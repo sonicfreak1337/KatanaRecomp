@@ -43,6 +43,41 @@ oder `rejected`. Semantikvertrag, konkrete Einschraenkung und
 Testanforderung sind Pflichtfelder; eine reine Decoderzaehlung ist keine
 Faehigkeitsbehauptung.
 
+Das separate Feld `external_evidence` ist ohne einen explizit uebergebenen
+externen Bericht `null`. Mit
+`katana-recomp isa-report --json --external-evidence
+<katana-sh4-sst-conformance.json>` enthaelt es ausschliesslich redigierte
+SingleStepTests-Evidence: Quelle, Katana- und Corpus-Commit, Corpus-Manifesthash,
+Backendprofil und -version, Runtime-/Backend-ABI, Scope, `complete_scope`,
+`expected_scope_vectors`, Speicherprofil, FPU-Vergleichsmodus, Zaehler fuer
+Gesamtmenge, anwendbar, Pass, Fail und nicht anwendbar sowie die Waiveranzahl.
+Zulaessige Scopes sind ausschliesslich `smoke` mit 65 erwarteten Vektoren und
+`full` mit 116500 erwarteten Vektoren. Dateilisten,
+Gegenbeispiele, Compilerpfade und andere lokale Pfade aus dem Quellbericht
+werden nicht uebernommen. Der deklarierte Vier-Schichten-Status bleibt davon
+getrennt und wird durch externe Evidence weder angehoben noch abgesenkt.
+
+`stale=true` nennt stabile Gruende, wenn die lokale Source-Identity nicht durch
+einen sauberen Git-Checkout belegt ist (`untrusted-build-source`), Katana-Commit,
+gepinnter Corpus-Commit
+oder -Manifesthash, Runtime-ABI, Backend-ABI, das externe
+`external-conformance`-Backendprofil oder dessen Profilversion nicht zum
+aktuellen Buildvertrag passen. Zusaetzlich wird `incomplete-scope` gemeldet,
+wenn `selection.complete_scope=false` ist. Vollstaendige Evidence verlangt
+exakt den Scope-Nenner, `file`, `case`, `opcode`, `family` und `shard` auf
+`null` sowie `fail_fast=false`; gefilterte, geshardete, abgebrochene oder
+anderweitig gekuerzte Laeufe bleiben damit sichtbar, gelten aber nie als
+frische Scope-Evidence. Malformed JSON, eine fremde Schema-/Berichtsversion
+oder ein anderer Scope, doppelte Schluessel, falsche Feldtypen, ein falscher
+Scope-Nenner und widerspruechliche Zaehler werden als ungueltige Eingabe
+abgelehnt und nicht als Evidence dargestellt.
+
+`SH4_ALPHA_ISA.md` wird von beiden Befehlen niemals automatisch veraendert.
+Eine Dokumentationsaktualisierung ist ein eigener, expliziter Review-Schritt:
+Zuerst wird ein vollstaendiger, bestandener und nicht veralteter SST-Bericht
+erzeugt, danach der ISA-JSON-Bericht mit `--external-evidence` erzeugt und erst
+dieses gepruefte Artefakt darf manuell in die Dokumentation uebernommen werden.
+
 ## Anwendungsjob und Buildplan
 
 `katana-application-job` Version 7 unterscheidet die Endzustaende `completed`,

@@ -117,6 +117,36 @@ std::string attach_execution_profile_json(std::string document,
     return document;
 }
 
+katana::sh4::ExternalIsaEvidence load_external_isa_evidence(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        throw katana::io::InputOutputError(
+            "Externer SST-Evidencebericht konnte nicht geoeffnet werden.");
+
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    constexpr std::streamoff maximum_size = 16 * 1024 * 1024;
+    if (end < 0)
+        throw katana::io::InputOutputError(
+            "Groesse des externen SST-Evidenceberichts konnte nicht gelesen werden.");
+    if (end > maximum_size)
+        throw std::invalid_argument("Externer SST-Evidencebericht ist groesser als 16 MiB.");
+
+    std::string document(static_cast<std::size_t>(end), '\0');
+    input.seekg(0, std::ios::beg);
+    if (!document.empty()) {
+        input.read(document.data(), static_cast<std::streamsize>(document.size()));
+        if (input.gcount() != static_cast<std::streamsize>(document.size()))
+            throw katana::io::InputOutputError(
+                "Externer SST-Evidencebericht konnte nicht vollstaendig gelesen werden.");
+    }
+    char unexpected = '\0';
+    if (input.get(unexpected))
+        throw katana::io::InputOutputError(
+            "Externer SST-Evidencebericht wurde waehrend des Lesens veraendert.");
+    return katana::sh4::parse_external_isa_evidence_json(document);
+}
+
 void require_cpp_profile_capabilities(const katana::io::ProjectManifest& profile) {
     try {
         katana::app::require_cpp_profile_capabilities(profile);
@@ -616,8 +646,8 @@ int audit_disc_hardware_set(const std::filesystem::path& root,
                       << " known_gap=" << audit.known_gap_addresses
                       << " rejected=" << audit.rejected_addresses
                       << " unmapped=" << audit.unmapped_addresses
-                      << " unresolved_poll_guard_loops="
-                      << audit.unresolved_poll_guard_loops << '\n';
+                      << " unresolved_poll_guard_loops=" << audit.unresolved_poll_guard_loops
+                      << '\n';
         }
     }
     if (failures != 0u) return 2;
@@ -1112,8 +1142,8 @@ std::size_t configured_host_build_jobs() {
     auto configured = configured_environment_value("KATANA_HOST_BUILD_JOBS");
     if (!configured) configured = configured_environment_value("KATANA_PORT_CODEGEN_JOBS");
     if (!configured) {
-        return std::min<std::size_t>(
-            maximum_jobs, std::max(1u, std::thread::hardware_concurrency()));
+        return std::min<std::size_t>(maximum_jobs,
+                                     std::max(1u, std::thread::hardware_concurrency()));
     }
     std::size_t parsed = 0u;
     const auto jobs = std::stoull(*configured, &parsed, 10);
@@ -1129,8 +1159,7 @@ void seed_incremental_port_stage(const std::filesystem::path& published,
     if (!std::filesystem::is_directory(root_status) || std::filesystem::is_symlink(root_status))
         throw std::runtime_error("Vorheriger Port ist kein sicherer regulaerer Ordner.");
     std::filesystem::create_directories(stage);
-    for (std::filesystem::recursive_directory_iterator iterator(published), end;
-         iterator != end;
+    for (std::filesystem::recursive_directory_iterator iterator(published), end; iterator != end;
          ++iterator) {
         const auto relative = iterator->path().lexically_relative(published);
         if (!relative.empty() && *relative.begin() == "user-data") {
@@ -1152,9 +1181,8 @@ void seed_incremental_port_stage(const std::filesystem::path& published,
         if (!std::filesystem::is_regular_file(status))
             throw std::runtime_error("Vorheriger Port enthaelt einen nicht regulaeren Eintrag.");
         std::filesystem::create_directories(destination.parent_path());
-        std::filesystem::copy_file(iterator->path(),
-                                   destination,
-                                   std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::copy_file(
+            iterator->path(), destination, std::filesystem::copy_options::overwrite_existing);
         std::error_code timestamp_error;
         std::filesystem::last_write_time(
             destination, std::filesystem::last_write_time(iterator->path()), timestamp_error);
@@ -1231,9 +1259,10 @@ int export_port_project(const std::filesystem::path& gdi_path,
             configure += " -G Ninja";
             if (const auto make_program =
                     configured_environment_value("KATANA_HOST_BUILD_MAKE_PROGRAM"))
-                configure += " -DCMAKE_MAKE_PROGRAM=" +
-                             shell_quote(std::filesystem::path(*make_program));
+                configure +=
+                    " -DCMAKE_MAKE_PROGRAM=" + shell_quote(std::filesystem::path(*make_program));
         } else {
+            configure += " -G \"Visual Studio 17 2022\" -A x64";
             configure +=
                 " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" + shell_quote(build_path);
         }
@@ -1252,7 +1281,7 @@ int export_port_project(const std::filesystem::path& gdi_path,
             std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
         build += " --parallel " + std::to_string(configured_host_build_jobs());
 #ifdef _WIN32
-        if (!use_ninja) build += " --config RelWithDebInfo";
+        if (!use_ninja) build += " --config RelWithDebInfo -- /nodeReuse:false";
 #endif
         std::cout << "KATANA_PORT_PHASE host-build\n" << std::flush;
         const auto build_command = normalized_host_command(build);
@@ -1337,7 +1366,8 @@ void print_usage(std::ostream& output) {
     output << "Verwendung:\n"
            << "  katana-recomp <Opcode>\n"
            << "  katana-recomp opcode <Opcode>\n"
-           << "  katana-recomp isa-report [--json]\n"
+           << "  katana-recomp isa-report [--json] "
+              "[--external-evidence <katana-sh4-sst-conformance.json>]\n"
            << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp analyze-json <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp cfg-json <Projektmanifest> [Override-Datei]\n"
@@ -1385,16 +1415,37 @@ int main(const int argc, char* argv[]) {
             std::cout << "KatanaRecomp " << KATANA_RECOMP_VERSION << '\n';
             return exit_status(ExitCode::Success);
         }
-        if (argc == 2 && std::string(argv[1]) == "isa-report") {
-            std::cout << katana::sh4::format_isa_coverage_report(
-                katana::sh4::build_isa_coverage_report());
-            return 0;
-        }
-        if (argc == 3 && std::string_view(argv[1]) == "isa-report" &&
-            std::string_view(argv[2]) == "--json") {
-            std::cout << katana::sh4::format_alpha_isa_json(
-                             katana::sh4::build_isa_coverage_report())
-                      << '\n';
+        if (argc >= 2 && std::string_view(argv[1]) == "isa-report") {
+            bool json = false;
+            std::optional<std::filesystem::path> external_evidence_path;
+            for (int index = 2; index < argc; ++index) {
+                const auto option = std::string_view(argv[index]);
+                if (option == "--json") {
+                    if (json) throw std::invalid_argument("--json wurde doppelt angegeben.");
+                    json = true;
+                } else if (option == "--external-evidence") {
+                    if (external_evidence_path || ++index >= argc)
+                        throw std::invalid_argument(
+                            "--external-evidence erwartet genau einen Bericht.");
+                    external_evidence_path = std::filesystem::path(argv[index]);
+                } else {
+                    throw std::invalid_argument("Unbekannte isa-report-Option: " +
+                                                std::string(option));
+                }
+            }
+            if (external_evidence_path && !json)
+                throw std::invalid_argument("--external-evidence erfordert --json.");
+
+            const auto report = katana::sh4::build_isa_coverage_report();
+            if (!json) {
+                std::cout << katana::sh4::format_isa_coverage_report(report);
+                return 0;
+            }
+
+            std::optional<katana::sh4::ExternalIsaEvidence> external_evidence;
+            if (external_evidence_path)
+                external_evidence = load_external_isa_evidence(*external_evidence_path);
+            std::cout << katana::sh4::format_alpha_isa_json(report, external_evidence) << '\n';
             return 0;
         }
         if (argc >= 3 && argc <= 6 && std::string_view(argv[1]) == "disc-audit") {
@@ -1404,12 +1455,17 @@ int main(const int argc, char* argv[]) {
             bool strict = false;
             for (int index = 3; index < argc; ++index) {
                 const auto option = std::string_view(argv[index]);
-                if (option == "--json") json = true;
-                else if (option == "--include-accesses") include_accesses = true;
-                else if (option == "--fail-on-gap") fail_on_gap = true;
-                else if (option == "--strict") strict = true;
-                else throw std::invalid_argument("Unbekannte disc-audit-Option: " +
-                                                 std::string(option));
+                if (option == "--json")
+                    json = true;
+                else if (option == "--include-accesses")
+                    include_accesses = true;
+                else if (option == "--fail-on-gap")
+                    fail_on_gap = true;
+                else if (option == "--strict")
+                    strict = true;
+                else
+                    throw std::invalid_argument("Unbekannte disc-audit-Option: " +
+                                                std::string(option));
             }
             if (fail_on_gap && strict)
                 throw std::invalid_argument("disc-audit akzeptiert nur einen Fehlermodus.");
@@ -1425,9 +1481,12 @@ int main(const int argc, char* argv[]) {
             std::size_t jobs = std::max(1u, std::thread::hardware_concurrency());
             for (int index = 3; index < argc; ++index) {
                 const auto option = std::string_view(argv[index]);
-                if (option == "--json") json = true;
-                else if (option == "--fail-on-gap") fail_on_gap = true;
-                else if (option == "--strict") strict = true;
+                if (option == "--json")
+                    json = true;
+                else if (option == "--fail-on-gap")
+                    fail_on_gap = true;
+                else if (option == "--strict")
+                    strict = true;
                 else if (option == "--jobs") {
                     if (++index >= argc)
                         throw std::invalid_argument("--jobs braucht eine positive Anzahl.");
@@ -1515,12 +1574,11 @@ int main(const int argc, char* argv[]) {
                 throw std::invalid_argument(
                     "port erwartet --output und --target-name jeweils genau einmal.");
             }
-            return export_port_project(
-                std::filesystem::path(argv[2]),
-                *output_path,
-                *target_name,
-                diagnostic_partial,
-                console_profile);
+            return export_port_project(std::filesystem::path(argv[2]),
+                                       *output_path,
+                                       *target_name,
+                                       diagnostic_partial,
+                                       console_profile);
         }
 
         if ((argc == 3 || argc == 4) &&

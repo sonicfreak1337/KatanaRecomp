@@ -615,6 +615,7 @@ docs/             Vertraege, Status, Tasks und Releaseberichte
 - [docs/SYSTEM_REPLAY.md](docs/SYSTEM_REPLAY.md) - deterministischer Replayvertrag
 - [docs/SONIC_ADVENTURE_ACCEPTANCE.md](docs/SONIC_ADVENTURE_ACCEPTANCE.md) - private Retail-Testbench
 - [docs/SH4_ALPHA_ISA.md](docs/SH4_ALPHA_ISA.md) - messbarer Alpha-ISA-Vertrag
+- [docs/SH4_SST_CONFORMANCE.md](docs/SH4_SST_CONFORMANCE.md) - externe native SH-4-AOT-Evidenz
 - [docs/REFERENCE_PROVENANCE.md](docs/REFERENCE_PROVENANCE.md) - Referenz- und Lizenzprovenienz
 
 ## Rechtlicher Rahmen

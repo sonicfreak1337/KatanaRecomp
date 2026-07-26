@@ -4,6 +4,19 @@
 
 ### Geaendert
 
+- SingleStepTests/sh4 ist als optionales, auf einen festen Commit und
+  Manifesthash gebundenes externes SH-4-Semantikorakel integriert. Der
+  C++20-Binaerparser, die deduplizierte native AOT-Codegenerierung ueber die
+  produktive Analyse-/IR-/Optimierer-/Backendpipeline, getrennte Produkt- und
+  Flat-Speicherprofile, Zustands- und Speicherorakel, reproduzierbare
+  CTest-Shards, versionierte Waiver sowie maschinenlesbare Konformitaets- und
+  ISA-Evidenceberichte arbeiten ohne Netzwerkzugriff im Build. Runtimekern,
+  Decoder und Diagnoseinterpreter sind als getrennte Targets modelliert; der
+  fertige SST-Runner wird per Member-, Symbol- und Linkmap-Audit gegen
+  Interpreter-, Diagnose- und Laufzeitdecoderpfade abgesichert. Runtime-ABI
+  49, Backend-Interface-ABI 4 und Portprojektvertrag 33 versionieren die
+  gemeinsame native AOT-Profilgrenze. Der normale Build behaelt den externen
+  Corpus standardmaessig deaktiviert.
 - Der nach dem sichtbaren Sega-Logo belegte `KR-4851`-Hotspot ist als
   allgemeiner SH-4-Exception-/Codegenfehler geschlossen. `trap_pending`
   bezeichnet den gesamten Zeitraum vom Exceptioneintritt bis `RTE`; der

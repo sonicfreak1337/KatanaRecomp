@@ -94,6 +94,17 @@ Vertrag aus synthetischen Daten neu. Die vom Nutzer genannte RetroBIOS-Seite
 KR-3709 weder heruntergeladen noch als Implementierungs- oder Testquelle
 verwendet.
 
+Als getrennte, externe Instruktionssemantik-Evidenz kann optional
+[`SingleStepTests/sh4`](https://github.com/SingleStepTests/sh4) am Commit
+`48975cb1a9569abb5a0cba587013ea54edf79100` verwendet werden. Das MIT-lizenzierte
+Korpus ist aus Reicast-Interpreterverhalten erzeugt; dieser Interpreter ist
+ausschliesslich Herkunft des Orakels. KatanaRecomp übernimmt weder Generator-
+noch Interpretercode und führt die Referenzvektoren nur über vorab
+kompilierten nativen AOT-Code aus. Der Corpus bleibt in einem lokalen Checkout
+außerhalb des Repositorys. Pin, Manifest-Hash, Waiververtrag und genaue
+Scope-Grenzen sind in [SH4_SST_CONFORMANCE.md](SH4_SST_CONFORMANCE.md)
+dokumentiert.
+
 ## Architekturvorbild: XenonRecomp
 
 - Upstream: <https://github.com/hedge-dev/XenonRecomp>

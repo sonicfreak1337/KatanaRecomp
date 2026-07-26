@@ -49,6 +49,7 @@ struct BackendRequest {
     bool single_block_execution = false;
     bool external_dynamic_dispatch = false;
     bool guarded_local_block_chaining = false;
+    bool external_instruction_observer = false;
 };
 
 struct BackendEmission {

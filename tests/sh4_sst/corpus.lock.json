@@ -1,0 +1,36 @@
+{
+  "schema": "katana-sh4-sst-corpus-lock",
+  "version": 1,
+  "repository": "https://github.com/SingleStepTests/sh4.git",
+  "commit": "48975cb1a9569abb5a0cba587013ea54edf79100",
+  "root_tree": "b5ca6e7a14976dd3eae6ebb5a06b305da221ae09",
+  "license": "MIT",
+  "license_file": "LICENSE",
+  "binary_files": 233,
+  "vectors_per_file": 500,
+  "record_bytes": 788,
+  "total_vectors": 116500,
+  "manifest": {
+    "algorithm": "sha256",
+    "canonicalization": "ordinal filename order; filename TAB decimal-size TAB lowercase-sha256 LF; UTF-8",
+    "sha256": "155ddb446f00e6e4985ea0bb978cef8984e7835c864134b33d99e33af47b46c7"
+  },
+  "smoke": {
+    "indices": [0, 127, 255, 383, 499],
+    "files": [
+      "0000mmmm00100011_sz0_pr0.json.bin",
+      "0010nnnnmmmm0010_sz0_pr0.json.bin",
+      "0010nnnnmmmm0110_sz0_pr0.json.bin",
+      "0010nnnnmmmm1001_sz0_pr0.json.bin",
+      "0011nnnnmmmm1100_sz0_pr0.json.bin",
+      "0100mmmm00001011_sz0_pr0.json.bin",
+      "0100mmmm00101011_sz0_pr0.json.bin",
+      "0110nnnnmmmm0010_sz0_pr0.json.bin",
+      "0110nnnnmmmm0110_sz0_pr0.json.bin",
+      "0111nnnniiiiiiii_sz0_pr0.json.bin",
+      "10001001dddddddd_sz0_pr0.json.bin",
+      "10001101dddddddd_sz0_pr0.json.bin",
+      "1010dddddddddddd_sz0_pr0.json.bin"
+    ]
+  }
+}

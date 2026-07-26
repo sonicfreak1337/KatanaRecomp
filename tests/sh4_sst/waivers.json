@@ -1,0 +1,6 @@
+{
+  "schema": "katana-sh4-sst-waivers",
+  "version": 1,
+  "corpus_commit": "48975cb1a9569abb5a0cba587013ea54edf79100",
+  "waivers": []
+}

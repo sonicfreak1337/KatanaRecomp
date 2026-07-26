@@ -19,6 +19,93 @@ find_package(Threads REQUIRED)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
+set(
+    KATANA_GIT_COMMIT
+    ""
+    CACHE STRING
+    "Optional exact source-commit assertion; it must match a clean Git HEAD"
+)
+set(KATANA_GIT_COMMIT_ASSERTION "${KATANA_GIT_COMMIT}")
+set(KATANA_GIT_COMMIT "0000000000000000000000000000000000000000")
+set(KATANA_SOURCE_IDENTITY_TRUSTED 0)
+find_package(Git QUIET)
+if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse HEAD
+        RESULT_VARIABLE KATANA_GIT_COMMIT_RESULT
+        OUTPUT_VARIABLE KATANA_GIT_HEAD
+        ERROR_VARIABLE KATANA_GIT_COMMIT_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT KATANA_GIT_COMMIT_RESULT EQUAL 0)
+        message(
+            FATAL_ERROR
+            "Cannot determine the Katana source commit: ${KATANA_GIT_COMMIT_ERROR}"
+        )
+    endif()
+    string(TOLOWER "${KATANA_GIT_HEAD}" KATANA_GIT_HEAD)
+    if(NOT "${KATANA_GIT_COMMIT_ASSERTION}" STREQUAL "" AND
+       NOT "${KATANA_GIT_COMMIT_ASSERTION}" STREQUAL "${KATANA_GIT_HEAD}")
+        message(
+            FATAL_ERROR
+            "KATANA_GIT_COMMIT must match the checked-out HEAD "
+            "${KATANA_GIT_HEAD}"
+        )
+    endif()
+    execute_process(
+        COMMAND
+            "${GIT_EXECUTABLE}"
+            -C "${CMAKE_CURRENT_SOURCE_DIR}"
+            status --porcelain=v1 --untracked-files=all
+        RESULT_VARIABLE KATANA_GIT_STATUS_RESULT
+        OUTPUT_VARIABLE KATANA_GIT_STATUS
+        ERROR_VARIABLE KATANA_GIT_STATUS_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT KATANA_GIT_STATUS_RESULT EQUAL 0)
+        message(
+            FATAL_ERROR
+            "Cannot inspect the Katana worktree: ${KATANA_GIT_STATUS_ERROR}"
+        )
+    endif()
+    if("${KATANA_GIT_STATUS}" STREQUAL "")
+        set(KATANA_GIT_COMMIT "${KATANA_GIT_HEAD}")
+        set(KATANA_SOURCE_IDENTITY_TRUSTED 1)
+    else()
+        message(
+            STATUS
+            "Katana source tree is dirty; embedding the untrusted source sentinel"
+        )
+    endif()
+elseif(NOT "${KATANA_GIT_COMMIT_ASSERTION}" STREQUAL "")
+    message(
+        WARNING
+        "Ignoring KATANA_GIT_COMMIT because the source identity cannot be "
+        "verified without a Git checkout"
+    )
+endif()
+string(TOLOWER "${KATANA_GIT_COMMIT}" KATANA_GIT_COMMIT)
+string(LENGTH "${KATANA_GIT_COMMIT}" KATANA_GIT_COMMIT_LENGTH)
+if(NOT KATANA_GIT_COMMIT_LENGTH EQUAL 40 OR
+   NOT KATANA_GIT_COMMIT MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "KATANA_GIT_COMMIT must be one lowercase 40-character Git commit")
+endif()
+
+if(KATANA_SOURCE_IDENTITY_TRUSTED)
+    add_custom_target(
+        katana-source-identity
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DKATANA_SOURCE_IDENTITY_GIT=${GIT_EXECUTABLE}"
+            "-DKATANA_SOURCE_IDENTITY_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DKATANA_SOURCE_IDENTITY_EXPECTED_COMMIT=${KATANA_GIT_COMMIT}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifySourceIdentity.cmake"
+        COMMENT "Verify clean Katana source identity"
+        VERBATIM
+    )
+endif()
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in
     ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
@@ -63,6 +150,37 @@ option(
     KATANA_BUILD_DESKTOP_GUI
     "Build the optional native desktop shell"
     OFF
+)
+
+option(
+    KATANA_ENABLE_SH4_SST
+    "Build the optional precompiled SingleStepTests/sh4 conformance harness"
+    OFF
+)
+set(
+    KATANA_SH4_SST_ROOT
+    ""
+    CACHE PATH
+    "Local checkout of the pinned SingleStepTests/sh4 corpus"
+)
+set(
+    KATANA_SH4_SST_SCOPE
+    "smoke"
+    CACHE STRING
+    "External SH-4 corpus scope: smoke or full"
+)
+set_property(CACHE KATANA_SH4_SST_SCOPE PROPERTY STRINGS smoke full)
+set(
+    KATANA_SH4_SST_GENERATED_SHARDS
+    "0"
+    CACHE STRING
+    "Generated C++ shard count; 0 selects the deterministic scope default"
+)
+set(
+    KATANA_SH4_SST_TEST_SHARDS
+    "4"
+    CACHE STRING
+    "Number of stable CTest runner shards per memory profile"
 )
 
 set(
@@ -196,16 +314,13 @@ function(katana_enable_warnings target)
     endif()
 endfunction()
 
-add_library(katana_runtime STATIC
-    src/decoder/decoder.cpp
-    src/decoder/instruction_metadata.cpp
+set(KATANA_RUNTIME_CORE_SOURCES
     src/io/input_provenance.cpp
     src/io/json_report.cpp
     src/runtime/aica.cpp
     src/runtime/block_abi.cpp
     src/runtime/block_table.cpp
     src/runtime/indirect_dispatch.cpp
-    src/runtime/controlled_fallback.cpp
     src/runtime/crash_report.cpp
     src/runtime/dispatch_diagnostics.cpp
     src/runtime/code_invalidation.cpp
@@ -219,7 +334,6 @@ add_library(katana_runtime STATIC
     src/runtime/system_asic.cpp
     src/runtime/block_guards.cpp
     src/runtime/bios_abi.cpp
-    src/runtime/interpreter_boundary.cpp
     src/runtime/store_queue.cpp
     src/runtime/cache_control.cpp
     src/runtime/io_port.cpp
@@ -229,7 +343,6 @@ add_library(katana_runtime STATIC
     src/runtime/disc_install.cpp
     src/runtime/dreamcast_boot.cpp
     src/runtime/dreamcast_memory.cpp
-    src/runtime/dynamic_interpreter.cpp
     src/runtime/executable_modules.cpp
     src/runtime/native_aot_template.cpp
     src/runtime/exception.cpp
@@ -260,16 +373,72 @@ add_library(katana_runtime STATIC
     src/runtime/runtime.cpp
 )
 
-add_library(KatanaRecomp::runtime ALIAS katana_runtime)
-set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)
-
-target_include_directories(
-    katana_runtime
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+set(KATANA_SH4_DECODER_SOURCES
+    src/decoder/decoder.cpp
+    src/decoder/instruction_metadata.cpp
 )
+
+set(KATANA_DIAGNOSTIC_INTERPRETER_SOURCES
+    src/runtime/controlled_fallback.cpp
+    src/runtime/interpreter_boundary.cpp
+    src/runtime/dynamic_interpreter.cpp
+)
+
+add_library(katana_runtime_core_objects OBJECT ${KATANA_RUNTIME_CORE_SOURCES})
+add_library(katana_sh4_decoder_objects OBJECT ${KATANA_SH4_DECODER_SOURCES})
+add_library(
+    katana_diagnostic_interpreter_objects
+    OBJECT
+    ${KATANA_DIAGNOSTIC_INTERPRETER_SOURCES}
+)
+
+function(katana_configure_runtime_objects target)
+    target_include_directories(
+        ${target}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/include
+    )
+    katana_enable_warnings(${target})
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /fp:strict)
+    else()
+        target_compile_options(${target} PRIVATE -frounding-math)
+    endif()
+endfunction()
+
+katana_configure_runtime_objects(katana_runtime_core_objects)
+katana_configure_runtime_objects(katana_sh4_decoder_objects)
+katana_configure_runtime_objects(katana_diagnostic_interpreter_objects)
+
+add_library(
+    katana_runtime_core
+    STATIC
+    $<TARGET_OBJECTS:katana_runtime_core_objects>
+)
+add_library(
+    katana_diagnostic_interpreter
+    STATIC
+    $<TARGET_OBJECTS:katana_sh4_decoder_objects>
+    $<TARGET_OBJECTS:katana_diagnostic_interpreter_objects>
+)
+add_library(
+    katana_runtime
+    STATIC
+    $<TARGET_OBJECTS:katana_runtime_core_objects>
+    $<TARGET_OBJECTS:katana_sh4_decoder_objects>
+    $<TARGET_OBJECTS:katana_diagnostic_interpreter_objects>
+)
+
+add_library(KatanaRecomp::runtime ALIAS katana_runtime)
+add_library(KatanaRecomp::runtime_core ALIAS katana_runtime_core)
+add_library(
+    KatanaRecomp::diagnostic_interpreter
+    ALIAS
+    katana_diagnostic_interpreter
+)
+set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)
+set_target_properties(katana_runtime_core PROPERTIES EXPORT_NAME runtime_core)
 
 # A static runtime built with sanitizers carries sanitizer-dependent ABI details
 # into every object file. In particular, MSVC's ASan-enabled STL emits
@@ -277,42 +446,48 @@ target_include_directories(
 # compiled with the same sanitizer profile; keeping these flags PRIVATE makes
 # an otherwise valid installed SDK fail at link time. Export the profile as
 # target usage requirements so build-tree and installed consumers inherit it
-# through KatanaRecomp::runtime.
-if(KATANA_ENABLE_SANITIZERS)
-    if(MSVC)
-        target_compile_options(katana_runtime INTERFACE /fsanitize=address /Oy-)
-        target_link_options(katana_runtime INTERFACE /INCREMENTAL:NO)
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(
-            katana_runtime
-            INTERFACE
-                -fsanitize=address,undefined
-                -fno-omit-frame-pointer
-                -fno-sanitize-recover=all
-        )
-        target_link_options(
-            katana_runtime
-            INTERFACE
-                -fsanitize=address,undefined
-                -fno-sanitize-recover=all
-        )
+# through KatanaRecomp::runtime or KatanaRecomp::runtime_core.
+function(katana_configure_runtime_archive target)
+    target_include_directories(
+        ${target}
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+    if(KATANA_ENABLE_SANITIZERS)
+        if(MSVC)
+            target_compile_options(${target} INTERFACE /fsanitize=address /Oy-)
+            target_link_options(${target} INTERFACE /INCREMENTAL:NO)
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(
+                ${target}
+                INTERFACE
+                    -fsanitize=address,undefined
+                    -fno-omit-frame-pointer
+                    -fno-sanitize-recover=all
+            )
+            target_link_options(
+                ${target}
+                INTERFACE
+                    -fsanitize=address,undefined
+                    -fno-sanitize-recover=all
+            )
+        endif()
     endif()
-endif()
+    if(WIN32)
+        target_link_libraries(${target} PUBLIC bcrypt gdi32 user32 winmm)
+    endif()
+endfunction()
 
-katana_enable_warnings(katana_runtime)
-if(MSVC)
-    target_compile_options(katana_runtime PRIVATE /fp:strict)
-else()
-    target_compile_options(katana_runtime PRIVATE -frounding-math)
-endif()
-
-if(WIN32)
-    target_link_libraries(katana_runtime PUBLIC bcrypt gdi32 user32 winmm)
-endif()
+target_link_libraries(katana_diagnostic_interpreter PUBLIC katana_runtime_core)
+katana_configure_runtime_archive(katana_runtime_core)
+katana_configure_runtime_archive(katana_diagnostic_interpreter)
+katana_configure_runtime_archive(katana_runtime)
 
 add_library(katana_core STATIC
+    $<TARGET_OBJECTS:katana_sh4_decoder_objects>
     src/decoder/decoder_validation.cpp
-    src/decoder/instruction_metadata.cpp
     src/decoder/isa_coverage.cpp
     src/io/binary_reader.cpp
     src/io/executable_image.cpp
@@ -357,12 +532,16 @@ add_library(katana_core STATIC
     src/codegen/latent_aot_registry.cpp
     src/codegen/metadata.cpp
     src/codegen/naming.cpp
+    src/codegen/native_aot_profile.cpp
     src/codegen/partition.cpp
     src/codegen/probe.cpp
     src/codegen/project.cpp
     src/codegen/port_export.cpp
     src/codegen/source_map.cpp
 )
+if(TARGET katana-source-identity)
+    add_dependencies(katana_core katana-source-identity)
+endif()
 
 target_include_directories(
     katana_core
@@ -372,7 +551,7 @@ target_include_directories(
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-target_link_libraries(katana_core PUBLIC katana_runtime)
+target_link_libraries(katana_core PUBLIC katana_runtime_core)
 set_target_properties(katana_core PROPERTIES EXPORT_NAME analyzer)
 katana_enable_warnings(katana_core)
 
@@ -427,6 +606,371 @@ target_include_directories(
 
 target_link_libraries(katana_test_support PUBLIC katana_runtime)
 katana_enable_warnings(katana_test_support)
+
+add_library(
+    katana_sh4_sst_support
+    STATIC
+    src/testing/sh4_sst.cpp
+    src/testing/sh4_sst_execution.cpp
+    src/testing/sh4_sst_harness.cpp
+)
+target_include_directories(
+    katana_sh4_sst_support
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include
+)
+target_link_libraries(katana_sh4_sst_support PUBLIC katana_runtime_core)
+katana_enable_warnings(katana_sh4_sst_support)
+
+add_library(
+    katana_sh4_sst_codegen_support
+    STATIC
+    src/testing/sh4_sst_codegen.cpp
+)
+target_include_directories(
+    katana_sh4_sst_codegen_support
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include
+)
+target_link_libraries(
+    katana_sh4_sst_codegen_support
+    PUBLIC
+        katana_sh4_sst_support
+)
+katana_enable_warnings(katana_sh4_sst_codegen_support)
+
+if(KATANA_ENABLE_SH4_SST)
+    find_package(Git REQUIRED)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+        message(
+            FATAL_ERROR
+            "KATANA_ENABLE_SH4_SST requires a Git checkout so the exact clean "
+            "Katana source identity can be verified"
+        )
+    endif()
+    if(NOT KATANA_SOURCE_IDENTITY_TRUSTED)
+        message(
+            FATAL_ERROR
+            "KATANA_ENABLE_SH4_SST requires a clean Katana index and worktree"
+        )
+    endif()
+    if(NOT KATANA_SH4_SST_SCOPE STREQUAL "smoke" AND
+       NOT KATANA_SH4_SST_SCOPE STREQUAL "full")
+        message(FATAL_ERROR "KATANA_SH4_SST_SCOPE must be smoke or full")
+    endif()
+    if(KATANA_SH4_SST_ROOT STREQUAL "")
+        message(FATAL_ERROR "KATANA_SH4_SST_ROOT is required when SH-4 SST is enabled")
+    endif()
+    get_filename_component(
+        KATANA_SH4_SST_ROOT
+        "${KATANA_SH4_SST_ROOT}"
+        ABSOLUTE
+        BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(NOT IS_DIRECTORY "${KATANA_SH4_SST_ROOT}")
+        message(FATAL_ERROR "KATANA_SH4_SST_ROOT is not a directory: ${KATANA_SH4_SST_ROOT}")
+    endif()
+    if(EXISTS "${KATANA_SH4_SST_ROOT}/.git")
+        if(NOT GIT_EXECUTABLE)
+            find_package(Git REQUIRED)
+        endif()
+        execute_process(
+            COMMAND
+                "${GIT_EXECUTABLE}"
+                -c "safe.directory=${KATANA_SH4_SST_ROOT}"
+                -C "${KATANA_SH4_SST_ROOT}"
+                rev-parse HEAD
+            RESULT_VARIABLE KATANA_SH4_SST_COMMIT_RESULT
+            OUTPUT_VARIABLE KATANA_SH4_SST_COMMIT
+            ERROR_VARIABLE KATANA_SH4_SST_COMMIT_ERROR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT KATANA_SH4_SST_COMMIT_RESULT EQUAL 0)
+            message(
+                FATAL_ERROR
+                "Cannot inspect the local SH-4 SST checkout: ${KATANA_SH4_SST_COMMIT_ERROR}"
+            )
+        endif()
+        if(NOT KATANA_SH4_SST_COMMIT STREQUAL
+           "48975cb1a9569abb5a0cba587013ea54edf79100")
+            message(
+                FATAL_ERROR
+                "SH-4 SST checkout is not at pinned commit "
+                "48975cb1a9569abb5a0cba587013ea54edf79100"
+            )
+        endif()
+    endif()
+
+    if(KATANA_SH4_SST_GENERATED_SHARDS STREQUAL "0")
+        if(KATANA_SH4_SST_SCOPE STREQUAL "smoke")
+            set(KATANA_SH4_SST_GENERATED_SHARDS 8)
+        else()
+            set(KATANA_SH4_SST_GENERATED_SHARDS 64)
+        endif()
+    endif()
+    foreach(
+        KATANA_SH4_SST_NUMERIC_OPTION
+        KATANA_SH4_SST_GENERATED_SHARDS
+        KATANA_SH4_SST_TEST_SHARDS
+    )
+        if(NOT "${${KATANA_SH4_SST_NUMERIC_OPTION}}" MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "${KATANA_SH4_SST_NUMERIC_OPTION} must be a positive integer")
+        endif()
+    endforeach()
+    if(KATANA_SH4_SST_GENERATED_SHARDS GREATER 1024)
+        message(FATAL_ERROR "KATANA_SH4_SST_GENERATED_SHARDS must not exceed 1024")
+    endif()
+    if(KATANA_SH4_SST_TEST_SHARDS GREATER 64)
+        message(FATAL_ERROR "KATANA_SH4_SST_TEST_SHARDS must not exceed 64")
+    endif()
+
+    add_executable(
+        katana-sh4-sst-aot-generator
+        tools/sh4_sst_aot_generator.cpp
+    )
+    target_link_libraries(
+        katana-sh4-sst-aot-generator
+        PRIVATE
+            katana_core
+            katana_sh4_sst_codegen_support
+    )
+    add_dependencies(
+        katana-sh4-sst-aot-generator
+        katana-source-identity
+    )
+    katana_enable_warnings(katana-sh4-sst-aot-generator)
+
+    file(
+        GLOB
+        KATANA_SH4_SST_CORPUS_FILES
+        CONFIGURE_DEPENDS
+        "${KATANA_SH4_SST_ROOT}/*.json.bin"
+    )
+    set(
+        KATANA_SH4_SST_GENERATED_DIRECTORY
+        "${CMAKE_CURRENT_BINARY_DIR}/generated-tests/sh4-sst-${KATANA_SH4_SST_SCOPE}"
+    )
+    set(
+        KATANA_SH4_SST_GENERATED_REGISTRY
+        "${KATANA_SH4_SST_GENERATED_DIRECTORY}/sh4_sst_aot_registry.cpp"
+    )
+    set(
+        KATANA_SH4_SST_GENERATED_METADATA
+        "${KATANA_SH4_SST_GENERATED_DIRECTORY}/sh4_sst_aot_metadata.json"
+    )
+    set(KATANA_SH4_SST_GENERATED_SOURCES)
+    math(
+        EXPR
+        KATANA_SH4_SST_LAST_GENERATED_SHARD
+        "${KATANA_SH4_SST_GENERATED_SHARDS} - 1"
+    )
+    foreach(
+        KATANA_SH4_SST_GENERATED_SHARD
+        RANGE 0 ${KATANA_SH4_SST_LAST_GENERATED_SHARD}
+    )
+        set(
+            KATANA_SH4_SST_GENERATED_SHARD_PADDED
+            "0000${KATANA_SH4_SST_GENERATED_SHARD}"
+        )
+        string(
+            LENGTH
+            "${KATANA_SH4_SST_GENERATED_SHARD_PADDED}"
+            KATANA_SH4_SST_GENERATED_SHARD_PADDED_LENGTH
+        )
+        math(
+            EXPR
+            KATANA_SH4_SST_GENERATED_SHARD_OFFSET
+            "${KATANA_SH4_SST_GENERATED_SHARD_PADDED_LENGTH} - 5"
+        )
+        string(
+            SUBSTRING
+            "${KATANA_SH4_SST_GENERATED_SHARD_PADDED}"
+            ${KATANA_SH4_SST_GENERATED_SHARD_OFFSET}
+            5
+            KATANA_SH4_SST_GENERATED_SHARD_SUFFIX
+        )
+        list(
+            APPEND
+            KATANA_SH4_SST_GENERATED_SOURCES
+            "${KATANA_SH4_SST_GENERATED_DIRECTORY}/sh4_sst_aot_shard_${KATANA_SH4_SST_GENERATED_SHARD_SUFFIX}.cpp"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT
+            ${KATANA_SH4_SST_GENERATED_SOURCES}
+            ${KATANA_SH4_SST_GENERATED_REGISTRY}
+            ${KATANA_SH4_SST_GENERATED_METADATA}
+        COMMAND
+            ${CMAKE_COMMAND} -E make_directory
+            "${KATANA_SH4_SST_GENERATED_DIRECTORY}"
+        COMMAND
+            $<TARGET_FILE:katana-sh4-sst-aot-generator>
+            --corpus-root "${KATANA_SH4_SST_ROOT}"
+            --scope "${KATANA_SH4_SST_SCOPE}"
+            --output-dir "${KATANA_SH4_SST_GENERATED_DIRECTORY}"
+            --shard-count "${KATANA_SH4_SST_GENERATED_SHARDS}"
+        DEPENDS
+            katana-sh4-sst-aot-generator
+            ${KATANA_SH4_SST_CORPUS_FILES}
+            tests/sh4_sst/corpus.lock.json
+            tools/sh4_sst_aot_generator.cpp
+        COMMENT
+            "Generate deduplicated native SH-4 SST AOT fixtures (${KATANA_SH4_SST_SCOPE})"
+        VERBATIM
+    )
+    set_source_files_properties(
+        ${KATANA_SH4_SST_GENERATED_SOURCES}
+        ${KATANA_SH4_SST_GENERATED_REGISTRY}
+        PROPERTIES GENERATED TRUE
+    )
+
+    add_executable(
+        katana-sh4-sst-runner
+        tests/testing/sh4_sst_runner.cpp
+        ${KATANA_SH4_SST_GENERATED_SOURCES}
+        ${KATANA_SH4_SST_GENERATED_REGISTRY}
+    )
+    target_link_libraries(
+        katana-sh4-sst-runner
+        PRIVATE
+            katana_sh4_sst_support
+            katana_runtime_core
+    )
+    add_dependencies(
+        katana-sh4-sst-runner
+        katana-source-identity
+    )
+
+    # This fixture deliberately retains one dynamic-interpreter entry point in
+    # a final executable. The negative audit below must detect the forbidden
+    # end artifact, not merely the contents of an unrelated archive.
+    add_executable(
+        katana-sh4-sst-forbidden-link-fixture
+        tests/testing/sh4_sst_forbidden_link_fixture.cpp
+    )
+    target_link_libraries(
+        katana-sh4-sst-forbidden-link-fixture
+        PRIVATE
+            katana_runtime
+    )
+    katana_enable_warnings(katana-sh4-sst-forbidden-link-fixture)
+    add_dependencies(
+        katana-sh4-sst-forbidden-link-fixture
+        katana-source-identity
+    )
+    add_dependencies(
+        katana-sh4-sst-runner
+        katana-sh4-sst-forbidden-link-fixture
+    )
+    file(
+        TO_CMAKE_PATH
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/sh4_sst/waivers.json"
+        KATANA_SH4_SST_WAIVERS_FILE_DEFINE
+    )
+    file(
+        TO_CMAKE_PATH
+        "${KATANA_SH4_SST_ROOT}"
+        KATANA_SH4_SST_ROOT_DEFINE
+    )
+    target_compile_definitions(
+        katana-sh4-sst-runner
+        PRIVATE
+            KATANA_SH4_SST_WAIVERS_FILE="${KATANA_SH4_SST_WAIVERS_FILE_DEFINE}"
+            KATANA_SH4_SST_DEFAULT_CORPUS_ROOT="${KATANA_SH4_SST_ROOT_DEFINE}"
+            KATANA_SH4_SST_BUILD_TYPE="$<CONFIG>"
+            KATANA_SH4_SST_LTO=$<BOOL:$<TARGET_PROPERTY:katana-sh4-sst-runner,INTERPROCEDURAL_OPTIMIZATION>>
+    )
+    katana_enable_warnings(katana-sh4-sst-runner)
+    set(
+        KATANA_SH4_SST_LINK_MAP
+        "$<TARGET_FILE_DIR:katana-sh4-sst-runner>/katana-sh4-sst-runner.map"
+    )
+    set(
+        KATANA_SH4_SST_NEGATIVE_LINK_MAP
+        "$<TARGET_FILE_DIR:katana-sh4-sst-forbidden-link-fixture>/katana-sh4-sst-forbidden-link-fixture.map"
+    )
+    if(MSVC)
+        target_compile_options(katana-sh4-sst-runner PRIVATE /bigobj)
+        target_link_options(
+            katana-sh4-sst-runner
+            PRIVATE
+                "/MAP:${KATANA_SH4_SST_LINK_MAP}"
+        )
+        target_link_options(
+            katana-sh4-sst-forbidden-link-fixture
+            PRIVATE
+                "/MAP:${KATANA_SH4_SST_NEGATIVE_LINK_MAP}"
+        )
+        get_filename_component(
+            KATANA_SH4_SST_MSVC_TOOL_DIRECTORY
+            "${CMAKE_LINKER}"
+            DIRECTORY
+        )
+        find_program(
+            KATANA_SH4_SST_DUMPBIN
+            NAMES dumpbin.exe dumpbin
+            HINTS "${KATANA_SH4_SST_MSVC_TOOL_DIRECTORY}"
+            REQUIRED
+        )
+        set(KATANA_SH4_SST_AUDIT_BACKEND MSVC)
+    else()
+        if(NOT CMAKE_NM)
+            find_program(KATANA_SH4_SST_NM NAMES llvm-nm nm REQUIRED)
+        else()
+            set(KATANA_SH4_SST_NM "${CMAKE_NM}")
+        endif()
+        target_link_options(
+            katana-sh4-sst-runner
+            PRIVATE
+                "LINKER:-Map,${KATANA_SH4_SST_LINK_MAP}"
+        )
+        target_link_options(
+            katana-sh4-sst-forbidden-link-fixture
+            PRIVATE
+                "LINKER:-Map,${KATANA_SH4_SST_NEGATIVE_LINK_MAP}"
+        )
+        set(KATANA_SH4_SST_AUDIT_BACKEND GNU)
+    endif()
+
+    set(
+        KATANA_SH4_SST_AUDIT_COMMAND
+        "${CMAKE_COMMAND}"
+        "-DKATANA_AUDIT_BACKEND=${KATANA_SH4_SST_AUDIT_BACKEND}"
+        "-DKATANA_AUDIT_RUNNER=$<TARGET_FILE:katana-sh4-sst-runner>"
+        "-DKATANA_AUDIT_CORE_ARCHIVE=$<TARGET_FILE:katana_runtime_core>"
+        "-DKATANA_AUDIT_AR=${CMAKE_AR}"
+    )
+    if(MSVC)
+        list(
+            APPEND
+            KATANA_SH4_SST_AUDIT_COMMAND
+            "-DKATANA_AUDIT_DUMPBIN=${KATANA_SH4_SST_DUMPBIN}"
+            "-DKATANA_AUDIT_MAP=${KATANA_SH4_SST_LINK_MAP}"
+        )
+    else()
+        list(
+            APPEND
+            KATANA_SH4_SST_AUDIT_COMMAND
+            "-DKATANA_AUDIT_NM=${KATANA_SH4_SST_NM}"
+            "-DKATANA_AUDIT_MAP=${KATANA_SH4_SST_LINK_MAP}"
+        )
+    endif()
+    list(
+        APPEND
+        KATANA_SH4_SST_AUDIT_COMMAND
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInterpreterFree.cmake"
+    )
+    add_custom_command(
+        TARGET katana-sh4-sst-runner
+        POST_BUILD
+        COMMAND ${KATANA_SH4_SST_AUDIT_COMMAND}
+        COMMENT "Audit the SH-4 SST runner for forbidden runtime linkage"
+        VERBATIM
+    )
+endif()
 
 add_executable(
     katana-differential-program-writer
@@ -522,6 +1066,124 @@ if(KATANA_DESKTOP_GUI_AVAILABLE)
 endif()
 
 enable_testing()
+
+add_executable(
+    katana-sh4-sst-parser-tests
+    tests/testing/sh4_sst_parser_tests.cpp
+)
+target_link_libraries(katana-sh4-sst-parser-tests PRIVATE katana_sh4_sst_support)
+katana_enable_warnings(katana-sh4-sst-parser-tests)
+add_test(NAME katana-sh4-sst-parser-tests COMMAND katana-sh4-sst-parser-tests)
+set_tests_properties(
+    katana-sh4-sst-parser-tests
+    PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+add_executable(
+    katana-sh4-sst-harness-tests
+    tests/testing/sh4_sst_harness_tests.cpp
+)
+target_link_libraries(katana-sh4-sst-harness-tests PRIVATE katana_sh4_sst_support)
+katana_enable_warnings(katana-sh4-sst-harness-tests)
+add_test(NAME katana-sh4-sst-harness-tests COMMAND katana-sh4-sst-harness-tests)
+
+add_executable(
+    katana-sh4-sst-codegen-tests
+    tests/testing/sh4_sst_codegen_tests.cpp
+)
+target_link_libraries(
+    katana-sh4-sst-codegen-tests
+    PRIVATE
+        katana_sh4_sst_codegen_support
+)
+katana_enable_warnings(katana-sh4-sst-codegen-tests)
+add_test(NAME katana-sh4-sst-codegen-tests COMMAND katana-sh4-sst-codegen-tests)
+
+if(KATANA_ENABLE_SH4_SST)
+    add_test(
+        NAME katana-sh4-sst-interpreter-free-link-audit
+        COMMAND ${KATANA_SH4_SST_AUDIT_COMMAND}
+    )
+
+    set(
+        KATANA_SH4_SST_NEGATIVE_AUDIT_COMMAND
+        "${CMAKE_COMMAND}"
+        "-DKATANA_AUDIT_BACKEND=${KATANA_SH4_SST_AUDIT_BACKEND}"
+        "-DKATANA_AUDIT_RUNNER=$<TARGET_FILE:katana-sh4-sst-forbidden-link-fixture>"
+        "-DKATANA_AUDIT_CORE_ARCHIVE=$<TARGET_FILE:katana_runtime_core>"
+        "-DKATANA_AUDIT_AR=${CMAKE_AR}"
+        "-DKATANA_AUDIT_EXPECT_FAILURE=ON"
+    )
+    if(MSVC)
+        list(
+            APPEND
+            KATANA_SH4_SST_NEGATIVE_AUDIT_COMMAND
+            "-DKATANA_AUDIT_DUMPBIN=${KATANA_SH4_SST_DUMPBIN}"
+            "-DKATANA_AUDIT_MAP=${KATANA_SH4_SST_NEGATIVE_LINK_MAP}"
+        )
+    else()
+        list(
+            APPEND
+            KATANA_SH4_SST_NEGATIVE_AUDIT_COMMAND
+            "-DKATANA_AUDIT_NM=${KATANA_SH4_SST_NM}"
+            "-DKATANA_AUDIT_MAP=${KATANA_SH4_SST_NEGATIVE_LINK_MAP}"
+        )
+    endif()
+    list(
+        APPEND
+        KATANA_SH4_SST_NEGATIVE_AUDIT_COMMAND
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInterpreterFree.cmake"
+    )
+    add_test(
+        NAME katana-sh4-sst-interpreter-link-negative-control
+        COMMAND ${KATANA_SH4_SST_NEGATIVE_AUDIT_COMMAND}
+    )
+
+    math(
+        EXPR
+        KATANA_SH4_SST_LAST_TEST_SHARD
+        "${KATANA_SH4_SST_TEST_SHARDS} - 1"
+    )
+    foreach(
+        KATANA_SH4_SST_TEST_PROFILE
+        IN ITEMS
+            flat-semantic-memory
+            native-product-memory
+    )
+        foreach(
+            KATANA_SH4_SST_TEST_SHARD
+            RANGE 0 ${KATANA_SH4_SST_LAST_TEST_SHARD}
+        )
+            set(
+                KATANA_SH4_SST_TEST_NAME
+                "katana-sh4-sst-${KATANA_SH4_SST_SCOPE}-${KATANA_SH4_SST_TEST_PROFILE}-${KATANA_SH4_SST_TEST_SHARD}"
+            )
+            add_test(
+                NAME "${KATANA_SH4_SST_TEST_NAME}"
+                COMMAND
+                    katana-sh4-sst-runner
+                    --corpus-root "${KATANA_SH4_SST_ROOT}"
+                    --profile "${KATANA_SH4_SST_TEST_PROFILE}"
+                    --shard "${KATANA_SH4_SST_TEST_SHARD}"
+                    --shard-count "${KATANA_SH4_SST_TEST_SHARDS}"
+                    --report-json
+                    "${CMAKE_CURRENT_BINARY_DIR}/sh4-sst-reports/${KATANA_SH4_SST_SCOPE}-${KATANA_SH4_SST_TEST_PROFILE}-${KATANA_SH4_SST_TEST_SHARD}.json"
+            )
+            set_tests_properties(
+                "${KATANA_SH4_SST_TEST_NAME}"
+                PROPERTIES
+                    LABELS "sh4-sst;external-conformance"
+                    TIMEOUT 3600
+            )
+        endforeach()
+    endforeach()
+    set_tests_properties(
+        katana-sh4-sst-interpreter-free-link-audit
+        katana-sh4-sst-interpreter-link-negative-control
+        PROPERTIES LABELS "sh4-sst;negative-control"
+    )
+endif()
 
 add_executable(
     katana-differential-execution-tests
@@ -690,7 +1352,11 @@ katana_enable_warnings(katana-indirect-dispatch-tests)
 add_test(NAME katana-indirect-dispatch-tests COMMAND katana-indirect-dispatch-tests)
 
 add_executable(katana-controlled-fallback-tests tests/runtime/controlled_fallback_tests.cpp)
-target_link_libraries(katana-controlled-fallback-tests PRIVATE katana_runtime)
+target_link_libraries(
+    katana-controlled-fallback-tests
+    PRIVATE
+        katana_diagnostic_interpreter
+)
 katana_enable_warnings(katana-controlled-fallback-tests)
 add_test(NAME katana-controlled-fallback-tests COMMAND katana-controlled-fallback-tests)
 
@@ -740,7 +1406,11 @@ katana_enable_warnings(katana-block-guard-tests)
 add_test(NAME katana-block-guard-tests COMMAND katana-block-guard-tests)
 
 add_executable(katana-interpreter-boundary-tests tests/runtime/interpreter_boundary_tests.cpp)
-target_link_libraries(katana-interpreter-boundary-tests PRIVATE katana_runtime)
+target_link_libraries(
+    katana-interpreter-boundary-tests
+    PRIVATE
+        katana_diagnostic_interpreter
+)
 katana_enable_warnings(katana-interpreter-boundary-tests)
 add_test(NAME katana-interpreter-boundary-tests COMMAND katana-interpreter-boundary-tests)
 
@@ -1092,7 +1762,11 @@ katana_enable_warnings(katana-scheduler-tests)
 add_test(NAME katana-scheduler-tests COMMAND katana-scheduler-tests)
 
 add_executable(katana-dynamic-interpreter-tests tests/runtime/dynamic_interpreter_tests.cpp)
-target_link_libraries(katana-dynamic-interpreter-tests PRIVATE katana_runtime)
+target_link_libraries(
+    katana-dynamic-interpreter-tests
+    PRIVATE
+        katana_diagnostic_interpreter
+)
 katana_enable_warnings(katana-dynamic-interpreter-tests)
 add_test(NAME katana-dynamic-interpreter-tests COMMAND katana-dynamic-interpreter-tests)
 
@@ -3919,7 +4593,7 @@ write_basic_package_version_file(
 )
 
 install(
-    TARGETS katana_runtime
+    TARGETS katana_runtime katana_runtime_core
     EXPORT KatanaRuntimeTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk

@@ -248,8 +248,8 @@ void emit_multi_block_completion(std::ostringstream& output,
     emit_indent(output, indent + 2);
     output << "cpu.retired_guest_instructions - block_retired_before,\n";
     emit_indent(output, indent + 2);
-    output << "block_raised_exception, "
-           << (exception_exit ? "true" : "block_raised_exception") << ");\n";
+    output << "block_raised_exception, " << (exception_exit ? "true" : "block_raised_exception")
+           << ");\n";
     emit_indent(output, indent + 1);
     output << "block_completion_committed = true;\n";
     emit_indent(output, indent + 1);
@@ -456,12 +456,15 @@ void emit_simple_instruction(std::ostringstream& output,
         }
         output << "cpu.r[" << source << "];\n"
                << "if (cpu.fpu_transfer_pair()) {\n"
-               << "    const std::uint32_t low = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
-               << "    const std::uint32_t high = katana::runtime::guest_read_u32_at(cpu, guest_origin, address + 4u);\n"
+               << "    const std::uint32_t low = katana::runtime::guest_read_u32_at(cpu, "
+                  "guest_origin, address);\n"
+               << "    const std::uint32_t high = katana::runtime::guest_read_u32_at(cpu, "
+                  "guest_origin, address + 4u);\n"
                << "    katana::runtime::write_fpu_pair_bits(cpu, " << destination
                << "u, (static_cast<std::uint64_t>(high) << 32u) | low);\n"
                << "} else {\n"
-               << "    cpu.fr[" << destination << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
+               << "    cpu.fr[" << destination
+               << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
                << "}\n";
         if (instruction.operation == Operation::FmovLoadPostIncrement) {
             output << "cpu.r[" << source << "] = address + (cpu.fpu_transfer_pair() ? 8u : 4u);\n";
@@ -490,13 +493,15 @@ void emit_simple_instruction(std::ostringstream& output,
                << "if (cpu.fpu_transfer_pair()) {\n"
                << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, "
                << source << "u);\n"
-               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, static_cast<std::uint32_t>(bits), "
+               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, "
+                  "static_cast<std::uint32_t>(bits), "
                   "katana::runtime::CodeWriteSource::Fpu);\n"
-               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address + 4u, static_cast<std::uint32_t>(bits >> 32u), "
+               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address + 4u, "
+                  "static_cast<std::uint32_t>(bits >> 32u), "
                   "katana::runtime::CodeWriteSource::Fpu);\n"
                << "} else {\n"
-               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, cpu.fr[" << source
-               << "], katana::runtime::CodeWriteSource::Fpu);\n"
+               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, cpu.fr["
+               << source << "], katana::runtime::CodeWriteSource::Fpu);\n"
                << "}\n";
         if (instruction.operation == Operation::FmovStorePreDecrement) {
             output << "cpu.r[" << destination << "] = address;\n";
@@ -1058,113 +1063,111 @@ void emit_simple_instruction(std::ostringstream& output,
                << "}\n";
         return;
     case Operation::MultiplyAccumulateWord:
-        output << "{\n"
-               << "const bool same_register = "
-               << (instruction.source_register == instruction.destination_register ? "true"
-                                                                                   : "false")
-               << ";\n"
-               << "const std::uint32_t destination_address = cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "];\n"
-               << "const std::uint32_t source_address = cpu.r["
-               << static_cast<unsigned>(instruction.source_register)
-               << "] + (same_register ? 2u : 0u);\n"
-               << "const std::uint32_t destination_raw =\n"
-               << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, destination_address);\n"
-               << "const std::uint32_t source_raw =\n"
-               << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, source_address);\n"
-               << "const std::int64_t destination =\n"
-               << "    (destination_raw & 0x00008000u) != 0u\n"
-               << "    ? static_cast<std::int64_t>(destination_raw) - 0x00010000ll\n"
-               << "    : static_cast<std::int64_t>(destination_raw);\n"
-               << "const std::int64_t source =\n"
-               << "    (source_raw & 0x00008000u) != 0u\n"
-               << "    ? static_cast<std::int64_t>(source_raw) - 0x00010000ll\n"
-               << "    : static_cast<std::int64_t>(source_raw);\n"
-               << "const std::int64_t product = source * destination;\n"
-               << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] += 2u;\n"
-               << "cpu.r[" << static_cast<unsigned>(instruction.source_register) << "] += 2u;\n"
-               << "if (cpu.s) {\n"
-               << "    const std::int64_t accumulator =\n"
-               << "        (cpu.macl & 0x80000000u) != 0u\n"
-               << "        ? static_cast<std::int64_t>(cpu.macl) - 0x100000000ll\n"
-               << "        : static_cast<std::int64_t>(cpu.macl);\n"
-               << "    std::int64_t result = accumulator + product;\n"
-               << "    if (result > 0x000000007FFFFFFFll) {\n"
-               << "        result = 0x000000007FFFFFFFll;\n"
-               << "    } else if (result < -0x0000000080000000ll) {\n"
-               << "        result = -0x0000000080000000ll;\n"
-               << "    }\n"
-               << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
-               << "} else {\n"
-               << "    const std::uint64_t accumulator =\n"
-               << "        (static_cast<std::uint64_t>(cpu.mach) << 32u) |\n"
-               << "        static_cast<std::uint64_t>(cpu.macl);\n"
-               << "    const std::uint64_t result =\n"
-               << "        accumulator + static_cast<std::uint64_t>(product);\n"
-               << "    cpu.mach = static_cast<std::uint32_t>(result >> 32u);\n"
-               << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
-               << "}\n"
-               << "}\n";
+        output
+            << "{\n"
+            << "const bool same_register = "
+            << (instruction.source_register == instruction.destination_register ? "true" : "false")
+            << ";\n"
+            << "const std::uint32_t destination_address = cpu.r["
+            << static_cast<unsigned>(instruction.destination_register) << "];\n"
+            << "const std::uint32_t source_address = cpu.r["
+            << static_cast<unsigned>(instruction.source_register)
+            << "] + (same_register ? 2u : 0u);\n"
+            << "const std::uint32_t destination_raw =\n"
+            << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, destination_address);\n"
+            << "const std::uint32_t source_raw =\n"
+            << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, source_address);\n"
+            << "const std::int64_t destination =\n"
+            << "    (destination_raw & 0x00008000u) != 0u\n"
+            << "    ? static_cast<std::int64_t>(destination_raw) - 0x00010000ll\n"
+            << "    : static_cast<std::int64_t>(destination_raw);\n"
+            << "const std::int64_t source =\n"
+            << "    (source_raw & 0x00008000u) != 0u\n"
+            << "    ? static_cast<std::int64_t>(source_raw) - 0x00010000ll\n"
+            << "    : static_cast<std::int64_t>(source_raw);\n"
+            << "const std::int64_t product = source * destination;\n"
+            << "cpu.r[" << static_cast<unsigned>(instruction.destination_register) << "] += 2u;\n"
+            << "cpu.r[" << static_cast<unsigned>(instruction.source_register) << "] += 2u;\n"
+            << "if (cpu.s) {\n"
+            << "    const std::int64_t accumulator =\n"
+            << "        (cpu.macl & 0x80000000u) != 0u\n"
+            << "        ? static_cast<std::int64_t>(cpu.macl) - 0x100000000ll\n"
+            << "        : static_cast<std::int64_t>(cpu.macl);\n"
+            << "    std::int64_t result = accumulator + product;\n"
+            << "    if (result > 0x000000007FFFFFFFll) {\n"
+            << "        result = 0x000000007FFFFFFFll;\n"
+            << "    } else if (result < -0x0000000080000000ll) {\n"
+            << "        result = -0x0000000080000000ll;\n"
+            << "    }\n"
+            << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
+            << "} else {\n"
+            << "    const std::uint64_t accumulator =\n"
+            << "        (static_cast<std::uint64_t>(cpu.mach) << 32u) |\n"
+            << "        static_cast<std::uint64_t>(cpu.macl);\n"
+            << "    const std::uint64_t result =\n"
+            << "        accumulator + static_cast<std::uint64_t>(product);\n"
+            << "    cpu.mach = static_cast<std::uint32_t>(result >> 32u);\n"
+            << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
+            << "}\n"
+            << "}\n";
         return;
 
     case Operation::MultiplyAccumulateLong:
-        output << "{\n"
-               << "const bool same_register = "
-               << (instruction.source_register == instruction.destination_register ? "true"
-                                                                                   : "false")
-               << ";\n"
-               << "const std::uint32_t destination_address = cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "];\n"
-               << "const std::uint32_t source_address = cpu.r["
-               << static_cast<unsigned>(instruction.source_register)
-               << "] + (same_register ? 4u : 0u);\n"
-               << "const std::uint32_t destination_raw =\n"
-               << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, destination_address);\n"
-               << "const std::uint32_t source_raw =\n"
-               << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, source_address);\n"
-               << "const std::int64_t destination =\n"
-               << "    (destination_raw & 0x80000000u) != 0u\n"
-               << "    ? static_cast<std::int64_t>(destination_raw) - 0x100000000ll\n"
-               << "    : static_cast<std::int64_t>(destination_raw);\n"
-               << "const std::int64_t source =\n"
-               << "    (source_raw & 0x80000000u) != 0u\n"
-               << "    ? static_cast<std::int64_t>(source_raw) - 0x100000000ll\n"
-               << "    : static_cast<std::int64_t>(source_raw);\n"
-               << "const std::int64_t product = source * destination;\n"
-               << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] += 4u;\n"
-               << "cpu.r[" << static_cast<unsigned>(instruction.source_register) << "] += 4u;\n"
-               << "if (cpu.s) {\n"
-               << "    const std::uint64_t accumulator_raw =\n"
-               << "        (static_cast<std::uint64_t>(cpu.mach & 0x0000FFFFu) << 32u) |\n"
-               << "        static_cast<std::uint64_t>(cpu.macl);\n"
-               << "    const std::int64_t accumulator =\n"
-               << "        (accumulator_raw & 0x0000800000000000ull) != 0u\n"
-               << "        ? static_cast<std::int64_t>(accumulator_raw) - 0x0001000000000000ll\n"
-               << "        : static_cast<std::int64_t>(accumulator_raw);\n"
-               << "    std::int64_t result = accumulator + product;\n"
-               << "    if (result > 0x00007FFFFFFFFFFFll) {\n"
-               << "        result = 0x00007FFFFFFFFFFFll;\n"
-               << "    } else if (result < -0x0000800000000000ll) {\n"
-               << "        result = -0x0000800000000000ll;\n"
-               << "    }\n"
-               << "    const std::uint64_t result_bits =\n"
-               << "        static_cast<std::uint64_t>(result) & 0x0000FFFFFFFFFFFFull;\n"
-               << "    cpu.mach = static_cast<std::uint32_t>(\n"
-               << "        (result_bits >> 32u) & 0x0000FFFFu\n"
-               << "    );\n"
-               << "    cpu.macl = static_cast<std::uint32_t>(result_bits);\n"
-               << "} else {\n"
-               << "    const std::uint64_t accumulator =\n"
-               << "        (static_cast<std::uint64_t>(cpu.mach) << 32u) |\n"
-               << "        static_cast<std::uint64_t>(cpu.macl);\n"
-               << "    const std::uint64_t result =\n"
-               << "        accumulator + static_cast<std::uint64_t>(product);\n"
-               << "    cpu.mach = static_cast<std::uint32_t>(result >> 32u);\n"
-               << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
-               << "}\n"
-               << "}\n";
+        output
+            << "{\n"
+            << "const bool same_register = "
+            << (instruction.source_register == instruction.destination_register ? "true" : "false")
+            << ";\n"
+            << "const std::uint32_t destination_address = cpu.r["
+            << static_cast<unsigned>(instruction.destination_register) << "];\n"
+            << "const std::uint32_t source_address = cpu.r["
+            << static_cast<unsigned>(instruction.source_register)
+            << "] + (same_register ? 4u : 0u);\n"
+            << "const std::uint32_t destination_raw =\n"
+            << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, destination_address);\n"
+            << "const std::uint32_t source_raw =\n"
+            << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, source_address);\n"
+            << "const std::int64_t destination =\n"
+            << "    (destination_raw & 0x80000000u) != 0u\n"
+            << "    ? static_cast<std::int64_t>(destination_raw) - 0x100000000ll\n"
+            << "    : static_cast<std::int64_t>(destination_raw);\n"
+            << "const std::int64_t source =\n"
+            << "    (source_raw & 0x80000000u) != 0u\n"
+            << "    ? static_cast<std::int64_t>(source_raw) - 0x100000000ll\n"
+            << "    : static_cast<std::int64_t>(source_raw);\n"
+            << "const std::int64_t product = source * destination;\n"
+            << "cpu.r[" << static_cast<unsigned>(instruction.destination_register) << "] += 4u;\n"
+            << "cpu.r[" << static_cast<unsigned>(instruction.source_register) << "] += 4u;\n"
+            << "if (cpu.s) {\n"
+            << "    const std::uint64_t accumulator_raw =\n"
+            << "        (static_cast<std::uint64_t>(cpu.mach & 0x0000FFFFu) << 32u) |\n"
+            << "        static_cast<std::uint64_t>(cpu.macl);\n"
+            << "    const std::int64_t accumulator =\n"
+            << "        (accumulator_raw & 0x0000800000000000ull) != 0u\n"
+            << "        ? static_cast<std::int64_t>(accumulator_raw) - 0x0001000000000000ll\n"
+            << "        : static_cast<std::int64_t>(accumulator_raw);\n"
+            << "    std::int64_t result = accumulator + product;\n"
+            << "    if (result > 0x00007FFFFFFFFFFFll) {\n"
+            << "        result = 0x00007FFFFFFFFFFFll;\n"
+            << "    } else if (result < -0x0000800000000000ll) {\n"
+            << "        result = -0x0000800000000000ll;\n"
+            << "    }\n"
+            << "    const std::uint64_t result_bits =\n"
+            << "        static_cast<std::uint64_t>(result) & 0x0000FFFFFFFFFFFFull;\n"
+            << "    cpu.mach = static_cast<std::uint32_t>(\n"
+            << "        (result_bits >> 32u) & 0x0000FFFFu\n"
+            << "    );\n"
+            << "    cpu.macl = static_cast<std::uint32_t>(result_bits);\n"
+            << "} else {\n"
+            << "    const std::uint64_t accumulator =\n"
+            << "        (static_cast<std::uint64_t>(cpu.mach) << 32u) |\n"
+            << "        static_cast<std::uint64_t>(cpu.macl);\n"
+            << "    const std::uint64_t result =\n"
+            << "        accumulator + static_cast<std::uint64_t>(product);\n"
+            << "    cpu.mach = static_cast<std::uint32_t>(result >> 32u);\n"
+            << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
+            << "}\n"
+            << "}\n";
         return;
     case Operation::DivideInitializeUnsigned:
         output << "cpu.q = false;\n"
@@ -1341,7 +1344,8 @@ void emit_simple_instruction(std::ostringstream& output,
         emit_indent(output, indent + 1);
         output << "const std::uint32_t address = cpu.gbr + cpu.r[0];\n";
         emit_indent(output, indent + 1);
-        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, address);\n";
+        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, "
+                  "address);\n";
         emit_indent(output, indent + 1);
         if (instruction.operation == Operation::TestByteImmediate) {
             output << "cpu.t = (value & static_cast<std::uint8_t>(" << instruction.immediate
@@ -1350,8 +1354,10 @@ void emit_simple_instruction(std::ostringstream& output,
             const char* operation = instruction.operation == Operation::AndByteImmediate   ? "&"
                                     : instruction.operation == Operation::XorByteImmediate ? "^"
                                                                                            : "|";
-            output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, static_cast<std::uint8_t>(value " << operation
-                   << " static_cast<std::uint8_t>(" << instruction.immediate << ")));\n";
+            output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, "
+                      "static_cast<std::uint8_t>(value "
+                   << operation << " static_cast<std::uint8_t>(" << instruction.immediate
+                   << ")));\n";
         }
         emit_indent(output, indent);
         output << "}\n";
@@ -1363,9 +1369,11 @@ void emit_simple_instruction(std::ostringstream& output,
         output << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n";
         emit_indent(output, indent + 1);
-        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, address);\n";
+        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, "
+                  "address);\n";
         emit_indent(output, indent + 1);
-        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, static_cast<std::uint8_t>(value | 0x80u));\n";
+        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, "
+                  "static_cast<std::uint8_t>(value | 0x80u));\n";
         emit_indent(output, indent + 1);
         output << "cpu.t = value == 0u;\n";
         emit_indent(output, indent);
@@ -1385,14 +1393,15 @@ void emit_simple_instruction(std::ostringstream& output,
 
     case Operation::LoadLong:
         if (instruction.forwarded_value_register) {
-            output << "{\n"
-                   << "const std::uint32_t forwarded_value = cpu.r["
-                   << static_cast<unsigned>(*instruction.forwarded_value_register) << "];\n"
-                   << "static_cast<void>(katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
-                   << static_cast<unsigned>(instruction.source_register) << "]));\n"
-                   << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = forwarded_value;\n"
-                   << "}\n";
+            output
+                << "{\n"
+                << "const std::uint32_t forwarded_value = cpu.r["
+                << static_cast<unsigned>(*instruction.forwarded_value_register) << "];\n"
+                << "static_cast<void>(katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
+                << static_cast<unsigned>(instruction.source_register) << "]));\n"
+                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
+                << "] = forwarded_value;\n"
+                << "}\n";
         } else {
             output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                    << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
@@ -1589,7 +1598,8 @@ void emit_simple_instruction(std::ostringstream& output,
         output << "{\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
-               << "const std::uint32_t value = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
+               << "const std::uint32_t value = katana::runtime::guest_read_u32_at(cpu, "
+                  "guest_origin, address);\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.source_register)
                << "] = address + 4u;\n";
         emit_special_register_write(output, instruction.special_register, "value");
@@ -1721,15 +1731,29 @@ void emit_simple_instruction(std::ostringstream& output,
     }
 }
 
+void emit_instruction_observer(std::ostringstream& output,
+                               const katana::ir::Instruction& instruction,
+                               const int indent,
+                               const bool external_instruction_observer) {
+    if (!external_instruction_observer) return;
+    emit_indent(output, indent);
+    output << "note_instruction_entry(" << relocated_code_address(instruction.source_address)
+           << ", "
+           << (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot ? "true" : "false")
+           << ");\n";
+}
+
 void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const katana::ir::Instruction& instruction,
                                      const int indent,
-                                     const bool single_block) {
+                                     const bool single_block,
+                                     const bool external_instruction_observer) {
     const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
     emit_indent(output, indent);
     output << "{\n";
     emit_indent(output, indent);
     output << "    // katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_instruction_observer(output, instruction, indent + 1, external_instruction_observer);
     if (timing.requires_cycle_flush && !has_proven_linear_ram_access(instruction)) {
         emit_indent(output, indent + 1);
         output << "if (services != nullptr) "
@@ -1769,9 +1793,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     emit_indent(output, indent + 2);
     output << "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()\n";
     emit_indent(output, indent + 3);
-    output << "? katana::runtime::GuestInstructionOrigin{"
-           << hex32(instruction.source_address) << ", "
-           << relocated_code_address(instruction.source_address) << ", true}\n";
+    output << "? katana::runtime::GuestInstructionOrigin{" << hex32(instruction.source_address)
+           << ", " << relocated_code_address(instruction.source_address) << ", true}\n";
     emit_indent(output, indent + 3);
     output << ": katana::runtime::GuestInstructionOrigin{};\n";
     emit_simple_instruction(output, instruction, indent + 2);
@@ -1797,13 +1820,15 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
 void emit_call_delay_slot(std::ostringstream& output,
                           const katana::ir::Instruction& instruction,
                           const int indent,
-                          const bool single_block) {
+                          const bool single_block,
+                          const bool external_instruction_observer) {
     emit_indent(output, indent);
     output << "const auto exception_generation_before_delay_slot = "
               "cpu.exception_generation;\n";
     emit_indent(output, indent);
     output << "[&] {\n";
-    emit_guarded_simple_instruction(output, instruction, indent + 1, single_block);
+    emit_guarded_simple_instruction(
+        output, instruction, indent + 1, single_block, external_instruction_observer);
     emit_indent(output, indent);
     output << "}();\n";
     emit_indent(output, indent);
@@ -1888,7 +1913,8 @@ void emit_terminal(std::ostringstream& output,
                    const std::unordered_set<std::uint32_t>& current_blocks,
                    const int indent,
                    const bool single_block,
-                   const bool guarded_local_block_chaining) {
+                   const bool guarded_local_block_chaining,
+                   const bool external_instruction_observer) {
     using Operation = katana::ir::Operation;
 
     const auto& instruction = block.instructions[control_index];
@@ -1896,6 +1922,7 @@ void emit_terminal(std::ostringstream& output,
 
     emit_indent(output, indent);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_instruction_observer(output, instruction, indent, external_instruction_observer);
     emit_indent(output, indent);
     output << "katana::runtime::GuestInstructionAttempt terminal_instruction_attempt(\n";
     emit_indent(output, indent + 1);
@@ -1922,7 +1949,8 @@ void emit_terminal(std::ostringstream& output,
         }
 
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
+            emit_guarded_simple_instruction(
+                output, *delay_slot, indent, single_block, external_instruction_observer);
         }
 
         emit_indent(output, indent);
@@ -1947,7 +1975,8 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_call_delay_slot(output, *delay_slot, indent, single_block);
+            emit_call_delay_slot(
+                output, *delay_slot, indent, single_block, external_instruction_observer);
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
@@ -1978,7 +2007,8 @@ void emit_terminal(std::ostringstream& output,
             emit_indent(output, indent);
             output << "const bool take_branch = " << condition << ";\n";
 
-            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
+            emit_guarded_simple_instruction(
+                output, *delay_slot, indent, single_block, external_instruction_observer);
 
             emit_indent(output, indent);
             output << "cpu.pc = take_branch ? "
@@ -1992,13 +2022,12 @@ void emit_terminal(std::ostringstream& output,
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
-        emit_block_transition(
-            output,
-            indent,
-            single_block,
-            guarded_local_block_chaining,
-            current_blocks.contains(*instruction.target_address) &&
-                current_blocks.contains(fallthrough_address(instruction)));
+        emit_block_transition(output,
+                              indent,
+                              single_block,
+                              guarded_local_block_chaining,
+                              current_blocks.contains(*instruction.target_address) &&
+                                  current_blocks.contains(fallthrough_address(instruction)));
         return;
     }
 
@@ -2012,7 +2041,8 @@ void emit_terminal(std::ostringstream& output,
         output << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
+            emit_guarded_simple_instruction(
+                output, *delay_slot, indent, single_block, external_instruction_observer);
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
@@ -2042,11 +2072,8 @@ void emit_terminal(std::ostringstream& output,
             if (current_blocks.contains(target)) {
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = jump_target;\n";
-                emit_block_transition(output,
-                                      indent + 2,
-                                      single_block,
-                                      guarded_local_block_chaining,
-                                      true);
+                emit_block_transition(
+                    output, indent + 2, single_block, guarded_local_block_chaining, true);
             } else if (known_functions.contains(target)) {
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = jump_target;\n";
@@ -2089,7 +2116,8 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_call_delay_slot(output, *delay_slot, indent, single_block);
+            emit_call_delay_slot(
+                output, *delay_slot, indent, single_block, external_instruction_observer);
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
@@ -2147,7 +2175,8 @@ void emit_terminal(std::ostringstream& output,
         output << "const std::uint32_t return_target = cpu.pr;\n";
 
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
+            emit_guarded_simple_instruction(
+                output, *delay_slot, indent, single_block, external_instruction_observer);
         }
 
         emit_indent(output, indent);
@@ -2173,7 +2202,8 @@ void emit_terminal(std::ostringstream& output,
         emit_indent(output, indent);
         output << "return_from_exception(cpu);\n";
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
+            emit_guarded_simple_instruction(
+                output, *delay_slot, indent, single_block, external_instruction_observer);
         }
         emit_terminal_instruction_completion(output, indent, single_block);
         emit_multi_block_completion(output, indent, single_block);
@@ -2466,7 +2496,8 @@ void emit_block(std::ostringstream& output,
                 const std::unordered_set<std::uint32_t>& current_blocks,
                 const bool single_block,
                 const bool guarded_local_block_chaining,
-                const bool note_external_block_entry) {
+                const bool note_external_block_entry,
+                const bool external_instruction_observer) {
     const auto segment = block.start_address >> 29u;
     if (segment == 4u || segment == 5u) {
         const auto direct_alias = block.start_address ^ 0x20000000u;
@@ -2501,7 +2532,8 @@ void emit_block(std::ostringstream& output,
             break;
         }
 
-        emit_guarded_simple_instruction(output, instruction, 4, single_block);
+        emit_guarded_simple_instruction(
+            output, instruction, 4, single_block, external_instruction_observer);
     }
 
     if (control_index.has_value()) {
@@ -2512,7 +2544,8 @@ void emit_block(std::ostringstream& output,
                       current_blocks,
                       4,
                       single_block,
-                      guarded_local_block_chaining);
+                      guarded_local_block_chaining,
+                      external_instruction_observer);
     } else if (block.successors.size() == 1u) {
         emit_indent(output, 4);
         output << "cpu.pc = " << relocated_code_address(block.successors.front()) << ";\n";
@@ -2569,7 +2602,7 @@ bool cpp_backend_supports_operation(const katana::ir::Operation operation) noexc
             break;
         }
         std::ostringstream output;
-        emit_guarded_simple_instruction(output, instruction, 0, true);
+        emit_guarded_simple_instruction(output, instruction, 0, true, false);
         return !output.str().empty();
     } catch (...) {
         return false;
@@ -2676,6 +2709,10 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                      << "#define runtime_only_call(...) unresolved_call(__VA_ARGS__)\n"
                      << "#define runtime_only_jump(...) unresolved_jump(__VA_ARGS__)\n\n";
     }
+    if (request.external_instruction_observer) {
+        declarations << "void note_instruction_entry(std::uint32_t address, "
+                        "bool in_delay_slot) noexcept;\n\n";
+    }
 
     std::vector<std::uint32_t> ordered_known_functions(known_functions.begin(),
                                                        known_functions.end());
@@ -2716,7 +2753,8 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                        current_blocks,
                        request.single_block_execution,
                        request.guarded_local_block_chaining,
-                       request.external_dynamic_dispatch);
+                       request.external_dynamic_dispatch,
+                       request.external_instruction_observer);
         }
 
         function_bodies << "            default:\n"

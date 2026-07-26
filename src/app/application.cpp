@@ -541,6 +541,41 @@ std::string hex_address(const std::uint32_t value) {
     return output.str();
 }
 
+bool remove_tree_with_retry(const std::filesystem::path& path, std::error_code& error) {
+    constexpr std::size_t attempts = 100u;
+    constexpr auto retry_delay = std::chrono::milliseconds(50);
+    auto removal_path = path;
+#ifdef _WIN32
+    std::error_code absolute_error;
+    auto absolute = std::filesystem::absolute(path, absolute_error);
+    if (!absolute_error) {
+        absolute.make_preferred();
+        const auto native = absolute.native();
+        if (!native.starts_with(LR"(\\?\)")) {
+            auto extended = native.starts_with(LR"(\\)")
+                                ? std::wstring(LR"(\\?\UNC\)") + native.substr(2u)
+                                : std::wstring(LR"(\\?\)") + native;
+            removal_path = std::filesystem::path(std::move(extended));
+        } else {
+            removal_path = absolute;
+        }
+    }
+#endif
+    for (std::size_t attempt = 0u; attempt < attempts; ++attempt) {
+        error.clear();
+        std::filesystem::remove_all(removal_path, error);
+        if (!error) return true;
+
+        std::error_code exists_error;
+        if (!std::filesystem::exists(removal_path, exists_error) && !exists_error) {
+            error.clear();
+            return true;
+        }
+        if (attempt + 1u != attempts) std::this_thread::sleep_for(retry_delay);
+    }
+    return false;
+}
+
 std::string shell_quote(const std::filesystem::path& path) {
     const auto text = path.string();
 #ifdef _WIN32
@@ -771,8 +806,8 @@ std::size_t configured_host_build_jobs() {
     auto configured = configured_environment_value("KATANA_HOST_BUILD_JOBS");
     if (!configured) configured = configured_environment_value("KATANA_PORT_CODEGEN_JOBS");
     if (!configured) {
-        return std::min<std::size_t>(
-            maximum_jobs, std::max(1u, std::thread::hardware_concurrency()));
+        return std::min<std::size_t>(maximum_jobs,
+                                     std::max(1u, std::thread::hardware_concurrency()));
     }
     std::size_t parsed = 0u;
     const auto jobs = std::stoull(*configured, &parsed, 10);
@@ -847,7 +882,7 @@ void configure_and_build(const std::filesystem::path& source,
         std::string("cmake --build ") + shell_quote(build) + " --target " + std::string(target);
     compile += " --parallel " + std::to_string(configured_host_build_jobs());
 #ifdef _WIN32
-    if (!use_ninja) compile += " --config RelWithDebInfo";
+    if (!use_ninja) compile += " --config RelWithDebInfo -- /nodeReuse:false";
 #endif
     run_host_command(
         compile, "compile", log_path, cancellation, events, 90u, "host-compilation", log_offset);
@@ -953,10 +988,10 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
                                            coverage.incomplete_initial_required_code_bytes +
                                            coverage.uncovered_runtime_materializable_bytes;
     coverage.functions = analysis.recursive.functions.size();
-    coverage.unknown_instructions = static_cast<std::size_t>(std::count_if(
-        analysis.recursive.diagnostics.begin(),
-        analysis.recursive.diagnostics.end(),
-        analysis::analysis_diagnostic_blocks_codegen));
+    coverage.unknown_instructions =
+        static_cast<std::size_t>(std::count_if(analysis.recursive.diagnostics.begin(),
+                                               analysis.recursive.diagnostics.end(),
+                                               analysis::analysis_diagnostic_blocks_codegen));
     coverage.candidate_unknown_instructions =
         analysis.recursive.diagnostics.size() - coverage.unknown_instructions;
     for (const auto& resolution : analysis.indirect_control_flow) {
@@ -1118,8 +1153,7 @@ std::string build_plan_json(const std::string_view status,
            << coverage.guarded_partial_control_flow + coverage.runtime_only_control_flow +
                   coverage.unresolved_control_flow
            << ",\"unknown_instructions\":" << coverage.unknown_instructions
-           << ",\"candidate_unknown_instructions\":"
-           << coverage.candidate_unknown_instructions
+           << ",\"candidate_unknown_instructions\":" << coverage.candidate_unknown_instructions
            << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
            << ",\"executable_byte_classes\":{";
     for (std::size_t current = 0u; current < coverage.executable_byte_classes.size(); ++current) {
@@ -1398,13 +1432,11 @@ JobResult ApplicationService::execute(const JobRequest& request,
         const auto staging_key = io::sha256_bytes(final_root.generic_string() + ':' + request.id);
         work_root = final_root.parent_path() / (".katana-stage-" + staging_key.substr(0u, 12u));
         std::error_code cleanup_error;
-        std::filesystem::remove_all(work_root, cleanup_error);
-        if (cleanup_error)
+        if (!remove_tree_with_retry(work_root, cleanup_error))
             throw std::runtime_error("Altes Job-Staging konnte nicht entfernt werden.");
         if (std::filesystem::exists(final_root)) {
             if (std::filesystem::exists(stale_root)) {
-                std::filesystem::remove_all(final_root, cleanup_error);
-                if (cleanup_error)
+                if (!remove_tree_with_retry(final_root, cleanup_error))
                     throw std::runtime_error(
                         "Vorheriger Fehlerbericht konnte nicht ersetzt werden.");
             } else {
@@ -1587,17 +1619,16 @@ JobResult ApplicationService::execute(const JobRequest& request,
                     result.failure_category = JobFailureCategory::Build;
                     if (project.execution_profile.format == io::ProjectInputFormat::DreamcastGdi) {
                         const auto host_root = work_root / "sourcecode";
-                        const auto boot_segment = std::find_if(
-                            project.image.segments().begin(),
-                            project.image.segments().end(),
-                            [](const auto& segment) {
-                                return segment.virtual_address ==
-                                       platform::dreamcast_disc_boot_address;
-                            });
-                        const auto boot_size =
-                            boot_segment == project.image.segments().end()
-                                ? 0u
-                                : boot_segment->bytes.size();
+                        const auto boot_segment =
+                            std::find_if(project.image.segments().begin(),
+                                         project.image.segments().end(),
+                                         [](const auto& segment) {
+                                             return segment.virtual_address ==
+                                                    platform::dreamcast_disc_boot_address;
+                                         });
+                        const auto boot_size = boot_segment == project.image.segments().end()
+                                                   ? 0u
+                                                   : boot_segment->bytes.size();
                         const auto port_export = codegen::export_dreamcast_port_project(
                             {project.image,
                              analysis,
@@ -1715,8 +1746,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                         std::filesystem::remove_all(host_root / "runtime");
                         std::filesystem::remove_all(host_root / "user-data");
                         std::error_code cleanup_error;
-                        std::filesystem::remove_all(host_build_root, cleanup_error);
-                        if (cleanup_error)
+                        if (!remove_tree_with_retry(host_build_root, cleanup_error))
                             throw std::runtime_error(
                                 "Temporaeres Hostbuildverzeichnis konnte nicht entfernt werden.");
                     } else {
@@ -1815,20 +1845,18 @@ JobResult ApplicationService::execute(const JobRequest& request,
                     codegen::preserve_local_port_user_data(stale_root, final_root);
                 } catch (...) {
                     std::error_code rollback_error;
-                    std::filesystem::remove_all(final_root, rollback_error);
+                    static_cast<void>(remove_tree_with_retry(final_root, rollback_error));
                     if (std::filesystem::exists(stale_root))
                         std::filesystem::rename(stale_root, final_root);
                     throw;
                 }
                 std::error_code cleanup_error;
-                std::filesystem::remove_all(stale_root, cleanup_error);
-                if (cleanup_error)
+                if (!remove_tree_with_retry(stale_root, cleanup_error))
                     throw std::runtime_error(
                         "Veraltetes Jobergebnis konnte nicht bereinigt werden.");
             } else {
                 std::error_code cleanup_error;
-                std::filesystem::remove_all(work_root, cleanup_error);
-                if (cleanup_error)
+                if (!remove_tree_with_retry(work_root, cleanup_error))
                     throw std::runtime_error(
                         "Fehlgeschlagenes Job-Staging konnte nicht bereinigt werden.");
                 std::filesystem::create_directories(final_root);
@@ -1848,7 +1876,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                        "Ausgabeziel, Zugriffsrechte und freien Speicher pruefen."));
         if (transactional) {
             std::error_code ignored;
-            std::filesystem::remove_all(work_root, ignored);
+            static_cast<void>(remove_tree_with_retry(work_root, ignored));
             if (std::filesystem::exists(final_root)) {
                 result_path = final_root / "job-result.json";
                 try {
@@ -2103,8 +2131,7 @@ std::string format_job_result_json(const JobResult& result) {
                << coverage.guarded_partial_control_flow + coverage.runtime_only_control_flow +
                       coverage.unresolved_control_flow
                << ",\"unknown_instructions\":" << coverage.unknown_instructions
-               << ",\"candidate_unknown_instructions\":"
-               << coverage.candidate_unknown_instructions
+               << ",\"candidate_unknown_instructions\":" << coverage.candidate_unknown_instructions
                << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
                << ",\"executable_byte_classes\":{";
         for (std::size_t current = 0u; current < coverage.executable_byte_classes.size();

@@ -26,6 +26,19 @@ Renesas SH-4 manuals are used as behavioral specifications. They are linked,
 not redistributed. See `docs/REFERENCE_PROVENANCE.md` for exact document
 revisions, reference commits, reviewed scope, and synthetic-fixture origins.
 
+SingleStepTests/sh4 is an optional external conformance corpus generated from
+Reicast interpreter behavior. KatanaRecomp does not download it during a
+normal build or CTest run and does not link its generator or any interpreter.
+The supported checkout is pinned to commit
+`48975cb1a9569abb5a0cba587013ea54edf79100`. Corpus data and its documentation
+are Copyright (c) 2024 SingleStepTests and licensed under the MIT License:
+<https://github.com/SingleStepTests/sh4/blob/48975cb1a9569abb5a0cba587013ea54edf79100/LICENSE>.
+The exact pinned license text is retained in
+`third_party/SingleStepTests-sh4-LICENSE.txt`.
+When corpus data or a derivative containing a substantial portion of it is
+redistributed, its copyright notice and MIT permission notice must accompany
+that distribution.
+
 KatanaRecomp itself currently has no repository license file. External
 distribution remains blocked until the explicit project-license decision in
 KR-4902 before the first public Alpha release.
