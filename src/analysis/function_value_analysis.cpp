@@ -111,6 +111,10 @@ struct AbstractState {
         result.fill(true);
         return result;
     }();
+    // Internal, inventory-only proof that a register still denotes VBR plus a
+    // constant displacement.  It is deliberately not part of the public value
+    // summaries and must never create a fixed control-flow edge.
+    std::array<bool, 16u> inventory_vbr_relative{};
     std::map<std::int32_t, AbstractValue> stack_values;
     std::map<std::uint32_t, AbstractValue> memory_values;
 
@@ -377,6 +381,9 @@ bool merge_state(AbstractState& destination,
         const auto merged_inventory_may_alias =
             destination.inventory_stack_may_alias[index] ||
             source.inventory_stack_may_alias[index];
+        const auto merged_inventory_vbr_relative =
+            destination.inventory_vbr_relative[index] &&
+            source.inventory_vbr_relative[index];
         if (destination.stack_offsets[index] != source.stack_offsets[index]) {
             if (destination.stack_offsets[index].has_value()) changed = true;
             destination.stack_offsets[index].reset();
@@ -389,6 +396,12 @@ bool merge_state(AbstractState& destination,
             merged_inventory_may_alias) {
             destination.inventory_stack_may_alias[index] =
                 merged_inventory_may_alias;
+            changed = true;
+        }
+        if (destination.inventory_vbr_relative[index] !=
+            merged_inventory_vbr_relative) {
+            destination.inventory_vbr_relative[index] =
+                merged_inventory_vbr_relative;
             changed = true;
         }
     }
@@ -449,6 +462,7 @@ void clear_written(AbstractState& state, const katana::sh4::DecodedInstruction& 
             state.stack_offsets[index].reset();
             state.stack_may_alias[index] = true;
             state.inventory_stack_may_alias[index] = true;
+            state.inventory_vbr_relative[index] = false;
         }
     }
 }
@@ -762,6 +776,15 @@ void apply_transfer(AbstractState& state,
                     const katana::io::ExecutableImage& image,
                     const bool preserve_guarded_stack_inventory = false) {
     const auto& instruction = line.instruction;
+    const auto incoming_source_vbr_relative =
+        state.inventory_vbr_relative[instruction.source_register];
+    const auto incoming_destination_vbr_relative =
+        state.inventory_vbr_relative[instruction.destination_register];
+    const auto written_registers = general_register_write_mask(instruction);
+    for (std::uint8_t index = 0u; index < state.size(); ++index) {
+        if ((written_registers & register_bit(index)) != 0u)
+            state.inventory_vbr_relative[index] = false;
+    }
     switch (instruction.kind) {
     case katana::sh4::InstructionKind::Nop:
     case katana::sh4::InstructionKind::Ocbp:
@@ -783,9 +806,13 @@ void apply_transfer(AbstractState& state,
             state.stack_may_alias[instruction.source_register];
         state.inventory_stack_may_alias[instruction.destination_register] =
             state.inventory_stack_may_alias[instruction.source_register];
+        state.inventory_vbr_relative[instruction.destination_register] =
+            incoming_source_vbr_relative;
         return;
     case katana::sh4::InstructionKind::AddImmediate:
         adjust_stack_offset(state, instruction.destination_register, instruction.immediate);
+        state.inventory_vbr_relative[instruction.destination_register] =
+            incoming_destination_vbr_relative;
         return;
     case katana::sh4::InstructionKind::AddRegister:
     case katana::sh4::InstructionKind::SubRegister:
@@ -959,6 +986,8 @@ void apply_transfer(AbstractState& state,
                                                                                          : 4u;
         adjust_stack_offset(
             state, instruction.destination_register, -static_cast<std::int32_t>(width));
+        state.inventory_vbr_relative[instruction.destination_register] =
+            incoming_destination_vbr_relative;
         const auto offset = stack_slot(state, instruction.destination_register);
         store_stack_value(state,
                           offset,
@@ -1051,6 +1080,8 @@ void apply_transfer(AbstractState& state,
         if (instruction.source_register != instruction.destination_register) {
             adjust_stack_offset(
                 state, instruction.source_register, static_cast<std::int32_t>(width));
+            state.inventory_vbr_relative[instruction.source_register] =
+                incoming_source_vbr_relative;
         }
         return;
     }
@@ -1138,6 +1169,8 @@ void apply_transfer(AbstractState& state,
         return;
     case katana::sh4::InstructionKind::StoreSpecialRegisterPreDecrement: {
         adjust_stack_offset(state, instruction.destination_register, -4);
+        state.inventory_vbr_relative[instruction.destination_register] =
+            incoming_destination_vbr_relative;
         const auto offset = stack_slot(state, instruction.destination_register);
         invalidate_stack_range(state,
                                offset,
@@ -1156,6 +1189,8 @@ void apply_transfer(AbstractState& state,
     }
     case katana::sh4::InstructionKind::LoadSpecialRegisterPostIncrement:
         adjust_stack_offset(state, instruction.source_register, 4);
+        state.inventory_vbr_relative[instruction.source_register] =
+            incoming_source_vbr_relative;
         return;
     case katana::sh4::InstructionKind::StoreSpecialRegister:
         clear_written(state, instruction);
@@ -1166,6 +1201,7 @@ void apply_transfer(AbstractState& state,
             // inventory-only observer to retain a proven callback subsequently
             // stored through a VBR-relative address.
             state.inventory_stack_may_alias[instruction.destination_register] = false;
+            state.inventory_vbr_relative[instruction.destination_register] = true;
         }
         return;
     case katana::sh4::InstructionKind::MovByteLoadR0Indexed:
@@ -1225,8 +1261,19 @@ void apply_call(AbstractState& state,
                 const std::map<std::uint32_t, FunctionValueSummary>& summaries,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments,
                 const bool preserve_guarded_stack_inventory = false) {
-    if (call_arguments != nullptr) {
-        auto observation = state;
+    if (call_arguments != nullptr && !candidate_callees.empty()) {
+        AbstractState observation;
+        observation.registers = state.registers;
+        observation.stack_offsets = state.stack_offsets;
+        observation.stack_may_alias = state.stack_may_alias;
+        observation.inventory_stack_may_alias =
+            state.inventory_stack_may_alias;
+        observation.inventory_vbr_relative =
+            state.inventory_vbr_relative;
+        observation.memory_values = state.memory_values;
+        // Caller-local stack slots are not part of callee ingress.  Keeping
+        // them in observations only deep-copied irrelevant state and could
+        // requeue a callee when the effective merged input was unchanged.
         if (candidate_callees_guarded) {
             for (auto& value : observation)
                 value.guarded = true;
@@ -1249,6 +1296,7 @@ void apply_call(AbstractState& state,
             state.stack_offsets[index].reset();
             state.stack_may_alias[index] = true;
             state.inventory_stack_may_alias[index] = true;
+            state.inventory_vbr_relative[index] = false;
         }
         state.stack_values.clear();
         state.memory_values.clear();
@@ -1278,7 +1326,10 @@ void apply_call(AbstractState& state,
         state.stack_may_alias[index] = true;
     for (std::uint8_t index = 0u; index <= 7u; ++index)
         state.inventory_stack_may_alias[index] = true;
+    for (std::uint8_t index = 0u; index <= 7u; ++index)
+        state.inventory_vbr_relative[index] = false;
     make_unknown(state[15u]);
+    state.inventory_vbr_relative[15u] = false;
     std::vector<std::uint32_t> callees;
     if (callee.has_value())
         callees.push_back(*callee);
@@ -1373,6 +1424,7 @@ void apply_call(AbstractState& state,
     state.stack_may_alias[0u] = returned_may_alias_stack;
     state.inventory_stack_may_alias[0u] =
         returned_inventory_may_alias_stack;
+    state.inventory_vbr_relative[0u] = false;
 }
 
 const katana::sh4::DisassemblyLine& controlling_line(const BasicBlock& block) {
@@ -1411,6 +1463,7 @@ void observe_stored_code_addresses(
     const auto& instruction = line.instruction;
     bool supported = false;
     bool stack_based = false;
+    bool vbr_relative_destination = false;
     std::set<std::uint32_t> evidence_call_sites;
     std::set<std::uint32_t> evidence_callees;
     const auto include_provenance = [&](const AbstractValue& evidence) {
@@ -1421,10 +1474,17 @@ void observe_stored_code_addresses(
         return !addresses.empty() &&
                addresses.size() <= maximum_summary_values;
     };
+    const auto finite_value = [](const AbstractValue& value) {
+        return value.known && !value.values.empty() &&
+               value.values.size() <= maximum_summary_values;
+    };
     switch (instruction.kind) {
     case K::MovLongStore:
         supported = true;
+        vbr_relative_destination =
+            state.inventory_vbr_relative[instruction.destination_register];
         stack_based =
+            !vbr_relative_destination &&
             state.inventory_stack_may_alias[instruction.destination_register] &&
             !finite_effective_address(
                 displaced_addresses(
@@ -1433,7 +1493,10 @@ void observe_stored_code_addresses(
         break;
     case K::MovLongStorePreDecrement:
         supported = true;
+        vbr_relative_destination =
+            state.inventory_vbr_relative[instruction.destination_register];
         stack_based =
+            !vbr_relative_destination &&
             state.inventory_stack_may_alias[instruction.destination_register] &&
             !finite_effective_address(
                 displaced_addresses(
@@ -1443,7 +1506,10 @@ void observe_stored_code_addresses(
         break;
     case K::MovLongStoreDisplacement:
         supported = true;
+        vbr_relative_destination =
+            state.inventory_vbr_relative[instruction.destination_register];
         stack_based =
+            !vbr_relative_destination &&
             state.inventory_stack_may_alias[instruction.destination_register] &&
             !finite_effective_address(
                 displaced_addresses(
@@ -1454,7 +1520,19 @@ void observe_stored_code_addresses(
         break;
     case K::MovLongStoreR0Indexed:
         supported = true;
+        if (instruction.destination_register != 0u) {
+            const auto r0_vbr_relative =
+                state.inventory_vbr_relative[0u];
+            const auto base_vbr_relative =
+                state.inventory_vbr_relative[instruction.destination_register];
+            vbr_relative_destination =
+                (r0_vbr_relative && !base_vbr_relative &&
+                 finite_value(state[instruction.destination_register])) ||
+                (base_vbr_relative && !r0_vbr_relative &&
+                 finite_value(state[0u]));
+        }
         stack_based =
+            !vbr_relative_destination &&
             (state.inventory_stack_may_alias[0u] ||
              state.inventory_stack_may_alias
                  [instruction.destination_register]) &&
@@ -1477,7 +1555,9 @@ void observe_stored_code_addresses(
     const auto& value = state[instruction.source_register];
     include_provenance(value);
     if (!value.known || value.values.empty() ||
-        value.values.size() > maximum_summary_values || evidence_call_sites.empty())
+        value.values.size() > maximum_summary_values ||
+        (evidence_call_sites.empty() &&
+         !vbr_relative_destination))
         return;
     std::vector<std::uint32_t> validated_candidates;
     validated_candidates.reserve(value.values.size());
@@ -1609,7 +1689,10 @@ FunctionEvaluation evaluate_function(
         std::nullopt) {
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
-    evaluation.call_arguments.reserve(function.direct_callees.size());
+    if (!collect_resolutions)
+        evaluation.call_arguments.reserve(function.direct_callees.size());
+    auto* const call_arguments =
+        collect_resolutions ? nullptr : &evaluation.call_arguments;
     std::unordered_set<std::uint32_t> members;
     members.reserve(function.block_addresses.size());
     members.insert(function.block_addresses.begin(), function.block_addresses.end());
@@ -1720,7 +1803,7 @@ FunctionEvaluation evaluate_function(
                            delayed_call->candidate_callees_guarded,
                            delayed_call->candidate_callees_complete,
                            summaries,
-                           &evaluation.call_arguments,
+                           call_arguments,
                            may_merge_stack_inventory);
                 delayed_call.reset();
             }
@@ -1756,7 +1839,7 @@ FunctionEvaluation evaluate_function(
                                candidate_callees_guarded,
                                candidate_callees_complete,
                                summaries,
-                               &evaluation.call_arguments,
+                               call_arguments,
                                may_merge_stack_inventory);
             }
         }
@@ -1898,6 +1981,7 @@ bool merge_candidate_input(CandidateInput& destination,
         bool exact_stack_provenance = true;
         bool may_alias_stack = false;
         bool inventory_may_alias_stack = false;
+        bool inventory_vbr_relative = true;
         std::optional<std::int32_t> stack_offset;
         std::set<std::uint32_t> call_sites;
         std::set<std::uint32_t> callees;
@@ -1911,6 +1995,9 @@ bool merge_candidate_input(CandidateInput& destination,
             inventory_may_alias_stack =
                 inventory_may_alias_stack ||
                 call_observation.inventory_stack_may_alias[index];
+            inventory_vbr_relative =
+                inventory_vbr_relative &&
+                call_observation.inventory_vbr_relative[index];
             const auto rebased_stack_offset =
                 callee_relative_stack_offset(call_observation, index);
             if (first_stack_provenance) {
@@ -1944,6 +2031,8 @@ bool merge_candidate_input(CandidateInput& destination,
         merged.stack_may_alias[index] = may_alias_stack;
         merged.inventory_stack_may_alias[index] =
             inventory_may_alias_stack;
+        merged.inventory_vbr_relative[index] =
+            inventory_vbr_relative;
         if (may_alias_stack && exact_stack_provenance)
             merged.stack_offsets[index] = stack_offset;
         else
@@ -2021,6 +2110,8 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
         input.stack_may_alias[index] = observation.stack_may_alias[index];
         input.inventory_stack_may_alias[index] =
             observation.inventory_stack_may_alias[index];
+        input.inventory_vbr_relative[index] =
+            observation.inventory_vbr_relative[index];
         if (input[index].values.size() > maximum_summary_values)
             make_unknown_preserving_provenance(input[index]);
     }
