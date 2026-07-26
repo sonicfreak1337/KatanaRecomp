@@ -297,6 +297,128 @@ int main() {
                                 katana::analysis::FunctionOrigin::StoredCodeAddress},
             "Expliziter Function-Override verlor im echten Seedmerge gegen GuardedPartial.");
 
+    const auto destination_forwarded_callback_image = [] {
+        std::vector<std::uint8_t> bytes(0x40u, 0x09u);
+        bytes[0x00u] = 0x0Eu;
+        bytes[0x01u] = 0xB0u; // bsr 0x20, unknown r4 is the destination object
+        bytes[0x02u] = 0x09u;
+        bytes[0x03u] = 0x00u; // nop (delay)
+        bytes[0x04u] = 0x0Bu;
+        bytes[0x05u] = 0x00u; // rts
+        bytes[0x06u] = 0x09u;
+        bytes[0x07u] = 0x00u; // nop (delay)
+        bytes[0x20u] = 0x00u;
+        bytes[0x21u] = 0xE0u; // mov #0,r0 (field offset)
+        bytes[0x22u] = 0x02u;
+        bytes[0x23u] = 0xD2u; // mov.l @(0x2c,pc),r2 -> local handler 0x30
+        bytes[0x24u] = 0x26u;
+        bytes[0x25u] = 0x04u; // mov.l r2,@(r0,r4)
+        bytes[0x26u] = 0x0Bu;
+        bytes[0x27u] = 0x00u; // rts
+        bytes[0x28u] = 0x09u;
+        bytes[0x29u] = 0x00u; // nop (delay)
+        bytes[0x2Cu] = 0x30u;
+        bytes[0x2Du] = 0x00u;
+        bytes[0x2Eu] = 0x00u;
+        bytes[0x2Fu] = 0x00u;
+        bytes[0x30u] = 0x0Bu;
+        bytes[0x31u] = 0x00u; // handler: rts
+        bytes[0x32u] = 0x09u;
+        bytes[0x33u] = 0x00u; // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".destination-forwarded-callback",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-destination-forwarded-callback"});
+        image.add_entry_point(0u);
+        return image;
+    }();
+    const auto destination_forwarded_callback =
+        katana::analysis::analyze_control_flow(destination_forwarded_callback_image);
+    const auto* destination_forwarded_handler =
+        find_function(destination_forwarded_callback, 0x30u);
+    require(destination_forwarded_handler != nullptr &&
+                destination_forwarded_handler->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+                has_instruction(destination_forwarded_callback, 0x30u),
+            "Lokal geladener Codepointer mit Aufrufprovenienz am Storeziel "
+            "erreichte das bewachte AOT-Inventar nicht.");
+
+    const auto widened_destination_callback_image = [] {
+        std::vector<std::uint8_t> bytes(0x70u, 0x09u);
+        constexpr std::array<std::uint8_t, 5u> destination_values{
+            0x68u, 0x6Cu, 0x70u, 0x74u, 0x78u};
+        constexpr std::array<std::uint8_t, 5u> call_displacements{
+            0x1Du, 0x1Au, 0x17u, 0x14u, 0x11u};
+        for (std::size_t index = 0u; index < destination_values.size(); ++index) {
+            const auto offset = index * 6u;
+            bytes[offset] = destination_values[index];
+            bytes[offset + 1u] = 0xE4u; // mov #destination,r4
+            bytes[offset + 2u] = call_displacements[index];
+            bytes[offset + 3u] = 0xB0u; // bsr 0x40
+            bytes[offset + 4u] = 0x09u;
+            bytes[offset + 5u] = 0x00u; // nop (delay)
+        }
+        bytes[0x1Eu] = 0x0Bu;
+        bytes[0x1Fu] = 0x00u; // rts
+        bytes[0x20u] = 0x09u;
+        bytes[0x21u] = 0x00u; // nop (delay)
+        bytes[0x40u] = 0x29u;
+        bytes[0x41u] = 0x00u; // movt r0 -> {0, 1}
+        bytes[0x42u] = 0x0Cu;
+        bytes[0x43u] = 0x34u; // add r0,r4 -> ten values, widened to unknown
+        bytes[0x44u] = 0x02u;
+        bytes[0x45u] = 0xD2u; // mov.l @(0x50,pc),r2 -> local handler 0x60
+        bytes[0x46u] = 0x22u;
+        bytes[0x47u] = 0x24u; // mov.l r2,@r4
+        bytes[0x48u] = 0x0Bu;
+        bytes[0x49u] = 0x00u; // rts
+        bytes[0x4Au] = 0x09u;
+        bytes[0x4Bu] = 0x00u; // nop (delay)
+        bytes[0x50u] = 0x60u;
+        bytes[0x51u] = 0x00u;
+        bytes[0x52u] = 0x00u;
+        bytes[0x53u] = 0x00u;
+        bytes[0x60u] = 0x0Bu;
+        bytes[0x61u] = 0x00u; // handler: rts
+        bytes[0x62u] = 0x09u;
+        bytes[0x63u] = 0x00u; // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".widened-destination-callback",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-widened-destination-callback"});
+        image.add_entry_point(0u);
+        return image;
+    }();
+    const auto widened_destination_callback =
+        katana::analysis::analyze_control_flow(widened_destination_callback_image);
+    const auto* widened_destination_handler =
+        find_function(widened_destination_callback, 0x60u);
+    require(widened_destination_handler != nullptr &&
+                widened_destination_handler->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+                has_instruction(widened_destination_callback, 0x60u),
+            "Wertmengen-Widening verlor die Aufrufprovenienz des Callback-Storeziels.");
+
     const auto forwarded_store_image = [](std::vector<std::uint8_t> registrar,
                                           std::string name) {
         std::vector<std::uint8_t> bytes(0x50u, 0x09u);

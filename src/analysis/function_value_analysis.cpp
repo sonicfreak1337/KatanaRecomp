@@ -161,6 +161,14 @@ void make_unknown(AbstractValue& value) {
     value.callees.clear();
 }
 
+void make_unknown_preserving_provenance(AbstractValue& value) {
+    auto call_sites = std::move(value.call_sites);
+    auto callees = std::move(value.callees);
+    make_unknown(value);
+    value.call_sites = std::move(call_sites);
+    value.callees = std::move(callees);
+}
+
 void set_value(AbstractValue& value, const std::uint32_t constant) {
     value.known = true;
     value.guarded = false;
@@ -172,15 +180,20 @@ void set_value(AbstractValue& value, const std::uint32_t constant) {
 
 bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     if (!destination.known || !source.known) {
+        auto call_sites = destination.call_sites;
+        call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+        auto callees = destination.callees;
+        callees.insert(source.callees.begin(), source.callees.end());
         const bool changed = destination.known || destination.guarded || destination.complete ||
-                             !destination.values.empty() || !destination.call_sites.empty() ||
-                             !destination.callees.empty();
+                             !destination.values.empty() ||
+                             call_sites != destination.call_sites ||
+                             callees != destination.callees;
         destination.known = false;
         destination.guarded = false;
         destination.complete = false;
         destination.values.clear();
-        destination.call_sites.clear();
-        destination.callees.clear();
+        destination.call_sites = std::move(call_sites);
+        destination.callees = std::move(callees);
         return changed;
     }
     bool changed = false;
@@ -197,7 +210,7 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     values.insert(values.end(), source.values.begin(), source.values.end());
     normalize(values);
     if (values.size() > maximum_summary_values) {
-        make_unknown(destination);
+        make_unknown_preserving_provenance(destination);
         return true;
     }
     if (values != destination.values) {
@@ -258,9 +271,17 @@ void apply_binary(AbstractValue& destination,
                   const AbstractValue& source,
                   const katana::sh4::InstructionKind kind) {
     if (!destination.known || !source.known) {
+        auto call_sites = destination.call_sites;
+        call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+        auto callees = destination.callees;
+        callees.insert(source.callees.begin(), source.callees.end());
         make_unknown(destination);
+        destination.call_sites = std::move(call_sites);
+        destination.callees = std::move(callees);
         return;
     }
+    destination.call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+    destination.callees.insert(source.callees.begin(), source.callees.end());
     std::vector<std::uint32_t> values;
     for (const auto left : destination.values) {
         for (const auto right : source.values) {
@@ -285,7 +306,7 @@ void apply_binary(AbstractValue& destination,
                 return;
             }
             if (values.size() > maximum_summary_values) {
-                make_unknown(destination);
+                make_unknown_preserving_provenance(destination);
                 return;
             }
         }
@@ -294,8 +315,6 @@ void apply_binary(AbstractValue& destination,
     destination.values = std::move(values);
     destination.guarded = destination.guarded || source.guarded;
     destination.complete = destination.complete && source.complete;
-    destination.call_sites.insert(source.call_sites.begin(), source.call_sites.end());
-    destination.callees.insert(source.callees.begin(), source.callees.end());
 }
 
 template <typename Operation> void apply_unary(AbstractValue& value, Operation operation) {
@@ -1066,17 +1085,26 @@ void observe_stored_code_addresses(
     const auto& instruction = line.instruction;
     bool supported = false;
     bool stack_based = false;
+    std::set<std::uint32_t> evidence_call_sites;
+    std::set<std::uint32_t> evidence_callees;
+    const auto include_provenance = [&](const AbstractValue& evidence) {
+        evidence_call_sites.insert(evidence.call_sites.begin(), evidence.call_sites.end());
+        evidence_callees.insert(evidence.callees.begin(), evidence.callees.end());
+    };
     switch (instruction.kind) {
     case K::MovLongStore:
     case K::MovLongStorePreDecrement:
     case K::MovLongStoreDisplacement:
         supported = true;
         stack_based = state.stack_offsets[instruction.destination_register].has_value();
+        include_provenance(state[instruction.destination_register]);
         break;
     case K::MovLongStoreR0Indexed:
         supported = true;
         stack_based = state.stack_offsets[0u].has_value() ||
                       state.stack_offsets[instruction.destination_register].has_value();
+        include_provenance(state[0u]);
+        include_provenance(state[instruction.destination_register]);
         break;
     case K::MovLongStoreGbrDisplacement:
         supported = true;
@@ -1087,8 +1115,9 @@ void observe_stored_code_addresses(
     if (!supported || stack_based) return;
 
     const auto& value = state[instruction.source_register];
+    include_provenance(value);
     if (!value.known || value.values.empty() ||
-        value.values.size() > maximum_summary_values || value.call_sites.empty())
+        value.values.size() > maximum_summary_values || evidence_call_sites.empty())
         return;
     std::vector<std::uint32_t> validated_candidates;
     validated_candidates.reserve(value.values.size());
@@ -1112,9 +1141,9 @@ void observe_stored_code_addresses(
         // source value.
         observation.guarded = true;
         observation.store_instruction_addresses = {line.address};
-        observation.evidence_call_sites.assign(value.call_sites.begin(),
-                                               value.call_sites.end());
-        observation.evidence_callees.assign(value.callees.begin(), value.callees.end());
+        observation.evidence_call_sites.assign(evidence_call_sites.begin(),
+                                               evidence_call_sites.end());
+        observation.evidence_callees.assign(evidence_callees.begin(), evidence_callees.end());
         candidates.push_back(std::move(observation));
     }
 }
@@ -1359,12 +1388,17 @@ bool merge_candidate_input(CandidateInput& destination,
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         auto& target = merged[index];
         bool first = true;
+        bool all_known = true;
+        std::set<std::uint32_t> call_sites;
+        std::set<std::uint32_t> callees;
         for (const auto call_site : destination.expected_call_sites) {
             const auto& source = destination.observations.at(call_site)[index];
+            call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+            callees.insert(source.callees.begin(), source.callees.end());
+            if (source.known || (index >= 4u && index <= 7u)) call_sites.insert(call_site);
             if (!source.known || source.values.empty()) {
-                make_unknown(target);
-                first = false;
-                break;
+                all_known = false;
+                continue;
             }
             if (first) {
                 target = source;
@@ -1373,17 +1407,16 @@ bool merge_candidate_input(CandidateInput& destination,
                 target.values.insert(
                     target.values.end(), source.values.begin(), source.values.end());
                 normalize(target.values);
-                target.call_sites.insert(source.call_sites.begin(), source.call_sites.end());
-                target.callees.insert(source.callees.begin(), source.callees.end());
                 target.complete = target.complete && source.complete;
             }
             target.guarded = true;
-            target.call_sites.insert(call_site);
             if (target.values.size() > maximum_summary_values) {
-                make_unknown(target);
-                break;
+                all_known = false;
             }
         }
+        if (!all_known || first) make_unknown(target);
+        target.call_sites = std::move(call_sites);
+        target.callees = std::move(callees);
     }
     const auto first_call_site = *destination.expected_call_sites.begin();
     merged.memory_values = destination.observations.at(first_call_site).memory_values;

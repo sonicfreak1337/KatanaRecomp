@@ -58,10 +58,10 @@ struct InterproceduralTargetResolution {
     std::string reason;
 };
 
-// A finite code address forwarded through a known guest-call argument and then
-// stored through a non-stack 32-bit memory operation.  The destination may
-// remain symbolic (for example VBR-relative); this is only native-inventory
-// evidence and never a concrete dispatch edge.
+// A finite code address stored through a non-stack 32-bit memory operation
+// where either the value or destination retains known guest-call argument
+// provenance.  The destination may remain symbolic (for example VBR-relative);
+// this is only native-inventory evidence and never a concrete dispatch edge.
 struct StoredCodeAddressCandidate {
     std::uint32_t target_address = 0u;
     bool complete = false;
