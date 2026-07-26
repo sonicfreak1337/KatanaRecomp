@@ -169,6 +169,32 @@ int main() {
                 katana::ir::verify_program(dual_role_bf_program).empty(),
             "BF/S-Ziel am eigenen Delay Slot erzeugt ungueltige IR.");
 
+    const auto lower_product_dual_role = [&](const std::array<std::uint8_t, 8>& image_bytes,
+                                             const std::string& name) {
+        katana::io::ExecutableImage image(name);
+        image.add_segment({".text",
+                           dual_role_base,
+                           0u,
+                           image_bytes.size(),
+                           katana::io::SegmentKind::Code,
+                           {true, false, true},
+                           {image_bytes.begin(), image_bytes.end()}});
+        for (const auto address : dual_role_seeds)
+            image.add_entry_point(address);
+        const auto analyzed = katana::analysis::analyze_control_flow(image);
+        return katana::ir::lower_program(analyzed);
+    };
+    const auto dual_role_product_program =
+        lower_product_dual_role(dual_role_bytes, "dual-role-bt-product-analysis");
+    const auto dual_role_bf_product_program =
+        lower_product_dual_role(dual_role_bf_bytes, "dual-role-bf-product-analysis");
+    require(dual_role_product_program.size() == 4u &&
+                katana::ir::verify_program(dual_role_product_program).empty() &&
+                dual_role_bf_product_program.size() == 4u &&
+                katana::ir::verify_program(dual_role_bf_product_program).empty(),
+            "Produktanalyse trennt dual-role BT/S- oder BF/S-Einstiege nicht in gueltige "
+            "IR-Funktionen.");
+
     constexpr std::array<std::uint8_t, 10> guarded_bytes = {
         0x0Bu, 0x00u, 0x09u, 0x00u, 0x01u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u};
     katana::analysis::ControlFlowAnalysisResult guarded_analysis;

@@ -440,17 +440,22 @@ io::ExecutableImage make_synthetic_image(const FormRecord& record,
     if (has_dual_role_delay_slot) {
         // The same physical opcode is first executed as an owner's delay slot
         // and then entered normally. Give every compiled slot in this rare
-        // four-step form an independent entry, while the owner block retains
-        // its overlapping delay-slot copy.
+        // four-step form an independent proven image entry, while the owner
+        // block retains its overlapping delay-slot copy. Product lowering
+        // deliberately treats analysis overrides as binding decode evidence,
+        // not as proven function roots.
         for (const auto slot : compiled_slots) {
             const auto address = sst_codegen::canonical_address_for_sst_slot(record.form, slot);
             if (!address) throw std::runtime_error("dual-role SST slot has no canonical address");
             function_seeds.insert(*address);
+            image.add_entry_point(*address);
         }
     }
     function_seeds.erase(*entry);
-    for (const auto address : function_seeds)
-        overrides.functions.push_back({address, line++});
+    if (!has_dual_role_delay_slot) {
+        for (const auto address : function_seeds)
+            overrides.functions.push_back({address, line++});
+    }
 
     std::map<std::uint32_t, std::set<std::uint32_t>> dynamic_targets;
     for (std::size_t index = 0u; index < record.form.fetch_slots.size(); ++index) {
