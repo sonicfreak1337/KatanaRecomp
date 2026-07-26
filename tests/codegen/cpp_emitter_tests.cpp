@@ -64,6 +64,11 @@ std::string read_cpp_emitter_implementation() {
 } // namespace
 
 int main() {
+    require(katana::codegen::cpp_function_name(0x1000018Eu) == "fn_1000018E" &&
+                katana::codegen::cpp_service_function_name(0x1000018Eu) ==
+                    "fn_1000018E_with_services",
+            "Der oeffentliche C++-Funktionssymbolvertrag verliert hexadezimale Grossbuchstaben.");
+
     constexpr std::array<std::uint8_t, 16> bytes = {0x02,
                                                     0xB0,
                                                     0x07,

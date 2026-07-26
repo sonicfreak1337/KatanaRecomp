@@ -550,8 +550,8 @@ void emit_wrapper(std::ostringstream& output,
            << "    const katana::runtime::BlockAddress source{\n"
            << "        cpu.pc, katana::runtime::canonical_physical_address(cpu.pc)};\n"
            << "    const auto exception_generation = cpu.exception_generation;\n"
-           << "    ::" << symbol_namespace << "::fn_" << hex8(function_entry)
-           << "_with_services(cpu, services);\n"
+           << "    ::" << symbol_namespace
+           << "::" << codegen::cpp_service_function_name(function_entry) << "(cpu, services);\n"
            << "    context.scheduler_cycle = services->scheduler_cycle();\n"
            << "    if (cpu.exception_generation != exception_generation)\n"
            << "        return katana::runtime::make_block_exit(\n"

@@ -10,6 +10,12 @@ namespace katana::codegen {
 
 [[nodiscard]] bool cpp_backend_supports_operation(katana::ir::Operation operation) noexcept;
 
+// These names are part of the generated C++ translation-unit contract. External
+// wrappers must use the same spelling (including hexadecimal letter case) as the
+// backend declarations and definitions.
+[[nodiscard]] std::string cpp_function_name(std::uint32_t address);
+[[nodiscard]] std::string cpp_service_function_name(std::uint32_t address);
+
 class CppBackend final : public Backend {
   public:
     [[nodiscard]] std::string_view name() const noexcept override;
