@@ -1307,6 +1307,15 @@ int export_port_project(const std::filesystem::path& gdi_path,
 #endif
         configure +=
             " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+        if (katana::build_contract::katana_git_commit !=
+            "0000000000000000000000000000000000000000") {
+            // The incremental port build directory intentionally survives
+            // exports. Refresh the cached source assertion with the exact
+            // exporter identity so a new Katana HEAD does not retain the
+            // previous build's commit and fail only after code generation.
+            configure += " -DKATANA_GIT_COMMIT=" +
+                         std::string(katana::build_contract::katana_git_commit);
+        }
         std::cout << "KATANA_PORT_PHASE configure\n" << std::flush;
         const auto configure_command = normalized_host_command(configure);
         if (std::system(configure_command.c_str()) != 0) {
