@@ -6789,7 +6789,9 @@ struct DiscExportContext {
     std::string boot_sha256;
 };
 
-DiscExportContext prepare_disc_export_context(const PreparedPortProgram& prepared) {
+DiscExportContext prepare_disc_export_context(
+    const PreparedPortProgram& prepared,
+    const std::shared_ptr<katana::runtime::GdiDiscSource>& validated_disc_source = {}) {
     const auto descriptor_input =
         std::find_if(prepared.inputs.begin(), prepared.inputs.end(), [](const auto& input) {
             return input.role == "gdi-descriptor";
@@ -6797,7 +6799,9 @@ DiscExportContext prepare_disc_export_context(const PreparedPortProgram& prepare
     if (descriptor_input == prepared.inputs.end() || descriptor_input->local_path.empty())
         throw std::invalid_argument(
             "Portexport besitzt keine lokale GDI-Eingabe fuer die Installations-Recipe.");
-    auto disc_source = katana::runtime::GdiDiscSource::open(descriptor_input->local_path);
+    auto disc_source = validated_disc_source;
+    if (!disc_source)
+        disc_source = katana::runtime::GdiDiscSource::open(descriptor_input->local_path);
     const auto& disc_descriptor = disc_source->descriptor();
     if (disc_descriptor.sha256 != descriptor_input->sha256)
         throw std::runtime_error("GDI wurde vor dem Recipe-Export veraendert.");
@@ -6883,9 +6887,11 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
     std::filesystem::rename(previous, published);
 }
 
-PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepared,
-                                               const std::filesystem::path& output_root,
-                                               const PortExportOptions& options) {
+static PortExportResult export_dreamcast_port_project_impl(
+    const PreparedPortProgram& prepared,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options,
+    const std::shared_ptr<katana::runtime::GdiDiscSource>& validated_disc_source) {
     report_progress(options, "program-validation");
     if (output_root.empty() || !valid_target_name(options.target_name) ||
         options.tool_version.empty() || prepared.entry_address == 0u ||
@@ -6924,7 +6930,8 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     LatentAotDiscovery latent_aot;
     if (prepared.discover_latent_aot) {
         report_progress(options, "latent-aot-source-validation");
-        disc_context.emplace(prepare_disc_export_context(prepared));
+        disc_context.emplace(
+            prepare_disc_export_context(prepared, validated_disc_source));
         const std::array excluded_identities{"sha256:" + disc_context->boot_sha256};
         const auto occupied = latent_aot_occupied_ranges(prepared);
         report_progress(options, "latent-aot-discovery");
@@ -7101,7 +7108,8 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     }
     report_progress(options, "disc-recipe");
     if (!disc_context) {
-        disc_context.emplace(prepare_disc_export_context(prepared));
+        disc_context.emplace(
+            prepare_disc_export_context(prepared, validated_disc_source));
     }
     const auto& recipe = disc_context->recipe;
     const auto& boot_sha256 = disc_context->boot_sha256;
@@ -7169,6 +7177,12 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     return result;
 }
 
+PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepared,
+                                               const std::filesystem::path& output_root,
+                                               const PortExportOptions& options) {
+    return export_dreamcast_port_project_impl(prepared, output_root, options, {});
+}
+
 PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_path,
                                                const std::filesystem::path& output_root,
                                                const PortExportOptions& options) {
@@ -7226,7 +7240,7 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
         identity_material << input.role << ':' << input.size << ':' << input.sha256 << '\n';
     }
     const auto project_identity = katana::io::sha256_bytes(identity_material.str());
-    return export_dreamcast_port_project(
+    return export_dreamcast_port_project_impl(
         {image,
          analysis,
          program,
@@ -7240,7 +7254,8 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
          disc.data_track_lba,
          disc.extent_lba_bias},
         output_root,
-        options);
+        options,
+        disc.source);
 }
 
 } // namespace katana::codegen
