@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -276,6 +277,36 @@ int main() {
                     table.resolve(*retained)->get().provenance == "rom-reset",
                 "Containerwachstum entwertet ein bestaetigtes Blockhandle.");
 
+        RuntimeBlockTable physical_overlap_query;
+        require(!physical_overlap_query.may_overlap_active_physical(0x0C123000u, 1u) &&
+                    !physical_overlap_query.may_overlap_active_physical(0xFFFFFFFFu, 0u) &&
+                    physical_overlap_query.may_overlap_active_physical(0x9FFFFFFFu, 2u) &&
+                    physical_overlap_query.may_overlap_active_physical(0xFFFFFFFFu, 2u) &&
+                    physical_overlap_query.may_overlap_active_physical(
+                        0u, std::numeric_limits<std::size_t>::max()),
+                "Active-Physical-Query behandelt leere, Alias- oder Overflowbereiche falsch.");
+        const RuntimeBlock physical_overlap_block{0x8C123FFEu,
+                                                  0x0C123FFEu,
+                                                  4u,
+                                                  BlockEndKind::Return,
+                                                  {},
+                                                  block_a,
+                                                  "active-physical-overlap-query",
+                                                  false};
+        const auto physical_overlap_identity =
+            stable_runtime_block_identity(physical_overlap_block);
+        static_cast<void>(
+            physical_overlap_query.register_runtime(physical_overlap_block));
+        require(physical_overlap_query.may_overlap_active_physical(0x0C123FFEu, 1u) &&
+                    physical_overlap_query.may_overlap_active_physical(0x8C123FFFu, 2u) &&
+                    physical_overlap_query.may_overlap_active_physical(0xAC124000u, 1u) &&
+                    !physical_overlap_query.may_overlap_active_physical(0x0C123000u, 1u) &&
+                    !physical_overlap_query.may_overlap_active_physical(0x0C124002u, 1u),
+                "Active-Physical-Query verliert Aliastreffer oder liefert Seiten-False-Positives.");
+        require(physical_overlap_query.erase_identity(physical_overlap_identity) &&
+                    !physical_overlap_query.may_overlap_active_physical(0x0C123FFEu, 4u),
+                "Active-Physical-Query behaelt einen deaktivierten Block im Seitenindex.");
+
         RuntimeBlockTable guarded;
         ExecutableCodeTracker tracker;
         RuntimeBlock tracked{0x8C100000u,
@@ -330,7 +361,15 @@ int main() {
                     aot_templates.resolve(first_template_handle)->get().aot_template ==
                         template_contract &&
                     aot_templates.resolve(second_template_handle)->get().aot_template ==
-                        template_contract,
+                        template_contract &&
+                    aot_templates.may_overlap_active_physical(
+                        canonical_physical_address(template_contract.mapping.runtime_start) +
+                            0x70u,
+                        1u) &&
+                    !aot_templates.may_overlap_active_physical(
+                        canonical_physical_address(template_contract.mapping.runtime_start) +
+                            0x80u,
+                        1u),
                 "AOT-Templatevertrag fehlt in stabiler Identitaet oder Runtimeblock.");
         auto executable_template = first_template_block;
         executable_template.function = relocated_block;
@@ -370,7 +409,10 @@ int main() {
                     canonical_physical_address(template_contract.mapping.runtime_start) + 0x70u,
                     1u) == 2u &&
                     !aot_templates.resolve(first_template_handle) &&
-                    !aot_templates.resolve(second_template_handle),
+                    !aot_templates.resolve(second_template_handle) &&
+                    !aot_templates.may_overlap_active_physical(
+                        canonical_physical_address(template_contract.mapping.runtime_start),
+                        template_contract.validation_extent),
                 "Literalpatch ausserhalb der Blockbytes invalidiert nicht die ganze AOT-Vorlage.");
 
         RuntimeBlockTable mutable_aot_templates;
@@ -394,15 +436,21 @@ int main() {
             mutable_aot_templates.register_runtime(mutable_second);
         const auto mutable_physical_start = canonical_physical_address(
             mutable_template_contract.mapping.runtime_start);
-        require(mutable_aot_templates.erase_overlapping_physical(
-                    mutable_physical_start + 0x30u, 4u) == 0u &&
+        require(mutable_aot_templates.may_overlap_active_physical(
+                    mutable_physical_start + 0x30u, 4u) &&
+                    mutable_aot_templates.erase_overlapping_physical(
+                        mutable_physical_start + 0x30u, 4u) == 0u &&
                     mutable_aot_templates.resolve(mutable_first_handle).has_value() &&
-                    mutable_aot_templates.resolve(mutable_second_handle).has_value(),
+                    mutable_aot_templates.resolve(mutable_second_handle).has_value() &&
+                    mutable_aot_templates.may_overlap_active_physical(
+                        mutable_physical_start + 0x30u, 4u),
                 "Scratchslot-Write invalidierte RuntimeBlockTable-AOT-Bloecke.");
         require(mutable_aot_templates.erase_overlapping_physical(
                     mutable_physical_start + 0x33u, 2u) == 2u &&
                     !mutable_aot_templates.resolve(mutable_first_handle) &&
-                    !mutable_aot_templates.resolve(mutable_second_handle),
+                    !mutable_aot_templates.resolve(mutable_second_handle) &&
+                    !mutable_aot_templates.may_overlap_active_physical(
+                        mutable_physical_start, mutable_template_contract.validation_extent),
                 "Scratchslot/Nachbarbyte-Write invalidierte RuntimeBlockTable nicht.");
 
         RuntimeBlockTable mmu_aot_templates;
@@ -417,6 +465,7 @@ int main() {
              false,
              RuntimeAotTemplateContract{{0x8C500000u, 0x00002000u, 0x40u}, 0x40u}});
         require(mmu_aot_templates.resolve(mmu_template_handle).has_value() &&
+                    mmu_aot_templates.may_overlap_active_physical(0x0C000130u, 1u) &&
                     mmu_aot_templates.erase_overlapping_physical(0x0C000130u, 1u) == 1u,
                 "MMU-AOT-Template leitet die physische Validierung nicht vom Blockursprung ab.");
 

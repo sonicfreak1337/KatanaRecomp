@@ -29,6 +29,12 @@ int main() {
     using namespace katana::runtime;
     Memory memory(0u);
     const auto cache = map_sh4_cache_control(memory);
+    const auto on_chip_ram_device = cache->on_chip_ram_device();
+    require(on_chip_ram_device &&
+                memory.maps_device(sh4_on_chip_ram_address,
+                                   sh4_on_chip_ram_aperture_size,
+                                   on_chip_ram_device.get()),
+            "SH-4-OCRAM-Zustand ist nicht an sein exaktes Speichergeraet gebunden.");
 
     require(memory.read_u32(sh4_cache_control_address) == 0u,
             "CCR besitzt keinen definierten Resetwert.");

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <exception>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -540,15 +541,17 @@ bool Memory::contains(const std::uint32_t address, const std::size_t width) cons
 
 bool Memory::maps_device(const std::uint32_t address,
                          const std::size_t width,
-                         const MemoryDevice* const device) const noexcept {
+                         const MemoryDevice* const device,
+                         const bool record_lookup_metrics) const noexcept {
     if (device == nullptr || width == 0u) return false;
     if (width > address_space_size - static_cast<std::uint64_t>(address)) return false;
     const auto end = static_cast<std::uint64_t>(address) + width;
-    if (const auto* mapped = indexed_region(address, width); mapped != nullptr) {
+    if (const auto* mapped = indexed_region(address, width, record_lookup_metrics);
+        mapped != nullptr) {
         return mapped->device.get() == device;
     }
     for (const auto& region : regions_) {
-        ++performance_counters_.reference_region_probes;
+        if (record_lookup_metrics) ++performance_counters_.reference_region_probes;
         const auto region_end =
             static_cast<std::uint64_t>(region.info.base_address) + region.info.size;
         if (address >= region.info.base_address && end <= region_end) {
@@ -559,17 +562,19 @@ bool Memory::maps_device(const std::uint32_t address,
 }
 
 bool Memory::is_writable_linear_range(const std::uint32_t address,
-                                      const std::size_t width) const noexcept {
+                                      const std::size_t width,
+                                      const bool record_lookup_metrics) const noexcept {
     if (width == 0u || width > address_space_size - static_cast<std::uint64_t>(address))
         return false;
     const auto writable_linear = [](const MappedRegion& mapped) {
         return mapped.info.access == MemoryRegionAccess::ReadWrite && mapped.linear != nullptr;
     };
-    if (const auto* mapped = indexed_region(address, width); mapped != nullptr)
+    if (const auto* mapped = indexed_region(address, width, record_lookup_metrics);
+        mapped != nullptr)
         return writable_linear(*mapped);
     const auto end = static_cast<std::uint64_t>(address) + width;
     for (const auto& mapped : regions_) {
-        ++performance_counters_.reference_region_probes;
+        if (record_lookup_metrics) ++performance_counters_.reference_region_probes;
         const auto region_end =
             static_cast<std::uint64_t>(mapped.info.base_address) + mapped.info.size;
         if (address >= mapped.info.base_address && end <= region_end)
@@ -579,17 +584,19 @@ bool Memory::is_writable_linear_range(const std::uint32_t address,
 }
 
 bool Memory::is_readable_linear_range(const std::uint32_t address,
-                                      const std::size_t width) const noexcept {
+                                      const std::size_t width,
+                                      const bool record_lookup_metrics) const noexcept {
     if (width == 0u || width > address_space_size - static_cast<std::uint64_t>(address))
         return false;
     const auto readable_linear = [](const MappedRegion& mapped) {
         return mapped.linear != nullptr;
     };
-    if (const auto* mapped = indexed_region(address, width); mapped != nullptr)
+    if (const auto* mapped = indexed_region(address, width, record_lookup_metrics);
+        mapped != nullptr)
         return readable_linear(*mapped);
     const auto end = static_cast<std::uint64_t>(address) + width;
     for (const auto& mapped : regions_) {
-        ++performance_counters_.reference_region_probes;
+        if (record_lookup_metrics) ++performance_counters_.reference_region_probes;
         const auto region_end =
             static_cast<std::uint64_t>(mapped.info.base_address) + mapped.info.size;
         if (address >= mapped.info.base_address && end <= region_end)
@@ -620,6 +627,17 @@ const MemoryPerformanceCounters& Memory::performance_counters() const noexcept {
 
 void Memory::reset_performance_counters() const noexcept {
     performance_counters_ = {};
+}
+
+bool Memory::account_prevalidated_unobserved_accesses(
+    const std::uint64_t accesses,
+    const std::uint64_t indexed_region_hits) const noexcept {
+    if (lookup_mode_ != MemoryLookupMode::Indexed || access_observers_active() ||
+        mmio_access_tracking_enabled_ || mmio_trace_handler_ || guest_memory_access_sink_)
+        return false;
+    performance_counters_.unobserved_accesses += accesses;
+    performance_counters_.indexed_region_hits += indexed_region_hits;
+    return true;
 }
 
 MemoryWatchpointId Memory::add_watchpoint(const std::uint32_t address,
@@ -1232,6 +1250,86 @@ bool Memory::commit_linear_transaction_batch(
     } catch (...) {
         return false;
     }
+}
+
+bool Memory::commit_prevalidated_linear_fill(const std::uint32_t address,
+                                             const std::size_t size,
+                                             const std::uint8_t value,
+                                             const CodeWriteSource source,
+                                             const std::size_t additional_unobserved_accesses,
+                                             const std::size_t additional_indexed_region_hits) noexcept {
+    if (size == 0u || access_observers_active() || mmio_access_tracking_enabled_ ||
+        mmio_trace_handler_ || guest_memory_access_sink_ ||
+        (additional_indexed_region_hits != 0u && lookup_mode_ != MemoryLookupMode::Indexed))
+        return false;
+    if (size > address_space_size - static_cast<std::uint64_t>(address)) return false;
+
+    const auto range_end = static_cast<std::uint64_t>(address) + size;
+    const MappedRegion* mapped = indexed_region(address, size, false);
+    if (mapped == nullptr) {
+        for (const auto& candidate : regions_) {
+            const auto region_start = static_cast<std::uint64_t>(candidate.info.base_address);
+            const auto region_end = region_start + candidate.info.size;
+            if (address >= region_start && range_end <= region_end) {
+                if (mapped != nullptr) return false;
+                mapped = &candidate;
+            }
+        }
+    }
+    if (mapped == nullptr || mapped->info.access != MemoryRegionAccess::ReadWrite ||
+        mapped->linear == nullptr)
+        return false;
+
+    const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
+    auto backing = mapped->linear->writable_bytes();
+    if (offset > backing.size() || size > backing.size() - offset) return false;
+    auto fill_range = backing.subspan(offset, size);
+
+    struct FillRun {
+        std::size_t offset = 0u;
+        std::size_t size = 0u;
+        bool changed = false;
+    };
+
+    std::vector<FillRun> runs;
+    GuestWriteObserver observer;
+    try {
+        bool run_changed = fill_range.front() != value;
+        std::size_t run_start = 0u;
+        for (std::size_t index = 1u; index < fill_range.size(); ++index) {
+            const bool changed = fill_range[index] != value;
+            if (changed == run_changed) continue;
+            runs.push_back({run_start, index - run_start, run_changed});
+            run_start = index;
+            run_changed = changed;
+        }
+        runs.push_back({run_start, fill_range.size() - run_start, run_changed});
+        observer = guest_write_observer_;
+    } catch (...) {
+        // Every potentially throwing preparation step happens before the backing is changed.
+        return false;
+    }
+
+    std::fill(fill_range.begin(), fill_range.end(), value);
+    performance_counters_.unobserved_accesses += size;
+    performance_counters_.unobserved_accesses += additional_unobserved_accesses;
+    performance_counters_.indexed_region_hits += additional_indexed_region_hits;
+
+    if (observer) {
+        for (const auto& run : runs) {
+            try {
+                observer({address + static_cast<std::uint32_t>(run.offset),
+                          run.size,
+                          source,
+                          run.changed});
+            } catch (...) {
+                // The RAM commit is already globally visible. Resuming the guest after only a
+                // prefix of product-observer updates would make executable provenance unsound.
+                std::terminate();
+            }
+        }
+    }
+    return true;
 }
 
 bool Memory::commit_prevalidated_linear_transaction_bytes(

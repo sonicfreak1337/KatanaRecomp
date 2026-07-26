@@ -243,6 +243,24 @@ void load_tlb(CpuState& cpu) noexcept {
     ++cpu.tlb_load_count;
 }
 
+void advance_utlb_access_counter(CpuState& cpu, const std::uint64_t accesses) noexcept {
+    if (accesses == 0u) return;
+    constexpr std::uint32_t mmucr_urc_shift = 10u;
+    constexpr std::uint32_t mmucr_urc_mask = 0x3Fu;
+    constexpr std::uint32_t mmucr_urb_shift = 18u;
+    const auto urc = (cpu.mmucr >> mmucr_urc_shift) & mmucr_urc_mask;
+    const auto urb = (cpu.mmucr >> mmucr_urb_shift) & mmucr_urc_mask;
+    const auto boundary = urb == 0u ? 64u : urb;
+    const auto next =
+        urc >= boundary
+            ? static_cast<std::uint32_t>((accesses - 1u) % boundary)
+            : static_cast<std::uint32_t>(
+                  (static_cast<std::uint64_t>(urc) + (accesses % boundary)) % boundary);
+    cpu.mmucr = (cpu.mmucr & ~(mmucr_urc_mask << mmucr_urc_shift)) |
+                (next << mmucr_urc_shift);
+    if (cpu.address_space) cpu.address_space->write_mmucr(cpu.mmucr);
+}
+
 namespace {
 
 MemoryAccessErrorReason translation_reason(const ExceptionCause cause) noexcept {
@@ -275,21 +293,8 @@ void validate_virtual_alignment(const std::uint32_t address,
                             "sh4-virtual-address");
 }
 
-void update_urc_after_utlb_access(CpuState& cpu) noexcept {
-    constexpr std::uint32_t mmucr_urc_shift = 10u;
-    constexpr std::uint32_t mmucr_urc_mask = 0x3Fu;
-    constexpr std::uint32_t mmucr_urb_shift = 18u;
-    const auto urc = (cpu.mmucr >> mmucr_urc_shift) & mmucr_urc_mask;
-    const auto urb = (cpu.mmucr >> mmucr_urb_shift) & mmucr_urc_mask;
-    const auto boundary = urb == 0u ? 64u : urb;
-    const auto next = urc + 1u >= boundary ? 0u : urc + 1u;
-    cpu.mmucr = (cpu.mmucr & ~(mmucr_urc_mask << mmucr_urc_shift)) |
-                (next << mmucr_urc_shift);
-    if (cpu.address_space) cpu.address_space->write_mmucr(cpu.mmucr);
-}
-
 void note_translation(CpuState& cpu, const TranslationResult& translated) noexcept {
-    if (translated.utlb_slot != 0xFFu) update_urc_after_utlb_access(cpu);
+    if (translated.utlb_slot != 0xFFu) advance_utlb_access_counter(cpu, 1u);
 }
 
 template <typename Function>
@@ -383,7 +388,7 @@ StoreQueuePrefetchTranslation translate_store_queue_prefetch(CpuState& cpu,
                 address, cpu.privileged_mode());
         }
         if (translated.addressing == StoreQueueAddressingMode::Utlb)
-            update_urc_after_utlb_access(cpu);
+            advance_utlb_access_counter(cpu, 1u);
         return translated;
     } catch (const TranslationError& error) {
         throw MemoryAccessError((address & 3u) != 0u

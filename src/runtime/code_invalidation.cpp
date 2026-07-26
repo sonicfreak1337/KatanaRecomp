@@ -3,8 +3,13 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 namespace katana::runtime {
+
+static_assert(std::is_nothrow_move_constructible_v<CodeInvalidationEvent>);
+static_assert(std::is_nothrow_move_assignable_v<CodeInvalidationEvent>);
+static_assert(std::is_nothrow_swappable_v<CodeInvalidationEvent>);
 
 ExecutableCodeTracker::ExecutableCodeTracker(const std::size_t provenance_capacity)
     : provenance_capacity_(provenance_capacity) {
@@ -272,7 +277,7 @@ void ExecutableCodeTracker::record_invalidation_event(
         return;
     }
     try {
-        CodeInvalidationEvent event;
+        auto& event = pending_invalidation_event_;
         event.sequence = next_provenance_sequence_;
         event.virtual_address = virtual_address;
         event.physical_address = physical_address;
@@ -281,17 +286,21 @@ void ExecutableCodeTracker::record_invalidation_event(
         event.byte_identical = result.byte_identical;
         event.invalidated_blocks = result.invalidated_blocks;
         event.unlinked_sources = result.unlinked_sources;
+        event.pages.clear();
         event.pages.reserve(result.changed_pages.size());
         for (const auto page : result.changed_pages) {
             event.pages.push_back({page, page_generation(page)});
         }
         if (invalidation_events_.size() == provenance_capacity_) {
-            invalidation_events_.erase(invalidation_events_.begin());
+            std::swap(invalidation_events_[oldest_invalidation_event_], event);
+            oldest_invalidation_event_ =
+                (oldest_invalidation_event_ + 1u) % provenance_capacity_;
             if (dropped_provenance_events_ != std::numeric_limits<std::uint64_t>::max()) {
                 ++dropped_provenance_events_;
             }
+        } else {
+            invalidation_events_.push_back(std::move(event));
         }
-        invalidation_events_.push_back(std::move(event));
     } catch (...) {
         if (dropped_provenance_events_ != std::numeric_limits<std::uint64_t>::max()) {
             ++dropped_provenance_events_;
@@ -359,6 +368,13 @@ const std::vector<TrackedExecutableBlock>& ExecutableCodeTracker::blocks() const
 
 const std::vector<CodeInvalidationEvent>&
 ExecutableCodeTracker::invalidation_events() const noexcept {
+    if (oldest_invalidation_event_ != 0u) {
+        std::rotate(invalidation_events_.begin(),
+                    invalidation_events_.begin() +
+                        static_cast<std::ptrdiff_t>(oldest_invalidation_event_),
+                    invalidation_events_.end());
+        oldest_invalidation_event_ = 0u;
+    }
     return invalidation_events_;
 }
 
@@ -393,7 +409,7 @@ ExecutableCodeTrackerSnapshot ExecutableCodeTracker::snapshot() const {
     for (const auto& [page, count] : hotspots_)
         result.hotspots.push_back({page, count});
     result.invalidation_count = invalidation_count_;
-    result.invalidation_events = invalidation_events_;
+    result.invalidation_events = invalidation_events();
     result.provenance_capacity = provenance_capacity_;
     result.next_provenance_sequence = next_provenance_sequence_;
     result.dropped_provenance_events = dropped_provenance_events_;

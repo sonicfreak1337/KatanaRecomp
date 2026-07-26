@@ -46,7 +46,23 @@ int main() {
             channel2_length = length;
             ++channel2_starts;
         });
-    const auto asic = map_dreamcast_system_asic(bus, router);
+    std::shared_ptr<MemoryDevice> asic_device;
+    const auto asic = map_dreamcast_system_asic(bus, router, &asic_device);
+    const auto proof_counters_before = bus.performance_counters();
+    require(asic_device != nullptr,
+            "System-ASIC-Mapping gibt die tatsaechlich gemappte MMIO-Aperture nicht zurueck.");
+    for (const auto segment : dreamcast_direct_segment_bases)
+        require(bus.maps_device(segment + system_asic_physical_base,
+                                sizeof(std::uint32_t),
+                                asic_device.get(),
+                                false),
+                "System-ASIC-Alias ist nicht auf der gemeldeten MMIO-Aperture gemappt.");
+    const auto proof_counters_after = bus.performance_counters();
+    require(proof_counters_after.indexed_region_hits ==
+                    proof_counters_before.indexed_region_hits &&
+                proof_counters_after.reference_region_probes ==
+                    proof_counters_before.reference_region_probes,
+            "Metrikneutraler System-ASIC-Geraetenachweis veraendert Lookup-Zaehler.");
     require(bus.read_u32(0x005F6800u) == 0x10000000u,
             "Channel-2-Ziel besitzt nicht den festen TA/PVR-Area-4-Resetwert.");
 
@@ -261,6 +277,12 @@ int main() {
     runtime_boot.repeated_reads_match = true;
     CpuState runtime_cpu;
     auto runtime = initialize_dreamcast_runtime(runtime_cpu, runtime_boot);
+    require(runtime.system_asic_device != nullptr &&
+                runtime_cpu.memory.maps_device(system_asic_physical_base,
+                                               sizeof(std::uint32_t),
+                                               runtime.system_asic_device.get(),
+                                               false),
+            "Dreamcast-Runtime verliert die Identitaet ihrer System-ASIC-MMIO-Aperture.");
 
     runtime.pvr_registers->write(pvr_register::TaIspBase, 0x00200000u);
     runtime.pvr_registers->write(pvr_register::TaNextOpbInit, 0x00100000u);

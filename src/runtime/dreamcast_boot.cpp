@@ -480,7 +480,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
                     ? DmaExternalDestinationProgression::IncrementByTransferUnit
                     : DmaExternalDestinationProgression::AddressMode);
         });
-    state.system_asic = map_dreamcast_system_asic(cpu.memory, *state.interrupt_router);
+    state.system_asic =
+        map_dreamcast_system_asic(cpu.memory, *state.interrupt_router, &state.system_asic_device);
     const auto asic = std::weak_ptr<DreamcastSystemAsic>(state.system_asic);
     const auto scheduler = std::weak_ptr<EventScheduler>(state.scheduler);
     const auto raise_now = [asic, scheduler](const SystemAsicEvent event) {

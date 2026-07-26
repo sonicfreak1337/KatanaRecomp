@@ -66,6 +66,10 @@ std::uint64_t Sh4CacheControl::instruction_invalidation_count() const noexcept {
     return instruction_invalidations_;
 }
 
+std::shared_ptr<const MemoryDevice> Sh4CacheControl::on_chip_ram_device() const noexcept {
+    return on_chip_ram_device_.lock();
+}
+
 void Sh4CacheControl::write(const std::uint32_t value) {
     if ((value & ~supported_write_mask) != 0u) {
         throw std::invalid_argument("SH-4-CCR-Schreibzugriff setzt reservierte Bits.");
@@ -191,6 +195,7 @@ std::shared_ptr<Sh4CacheControl> map_sh4_cache_control(Memory& memory) {
         [state](const auto offset, const auto value, const auto width) {
             state->write_on_chip_ram(offset, value, width);
         });
+    state->on_chip_ram_device_ = on_chip_ram;
     memory.map_region("sh4-on-chip-ram", sh4_on_chip_ram_address, std::move(on_chip_ram));
     memory.map_region(
         "sh4-instruction-cache-address-array",

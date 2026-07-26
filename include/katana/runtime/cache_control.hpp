@@ -39,6 +39,7 @@ class Sh4CacheControl final {
 
     [[nodiscard]] std::uint32_t value() const noexcept;
     [[nodiscard]] std::uint64_t instruction_invalidation_count() const noexcept;
+    [[nodiscard]] std::shared_ptr<const MemoryDevice> on_chip_ram_device() const noexcept;
     [[nodiscard]] std::uint32_t read_instruction_address(std::uint32_t offset) const;
     [[nodiscard]] std::uint32_t read_operand_address(std::uint32_t offset) const;
     [[nodiscard]] std::uint32_t read_instruction_data(std::uint32_t offset) const;
@@ -57,8 +58,11 @@ class Sh4CacheControl final {
     void reset() noexcept;
 
   private:
+    friend std::shared_ptr<Sh4CacheControl> map_sh4_cache_control(Memory& memory);
+
     std::uint32_t value_ = 0u;
     std::uint64_t instruction_invalidations_ = 0u;
+    std::weak_ptr<MemoryDevice> on_chip_ram_device_;
     std::array<std::uint32_t, 256u> instruction_addresses_{};
     std::array<std::uint32_t, 512u> operand_addresses_{};
     std::array<std::uint8_t, 8u * 1024u> instruction_data_{};

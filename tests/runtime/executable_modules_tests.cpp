@@ -1698,6 +1698,41 @@ void active_extent_page_index_lifecycle_regression() {
             "Aliaspatch nach publish-loaded-range wird vom aktualisierten Index uebersehen.");
 }
 
+void active_extent_overlap_query_regression() {
+    using namespace katana::runtime;
+    ExecutableModuleCatalog modules;
+    require(!modules.may_overlap_active_extent(0x00100000u, 1u) &&
+                !modules.may_overlap_active_extent(0xFFFFFFFFu, 0u),
+            "Leerer Active-Extent-Index meldet einen linearen oder leeren Bereich.");
+    require(modules.may_overlap_active_extent(0x1FFFFFFFu, 2u) &&
+                modules.may_overlap_active_extent(0xFFFFFFFFu, 2u),
+            "Nichtlineare Alias- oder Adressraumgrenze wird nicht konservativ abgelehnt.");
+
+    ExecutableModule module;
+    module.id = "active-extent-overlap-query";
+    module.source_identity = "free-active-extent-overlap-query-v1";
+    module.guest_start = 0x00101FF0u;
+    module.bytes.assign(0x30u, 0x09u);
+    modules.publish(module);
+
+    require(modules.may_overlap_active_extent(0x00101FF0u, 1u) &&
+                modules.may_overlap_active_extent(0x80102000u, 0x20u) &&
+                modules.may_overlap_active_extent(0xA0102030u, 1u) &&
+                !modules.may_overlap_active_extent(0x00103000u, 1u),
+            "Active-Extent-Query verliert direkte/Alias-Seiten oder ist nicht konservativ.");
+
+    modules.record_runtime_write(0x80101FF0u, 0x10u, CodeWriteSource::Cpu, true);
+    require(!modules.may_overlap_active_extent(0x00101FF0u, 1u) &&
+                modules.may_overlap_active_extent(0x00102000u, 0x20u),
+            "Active-Extent-Query behaelt eine geleerte Seite oder verliert den Restbereich.");
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    modules.unload(module.id, blocks, tracker);
+    require(!modules.may_overlap_active_extent(0xA0102000u, 0x1000u),
+            "Active-Extent-Query behaelt nach Unload einen Seitenindexeintrag.");
+}
+
 void rejected_loaded_range_is_atomic_regression() {
     using namespace katana::runtime;
     CpuState cpu;
@@ -2378,6 +2413,7 @@ int main() {
     partial_module_patch_regression();
     non_overlapping_write_stress_regression();
     active_extent_page_index_lifecycle_regression();
+    active_extent_overlap_query_regression();
     rejected_loaded_range_is_atomic_regression();
     rejected_replacement_is_atomic_regression();
     nonlinear_alias_boundary_regression();

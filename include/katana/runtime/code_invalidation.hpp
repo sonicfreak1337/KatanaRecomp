@@ -163,7 +163,9 @@ class ExecutableCodeTracker {
     std::map<std::uint32_t, std::uint64_t> generations_;
     std::map<std::uint32_t, std::uint64_t> hotspots_;
     std::uint64_t invalidation_count_ = 0u;
-    std::vector<CodeInvalidationEvent> invalidation_events_;
+    mutable std::vector<CodeInvalidationEvent> invalidation_events_;
+    mutable std::size_t oldest_invalidation_event_ = 0u;
+    CodeInvalidationEvent pending_invalidation_event_;
     std::size_t provenance_capacity_ = default_provenance_capacity;
     std::uint64_t next_provenance_sequence_ = 0u;
     std::uint64_t dropped_provenance_events_ = 0u;

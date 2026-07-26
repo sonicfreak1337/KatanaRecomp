@@ -134,6 +134,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<Sh4Scif> scif;
     std::shared_ptr<DreamcastSystemBusControl> system_bus_control;
     std::shared_ptr<DreamcastSystemAsic> system_asic;
+    std::shared_ptr<MemoryDevice> system_asic_device;
     std::shared_ptr<PvrRegisterFile> pvr_registers;
     std::shared_ptr<PvrTaFifo> pvr_ta_fifo;
     std::shared_ptr<PvrTaFifoMemoryDevice> pvr_ta_aperture;

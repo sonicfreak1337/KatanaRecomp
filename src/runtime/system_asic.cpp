@@ -394,8 +394,10 @@ std::shared_ptr<DreamcastSystemBusControl> map_dreamcast_system_bus_control(
                           device);
     return control;
 }
-std::shared_ptr<DreamcastSystemAsic> map_dreamcast_system_asic(Memory& memory,
-                                                               PlatformInterruptRouter& router) {
+std::shared_ptr<DreamcastSystemAsic>
+map_dreamcast_system_asic(Memory& memory,
+                          PlatformInterruptRouter& router,
+                          std::shared_ptr<MemoryDevice>* const mapped_device_out) {
     auto asic = std::make_shared<DreamcastSystemAsic>(router);
     auto device = std::make_shared<MmioMemoryDevice>(
         system_asic_register_size,
@@ -413,6 +415,7 @@ std::shared_ptr<DreamcastSystemAsic> map_dreamcast_system_asic(Memory& memory,
         memory.map_region("dreamcast-system-asic-" + std::to_string(segment),
                           segment + system_asic_physical_base,
                           device);
+    if (mapped_device_out != nullptr) *mapped_device_out = device;
     return asic;
 }
 } // namespace katana::runtime

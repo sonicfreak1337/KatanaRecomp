@@ -189,6 +189,11 @@ class RuntimeBlockTable {
     [[nodiscard]] RuntimeBlockTableSnapshot snapshot() const;
     void reset_lookup_counters() const noexcept;
     [[nodiscard]] bool erase_identity(const std::string& block_identity) noexcept;
+    // Valid linear ranges are checked exactly against active validation extents after the
+    // physical-page index narrows the candidates. Nonempty overflow or alias-boundary ranges
+    // conservatively return true.
+    [[nodiscard]] bool may_overlap_active_physical(std::uint32_t address,
+                                                   std::size_t size) const noexcept;
     [[nodiscard]] std::size_t erase_overlapping_physical(std::uint32_t physical_address,
                                                          std::size_t size) noexcept;
     void bind_code_tracker(const ExecutableCodeTracker* tracker) noexcept;

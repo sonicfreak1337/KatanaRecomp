@@ -763,6 +763,43 @@ bool RuntimeBlockTable::erase_identity(const std::string& block_identity) noexce
     return true;
 }
 
+bool RuntimeBlockTable::may_overlap_active_physical(
+    const std::uint32_t address,
+    const std::size_t size) const noexcept {
+    if (size == 0u) return false;
+    constexpr auto address_space_end =
+        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
+    if (size > address_space_end - address) return true;
+
+    const auto canonical = canonical_physical_address(address);
+    const auto final_address =
+        address + static_cast<std::uint32_t>(static_cast<std::uint64_t>(size) - 1u);
+    const auto expected_final = static_cast<std::uint64_t>(canonical) + size - 1u;
+    if (expected_final > std::numeric_limits<std::uint32_t>::max() ||
+        canonical_physical_address(final_address) != expected_final)
+        return true;
+
+    const auto range_end = expected_final + 1u;
+    const auto first_page = canonical / physical_page_size;
+    const auto last_page = static_cast<std::uint32_t>(expected_final / physical_page_size);
+    for (auto page = first_page;; ++page) {
+        if (const auto candidates = active_physical_pages_.find(page);
+            candidates != active_physical_pages_.end()) {
+            for (const auto id : candidates->second) {
+                const auto record = records_.find(id);
+                if (record == records_.end() || !record->second.active) continue;
+                const auto validation_start = validation_physical_start(record->second.block);
+                const auto validation_end =
+                    static_cast<std::uint64_t>(validation_start) +
+                    validation_extent(record->second.block);
+                if (canonical < validation_end && validation_start < range_end) return true;
+            }
+        }
+        if (page == last_page) break;
+    }
+    return false;
+}
+
 RuntimeBlockTable::PreparedDiscLoadInvalidation
 RuntimeBlockTable::prepare_disc_load_invalidation(const std::uint32_t physical_address,
                                                   const std::size_t size) const {

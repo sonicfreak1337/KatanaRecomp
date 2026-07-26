@@ -254,11 +254,14 @@ class Memory {
     [[nodiscard]] bool contains(std::uint32_t address, std::size_t width = 1u) const noexcept;
     [[nodiscard]] bool maps_device(std::uint32_t address,
                                    std::size_t width,
-                                   const MemoryDevice* device) const noexcept;
+                                   const MemoryDevice* device,
+                                   bool record_lookup_metrics = true) const noexcept;
     [[nodiscard]] bool is_readable_linear_range(std::uint32_t address,
-                                                std::size_t width) const noexcept;
+                                                std::size_t width,
+                                                bool record_lookup_metrics = true) const noexcept;
     [[nodiscard]] bool is_writable_linear_range(std::uint32_t address,
-                                                 std::size_t width) const noexcept;
+                                                 std::size_t width,
+                                                 bool record_lookup_metrics = true) const noexcept;
 
     [[nodiscard]] MemoryAlignmentPolicy alignment_policy() const noexcept;
     void set_alignment_policy(MemoryAlignmentPolicy policy) noexcept;
@@ -266,6 +269,12 @@ class Memory {
     void set_lookup_mode(MemoryLookupMode mode) noexcept;
     [[nodiscard]] const MemoryPerformanceCounters& performance_counters() const noexcept;
     void reset_performance_counters() const noexcept;
+    // Accounts accesses whose complete Indexed lookup and observer behavior was proven by the
+    // caller before an equivalent batched operation. A false result leaves every counter
+    // unchanged. Counter overflow intentionally follows the scalar uint64_t wraparound behavior.
+    [[nodiscard]] bool account_prevalidated_unobserved_accesses(
+        std::uint64_t accesses,
+        std::uint64_t indexed_region_hits) const noexcept;
 
     [[nodiscard]] MemoryWatchpointId add_watchpoint(std::uint32_t address,
                                                     std::size_t size,
@@ -345,6 +354,18 @@ class Memory {
     [[nodiscard]] bool commit_linear_transaction_batch(
         std::span<const LinearMemoryTransactionWrite> writes,
         CodeWriteSource source = CodeWriteSource::Copy) noexcept;
+    // A false result proves that no byte or observer-visible state was changed. Once the complete
+    // linear fill is atomically visible, every prepared GuestWriteObserver run is part of that
+    // commit. An observer exception is therefore fail-stop and calls std::terminate instead of
+    // returning to a caller that could resume the guest with partially updated observer state.
+    // A nonzero synthetic Indexed lookup count is admitted only while Indexed lookup is active.
+    [[nodiscard]] bool
+    commit_prevalidated_linear_fill(std::uint32_t address,
+                                    std::size_t size,
+                                    std::uint8_t value,
+                                    CodeWriteSource source = CodeWriteSource::Copy,
+                                    std::size_t additional_unobserved_accesses = 0u,
+                                    std::size_t additional_indexed_region_hits = 0u) noexcept;
     void write_bytes_at(std::uint32_t address,
                         std::span<const std::uint8_t> bytes,
                         const GuestMemoryAccessContext& context,

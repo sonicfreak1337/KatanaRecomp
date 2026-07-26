@@ -191,7 +191,9 @@ class DreamcastSystemAsic final {
 };
 
 [[nodiscard]] std::shared_ptr<DreamcastSystemAsic>
-map_dreamcast_system_asic(Memory& memory, PlatformInterruptRouter& router);
+map_dreamcast_system_asic(Memory& memory,
+                           PlatformInterruptRouter& router,
+                           std::shared_ptr<MemoryDevice>* mapped_device_out = nullptr);
 [[nodiscard]] std::shared_ptr<DreamcastSystemBusControl>
 map_dreamcast_system_bus_control(Memory& memory);
 [[nodiscard]] std::shared_ptr<DreamcastSystemBusControl>

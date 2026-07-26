@@ -248,6 +248,7 @@ class GuestInstructionAttempt final {
 
 void prefetch(CpuState& cpu, std::uint32_t address) noexcept;
 void load_tlb(CpuState& cpu) noexcept;
+void advance_utlb_access_counter(CpuState& cpu, std::uint64_t accesses) noexcept;
 
 [[nodiscard]] std::uint32_t translate_guest_address(CpuState& cpu,
                                                     std::uint32_t address,

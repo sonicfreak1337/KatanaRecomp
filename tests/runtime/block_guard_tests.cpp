@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 using namespace katana::runtime;
@@ -209,6 +210,38 @@ int main() {
                                                   MemoryAccessWidth::Byte));
         require(((tlb_cpu.mmucr >> 10u) & 0x3Fu) == 0u,
                 "UTLB-Zugriff laesst URC an URB nicht auf null umlaufen.");
+        const auto bulk_generation = tlb_cpu.address_space->snapshot().mmu_generation;
+        advance_utlb_access_counter(tlb_cpu, 130u);
+        require(((tlb_cpu.mmucr >> 10u) & 0x3Fu) == 1u &&
+                    tlb_cpu.address_space->snapshot().mmucr == tlb_cpu.mmucr &&
+                    tlb_cpu.address_space->snapshot().mmu_generation == bulk_generation,
+                "Gebatchte UTLB-Zugriffe bilden URC/URB oder den MMU-Spiegel nicht exakt ab.");
+        const auto bulk_mmucr = tlb_cpu.mmucr;
+        advance_utlb_access_counter(tlb_cpu, 0u);
+        require(tlb_cpu.mmucr == bulk_mmucr,
+                "Null UTLB-Zugriffe veraendern den MMU-Zustand.");
+
+        CpuState out_of_range_urc_cpu;
+        out_of_range_urc_cpu.address_space = std::make_shared<RuntimeAddressSpace>();
+        out_of_range_urc_cpu.mmucr = 1u | (63u << 10u) | (3u << 18u);
+        out_of_range_urc_cpu.address_space->set_mode(AddressTranslationMode::Mmu);
+        out_of_range_urc_cpu.address_space->write_mmucr(out_of_range_urc_cpu.mmucr);
+        advance_utlb_access_counter(out_of_range_urc_cpu, 5u);
+        require(((out_of_range_urc_cpu.mmucr >> 10u) & 0x3Fu) == 1u,
+                "Gebatchtes URC normalisiert einen Wert oberhalb URB nicht wie Einzelzugriffe.");
+
+        CpuState maximum_bulk_urc_cpu;
+        maximum_bulk_urc_cpu.mmucr = 1u | (1u << 10u) | (3u << 18u);
+        advance_utlb_access_counter(
+            maximum_bulk_urc_cpu, std::numeric_limits<std::uint64_t>::max());
+        require(((maximum_bulk_urc_cpu.mmucr >> 10u) & 0x3Fu) == 1u,
+                "Maximale gebatchte UTLB-Zugriffszahl laeuft vor der URB-Modulooperation ueber.");
+
+        CpuState full_boundary_urc_cpu;
+        full_boundary_urc_cpu.mmucr = 63u << 10u;
+        advance_utlb_access_counter(full_boundary_urc_cpu, 1u);
+        require(((full_boundary_urc_cpu.mmucr >> 10u) & 0x3Fu) == 0u,
+                "URB=0 verwendet fuer gebatchte UTLB-Zugriffe nicht die 64er-Grenze.");
 
         CpuState sq_cpu;
         sq_cpu.address_space = std::make_shared<RuntimeAddressSpace>();

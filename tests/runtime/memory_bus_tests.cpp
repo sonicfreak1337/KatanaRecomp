@@ -2,12 +2,21 @@
 #include "katana/runtime/memory.hpp"
 #include "katana/runtime/runtime.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <vector>
+
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
 namespace {
 
@@ -27,15 +36,55 @@ template <typename Exception, typename Function> bool throws(Function&& function
     return false;
 }
 
+void count_guest_memory_access(void* const context,
+                               const katana::runtime::GuestMemoryAccessEvent&) noexcept {
+    ++*static_cast<std::size_t*>(context);
+}
+
+constexpr std::string_view fill_observer_terminate_child =
+    "--fill-observer-terminate-child";
+constexpr int fill_observer_terminate_exit_code = 86;
+
+int run_fill_observer_terminate_child() {
+    std::set_terminate([] { std::_Exit(fill_observer_terminate_exit_code); });
+    katana::runtime::Memory memory(0u);
+    const auto backing = std::make_shared<katana::runtime::LinearMemoryDevice>(4u);
+    memory.map_region("fill-terminate", 0x00200000u, backing);
+    memory.set_guest_write_observer([](const katana::runtime::GuestWriteEvent&) {
+        throw std::runtime_error("expected fill observer failure");
+    });
+    static_cast<void>(memory.commit_prevalidated_linear_fill(
+        0x00200000u, 4u, 0x7Eu, katana::runtime::CodeWriteSource::Cpu));
+    return 87;
+}
+
 } // namespace
 
-int main() {
+int main(const int argc, const char* const* argv) {
+    if (argc == 2 && std::string_view(argv[1]) == fill_observer_terminate_child)
+        return run_fill_observer_terminate_child();
+
     using katana::runtime::LinearMemoryDevice;
     using katana::runtime::Memory;
     using katana::runtime::MemoryAccessError;
     using katana::runtime::MemoryAccessErrorReason;
     using katana::runtime::MemoryLookupMode;
     using katana::runtime::MemoryRegionAccess;
+
+    require(argc > 0 && argv[0] != nullptr,
+            "Testprozess besitzt keinen Pfad fuer den Fail-stop-Kindprozess.");
+    const auto executable = std::filesystem::absolute(argv[0]).string();
+    const auto terminate_command =
+        '"' + executable + "\" " + std::string(fill_observer_terminate_child);
+    const auto terminate_status = std::system(terminate_command.c_str());
+#ifdef _WIN32
+    require(terminate_status == fill_observer_terminate_exit_code,
+            "Observer-Ausnahme beendet atomaren Fill nicht mit eindeutigem Fail-stop-Code.");
+#else
+    require(terminate_status != -1 && WIFEXITED(terminate_status) &&
+                WEXITSTATUS(terminate_status) == fill_observer_terminate_exit_code,
+            "Observer-Ausnahme beendet atomaren Fill nicht mit eindeutigem Fail-stop-Code.");
+#endif
 
     Memory bus(0u);
     const auto work_ram = std::make_shared<LinearMemoryDevice>(16u);
@@ -269,6 +318,219 @@ int main() {
     require(throws<katana::runtime::MemoryAccessError>(
                 [&bus] { bus.copy_bytes(0x00001008u, 0x00001000u, 16u); }),
             "Regionsuebergreifender DMA-Kopierpfad wurde teilweise ausgefuehrt.");
+
+    {
+        constexpr std::uint32_t fill_base = 0x00200000u;
+        Memory fill_memory(0u);
+        const auto fill_backing = std::make_shared<LinearMemoryDevice>(16u);
+        const auto adjacent_backing = std::make_shared<LinearMemoryDevice>(16u);
+        const auto read_only_backing = std::make_shared<LinearMemoryDevice>(8u);
+        std::size_t mmio_write_calls = 0u;
+        const auto nonlinear_mmio = std::make_shared<katana::runtime::MmioMemoryDevice>(
+            8u,
+            [](const auto, const auto) { return 0u; },
+            [&](const auto, const auto, const auto) { ++mmio_write_calls; });
+        fill_memory.map_region("fill", fill_base, fill_backing);
+        fill_memory.map_region("fill-adjacent", fill_base + 16u, adjacent_backing);
+        fill_memory.map_region("fill-read-only",
+                               fill_base + 0x10000u,
+                               read_only_backing,
+                               MemoryRegionAccess::ReadOnly);
+        fill_memory.map_region("fill-mmio", fill_base + 0x20000u, nonlinear_mmio);
+
+        constexpr std::uint8_t fill_value = 0x7Eu;
+        constexpr std::array initial{
+            fill_value,
+            std::uint8_t{0x11u},
+            std::uint8_t{0x22u},
+            fill_value,
+            fill_value,
+            std::uint8_t{0x33u},
+            fill_value,
+            std::uint8_t{0x44u},
+            std::uint8_t{0x55u},
+            fill_value,
+            fill_value,
+            std::uint8_t{0x66u},
+        };
+        for (std::size_t index = 0u; index < initial.size(); ++index)
+            fill_backing->write_u8(static_cast<std::uint32_t>(index), initial[index]);
+
+        std::vector<katana::runtime::GuestWriteEvent> fill_events;
+        fill_events.reserve(8u);
+        fill_memory.set_guest_write_observer(
+            [&](const katana::runtime::GuestWriteEvent& event) { fill_events.push_back(event); });
+        fill_memory.reset_performance_counters();
+        constexpr std::size_t synthetic_limit_reads = 13u;
+        constexpr std::size_t synthetic_indexed_hits = initial.size() * 2u + 1u;
+        require(fill_memory.commit_prevalidated_linear_fill(
+                    fill_base,
+                    initial.size(),
+                    fill_value,
+                    katana::runtime::CodeWriteSource::Dma,
+                    synthetic_limit_reads,
+                    synthetic_indexed_hits),
+                "Vorvalidierter linearer Mixed-Fill wurde abgelehnt.");
+
+        constexpr std::array<std::uint32_t, 8u> expected_run_offsets{
+            0u, 1u, 3u, 5u, 6u, 7u, 9u, 11u};
+        constexpr std::array<std::size_t, 8u> expected_run_sizes{1u, 2u, 2u, 1u, 1u, 2u, 2u, 1u};
+        constexpr std::array<bool, 8u> expected_run_changes{
+            false, true, false, true, false, true, false, true};
+        require(fill_events.size() == expected_run_offsets.size(),
+                "Mixed-Fill meldet nicht jeden geaenderten/identischen Run.");
+        for (std::size_t index = 0u; index < fill_events.size(); ++index) {
+            require(fill_events[index].address == fill_base + expected_run_offsets[index] &&
+                        fill_events[index].size == expected_run_sizes[index] &&
+                        fill_events[index].source == katana::runtime::CodeWriteSource::Dma &&
+                        fill_events[index].bytes_changed == expected_run_changes[index],
+                    "Mixed-Fill verliert Runadresse, -groesse, Herkunft oder Aenderungsstatus.");
+        }
+        require(
+            std::all_of(fill_backing->bytes().begin(),
+                        fill_backing->bytes().begin() + static_cast<std::ptrdiff_t>(initial.size()),
+                        [](const auto byte) { return byte == fill_value; }) &&
+                fill_memory.performance_counters().unobserved_accesses ==
+                    initial.size() + synthetic_limit_reads &&
+                fill_memory.performance_counters().indexed_region_hits ==
+                    synthetic_indexed_hits &&
+                fill_memory.performance_counters().observed_accesses == 0u,
+            "Mixed-Fill ist nicht atomar sichtbar oder zaehlt synthetische Zugriffe falsch.");
+
+        fill_memory.reset_performance_counters();
+        require(fill_memory.account_prevalidated_unobserved_accesses(
+                    std::numeric_limits<std::uint64_t>::max(),
+                    std::numeric_limits<std::uint64_t>::max()) &&
+                    fill_memory.account_prevalidated_unobserved_accesses(2u, 3u) &&
+                    fill_memory.performance_counters().unobserved_accesses == 1u &&
+                    fill_memory.performance_counters().indexed_region_hits == 2u,
+                "Vorvalidierte Zugriffszaehler verlieren das skalare uint64-Wraparound.");
+
+        fill_events.clear();
+        fill_memory.reset_performance_counters();
+        require(fill_memory.commit_prevalidated_linear_fill(
+                    fill_base + 2u, 6u, fill_value, katana::runtime::CodeWriteSource::Fallback) &&
+                    fill_events.size() == 1u && fill_events.front().address == fill_base + 2u &&
+                    fill_events.front().size == 6u &&
+                    fill_events.front().source == katana::runtime::CodeWriteSource::Fallback &&
+                    !fill_events.front().bytes_changed &&
+                    fill_memory.performance_counters().unobserved_accesses == 6u &&
+                    fill_memory.performance_counters().observed_accesses == 0u,
+                "Bytegleicher Fill wird nicht als einzelner identischer Run gemeldet.");
+
+        for (const auto lookup_mode :
+             {katana::runtime::MemoryLookupMode::Indexed,
+              katana::runtime::MemoryLookupMode::Reference}) {
+            fill_memory.set_lookup_mode(lookup_mode);
+            fill_memory.reset_performance_counters();
+            require(fill_memory.maps_device(
+                        fill_base, initial.size(), fill_backing.get(), false) &&
+                        fill_memory.is_readable_linear_range(fill_base, initial.size(), false) &&
+                        fill_memory.is_writable_linear_range(fill_base, initial.size(), false) &&
+                        fill_memory.performance_counters().indexed_region_hits == 0u &&
+                        fill_memory.performance_counters().reference_region_probes == 0u,
+                    "Metrikneutraler Linear-RAM-Proof veraendert Lookup-Zaehler.");
+        }
+        fill_memory.set_lookup_mode(katana::runtime::MemoryLookupMode::Reference);
+        fill_memory.reset_performance_counters();
+        require(!fill_memory.account_prevalidated_unobserved_accesses(1u, 1u) &&
+                    fill_memory.performance_counters().indexed_region_hits == 0u &&
+                    fill_memory.performance_counters().reference_region_probes == 0u &&
+                    fill_memory.performance_counters().unobserved_accesses == 0u,
+                "Reference-Lookup akzeptiert vorvalidierte Indexed-Zugriffszaehler.");
+        const auto before_reference_synthetic =
+            std::vector<std::uint8_t>(fill_backing->bytes().begin(), fill_backing->bytes().end());
+        require(!fill_memory.commit_prevalidated_linear_fill(
+                    fill_base,
+                    initial.size(),
+                    std::uint8_t{0xA5u},
+                    katana::runtime::CodeWriteSource::Cpu,
+                    0u,
+                    1u) &&
+                    std::equal(before_reference_synthetic.begin(),
+                               before_reference_synthetic.end(),
+                               fill_backing->bytes().begin()) &&
+                    fill_memory.performance_counters().indexed_region_hits == 0u &&
+                    fill_memory.performance_counters().reference_region_probes == 0u &&
+                    fill_memory.performance_counters().unobserved_accesses == 0u,
+                "Reference-Lookup akzeptiert synthetische Indexed-Hits oder mutiert Zustand.");
+        fill_memory.set_lookup_mode(katana::runtime::MemoryLookupMode::Indexed);
+
+        const auto require_rejected_without_mutation = [&](const char* const message) {
+            const std::vector<std::uint8_t> before(fill_backing->bytes().begin(),
+                                                   fill_backing->bytes().end());
+            const auto counters_before = fill_memory.performance_counters();
+            const auto events_before = fill_events.size();
+            require(!fill_memory.commit_prevalidated_linear_fill(
+                        fill_base + 4u,
+                        4u,
+                        std::uint8_t{0xA5u},
+                        katana::runtime::CodeWriteSource::Cpu) &&
+                        std::equal(before.begin(), before.end(), fill_backing->bytes().begin()) &&
+                        fill_memory.performance_counters().indexed_region_hits ==
+                            counters_before.indexed_region_hits &&
+                        fill_memory.performance_counters().reference_region_probes ==
+                            counters_before.reference_region_probes &&
+                        fill_memory.performance_counters().unobserved_accesses ==
+                            counters_before.unobserved_accesses &&
+                        fill_memory.performance_counters().observed_accesses ==
+                            counters_before.observed_accesses &&
+                        fill_events.size() == events_before,
+                    message);
+        };
+
+        fill_memory.set_trace_handler([](const auto&) {});
+        require_rejected_without_mutation("Aktiver Trace liess einen vorvalidierten Fill durch.");
+        fill_memory.clear_trace_handler();
+
+        const auto fill_watchpoint = fill_memory.add_watchpoint(
+            fill_base + 15u, 1u, katana::runtime::MemoryWatchpointAccess::Read, [](const auto&) {});
+        require_rejected_without_mutation(
+            "Aktiver Watchpoint liess einen vorvalidierten Fill durch.");
+        static_cast<void>(fill_memory.remove_watchpoint(fill_watchpoint));
+
+        fill_memory.set_mmio_trace_handler([](const auto&) {});
+        require_rejected_without_mutation(
+            "Aktiver MMIO-Trace liess einen vorvalidierten Fill durch.");
+        fill_memory.clear_mmio_trace_handler();
+
+        fill_memory.set_mmio_access_tracking(true);
+        require_rejected_without_mutation(
+            "Aktives MMIO-Tracking liess einen vorvalidierten Fill durch.");
+        fill_memory.set_mmio_access_tracking(false);
+
+        std::size_t guest_sink_calls = 0u;
+        fill_memory.set_guest_memory_access_sink({&guest_sink_calls, &count_guest_memory_access});
+        require_rejected_without_mutation(
+            "Aktiver Gast-Speichersink liess einen vorvalidierten Fill durch.");
+        require(guest_sink_calls == 0u, "Abgelehnter Fill benachrichtigte den Gast-Speichersink.");
+        fill_memory.clear_guest_memory_access_sink();
+
+        fill_events.clear();
+        fill_memory.reset_performance_counters();
+        const auto fill_before_invalid_ranges =
+            std::vector<std::uint8_t>(fill_backing->bytes().begin(), fill_backing->bytes().end());
+        const auto adjacent_before_invalid_ranges = std::vector<std::uint8_t>(
+            adjacent_backing->bytes().begin(), adjacent_backing->bytes().end());
+        require(!fill_memory.commit_prevalidated_linear_fill(fill_base + 15u, 2u, fill_value) &&
+                    !fill_memory.commit_prevalidated_linear_fill(
+                        fill_base + 0x10000u, 1u, fill_value) &&
+                    !fill_memory.commit_prevalidated_linear_fill(
+                        fill_base + 0x20000u, 1u, fill_value) &&
+                    !fill_memory.commit_prevalidated_linear_fill(0xFFFFFFFFu, 2u, fill_value) &&
+                    !fill_memory.commit_prevalidated_linear_fill(fill_base, 0u, fill_value) &&
+                    std::equal(fill_before_invalid_ranges.begin(),
+                               fill_before_invalid_ranges.end(),
+                               fill_backing->bytes().begin()) &&
+                    std::equal(adjacent_before_invalid_ranges.begin(),
+                               adjacent_before_invalid_ranges.end(),
+                               adjacent_backing->bytes().begin()) &&
+                    mmio_write_calls == 0u && fill_events.empty() &&
+                    fill_memory.performance_counters().unobserved_accesses == 0u &&
+                    fill_memory.performance_counters().observed_accesses == 0u,
+                "Cross-Region/Read-only/MMIO/Overflow/Leer-Fill mutiert Speicher, "
+                "Observer oder Zaehler.");
+    }
 
     std::cout << "Regionbasierter Speicherbus erfolgreich.\n";
     return EXIT_SUCCESS;

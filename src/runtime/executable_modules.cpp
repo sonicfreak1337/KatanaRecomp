@@ -519,6 +519,16 @@ bool ExecutableModuleCatalog::active_extent_index_may_overlap(
     return false;
 }
 
+bool ExecutableModuleCatalog::may_overlap_active_extent(
+    const std::uint32_t address,
+    const std::size_t size) const noexcept {
+    if (size == 0u) return false;
+    if (!canonical_range_is_linear(address, size)) return true;
+    const auto physical_begin = canonical_physical_address(address);
+    const auto physical_end = static_cast<std::uint64_t>(physical_begin) + size;
+    return active_extent_index_may_overlap(physical_begin, physical_end);
+}
+
 void ExecutableModuleCatalog::publish(ExecutableModule module) {
     validate_and_normalize_module(module);
     if (find(module.id) != nullptr)

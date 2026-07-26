@@ -158,6 +158,10 @@ class ExecutableModuleCatalog final {
     [[nodiscard]] const ExecutableModule* resolve(std::uint32_t address,
                                                   std::size_t width = 1u) const noexcept;
     [[nodiscard]] const ExecutableModule* find(std::string_view id) const noexcept;
+    // A false result proves that no indexed active extent can overlap. Page-level false positives
+    // and nonempty ranges crossing an address or SH-4 alias boundary conservatively return true.
+    [[nodiscard]] bool may_overlap_active_extent(std::uint32_t address,
+                                                 std::size_t size) const noexcept;
     [[nodiscard]] bool authorize_control_transfer(std::uint32_t address,
                                                   std::uint32_t maximum_bytes = 128u);
     void record_runtime_write(std::uint32_t address,

@@ -254,9 +254,64 @@ int main() {
         for (std::uint32_t address = 0x0C200000u; address < 0x0C204000u; address += 0x1000u) {
             static_cast<void>(indexed.observe_write(address, 1u, CodeWriteSource::Dma, false));
         }
-        require(indexed.invalidation_events().size() == indexed.provenance_capacity() &&
-                    indexed.dropped_provenance_events() >= 3u,
+        const auto& indexed_events = indexed.invalidation_events();
+        require(indexed_events.size() == indexed.provenance_capacity() &&
+                    indexed_events[0u].sequence == 3u && indexed_events[1u].sequence == 4u &&
+                    indexed.dropped_provenance_events() == 3u,
                 "Invalidierungsprovenienz waechst ueber ihre feste Kapazitaet hinaus.");
+
+        ExecutableCodeTracker ring(3u);
+        for (std::uint64_t sequence = 0u; sequence < 4u; ++sequence) {
+            const auto address =
+                0xAC300000u + static_cast<std::uint32_t>(sequence * 4u);
+            static_cast<void>(
+                ring.observe_write(address, 4u, CodeWriteSource::Dma, false));
+        }
+        const auto first_wrap = ring.invalidation_events();
+        require(first_wrap.size() == 3u && first_wrap[0u].sequence == 1u &&
+                    first_wrap[1u].sequence == 2u && first_wrap[2u].sequence == 3u,
+                "Ringpuffer verliert nach dem ersten Umlauf die chronologische Reihenfolge.");
+        for (std::uint64_t sequence = 4u; sequence < 8u; ++sequence) {
+            const auto address =
+                0xAC300000u + static_cast<std::uint32_t>(sequence * 4u);
+            static_cast<void>(
+                ring.observe_write(address, 4u, CodeWriteSource::Dma, false));
+        }
+        const auto ring_snapshot = ring.snapshot();
+        require(ring_snapshot.invalidation_events.size() == 3u &&
+                    ring_snapshot.invalidation_events[0u].sequence == 5u &&
+                    ring_snapshot.invalidation_events[1u].sequence == 6u &&
+                    ring_snapshot.invalidation_events[2u].sequence == 7u &&
+                    ring_snapshot.invalidation_events[0u].virtual_address == 0xAC300014u &&
+                    ring_snapshot.invalidation_events[2u].physical_address == 0x0C30001Cu &&
+                    ring_snapshot.next_provenance_sequence == 8u &&
+                    ring_snapshot.dropped_provenance_events == 5u &&
+                    ring.invalidation_events() == ring_snapshot.invalidation_events,
+                "Ringpuffer-Snapshot verliert Reihenfolge, Aliasadresse, Sequenz oder Dropzaehler.");
+        static_cast<void>(
+            ring.observe_write(0xAC300020u, 4u, CodeWriteSource::Dma, false));
+        require(ring.invalidation_events()[0u].sequence == 6u &&
+                    ring.invalidation_events()[1u].sequence == 7u &&
+                    ring.invalidation_events()[2u].sequence == 8u &&
+                    ring.dropped_provenance_events() == 6u,
+                "Ringpuffer schreibt nach einer linearisierenden Abfrage nicht korrekt weiter.");
+
+        ExecutableCodeTracker default_ring;
+        constexpr auto stress_events =
+            ExecutableCodeTracker::default_provenance_capacity * 3u + 17u;
+        for (std::size_t index = 0u; index < stress_events; ++index) {
+            static_cast<void>(default_ring.observe_write(
+                0x0C400000u, 1u, CodeWriteSource::Cpu, false));
+        }
+        const auto stress_snapshot = default_ring.snapshot();
+        require(stress_snapshot.invalidation_events.size() ==
+                        ExecutableCodeTracker::default_provenance_capacity &&
+                    stress_snapshot.invalidation_events.front().sequence ==
+                        stress_events - ExecutableCodeTracker::default_provenance_capacity &&
+                    stress_snapshot.invalidation_events.back().sequence == stress_events - 1u &&
+                    stress_snapshot.dropped_provenance_events ==
+                        stress_events - ExecutableCodeTracker::default_provenance_capacity,
+                "Ringpuffer behaelt ueber mehrere Umlaeufe nicht exakt die neuesten Ereignisse.");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
