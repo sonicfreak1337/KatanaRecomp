@@ -440,20 +440,23 @@ int main(const int argc, const char* const* argv) {
                 "Reference-Lookup akzeptiert vorvalidierte Indexed-Zugriffszaehler.");
         const auto before_reference_synthetic =
             std::vector<std::uint8_t>(fill_backing->bytes().begin(), fill_backing->bytes().end());
-        require(!fill_memory.commit_prevalidated_linear_fill(
-                    fill_base,
-                    initial.size(),
-                    std::uint8_t{0xA5u},
-                    katana::runtime::CodeWriteSource::Cpu,
-                    0u,
-                    1u) &&
-                    std::equal(before_reference_synthetic.begin(),
-                               before_reference_synthetic.end(),
-                               fill_backing->bytes().begin()) &&
-                    fill_memory.performance_counters().indexed_region_hits == 0u &&
-                    fill_memory.performance_counters().reference_region_probes == 0u &&
-                    fill_memory.performance_counters().unobserved_accesses == 0u,
-                "Reference-Lookup akzeptiert synthetische Indexed-Hits oder mutiert Zustand.");
+        for (const auto rejected_indexed_hits : {std::size_t{0u}, std::size_t{1u}}) {
+            require(!fill_memory.commit_prevalidated_linear_fill(
+                        fill_base,
+                        initial.size(),
+                        std::uint8_t{0xA5u},
+                        katana::runtime::CodeWriteSource::Cpu,
+                        0u,
+                        rejected_indexed_hits) &&
+                        std::equal(before_reference_synthetic.begin(),
+                                   before_reference_synthetic.end(),
+                                   fill_backing->bytes().begin()) &&
+                        fill_memory.performance_counters().indexed_region_hits == 0u &&
+                        fill_memory.performance_counters().reference_region_probes == 0u &&
+                        fill_memory.performance_counters().unobserved_accesses == 0u &&
+                        fill_memory.performance_counters().observed_accesses == 0u,
+                    "Reference-Lookup akzeptiert einen vorvalidierten Fill oder mutiert Zustand.");
+        }
         fill_memory.set_lookup_mode(katana::runtime::MemoryLookupMode::Indexed);
 
         const auto require_rejected_without_mutation = [&](const char* const message) {

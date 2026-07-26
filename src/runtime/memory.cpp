@@ -1258,9 +1258,9 @@ bool Memory::commit_prevalidated_linear_fill(const std::uint32_t address,
                                              const CodeWriteSource source,
                                              const std::size_t additional_unobserved_accesses,
                                              const std::size_t additional_indexed_region_hits) noexcept {
-    if (size == 0u || access_observers_active() || mmio_access_tracking_enabled_ ||
-        mmio_trace_handler_ || guest_memory_access_sink_ ||
-        (additional_indexed_region_hits != 0u && lookup_mode_ != MemoryLookupMode::Indexed))
+    if (size == 0u || lookup_mode_ != MemoryLookupMode::Indexed ||
+        access_observers_active() || mmio_access_tracking_enabled_ ||
+        mmio_trace_handler_ || guest_memory_access_sink_)
         return false;
     if (size > address_space_size - static_cast<std::uint64_t>(address)) return false;
 

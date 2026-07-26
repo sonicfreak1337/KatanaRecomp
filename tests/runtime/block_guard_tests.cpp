@@ -3,6 +3,7 @@
 #include "katana/runtime/mmu_control.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -242,6 +243,52 @@ int main() {
         advance_utlb_access_counter(full_boundary_urc_cpu, 1u);
         require(((full_boundary_urc_cpu.mmucr >> 10u) & 0x3Fu) == 0u,
                 "URB=0 verwendet fuer gebatchte UTLB-Zugriffe nicht die 64er-Grenze.");
+
+        constexpr std::array<std::uint64_t, 14u> counter_sweep_accesses{
+            0u,
+            1u,
+            2u,
+            3u,
+            7u,
+            31u,
+            63u,
+            64u,
+            65u,
+            127u,
+            128u,
+            129u,
+            std::numeric_limits<std::uint64_t>::max() - 1u,
+            std::numeric_limits<std::uint64_t>::max(),
+        };
+        const auto scalar_counter_reference = [](std::uint32_t urc,
+                                                 const std::uint32_t urb,
+                                                 const std::uint64_t accesses) {
+            if (accesses == 0u) return urc;
+            const auto boundary = urb == 0u ? 64u : urb;
+            urc = urc >= boundary || urc + 1u == boundary ? 0u : urc + 1u;
+            return static_cast<std::uint32_t>(
+                (urc + (accesses - 1u) % boundary) % boundary);
+        };
+        constexpr std::uint32_t urc_field_mask = 0x3Fu << 10u;
+        constexpr std::uint32_t urb_field_mask = 0x3Fu << 18u;
+        constexpr std::uint32_t counter_field_mask = urc_field_mask | urb_field_mask;
+        constexpr std::uint32_t preserved_mmucr_bits = 0xA5A55A5Bu & ~counter_field_mask;
+        CpuState counter_sweep_cpu;
+        for (std::uint32_t urb = 0u; urb < 64u; ++urb) {
+            for (std::uint32_t urc = 0u; urc < 64u; ++urc) {
+                for (const auto accesses : counter_sweep_accesses) {
+                    counter_sweep_cpu.mmucr =
+                        preserved_mmucr_bits | (urc << 10u) | (urb << 18u);
+                    const auto mmucr_before = counter_sweep_cpu.mmucr;
+                    advance_utlb_access_counter(counter_sweep_cpu, accesses);
+                    const auto expected = scalar_counter_reference(urc, urb, accesses);
+                    require(((counter_sweep_cpu.mmucr >> 10u) & 0x3Fu) == expected &&
+                                (counter_sweep_cpu.mmucr & ~urc_field_mask) ==
+                                    (mmucr_before & ~urc_field_mask),
+                            "Tabellarischer UTLB-Zaehler-Sweep weicht von Einzelzugriffen ab.");
+                }
+            }
+        }
 
         CpuState sq_cpu;
         sq_cpu.address_space = std::make_shared<RuntimeAddressSpace>();

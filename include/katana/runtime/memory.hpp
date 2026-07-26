@@ -358,7 +358,7 @@ class Memory {
     // linear fill is atomically visible, every prepared GuestWriteObserver run is part of that
     // commit. An observer exception is therefore fail-stop and calls std::terminate instead of
     // returning to a caller that could resume the guest with partially updated observer state.
-    // A nonzero synthetic Indexed lookup count is admitted only while Indexed lookup is active.
+    // This prevalidated fast path is admitted only while Indexed lookup is active.
     [[nodiscard]] bool
     commit_prevalidated_linear_fill(std::uint32_t address,
                                     std::size_t size,
