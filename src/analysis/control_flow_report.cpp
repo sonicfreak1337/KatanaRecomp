@@ -379,6 +379,14 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"function_iteration_budget\":" << analysis.function_iteration_budget
            << ",\"function_budget_exhausted\":"
            << (analysis.function_budget_exhausted ? "true" : "false")
+           << ",\"guarded_code_inventory_candidates\":"
+           << analysis.guarded_code_inventory_candidates
+           << ",\"guarded_code_inventory_budget\":"
+           << analysis.guarded_code_inventory_budget
+           << ",\"candidate_inventory_truncated\":"
+           << (analysis.candidate_inventory_truncated ? "true" : "false")
+           << ",\"returned_table_scan_truncated\":"
+           << (analysis.returned_table_scan_truncated ? "true" : "false")
            << ",\"jump_table_cache_hits\":" << analysis.jump_table_cache.hits
            << ",\"jump_table_cache_misses\":" << analysis.jump_table_cache.misses
            << ",\"interned_evidence\":" << analysis.evidence_ids.size() << '}';
@@ -635,6 +643,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                    << ",\"complete\":" << (value.complete ? "true" : "false")
                    << ",\"guarded\":" << (value.guarded ? "true" : "false")
                    << ",\"abi_preserved\":" << (value.abi_preserved ? "true" : "false")
+                   << ",\"may_alias_stack\":"
+                   << (value.may_alias_stack ? "true" : "false")
                    << ",\"reason\":" << katana::io::quote_json(value.reason) << ",\"values\":[";
             for (std::size_t item = 0u; item < value.values.size(); ++item) {
                 if (item != 0u) output << ',';
@@ -692,7 +702,10 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                       table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump")
                << ",\"resolved\":" << (table.resolved ? "true" : "false")
                << ",\"aot_candidates_only\":"
-               << (table.aot_candidates_only ? "true" : "false") << ",\"evidence\":"
+               << (table.aot_candidates_only ? "true" : "false")
+               << ",\"candidate_scan_truncated\":"
+               << (table.candidate_scan_truncated ? "true" : "false")
+               << ",\"evidence\":"
                << katana::io::quote_json(control_flow_evidence_name(table.evidence))
                << ",\"requested_entries\":" << table.requested_entries
                << ",\"reason\":" << katana::io::quote_json(table.reason) << ",\"entries\":[";

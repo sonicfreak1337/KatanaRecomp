@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace katana::runtime {
@@ -82,6 +83,7 @@ class DispatchDiagnosticRecorder final {
 
   private:
     std::vector<DispatchDiagnosticEvent> events_;
+    std::unordered_multimap<std::uint64_t, std::size_t> event_index_;
     std::size_t capacity_ = default_capacity;
     std::uint64_t total_occurrences_ = 0u;
     std::uint64_t dropped_unique_events_ = 0u;

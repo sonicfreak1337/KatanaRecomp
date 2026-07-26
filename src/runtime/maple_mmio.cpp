@@ -124,6 +124,7 @@ void DreamcastMapleController::write(const std::uint32_t offset, const std::uint
             state_ = MapleDmaState::Disabled;
             error_ = MapleDmaError::None;
             error_address_.reset();
+            clear_event_publication();
             hard_trigger_failed_ = false;
         } else if (state_ == MapleDmaState::Disabled) {
             state_ = MapleDmaState::Completed;
@@ -141,6 +142,7 @@ void DreamcastMapleController::write(const std::uint32_t offset, const std::uint
             state_ = MapleDmaState::Armed;
             error_ = MapleDmaError::None;
             error_address_.reset();
+            clear_event_publication();
             hard_trigger_failed_ = false;
         } else {
             start_dma();
@@ -154,6 +156,7 @@ void DreamcastMapleController::write(const std::uint32_t offset, const std::uint
             hard_trigger_failed_ = false;
             error_ = MapleDmaError::None;
             error_address_.reset();
+            clear_event_publication();
             if (state_ == MapleDmaState::Failed)
                 state_ = enabled_ != 0u ? MapleDmaState::Completed
                                         : MapleDmaState::Disabled;
@@ -179,6 +182,7 @@ void DreamcastMapleController::reset() noexcept {
     state_ = MapleDmaState::Disabled;
     error_ = MapleDmaError::None;
     error_address_.reset();
+    clear_event_publication();
     system_control_ = 0x3A980000u;
     address_protect_ = 0x00007F00u;
     msb_select_ = 1u;
@@ -222,6 +226,21 @@ std::optional<std::uint32_t> DreamcastMapleController::error_address() const noe
     return error_address_;
 }
 
+MapleDmaEventPublicationState
+DreamcastMapleController::event_publication_state() const noexcept {
+    return event_publication_state_;
+}
+
+MapleDmaEventPublicationError
+DreamcastMapleController::event_publication_error() const noexcept {
+    return event_publication_error_;
+}
+
+std::uint64_t
+DreamcastMapleController::event_publication_failure_count() const noexcept {
+    return event_publication_failure_count_;
+}
+
 DreamcastMapleControllerSnapshot DreamcastMapleController::snapshot() const {
     DreamcastMapleControllerSnapshot result;
     result.timing = timing_;
@@ -236,6 +255,9 @@ DreamcastMapleControllerSnapshot DreamcastMapleController::snapshot() const {
     result.state = state_;
     result.error = error_;
     result.error_address = error_address_;
+    result.event_publication_state = event_publication_state_;
+    result.event_publication_error = event_publication_error_;
+    result.event_publication_failure_count = event_publication_failure_count_;
     result.system_control = system_control_;
     result.address_protect = address_protect_;
     result.msb_select = msb_select_;
@@ -292,6 +314,7 @@ void DreamcastMapleController::start_dma() {
         state_ = MapleDmaState::Active;
         error_ = MapleDmaError::None;
         error_address_.reset();
+        clear_event_publication();
         hard_trigger_failed_ = false;
         pending_responses_.clear();
         tx_address_ = command_table_;
@@ -488,13 +511,7 @@ void DreamcastMapleController::complete_dma(const SchedulerEventId event_id) noe
         error_ = MapleDmaError::None;
         error_address_.reset();
         ++completed_dma_count_;
-        if (completion_observer_) {
-            try {
-                completion_observer_();
-            } catch (...) {
-                fail(MapleDmaError::InternalLifecycle, rx_address_);
-            }
-        }
+        publish_dma_event();
     } catch (...) {
         fail(MapleDmaError::InternalLifecycle, rx_base_);
     }
@@ -515,12 +532,30 @@ void DreamcastMapleController::fail(const MapleDmaError error,
     error_ = error;
     error_address_ = address;
     ++failed_dma_count_;
-    if (!guest_caused_dma_error(error) || !completion_observer_) return;
+    clear_event_publication();
+    if (!guest_caused_dma_error(error)) return;
+    publish_dma_event();
+}
+
+void DreamcastMapleController::publish_dma_event() noexcept {
+    clear_event_publication();
+    if (!completion_observer_) return;
+    event_publication_state_ = MapleDmaEventPublicationState::Publishing;
     try {
         completion_observer_();
+        event_publication_state_ = MapleDmaEventPublicationState::Published;
     } catch (...) {
-        error_ = MapleDmaError::InternalLifecycle;
+        event_publication_state_ = MapleDmaEventPublicationState::Failed;
+        event_publication_error_ =
+            MapleDmaEventPublicationError::ObserverException;
+        ++event_publication_failure_count_;
     }
+}
+
+void DreamcastMapleController::clear_event_publication() noexcept {
+    event_publication_state_ =
+        MapleDmaEventPublicationState::NotRequested;
+    event_publication_error_ = MapleDmaEventPublicationError::None;
 }
 
 void DreamcastMapleController::handle_scheduler_reset() noexcept {
@@ -530,6 +565,7 @@ void DreamcastMapleController::handle_scheduler_reset() noexcept {
     state_ = enabled_ != 0u ? MapleDmaState::Completed : MapleDmaState::Disabled;
     error_ = MapleDmaError::None;
     error_address_.reset();
+    clear_event_publication();
     hard_trigger_failed_ = false;
 }
 

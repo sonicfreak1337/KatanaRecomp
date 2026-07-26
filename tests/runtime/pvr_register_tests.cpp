@@ -1,5 +1,6 @@
 #include "katana/runtime/pvr.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -485,6 +486,81 @@ int main() {
     require(wrapped_vblank_pvr->in_vblank() && wrapped_vblank_in == 1u &&
                 wrapped_vblank_out == 1u,
             "Gewrappter VBlank-Bereich tritt an seiner spaeten In-Grenze nicht erneut ein.");
+
+    EventScheduler full_reset_scheduler;
+    Memory full_reset_bus(0u);
+    const auto full_reset_pvr = map_pvr_registers(
+        full_reset_bus, full_reset_scheduler, {}, PvrTiming{5u, 100u, 100u});
+    full_reset_pvr->write(pvr_register::VideoControl, 0u);
+    full_reset_pvr->write(
+        pvr_register::FramebufferReadControl, 1u << 23u);
+    full_reset_pvr->write(pvr_register::SpgControl, 0u);
+    full_reset_pvr->write(pvr_register::SpgHblankInterrupt,
+                          (1u << 12u) | 0x3FFu);
+    full_reset_pvr->write(pvr_register::SpgVblankInterrupt,
+                          (2u << 16u) | 8u);
+    full_reset_pvr->write(pvr_register::SpgLoad, (9u << 16u) | 9u);
+    static_cast<void>(full_reset_scheduler.advance_to(50u, 32u));
+    const auto before_runtime_reschedule = full_reset_pvr->snapshot();
+    full_reset_pvr->write(pvr_register::VideoControl, 1u);
+    const auto after_runtime_reschedule = full_reset_pvr->snapshot();
+    require(before_runtime_reschedule.scan_epoch_cycle ==
+                    after_runtime_reschedule.scan_epoch_cycle &&
+                (full_reset_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 5u,
+            "Laufende PVR-Registeraenderung verliert die bestehende Rasterphase.");
+
+    full_reset_pvr->reset();
+    const auto after_full_reset = full_reset_pvr->snapshot();
+    require(after_full_reset.scan_frame_cycles != 0u &&
+                after_full_reset.scan_epoch_cycle ==
+                    full_reset_scheduler.current_cycle() &&
+                after_full_reset.in_vblank &&
+                (full_reset_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 0u,
+            "PVR-Vollreset uebernimmt Rasterepoche oder VBlank-Zustand des alten Modus.");
+
+    const auto reset_vertical =
+        static_cast<std::uint64_t>(
+            (after_full_reset.read(pvr_register::SpgLoad) >> 16u) & 0x3FFu) +
+        1u;
+    const auto reset_vblank_out_line = static_cast<std::uint64_t>(
+        (after_full_reset.read(pvr_register::SpgVblankInterrupt) >> 16u) &
+        0x3FFu);
+    const auto reset_vblank_out_cycle =
+        after_full_reset.scan_epoch_cycle +
+        std::max<std::uint64_t>(
+            1u,
+            after_full_reset.scan_frame_cycles * reset_vblank_out_line /
+                reset_vertical);
+    static_cast<void>(
+        full_reset_scheduler.advance_to(reset_vblank_out_cycle - 1u, 32u));
+    require(full_reset_pvr->in_vblank() &&
+                full_reset_pvr->vblank_in_count() ==
+                    after_full_reset.vblank_in &&
+                full_reset_pvr->vblank_out_count() ==
+                    after_full_reset.vblank_out,
+            "PVR-Vollreset verlaesst den gewrappten Default-VBlank vor der "
+            "Out-Grenze.");
+    static_cast<void>(
+        full_reset_scheduler.advance_to(reset_vblank_out_cycle, 32u));
+    require(!full_reset_pvr->in_vblank() &&
+                full_reset_pvr->vblank_in_count() ==
+                    after_full_reset.vblank_in &&
+                full_reset_pvr->vblank_out_count() ==
+                    after_full_reset.vblank_out + 1u,
+            "Erstes VBlank-Ereignis nach PVR-Vollreset ist nicht VBlankOut.");
+
+    full_reset_pvr->set_ta_reset_observer(
+        [] { throw std::runtime_error("synthetic-ta-reset-observer"); });
+    require(throws<std::runtime_error>([&] { full_reset_pvr->reset(); }),
+            "Werfender TA-Resetobserver wurde an der oeffentlichen Grenze verschluckt.");
+    const auto after_observer_failure = full_reset_pvr->snapshot();
+    require(after_observer_failure.scan_frame_cycles != 0u &&
+                after_observer_failure.scan_epoch_cycle ==
+                    full_reset_scheduler.current_cycle() &&
+                after_observer_failure.in_vblank &&
+                full_reset_scheduler.next_event_cycle().has_value(),
+            "TA-Resetobserverfehler strandet den bereits reseteten PVR ohne "
+            "Rasterereignisse.");
 
     const auto require_profile = [&](const DreamcastVideoMode mode,
                                      const std::uint32_t load,

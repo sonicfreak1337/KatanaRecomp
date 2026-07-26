@@ -65,6 +65,10 @@ struct ControlFlowAnalysisResult {
     std::size_t unchanged_ingress_skips = 0u;
     std::size_t function_iteration_budget = 0u;
     bool function_budget_exhausted = false;
+    std::size_t guarded_code_inventory_candidates = 0u;
+    std::size_t guarded_code_inventory_budget = 0u;
+    bool candidate_inventory_truncated = false;
+    bool returned_table_scan_truncated = false;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
     std::vector<SymbolicAddress> symbolic_addresses;
 };

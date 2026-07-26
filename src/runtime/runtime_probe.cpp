@@ -823,9 +823,14 @@ capture_runtime_probe_replay(const SystemReplayLog& replay) {
     snapshot.enabled_coverage = replay.enabled_coverage();
     snapshot.observed_coverage = replay.observed_coverage();
     snapshot.required_coverage = replay.required_coverage();
+    snapshot.expected_observed_coverage =
+        replay.expected_observed_coverage();
     snapshot.event_counts = replay.event_counts();
-    snapshot.coverage_complete = replay.coverage_complete();
-    snapshot.complete = snapshot.dropped_events == 0u && snapshot.coverage_complete;
+    snapshot.hooks_complete = replay.hooks_complete();
+    snapshot.observed_complete = replay.observed_complete();
+    snapshot.complete = snapshot.dropped_events == 0u &&
+                        snapshot.hooks_complete &&
+                        snapshot.observed_complete;
     snapshot.exact_event_stream = replay.exact_event_stream_available();
     snapshot.sealed = replay.sealed();
     if (snapshot.sealed)
@@ -1259,6 +1264,11 @@ make_runtime_probe_device_snapshot(const DreamcastMapleControllerSnapshot& snaps
     fields.scalar(static_cast<std::uint64_t>(snapshot.state));
     fields.scalar(static_cast<std::uint64_t>(snapshot.error));
     fields.optional_scalar(snapshot.error_address);
+    fields.scalar(static_cast<std::uint64_t>(
+        snapshot.event_publication_state));
+    fields.scalar(static_cast<std::uint64_t>(
+        snapshot.event_publication_error));
+    fields.scalar(snapshot.event_publication_failure_count);
     fields.scalar(snapshot.system_control);
     fields.scalar(snapshot.address_protect);
     fields.scalar(snapshot.msb_select);
@@ -2427,9 +2437,11 @@ hash_runtime_probe_replay(const RuntimeProbeReplaySnapshot& snapshot) noexcept {
     hash.append_u32(snapshot.enabled_coverage);
     hash.append_u32(snapshot.observed_coverage);
     hash.append_u32(snapshot.required_coverage);
+    hash.append_u32(snapshot.expected_observed_coverage);
     for (const auto count : snapshot.event_counts)
         hash.append_u64(count);
-    hash.append_bool(snapshot.coverage_complete);
+    hash.append_bool(snapshot.hooks_complete);
+    hash.append_bool(snapshot.observed_complete);
     hash.append_bool(snapshot.complete);
     hash.append_bool(snapshot.exact_event_stream);
     hash.append_bool(snapshot.sealed);
@@ -2507,6 +2519,9 @@ void validate_runtime_probe_deterministic_v1(
     }
     const auto required_replay_coverage =
         system_replay_required_coverage(SystemReplayProfile::DeterministicV1);
+    const auto expected_observed_replay_coverage =
+        system_replay_expected_observed_coverage(
+            SystemReplayProfile::DeterministicV1);
     const auto exact_replay_storage =
         static_cast<std::uint32_t>(SystemReplayStorageMode::ExactEvents);
     const auto digest_replay_storage =
@@ -2537,11 +2552,20 @@ void validate_runtime_probe_deterministic_v1(
         (replay.storage_mode == exact_replay_storage &&
          replay.summarized_event_count != 0u) ||
         replay.required_coverage != required_replay_coverage ||
+        replay.expected_observed_coverage !=
+            expected_observed_replay_coverage ||
         replay.enabled_coverage != required_replay_coverage ||
-        !replay.coverage_complete ||
+        replay.hooks_complete !=
+            ((replay.required_coverage & ~replay.enabled_coverage) == 0u) ||
+        !replay.hooks_complete ||
+        replay.observed_complete !=
+            ((replay.expected_observed_coverage &
+              ~replay.observed_coverage) == 0u) ||
+        !replay.observed_complete ||
         replay.ordering_digest != replay.event_hash ||
         replay.complete !=
-            (replay.dropped_events == 0u && replay.coverage_complete) ||
+            (replay.dropped_events == 0u && replay.hooks_complete &&
+             replay.observed_complete) ||
         (replay.observed_coverage & ~replay.enabled_coverage) != 0u ||
         replay.sealed != replay.final_guest_state_hash.has_value()) {
         throw std::invalid_argument(
@@ -2648,6 +2672,26 @@ std::string serialize_runtime_probe_report_json(const RuntimeProbeReport& report
            << ",\"summarized_event_count\":"
            << report.replay.summarized_event_count
            << ",\"dropped_events\":" << report.replay.dropped_events
+           << ",\"enabled_coverage\":"
+           << report.replay.enabled_coverage
+           << ",\"observed_coverage\":"
+           << report.replay.observed_coverage
+           << ",\"required_coverage\":"
+           << report.replay.required_coverage
+           << ",\"expected_observed_coverage\":"
+           << report.replay.expected_observed_coverage
+           << ",\"coverage_event_counts\":[";
+    for (std::size_t index = 0u;
+         index < report.replay.event_counts.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        output << report.replay.event_counts[index];
+    }
+    output << ']'
+           << ",\"hooks_complete\":"
+           << (report.replay.hooks_complete ? "true" : "false")
+           << ",\"observed_complete\":"
+           << (report.replay.observed_complete ? "true" : "false")
            << ",\"complete\":" << (report.replay.complete ? "true" : "false")
            << ",\"exact_event_stream\":"
            << (report.replay.exact_event_stream ? "true" : "false")

@@ -411,6 +411,8 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
         request.materializer->reconcile_inactive_origins(request.metrics);
     auto block = table.lookup(target, effective_variant);
     bool alias_lookup = false;
+    bool variant_materialized = false;
+    bool invalidated = false;
     if (!block) {
         block = table.lookup_physical(physical, effective_variant);
         alias_lookup = block.has_value();
@@ -419,6 +421,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
         block = table.register_static_variant(
             target, physical, request.variant, effective_variant);
         alias_lookup = false;
+        variant_materialized = block.has_value();
     }
     bool materialized = false;
     if (!block && request.materializer != nullptr) {
@@ -457,6 +460,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
             const auto stale_identity = stable_runtime_block_identity(resolved->get());
             if (!table.erase_identity(stale_identity))
                 reject(materialization_error(request.materializer->last_failure()));
+            invalidated = true;
             request.materializer->reconcile_inactive_origins(request.metrics);
 
             const auto materializations_before =
@@ -488,7 +492,12 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     cpu.pc = alias_lookup ? resolved->get().virtual_start : target;
     if (request.metrics != nullptr)
         request.metrics->record_hit(request.dispatch_class, request.callsite, target, materialized);
-    diagnose(request, target, cpu.pr, alias_lookup, true);
+    const bool plain_runtime_hit =
+        request.dispatch_class == RuntimeDispatchClass::RuntimeOnly &&
+        request.kind == IndirectDispatchKind::TailJump && !materialized &&
+        !variant_materialized && !invalidated && !alias_lookup &&
+        !architectural_target_fetch_fault;
+    if (!plain_runtime_hit) diagnose(request, target, cpu.pr, alias_lookup, true);
     return {*block,
             target,
             physical,

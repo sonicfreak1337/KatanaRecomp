@@ -979,9 +979,18 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.unchanged_ingress_skips = function_values.unchanged_ingress_skips;
         analysis.function_iteration_budget = function_values.iteration_budget;
         analysis.function_budget_exhausted = function_values.budget_exhausted;
+        analysis.guarded_code_inventory_candidates =
+            function_values.guarded_code_inventory.candidate_count;
+        analysis.guarded_code_inventory_budget =
+            function_values.guarded_code_inventory.candidate_budget;
+        analysis.candidate_inventory_truncated =
+            function_values.guarded_code_inventory.candidate_inventory_truncated;
+        analysis.returned_table_scan_truncated =
+            function_values.guarded_code_inventory.table_scan_truncated;
         analysis.function_value_summaries = std::move(function_values.summaries);
         report_progress("function-values-complete");
-        for (const auto& candidate : function_values.stored_code_address_candidates) {
+        for (const auto& candidate :
+             function_values.guarded_code_inventory.stored_code_addresses) {
             const std::array origins{FunctionOrigin::StoredCodeAddress};
             changed = add_seed(seeds,
                                candidate.target_address,
@@ -991,7 +1000,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                       changed;
         }
         for (const auto& table :
-             function_values.returned_code_address_table_candidates) {
+             function_values.guarded_code_inventory.returned_code_address_tables) {
             const std::array origins{FunctionOrigin::GuardedSnapshot};
             for (const auto target : table.target_addresses) {
                 changed = add_seed(seeds,

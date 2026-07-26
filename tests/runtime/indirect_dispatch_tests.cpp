@@ -84,24 +84,30 @@ void materializer_lifecycle_regression() {
     request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
     request.metrics = &metrics;
     request.materializer = &materializer;
+    DispatchDiagnosticRecorder diagnostics;
+    request.diagnostics = &diagnostics;
 
     const auto first = dispatch_indirect(cpu, blocks, request);
     const auto first_block = blocks.resolve(first.block);
-    require(first.materialized && first_block.has_value(),
-            "Erste AOT-Bindung wird nicht als Materialisierung ausgewiesen.");
+    require(first.materialized && first_block.has_value() &&
+                diagnostics.total_occurrences() == 1u &&
+                diagnostics.events().size() == 1u,
+            "Erste AOT-Bindung wird nicht materialisiert oder detailliert ausgewiesen.");
     const auto first_identity = stable_runtime_block_identity(first_block->get());
     const auto cached = dispatch_indirect(cpu, blocks, request);
-    require(!cached.materialized && cached.block == first.block,
-            "Cache-Hit wird faelschlich als neue Materialisierung ausgewiesen.");
+    require(!cached.materialized && cached.block == first.block &&
+                diagnostics.total_occurrences() == 1u,
+            "Cache-Hit wird faelschlich materialisiert oder als Detailereignis erfasst.");
 
     request.target = 0x2002u;
     request.callsite = 0x84u;
     const auto sibling = dispatch_indirect(cpu, blocks, request);
     const auto sibling_block = blocks.resolve(sibling.block);
     require(sibling.materialized && sibling_block.has_value() &&
+                diagnostics.total_occurrences() == 2u &&
                 materializer.metrics().retained_validation_bytes == bytes.size() &&
                 materializer.metrics().peak_retained_validation_bytes == bytes.size(),
-            "Mehrere Bloecke derselben AOT-Vorlage duplizieren den Retained-Proof.");
+            "Weitere AOT-Bindung fehlt im Detail oder dupliziert den Retained-Proof.");
     const auto sibling_identity = stable_runtime_block_identity(sibling_block->get());
 
     auto replacement = source;
@@ -115,6 +121,7 @@ void materializer_lifecycle_regression() {
                 !blocks.active(sibling.block) && !tracker.valid(first_identity) &&
                 !tracker.valid(sibling_identity) &&
                 tracker.valid(stable_runtime_block_identity(rebound_block->get())) &&
+                diagnostics.total_occurrences() == 3u &&
                 materializer.metrics().materializations == 3u &&
                 materializer.metrics().retained_validation_bytes == bytes.size() &&
                 materializer.metrics().peak_retained_validation_bytes == bytes.size() &&
@@ -338,6 +345,143 @@ void missing_aot_dispatch_regression() {
                 metrics.first_error()->error == DispatchDiagnosticError::MissingAot,
             "Missing-AOT ging zwischen Binder, Materializer und Dispatchdiagnose verloren.");
 }
+
+void runtime_only_hit_hotloop_regression() {
+    constexpr std::uint32_t callsite = 0x8C003002u;
+    constexpr std::uint32_t target = 0x8C004000u;
+    constexpr std::uint64_t hotloop_hits = 1'000'000u;
+
+    RuntimeBlockTable blocks;
+    const BlockVariantKey variant{};
+    const auto registered = blocks.register_static({target,
+                                                    canonical_physical_address(target),
+                                                    2u,
+                                                    BlockEndKind::Return,
+                                                    variant,
+                                                    block,
+                                                    "runtime-only-hotloop",
+                                                    false});
+    require(static_cast<bool>(registered),
+            "Runtime-only-Hotloopblock wurde nicht registriert.");
+
+    DispatchDiagnosticRecorder diagnostics;
+    for (std::size_t index = 0u; index < diagnostics.capacity(); ++index) {
+        const auto offset = static_cast<std::uint32_t>(index * 2u);
+        DispatchDiagnosticEvent event;
+        event.callsite = 0x8C100000u + offset;
+        event.source_virtual = 0x8C110000u + offset;
+        event.source_physical = canonical_physical_address(event.source_virtual);
+        event.virtual_target = 0x8C120000u + offset;
+        event.canonical_target = canonical_physical_address(*event.virtual_target);
+        event.block_end = BlockEndKind::DynamicBranch;
+        event.origin = DispatchResolutionOrigin::RuntimeOnly;
+        event.exit_pc = *event.virtual_target;
+        diagnostics.record(event);
+    }
+    const auto detail_occurrences_before = diagnostics.total_occurrences();
+    const auto dropped_details_before = diagnostics.dropped_unique_events();
+
+    CpuState cpu;
+    cpu.write_sr(sr_md_mask);
+    IndirectDispatchMetrics metrics;
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = callsite;
+    request.target = target;
+    request.source = {callsite - 2u, canonical_physical_address(callsite - 2u)};
+    request.variant = variant;
+    request.resolution_origin = DispatchResolutionOrigin::RuntimeOnly;
+    request.diagnostics = &diagnostics;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.metrics = &metrics;
+
+    for (std::uint64_t hit = 0u; hit < hotloop_hits; ++hit)
+        static_cast<void>(dispatch_indirect(cpu, blocks, request));
+
+    bool retained_details_unchanged =
+        diagnostics.events().size() == diagnostics.capacity();
+    for (const auto& event : diagnostics.events())
+        retained_details_unchanged &= event.occurrences == 1u;
+    const auto site = metrics.runtime_only_sites().find(callsite);
+    require(metrics.hits() == hotloop_hits &&
+                metrics.runtime_only_hits() == hotloop_hits && metrics.misses() == 0u &&
+                site != metrics.runtime_only_sites().end() &&
+                site->second.calls == hotloop_hits && site->second.hits == hotloop_hits &&
+                site->second.misses == 0u && site->second.materializations == 0u &&
+                site->second.invalidations == 0u && site->second.targets.size() == 1u &&
+                site->second.targets.front() == target &&
+                diagnostics.total_occurrences() == detail_occurrences_before &&
+                diagnostics.dropped_unique_events() == dropped_details_before &&
+                retained_details_unchanged,
+            "Eine Million reine Runtime-only-Hits aktualisieren nicht nur Metriken oder "
+            "betreten weiterhin den linearen Detail-Key-Vergleich.");
+
+    DispatchDiagnosticRecorder alias_diagnostics;
+    IndirectDispatchMetrics alias_metrics;
+    request.target = 0xAC004000u;
+    request.diagnostics = &alias_diagnostics;
+    request.metrics = &alias_metrics;
+    const auto alias = dispatch_indirect(cpu, blocks, request);
+    require(alias.alias_lookup && alias.resulting_pc == target && cpu.pc == target &&
+                alias_metrics.hits() == 1u && alias_metrics.misses() == 0u &&
+                alias_diagnostics.total_occurrences() == 1u &&
+                alias_diagnostics.events().size() == 1u &&
+                alias_diagnostics.events().front().alias_origin ==
+                    DispatchAliasOrigin::CanonicalPhysical &&
+                alias_diagnostics.events().front().virtual_target ==
+                    std::optional<std::uint32_t>{0xAC004000u},
+            "Erster Runtime-only-P0/P1/P2-Aliastreffer verliert seine "
+            "PC-Normalisierung oder Aliasdiagnose.");
+
+    DispatchDiagnosticRecorder call_diagnostics;
+    IndirectDispatchMetrics call_metrics;
+    request.kind = IndirectDispatchKind::Call;
+    request.target = target;
+    request.return_address = 0x8C003006u;
+    request.diagnostics = &call_diagnostics;
+    request.metrics = &call_metrics;
+    static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    require(cpu.pr == request.return_address && call_metrics.hits() == 1u &&
+                call_diagnostics.total_occurrences() == 1u &&
+                call_diagnostics.events().size() == 1u &&
+                call_diagnostics.events().front().block_end == BlockEndKind::Call &&
+                call_diagnostics.events().front().pr == request.return_address,
+            "Exakter Runtime-only-Call verliert PR- oder Terminatorevidenz.");
+
+    DispatchDiagnosticRecorder return_diagnostics;
+    IndirectDispatchMetrics return_metrics;
+    request.kind = IndirectDispatchKind::Return;
+    request.target = 0u;
+    cpu.pr = target;
+    request.diagnostics = &return_diagnostics;
+    request.metrics = &return_metrics;
+    static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    require(cpu.pc == target && cpu.pr == target && return_metrics.hits() == 1u &&
+                return_diagnostics.total_occurrences() == 1u &&
+                return_diagnostics.events().size() == 1u &&
+                return_diagnostics.events().front().block_end == BlockEndKind::Return &&
+                return_diagnostics.events().front().pr == target,
+            "Exakter Runtime-only-Return verliert PR- oder Terminatorevidenz.");
+
+    DispatchDiagnosticRecorder miss_diagnostics;
+    IndirectDispatchMetrics miss_metrics;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.target = 0x8C005000u;
+    request.diagnostics = &miss_diagnostics;
+    request.metrics = &miss_metrics;
+    bool rejected = false;
+    try {
+        static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    } catch (const IndirectDispatchError&) {
+        rejected = true;
+    }
+    require(rejected && miss_metrics.misses() == 1u &&
+                miss_diagnostics.total_occurrences() == 1u &&
+                miss_diagnostics.events().size() == 1u &&
+                miss_diagnostics.events().front().error ==
+                    DispatchDiagnosticError::UnknownTarget,
+            "Runtime-only-Miss verliert sein Detailereignis neben dem Hit-Hotpath.");
+}
 } // namespace
 
 int main() {
@@ -345,6 +489,7 @@ int main() {
         materializer_lifecycle_regression();
         runtime_aot_alias_lifetime_regression();
         missing_aot_dispatch_regression();
+        runtime_only_hit_hotloop_regression();
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};
         static_cast<void>(table.register_static({0x8C001000u,
@@ -463,10 +608,9 @@ int main() {
                     continuation_profile->second.targets.front() == dynamic_target &&
                     !continuation_metrics.runtime_only_sites().contains(dynamic_target) &&
                     continuation_diagnostics.events().size() == 1u &&
-                    continuation_diagnostics.events().front().callsite == terminator &&
-                    continuation_diagnostics.events().front().virtual_target == dynamic_target &&
-                    continuation_diagnostics.events().front().origin ==
-                        DispatchResolutionOrigin::RuntimeOnly,
+                    continuation_diagnostics.total_occurrences() == 1u &&
+                    continuation_diagnostics.events().front().alias_origin ==
+                        DispatchAliasOrigin::CanonicalPhysical,
                 "Runtime-only-Fortsetzung verliert Terminator, Ziel oder Site-Profil.");
 
         dynamic_exit.kind = BlockEndKind::Call;

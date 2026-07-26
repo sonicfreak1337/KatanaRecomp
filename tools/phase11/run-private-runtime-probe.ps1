@@ -1967,6 +1967,13 @@ function Read-RuntimeProbeLine {
         'retained_event_count',
         'summarized_event_count',
         'dropped_events',
+        'enabled_coverage',
+        'observed_coverage',
+        'required_coverage',
+        'expected_observed_coverage',
+        'coverage_event_counts',
+        'hooks_complete',
+        'observed_complete',
         'complete',
         'exact_event_stream',
         'sealed'
@@ -2018,6 +2025,32 @@ function Read-RuntimeProbeLine {
     $retainedEventCount = Get-StrictUInt64 $probe.replay.retained_event_count
     $summarizedEventCount = Get-StrictUInt64 $probe.replay.summarized_event_count
     $droppedEvents = Get-StrictUInt64 $probe.replay.dropped_events
+    $enabledCoverage = Get-StrictUInt64 $probe.replay.enabled_coverage
+    $observedCoverage = Get-StrictUInt64 $probe.replay.observed_coverage
+    $requiredCoverage = Get-StrictUInt64 $probe.replay.required_coverage
+    $expectedObservedCoverage =
+        Get-StrictUInt64 $probe.replay.expected_observed_coverage
+    $coverageCounts = @($probe.replay.coverage_event_counts)
+    if ($coverageCounts.Count -ne 12) {
+        Throw-ProbeFailure 'invalid-runtime-probe-contract'
+    }
+    $normalizedCoverageCounts = @()
+    [uint64]$coveredEventCount = 0
+    [uint64]$countedCoverage = 0
+    for ($coverageIndex = 0; $coverageIndex -lt 12; ++$coverageIndex) {
+        $coverageCount = Get-StrictUInt64 $coverageCounts[$coverageIndex]
+        if ($coverageCount -gt ([uint64]::MaxValue - $coveredEventCount)) {
+            Throw-ProbeFailure 'invalid-runtime-probe-contract'
+        }
+        $coveredEventCount += $coverageCount
+        if ($coverageCount -ne 0) {
+            $countedCoverage =
+                $countedCoverage -bor ([uint64]1 -shl $coverageIndex)
+        }
+        $normalizedCoverageCounts +=
+            $coverageCount.ToString(
+                [Globalization.CultureInfo]::InvariantCulture)
+    }
     $retentionSumOverflows =
         $summarizedEventCount -gt ([uint64]::MaxValue - $retainedEventCount)
     $retentionSum = if ($retentionSumOverflows) {
@@ -2035,6 +2068,18 @@ function Read-RuntimeProbeLine {
         ($summarizedEventCount -ne 0 -and
             $retainedEventCount -ne $retentionCapacity) -or
         $droppedEvents -ne 0 -or
+        $requiredCoverage -ne 4095 -or
+        $expectedObservedCoverage -ne 2559 -or
+        $enabledCoverage -ne $requiredCoverage -or
+        ($observedCoverage -band [uint64]4095) -ne $observedCoverage -or
+        ($observedCoverage -band $expectedObservedCoverage) -ne
+            $expectedObservedCoverage -or
+        $countedCoverage -ne $observedCoverage -or
+        $coveredEventCount -gt $eventCount -or
+        -not (Test-JsonBoolean $probe.replay.hooks_complete) -or
+        -not [bool]$probe.replay.hooks_complete -or
+        -not (Test-JsonBoolean $probe.replay.observed_complete) -or
+        -not [bool]$probe.replay.observed_complete -or
         -not (Test-JsonBoolean $probe.replay.complete) -or
         -not [bool]$probe.replay.complete -or
         -not (Test-JsonBoolean $probe.replay.exact_event_stream) -or
@@ -2086,6 +2131,18 @@ function Read-RuntimeProbeLine {
             summarized_event_count =
                 $summarizedEventCount.ToString([Globalization.CultureInfo]::InvariantCulture)
             dropped_events = '0'
+            enabled_coverage =
+                $enabledCoverage.ToString([Globalization.CultureInfo]::InvariantCulture)
+            observed_coverage =
+                $observedCoverage.ToString([Globalization.CultureInfo]::InvariantCulture)
+            required_coverage =
+                $requiredCoverage.ToString([Globalization.CultureInfo]::InvariantCulture)
+            expected_observed_coverage =
+                $expectedObservedCoverage.ToString(
+                    [Globalization.CultureInfo]::InvariantCulture)
+            coverage_event_counts = $normalizedCoverageCounts
+            hooks_complete = $true
+            observed_complete = $true
             complete = $true
             exact_event_stream = [bool]$probe.replay.exact_event_stream
             sealed = $true
@@ -2256,11 +2313,18 @@ function New-SyntheticProbeJson {
         device_field_count = 3
         replay = [ordered]@{
             storage_mode = 'digest-stream'
-            retention_capacity = 8
-            event_count = 4
-            retained_event_count = 4
+            retention_capacity = 16
+            event_count = 10
+            retained_event_count = 10
             summarized_event_count = 0
             dropped_events = $DroppedEvents
+            enabled_coverage = 4095
+            observed_coverage = 2559
+            required_coverage = 4095
+            expected_observed_coverage = 2559
+            coverage_event_counts = @(1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1)
+            hooks_complete = $true
+            observed_complete = $true
             complete = $DroppedEvents -eq 0
             exact_event_stream = $DroppedEvents -eq 0
             sealed = $true
@@ -2696,11 +2760,31 @@ function Invoke-SelfTest {
         '"probe_version":' +
         $script:RuntimeProbeSchemaVersion.ToString(
             [Globalization.CultureInfo]::InvariantCulture)
+    $coverageCountsField =
+        '"coverage_event_counts":[1,1,1,1,1,1,1,1,1,0,0,1]'
     foreach ($invalidProbe in @(
         ($script:ProbeMarker + $probeOff + "`n" + $script:ProbeMarker + $probeOff),
         ($script:ProbeMarker + (New-SyntheticProbeJson 101 $false)),
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $true)),
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $false 1)),
+        ($script:ProbeMarker + $probeOff.Replace(
+            '"expected_observed_coverage":2559',
+            '"expected_observed_coverage":2558')),
+        ($script:ProbeMarker + $probeOff.Replace(
+            '"hooks_complete":true',
+            '"hooks_complete":false')),
+        ($script:ProbeMarker + $probeOff.Replace(
+            '"observed_complete":true',
+            '"observed_complete":false')),
+        ($script:ProbeMarker + $probeOff.Replace(
+            $coverageCountsField,
+            '"coverage_event_counts":[1,1,1,1,1,1,1,1,1,0,1]')),
+        ($script:ProbeMarker + $probeOff.Replace(
+            $coverageCountsField,
+            '"coverage_event_counts":[1,1,1,1,1,1,1,1,1,0,0,1,0]')),
+        ($script:ProbeMarker + $probeOff.Replace(
+            $coverageCountsField,
+            '"coverage_event_counts":[2,1,1,1,1,1,1,1,1,0,0,1]')),
         ($script:ProbeMarker + $probeOff.Replace(
             $probeVersionField,
             ($probeVersionField + ',' + $probeVersionField)))

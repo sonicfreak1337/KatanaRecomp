@@ -38,8 +38,8 @@ namespace katana::runtime {
 struct DreamcastRuntimeState;
 class SystemReplayLog;
 
-inline constexpr std::uint32_t runtime_probe_schema_version = 4u;
-inline constexpr std::uint64_t runtime_probe_device_schema_version = 4u;
+inline constexpr std::uint32_t runtime_probe_schema_version = 5u;
+inline constexpr std::uint64_t runtime_probe_device_schema_version = 5u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
 inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
 inline constexpr std::size_t runtime_probe_replay_coverage_class_count = 12u;
@@ -170,9 +170,11 @@ struct RuntimeProbeReplaySnapshot {
     std::uint32_t enabled_coverage = 0u;
     std::uint32_t observed_coverage = 0u;
     std::uint32_t required_coverage = 0u;
+    std::uint32_t expected_observed_coverage = 0u;
     std::array<std::uint64_t, runtime_probe_replay_coverage_class_count>
         event_counts{};
-    bool coverage_complete = false;
+    bool hooks_complete = false;
+    bool observed_complete = false;
     bool complete = false;
     bool exact_event_stream = false;
     bool sealed = false;
@@ -266,7 +268,7 @@ inline constexpr std::array<RuntimeProbeDeviceSchema, 35u>
         {RuntimeProbeDeviceKind::IoPort, 0u, 10u},
         {RuntimeProbeDeviceKind::AicaRtc, 0u, 9u},
         {RuntimeProbeDeviceKind::AicaExecution, 0u, 22u},
-        {RuntimeProbeDeviceKind::MapleController, 0u, 24u},
+        {RuntimeProbeDeviceKind::MapleController, 0u, 27u},
         {RuntimeProbeDeviceKind::RtcClock, 0u, 6u},
         {RuntimeProbeDeviceKind::InterruptRouter, 0u, 14u},
         {RuntimeProbeDeviceKind::InterruptRegisters, 0u, 6u},

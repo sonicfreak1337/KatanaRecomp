@@ -36,6 +36,7 @@ struct JumpTableAnalysis {
     JumpTableEncoding encoding = JumpTableEncoding::Absolute32;
     bool resolved = false;
     bool aot_candidates_only = false;
+    bool candidate_scan_truncated = false;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::vector<JumpTableEntry> entries;
     std::string reason;

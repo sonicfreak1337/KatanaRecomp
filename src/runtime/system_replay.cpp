@@ -30,7 +30,14 @@ constexpr SystemReplayCoverageMask all_coverage =
     static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestException) |
     static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::ControlledFallback) |
     static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestCheckpoint);
-constexpr std::string_view ordering_digest_domain = "katana-system-replay-order-v1";
+constexpr SystemReplayCoverageMask contingent_negative_coverage =
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestException) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::ControlledFallback);
+constexpr SystemReplayCoverageMask deterministic_expected_observed_coverage =
+    all_coverage & ~contingent_negative_coverage;
+constexpr std::string_view ordering_digest_domain = "katana-system-replay-order-v2";
+constexpr std::string_view ordering_digest_counts_domain =
+    "katana-system-replay-counts-v1";
 
 bool stable_code(const std::string_view value) noexcept {
     return !value.empty() && value.size() <= SystemReplayConfig::maximum_code_length &&
@@ -120,6 +127,24 @@ std::uint64_t ordering_digest_seed(const SystemReplayProfile profile,
     hash_u64(hash, system_replay_schema_version);
     hash_byte(hash, static_cast<std::uint8_t>(profile));
     hash_u64(hash, enabled);
+    return hash;
+}
+
+std::uint64_t finalize_ordering_digest(
+    const std::uint64_t event_stream_digest,
+    const std::uint64_t event_count,
+    const SystemReplayCoverageMask observed_coverage,
+    const SystemReplayEventCounts& event_counts) noexcept {
+    auto hash = fnv_offset;
+    for (const unsigned char value : ordering_digest_counts_domain)
+        hash_byte(hash, value);
+    hash_byte(hash, 0u);
+    hash_u64(hash, system_replay_schema_version);
+    hash_u64(hash, event_stream_digest);
+    hash_u64(hash, event_count);
+    hash_u64(hash, observed_coverage);
+    for (const auto count : event_counts)
+        hash_u64(hash, count);
     return hash;
 }
 
@@ -335,9 +360,12 @@ std::uint64_t SystemReplayLog::event_hash() const noexcept {
 }
 
 std::uint64_t SystemReplayLog::ordering_digest() const noexcept {
-    return ordering_digest_initialized_
-               ? ordering_digest_
-               : ordering_digest_seed(config_.profile, enabled_coverage_);
+    const auto event_stream_digest =
+        ordering_digest_initialized_
+            ? ordering_digest_
+            : ordering_digest_seed(config_.profile, enabled_coverage_);
+    return finalize_ordering_digest(
+        event_stream_digest, event_count_, observed_coverage_, event_counts_);
 }
 
 SystemReplayCoverageMask SystemReplayLog::enabled_coverage() const noexcept {
@@ -352,8 +380,21 @@ SystemReplayCoverageMask SystemReplayLog::required_coverage() const noexcept {
     return required_coverage_;
 }
 
-bool SystemReplayLog::coverage_complete() const noexcept {
+SystemReplayCoverageMask
+SystemReplayLog::expected_observed_coverage() const noexcept {
+    return system_replay_expected_observed_coverage(config_.profile);
+}
+
+bool SystemReplayLog::hooks_complete() const noexcept {
     return (required_coverage_ & ~enabled_coverage_) == 0u;
+}
+
+bool SystemReplayLog::observed_complete() const noexcept {
+    return (expected_observed_coverage() & ~observed_coverage_) == 0u;
+}
+
+bool SystemReplayLog::coverage_complete() const noexcept {
+    return hooks_complete();
 }
 
 const SystemReplayEventCounts& SystemReplayLog::event_counts() const noexcept {
@@ -386,7 +427,11 @@ std::string SystemReplayLog::serialize_json() const {
            << ",\"enabled_coverage\":" << enabled_coverage_
            << ",\"observed_coverage\":" << observed_coverage_
            << ",\"required_coverage\":" << required_coverage_
-           << ",\"coverage_complete\":" << (coverage_complete() ? "true" : "false")
+           << ",\"expected_observed_coverage\":"
+           << expected_observed_coverage()
+           << ",\"hooks_complete\":" << (hooks_complete() ? "true" : "false")
+           << ",\"observed_complete\":"
+           << (observed_complete() ? "true" : "false")
            << ",\"coverage_event_counts\":[";
     for (std::size_t index = 0u; index < event_counts_.size(); ++index) {
         if (index != 0u) output << ',';
@@ -448,9 +493,13 @@ DeterministicSystemReplay::DeterministicSystemReplay(const SystemReplayLog& expe
     if (!expected.sealed()) {
         throw std::invalid_argument("Unversiegelte Aufzeichnung kann nicht abgespielt werden.");
     }
-    if (!expected.coverage_complete()) {
+    if (!expected.hooks_complete()) {
         throw std::invalid_argument(
             "Aufzeichnung besitzt nicht alle verpflichtenden Replay-Coverage-Hooks.");
+    }
+    if (!expected.observed_complete()) {
+        throw std::invalid_argument(
+            "Aufzeichnung besitzt nicht alle erwartbar positiven Replay-Ereignisklassen.");
     }
     if (expected.config().storage_mode != SystemReplayStorageMode::ExactEvents ||
         !expected.exact_event_stream_available()) {
@@ -511,9 +560,14 @@ DeterministicSystemReplayDigest::DeterministicSystemReplayDigest(
         throw std::invalid_argument(
             "Unversiegelte Digest-Aufzeichnung kann nicht verifiziert werden.");
     }
-    if (!expected.coverage_complete()) {
+    if (!expected.hooks_complete()) {
         throw std::invalid_argument(
             "Digest-Aufzeichnung besitzt nicht alle verpflichtenden Replay-Coverage-Hooks.");
+    }
+    if (!expected.observed_complete()) {
+        throw std::invalid_argument(
+            "Digest-Aufzeichnung besitzt nicht alle erwartbar positiven "
+            "Replay-Ereignisklassen.");
     }
     observed_.enable_coverage(expected.enabled_coverage());
     expected_witnesses_ = expected.events();
@@ -824,6 +878,18 @@ system_replay_required_coverage(const SystemReplayProfile profile) noexcept {
         return all_coverage;
     }
     return all_coverage;
+}
+
+SystemReplayCoverageMask
+system_replay_expected_observed_coverage(
+    const SystemReplayProfile profile) noexcept {
+    switch (profile) {
+    case SystemReplayProfile::General:
+        return 0u;
+    case SystemReplayProfile::DeterministicV1:
+        return deterministic_expected_observed_coverage;
+    }
+    return deterministic_expected_observed_coverage;
 }
 
 SystemReplayCoverageMask

@@ -552,11 +552,10 @@ void multi_extent_module_lifecycle_regression() {
         modules.publish(foreign);
         modules.publish_loaded_range(
             owner, blocks, tracker, LoadedRangeWriteObservation::ObservedByteIdentical);
-        const std::vector<ExecutableModuleActiveExtent> expected_extents{
-            {0u, page}, {page * 2u, page}};
+        const std::vector<ExecutableModuleActiveExtent> expected_extents{{0u, page * 3u}};
         require(modules.find(owner.id) != nullptr &&
                     modules.find(owner.id)->active_extents == expected_extents,
-                "Byte-identisches Lochmodul besitzt nicht die zwei disjunkten Eigentumsbereiche.");
+                "Byte-identisches Lochmodul verliert seinen ueberdeckten Mehrfach-Owner.");
 
         DemandBlockMaterializer materializer(
             modules,
@@ -1065,12 +1064,15 @@ void identity_preserving_loaded_range_regression() {
     identical.source_identity = "free-identical-disc-reload-v1";
     modules.publish_loaded_range(
         identical, blocks, tracker, load_writes.consume(static_address, original.size()));
-    require(modules.find(identical.id) == nullptr && modules.find(original_module.id) != nullptr &&
+    require(modules.find(identical.id) != nullptr &&
+                modules.find(identical.id)->active_extents ==
+                    std::vector<ExecutableModuleActiveExtent>{{0u, 4u}} &&
+                modules.find(original_module.id) != nullptr &&
                 blocks.active(compiled_handle) && tracker.valid(compiled_identity) &&
                 tracker.invalidation_count() == 0u &&
                 tracker.page_generation(static_address) == 0u,
-            "Byte-identischer Disc-Reload invalidiert statischen AOT-Code oder publiziert ein "
-            "Scheinoverlay.");
+            "Byte-identischer Disc-Reload invalidiert statischen AOT-Code oder verliert seine "
+            "eigene Modullebenszeit.");
 
     const std::vector<std::uint8_t> byte_identical_new_bytes(4u, 0u);
     cpu.memory.write_bytes(byte_identical_new_address,
@@ -1151,13 +1153,13 @@ void identity_preserving_loaded_range_overlap_regression() {
         const auto* published = modules.find(incoming.id);
         require(published != nullptr &&
                     published->active_extents ==
-                        std::vector<ExecutableModuleActiveExtent>{{2u, 2u}} &&
+                        std::vector<ExecutableModuleActiveExtent>{{0u, 4u}} &&
                     modules.resolve(0x00008000u, 4u) == modules.find(original.id) &&
                     modules.resolve(0x00008002u, 2u) == modules.find(original.id) &&
                     modules.resolve(0x00008004u, 2u) == published &&
                     modules.metrics().loads == 2u,
-                "Teilweise byte-identische Aliasueberdeckung publiziert nicht nur den neuen "
-                "disjunkten Tail.");
+                "Teilweise byte-identische Aliasueberdeckung verliert den ueberdeckten "
+                "Mehrfach-Owner.");
     }
 
     {
@@ -1184,13 +1186,13 @@ void identity_preserving_loaded_range_overlap_regression() {
         const auto* published = modules.find(incoming.id);
         require(published != nullptr &&
                     published->active_extents ==
-                        std::vector<ExecutableModuleActiveExtent>{{0u, 2u}, {6u, 2u}} &&
+                        std::vector<ExecutableModuleActiveExtent>{{0u, 8u}} &&
                     modules.resolve(0x00009000u, 2u) == published &&
                     modules.resolve(0x00009002u, 4u) == modules.find(original.id) &&
                     modules.resolve(0x00009006u, 2u) == published &&
-                    modules.resolve(0x00009000u, 8u) == nullptr,
-                "Byte-identischer Superset-Load publiziert nicht exakt seine beiden neuen "
-                "Randfenster.");
+                    modules.resolve(0x00009000u, 8u) == published,
+                "Byte-identischer Superset-Load verliert seinen ueberdeckten "
+                "Mehrfach-Owner.");
     }
 
     {
@@ -1243,12 +1245,16 @@ void identity_preserving_loaded_range_overlap_regression() {
                                      tracker,
                                      LoadedRangeWriteObservation::ObservedByteIdentical);
 
-        require(modules.snapshot() == catalog_before && modules.find(incoming.id) == nullptr &&
+        const auto* published = modules.find(incoming.id);
+        require(published != nullptr &&
+                    published->active_extents ==
+                        std::vector<ExecutableModuleActiveExtent>{{0u, 4u}} &&
+                    modules.snapshot().modules.size() == catalog_before.modules.size() + 1u &&
                     blocks.active(guarded_handle) && tracker.valid(guarded_identity) &&
                     tracker.page_generation(0x0000A000u) == tracker_generation_before &&
                     tracker.invalidation_count() == tracker_invalidations_before,
-                "Vollstaendige byte-identische Union-Coverage mutiert Katalog, Blocktabelle "
-                "oder Tracker-Generation.");
+                "Vollstaendige byte-identische Union-Coverage verliert ihren Owner oder "
+                "invalidiert Blocktabelle beziehungsweise Tracker-Generation.");
     }
 
     {
@@ -1342,6 +1348,576 @@ void identity_preserving_loaded_range_overlap_regression() {
                     tracker.invalidation_count() == tracker_invalidations_before,
                 "Widerspruechliche Byte-identisch-Metadaten werden nicht atomar abgelehnt.");
     }
+}
+
+void byte_identical_module_owner_lifecycle_regression() {
+    using namespace katana::runtime;
+
+    const auto make_module = [](std::string id,
+                                std::string source_identity,
+                                const std::uint32_t guest_start,
+                                std::vector<std::uint8_t> bytes) {
+        ExecutableModule module;
+        module.id = std::move(id);
+        module.source_identity = std::move(source_identity);
+        module.guest_start = guest_start;
+        module.bytes = std::move(bytes);
+        return module;
+    };
+    const auto install_guard = [](RuntimeBlockTable& blocks,
+                                  ExecutableCodeTracker& tracker,
+                                  const std::uint32_t address,
+                                  const std::uint32_t size,
+                                  std::string provenance) {
+        RuntimeBlock guarded{address,
+                             canonical_physical_address(address),
+                             size,
+                             BlockEndKind::Return,
+                             {},
+                             block,
+                             std::move(provenance),
+                             true};
+        const auto identity = stable_runtime_block_identity(guarded);
+        const auto handle = blocks.register_static(guarded);
+        require(tracker.register_block({identity,
+                                        canonical_physical_address(address),
+                                        size,
+                                        guarded.provenance,
+                                        {},
+                                        ExecutableBlockOrigin::ImageSegment}) ==
+                    BlockRegistrationResult::Inserted,
+                "Mehrfach-Owner-Test konnte seinen AOT-Trackerblock nicht registrieren.");
+        return std::pair{handle, identity};
+    };
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        blocks.bind_code_tracker(&tracker);
+        const std::vector<std::uint8_t> bytes{
+            0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+        auto owner_a =
+            make_module("identical-owner-a", "free-identical-owner-a-v1", 0x00010000u, bytes);
+        auto owner_b =
+            make_module("identical-owner-b", "free-identical-owner-b-v1", 0x80010000u, bytes);
+        modules.publish(owner_a);
+        const auto [guard, identity] =
+            install_guard(blocks, tracker, owner_a.guest_start, 4u, "identical-owner-aot");
+        modules.publish_loaded_range(owner_b,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+
+        require(modules.find(owner_a.id) != nullptr && modules.find(owner_b.id) != nullptr &&
+                    modules.find(owner_a.id)->active_extents ==
+                        std::vector<ExecutableModuleActiveExtent>{{0u, 8u}} &&
+                    modules.find(owner_b.id)->active_extents ==
+                        std::vector<ExecutableModuleActiveExtent>{{0u, 8u}} &&
+                    modules.snapshot().active_extent_page_refcounts ==
+                    std::vector<ExecutableModulePageRefcountSnapshot>{{0x00010000u, 2u}},
+                "Byteidentische P0/P1-Module besitzen keine zwei aktiven Owner.");
+
+        auto replacement = owner_a;
+        replacement.source_identity = "free-identical-owner-a-v2";
+        modules.replace(replacement, blocks, tracker);
+        require(modules.find(owner_a.id) != nullptr &&
+                    modules.find(owner_a.id)->generation == 2u &&
+                    modules.find(owner_a.id)->source_identity == replacement.source_identity &&
+                    modules.find(owner_b.id) != nullptr && blocks.active(guard) &&
+                    tracker.valid(identity) && tracker.invalidation_count() == 0u &&
+                    modules.snapshot().active_extent_page_refcounts ==
+                        std::vector<ExecutableModulePageRefcountSnapshot>{{0x00010000u, 2u}},
+                "Byteidentischer In-place-Ersatz wird vom Peer verworfen oder invalidiert "
+                "dessen weiterhin gedeckte AOT-Bindung.");
+
+        modules.unload(owner_a.id, blocks, tracker);
+        require(modules.find(owner_a.id) == nullptr && modules.find(owner_b.id) != nullptr &&
+                    modules.resolve(0x00010000u, bytes.size()) == modules.find(owner_b.id) &&
+                    blocks.active(guard) && tracker.valid(identity) &&
+                    tracker.invalidation_count() == 0u,
+                "Unload des ersten P0/P1-Owners entfernt die weiter gedeckte AOT-Bindung.");
+
+        modules.unload(owner_b.id, blocks, tracker);
+        require(modules.resolve(0x00010000u, bytes.size()) == nullptr &&
+                    !blocks.active(guard) && !tracker.valid(identity) &&
+                    tracker.invalidation_count() == 1u,
+                "Letzter P0/P1-Owner entfernt Provenienz oder AOT-Bindung nicht exakt.");
+    }
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        blocks.bind_code_tracker(&tracker);
+        const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
+        auto owner_a =
+            make_module("reverse-owner-a", "free-reverse-owner-a-v1", 0x00012000u, bytes);
+        auto owner_b =
+            make_module("reverse-owner-b", "free-reverse-owner-b-v1", 0xA0012000u, bytes);
+        modules.publish(owner_a);
+        const auto [guard, identity] =
+            install_guard(blocks, tracker, owner_a.guest_start, 4u, "reverse-owner-aot");
+        modules.publish_loaded_range(owner_b,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+
+        modules.unload(owner_b.id, blocks, tracker);
+        require(modules.find(owner_a.id) != nullptr && modules.find(owner_b.id) == nullptr &&
+                    modules.resolve(0xA0012000u, bytes.size()) == modules.find(owner_a.id) &&
+                    blocks.active(guard) && tracker.valid(identity) &&
+                    tracker.invalidation_count() == 0u,
+                "Umgekehrte P0/P2-Entladereihenfolge entfernt den verbleibenden Owner.");
+        modules.unload(owner_a.id, blocks, tracker);
+        require(!blocks.active(guard) && !tracker.valid(identity) &&
+                    tracker.invalidation_count() == 1u,
+                "Umgekehrte Entladereihenfolge behaelt die letzte AOT-Bindung.");
+    }
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        blocks.bind_code_tracker(&tracker);
+        const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
+        auto owner_p0 =
+            make_module("alias-owner-p0", "free-alias-owner-p0-v1", 0x00014000u, bytes);
+        auto owner_p1 =
+            make_module("alias-owner-p1", "free-alias-owner-p1-v1", 0x80014000u, bytes);
+        auto owner_p2 =
+            make_module("alias-owner-p2", "free-alias-owner-p2-v1", 0xA0014000u, bytes);
+        modules.publish(owner_p0);
+        const auto [guard, identity] =
+            install_guard(blocks, tracker, owner_p0.guest_start, 4u, "three-alias-owner-aot");
+        modules.publish_loaded_range(owner_p1,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+        modules.publish_loaded_range(owner_p2,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+        require(modules.snapshot().active_extent_page_refcounts ==
+                    std::vector<ExecutableModulePageRefcountSnapshot>{{0x00014000u, 3u}},
+                "P0/P1/P2-Aliase werden nicht als drei physische Owner gezaehlt.");
+
+        modules.unload(owner_p0.id, blocks, tracker);
+        modules.unload(owner_p1.id, blocks, tracker);
+        require(modules.resolve(0x80014000u, bytes.size()) == modules.find(owner_p2.id) &&
+                    blocks.active(guard) && tracker.valid(identity) &&
+                    tracker.invalidation_count() == 0u,
+                "P0/P1-Unload entfernt den verbleibenden P2-Owner.");
+        modules.unload(owner_p2.id, blocks, tracker);
+        require(!blocks.active(guard) && !tracker.valid(identity) &&
+                    tracker.invalidation_count() == 1u,
+                "Letzter P2-Aliasowner behaelt eine veraltete AOT-Bindung.");
+    }
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        blocks.bind_code_tracker(&tracker);
+        auto owner_a = make_module("partial-owner-a",
+                                   "free-partial-owner-a-v1",
+                                   0x00016000u,
+                                   {0x00u,
+                                    0x01u,
+                                    0x02u,
+                                    0x03u,
+                                    0x04u,
+                                    0x05u,
+                                    0x06u,
+                                    0x07u});
+        auto owner_b = make_module("partial-owner-b",
+                                   "free-partial-owner-b-v1",
+                                   0x80016004u,
+                                   {0x04u,
+                                    0x05u,
+                                    0x06u,
+                                    0x07u,
+                                    0x08u,
+                                    0x09u,
+                                    0x0Au,
+                                    0x0Bu});
+        modules.publish(owner_a);
+        const auto [prefix, prefix_identity] =
+            install_guard(blocks, tracker, 0x00016000u, 4u, "partial-owner-prefix");
+        const auto [overlap, overlap_identity] =
+            install_guard(blocks, tracker, 0x00016004u, 4u, "partial-owner-overlap");
+        const auto [tail, tail_identity] =
+            install_guard(blocks, tracker, 0x00016008u, 4u, "partial-owner-tail");
+        modules.publish_loaded_range(owner_b,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+        require(modules.find(owner_b.id)->active_extents ==
+                    std::vector<ExecutableModuleActiveExtent>{{0u, 8u}},
+                "Partielle Ueberlappung schneidet den gemeinsamen Ownerbereich weiterhin ab.");
+
+        modules.unload(owner_a.id, blocks, tracker);
+        require(!blocks.active(prefix) && !tracker.valid(prefix_identity) &&
+                    blocks.active(overlap) && tracker.valid(overlap_identity) &&
+                    blocks.active(tail) && tracker.valid(tail_identity) &&
+                    modules.resolve(0x00016004u, 4u) == modules.find(owner_b.id) &&
+                    tracker.invalidation_count() == 1u,
+                "Partieller Owner-Unload invalidiert nicht exakt den exklusiven Prefix.");
+        modules.unload(owner_b.id, blocks, tracker);
+        require(!blocks.active(overlap) && !tracker.valid(overlap_identity) &&
+                    !blocks.active(tail) && !tracker.valid(tail_identity) &&
+                    tracker.invalidation_count() == 3u,
+                "Letzter partieller Owner behaelt Overlap oder exklusiven Tail.");
+    }
+}
+
+void runtime_aot_owner_failover_regression() {
+    using namespace katana::runtime;
+
+    constexpr std::uint32_t address = 0x00018000u;
+    const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
+    CpuState cpu;
+    cpu.memory.write_bytes(address, bytes, CodeWriteSource::Copy);
+    ExecutableModule owner_a;
+    owner_a.id = "runtime-aot-owner-a";
+    owner_a.source_identity = "free-runtime-aot-owner-a-v1";
+    owner_a.guest_start = address;
+    owner_a.bytes = bytes;
+    ExecutableModule owner_b = owner_a;
+    owner_b.id = "runtime-aot-owner-b";
+    owner_b.source_identity = "free-runtime-aot-owner-b-v1";
+    owner_b.guest_start = 0x80018000u;
+
+    ExecutableModuleCatalog modules;
+    modules.publish(owner_a);
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    BlockMaterializationPolicy policy;
+    policy.enabled = true;
+    policy.max_blocks = 2u;
+    policy.max_bytes = 16u;
+    policy.max_guest_cycles = 16u;
+    policy.max_instructions = 8u;
+    policy.max_recursive_seeds = 4u;
+    policy.max_analysis_time_ms = 100u;
+    policy.max_memory_bytes = 64u;
+    policy.max_materializations_per_run = 2u;
+    policy.max_repeated_misses_per_target = 2u;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        policy,
+        [](const std::uint32_t target,
+           const std::uint32_t physical,
+           const std::span<const std::uint8_t>,
+           const BlockVariantKey& variant) {
+            MaterializedBlockCandidate candidate;
+            candidate.block = {target,
+                               physical,
+                               2u,
+                               BlockEndKind::Return,
+                               variant,
+                               block,
+                               "runtime-aot-owner-failover",
+                               true};
+            candidate.decode_candidate_validated = true;
+            candidate.bounded_analysis_complete = true;
+            candidate.ir_verified = true;
+            candidate.code_generated = true;
+            candidate.guest_cycles = 1u;
+            candidate.instructions = 1u;
+            candidate.recursive_seeds = 1u;
+            candidate.peak_memory_bytes = 4u;
+            return candidate;
+        });
+    const auto handle =
+        materializer.try_materialize(cpu, address, address, BlockVariantKey{}, 0x00017FF0u);
+    require(handle.has_value() && blocks.active(*handle),
+            "Runtime-AOT-Fixture konnte ihre erste Ownerbindung nicht materialisieren.");
+
+    modules.publish_loaded_range(owner_b,
+                                 blocks,
+                                 tracker,
+                                 LoadedRangeWriteObservation::ObservedByteIdentical);
+    modules.unload(owner_a.id, blocks, tracker);
+    materializer.reconcile_inactive_origins();
+    require(blocks.active(*handle) &&
+                materializer.validate_for_dispatch(cpu, *handle, address, address) &&
+                materializer.last_failure() == MaterializationFailure::None,
+            "Runtime-AOT-Bindung faellt beim ersten byteidentischen Owner-Unload aus.");
+
+    modules.unload(owner_b.id, blocks, tracker);
+    materializer.reconcile_inactive_origins();
+    require(!blocks.active(*handle) &&
+                materializer.metrics().retained_validation_bytes == 0u,
+            "Runtime-AOT-Bindung ueberlebt den letzten physisch aktiven Owner.");
+}
+
+void relocation_owner_failover_regression() {
+    using namespace katana::runtime;
+
+    constexpr std::uint32_t address = 0x0001A000u;
+    const std::vector<std::uint8_t> source{0x00u, 0x00u, 0x00u, 0x00u, 0x0Bu, 0x00u};
+    const std::vector<std::uint8_t> relocated{0x00u, 0xA0u, 0x01u, 0x00u, 0x0Bu, 0x00u};
+    CpuState cpu;
+    cpu.memory.write_bytes(address, relocated, CodeWriteSource::Copy);
+
+    ExecutableModule owner_a;
+    owner_a.id = "relocation-owner-a";
+    owner_a.source_identity = "free-relocation-owner-a-v1";
+    owner_a.guest_start = address;
+    owner_a.bytes = source;
+    owner_a.relocations = {{0u, executable_module_relocation_module_base32, 0}};
+    auto owner_b = owner_a;
+    owner_b.id = "relocation-owner-b";
+    owner_b.source_identity = "free-relocation-owner-b-v1";
+
+    ExecutableModuleCatalog modules;
+    modules.publish(owner_a);
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    BlockMaterializationPolicy policy;
+    policy.enabled = true;
+    policy.max_blocks = 2u;
+    policy.max_bytes = 16u;
+    policy.max_guest_cycles = 16u;
+    policy.max_instructions = 8u;
+    policy.max_recursive_seeds = 4u;
+    policy.max_analysis_time_ms = 100u;
+    policy.max_memory_bytes = 64u;
+    policy.max_materializations_per_run = 2u;
+    policy.max_repeated_misses_per_target = 2u;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        policy,
+        [](const std::uint32_t target,
+           const std::uint32_t physical,
+           const std::span<const std::uint8_t>,
+           const BlockVariantKey& variant) {
+            return MaterializedBlockCandidate{{target,
+                                               physical,
+                                               2u,
+                                               BlockEndKind::Return,
+                                               variant,
+                                               block,
+                                               "relocation-owner-failover",
+                                               true},
+                                              true,
+                                              false,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              4u};
+        });
+    const auto handle =
+        materializer.try_materialize(cpu, address, address, BlockVariantKey{}, 0x00019FF0u);
+    require(handle.has_value() && blocks.active(*handle),
+            "Relocation-Mehrfachowner konnte seinen Ausgangsblock nicht materialisieren.");
+    modules.publish_loaded_range(owner_b,
+                                 blocks,
+                                 tracker,
+                                 LoadedRangeWriteObservation::ObservedByteIdentical);
+
+    modules.update_relocations(
+        owner_a.id, {{0u, executable_module_relocation_module_base32, 4}}, blocks, tracker);
+    materializer.reconcile_inactive_origins();
+    require(blocks.active(*handle) &&
+                materializer.validate_for_dispatch(cpu, *handle, address, address) &&
+                materializer.last_failure() == MaterializationFailure::None &&
+                tracker.invalidation_count() == 0u,
+            "Relocation-Generation des ersten Owners bindet nicht auf den byteidentischen "
+            "Peer um.");
+
+    modules.update_relocations(
+        owner_b.id, {{0u, executable_module_relocation_module_base32, 8}}, blocks, tracker);
+    materializer.reconcile_inactive_origins();
+    require(!blocks.active(*handle) && tracker.invalidation_count() == 1u,
+            "Relocation-Origin ueberlebt ohne byteidentischen Owner.");
+}
+
+void multi_owner_selection_regression() {
+    using namespace katana::runtime;
+
+    const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
+    {
+        ExecutableModule denied;
+        denied.id = "permission-shadow-denied";
+        denied.source_identity = "free-permission-shadow-denied-v1";
+        denied.guest_start = 0x0001C000u;
+        denied.bytes = bytes;
+        denied.executable_permission = false;
+        auto executable = denied;
+        executable.id = "permission-shadow-executable";
+        executable.source_identity = "free-permission-shadow-executable-v1";
+        executable.executable_permission = true;
+
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        modules.publish(denied);
+        modules.publish_loaded_range(executable,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+        require(modules.resolve(denied.guest_start, 2u) == modules.find(executable.id) &&
+                    modules.authorize_control_transfer(denied.guest_start),
+                "Nichtausfuehrbarer erster Owner schattet den gueltigen spaeteren Owner ab.");
+    }
+
+    {
+        constexpr std::uint32_t address = 0x0001E000u;
+        CpuState cpu;
+        cpu.memory.write_bytes(address, bytes, CodeWriteSource::Copy);
+        ExecutableModule proven_data;
+        proven_data.id = "role-shadow-proven-data";
+        proven_data.source_identity = "free-role-shadow-proven-data-v1";
+        proven_data.guest_start = address;
+        proven_data.bytes = bytes;
+        proven_data.range_roles = {
+            {0u, static_cast<std::uint32_t>(bytes.size()), ExecutableStorageRole::ProvenData}};
+        auto promotable = proven_data;
+        promotable.id = "role-shadow-promotable";
+        promotable.source_identity = "free-role-shadow-promotable-v1";
+        promotable.executable_permission = false;
+        promotable.control_transfer_promotion_allowed = true;
+
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        blocks.bind_code_tracker(&tracker);
+        modules.publish(proven_data);
+        modules.publish_loaded_range(promotable,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+        DemandBlockMaterializer materializer(
+            modules,
+            blocks,
+            &tracker,
+            {true, 1u, 4u},
+            [](const std::uint32_t target,
+               const std::uint32_t physical,
+               const std::span<const std::uint8_t>,
+               const BlockVariantKey& variant) {
+                return MaterializedBlockCandidate{{target,
+                                                   physical,
+                                                   2u,
+                                                   BlockEndKind::Return,
+                                                   variant,
+                                                   block,
+                                                   "role-shadow-materializer",
+                                                   true},
+                                                  true,
+                                                  false,
+                                                  true,
+                                                  true,
+                                                  true,
+                                                  1u,
+                                                  1u,
+                                                  1u,
+                                                  1u,
+                                                  2u};
+            });
+        const auto handle =
+            materializer.try_materialize(cpu, address, address, BlockVariantKey{}, 0x0001DFF0u);
+        require(handle.has_value() && blocks.active(*handle) &&
+                    modules.find(promotable.id)->materializable(address, 2u) &&
+                    modules.resolve(address, 2u) == modules.find(promotable.id),
+                "ProvenData-Owner schattet die Promotion des spaeteren Runtimeowners ab.");
+    }
+}
+
+void longest_materializable_owner_regression() {
+    using namespace katana::runtime;
+
+    constexpr std::uint32_t address = 0x00020000u;
+    const std::vector<std::uint8_t> bytes{
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+    CpuState cpu;
+    cpu.memory.write_bytes(address, bytes, CodeWriteSource::Copy);
+
+    ExecutableModule short_owner;
+    short_owner.id = "short-runtime-aot-owner";
+    short_owner.source_identity = "free-short-runtime-aot-owner-v1";
+    short_owner.guest_start = address;
+    short_owner.bytes = bytes;
+    short_owner.active_extents = {{0u, 2u}};
+    auto long_owner = short_owner;
+    long_owner.id = "long-runtime-aot-owner";
+    long_owner.source_identity = "free-long-runtime-aot-owner-v1";
+    long_owner.active_extents.clear();
+
+    ExecutableModuleCatalog modules;
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    modules.publish(short_owner);
+    modules.publish_loaded_range(long_owner,
+                                 blocks,
+                                 tracker,
+                                 LoadedRangeWriteObservation::ObservedByteIdentical);
+
+    std::vector<std::size_t> snapshot_sizes;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 2u, 16u},
+        [&](const std::uint32_t target,
+            const std::uint32_t physical,
+            const std::span<const std::uint8_t> snapshot,
+            const BlockVariantKey& variant) {
+            snapshot_sizes.push_back(snapshot.size());
+            MaterializedBlockCandidate candidate;
+            candidate.block = {
+                target,
+                physical,
+                4u,
+                BlockEndKind::Return,
+                variant,
+                block,
+                "longest-owner-runtime-aot",
+                false,
+                RuntimeAotTemplateContract{{address, address, 8u}, 8u}};
+            candidate.decode_candidate_validated = snapshot.size() >= 4u;
+            candidate.bounded_analysis_complete = true;
+            candidate.ir_verified = true;
+            candidate.code_generated = true;
+            candidate.guest_cycles = 1u;
+            candidate.instructions = 2u;
+            candidate.recursive_seeds = 1u;
+            candidate.peak_memory_bytes = 8u;
+            return candidate;
+        });
+
+    const auto handle =
+        materializer.try_materialize(cpu, address, address, BlockVariantKey{}, 0x0001FFF0u);
+    const auto registered = handle ? blocks.resolve(*handle) : std::nullopt;
+    require(handle.has_value() && registered.has_value() &&
+                modules.resolve(address, 2u) == modules.find(short_owner.id) &&
+                snapshot_sizes == std::vector<std::size_t>{bytes.size()} &&
+                registered->get().provenance.find(long_owner.id) != std::string::npos,
+            "Kurzer erster Owner schattet den laengeren Runtime-AOT-Snapshot ab.");
+
+    modules.unload(long_owner.id, blocks, tracker);
+    const auto retry =
+        materializer.try_materialize(cpu, address, address, BlockVariantKey{}, 0x0001FFF0u);
+    require(!blocks.active(*handle) && !retry.has_value() &&
+                modules.resolve(address, 2u) == modules.find(short_owner.id) &&
+                snapshot_sizes == std::vector<std::size_t>{bytes.size(), 2u} &&
+                materializer.last_failure() == MaterializationFailure::DecodeRejected &&
+                materializer.metrics().materializations == 1u,
+            "Langer Runtime-AOT-Block ueberlebt den langen Owner oder wird aus dem "
+            "Zweibyte-Restowner neu gebunden.");
 }
 
 void dreamcast_main_ram_mirror_invalidation_regression() {
@@ -2409,6 +2985,11 @@ int main() {
     runtime_write_delay_slot_extension_regression();
     identity_preserving_loaded_range_regression();
     identity_preserving_loaded_range_overlap_regression();
+    byte_identical_module_owner_lifecycle_regression();
+    runtime_aot_owner_failover_regression();
+    relocation_owner_failover_regression();
+    multi_owner_selection_regression();
+    longest_materializable_owner_regression();
     dreamcast_main_ram_mirror_invalidation_regression();
     partial_module_patch_regression();
     non_overlapping_write_stress_regression();

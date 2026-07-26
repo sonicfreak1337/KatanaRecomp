@@ -648,7 +648,10 @@ detail::analyze_snapshot_pointer_candidates(
     analysis.entries.reserve(scan_limit);
     std::size_t skipped_slots = 0u;
     std::size_t consecutive_skipped_slots = 0u;
+    std::size_t scanned_slots = 0u;
+    bool stopped_at_gap = false;
     for (std::size_t index = 0u; index < scan_limit; ++index) {
+        scanned_slots = index + 1u;
         const auto offset = *table_offset + index * 4u;
         const auto target = static_cast<std::uint32_t>(
                                 katana::io::read_u16_le(table_segment->bytes, offset)) |
@@ -661,8 +664,10 @@ detail::analyze_snapshot_pointer_candidates(
             !snapshot_candidate_source(image, *validation.segment)) {
             if (skipped_slots >= policy.maximum_skipped_slots ||
                 consecutive_skipped_slots >=
-                    policy.maximum_consecutive_skipped_slots)
+                    policy.maximum_consecutive_skipped_slots) {
+                stopped_at_gap = true;
                 break;
+            }
             ++skipped_slots;
             ++consecutive_skipped_slots;
             continue;
@@ -674,6 +679,9 @@ detail::analyze_snapshot_pointer_candidates(
                                     "snapshot-absolute-target"});
         consecutive_skipped_slots = 0u;
     }
+    analysis.candidate_scan_truncated =
+        !stopped_at_gap && scanned_slots == scan_limit &&
+        available_entries > scan_limit;
     if (analysis.entries.size() < policy.minimum_entries ||
         (policy.reject_truncated_scan &&
          analysis.entries.size() == policy.maximum_scanned_slots &&

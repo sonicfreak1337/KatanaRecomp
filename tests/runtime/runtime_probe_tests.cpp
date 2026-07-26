@@ -534,6 +534,16 @@ int main() {
         maple_controller_before,
         maple_controller_after,
         "Der strukturierte Maple-Completionfehler fehlt im Devicehash.");
+    maple_controller_after = maple_controller_before;
+    maple_controller_after.event_publication_state =
+        MapleDmaEventPublicationState::Failed;
+    maple_controller_after.event_publication_error =
+        MapleDmaEventPublicationError::ObserverException;
+    maple_controller_after.event_publication_failure_count = 1u;
+    require_snapshot_mutation_changes(
+        maple_controller_before,
+        maple_controller_after,
+        "Der getrennte Maple-ASIC-Publikationsfehler fehlt im Devicehash.");
 
     DreamcastSystemAsicSnapshot asic_before;
     auto asic_after = asic_before;
@@ -852,7 +862,8 @@ int main() {
                 replay_snapshot.exact_event_stream &&
                 replay_snapshot.dropped_events == 0u &&
                 replay_snapshot.event_hash == replay_snapshot.ordering_digest &&
-                replay_snapshot.coverage_complete &&
+                replay_snapshot.hooks_complete &&
+                replay_snapshot.observed_complete &&
                 replay_snapshot.complete && replay_snapshot.sealed &&
                 replay_snapshot.final_guest_state_hash == 0x1020304050607080ull,
             "Der Replay-Snapshot bindet Sequenz, Coverage und Seal nicht explizit.");
@@ -862,9 +873,11 @@ int main() {
          SystemReplayProfile::DeterministicV1});
     const auto incomplete_replay_snapshot =
         capture_runtime_probe_replay(incomplete_replay);
-    require(!incomplete_replay_snapshot.coverage_complete &&
+    require(!incomplete_replay_snapshot.hooks_complete &&
+                !incomplete_replay_snapshot.observed_complete &&
                 !incomplete_replay_snapshot.complete &&
-                incomplete_replay_snapshot.required_coverage != 0u,
+                incomplete_replay_snapshot.required_coverage != 0u &&
+                incomplete_replay_snapshot.expected_observed_coverage != 0u,
             "Fehlende deterministic-v1-Coverage gilt als vollstaendiger Replay.");
 
     std::array<std::uint8_t, 4u> main_bytes = {1u, 2u, 3u, 4u};
@@ -938,15 +951,56 @@ int main() {
          SystemReplayProfile::DeterministicV1,
          SystemReplayStorageMode::DigestStream});
     product_replay.enable_coverage(product_replay.required_coverage());
-    for (std::uint64_t index = 0u; index < 100'000u; ++index) {
+    const std::array positive_replay_events = {
+        std::pair{SystemReplayEventKind::CpuSafepoint,
+                  std::string_view{"cpu-safepoint"}},
+        std::pair{SystemReplayEventKind::SchedulerCallback,
+                  std::string_view{"scheduler-callback"}},
+        std::pair{SystemReplayEventKind::Interrupt,
+                  std::string_view{"interrupt-accepted"}},
+        std::pair{SystemReplayEventKind::Video,
+                  std::string_view{"video-tick"}},
+        std::pair{SystemReplayEventKind::Audio,
+                  std::string_view{"audio-tick"}},
+        std::pair{SystemReplayEventKind::ExternalInput,
+                  std::string_view{"controller-input"}},
+        std::pair{SystemReplayEventKind::MmioRead,
+                  std::string_view{"mmio-read"}},
+        std::pair{SystemReplayEventKind::Dma,
+                  std::string_view{"dma-complete"}},
+        std::pair{SystemReplayEventKind::BlockDispatchHit,
+                  std::string_view{"block-dispatch-hit"}},
+        std::pair{SystemReplayEventKind::GuestCheckpoint,
+                  std::string_view{"guest-checkpoint"}},
+    };
+    std::uint64_t product_event_index = 0u;
+    for (const auto& [kind, code] : positive_replay_events) {
+        SystemReplayEvent positive_event{
+            0u,
+            product_event_index + 3u,
+            kind,
+            std::string(code),
+            std::nullopt,
+            std::nullopt,
+            product_event_index,
+            product_event_index + 1u,
+            false,
+            0u};
+        if (kind == SystemReplayEventKind::ExternalInput)
+            product_replay.inject(std::move(positive_event));
+        else
+            product_replay.record(std::move(positive_event));
+        ++product_event_index;
+    }
+    for (; product_event_index < 100'000u; ++product_event_index) {
         product_replay.record({0u,
-                               index + 3u,
+                               product_event_index + 3u,
                                SystemReplayEventKind::Timer,
                                "profile-timer",
                                std::nullopt,
                                std::nullopt,
-                               index,
-                               index + 1u,
+                               product_event_index,
+                               product_event_index + 1u,
                                false,
                                0u});
     }
@@ -1104,9 +1158,17 @@ int main() {
                 bound_replay.retained_event_count == 8u &&
                 bound_replay.summarized_event_count == 99'992u &&
                 !bound_replay.exact_event_stream &&
-                bound_replay.dropped_events == 0u,
+                bound_replay.dropped_events == 0u &&
+                bound_replay.hooks_complete &&
+                bound_replay.observed_complete &&
+                bound_replay.complete &&
+                bound_replay.event_counts ==
+                    SystemReplayEventCounts{
+                        1u, 1u, 1u, 1u, 1u, 1u,
+                        1u, 1u, 1u, 0u, 0u, 1u},
             "Runtime-Probe-Snapshot verwechselt Digest-Zusammenfassung mit Drops "
-            "oder einem exakten Ereignisstrom.");
+            "oder einem exakten Ereignisstrom oder bindet die Klassenzaehler "
+            "nicht exakt.");
     const auto replay_contract_rejects = [&](const RuntimeProbeReplaySnapshot& replay) {
         return throws<std::invalid_argument>([&] {
             validate_runtime_probe_deterministic_v1(
@@ -1126,6 +1188,15 @@ int main() {
     false_complete_replay.dropped_events = 1u;
     require(replay_contract_rejects(false_complete_replay),
             "Ein echter Ereignisverlust bleibt als vollstaendiger Replay markierbar.");
+    auto false_observed_replay = bound_replay;
+    false_observed_replay.event_counts[0u] = 0u;
+    false_observed_replay.observed_coverage &=
+        ~static_cast<std::uint32_t>(SystemReplayCoverage::CpuSafepoint);
+    false_observed_replay.observed_complete = false;
+    false_observed_replay.complete = false;
+    require(replay_contract_rejects(false_observed_replay),
+            "Eine erwartbar positive Klasse ohne Ereignis bleibt als "
+            "vollstaendiger Probe-Replay markierbar.");
     auto inconsistent_summary = bound_replay;
     --inconsistent_summary.summarized_event_count;
     require(replay_contract_rejects(inconsistent_summary),
@@ -1177,6 +1248,11 @@ int main() {
                 report.hashes.replay != replay_changed_report.hashes.replay &&
                 report.hashes.combined != replay_changed_report.hashes.combined,
             "Replaydiagnose verunreinigt den semantischen Gastzustandshash.");
+    auto changed_replay_counts = bound_replay;
+    ++changed_replay_counts.event_counts[0u];
+    require(hash_runtime_probe_replay(changed_replay_counts) !=
+                hash_runtime_probe_replay(bound_replay),
+            "Ein exakter Replay-Klassenzaehler bleibt im Probehash unsichtbar.");
 
     report.termination = RuntimeProbeTermination::BudgetReached;
     report.diagnostics_enabled = true;
@@ -1195,6 +1271,15 @@ int main() {
                 json.find("\"event_count\":100000") != std::string::npos &&
                 json.find("\"retained_event_count\":8") != std::string::npos &&
                 json.find("\"summarized_event_count\":99992") !=
+                    std::string::npos &&
+                json.find("\"hooks_complete\":true") !=
+                    std::string::npos &&
+                json.find("\"observed_complete\":true") !=
+                    std::string::npos &&
+                json.find("\"expected_observed_coverage\":2559") !=
+                    std::string::npos &&
+                json.find(
+                    "\"coverage_event_counts\":[1,1,1,1,1,1,1,1,1,0,0,1]") !=
                     std::string::npos &&
                 json.find("\"exact_event_stream\":false") !=
                     std::string::npos &&

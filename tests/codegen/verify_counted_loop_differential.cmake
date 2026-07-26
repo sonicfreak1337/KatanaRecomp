@@ -52,6 +52,7 @@ execute_process(
   COMMAND "${CMAKE_COMMAND}" -S "${port_workspace}" -B "${port_build}"
           "-DKATANA_RUNTIME_ROOT=${KATANA_RUNTIME_ROOT}"
           -DKATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST=ON
+          -DKATANA_INTERNAL_BATCH_COMMIT_LIFECYCLE_TEST=ON
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
   RESULT_VARIABLE configure_result
   OUTPUT_VARIABLE configure_output
@@ -155,14 +156,59 @@ function(run_counted_loop_case
   set(${trace_output} "${combined}" PARENT_SCOPE)
 endfunction()
 
+function(split_counted_loop_state
+         state architecture_output runtime_hits_output runtime_misses_output
+         runtime_fallbacks_output)
+  if(NOT state MATCHES " code_provenance=[0-9]+ module_provenance=[0-9]+")
+    message(FATAL_ERROR
+      "Counted-State besitzt keinen CodeTracker-/Modul-Provenienznachweis: ${state}")
+  endif()
+  string(REGEX MATCH " runtime_dispatch_hits=([0-9]+)" hits_match "${state}")
+  if(NOT hits_match)
+    message(FATAL_ERROR "Counted-State besitzt keine Runtime-Hit-Metrik: ${state}")
+  endif()
+  set(runtime_hits "${CMAKE_MATCH_1}")
+  string(REGEX MATCH " runtime_dispatch_misses=([0-9]+)" misses_match "${state}")
+  if(NOT misses_match)
+    message(FATAL_ERROR "Counted-State besitzt keine Runtime-Miss-Metrik: ${state}")
+  endif()
+  set(runtime_misses "${CMAKE_MATCH_1}")
+  string(REGEX MATCH " runtime_dispatch_fallbacks=([0-9]+)"
+         fallbacks_match "${state}")
+  if(NOT fallbacks_match)
+    message(FATAL_ERROR "Counted-State besitzt keine Runtime-Fallback-Metrik: ${state}")
+  endif()
+  set(runtime_fallbacks "${CMAKE_MATCH_1}")
+  string(REGEX REPLACE
+    " indirect_dispatches=[0-9]+ runtime_dispatch_hits=[0-9]+ runtime_dispatch_misses=[0-9]+ runtime_dispatch_fallbacks=[0-9]+ runtime_only_dispatch_hits=[0-9]+ runtime_only_dispatch_misses=[0-9]+ runtime_only_dispatch_fallbacks=[0-9]+"
+    "" architecture "${state}")
+  set(${architecture_output} "${architecture}" PARENT_SCOPE)
+  set(${runtime_hits_output} "${runtime_hits}" PARENT_SCOPE)
+  set(${runtime_misses_output} "${runtime_misses}" PARENT_SCOPE)
+  set(${runtime_fallbacks_output} "${runtime_fallbacks}" PARENT_SCOPE)
+endfunction()
+
 run_counted_loop_case(
   "no-mmu-batch" FALSE none FALSE no_mmu_batch no_mmu_batch_trace)
 run_counted_loop_case(
   "no-mmu-scalar" FALSE none TRUE no_mmu_scalar no_mmu_scalar_trace)
-if(NOT no_mmu_batch STREQUAL no_mmu_scalar OR
-   NOT no_mmu_batch MATCHES " mmucr=0 mode=0 ")
+split_counted_loop_state(
+  "${no_mmu_batch}" no_mmu_batch_arch no_mmu_batch_runtime_hits
+  no_mmu_batch_runtime_misses no_mmu_batch_runtime_fallbacks)
+split_counted_loop_state(
+  "${no_mmu_scalar}" no_mmu_scalar_arch no_mmu_scalar_runtime_hits
+  no_mmu_scalar_runtime_misses no_mmu_scalar_runtime_fallbacks)
+if(NOT no_mmu_batch_arch STREQUAL no_mmu_scalar_arch OR
+   NOT no_mmu_batch_arch MATCHES " mmucr=0 mode=0 ")
   message(FATAL_ERROR
     "No-MMU-Batch und nativer Skalarpfad divergieren:\n"
+    "batch:  ${no_mmu_batch_arch}\nscalar: ${no_mmu_scalar_arch}")
+endif()
+if(NOT no_mmu_batch_runtime_hits LESS no_mmu_scalar_runtime_hits OR
+   NOT no_mmu_batch_runtime_misses STREQUAL no_mmu_scalar_runtime_misses OR
+   NOT no_mmu_batch_runtime_fallbacks STREQUAL no_mmu_scalar_runtime_fallbacks)
+  message(FATAL_ERROR
+    "No-MMU-Counted-Batch reduziert Runtime-Dispatches nicht ohne neue Fehler:\n"
     "batch:  ${no_mmu_batch}\nscalar: ${no_mmu_scalar}")
 endif()
 if(NOT no_mmu_batch_trace MATCHES "KATANA_COUNTED_LOOP_ADMIT iterations=")
@@ -177,13 +223,32 @@ run_counted_loop_case(
 run_counted_loop_case(
   "active-mmu-direct-scalar" TRUE none TRUE
   active_mmu_direct_scalar active_mmu_direct_scalar_trace)
+split_counted_loop_state(
+  "${active_mmu_direct_batch}" active_mmu_direct_batch_arch
+  active_mmu_direct_batch_runtime_hits active_mmu_direct_batch_runtime_misses
+  active_mmu_direct_batch_runtime_fallbacks)
+split_counted_loop_state(
+  "${active_mmu_direct_scalar}" active_mmu_direct_scalar_arch
+  active_mmu_direct_scalar_runtime_hits active_mmu_direct_scalar_runtime_misses
+  active_mmu_direct_scalar_runtime_fallbacks)
 # cpu= umfasst MMUCR und alle 64 CPU-UTLB-Eintraege; address_space= umfasst
 # die UTLB-Abbildungen sowie ITLB-Belegung, Source-Slots und LRU-Raenge.
-if(NOT active_mmu_direct_batch STREQUAL active_mmu_direct_scalar OR
-   NOT active_mmu_direct_batch MATCHES " mmucr=1025 mode=1 ")
+if(NOT active_mmu_direct_batch_arch STREQUAL active_mmu_direct_scalar_arch OR
+   NOT active_mmu_direct_batch_arch MATCHES " mmucr=1025 mode=1 ")
   message(FATAL_ERROR
     "Direkter P1/P2-Batch unter aktiver MMU divergiert einschliesslich "
     "MMUCR/UTLB/ITLB vom nativen Skalarpfad:\n"
+    "batch:  ${active_mmu_direct_batch_arch}\n"
+    "scalar: ${active_mmu_direct_scalar_arch}")
+endif()
+if(NOT active_mmu_direct_batch_runtime_hits LESS
+       active_mmu_direct_scalar_runtime_hits OR
+   NOT active_mmu_direct_batch_runtime_misses STREQUAL
+       active_mmu_direct_scalar_runtime_misses OR
+   NOT active_mmu_direct_batch_runtime_fallbacks STREQUAL
+       active_mmu_direct_scalar_runtime_fallbacks)
+  message(FATAL_ERROR
+    "Direkter P1/P2-Counted-Batch reduziert Runtime-Dispatches nicht sauber:\n"
     "batch:  ${active_mmu_direct_batch}\n"
     "scalar: ${active_mmu_direct_scalar}")
 endif()
@@ -231,9 +296,29 @@ if(NOT active_mmu_p3_trace MATCHES
    active_mmu_p3_trace MATCHES "KATANA_COUNTED_LOOP_ADMIT iterations=")
   message(FATAL_ERROR
     "Gemappter P3-Counter wurde unter aktiver MMU nicht vor dem Batch abgelehnt: "
-    "${active_mmu_p3_trace}")
+      "${active_mmu_p3_trace}")
+endif()
+
+set(ENV{KATANA_PORT_TEST_BATCH_COMMIT_ABORT} "counted-loop")
+set(ENV{KATANA_PORT_COUNTED_LOOP_TRACE} "1")
+unset(ENV{KATANA_PORT_BLOCK_LIMIT})
+execute_process(
+  COMMAND "${game}"
+  RESULT_VARIABLE lifecycle_result
+  OUTPUT_VARIABLE lifecycle_output
+  ERROR_VARIABLE lifecycle_error
+)
+unset(ENV{KATANA_PORT_TEST_BATCH_COMMIT_ABORT})
+unset(ENV{KATANA_PORT_COUNTED_LOOP_TRACE})
+set(lifecycle_combined "${lifecycle_output}\n${lifecycle_error}")
+if(NOT lifecycle_combined MATCHES
+     "KATANA_BATCH_COMMIT_ABORT_CLEAN kind=counted-loop" OR
+   lifecycle_combined MATCHES "KATANA_COUNTED_LOOP_ADMIT iterations=")
+  message(FATAL_ERROR
+    "Counted-Loop commitet bei Lifecycle-Abbruch vor voller Gastzeitannahme: "
+    "${lifecycle_combined}")
 endif()
 
 file(REMOVE_RECURSE "${fixture}")
 message(STATUS
-  "Counted-Loop No-MMU/P1/P2-Differential und aktive-MMU-P0/P3-Ablehnung erfolgreich")
+  "Counted-Loop Differential, MMU-Gates und atomarer Lifecycle-Abbruch erfolgreich")

@@ -182,6 +182,7 @@ class ExecutableModuleCatalog final {
 
   private:
     friend class ExecutableDiscLoadTransactionCoordinator;
+    friend class DemandBlockMaterializer;
     struct PreparedDiscLoadCatalog {
         struct ModuleUpdate {
             std::size_t module_index = 0u;
@@ -214,6 +215,9 @@ class ExecutableModuleCatalog final {
                                 std::span<const ExecutableModuleActiveExtent> extents) noexcept;
     [[nodiscard]] bool active_extent_index_may_overlap(std::uint32_t physical_begin,
                                                        std::uint64_t physical_end) const noexcept;
+    [[nodiscard]] const ExecutableModule*
+    resolve_for_materialization(std::uint32_t address,
+                                std::size_t width) const noexcept;
     std::vector<ExecutableModule> modules_;
     std::map<std::uint32_t, RuntimeWritePage> runtime_write_pages_;
     std::map<std::uint32_t, std::uint64_t> active_extent_page_refcounts_;
@@ -362,6 +366,13 @@ class DemandBlockMaterializer final {
         bool interpreter_backed = false;
         bool aot_template = false;
     };
+    [[nodiscard]] static bool
+    origin_matches_module(const MaterializedOrigin& origin,
+                          const ExecutableModule& module) noexcept;
+    [[nodiscard]] const ExecutableModule*
+    compatible_owner(const MaterializedOrigin& origin) const noexcept;
+    static void bind_origin_to_module(MaterializedOrigin& origin,
+                                      const ExecutableModule& module);
     std::vector<MaterializedOrigin> origins_;
 };
 

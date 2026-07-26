@@ -209,12 +209,14 @@ std::vector<std::uint8_t> stored_unknown_candidate_boot_track() {
     program[0x11u] = static_cast<std::uint8_t>(candidate_address >> 8u);
     program[0x12u] = static_cast<std::uint8_t>(candidate_address >> 16u);
     program[0x13u] = static_cast<std::uint8_t>(candidate_address >> 24u);
-    program[0x20u] = 0x42u;
-    program[0x21u] = 0x22u; // mov.l r4,@r2 (symbolic non-stack destination)
-    program[0x22u] = 0x0Bu;
-    program[0x23u] = 0x00u; // rts
-    program[0x24u] = 0x09u;
-    program[0x25u] = 0x00u; // nop (delay)
+    program[0x20u] = 0x28u;
+    program[0x21u] = 0xE2u; // mov #0x28,r2 (proven non-stack destination)
+    program[0x22u] = 0x42u;
+    program[0x23u] = 0x22u; // mov.l r4,@r2
+    program[0x24u] = 0x0Bu;
+    program[0x25u] = 0x00u; // rts
+    program[0x26u] = 0x09u;
+    program[0x27u] = 0x00u; // nop (delay)
     program[0x30u] = 0xFFu;
     program[0x31u] = 0xFFu; // speculative unknown opcode
     std::copy(program.begin(),
@@ -316,6 +318,81 @@ std::vector<std::uint8_t> counted_loop_boot_track(const bool valid_step = true,
     program[0x21u] = 0x00u; // delay-slot nop
     program[0x24u] = 0x05u;
     program[0x25u] = 0x00u; // signed loop limit
+    std::copy(program.begin(),
+              program.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
+    return bytes;
+}
+
+std::vector<std::uint8_t> composite_callback_boot_track() {
+    auto bytes = boot_track();
+    constexpr std::uint32_t boot_size = 0xA4u;
+    auto directory = payload_offset(20u);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
+    static_cast<void>(record(bytes, directory, data_lba + 21u, boot_size, "BOOT.BIN;1", false));
+
+    std::vector<std::uint8_t> program(boot_size, 0x09u);
+    for (std::size_t offset = 1u; offset < program.size(); offset += 2u)
+        program[offset] = 0x00u;
+    const auto put_u16 = [&program](const std::size_t offset, const std::uint16_t value) {
+        program[offset] = static_cast<std::uint8_t>(value);
+        program[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&program](const std::size_t offset, const std::uint32_t value) {
+        program[offset] = static_cast<std::uint8_t>(value);
+        program[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        program[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        program[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0x0D2Au); // sts pr,r13: preserve the generated root sentinel
+    put_u16(0x02u, 0xD10Bu); // mov.l @(0x2c,pc),r1 -> accessor 0x8C010050
+    put_u16(0x04u, 0x410Bu); // jsr @r1
+    put_u16(0x06u, 0x0009u); // nop (delay)
+    put_u16(0x08u, 0x6C03u); // mov r0,r12
+    put_u16(0x0Au, 0x67C2u); // mov.l @r12,r7 -> live callback candidate
+    put_u16(0x0Cu, 0xDF09u); // mov.l @(0x24,pc),r15 -> repeated source
+    put_u16(0x0Eu, 0xD80Au); // mov.l @(0x28,pc),r8 -> destination
+    put_u16(0x10u, 0xE900u); // mov #0,r9
+    put_u16(0x12u, 0xEA40u); // mov #64,r10
+    put_u16(0x14u, 0xA000u); // bra 0x8C010018: exact call-block boundary
+    put_u16(0x16u, 0x0009u); // nop (delay)
+
+    put_u16(0x18u, 0x65F3u); // mov r15,r5
+    put_u16(0x1Au, 0xE604u); // mov #4,r6
+    put_u16(0x1Cu, 0x470Bu); // jsr @r7
+    put_u16(0x1Eu, 0x6483u); // mov r8,r4 (delay)
+    put_u16(0x20u, 0x7901u); // add #1,r9
+    put_u16(0x22u, 0x39A3u); // cmp/ge r10,r9
+    put_u16(0x24u, 0x8FF8u); // bf/s 0x8C010018
+    put_u16(0x26u, 0x7804u); // add #4,r8 (delay)
+    put_u16(0x28u, 0x4D2Au); // lds r13,pr
+    put_u16(0x2Au, 0x000Bu); // rts
+    put_u16(0x2Cu, 0x0009u); // nop (delay)
+
+    put_u32(0x30u, katana::platform::dreamcast_disc_boot_address + 0x50u);
+    put_u32(0x34u, katana::platform::dreamcast_disc_boot_address + 0xA0u);
+    put_u32(0x38u, 0x8C020000u);
+    put_u16(0x50u, 0xD002u); // mov.l @(8,pc),r0 -> table 0x8C010080
+    put_u16(0x52u, 0x000Bu); // rts
+    put_u16(0x54u, 0x0009u); // nop (delay)
+    put_u32(0x5Cu, katana::platform::dreamcast_disc_boot_address + 0x80u);
+    put_u32(0x80u, katana::platform::dreamcast_disc_boot_address + 0x90u);
+    put_u32(0x84u, 1u); // bounded returned-table sentinel
+
+    put_u16(0x90u, 0x4609u); // shlr2 r6
+    put_u16(0x92u, 0x6056u); // mov.l @r5+,r0
+    put_u16(0x94u, 0x4610u); // dt r6
+    put_u16(0x96u, 0x2402u); // mov.l r0,@r4
+    put_u16(0x98u, 0x8FFAu); // bf/s 0x8C010090
+    put_u16(0x9Au, 0x7404u); // add #4,r4 (delay)
+    put_u16(0x9Cu, 0x000Bu); // rts
+    put_u16(0x9Eu, 0x0009u); // nop (delay)
+    put_u32(0xA0u, 0x44332211u);
+
     std::copy(program.begin(),
               program.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
@@ -540,7 +617,9 @@ int run_test(const int argc, char* argv[]) {
     if (argc == 3 && (std::string(argv[1]) == "--write-fixture" ||
                       std::string(argv[1]) == "--write-trap-fixture" ||
                       std::string(argv[1]) == "--write-unknown-target-fixture" ||
-                      std::string(argv[1]) == "--write-counted-loop-fixture")) {
+                      std::string(argv[1]) == "--write-counted-loop-fixture" ||
+                      std::string(argv[1]) == "--write-memory-fill-fixture" ||
+                      std::string(argv[1]) == "--write-composite-callback-fixture")) {
         const std::filesystem::path directory(argv[2]);
         std::filesystem::create_directories(directory);
         const auto program = std::string(argv[1]) == "--write-trap-fixture"
@@ -556,6 +635,22 @@ int run_test(const int argc, char* argv[]) {
                 track.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u));
             write_binary(directory / "program.bin",
                          std::vector<std::uint8_t>(program_begin, program_begin + 0x28));
+        }
+        if (std::string(argv[1]) == "--write-memory-fill-fixture") {
+            const auto track = memory_fill_loop_boot_track();
+            write_binary(directory / "high.bin", track);
+            const auto program_begin =
+                track.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u));
+            write_binary(directory / "program.bin",
+                         std::vector<std::uint8_t>(program_begin, program_begin + 0x2C));
+        }
+        if (std::string(argv[1]) == "--write-composite-callback-fixture") {
+            const auto track = composite_callback_boot_track();
+            write_binary(directory / "high.bin", track);
+            const auto program_begin =
+                track.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u));
+            write_binary(directory / "program.bin",
+                         std::vector<std::uint8_t>(program_begin, program_begin + 0xA4));
         }
         return EXIT_SUCCESS;
     }
@@ -1365,9 +1460,9 @@ int run_test(const int argc, char* argv[]) {
             fastpath_completion != std::string::npos &&
             fastpath_finalizer < fastpath_completion &&
             occurrences(mmio_wait_dispatch,
-                        "const auto fastpath_retired_before") == 3u &&
+                        "const auto fastpath_retired_before") == 4u &&
             occurrences(mmio_wait_dispatch,
-                        "const auto fastpath_exception_generation_before") == 3u &&
+                        "const auto fastpath_exception_generation_before") == 4u &&
             mmio_fastpath_snapshot != std::string::npos &&
             mmio_fastpath_exception_snapshot != std::string::npos &&
             mmio_fastpath_finalize != std::string::npos &&
@@ -1408,9 +1503,9 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             occurrences(mmio_wait_dispatch,
                         "dispatch_callsite = fastpath_source.virtual_address") ==
-                3u &&
+                4u &&
             occurrences(mmio_wait_dispatch,
-                        "dispatch_source = fastpath_source") == 3u &&
+                        "dispatch_source = fastpath_source") == 4u &&
             mmio_wait_dispatch.find(
                 "active_observations->observe_guest_exception(") !=
                 std::string::npos &&
@@ -1582,6 +1677,8 @@ int run_test(const int argc, char* argv[]) {
         read_text(memory_fill_output / "src" / "main.cpp");
     const auto memory_fill_header =
         read_text(memory_fill_output / "generated" / "include" / "katana_port.hpp");
+    const auto memory_fill_port_cmake =
+        read_text(memory_fill_output / "generated" / "katana-port.cmake");
     constexpr std::string_view memory_fill_descriptor =
         "{0x8C01000Eu, 0x8C01000Au, 0x8C010014u, 0x8C01000Au, "
         "0x8C01000Cu, 0x8C01000Eu, 0x8C010010u, 0x8C010012u, 6u, 4u, "
@@ -1623,8 +1720,14 @@ int run_test(const int argc, char* argv[]) {
         memory_fill_method.find("const auto proves_instruction_block");
     const auto memory_fill_limit_read =
         memory_fill_method.find("const auto limit_pointer");
+    const auto memory_fill_time_accept = memory_fill_method.find(
+        "accept_batch_guest_cycles_before_commit(",
+        memory_fill_limit_read);
     const auto memory_fill_commit =
         memory_fill_method.find("cpu_.memory.commit_prevalidated_linear_fill(");
+    const auto memory_fill_cpu_commit = memory_fill_method.find(
+        "cpu_.r[descriptor.cursor_register] = final_cursor",
+        memory_fill_commit);
     const auto memory_fill_call =
         memory_fill_dispatch.find("try_product_memory_fill_loop_batch(");
     const auto memory_fill_fastpath_snapshot =
@@ -1656,15 +1759,40 @@ int run_test(const int argc, char* argv[]) {
             memory_fill_main.find(
                 "memory_fill_loop_batching_enabled_ = !diagnostic_partial_port") !=
                 std::string::npos &&
+            memory_fill_main.find("KATANA_PORT_TEST_DISABLE_MEMORY_FILL") !=
+                std::string::npos &&
+            memory_fill_main.find("KATANA_PORT_MEMORY_FILL_DIFFERENTIAL_TEST") !=
+                std::string::npos &&
+            memory_fill_main.find("KATANA_PORT_TEST_ACTIVE_MMU") != std::string::npos &&
+            memory_fill_main.find("KATANA_PORT_MEMORY_FILL_TRACE") !=
+                std::string::npos &&
+            memory_fill_main.find("KATANA_MEMORY_FILL_ADMIT iterations=") !=
+                std::string::npos &&
+            memory_fill_main.find("KATANA_MEMORY_FILL_STATE cpu=") !=
+                std::string::npos &&
+            memory_fill_port_cmake.find(
+                "option(KATANA_INTERNAL_MEMORY_FILL_DIFFERENTIAL_TEST") !=
+                std::string::npos &&
+            memory_fill_port_cmake.find(
+                "PRIVATE KATANA_INTERNAL_MEMORY_FILL_DIFFERENTIAL_TEST=1") !=
+                std::string::npos &&
             memory_fill_environment.find("\"KATANA_PORT_PROGRESS_INTERVAL\"") !=
                 std::string::npos &&
             memory_fill_method.find("runtime_state_allows_batch") !=
                 std::string::npos &&
             memory_fill_method.find("cpu_.memory.has_guest_memory_access_sink()") !=
                 std::string::npos &&
+            memory_fill_method.find(
+                "guest_write_observer_allows_prevalidated_linear_writes()") !=
+                std::string::npos &&
             memory_fill_method.find("MemoryLookupMode::Indexed") !=
                 std::string::npos &&
             memory_fill_method.find("state_.disc_load_transactions->transaction_active()") !=
+                std::string::npos &&
+            memory_fill_method.find("ScopedCpuActiveBlockProvenance") !=
+                std::string::npos &&
+            memory_fill_method.find(
+                "cpu_.active_block_virtual_start = descriptor.guard_address") ==
                 std::string::npos &&
             memory_fill_method.find("proves_instruction_block(") != std::string::npos &&
             memory_fill_method.find("instruction_translation_path(") !=
@@ -1695,13 +1823,17 @@ int run_test(const int argc, char* argv[]) {
             memory_fill_registration != std::string::npos &&
             memory_fill_instruction_proof != std::string::npos &&
             memory_fill_limit_read != std::string::npos &&
+            memory_fill_time_accept != std::string::npos &&
             memory_fill_commit != std::string::npos &&
+            memory_fill_cpu_commit != std::string::npos &&
             memory_fill_selected_shape < memory_fill_selected_proof &&
             memory_fill_selected_proof < memory_fill_preflush &&
             memory_fill_preflush < memory_fill_registration &&
             memory_fill_registration < memory_fill_instruction_proof &&
             memory_fill_instruction_proof < memory_fill_limit_read &&
-            memory_fill_limit_read < memory_fill_commit &&
+            memory_fill_limit_read < memory_fill_time_accept &&
+            memory_fill_time_accept < memory_fill_commit &&
+            memory_fill_commit < memory_fill_cpu_commit &&
             memory_fill_fastpath_snapshot != std::string::npos &&
             memory_fill_fastpath_finalize != std::string::npos &&
             memory_fill_fastpath_target != std::string::npos &&
@@ -1739,7 +1871,8 @@ int run_test(const int argc, char* argv[]) {
                 "cpu_.active_instruction_pc = descriptor.branch_instruction_address") !=
                 std::string::npos &&
             memory_fill_method.find(
-                "flush_pending_guest_cycles(cpu_, *this)") != std::string::npos,
+                "flush_pending_guest_cycles(cpu_, *this)",
+                memory_fill_commit) == std::string::npos,
         "Bewiesener linearer RAM-Fill verliert Shape, Guard/Body-Einstieg, "
         "No-TLB-/Code-Proof, exakte Zaehler oder Event-/Budgetgrenzen.");
     for (const auto [name, variant] :
@@ -1770,6 +1903,303 @@ int run_test(const int argc, char* argv[]) {
             "Unsicherer RAM-Fill-Near-Miss erzeugt einen Produkt-Fastpath: " +
                 std::string(name));
     }
+
+    constexpr auto composite_call_block =
+        katana::platform::dreamcast_disc_boot_address + 0x18u;
+    constexpr auto composite_callsite =
+        katana::platform::dreamcast_disc_boot_address + 0x1Cu;
+    constexpr auto composite_kernel =
+        katana::platform::dreamcast_disc_boot_address + 0x90u;
+    constexpr auto composite_kernel_return =
+        katana::platform::dreamcast_disc_boot_address + 0x9Cu;
+    const auto composite_disc_directory = fixture.root / "composite-callback-disc";
+    std::filesystem::create_directories(composite_disc_directory);
+    write_fixture(composite_disc_directory);
+    write_binary(composite_disc_directory / "high.bin", composite_callback_boot_track());
+    const auto composite_gdi = composite_disc_directory / "disc.gdi";
+    const auto composite_disc =
+        katana::platform::load_dreamcast_gdi_boot(composite_gdi);
+    const auto composite_image =
+        katana::platform::make_dreamcast_disc_executable(composite_disc);
+    const auto composite_analysis =
+        katana::analysis::analyze_control_flow(composite_image);
+    const auto composite_program = katana::ir::lower_program(composite_analysis);
+    const auto composite_resolution = std::find_if(
+        composite_analysis.indirect_control_flow.begin(),
+        composite_analysis.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == composite_callsite;
+        });
+    const auto composite_candidate = std::find_if(
+        composite_analysis.recursive.functions.begin(),
+        composite_analysis.recursive.functions.end(),
+        [](const auto& candidate) { return candidate.address == composite_kernel; });
+    require(
+        composite_resolution != composite_analysis.indirect_control_flow.end() &&
+            composite_resolution->kind ==
+                katana::analysis::IndirectControlFlowKind::Call &&
+            composite_resolution->evidence ==
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            !composite_resolution->target.has_value() &&
+            composite_resolution->targets.empty() &&
+            composite_resolution->analysis_candidates ==
+                std::vector<std::uint32_t>{composite_kernel} &&
+            composite_candidate != composite_analysis.recursive.functions.end() &&
+            composite_candidate->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedPartial &&
+            std::find(composite_candidate->origins.begin(),
+                      composite_candidate->origins.end(),
+                      katana::analysis::FunctionOrigin::GuardedSnapshot) !=
+                composite_candidate->origins.end() &&
+            std::none_of(
+                composite_analysis.resolved_edges.begin(),
+                composite_analysis.resolved_edges.end(),
+                [](const auto& edge) {
+                    return edge.instruction_address == composite_callsite &&
+                           edge.target_address == composite_kernel;
+                }),
+        "Composite-Callback-Fixture verliert Returned-Table-Provenienz oder erfindet eine "
+        "feste CFG-Kante.");
+    std::vector<katana::io::InputProvenance> composite_inputs;
+    const auto& composite_source_descriptor = composite_disc.source->descriptor();
+    composite_inputs.push_back(katana::io::capture_input_provenance(
+        "gdi-descriptor", composite_source_descriptor.resolved_path));
+    for (const auto& track : composite_source_descriptor.tracks)
+        composite_inputs.push_back(katana::io::capture_input_provenance(
+            "gdi-track-" + std::to_string(track.number), track.resolved_path));
+    const auto export_composite_program =
+        [&](const std::string& identity,
+            const std::vector<katana::ir::Function>& program) {
+            const auto output_directory = fixture.root / (identity + "-port");
+            static_cast<void>(export_dreamcast_port_project(
+                {composite_image,
+                 composite_analysis,
+                 program,
+                 composite_inputs,
+                 katana::platform::dreamcast_disc_boot_address,
+                 katana::platform::dreamcast_disc_boot_address,
+                 composite_disc.boot_file.size(),
+                 identity},
+                output_directory,
+                options));
+            return output_directory;
+        };
+    const auto composite_output =
+        export_composite_program("composite-callback", composite_program);
+    const auto composite_dispatch =
+        read_text(composite_output / "generated" / "code" / "runtime-dispatch.cpp");
+    const auto composite_main = read_text(composite_output / "src" / "main.cpp");
+    const auto composite_header =
+        read_text(composite_output / "generated" / "include" / "katana_port.hpp");
+    const auto composite_port_cmake =
+        read_text(composite_output / "generated" / "katana-port.cmake");
+    const auto composite_batch_call =
+        composite_dispatch.find("try_product_composite_callback_batch(");
+    const auto composite_ordinary_execute =
+        composite_dispatch.find("execute_runtime_block(", composite_batch_call);
+    const auto composite_method_begin =
+        composite_main.find("bool try_composite_callback_batch(");
+    const auto composite_method_end =
+        composite_main.find("bool try_memory_fill_loop_batch(", composite_method_begin);
+    const auto composite_method =
+        composite_method_begin == std::string::npos ||
+                composite_method_end == std::string::npos ||
+                composite_method_end < composite_method_begin
+            ? std::string_view{}
+            : std::string_view{composite_main}.substr(
+                  composite_method_begin,
+                  composite_method_end - composite_method_begin);
+    const auto composite_time_accept =
+        composite_method.find("accept_batch_guest_cycles_before_commit(");
+    const auto composite_commit =
+        composite_method.find("commit_prevalidated_linear_u32_pattern(");
+    const auto composite_cpu_commit =
+        composite_method.find("cpu_.r[0u] = pattern", composite_commit);
+    require(
+        composite_dispatch.find(
+            "std::array<CompositeCallbackBatchDescriptor, 1u> "
+            "composite_callback_batch_descriptors") != std::string::npos &&
+            composite_dispatch.find("0x8C010018u, 0x8C01001Cu, 0x8C010020u, "
+                                    "0x8C010028u, 0x8C010090u, 0x8C01009Cu") !=
+                std::string::npos &&
+            composite_header.find("struct CompositeCallbackBatchDescriptor") !=
+                std::string::npos &&
+            composite_header.find("try_product_composite_callback_batch(") !=
+                std::string::npos &&
+            composite_batch_call != std::string::npos &&
+            composite_ordinary_execute != std::string::npos &&
+            composite_batch_call < composite_ordinary_execute &&
+            composite_method.find(
+                "katana::runtime::AddressTranslationMode::NoMmu") !=
+                std::string::npos &&
+            composite_method.find(
+                "const auto live_target = "
+                "cpu_.r[descriptor.callback_register]") !=
+                std::string::npos &&
+            composite_method.find("if (cpu_.pc != live_target") !=
+                std::string::npos &&
+            composite_method.find("selected_block.aot_template") !=
+                std::string::npos &&
+            composite_method.find("*target_backing < *source_backing + 4u") !=
+                std::string::npos &&
+            composite_method.find(
+                "dreamcast_main_ram_backing_is_executable(") !=
+                std::string::npos &&
+            composite_method.find("may_overlap_active_physical(") !=
+                std::string::npos &&
+            composite_method.find(
+                "guest_write_observer_allows_prevalidated_linear_writes()") !=
+                std::string::npos &&
+            composite_method.find("next_event_cycle()") != std::string::npos &&
+            composite_time_accept != std::string::npos &&
+            composite_commit != std::string::npos &&
+            composite_cpu_commit != std::string::npos &&
+            composite_time_accept < composite_commit &&
+            composite_commit < composite_cpu_commit &&
+            composite_method.find(
+                "flush_pending_guest_cycles(cpu_, *this)",
+                composite_commit) == std::string::npos &&
+            composite_method.find(
+                "const ScopedCpuActiveBlockProvenance active_block_provenance(") !=
+                std::string::npos &&
+            composite_method.find(
+                "cpu_.active_block_virtual_start = descriptor.continuation_address") ==
+                std::string::npos &&
+            composite_main.find(
+                "KATANA_PORT_TEST_DISABLE_COMPOSITE_CALLBACK") !=
+                std::string::npos &&
+            composite_main.find("\" code_provenance=\"") !=
+                std::string::npos &&
+            composite_main.find("RuntimeProbeDeviceKind::CodeTracker") !=
+                std::string::npos &&
+            composite_main.find("KATANA_COMPOSITE_CALLBACK_STATE cpu=") !=
+                std::string::npos &&
+            composite_main.find("KATANA_COMPOSITE_CALLBACK_ADMIT iterations=") !=
+                std::string::npos &&
+            composite_main.find("KATANA_COMPOSITE_CALLBACK_REJECT stage=") !=
+                std::string::npos &&
+            composite_port_cmake.find(
+                "option(KATANA_INTERNAL_COMPOSITE_CALLBACK_DIFFERENTIAL_TEST") !=
+                std::string::npos &&
+            composite_port_cmake.find(
+                "PRIVATE KATANA_INTERNAL_COMPOSITE_CALLBACK_DIFFERENTIAL_TEST=1") !=
+                std::string::npos &&
+            composite_port_cmake.find(
+                "option(KATANA_INTERNAL_BATCH_COMMIT_LIFECYCLE_TEST") !=
+                std::string::npos &&
+            composite_port_cmake.find(
+                "PRIVATE KATANA_INTERNAL_BATCH_COMMIT_LIFECYCLE_TEST=1") !=
+                std::string::npos,
+        "Composite-Callback-Descriptor oder Produkt-/No-MMU-/Differentialvertrag ist "
+        "unvollstaendig.");
+    require(
+        composite_resolution->analysis_candidates ==
+                std::vector<std::uint32_t>{composite_kernel} &&
+            std::none_of(
+                composite_program.begin(), composite_program.end(), [](const auto& function) {
+                    return std::any_of(
+                        function.blocks.begin(),
+                        function.blocks.end(),
+                        [](const auto& block) {
+                            return std::any_of(
+                                block.instructions.begin(),
+                                block.instructions.end(),
+                                [](const auto& instruction) {
+                                    return instruction.source_address == composite_callsite &&
+                                           (instruction.target_address.has_value() ||
+                                            !instruction.resolved_targets.empty());
+                                });
+                        });
+                }),
+        "Composite-Callback-Kandidat wurde als feste IR-/CFG-Kante materialisiert.");
+    const auto composite_dispatch_end = composite_dispatch.find(
+        "if (const auto* memory_fill_loop =", composite_batch_call);
+    const auto composite_dispatch_fastpath =
+        composite_batch_call == std::string::npos ||
+                composite_dispatch_end == std::string::npos ||
+                composite_dispatch_end < composite_batch_call
+            ? std::string_view{}
+            : std::string_view{composite_dispatch}.substr(
+                  composite_batch_call,
+                  composite_dispatch_end - composite_batch_call);
+    require(
+        composite_dispatch_fastpath.find("record_hit(") == std::string::npos &&
+            composite_dispatch_fastpath.find(
+                "observe_block_dispatch_hit(") == std::string::npos &&
+            composite_dispatch_fastpath.find("active_table->lookup(") ==
+                std::string::npos &&
+            composite_dispatch_fastpath.find("synthesized_target_fetches") ==
+                std::string::npos,
+        "Composite-Fastpath synthetisiert Hostdispatch-/Diagnosearbeit und vernichtet den "
+        "belegten Dispatch-Speedup.");
+
+    const auto kernel_function = std::find_if(
+        composite_program.begin(), composite_program.end(), [](const auto& function) {
+            return std::any_of(
+                function.blocks.begin(), function.blocks.end(), [](const auto& block) {
+                    return block.start_address == composite_kernel;
+                });
+        });
+    const auto outer_function = std::find_if(
+        composite_program.begin(), composite_program.end(), [](const auto& function) {
+            return std::any_of(
+                function.blocks.begin(), function.blocks.end(), [](const auto& block) {
+                    return block.start_address == composite_call_block;
+                });
+        });
+    require(kernel_function != composite_program.end() &&
+                outer_function != composite_program.end() &&
+                kernel_function != outer_function,
+            "Composite-Overlap-Fixture besitzt keine getrennten Kernel-/Outer-Funktionen.");
+    const auto append_kernel_overlap = [&](auto& program) {
+        const auto kernel_index =
+            static_cast<std::size_t>(kernel_function - composite_program.begin());
+        const auto outer_index =
+            static_cast<std::size_t>(outer_function - composite_program.begin());
+        for (const auto& block : program[kernel_index].blocks) {
+            if (block.start_address == composite_kernel ||
+                block.start_address == composite_kernel_return)
+                program[outer_index].blocks.push_back(block);
+        }
+    };
+    auto identical_overlap_program = composite_program;
+    append_kernel_overlap(identical_overlap_program);
+    const auto identical_overlap_output = export_composite_program(
+        "composite-callback-identical-overlap", identical_overlap_program);
+    const auto identical_overlap_dispatch =
+        read_text(identical_overlap_output / "generated" / "code" /
+                  "runtime-dispatch.cpp");
+    require(
+        identical_overlap_dispatch.find(
+            "std::array<CompositeCallbackBatchDescriptor, 1u> "
+            "composite_callback_batch_descriptors") != std::string::npos,
+        "Byte- und CFG-identischer Kernel-Overlap wurde pauschal verworfen.");
+
+    auto divergent_overlap_program = composite_program;
+    append_kernel_overlap(divergent_overlap_program);
+    const auto divergent_outer_index =
+        static_cast<std::size_t>(outer_function - composite_program.begin());
+    auto divergent_overlap_block = std::find_if(
+        divergent_overlap_program[divergent_outer_index].blocks.begin(),
+        divergent_overlap_program[divergent_outer_index].blocks.end(),
+        [](const auto& block) { return block.start_address == composite_kernel; });
+    require(divergent_overlap_block !=
+                divergent_overlap_program[divergent_outer_index].blocks.end() &&
+                !divergent_overlap_block->instructions.empty(),
+            "Composite-Negativfixture findet ihren ueberlappenden Kernel nicht.");
+    divergent_overlap_block->instructions.front().original_opcode = 0x0009u;
+    bool divergent_overlap_rejected = false;
+    try {
+        static_cast<void>(export_composite_program(
+            "composite-callback-divergent-overlap", divergent_overlap_program));
+    } catch (const std::runtime_error& error) {
+        divergent_overlap_rejected =
+            std::string_view(error.what()) ==
+            "IR-Basic-Block besitzt abweichende Funktionsbesitzer.";
+    }
+    require(divergent_overlap_rejected,
+            "Semantisch abweichender Kernel-Overlap wurde nicht typisiert verworfen.");
+
     const auto counted_loop_disc_directory = fixture.root / "counted-loop-disc";
     std::filesystem::create_directories(counted_loop_disc_directory);
     write_fixture(counted_loop_disc_directory);
@@ -1830,28 +2260,15 @@ int run_test(const int argc, char* argv[]) {
         counted_loop_method.find("first_round_tail_guest_cycles", counted_scalar_guard);
     const auto counted_synthetic_reads =
         counted_loop_method.find("admitted * 3u - 2u", counted_first_round_tail);
-    const auto counted_remaining_attempts = counted_loop_method.find(
-        "cpu_.attempted_guest_instructions += remaining_batch_instructions",
+    const auto counted_time_accept = counted_loop_method.find(
+        "accept_batch_guest_cycles_before_commit(",
         counted_synthetic_reads);
-    const auto counted_intermediate_store_loop =
-        counted_loop_method.find("iteration < admitted", counted_remaining_attempts);
-    const auto counted_intermediate_value =
-        counted_loop_method.find("iteration * descriptor.step",
-                                 counted_intermediate_store_loop);
-    const auto counted_intermediate_write =
-        counted_loop_method.find("cpu_.memory.write_u32(",
-                                 counted_intermediate_store_loop);
-    const auto counted_final_store_attempt = counted_loop_method.find(
-        "GuestInstructionAttempt store_attempt", counted_intermediate_write);
-    const auto counted_final_write =
-        counted_loop_method.find("guest_write_u32_at(", counted_final_store_attempt);
-    const auto counted_final_exception_flush = counted_loop_method.find(
-        "flush_pending_guest_cycles(cpu_, *this)", counted_final_write);
-    const auto counted_final_flush = counted_loop_method.find(
-        "flush_pending_guest_cycles(cpu_, *this)",
-        counted_final_exception_flush == std::string::npos
-            ? std::string::npos
-            : counted_final_exception_flush + 1u);
+    const auto counted_atomic_sequence = counted_loop_method.find(
+        "commit_prevalidated_repeated_u32_sequence(",
+        counted_time_accept);
+    const auto counted_cpu_commit = counted_loop_method.find(
+        "cpu_.r[descriptor.limit_register] = limit_bits",
+        counted_atomic_sequence);
     const auto counted_dynamic_kind =
         counted_loop_dispatch.find("const auto counted_fastpath_kind", counted_loop_call);
     const auto counted_dynamic_kind_store = counted_loop_dispatch.find(
@@ -1950,6 +2367,18 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             counted_loop_port_cmake.find(
                 "PRIVATE KATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST=1") !=
+                std::string::npos &&
+            counted_loop_port_cmake.find(
+                "option(KATANA_INTERNAL_BATCH_COMMIT_LIFECYCLE_TEST") !=
+                std::string::npos &&
+            counted_loop_port_cmake.find(
+                "PRIVATE KATANA_INTERNAL_BATCH_COMMIT_LIFECYCLE_TEST=1") !=
+                std::string::npos &&
+            counted_loop_main.find("KATANA_PORT_TEST_BATCH_COMMIT_ABORT") !=
+                std::string::npos &&
+            counted_loop_main.find("KATANA_BATCH_COMMIT_ABORT_CLEAN kind=") !=
+                std::string::npos &&
+            counted_loop_main.find("restore_unaccepted_time") !=
                 std::string::npos &&
             counted_loop_main.find(
                 "#if defined(KATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST)") !=
@@ -2112,14 +2541,15 @@ int run_test(const int argc, char* argv[]) {
             counted_scalar_guard != std::string::npos &&
             counted_first_round_tail != std::string::npos &&
             counted_synthetic_reads != std::string::npos &&
-            counted_remaining_attempts != std::string::npos &&
-            counted_intermediate_store_loop != std::string::npos &&
-            counted_intermediate_value != std::string::npos &&
-            counted_intermediate_write != std::string::npos &&
-            counted_final_store_attempt != std::string::npos &&
-            counted_final_write != std::string::npos &&
-            counted_final_exception_flush != std::string::npos &&
-            counted_final_flush != std::string::npos &&
+            counted_time_accept != std::string::npos &&
+            counted_atomic_sequence != std::string::npos &&
+            counted_cpu_commit != std::string::npos &&
+            counted_synthetic_reads < counted_time_accept &&
+            counted_time_accept < counted_atomic_sequence &&
+            counted_atomic_sequence < counted_cpu_commit &&
+            counted_loop_method.find(
+                "flush_pending_guest_cycles(cpu_, *this)",
+                counted_atomic_sequence) == std::string::npos &&
             counted_limit_attempt < counted_limit_read &&
             counted_limit_read < counted_first_flush &&
             counted_first_flush < counted_prefix_flush &&
@@ -2173,33 +2603,27 @@ int run_test(const int argc, char* argv[]) {
             counted_first_read < counted_scalar_guard &&
             counted_scalar_guard < counted_first_round_tail &&
             counted_first_round_tail < counted_synthetic_reads &&
-            counted_synthetic_reads < counted_remaining_attempts &&
-            counted_remaining_attempts < counted_intermediate_store_loop &&
-            counted_intermediate_store_loop < counted_intermediate_value &&
-            counted_intermediate_value < counted_intermediate_write &&
-            counted_intermediate_write < counted_final_store_attempt &&
-            counted_final_store_attempt < counted_final_write &&
-            counted_final_write < counted_final_exception_flush &&
-            counted_final_exception_flush < counted_final_flush &&
+            counted_synthetic_reads < counted_time_accept &&
+            counted_time_accept < counted_atomic_sequence &&
+            counted_atomic_sequence < counted_cpu_commit &&
             counted_loop_method.find("return false;", counted_prefix_flush) ==
                 std::string::npos &&
             counted_loop_method.find(
                 "return finish_scalar_guard();", counted_scalar_guard) !=
                 std::string::npos &&
-            counted_loop_method.find("account_prevalidated_unobserved_accesses(") !=
+            counted_loop_method.find("account_prevalidated_unobserved_accesses(") ==
                 std::string::npos &&
             counted_loop_method.find(
-                "cpu_.attempted_guest_instructions += remaining_batch_instructions") !=
+                "cpu_.attempted_guest_instructions += instructions_through_final_store") !=
                 std::string::npos &&
             counted_loop_method.find(
-                "cpu_.retired_guest_instructions += remaining_batch_instructions") !=
+                "cpu_.retired_guest_instructions += instructions_through_final_store") !=
                 std::string::npos &&
             counted_loop_method.find(
-                "for (std::uint64_t iteration = 1u;") !=
+                "commit_prevalidated_repeated_u32_sequence(") !=
                 std::string::npos &&
             counted_loop_method.find(
-                "descriptor.store_instruction_address,\n"
-                "            store_contract->store_physical, true") !=
+                "synthetic_memory_accesses + admitted") !=
                 std::string::npos &&
             counted_loop_main.find(
                 "cpu_.active_instruction_physical_pc = "
@@ -2218,8 +2642,8 @@ int run_test(const int argc, char* argv[]) {
             counted_fastpath_finalize < counted_dynamic_source &&
             counted_dynamic_source < counted_dynamic_physical_source &&
             counted_dynamic_physical_source < ordinary_block_execute &&
-            occurrences(counted_loop_method, "cpu_.memory.write_u32(") == 1u &&
-            occurrences(counted_loop_method, "guest_write_u32_at(") == 1u &&
+            occurrences(counted_loop_method, "cpu_.memory.write_u32(") == 0u &&
+            occurrences(counted_loop_method, "guest_write_u32_at(") == 0u &&
             occurrences(counted_loop_method, "state_.main_ram->write_u32(") == 0u &&
             occurrences(counted_loop_method,
                         "state_.cache_control->write_on_chip_ram(") == 0u &&
@@ -2231,7 +2655,7 @@ int run_test(const int argc, char* argv[]) {
                 "store_contract->store_physical") !=
                 std::string::npos,
         "Der produktive Counted-Loop-Pfad verliert Staged-Prefix, Post-Flush-Proof, "
-        "exakte Event-/Budget-/Zaehlerformeln, Observer-Store-Reihenfolge oder "
+        "exakte Event-/Budget-/Zaehlerformeln, atomaren Zeit-vor-Store-Commit oder "
         "dynamische Exit-Provenienz.");
 
     auto counted_loop_diagnostic_options = options;

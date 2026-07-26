@@ -386,9 +386,16 @@ void PvrRegisterFile::reset() {
     cancel_scan_events();
     initialize_register_defaults();
     field_ = 0u;
+    scan_frame_cycles_ = 0u;
+    scan_epoch_cycle_ = scheduler_.current_cycle();
+    in_vblank_ = false;
     ++resets_;
-    if (ta_reset_observer_) ta_reset_observer_();
     reschedule_scanout();
+    // Keep the PVR internally schedulable even when an externally supplied TA
+    // reset observer reports a host-side lifecycle failure. The observer may
+    // still propagate its exception, but it cannot strand an already committed
+    // full reset without VBlank/HBlank events.
+    if (ta_reset_observer_) ta_reset_observer_();
 }
 
 void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
@@ -533,7 +540,7 @@ void PvrRegisterFile::cancel_scan_events() noexcept {
     hblank_event_.reset();
 }
 
-void PvrRegisterFile::reschedule_scanout() {
+void PvrRegisterFile::reschedule_scanout(const bool derive_current_vblank) {
     cancel_scan_events();
     const auto current_cycle = scheduler_.current_cycle();
     const auto preserve_scan_phase =
@@ -574,7 +581,7 @@ void PvrRegisterFile::reschedule_scanout() {
     const auto vblank = registers_[index(pvr_register::SpgVblankInterrupt)];
     const auto start = vblank & 0x3FFu;
     const auto end = (vblank >> 16u) & 0x3FFu;
-    if (start < vertical && end < vertical) {
+    if (derive_current_vblank && start < vertical && end < vertical) {
         const auto elapsed = current_cycle - scan_epoch_cycle_;
         const auto frame_cycle = elapsed % scan_frame_cycles_;
         const auto scanline = std::min<std::uint64_t>(

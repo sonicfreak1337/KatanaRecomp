@@ -2434,6 +2434,31 @@ set_tests_properties(
     katana-counted-loop-differential-tests
     PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
 )
+add_test(
+    NAME katana-composite-callback-fill-differential-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
+        -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+        -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+        -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_composite_callback_fill_differential.cmake
+)
+set_tests_properties(
+    katana-composite-callback-fill-differential-tests
+    PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
+)
+add_test(
+    NAME katana-memory-fill-batch-lifecycle-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
+        -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+        -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_memory_fill_batch_lifecycle.cmake
+)
+set_tests_properties(
+    katana-memory-fill-batch-lifecycle-tests
+    PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
+)
 
 add_executable(katana-codegen-metadata-tests tests/codegen/metadata_tests.cpp)
 target_link_libraries(katana-codegen-metadata-tests PRIVATE katana_core katana_runtime)
@@ -4590,6 +4615,7 @@ add_test(
         -DKATANA_CONFIG=$<CONFIG>
         -DKATANA_EXPECTED_VERSION=${PROJECT_VERSION}
         -DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_RUNTIME_ABI_VERSION}
+        -DKATANA_EXPECTED_PORT_PROJECT_CONTRACT=${KATANA_PORT_PROJECT_CONTRACT_VERSION}
         -P ${CMAKE_SOURCE_DIR}/tests/build/package_contract_tests.cmake
 )
 set_tests_properties(katana-package-contract-tests PROPERTIES LABELS "build;gate" TIMEOUT 180)

@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -57,7 +58,12 @@ int main() {
     static_cast<void>(scheduler.advance_by(100u, 1u));
     require(memory.read_u32(0x005F6C18u) == 0u && completions == 1u &&
                 controller->completed_dma_count() == 1u &&
-                controller->transferred_word_count() == 6u,
+                controller->transferred_word_count() == 6u &&
+                controller->event_publication_state() ==
+                    MapleDmaEventPublicationState::Published &&
+                controller->event_publication_error() ==
+                    MapleDmaEventPublicationError::None &&
+                controller->event_publication_failure_count() == 0u,
             "Maple-DMA schliesst nicht einmalig mit Zaehlern und Status ab.");
     require(memory.read_u32(response) == 0x03200008u &&
                 memory.read_u32(response + 4u) == 0x01000000u &&
@@ -172,6 +178,8 @@ int main() {
                 controller->error() == MapleDmaError::ProtectedRange &&
                 controller->error_address() == protected_first_invalid &&
                 !controller->hard_trigger_failed() &&
+                controller->event_publication_state() ==
+                    MapleDmaEventPublicationState::Published &&
                 completions == completions_before_software_fault + 1u &&
                 scheduler.pending_event_count() == 0u,
             "Softwaregetriggerter Maple-Gastfehler erreicht Geraete-/ASIC-Zustand nicht "
@@ -292,6 +300,94 @@ int main() {
                 controller->error_address() == table &&
                 completions == completions_before_invalid_descriptor + 1u,
             "Widerspruechliche Maple-Frame-/Deskriptorlaenge erreicht den Gastfehlerpfad nicht.");
+
+    {
+        Memory publication_memory(0u);
+        auto publication_ram =
+            std::make_shared<LinearMemoryDevice>(16u * 1024u * 1024u);
+        publication_memory.map_region(
+            "publication-main-ram", 0x0C000000u, publication_ram);
+        EventScheduler publication_scheduler;
+        auto publication_maple = std::make_shared<MapleBus>();
+        auto publication_input = std::make_shared<ReplayInputBackend>(
+            std::vector<ControllerState>(4u, ControllerState{}));
+        publication_maple->attach(
+            0u, 0u, std::make_shared<MapleControllerDevice>(publication_input));
+
+        std::uint64_t publication_calls = 0u;
+        bool observer_saw_publishing = true;
+        std::shared_ptr<DreamcastMapleController> publication_controller;
+        publication_controller = map_dreamcast_maple_controller(
+            publication_memory,
+            publication_scheduler,
+            publication_maple,
+            MapleDmaTiming{10u},
+            [&] {
+                ++publication_calls;
+                observer_saw_publishing &=
+                    publication_controller->event_publication_state() ==
+                    MapleDmaEventPublicationState::Publishing;
+                throw std::runtime_error(
+                    "synthetischer Maple-ASIC-Publikationsfehler");
+            });
+
+        constexpr std::uint32_t publication_table = 0x0C003000u;
+        constexpr std::uint32_t publication_response = 0x0C004000u;
+        publication_memory.write_u32(publication_table, 0x80000001u);
+        publication_memory.write_u32(
+            publication_table + 4u, publication_response);
+        publication_memory.write_u32(
+            publication_table + 8u, request_header);
+        publication_memory.write_u32(
+            publication_table + 12u, 0x01000000u);
+        publication_memory.write_u32(
+            0x005F6C04u, publication_table);
+        publication_memory.write_u32(0x005F6C10u, 0u);
+        publication_memory.write_u32(0x005F6C14u, 1u);
+        publication_memory.write_u32(0x005F6C18u, 1u);
+        const auto successful_publication_escaped = throws([&] {
+            static_cast<void>(
+                publication_scheduler.advance_by(100u, 1u));
+        });
+        const auto committed_snapshot = publication_controller->snapshot();
+        require(!successful_publication_escaped &&
+                    publication_memory.read_u32(publication_response) ==
+                        0x03200008u &&
+                    committed_snapshot.state == MapleDmaState::Completed &&
+                    committed_snapshot.error == MapleDmaError::None &&
+                    committed_snapshot.completed_dma_count == 1u &&
+                    committed_snapshot.failed_dma_count == 0u &&
+                    committed_snapshot.event_publication_state ==
+                        MapleDmaEventPublicationState::Failed &&
+                    committed_snapshot.event_publication_error ==
+                        MapleDmaEventPublicationError::ObserverException &&
+                    committed_snapshot.event_publication_failure_count == 1u &&
+                    publication_calls == 1u && observer_saw_publishing,
+                "Maple-ASIC-Publikationsfehler klassifiziert einen atomar "
+                "commiteten DMA nachtraeglich als Transferfehler.");
+
+        publication_memory.write_u32(
+            publication_table, 0x80000100u);
+        const auto guest_fault_escaped = throws([&] {
+            publication_memory.write_u32(0x005F6C18u, 1u);
+        });
+        const auto failed_snapshot = publication_controller->snapshot();
+        require(!guest_fault_escaped &&
+                    failed_snapshot.state == MapleDmaState::Failed &&
+                    failed_snapshot.error ==
+                        MapleDmaError::UnsupportedDescriptor &&
+                    failed_snapshot.error_address == publication_table &&
+                    failed_snapshot.completed_dma_count == 1u &&
+                    failed_snapshot.failed_dma_count == 1u &&
+                    failed_snapshot.event_publication_state ==
+                        MapleDmaEventPublicationState::Failed &&
+                    failed_snapshot.event_publication_error ==
+                        MapleDmaEventPublicationError::ObserverException &&
+                    failed_snapshot.event_publication_failure_count == 2u &&
+                    publication_calls == 2u && observer_saw_publishing,
+                "Maple-Gastfehler verliert bei fehlschlagender "
+                "ASIC-Publikation seine eigene typisierte Ursache.");
+    }
 
     std::cout << "Dreamcast-Maple-MMIO und echter DMA-Responsepfad erfolgreich.\n";
 }

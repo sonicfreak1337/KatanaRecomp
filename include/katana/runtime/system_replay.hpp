@@ -14,7 +14,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t system_replay_schema_version = 7u;
+inline constexpr std::uint32_t system_replay_schema_version = 8u;
 inline constexpr std::string_view runtime_probe_checkpoint_line_prefix =
     "KATANA_RUNTIME_PROBE_CHECKPOINT ";
 
@@ -135,6 +135,11 @@ class SystemReplayLog final {
     [[nodiscard]] SystemReplayCoverageMask enabled_coverage() const noexcept;
     [[nodiscard]] SystemReplayCoverageMask observed_coverage() const noexcept;
     [[nodiscard]] SystemReplayCoverageMask required_coverage() const noexcept;
+    [[nodiscard]] SystemReplayCoverageMask
+    expected_observed_coverage() const noexcept;
+    [[nodiscard]] bool hooks_complete() const noexcept;
+    [[nodiscard]] bool observed_complete() const noexcept;
+    [[deprecated("coverage_complete() only reports hook availability; use hooks_complete()")]]
     [[nodiscard]] bool coverage_complete() const noexcept;
     [[nodiscard]] const SystemReplayEventCounts& event_counts() const noexcept;
     [[nodiscard]] std::uint64_t final_guest_state_hash() const;
@@ -243,6 +248,8 @@ system_replay_mmio_observer(SystemReplayLog& log,
                                                     std::uint64_t subsystem_hash = 0u) noexcept;
 [[nodiscard]] SystemReplayCoverageMask
 system_replay_required_coverage(SystemReplayProfile profile) noexcept;
+[[nodiscard]] SystemReplayCoverageMask
+system_replay_expected_observed_coverage(SystemReplayProfile profile) noexcept;
 [[nodiscard]] SystemReplayCoverageMask
 system_replay_event_coverage(const SystemReplayEvent& event) noexcept;
 [[nodiscard]] const char* system_replay_profile_name(SystemReplayProfile profile) noexcept;

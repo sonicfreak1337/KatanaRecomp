@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -104,7 +105,7 @@ katana::io::ExecutableImage returned_table_load_image(
     const std::vector<std::pair<std::uint32_t, std::uint32_t>>& table_slots) {
     require(!returned_addresses.empty() && returned_addresses.size() <= 8u,
             "Returned-Table-Testfixture erhielt keine begrenzte Rueckgabemenge.");
-    std::vector<std::uint8_t> bytes(0xE0u, 0x09u);
+    std::vector<std::uint8_t> bytes(0x800u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset,
                                   const std::uint16_t value) {
         bytes[offset] = static_cast<std::uint8_t>(value);
@@ -160,7 +161,13 @@ katana::io::ExecutableImage returned_table_load_image(
                 "Returned-Table-Testslot liegt ausserhalb des Images.");
         put_u32(address, value);
     }
-    for (const auto handler : {0xC0u, 0xC4u, 0xC8u, 0xCCu}) {
+    std::set<std::uint32_t> handlers;
+    for (const auto& [address, value] : table_slots) {
+        static_cast<void>(address);
+        if (value >= 0xC0u && value <= bytes.size() - 4u)
+            handlers.insert(value);
+    }
+    for (const auto handler : handlers) {
         put_u16(handler, 0x000Bu);
         put_u16(handler + 2u, 0x0009u);
     }
@@ -198,14 +205,184 @@ returned_table_candidate(
     const katana::analysis::FunctionValueAnalysisResult& analysis,
     const std::uint32_t table_address) {
     const auto found = std::find_if(
-        analysis.returned_code_address_table_candidates.begin(),
-        analysis.returned_code_address_table_candidates.end(),
+        analysis.guarded_code_inventory.returned_code_address_tables.begin(),
+        analysis.guarded_code_inventory.returned_code_address_tables.end(),
         [table_address](const auto& candidate) {
             return candidate.table_address == table_address;
         });
-    return found == analysis.returned_code_address_table_candidates.end()
+    return found == analysis.guarded_code_inventory.returned_code_address_tables.end()
                ? nullptr
                : &*found;
+}
+
+katana::analysis::FunctionValueAnalysisResult
+incomplete_return_family_values() {
+    std::vector<std::uint8_t> bytes(0x60u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD105u); // mov.l @(0x18,pc),r1 -> known accessor 0x20
+    put_u16(0x02u, 0x410Bu); // jsr @r1 (incomplete family)
+    put_u16(0x04u, 0x0009u); // nop (delay)
+    put_u16(0x06u, 0x6803u); // mov r0,r8 (preserve semantic provenance)
+    put_u16(0x08u, 0x6C03u); // mov r0,r12
+    put_u16(0x0Au, 0x63C2u); // mov.l @r12,r3
+    put_u16(0x0Cu, 0x430Bu); // jsr @r3
+    put_u16(0x0Eu, 0x0009u); // nop (delay)
+    put_u16(0x10u, 0x000Bu); // rts
+    put_u16(0x12u, 0x0009u); // nop (delay)
+    put_u32(0x18u, 0x20u);
+    put_u16(0x20u, 0xE040u); // known candidate returns non-stack table 0x40
+    put_u16(0x22u, 0x000Bu);
+    put_u16(0x24u, 0x0009u);
+    put_u32(0x40u, 0x50u);
+    put_u16(0x50u, 0x000Bu); // callback
+    put_u16(0x52u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.add_segment({".incomplete-return-family",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes,
+                       katana::io::ImageSourceKind::DiscBootFile,
+                       katana::io::ImageLoadPhase::Initial,
+                       "synthetic-incomplete-return-family"});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<std::uint32_t, 2u> function_entries{0u, 0x20u};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x02u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot}},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, function_entries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+shifted_stack_alias_values(const bool isolated_harvest) {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0x7FD4u); // add #-44,r15
+    put_u16(0x02u, 0x64F3u); // mov r15,r4
+    put_u16(0x04u, 0xE560u); // mov #0x60,r5 (callback)
+    put_u16(0x06u, 0xB01Bu); // bsr 0x40
+    put_u16(0x08u, 0x0009u); // nop (delay)
+    put_u16(0x0Au, 0x7F2Cu); // add #44,r15
+    put_u16(0x0Cu, 0x000Bu);
+    put_u16(0x0Eu, 0x0009u);
+    put_u16(0x40u, 0x2452u); // mov.l r5,@r4
+    put_u16(0x42u, 0x2F62u); // mov.l r6,@r15 (same rebased slot)
+    put_u16(0x44u, 0x6542u); // mov.l @r4,r5
+    put_u16(0x46u, 0xE220u); // mov #0x20,r2
+    put_u16(0x48u, 0x2252u); // mov.l r5,@r2
+    put_u16(0x4Au, 0x000Bu);
+    put_u16(0x4Cu, 0x0009u);
+    put_u16(0x60u, 0x000Bu);
+    put_u16(0x62u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".shifted-stack-alias",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes,
+                       katana::io::ImageSourceKind::DiscBootFile,
+                       katana::io::ImageLoadPhase::Initial,
+                       "synthetic-shifted-stack-alias"});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    if (isolated_harvest) {
+        image.add_entry_point(0x40u);
+        constexpr std::array<std::uint32_t, 2u> function_entries{0u, 0x40u};
+        return katana::analysis::analyze_function_values(
+            image, lines, function_entries);
+    }
+    constexpr std::array<std::uint32_t, 1u> function_entries{0u};
+    return katana::analysis::analyze_function_values(
+        image, lines, function_entries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+guarded_inventory_budget_values(const std::size_t candidate_count) {
+    constexpr std::size_t record_size = 0x20u;
+    constexpr std::uint32_t handler_base = 0x1'0000u;
+    std::vector<std::uint8_t> bytes(
+        handler_base + candidate_count * 4u, 0x09u);
+    std::vector<std::uint32_t> function_entries;
+    function_entries.reserve(candidate_count);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    for (std::size_t index = 0u; index < candidate_count; ++index) {
+        const auto caller = index * record_size;
+        const auto callback =
+            handler_base + static_cast<std::uint32_t>(index * 4u);
+        function_entries.push_back(static_cast<std::uint32_t>(caller));
+        put_u16(caller + 0x00u, 0xD405u); // mov.l @(0x18,pc),r4
+        put_u16(caller + 0x02u, 0xB003u); // bsr local registrar +0x0c
+        put_u16(caller + 0x04u, 0x0009u);
+        put_u16(caller + 0x06u, 0x000Bu);
+        put_u16(caller + 0x08u, 0x0009u);
+        put_u16(caller + 0x0Cu, 0xE220u); // mov #0x20,r2
+        put_u16(caller + 0x0Eu, 0x2242u); // mov.l r4,@r2
+        put_u16(caller + 0x10u, 0x000Bu);
+        put_u16(caller + 0x12u, 0x0009u);
+        put_u32(caller + 0x18u, callback);
+        put_u16(callback, 0x000Bu);
+        put_u16(callback + 2u, 0x0009u);
+    }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".guarded-inventory-budget",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes,
+                       katana::io::ImageSourceKind::DiscBootFile,
+                       katana::io::ImageLoadPhase::Initial,
+                       "synthetic-guarded-inventory-budget"});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    return katana::analysis::analyze_function_values(
+        image, lines, function_entries);
 }
 
 } // namespace
@@ -478,6 +655,94 @@ int main() {
             "Konkret geladener einzelner Callbackslot erreichte das bewachte AOT-Inventar "
             "nicht.");
 
+    {
+        const auto incomplete_family = incomplete_return_family_values();
+        const auto accessor = std::find_if(
+            incomplete_family.summaries.begin(),
+            incomplete_family.summaries.end(),
+            [](const auto& candidate) {
+                return candidate.function_address == 0x20u;
+            });
+        require(accessor != incomplete_family.summaries.end(),
+                "Incomplete Callee-Familie verlor den bekannten Accessor.");
+        const auto accessor_return =
+            std::find_if(accessor->registers.begin(),
+                         accessor->registers.end(),
+                         [](const auto& candidate) {
+                             return candidate.register_index == 0u;
+                         });
+        require(accessor_return != accessor->registers.end() &&
+                    accessor_return->values ==
+                        std::vector<std::uint32_t>{0x40u} &&
+                    !accessor_return->may_alias_stack,
+                "Bekannter Accessor verlor seinen Non-Stack-Return.");
+        const auto owner = std::find_if(
+            incomplete_family.summaries.begin(),
+            incomplete_family.summaries.end(),
+            [](const auto& candidate) {
+                return candidate.function_address == 0u;
+            });
+        require(owner != incomplete_family.summaries.end(),
+                "Incomplete Callee-Familie verlor ihre Caller-Summary.");
+        const auto returned =
+            std::find_if(owner->registers.begin(),
+                         owner->registers.end(),
+                         [](const auto& candidate) {
+                             return candidate.register_index == 8u;
+                         });
+        const auto* table =
+            returned_table_candidate(incomplete_family, 0x40u);
+        const auto dispatch = std::find_if(
+            incomplete_family.resolutions.begin(),
+            incomplete_family.resolutions.end(),
+            [](const auto& candidate) {
+                return candidate.instruction_address == 0x0Cu;
+            });
+        require(returned != owner->registers.end() &&
+                    returned->abi_preserved && returned->may_alias_stack,
+                "Incomplete Callee-Familie verlor ihr semantisches "
+                "Stack-May-Alias am bekannten Non-Stack-Return (may_alias=" +
+                    std::to_string(returned->may_alias_stack) +
+                    ", abi_preserved=" +
+                    std::to_string(returned->abi_preserved) +
+                    ").");
+        require(owner->memory_values.empty(),
+                "Inventory-only Non-Stack-Provenienz erzeugte einen normalen "
+                "Memory-Summary-Beweis.");
+        require(table != nullptr &&
+                    table->target_addresses ==
+                        std::vector<std::uint32_t>{0x50u},
+                "Separate Inventory-Provenienz verlor den bekannten "
+                "Guarded-Table-Seed (tables=" +
+                    std::to_string(
+                        incomplete_family.guarded_code_inventory
+                            .returned_code_address_tables.size()) +
+                    ").");
+        require(dispatch != incomplete_family.resolutions.end() &&
+                    dispatch->guarded && !dispatch->complete &&
+                    dispatch->evidence ==
+                        katana::analysis::ControlFlowEvidence::GuardedPartial,
+                "Inventory-only Non-Stack-Provenienz erzeugte einen normalen "
+                "CFG-Beweis.");
+    }
+
+    for (const auto isolated_harvest : {false, true}) {
+        const auto shifted_stack =
+            shifted_stack_alias_values(isolated_harvest);
+        require(
+            std::none_of(
+                shifted_stack.guarded_code_inventory.stored_code_addresses.begin(),
+                shifted_stack.guarded_code_inventory.stored_code_addresses.end(),
+                [](const auto& candidate) {
+                    return candidate.target_address == 0x60u;
+                }),
+            isolated_harvest
+                ? "Isolated Store Harvest lud nach verschobenem Caller-SP einen "
+                  "ueberschriebenen Stackslot als Callback."
+                : "Candidate-Input-Merge lud nach verschobenem Caller-SP einen "
+                  "ueberschriebenen Stackslot als Callback.");
+    }
+
     [] {
         constexpr auto mov_r0_r12 = std::uint16_t{0x6C03u};
         constexpr auto nop = std::uint16_t{0x0009u};
@@ -567,10 +832,12 @@ int main() {
                                       {{0x70u, 0xC0u},
                                        {0x74u, 0xC4u},
                                        {0x78u, 0xC8u}}));
-        for (const auto address : {0x70u, 0x74u, 0x78u}) {
+        for (const auto address : {0x70u, 0x78u}) {
             require(returned_table_candidate(same_register, address) != nullptr,
-                    "MOV.L @(R0,R0) verlor eine kartesische Selbstsumme.");
+                    "MOV.L @(R0,R0) verlor eine korrelierte Selbstsumme.");
         }
+        require(returned_table_candidate(same_register, 0x74u) == nullptr,
+                "MOV.L @(R0,R0) erfand die unmoegliche kartesische Summe x+y.");
 
         const auto sparse = returned_table_values(returned_table_load_image(
             {mov_r0_r12, nop},
@@ -594,10 +861,42 @@ int main() {
                                       {0x70u},
                                       {{0x70u, 0u},
                                        {0x74u, 1u},
-                                       {0x78u, 0xC0u}}));
-        require(excessive_gap.returned_code_address_table_candidates.empty(),
-                "Zwei aufeinanderfolgende unbelegte Slots wurden ueber das enge "
+                                       {0x78u, 3u},
+                                       {0x7Cu, 0xC0u}}));
+        require(excessive_gap.guarded_code_inventory.returned_code_address_tables.empty(),
+                "Drei aufeinanderfolgende unbelegte Slots wurden ueber das enge "
                 "Callbackfenster hinweg geraten.");
+
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> twelve_slots;
+        std::vector<std::uint32_t> twelve_targets;
+        for (std::uint32_t index = 0u; index < 12u; ++index) {
+            const auto target = 0x400u + index * 4u;
+            twelve_slots.emplace_back(0x70u + index * 4u, target);
+            twelve_targets.push_back(target);
+        }
+        const auto twelve_entry_table = returned_table_values(
+            returned_table_load_image(
+                {mov_r0_r12, nop}, mov_l_at_r12_r3, {0x70u}, twelve_slots));
+        const auto* twelve_entry_candidate =
+            returned_table_candidate(twelve_entry_table, 0x70u);
+        require(twelve_entry_candidate != nullptr &&
+                    twelve_entry_candidate->target_addresses == twelve_targets &&
+                    !twelve_entry_candidate->scan_truncated,
+                "Returned-Callbacktabellen blieben auf acht Slots begrenzt.");
+
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> sixty_five_slots;
+        for (std::uint32_t index = 0u; index < 65u; ++index)
+            sixty_five_slots.emplace_back(0x70u + index * 4u, 0x400u + index * 4u);
+        const auto bounded_table = returned_table_values(
+            returned_table_load_image(
+                {mov_r0_r12, nop}, mov_l_at_r12_r3, {0x70u}, sixty_five_slots));
+        const auto* bounded_candidate = returned_table_candidate(bounded_table, 0x70u);
+        require(bounded_candidate != nullptr &&
+                    bounded_candidate->target_addresses.size() == 64u &&
+                    bounded_candidate->scan_truncated &&
+                    bounded_table.guarded_code_inventory.table_scan_truncated,
+                "Begrenzter Returned-Tabellenscan meldete seine Truncation nicht "
+                "maschinenlesbar.");
 
         const std::vector<std::uint32_t> too_many_returned_bases{
             0x60u, 0x64u, 0x68u, 0x6Cu, 0x70u, 0x74u, 0x78u, 0x7Cu};
@@ -606,7 +905,8 @@ int main() {
                                       mov_l_at_r0_r12_r3,
                                       too_many_returned_bases,
                                       {{0x60u, 0xC0u}}));
-        require(excessive_cartesian.returned_code_address_table_candidates.empty(),
+        require(
+            excessive_cartesian.guarded_code_inventory.returned_code_address_tables.empty(),
                 "Kartesische Effektivadressen ueberschritten das bestehende "
                 "Achtkandidatenlimit.");
 
@@ -650,7 +950,7 @@ int main() {
         constexpr std::array<std::uint32_t, 1u> local_entries{0u};
         const auto local_values = katana::analysis::analyze_function_values(
             local_image, local_lines, local_entries);
-        require(local_values.returned_code_address_table_candidates.empty(),
+        require(local_values.guarded_code_inventory.returned_code_address_tables.empty(),
                 "Lokaler Tabellenzeiger ohne Call-/Return-Provenienz wurde als "
                 "Returned-Callbacktabelle akzeptiert.");
     }();
@@ -692,7 +992,11 @@ int main() {
                     std::string::npos &&
                 multi_json.find("\"targets\":[\"0x00000010\",\"0x00000014\"]") !=
                     std::string::npos &&
-                multi_json.find("\"function_value_summaries\":[") != std::string::npos,
+                multi_json.find("\"function_value_summaries\":[") != std::string::npos &&
+                multi_json.find("\"candidate_inventory_truncated\":false") !=
+                    std::string::npos &&
+                multi_json.find("\"returned_table_scan_truncated\":false") !=
+                    std::string::npos,
             "Mehrziel- oder Summary-Evidenz fehlt im Text-/JSON-Bericht.");
 
         const auto conflicting_image =
@@ -1238,6 +1542,67 @@ int main() {
                         site(prefetch, prefetch_addresses.second)->evidence),
                 "PREF laesst einen stale Objektfeldbeweis bestehen.");
     }();
+
+    {
+        constexpr std::size_t inventory_budget = 1'024u;
+        constexpr std::uint32_t handler_base = 0x1'0000u;
+        const auto exact_budget =
+            guarded_inventory_budget_values(inventory_budget);
+        require(
+            exact_budget.guarded_code_inventory.candidate_budget ==
+                    inventory_budget &&
+                exact_budget.guarded_code_inventory.candidate_count ==
+                    inventory_budget &&
+                !exact_budget.guarded_code_inventory
+                     .candidate_inventory_truncated &&
+                exact_budget.guarded_code_inventory.stored_code_addresses
+                        .size() == inventory_budget &&
+                std::all_of(
+                    exact_budget.guarded_code_inventory.stored_code_addresses
+                        .begin(),
+                    exact_budget.guarded_code_inventory.stored_code_addresses
+                        .end(),
+                    [](const auto& candidate) { return candidate.guarded; }),
+            "Exakt 1.024 eindeutige Guarded-Code-Ziele verletzten Budget, "
+            "Zaehler oder Guard-Vertrag.");
+
+        const auto over_budget =
+            guarded_inventory_budget_values(inventory_budget + 1u);
+        const auto& retained =
+            over_budget.guarded_code_inventory.stored_code_addresses;
+        const auto deterministic_prefix =
+            retained.size() == inventory_budget &&
+            std::all_of(
+                retained.begin(),
+                retained.end(),
+                [&](const auto& candidate) {
+                    const auto index = static_cast<std::size_t>(
+                        &candidate - retained.data());
+                    return candidate.target_address ==
+                           handler_base +
+                               static_cast<std::uint32_t>(index * 4u);
+                });
+        require(
+            over_budget.guarded_code_inventory.candidate_budget ==
+                    inventory_budget &&
+                over_budget.guarded_code_inventory.candidate_count ==
+                    inventory_budget &&
+                over_budget.guarded_code_inventory
+                    .candidate_inventory_truncated &&
+                deterministic_prefix &&
+                std::none_of(
+                    retained.begin(),
+                    retained.end(),
+                    [](const auto& candidate) {
+                        return candidate.target_address ==
+                               handler_base +
+                                   static_cast<std::uint32_t>(
+                                       inventory_budget * 4u);
+                    }),
+            "Das 1.025. eindeutige Guarded-Code-Ziel wurde nicht waehrend "
+            "der Sammlung mit korrekter Truncation und stabilem Prefix "
+            "abgewiesen.");
+    }
 
     std::cout << "KR-4713 interprozedurale Zielwertsummaries erfolgreich.\n";
     return EXIT_SUCCESS;

@@ -95,6 +95,27 @@ void replay_all(katana::runtime::DeterministicSystemReplay& replay,
         replay.observe(current);
 }
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+bool legacy_coverage_complete(const katana::runtime::SystemReplayLog& log) {
+    return log.coverage_complete();
+}
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 } // namespace
 
 int main() {
@@ -109,7 +130,9 @@ int main() {
     require(log.event_hash() == duplicate.event_hash() &&
                 log.serialize_json() == duplicate.serialize_json() && log.events().size() == 12u,
             "Gleiche synthetische Framesequenz erzeugt keinen bytegleichen Ereignisvertrag.");
-    require(log.coverage_complete() && log.required_coverage() == 0u &&
+    require(log.hooks_complete() && log.observed_complete() &&
+                log.required_coverage() == 0u &&
+                log.expected_observed_coverage() == 0u &&
                 log.enabled_coverage() == 0u && log.observed_coverage() != 0u,
             "Allgemeiner Replayvertrag trennt aktivierte und beobachtete Coverage nicht.");
     const auto json = log.serialize_json();
@@ -129,7 +152,9 @@ int main() {
                               "\"event_hash\":null",
                               "\"profile\":\"general\"",
                               "\"enabled_coverage\":0",
-                              "\"coverage_complete\":true",
+                              "\"expected_observed_coverage\":0",
+                              "\"hooks_complete\":true",
+                              "\"observed_complete\":true",
                               "\"coverage_event_counts\":[",
                               "\"final_guest_state_hash\":null",
                               "\"detail\":null",
@@ -137,6 +162,33 @@ int main() {
         require(json.find(marker) != std::string::npos,
                 std::string("Systemreplay verliert Ereignis- oder Hashfeld: ") + marker);
     }
+
+    auto sealed_mutation_guard = frame_log(guest_hash);
+    const auto sealed_mutation_json = sealed_mutation_guard.serialize_json();
+    require_failure<std::logic_error>(
+        [&] {
+            sealed_mutation_guard.record(
+                event(SystemReplayEventKind::Timer, 12u, "sealed-record", 1u));
+        },
+        "Versiegelter Systemreplay nimmt ein direktes Ereignis auf.");
+    require(!sealed_mutation_guard.try_record(
+                event(SystemReplayEventKind::Timer, 12u, "sealed-try-record", 1u)),
+            "Versiegelter Systemreplay meldet try_record als erfolgreich.");
+    require_failure<std::logic_error>(
+        [&] {
+            sealed_mutation_guard.inject(
+                event(SystemReplayEventKind::HostEvent, 12u, "sealed-inject", 1u));
+        },
+        "Versiegelter Systemreplay nimmt eine externe Injektion auf.");
+    require_failure<std::logic_error>(
+        [&] {
+            sealed_mutation_guard.enable_coverage(
+                static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Dma));
+        },
+        "Versiegelter Systemreplay laesst seine Hook-Coverage aendern.");
+    require(sealed_mutation_guard.serialize_json() == sealed_mutation_json &&
+                sealed_mutation_guard.dropped_events() == 0u,
+            "Abgelehnte Mutation veraendert einen versiegelten Systemreplay.");
 
     DeterministicSystemReplay replay(log);
     replay_all(replay, log);
@@ -383,7 +435,10 @@ int main() {
         system_replay_required_coverage(SystemReplayProfile::DeterministicV1);
     SystemReplayLog enabled_without_events(
         {16u, false, SystemReplayProfile::DeterministicV1});
-    require(!enabled_without_events.coverage_complete() &&
+    require(!enabled_without_events.hooks_complete() &&
+                legacy_coverage_complete(enabled_without_events) ==
+                    enabled_without_events.hooks_complete() &&
+                !enabled_without_events.observed_complete() &&
                 enabled_without_events.observed_coverage() == 0u,
             "Deterministic-v1 behauptet Coverage ohne aktivierte Hooks.");
     for (const auto hook : {SystemReplayCoverage::CpuSafepoint,
@@ -401,8 +456,14 @@ int main() {
         enabled_without_events.enable_coverage(
             static_cast<SystemReplayCoverageMask>(hook));
     }
-    require(enabled_without_events.coverage_complete() &&
+    require(enabled_without_events.hooks_complete() &&
+                legacy_coverage_complete(enabled_without_events) ==
+                    enabled_without_events.hooks_complete() &&
+                !enabled_without_events.observed_complete() &&
                 enabled_without_events.enabled_coverage() == deterministic_required &&
+                enabled_without_events.expected_observed_coverage() ==
+                    system_replay_expected_observed_coverage(
+                        SystemReplayProfile::DeterministicV1) &&
                 enabled_without_events.observed_coverage() == 0u &&
                 std::all_of(enabled_without_events.event_counts().begin(),
                             enabled_without_events.event_counts().end(),
@@ -412,13 +473,38 @@ int main() {
     enabled_without_events.seal(guest_hash);
     require(empty_digest == enabled_without_events.ordering_digest(),
             "Seal mutiert den kanonischen Reihenfolge-Digest eines leeren Laufs.");
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(
+                DeterministicSystemReplay(enabled_without_events));
+        },
+        "Pflichthooks ohne erwartbar positive Beobachtungen gelten als "
+        "abspielbarer Replay.");
+    SystemReplayLog enabled_without_digest_events(
+        {16u,
+         false,
+         SystemReplayProfile::DeterministicV1,
+         SystemReplayStorageMode::DigestStream});
+    enabled_without_digest_events.enable_coverage(
+        enabled_without_digest_events.required_coverage());
+    enabled_without_digest_events.seal(guest_hash);
+    require(enabled_without_digest_events.hooks_complete() &&
+                !enabled_without_digest_events.observed_complete(),
+            "Leerer DigestStream trennt Hook- und Beobachtungsvollstaendigkeit nicht.");
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(
+                DeterministicSystemReplayDigest(enabled_without_digest_events));
+        },
+        "Digest-Replay akzeptiert vollstaendige Hooks ohne erwartbar positive "
+        "Beobachtungen.");
 
     SystemReplayLog incomplete_coverage(
         {16u, false, SystemReplayProfile::DeterministicV1});
     const auto dma_coverage =
         static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Dma);
     incomplete_coverage.enable_coverage(deterministic_required & ~dma_coverage);
-    require(!incomplete_coverage.coverage_complete() &&
+    require(!incomplete_coverage.hooks_complete() &&
                 (incomplete_coverage.required_coverage() &
                  ~incomplete_coverage.enabled_coverage()) == dma_coverage,
             "Fehlender DMA-Hook bleibt im Pflichtprofil nicht sichtbar.");
@@ -436,7 +522,9 @@ int main() {
     };
     const auto forward_order = make_order_log(false);
     const auto reverse_order = make_order_log(true);
-    require(forward_order.coverage_complete() && reverse_order.coverage_complete() &&
+    require(forward_order.hooks_complete() && reverse_order.hooks_complete() &&
+                !forward_order.observed_complete() &&
+                !reverse_order.observed_complete() &&
                 forward_order.final_guest_state_hash() ==
                     reverse_order.final_guest_state_hash() &&
                 forward_order.observed_coverage() == reverse_order.observed_coverage() &&
@@ -481,7 +569,7 @@ int main() {
     observation_log.enable_coverage(deterministic_required & ~observation_coverage);
     EventScheduler observation_scheduler;
     SystemReplayObservationSession observations(&observation_log, &observation_scheduler);
-    require(observation_log.coverage_complete(),
+    require(observation_log.hooks_complete(),
             "Zentrale Observation-Session aktiviert ihre vier Pflichtklassen nicht.");
     require(observations.observe_guest_checkpoint(SystemReplayCheckpointKind::RuntimeStarted) &&
                 !observations.observe_guest_checkpoint(
@@ -581,10 +669,52 @@ int main() {
 
     constexpr std::uint64_t long_replay_event_count = 100'000u;
     const auto long_replay_event = [](const std::uint64_t index) {
-        return event(SystemReplayEventKind::CpuSafepoint,
-                     index,
-                     "long-product-safepoint",
-                     index * 3u + 1u);
+        auto kind = SystemReplayEventKind::CpuSafepoint;
+        auto code = std::string{"long-product-safepoint"};
+        switch (index) {
+        case 1u:
+            kind = SystemReplayEventKind::SchedulerCallback;
+            code = "scheduler-callback";
+            break;
+        case 2u:
+            kind = SystemReplayEventKind::Interrupt;
+            code = "interrupt-accepted";
+            break;
+        case 3u:
+            kind = SystemReplayEventKind::Video;
+            code = "video-tick";
+            break;
+        case 4u:
+            kind = SystemReplayEventKind::Audio;
+            code = "audio-tick";
+            break;
+        case 5u:
+            kind = SystemReplayEventKind::ExternalInput;
+            code = "controller-input";
+            break;
+        case 6u:
+            kind = SystemReplayEventKind::MmioRead;
+            code = "mmio-read";
+            break;
+        case 7u:
+            kind = SystemReplayEventKind::Dma;
+            code = "dma-complete";
+            break;
+        case 8u:
+            kind = SystemReplayEventKind::BlockDispatchHit;
+            code = "block-dispatch-hit";
+            break;
+        case 9u:
+            kind = SystemReplayEventKind::GuestCheckpoint;
+            code = "guest-checkpoint";
+            break;
+        default:
+            break;
+        }
+        auto recorded = event(kind, index, std::move(code), index * 3u + 1u);
+        if (kind == SystemReplayEventKind::ExternalInput)
+            recorded.injected = true;
+        return recorded;
     };
     const auto make_long_digest = [&] {
         SystemReplayLog digest(
@@ -600,18 +730,27 @@ int main() {
     };
     const auto long_digest = make_long_digest();
     const auto long_digest_duplicate = make_long_digest();
+    SystemReplayEventCounts expected_long_event_counts{};
+    expected_long_event_counts[0u] = long_replay_event_count - 9u;
+    for (std::size_t index = 1u; index <= 8u; ++index)
+        expected_long_event_counts[index] = 1u;
+    expected_long_event_counts[11u] = 1u;
     require(long_digest.event_count() == long_replay_event_count &&
                 long_digest.events().size() == 8u &&
                 long_digest.summarized_event_count() ==
                     long_replay_event_count - 8u &&
                 !long_digest.exact_event_stream_available() &&
                 long_digest.dropped_events() == 0u && long_digest.sealed() &&
+                long_digest.hooks_complete() &&
+                long_digest.observed_complete() &&
                 long_digest.ordering_digest() ==
                     long_digest_duplicate.ordering_digest() &&
                 long_digest.event_counts() ==
-                    long_digest_duplicate.event_counts(),
+                    long_digest_duplicate.event_counts() &&
+                long_digest.event_counts() == expected_long_event_counts,
             "DigestStream verliert lange Produktreplays, waechst ueber die Retention "
-            "hinaus oder ist nicht deterministisch.");
+            "hinaus, bindet seine exakten Klassenzaehler nicht oder ist nicht "
+            "deterministisch.");
     const auto long_digest_json = long_digest.serialize_json();
     require(long_digest_json.find("\"storage_mode\":\"digest-stream\"") !=
                     std::string::npos &&
@@ -622,6 +761,13 @@ int main() {
                 long_digest_json.find("\"summarized_event_count\":99992") !=
                     std::string::npos &&
                 long_digest_json.find("\"exact_event_stream\":false") !=
+                    std::string::npos &&
+                long_digest_json.find("\"hooks_complete\":true") !=
+                    std::string::npos &&
+                long_digest_json.find("\"observed_complete\":true") !=
+                    std::string::npos &&
+                long_digest_json.find(
+                    "\"coverage_event_counts\":[99991,1,1,1,1,1,1,1,1,0,0,1]") !=
                     std::string::npos &&
                 long_digest_json.find("\"dropped_events\":0") !=
                     std::string::npos,

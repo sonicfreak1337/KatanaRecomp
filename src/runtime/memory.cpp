@@ -1270,7 +1270,8 @@ bool Memory::commit_prevalidated_linear_fill(const std::uint32_t address,
                                              const std::size_t additional_indexed_region_hits) noexcept {
     if (size == 0u || lookup_mode_ != MemoryLookupMode::Indexed ||
         access_observers_active() || mmio_access_tracking_enabled_ ||
-        mmio_trace_handler_ || guest_memory_access_sink_)
+        mmio_trace_handler_ || guest_memory_access_sink_ ||
+        !guest_write_observer_allows_prevalidated_linear_writes())
         return false;
     if (size > address_space_size - static_cast<std::uint64_t>(address)) return false;
 
@@ -1295,25 +1296,12 @@ bool Memory::commit_prevalidated_linear_fill(const std::uint32_t address,
     if (offset > backing.size() || size > backing.size() - offset) return false;
     auto fill_range = backing.subspan(offset, size);
 
-    struct FillRun {
-        std::size_t offset = 0u;
-        std::size_t size = 0u;
-        bool changed = false;
-    };
-
-    std::vector<FillRun> runs;
+    std::vector<std::uint8_t> changed_bytes;
     GuestWriteObserver observer;
     try {
-        bool run_changed = fill_range.front() != value;
-        std::size_t run_start = 0u;
-        for (std::size_t index = 1u; index < fill_range.size(); ++index) {
-            const bool changed = fill_range[index] != value;
-            if (changed == run_changed) continue;
-            runs.push_back({run_start, index - run_start, run_changed});
-            run_start = index;
-            run_changed = changed;
-        }
-        runs.push_back({run_start, fill_range.size() - run_start, run_changed});
+        changed_bytes.reserve(fill_range.size());
+        for (const auto byte : fill_range)
+            changed_bytes.push_back(static_cast<std::uint8_t>(byte != value));
         observer = guest_write_observer_;
     } catch (...) {
         // Every potentially throwing preparation step happens before the backing is changed.
@@ -1326,15 +1314,191 @@ bool Memory::commit_prevalidated_linear_fill(const std::uint32_t address,
     performance_counters_.indexed_region_hits += additional_indexed_region_hits;
 
     if (observer) {
-        for (const auto& run : runs) {
+        for (std::size_t index = 0u; index < changed_bytes.size(); ++index) {
             try {
-                observer({address + static_cast<std::uint32_t>(run.offset),
-                          run.size,
+                observer({address + static_cast<std::uint32_t>(index),
+                          1u,
                           source,
-                          run.changed});
+                          changed_bytes[index] != 0u});
             } catch (...) {
                 // The RAM commit is already globally visible. Resuming the guest after only a
                 // prefix of product-observer updates would make executable provenance unsound.
+                std::terminate();
+            }
+        }
+    }
+    return true;
+}
+
+bool Memory::commit_prevalidated_linear_u32_pattern(
+    const std::uint32_t address,
+    const std::size_t word_count,
+    const std::uint32_t value,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
+    constexpr std::size_t word_size = sizeof(std::uint32_t);
+    if (word_count == 0u || word_count > std::numeric_limits<std::size_t>::max() / word_size ||
+        (address & (word_size - 1u)) != 0u || lookup_mode_ != MemoryLookupMode::Indexed ||
+        access_observers_active() || mmio_access_tracking_enabled_ || mmio_trace_handler_ ||
+        guest_memory_access_sink_ || !guest_write_observer_allows_prevalidated_linear_writes())
+        return false;
+
+    const auto size = word_count * word_size;
+    if (size > address_space_size - static_cast<std::uint64_t>(address)) return false;
+
+    const auto range_end = static_cast<std::uint64_t>(address) + size;
+    const MappedRegion* mapped = indexed_region(address, size, false);
+    if (mapped == nullptr) {
+        for (const auto& candidate : regions_) {
+            const auto region_start = static_cast<std::uint64_t>(candidate.info.base_address);
+            const auto region_end = region_start + candidate.info.size;
+            if (address >= region_start && range_end <= region_end) {
+                if (mapped != nullptr) return false;
+                mapped = &candidate;
+            }
+        }
+    }
+    if (mapped == nullptr || mapped->info.access != MemoryRegionAccess::ReadWrite ||
+        mapped->linear == nullptr)
+        return false;
+
+    const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
+    auto backing = mapped->linear->writable_bytes();
+    if (offset > backing.size() || size > backing.size() - offset) return false;
+    auto pattern_range = backing.subspan(offset, size);
+
+    std::vector<bool> changed_words;
+    GuestWriteObserver observer;
+    try {
+        observer = guest_write_observer_;
+        if (observer) {
+            changed_words.reserve(word_count);
+            const auto word_changed = [&](const std::size_t word) {
+                const auto byte = word * word_size;
+                return pattern_range[byte] != static_cast<std::uint8_t>(value) ||
+                       pattern_range[byte + 1u] != static_cast<std::uint8_t>(value >> 8u) ||
+                       pattern_range[byte + 2u] != static_cast<std::uint8_t>(value >> 16u) ||
+                       pattern_range[byte + 3u] != static_cast<std::uint8_t>(value >> 24u);
+            };
+            for (std::size_t word = 0u; word < word_count; ++word)
+                changed_words.push_back(word_changed(word));
+        }
+    } catch (...) {
+        // Every potentially throwing preparation step happens before the backing is changed.
+        return false;
+    }
+
+    const std::array pattern{
+        static_cast<std::uint8_t>(value),
+        static_cast<std::uint8_t>(value >> 8u),
+        static_cast<std::uint8_t>(value >> 16u),
+        static_cast<std::uint8_t>(value >> 24u),
+    };
+    for (std::size_t word = 0u; word < word_count; ++word)
+        std::copy(pattern.begin(),
+                  pattern.end(),
+                  pattern_range.begin() + static_cast<std::ptrdiff_t>(word * word_size));
+
+    performance_counters_.unobserved_accesses += word_count;
+    performance_counters_.unobserved_accesses += additional_unobserved_accesses;
+    performance_counters_.indexed_region_hits += additional_indexed_region_hits;
+
+    if (observer) {
+        for (std::size_t word = 0u; word < word_count; ++word) {
+            try {
+                const auto byte_offset = word * word_size;
+                observer({address + static_cast<std::uint32_t>(byte_offset),
+                          word_size,
+                          source,
+                          changed_words[word]});
+            } catch (...) {
+                // The complete RAM commit is already visible. Partial provenance updates may
+                // never be followed by resumed guest execution.
+                std::terminate();
+            }
+        }
+    }
+    return true;
+}
+
+bool Memory::commit_prevalidated_repeated_u32_sequence(
+    const std::uint32_t address,
+    const std::size_t word_count,
+    const std::uint32_t first_value,
+    const std::uint32_t step,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
+    constexpr std::size_t word_size = sizeof(std::uint32_t);
+    if (word_count == 0u || (address & (word_size - 1u)) != 0u ||
+        lookup_mode_ != MemoryLookupMode::Indexed || access_observers_active() ||
+        mmio_access_tracking_enabled_ || mmio_trace_handler_ || guest_memory_access_sink_ ||
+        !guest_write_observer_allows_prevalidated_linear_writes())
+        return false;
+
+    const MappedRegion* mapped = indexed_region(address, word_size, false);
+    if (mapped == nullptr) {
+        for (const auto& candidate : regions_) {
+            const auto region_start = static_cast<std::uint64_t>(candidate.info.base_address);
+            const auto region_end = region_start + candidate.info.size;
+            const auto write_end = static_cast<std::uint64_t>(address) + word_size;
+            if (address >= region_start && write_end <= region_end) {
+                if (mapped != nullptr) return false;
+                mapped = &candidate;
+            }
+        }
+    }
+    if (mapped == nullptr || mapped->info.access != MemoryRegionAccess::ReadWrite ||
+        mapped->linear == nullptr)
+        return false;
+
+    const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
+    auto backing = mapped->linear->writable_bytes();
+    if (offset > backing.size() || word_size > backing.size() - offset) return false;
+    auto target = backing.subspan(offset, word_size);
+
+    std::vector<bool> changed_words;
+    GuestWriteObserver observer;
+    std::uint32_t final_value = first_value;
+    try {
+        observer = guest_write_observer_;
+        if (observer) {
+            changed_words.reserve(word_count);
+            std::uint32_t previous =
+                static_cast<std::uint32_t>(target[0u]) |
+                (static_cast<std::uint32_t>(target[1u]) << 8u) |
+                (static_cast<std::uint32_t>(target[2u]) << 16u) |
+                (static_cast<std::uint32_t>(target[3u]) << 24u);
+            auto next = first_value;
+            for (std::size_t word = 0u; word < word_count; ++word) {
+                changed_words.push_back(previous != next);
+                previous = next;
+                final_value = next;
+                next += step;
+            }
+        } else {
+            final_value = first_value +
+                static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(word_count - 1u) * step);
+        }
+    } catch (...) {
+        return false;
+    }
+
+    target[0u] = static_cast<std::uint8_t>(final_value);
+    target[1u] = static_cast<std::uint8_t>(final_value >> 8u);
+    target[2u] = static_cast<std::uint8_t>(final_value >> 16u);
+    target[3u] = static_cast<std::uint8_t>(final_value >> 24u);
+    performance_counters_.unobserved_accesses += word_count;
+    performance_counters_.unobserved_accesses += additional_unobserved_accesses;
+    performance_counters_.indexed_region_hits += additional_indexed_region_hits;
+
+    if (observer) {
+        for (std::size_t word = 0u; word < word_count; ++word) {
+            try {
+                observer({address, word_size, source, changed_words[word]});
+            } catch (...) {
                 std::terminate();
             }
         }

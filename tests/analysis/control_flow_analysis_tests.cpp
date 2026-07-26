@@ -196,12 +196,14 @@ int main() {
         std::copy(caller.begin(), caller.end(), bytes.begin());
         put_u32(0x10u, 0x30u);
         put_u32(0x14u, 0x20u);
-        bytes[0x20u] = 0x42u;
-        bytes[0x21u] = 0x22u; // mov.l r4,@r2 (symbolic non-stack destination)
-        bytes[0x22u] = 0x0Bu;
-        bytes[0x23u] = 0x00u; // rts
-        bytes[0x24u] = 0x09u;
-        bytes[0x25u] = 0x00u; // nop (delay)
+        bytes[0x20u] = 0x3Cu;
+        bytes[0x21u] = 0xE2u; // mov #0x3c,r2 (proven non-stack destination)
+        bytes[0x22u] = 0x42u;
+        bytes[0x23u] = 0x22u; // mov.l r4,@r2
+        bytes[0x24u] = 0x0Bu;
+        bytes[0x25u] = 0x00u; // rts
+        bytes[0x26u] = 0x09u;
+        bytes[0x27u] = 0x00u; // nop (delay)
         bytes[0x30u] = 0x0Bu;
         bytes[0x31u] = 0x00u; // handler: rts
         bytes[0x32u] = 0x09u;
@@ -315,15 +317,25 @@ int main() {
         bytes[0x41u] = 0x2Fu; // mov.l r5,@-r15
         bytes[0x42u] = 0xF6u;
         bytes[0x43u] = 0x65u; // mov.l @r15+,r5
-        bytes[0x44u] = 0x52u;
-        bytes[0x45u] = stack_argument_destination
-                           ? 0x24u
-                           : (non_stack_store ? 0x22u : 0x2Fu);
-        // mov.l r5,@r4 / mov.l r5,@r2 / mov.l r5,@r15
-        bytes[0x46u] = 0x0Bu;
-        bytes[0x47u] = 0x00u; // rts
-        bytes[0x48u] = 0x09u;
-        bytes[0x49u] = 0x00u; // nop (delay)
+        if (non_stack_store && !stack_argument_destination) {
+            bytes[0x44u] = 0x20u;
+            bytes[0x45u] = 0xE2u; // mov #0x20,r2 (proven non-stack)
+            bytes[0x46u] = 0x52u;
+            bytes[0x47u] = 0x22u; // mov.l r5,@r2
+            bytes[0x48u] = 0x0Bu;
+            bytes[0x49u] = 0x00u; // rts
+            bytes[0x4Au] = 0x09u;
+            bytes[0x4Bu] = 0x00u; // nop (delay)
+        } else {
+            bytes[0x44u] = 0x52u;
+            bytes[0x45u] =
+                stack_argument_destination ? 0x24u : 0x2Fu;
+            // mov.l r5,@r4 / mov.l r5,@r15
+            bytes[0x46u] = 0x0Bu;
+            bytes[0x47u] = 0x00u; // rts
+            bytes[0x48u] = 0x09u;
+            bytes[0x49u] = 0x00u; // nop (delay)
+        }
         bytes[0x60u] = 0x0Bu;
         bytes[0x61u] = 0x00u; // handler: rts
         bytes[0x62u] = 0x09u;
@@ -416,39 +428,39 @@ int main() {
                 !has_instruction(partial_argument_stack_store, 0x60u),
             "Partielle Callsite-Ernte verlor Stackprovenienz eines Argumentzeigers.");
 
-    const auto widened_partial_store_image = [] {
-        std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
-        constexpr std::array<std::uint8_t, 9u> callback_addresses{
-            0x50u, 0x54u, 0x58u, 0x5Cu, 0x60u, 0x64u, 0x68u, 0x6Cu, 0x70u};
+    const auto branch_merged_stack_callback_image = [] {
+        std::vector<std::uint8_t> bytes(0x80u, 0x09u);
         const auto put_u16 = [&bytes](const std::size_t offset,
                                       const std::uint16_t value) {
             bytes[offset] = static_cast<std::uint8_t>(value);
             bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
         };
-        for (std::size_t index = 0u; index < callback_addresses.size(); ++index) {
-            const auto offset = index * 6u;
-            put_u16(offset,
-                    static_cast<std::uint16_t>(0xE400u | callback_addresses[index]));
-            const auto call_address = static_cast<std::uint32_t>(offset + 2u);
-            const auto displacement =
-                static_cast<std::uint16_t>((0x80u - (call_address + 4u)) / 2u);
-            put_u16(offset + 2u, static_cast<std::uint16_t>(0xB000u | displacement));
-            put_u16(offset + 4u, 0x0009u); // nop (delay)
-        }
-        put_u16(0x36u, 0x000Bu); // rts
-        put_u16(0x38u, 0x0009u); // nop (delay)
-        for (const auto address : callback_addresses) {
-            put_u16(address, 0x000Bu); // callback: rts
-            put_u16(address + 2u, 0x0009u); // nop (delay)
-        }
-        put_u16(0x80u, 0x2242u); // mov.l r4,@r2
-        put_u16(0x82u, 0x000Bu); // rts
-        put_u16(0x84u, 0x0009u); // nop (delay)
+        put_u16(0x00u, 0xE560u); // mov #0x60,r5
+        put_u16(0x02u, 0xB01Du); // bsr 0x40
+        put_u16(0x04u, 0x66F3u); // mov r15,r6 (caller-stack alias; delay)
+        put_u16(0x06u, 0x000Bu); // rts
+        put_u16(0x08u, 0x0009u); // nop (delay)
+        put_u16(0x40u, 0xEC20u); // mov #0x20,r12 (proven non-stack)
+        put_u16(0x42u, 0x2F56u); // mov.l r5,@-r15
+        put_u16(0x44u, 0x8902u); // bt 0x4c
+        put_u16(0x46u, 0x0236u); // mov.l r3,@(r0,r2)
+        put_u16(0x48u, 0xA002u); // bra 0x50
+        put_u16(0x4Au, 0x0009u); // nop (delay)
+        put_u16(0x4Cu, 0xB010u); // bsr 0x70 with escaped caller-stack alias
+        put_u16(0x4Eu, 0x0009u); // nop (delay)
+        put_u16(0x50u, 0x62F6u); // mov.l @r15+,r2
+        put_u16(0x52u, 0x2C22u); // mov.l r2,@r12
+        put_u16(0x54u, 0x000Bu); // rts
+        put_u16(0x56u, 0x0009u); // nop (delay)
+        put_u16(0x60u, 0x000Bu); // callback: rts
+        put_u16(0x62u, 0x0009u); // nop (delay)
+        put_u16(0x70u, 0x000Bu); // nested callee: rts
+        put_u16(0x72u, 0x0009u); // nop (delay)
         katana::io::ExecutableImage image;
         image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
         image.set_initial_snapshot_policy(
             katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
-        image.add_segment({".widened-partial-store",
+        image.add_segment({".branch-merged-stack-callback",
                            0u,
                            0u,
                            bytes.size(),
@@ -457,38 +469,158 @@ int main() {
                            std::move(bytes),
                            katana::io::ImageSourceKind::DiscBootFile,
                            katana::io::ImageLoadPhase::Initial,
-                           "synthetic-widened-partial-store"});
+                           "synthetic-branch-merged-stack-callback"});
         image.add_entry_point(0u);
-        image.add_entry_point(0x80u); // unknown additional registrar ingress
-        return std::pair{std::move(image), callback_addresses};
+        image.add_entry_point(0x40u); // unknown additional registrar ingress
+        return image;
     }();
-    const auto widened_partial_store =
-        katana::analysis::analyze_control_flow(widened_partial_store_image.first);
-    require(std::count_if(widened_partial_store.recursive.instructions.begin(),
-                          widened_partial_store.recursive.instructions.end(),
+    const auto branch_merged_stack_callback =
+        katana::analysis::analyze_control_flow(branch_merged_stack_callback_image);
+    const auto* branch_merged_handler =
+        find_function(branch_merged_stack_callback, 0x60u);
+    require(branch_merged_handler != nullptr &&
+                branch_merged_handler->origins ==
+                    std::vector{
+                        katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+                branch_merged_handler->evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                has_instruction(branch_merged_stack_callback, 0x60u) &&
+                std::none_of(branch_merged_stack_callback.resolved_edges.begin(),
+                             branch_merged_stack_callback.resolved_edges.end(),
+                             [](const auto& edge) {
+                                 return edge.target_address == 0x60u;
+                             }),
+            "Ein pfadweise erhaltener Callback-Stackspill ging am Registrar-Join "
+            "verloren oder wurde als feste CFG-Kante missbraucht.");
+
+    const auto independent_partial_store_image = [](const std::size_t callback_count) {
+        require(callback_count != 0u && callback_count <= 64u,
+                "Guarded-Code-Inventarfixture erhielt ungueltige Groesse.");
+        std::vector<std::uint8_t> bytes(0xA20u, 0x09u);
+        std::vector<std::uint32_t> callback_addresses;
+        callback_addresses.reserve(callback_count);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+        for (std::size_t index = 0u; index < callback_count; ++index) {
+            const auto offset = index * 6u;
+            const auto literal_address = 0x400u + index * 4u;
+            const auto pc_base = (offset + 4u) & ~std::size_t{3u};
+            const auto literal_displacement = (literal_address - pc_base) / 4u;
+            require(literal_displacement <= 0xFFu,
+                    "Guarded-Code-Inventarfixture ueberschritt MOV.L-PC-Bereich.");
+            put_u16(offset,
+                    static_cast<std::uint16_t>(0xD400u | literal_displacement));
+            const auto call_address = static_cast<std::uint32_t>(offset + 2u);
+            const auto displacement =
+                static_cast<std::uint16_t>((0x800u - (call_address + 4u)) / 2u);
+            put_u16(offset + 2u, static_cast<std::uint16_t>(0xB000u | displacement));
+            put_u16(offset + 4u, 0x0009u); // nop (delay)
+            const auto callback = static_cast<std::uint32_t>(0x900u + index * 4u);
+            callback_addresses.push_back(callback);
+            put_u32(literal_address, callback);
+            put_u16(callback, 0x000Bu); // callback: rts
+            put_u16(callback + 2u, 0x0009u); // nop (delay)
+        }
+        put_u16(callback_count * 6u, 0x000Bu); // rts
+        put_u16(callback_count * 6u + 2u, 0x0009u); // nop (delay)
+        put_u16(0x800u, 0xE220u); // mov #0x20,r2 (proven non-stack)
+        put_u16(0x802u, 0x2242u); // mov.l r4,@r2
+        put_u16(0x804u, 0x000Bu); // rts
+        put_u16(0x806u, 0x0009u); // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".independent-partial-store",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-independent-partial-store"});
+        image.add_entry_point(0u);
+        image.add_entry_point(0x800u); // unknown additional registrar ingress
+        return std::pair{std::move(image), callback_addresses};
+    };
+    for (const auto callback_count : {9u, 16u, 64u}) {
+        const auto independent_image =
+            independent_partial_store_image(callback_count);
+        const auto independent_partial_store =
+            katana::analysis::analyze_control_flow(independent_image.first);
+        require(
+            std::count_if(independent_partial_store.recursive.instructions.begin(),
+                          independent_partial_store.recursive.instructions.end(),
                           [](const auto& line) {
                               return line.instruction.control_flow ==
                                          katana::sh4::ControlFlowKind::Call &&
-                                     line.target_address == 0x80u;
-                           }) == 9 &&
-                std::none_of(widened_partial_store_image.second.begin(),
-                             widened_partial_store_image.second.end(),
-                             [&](const auto address) {
-                                 return find_function(widened_partial_store, address) != nullptr ||
-                                        has_instruction(widened_partial_store, address);
-                             }),
-            "Mehr als acht partielle Callerwerte umgingen das Kandidatenlimit.");
+                                     line.target_address == 0x800u;
+                          }) == static_cast<std::ptrdiff_t>(callback_count) &&
+                std::all_of(independent_image.second.begin(),
+                            independent_image.second.end(),
+                            [&](const auto address) {
+                                const auto* callback =
+                                    find_function(independent_partial_store, address);
+                                return callback != nullptr &&
+                                       callback->origins ==
+                                           std::vector{
+                                               katana::analysis::FunctionOrigin::
+                                                   StoredCodeAddress} &&
+                                       callback->evidence ==
+                                           katana::analysis::ControlFlowEvidence::
+                                               GuardedPartial &&
+                                       has_instruction(independent_partial_store, address);
+                            }) &&
+                std::none_of(independent_partial_store.resolved_edges.begin(),
+                             independent_partial_store.resolved_edges.end(),
+                             [&](const auto& edge) {
+                                 return std::binary_search(independent_image.second.begin(),
+                                                           independent_image.second.end(),
+                                                           edge.target_address);
+                             }) &&
+                independent_partial_store.guarded_code_inventory_candidates >=
+                    callback_count &&
+                independent_partial_store.guarded_code_inventory_budget >= 64u &&
+                !independent_partial_store.candidate_inventory_truncated,
+            "Guarded-Code-Inventar verlor 9/16/64 unabhaengige Callerwerte, "
+            "fror sie als CFG-Kanten ein oder meldete falsche Truncation.");
+    }
 
-    const auto destination_forwarded_callback_image = [] {
+    const auto destination_forwarded_callback_image = [](const bool proven_non_stack) {
         std::vector<std::uint8_t> bytes(0x40u, 0x09u);
-        bytes[0x00u] = 0x0Eu;
-        bytes[0x01u] = 0xB0u; // bsr 0x20, unknown r4 is the destination object
-        bytes[0x02u] = 0x09u;
-        bytes[0x03u] = 0x00u; // nop (delay)
-        bytes[0x04u] = 0x0Bu;
-        bytes[0x05u] = 0x00u; // rts
-        bytes[0x06u] = 0x09u;
-        bytes[0x07u] = 0x00u; // nop (delay)
+        if (proven_non_stack) {
+            bytes[0x00u] = 0x38u;
+            bytes[0x01u] = 0xE4u; // mov #0x38,r4 (proven non-stack object)
+            bytes[0x02u] = 0x0Du;
+            bytes[0x03u] = 0xB0u; // bsr 0x20
+            bytes[0x04u] = 0x09u;
+            bytes[0x05u] = 0x00u; // nop (delay)
+            bytes[0x06u] = 0x0Bu;
+            bytes[0x07u] = 0x00u; // rts
+            bytes[0x08u] = 0x09u;
+            bytes[0x09u] = 0x00u; // nop (delay)
+        } else {
+            bytes[0x00u] = 0x0Eu;
+            bytes[0x01u] = 0xB0u; // bsr 0x20 with unknown r4 provenance
+            bytes[0x02u] = 0x09u;
+            bytes[0x03u] = 0x00u; // nop (delay)
+            bytes[0x04u] = 0x0Bu;
+            bytes[0x05u] = 0x00u; // rts
+            bytes[0x06u] = 0x09u;
+            bytes[0x07u] = 0x00u; // nop (delay)
+        }
         bytes[0x20u] = 0x00u;
         bytes[0x21u] = 0xE0u; // mov #0,r0 (field offset)
         bytes[0x22u] = 0x02u;
@@ -523,9 +655,10 @@ int main() {
                            "synthetic-destination-forwarded-callback"});
         image.add_entry_point(0u);
         return image;
-    }();
+    };
     const auto destination_forwarded_callback =
-        katana::analysis::analyze_control_flow(destination_forwarded_callback_image);
+        katana::analysis::analyze_control_flow(
+            destination_forwarded_callback_image(true));
     const auto* destination_forwarded_handler =
         find_function(destination_forwarded_callback, 0x30u);
     require(destination_forwarded_handler != nullptr &&
@@ -534,6 +667,13 @@ int main() {
                 has_instruction(destination_forwarded_callback, 0x30u),
             "Lokal geladener Codepointer mit Aufrufprovenienz am Storeziel "
             "erreichte das bewachte AOT-Inventar nicht.");
+    const auto unknown_destination_callback =
+        katana::analysis::analyze_control_flow(
+            destination_forwarded_callback_image(false));
+    require(find_function(unknown_destination_callback, 0x30u) == nullptr &&
+                !has_instruction(unknown_destination_callback, 0x30u),
+            "Unbekannte Callsite-Stackprovenienz wurde als bewiesenes "
+            "Non-Stack-Callbackobjekt missverstanden.");
 
     const auto widened_destination_callback_image = [] {
         std::vector<std::uint8_t> bytes(0x70u, 0x09u);

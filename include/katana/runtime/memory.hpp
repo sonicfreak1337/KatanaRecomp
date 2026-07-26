@@ -378,6 +378,32 @@ class Memory {
                                     CodeWriteSource source = CodeWriteSource::Copy,
                                     std::size_t additional_unobserved_accesses = 0u,
                                     std::size_t additional_indexed_region_hits = 0u) noexcept;
+    // Atomically commits `word_count` little-endian 32-bit stores of the same value. Stable
+    // observers receive one word-sized event per guest store, including its exact bytes_changed
+    // state, so code/module generations remain scalar-equivalent. Performance counters remain
+    // operation-based, while callers may account separately prevalidated reads or other lookups
+    // skipped by the composite operation.
+    [[nodiscard]] bool
+    commit_prevalidated_linear_u32_pattern(
+        std::uint32_t address,
+        std::size_t word_count,
+        std::uint32_t value,
+        CodeWriteSource source = CodeWriteSource::Copy,
+        std::size_t additional_unobserved_accesses = 0u,
+        std::size_t additional_indexed_region_hits = 0u) noexcept;
+    // Atomically commits `word_count` scalar 32-bit stores to one prevalidated address. The first
+    // store writes `first_value`; every later value advances by `step` with 32-bit wraparound.
+    // Stable observers receive the exact scalar event sequence although only the final value
+    // becomes visible to concurrent host code.
+    [[nodiscard]] bool
+    commit_prevalidated_repeated_u32_sequence(
+        std::uint32_t address,
+        std::size_t word_count,
+        std::uint32_t first_value,
+        std::uint32_t step,
+        CodeWriteSource source = CodeWriteSource::Copy,
+        std::size_t additional_unobserved_accesses = 0u,
+        std::size_t additional_indexed_region_hits = 0u) noexcept;
     void write_bytes_at(std::uint32_t address,
                         std::span<const std::uint8_t> bytes,
                         const GuestMemoryAccessContext& context,

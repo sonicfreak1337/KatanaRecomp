@@ -55,6 +55,18 @@ enum class MapleDmaError : std::uint8_t {
     InternalLifecycle,
 };
 
+enum class MapleDmaEventPublicationState : std::uint8_t {
+    NotRequested,
+    Publishing,
+    Published,
+    Failed,
+};
+
+enum class MapleDmaEventPublicationError : std::uint8_t {
+    None,
+    ObserverException,
+};
+
 struct DreamcastMaplePendingResponseSnapshot {
     std::uint32_t destination = 0u;
     std::vector<std::uint32_t> words;
@@ -73,6 +85,11 @@ struct DreamcastMapleControllerSnapshot {
     MapleDmaState state = MapleDmaState::Disabled;
     MapleDmaError error = MapleDmaError::None;
     std::optional<std::uint32_t> error_address;
+    MapleDmaEventPublicationState event_publication_state =
+        MapleDmaEventPublicationState::NotRequested;
+    MapleDmaEventPublicationError event_publication_error =
+        MapleDmaEventPublicationError::None;
+    std::uint64_t event_publication_failure_count = 0u;
     std::uint32_t system_control = 0u;
     std::uint32_t address_protect = 0u;
     std::uint32_t msb_select = 0u;
@@ -106,6 +123,11 @@ class DreamcastMapleController final {
     [[nodiscard]] MapleDmaState state() const noexcept;
     [[nodiscard]] MapleDmaError error() const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> error_address() const noexcept;
+    [[nodiscard]] MapleDmaEventPublicationState
+    event_publication_state() const noexcept;
+    [[nodiscard]] MapleDmaEventPublicationError
+    event_publication_error() const noexcept;
+    [[nodiscard]] std::uint64_t event_publication_failure_count() const noexcept;
     [[nodiscard]] DreamcastMapleControllerSnapshot snapshot() const;
 
   private:
@@ -118,6 +140,8 @@ class DreamcastMapleController final {
     void complete_dma(SchedulerEventId event_id) noexcept;
     void cancel_pending() noexcept;
     void fail(MapleDmaError error, std::optional<std::uint32_t> address = {}) noexcept;
+    void publish_dma_event() noexcept;
+    void clear_event_publication() noexcept;
     void handle_scheduler_reset() noexcept;
     [[nodiscard]] bool protected_address(std::uint32_t address, std::size_t size) const noexcept;
     [[nodiscard]] std::pair<std::uint8_t, std::uint8_t>
@@ -139,6 +163,11 @@ class DreamcastMapleController final {
     MapleDmaState state_ = MapleDmaState::Disabled;
     MapleDmaError error_ = MapleDmaError::None;
     std::optional<std::uint32_t> error_address_;
+    MapleDmaEventPublicationState event_publication_state_ =
+        MapleDmaEventPublicationState::NotRequested;
+    MapleDmaEventPublicationError event_publication_error_ =
+        MapleDmaEventPublicationError::None;
+    std::uint64_t event_publication_failure_count_ = 0u;
     std::uint32_t system_control_ = 0u;
     std::uint32_t address_protect_ = 0u;
     std::uint32_t msb_select_ = 1u;

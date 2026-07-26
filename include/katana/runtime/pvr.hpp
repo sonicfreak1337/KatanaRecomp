@@ -277,7 +277,7 @@ class PvrRegisterFile final {
     [[nodiscard]] static std::size_t index(std::uint32_t offset);
     void complete_render(SchedulerEventId event_id);
     void initialize_register_defaults() noexcept;
-    void reschedule_scanout();
+    void reschedule_scanout(bool derive_current_vblank = true);
     void schedule_scan_event(std::uint32_t line, bool entering);
     void handle_scan_event(SchedulerEventId event_id, bool entering);
     void schedule_hblank_event(std::uint32_t line);

@@ -19,6 +19,7 @@ struct FunctionRegisterValueSummary {
     bool complete = false;
     bool guarded = false;
     bool abi_preserved = false;
+    bool may_alias_stack = true;
     std::vector<std::uint32_t> values;
     std::vector<std::uint32_t> return_sites;
     std::vector<std::uint32_t> evidence_callees;
@@ -83,15 +84,28 @@ struct ReturnedCodeAddressTableCandidate {
     std::vector<std::uint32_t> load_instruction_addresses;
     std::vector<std::uint32_t> evidence_call_sites;
     std::vector<std::uint32_t> evidence_callees;
+    bool scan_truncated = false;
 
     bool operator==(const ReturnedCodeAddressTableCandidate&) const = default;
+};
+
+// A larger, separately bounded native-code inventory channel.  Its entries
+// never become fixed CFG edges; the live runtime value remains authoritative.
+// The ordinary abstract-value domain intentionally retains its much smaller
+// dataflow bound.
+struct GuardedCodeInventory {
+    std::vector<StoredCodeAddressCandidate> stored_code_addresses;
+    std::vector<ReturnedCodeAddressTableCandidate> returned_code_address_tables;
+    std::size_t candidate_budget = 0u;
+    std::size_t candidate_count = 0u;
+    bool candidate_inventory_truncated = false;
+    bool table_scan_truncated = false;
 };
 
 struct FunctionValueAnalysisResult {
     std::vector<FunctionValueSummary> summaries;
     std::vector<InterproceduralTargetResolution> resolutions;
-    std::vector<StoredCodeAddressCandidate> stored_code_address_candidates;
-    std::vector<ReturnedCodeAddressTableCandidate> returned_code_address_table_candidates;
+    GuardedCodeInventory guarded_code_inventory;
     std::size_t fixpoint_iterations = 0u;
     std::size_t strongly_connected_components = 0u;
     std::size_t unchanged_ingress_skips = 0u;

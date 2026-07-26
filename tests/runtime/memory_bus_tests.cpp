@@ -8,6 +8,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -44,18 +45,42 @@ void count_guest_memory_access(void* const context,
 constexpr std::string_view fill_observer_terminate_child =
     "--fill-observer-terminate-child";
 constexpr int fill_observer_terminate_exit_code = 86;
+constexpr std::string_view u32_pattern_observer_terminate_child =
+    "--u32-pattern-observer-terminate-child";
+constexpr int u32_pattern_observer_terminate_exit_code = 88;
 
 int run_fill_observer_terminate_child() {
     std::set_terminate([] { std::_Exit(fill_observer_terminate_exit_code); });
     katana::runtime::Memory memory(0u);
     const auto backing = std::make_shared<katana::runtime::LinearMemoryDevice>(4u);
     memory.map_region("fill-terminate", 0x00200000u, backing);
-    memory.set_guest_write_observer([](const katana::runtime::GuestWriteEvent&) {
-        throw std::runtime_error("expected fill observer failure");
-    });
+    memory.set_guest_write_observer(
+        [](const katana::runtime::GuestWriteEvent&) {
+            throw std::runtime_error("expected fill observer failure");
+        },
+        katana::runtime::GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
     static_cast<void>(memory.commit_prevalidated_linear_fill(
         0x00200000u, 4u, 0x7Eu, katana::runtime::CodeWriteSource::Cpu));
     return 87;
+}
+
+int run_u32_pattern_observer_terminate_child() {
+    std::set_terminate([] { std::_Exit(u32_pattern_observer_terminate_exit_code); });
+    katana::runtime::Memory memory(0u);
+    const auto backing = std::make_shared<katana::runtime::LinearMemoryDevice>(12u);
+    memory.map_region("u32-pattern-terminate", 0x00210000u, backing);
+    memory.set_guest_write_observer(
+        [backing](const katana::runtime::GuestWriteEvent&) {
+            constexpr std::uint32_t pattern = 0x12345678u;
+            if (backing->read_u32(0u) != pattern || backing->read_u32(4u) != pattern ||
+                backing->read_u32(8u) != pattern)
+                std::_Exit(90);
+            throw std::runtime_error("expected u32 pattern observer failure");
+        },
+        katana::runtime::GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+    static_cast<void>(memory.commit_prevalidated_linear_u32_pattern(
+        0x00210000u, 3u, 0x12345678u, katana::runtime::CodeWriteSource::Cpu));
+    return 89;
 }
 
 } // namespace
@@ -63,6 +88,8 @@ int run_fill_observer_terminate_child() {
 int main(const int argc, const char* const* argv) {
     if (argc == 2 && std::string_view(argv[1]) == fill_observer_terminate_child)
         return run_fill_observer_terminate_child();
+    if (argc == 2 && std::string_view(argv[1]) == u32_pattern_observer_terminate_child)
+        return run_u32_pattern_observer_terminate_child();
 
     using katana::runtime::LinearMemoryDevice;
     using katana::runtime::Memory;
@@ -85,6 +112,23 @@ int main(const int argc, const char* const* argv) {
     require(terminate_status != -1 && WIFEXITED(terminate_status) &&
                 WEXITSTATUS(terminate_status) == fill_observer_terminate_exit_code,
             "Observer-Ausnahme beendet atomaren Fill nicht mit eindeutigem Fail-stop-Code.");
+#endif
+
+    const auto u32_pattern_terminate_command =
+        '"' + executable + "\" " + std::string(u32_pattern_observer_terminate_child);
+    const auto u32_pattern_terminate_status =
+        std::system(u32_pattern_terminate_command.c_str());
+#ifdef _WIN32
+    require(u32_pattern_terminate_status == u32_pattern_observer_terminate_exit_code,
+            "Observer-Ausnahme beendet atomaren U32-Mustercommit nicht mit eindeutigem "
+            "Fail-stop-Code.");
+#else
+    require(u32_pattern_terminate_status != -1 &&
+                WIFEXITED(u32_pattern_terminate_status) &&
+                WEXITSTATUS(u32_pattern_terminate_status) ==
+                    u32_pattern_observer_terminate_exit_code,
+            "Observer-Ausnahme beendet atomaren U32-Mustercommit nicht mit eindeutigem "
+            "Fail-stop-Code.");
 #endif
 
     Memory bus(0u);
@@ -336,7 +380,9 @@ int main(const int argc, const char* const* argv) {
     {
         constexpr std::uint32_t fill_base = 0x00200000u;
         Memory fill_memory(0u);
+        Memory scalar_fill_memory(0u);
         const auto fill_backing = std::make_shared<LinearMemoryDevice>(16u);
+        const auto scalar_fill_backing = std::make_shared<LinearMemoryDevice>(16u);
         const auto adjacent_backing = std::make_shared<LinearMemoryDevice>(16u);
         const auto read_only_backing = std::make_shared<LinearMemoryDevice>(8u);
         std::size_t mmio_write_calls = 0u;
@@ -345,6 +391,7 @@ int main(const int argc, const char* const* argv) {
             [](const auto, const auto) { return 0u; },
             [&](const auto, const auto, const auto) { ++mmio_write_calls; });
         fill_memory.map_region("fill", fill_base, fill_backing);
+        scalar_fill_memory.map_region("scalar-fill", fill_base, scalar_fill_backing);
         fill_memory.map_region("fill-adjacent", fill_base + 16u, adjacent_backing);
         fill_memory.map_region("fill-read-only",
                                fill_base + 0x10000u,
@@ -367,16 +414,54 @@ int main(const int argc, const char* const* argv) {
             fill_value,
             std::uint8_t{0x66u},
         };
-        for (std::size_t index = 0u; index < initial.size(); ++index)
+        for (std::size_t index = 0u; index < initial.size(); ++index) {
             fill_backing->write_u8(static_cast<std::uint32_t>(index), initial[index]);
+            scalar_fill_backing->write_u8(
+                static_cast<std::uint32_t>(index), initial[index]);
+        }
 
         std::vector<katana::runtime::GuestWriteEvent> fill_events;
-        fill_events.reserve(8u);
-        fill_memory.set_guest_write_observer(
-            [&](const katana::runtime::GuestWriteEvent& event) { fill_events.push_back(event); });
+        std::vector<katana::runtime::GuestWriteEvent> scalar_fill_events;
+        fill_events.reserve(initial.size());
+        scalar_fill_events.reserve(initial.size());
+        const auto record_fill_event =
+            [&](const katana::runtime::GuestWriteEvent& event) {
+                fill_events.push_back(event);
+            };
+        fill_memory.set_guest_write_observer(record_fill_event);
         fill_memory.reset_performance_counters();
         constexpr std::size_t synthetic_limit_reads = 13u;
         constexpr std::size_t synthetic_indexed_hits = initial.size() * 2u + 1u;
+        const std::vector<std::uint8_t> before_general_observer(
+            fill_backing->bytes().begin(), fill_backing->bytes().end());
+        require(!fill_memory.commit_prevalidated_linear_fill(
+                    fill_base,
+                    initial.size(),
+                    fill_value,
+                    katana::runtime::CodeWriteSource::Dma,
+                    synthetic_limit_reads,
+                    synthetic_indexed_hits) &&
+                    std::equal(before_general_observer.begin(),
+                               before_general_observer.end(),
+                               fill_backing->bytes().begin()) &&
+                    fill_events.empty() &&
+                    fill_memory.performance_counters().indexed_region_hits == 0u &&
+                    fill_memory.performance_counters().unobserved_accesses == 0u,
+                "Allgemeiner GuestWrite-Observer liess einen vorvalidierten Fill durch.");
+        fill_memory.set_guest_write_observer(
+            record_fill_event,
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        scalar_fill_memory.set_guest_write_observer(
+            [&](const katana::runtime::GuestWriteEvent& event) {
+                scalar_fill_events.push_back(event);
+            },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        for (std::size_t index = 0u; index < initial.size(); ++index) {
+            scalar_fill_memory.write_u8(
+                fill_base + static_cast<std::uint32_t>(index),
+                fill_value,
+                katana::runtime::CodeWriteSource::Dma);
+        }
         require(fill_memory.commit_prevalidated_linear_fill(
                     fill_base,
                     initial.size(),
@@ -386,24 +471,22 @@ int main(const int argc, const char* const* argv) {
                     synthetic_indexed_hits),
                 "Vorvalidierter linearer Mixed-Fill wurde abgelehnt.");
 
-        constexpr std::array<std::uint32_t, 8u> expected_run_offsets{
-            0u, 1u, 3u, 5u, 6u, 7u, 9u, 11u};
-        constexpr std::array<std::size_t, 8u> expected_run_sizes{1u, 2u, 2u, 1u, 1u, 2u, 2u, 1u};
-        constexpr std::array<bool, 8u> expected_run_changes{
-            false, true, false, true, false, true, false, true};
-        require(fill_events.size() == expected_run_offsets.size(),
-                "Mixed-Fill meldet nicht jeden geaenderten/identischen Run.");
+        require(fill_events.size() == scalar_fill_events.size() &&
+                    fill_events.size() == initial.size(),
+                "Mixed-Fill meldet nicht exakt eine Observerkante pro skalarem Byte-Store.");
         for (std::size_t index = 0u; index < fill_events.size(); ++index) {
-            require(fill_events[index].address == fill_base + expected_run_offsets[index] &&
-                        fill_events[index].size == expected_run_sizes[index] &&
-                        fill_events[index].source == katana::runtime::CodeWriteSource::Dma &&
-                        fill_events[index].bytes_changed == expected_run_changes[index],
-                    "Mixed-Fill verliert Runadresse, -groesse, Herkunft oder Aenderungsstatus.");
+            require(fill_events[index].address == scalar_fill_events[index].address &&
+                        fill_events[index].size == scalar_fill_events[index].size &&
+                        fill_events[index].source == scalar_fill_events[index].source &&
+                        fill_events[index].bytes_changed ==
+                            scalar_fill_events[index].bytes_changed,
+                    "Mixed-Fill verliert skalare Adresse, Bytebreite, Herkunft oder "
+                    "Aenderungsstatus.");
         }
         require(
-            std::all_of(fill_backing->bytes().begin(),
-                        fill_backing->bytes().begin() + static_cast<std::ptrdiff_t>(initial.size()),
-                        [](const auto byte) { return byte == fill_value; }) &&
+            std::equal(fill_backing->bytes().begin(),
+                       fill_backing->bytes().end(),
+                       scalar_fill_backing->bytes().begin()) &&
                 fill_memory.performance_counters().unobserved_accesses ==
                     initial.size() + synthetic_limit_reads &&
                 fill_memory.performance_counters().indexed_region_hits ==
@@ -421,16 +504,31 @@ int main(const int argc, const char* const* argv) {
                 "Vorvalidierte Zugriffszaehler verlieren das skalare uint64-Wraparound.");
 
         fill_events.clear();
+        scalar_fill_events.clear();
         fill_memory.reset_performance_counters();
+        for (std::size_t index = 0u; index < 6u; ++index) {
+            scalar_fill_memory.write_u8(
+                fill_base + 2u + static_cast<std::uint32_t>(index),
+                fill_value,
+                katana::runtime::CodeWriteSource::Fallback);
+        }
         require(fill_memory.commit_prevalidated_linear_fill(
                     fill_base + 2u, 6u, fill_value, katana::runtime::CodeWriteSource::Fallback) &&
-                    fill_events.size() == 1u && fill_events.front().address == fill_base + 2u &&
-                    fill_events.front().size == 6u &&
-                    fill_events.front().source == katana::runtime::CodeWriteSource::Fallback &&
-                    !fill_events.front().bytes_changed &&
+                    fill_events.size() == scalar_fill_events.size() &&
+                    fill_events.size() == 6u &&
+                    std::equal(
+                        fill_events.begin(),
+                        fill_events.end(),
+                        scalar_fill_events.begin(),
+                        [](const auto& batched, const auto& scalar) {
+                            return batched.address == scalar.address &&
+                                   batched.size == scalar.size &&
+                                   batched.source == scalar.source &&
+                                   batched.bytes_changed == scalar.bytes_changed;
+                        }) &&
                     fill_memory.performance_counters().unobserved_accesses == 6u &&
                     fill_memory.performance_counters().observed_accesses == 0u,
-                "Bytegleicher Fill wird nicht als einzelner identischer Run gemeldet.");
+                "Bytegleicher Fill verliert die skalare Byte-Store-Ereignisfolge.");
 
         for (const auto lookup_mode :
              {katana::runtime::MemoryLookupMode::Indexed,
@@ -547,6 +645,274 @@ int main(const int argc, const char* const* argv) {
                     fill_memory.performance_counters().observed_accesses == 0u,
                 "Cross-Region/Read-only/MMIO/Overflow/Leer-Fill mutiert Speicher, "
                 "Observer oder Zaehler.");
+    }
+
+    {
+        constexpr std::uint32_t pattern_base = 0x04000000u;
+        constexpr std::uint32_t source_offset = 0x30u;
+        constexpr std::uint32_t pattern = 0x12345678u;
+        constexpr std::size_t word_count = 6u;
+        const auto scalar_backing = std::make_shared<LinearMemoryDevice>(64u);
+        const auto batch_backing = std::make_shared<LinearMemoryDevice>(64u);
+        const auto adjacent_backing = std::make_shared<LinearMemoryDevice>(16u);
+        const auto read_only_backing = std::make_shared<LinearMemoryDevice>(16u);
+        std::uint64_t mmio_write_calls = 0u;
+        const auto nonlinear_mmio = std::make_shared<katana::runtime::MmioMemoryDevice>(
+            16u,
+            [](const auto, const auto) { return 0u; },
+            [&](const auto, const auto, const auto) { ++mmio_write_calls; });
+        Memory scalar(0u);
+        Memory batch(0u);
+        scalar.map_region("scalar-pattern", pattern_base, scalar_backing);
+        batch.map_region("batch-pattern", pattern_base, batch_backing);
+        batch.map_region("batch-pattern-adjacent", pattern_base + 64u, adjacent_backing);
+        batch.map_region("batch-pattern-read-only",
+                         pattern_base + 0x10000u,
+                         read_only_backing,
+                         MemoryRegionAccess::ReadOnly);
+        batch.map_region("batch-pattern-mmio", pattern_base + 0x20000u, nonlinear_mmio);
+
+        constexpr std::array<std::uint32_t, word_count> initial{
+            pattern, pattern, 0x01020304u, 0xFFFFFFFFu, 0u, pattern};
+        for (std::size_t index = 0u; index < initial.size(); ++index) {
+            scalar_backing->write_u32(static_cast<std::uint32_t>(index * 4u), initial[index]);
+            batch_backing->write_u32(static_cast<std::uint32_t>(index * 4u), initial[index]);
+        }
+        scalar_backing->write_u32(source_offset, pattern);
+        batch_backing->write_u32(source_offset, pattern);
+
+        std::vector<katana::runtime::GuestWriteEvent> scalar_events;
+        std::vector<katana::runtime::GuestWriteEvent> batch_events;
+        scalar.set_guest_write_observer(
+            [&](const auto& event) { scalar_events.push_back(event); },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        batch.set_guest_write_observer(
+            [&](const auto& event) { batch_events.push_back(event); },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        scalar.reset_performance_counters();
+        batch.reset_performance_counters();
+
+        for (std::size_t index = 0u; index < word_count; ++index) {
+            const auto live_pattern = scalar.read_u32(pattern_base + source_offset);
+            scalar.write_u32(pattern_base + static_cast<std::uint32_t>(index * 4u),
+                             live_pattern,
+                             katana::runtime::CodeWriteSource::Cpu);
+        }
+        const auto prevalidated_pattern = batch_backing->read_u32(source_offset);
+        require(batch.commit_prevalidated_linear_u32_pattern(
+                    pattern_base,
+                    word_count,
+                    prevalidated_pattern,
+                    katana::runtime::CodeWriteSource::Cpu,
+                    word_count,
+                    word_count * 2u),
+                "Vorvalidiertes U32-Muster wurde abgelehnt.");
+
+        require(std::equal(scalar_backing->bytes().begin(),
+                           scalar_backing->bytes().end(),
+                           batch_backing->bytes().begin()) &&
+                    batch_backing->read_u8(0u) == 0x78u &&
+                    batch_backing->read_u8(1u) == 0x56u &&
+                    batch_backing->read_u8(2u) == 0x34u &&
+                    batch_backing->read_u8(3u) == 0x12u,
+                "U32-Mustercommit divergiert vom skalaren Little-Endian-Ergebnis.");
+        const auto scalar_counters = scalar.performance_counters();
+        const auto batch_counters = batch.performance_counters();
+        require(batch_counters.indexed_region_hits == scalar_counters.indexed_region_hits &&
+                    batch_counters.reference_region_probes ==
+                        scalar_counters.reference_region_probes &&
+                    batch_counters.unobserved_accesses ==
+                        scalar_counters.unobserved_accesses &&
+                    batch_counters.observed_accesses == scalar_counters.observed_accesses &&
+                    batch_counters.unobserved_accesses == word_count * 2u,
+                "U32-Mustercommit zaehlt Bytes statt skalarer Read/Write-Operationen.");
+        require(scalar_events.size() == word_count && batch_events.size() == word_count,
+                "U32-Mustercommit meldet nicht exakt eine Observerkante pro Gastwort.");
+        for (std::size_t index = 0u; index < batch_events.size(); ++index) {
+            require(batch_events[index].address == scalar_events[index].address &&
+                        batch_events[index].size == scalar_events[index].size &&
+                        batch_events[index].source == scalar_events[index].source &&
+                        batch_events[index].bytes_changed ==
+                            scalar_events[index].bytes_changed,
+                    "U32-Mustercommit verliert skalare Adresse, Wortbreite, Herkunft oder "
+                    "Changed-Flag.");
+        }
+
+        constexpr std::uint32_t sequence_base = pattern_base + 0x30000u;
+        constexpr std::size_t sequence_count = 5u;
+        constexpr std::uint32_t sequence_first = 0xFFFFFFFEu;
+        constexpr std::uint32_t sequence_step = 1u;
+        const auto scalar_sequence_backing = std::make_shared<LinearMemoryDevice>(4u);
+        const auto batch_sequence_backing = std::make_shared<LinearMemoryDevice>(4u);
+        Memory scalar_sequence(0u);
+        Memory batch_sequence(0u);
+        scalar_sequence.map_region(
+            "scalar-repeated-u32", sequence_base, scalar_sequence_backing);
+        batch_sequence.map_region(
+            "batch-repeated-u32", sequence_base, batch_sequence_backing);
+        scalar_sequence_backing->write_u32(0u, sequence_first);
+        batch_sequence_backing->write_u32(0u, sequence_first);
+        std::vector<katana::runtime::GuestWriteEvent> scalar_sequence_events;
+        std::vector<katana::runtime::GuestWriteEvent> batch_sequence_events;
+        scalar_sequence.set_guest_write_observer(
+            [&](const auto& event) { scalar_sequence_events.push_back(event); },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        batch_sequence.set_guest_write_observer(
+            [&](const auto& event) { batch_sequence_events.push_back(event); },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        auto sequence_value = sequence_first;
+        for (std::size_t index = 0u; index < sequence_count; ++index) {
+            scalar_sequence.write_u32(
+                sequence_base, sequence_value, katana::runtime::CodeWriteSource::Cpu);
+            sequence_value += sequence_step;
+        }
+        require(batch_sequence.commit_prevalidated_repeated_u32_sequence(
+                    sequence_base,
+                    sequence_count,
+                    sequence_first,
+                    sequence_step,
+                    katana::runtime::CodeWriteSource::Cpu,
+                    7u,
+                    sequence_count + 11u) &&
+                    batch_sequence_backing->read_u32(0u) ==
+                        scalar_sequence_backing->read_u32(0u) &&
+                    batch_sequence_events.size() == scalar_sequence_events.size(),
+                "Atomare wiederholte U32-Sequenz divergiert vom skalaren Endzustand.");
+        for (std::size_t index = 0u; index < batch_sequence_events.size(); ++index) {
+            require(batch_sequence_events[index].address ==
+                            scalar_sequence_events[index].address &&
+                        batch_sequence_events[index].size ==
+                            scalar_sequence_events[index].size &&
+                        batch_sequence_events[index].source ==
+                            scalar_sequence_events[index].source &&
+                        batch_sequence_events[index].bytes_changed ==
+                            scalar_sequence_events[index].bytes_changed,
+                    "Atomare wiederholte U32-Sequenz verliert skalare Observerprovenienz.");
+        }
+        require(batch_sequence.performance_counters().unobserved_accesses ==
+                        scalar_sequence.performance_counters().unobserved_accesses + 7u &&
+                    batch_sequence.performance_counters().indexed_region_hits ==
+                        scalar_sequence.performance_counters().indexed_region_hits + 11u,
+                "Atomare wiederholte U32-Sequenz verliert vorvalidiertes Accounting.");
+        const auto repeated_before = batch_sequence_backing->read_u32(0u);
+        require(!batch_sequence.commit_prevalidated_repeated_u32_sequence(
+                    sequence_base + 1u,
+                    sequence_count,
+                    sequence_first,
+                    sequence_step,
+                    katana::runtime::CodeWriteSource::Cpu) &&
+                    !batch_sequence.commit_prevalidated_repeated_u32_sequence(
+                        sequence_base,
+                        0u,
+                        sequence_first,
+                        sequence_step,
+                        katana::runtime::CodeWriteSource::Cpu) &&
+                    batch_sequence_backing->read_u32(0u) == repeated_before,
+                "Ungueltige wiederholte U32-Sequenz veraendert den Speicher.");
+
+        const auto require_rejected_without_mutation =
+            [&](const std::uint32_t address,
+                const std::size_t rejected_word_count,
+                const char* const message) {
+                const std::vector<std::uint8_t> before(
+                    batch_backing->bytes().begin(), batch_backing->bytes().end());
+                const std::vector<std::uint8_t> adjacent_before(
+                    adjacent_backing->bytes().begin(), adjacent_backing->bytes().end());
+                const std::vector<std::uint8_t> read_only_before(
+                    read_only_backing->bytes().begin(), read_only_backing->bytes().end());
+                const auto counters_before = batch.performance_counters();
+                const auto events_before = batch_events.size();
+                const auto mmio_writes_before = mmio_write_calls;
+                require(!batch.commit_prevalidated_linear_u32_pattern(
+                            address,
+                            rejected_word_count,
+                            pattern,
+                            katana::runtime::CodeWriteSource::Cpu,
+                            7u,
+                            11u) &&
+                            std::equal(
+                                before.begin(), before.end(), batch_backing->bytes().begin()) &&
+                            std::equal(adjacent_before.begin(),
+                                       adjacent_before.end(),
+                                       adjacent_backing->bytes().begin()) &&
+                            std::equal(read_only_before.begin(),
+                                       read_only_before.end(),
+                                       read_only_backing->bytes().begin()) &&
+                            batch.performance_counters().indexed_region_hits ==
+                                counters_before.indexed_region_hits &&
+                            batch.performance_counters().reference_region_probes ==
+                                counters_before.reference_region_probes &&
+                            batch.performance_counters().unobserved_accesses ==
+                                counters_before.unobserved_accesses &&
+                            batch.performance_counters().observed_accesses ==
+                                counters_before.observed_accesses &&
+                            batch_events.size() == events_before &&
+                            mmio_write_calls == mmio_writes_before,
+                        message);
+            };
+
+        batch.set_lookup_mode(MemoryLookupMode::Reference);
+        require_rejected_without_mutation(
+            pattern_base, word_count, "Reference-Lookup liess einen U32-Mustercommit durch.");
+        batch.set_lookup_mode(MemoryLookupMode::Indexed);
+
+        batch.set_guest_write_observer([](const auto&) {});
+        require_rejected_without_mutation(
+            pattern_base, word_count, "Allgemeiner Observer liess einen U32-Mustercommit durch.");
+        batch.set_guest_write_observer(
+            [&](const auto& event) { batch_events.push_back(event); },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+
+        batch.set_trace_handler([](const auto&) {});
+        require_rejected_without_mutation(
+            pattern_base, word_count, "Aktiver Trace liess einen U32-Mustercommit durch.");
+        batch.clear_trace_handler();
+
+        const auto pattern_watchpoint = batch.add_watchpoint(
+            pattern_base,
+            4u,
+            katana::runtime::MemoryWatchpointAccess::Write,
+            [](const auto&) {});
+        require_rejected_without_mutation(
+            pattern_base, word_count, "Aktiver Watchpoint liess einen U32-Mustercommit durch.");
+        static_cast<void>(batch.remove_watchpoint(pattern_watchpoint));
+
+        batch.set_mmio_trace_handler([](const auto&) {});
+        require_rejected_without_mutation(
+            pattern_base, word_count, "Aktiver MMIO-Trace liess einen U32-Mustercommit durch.");
+        batch.clear_mmio_trace_handler();
+
+        batch.set_mmio_access_tracking(true);
+        require_rejected_without_mutation(
+            pattern_base, word_count, "Aktives MMIO-Tracking liess einen U32-Mustercommit durch.");
+        batch.set_mmio_access_tracking(false);
+
+        std::size_t guest_sink_calls = 0u;
+        batch.set_guest_memory_access_sink({&guest_sink_calls, &count_guest_memory_access});
+        require_rejected_without_mutation(
+            pattern_base, word_count, "Aktiver Gast-Speichersink liess U32-Mustercommit durch.");
+        require(guest_sink_calls == 0u,
+                "Abgelehnter U32-Mustercommit benachrichtigte den Gast-Speichersink.");
+        batch.clear_guest_memory_access_sink();
+
+        require_rejected_without_mutation(
+            pattern_base + 2u, 1u, "Misalignment liess einen U32-Mustercommit durch.");
+        require_rejected_without_mutation(
+            pattern_base, 0u, "Leeres U32-Muster wurde als Commit akzeptiert.");
+        require_rejected_without_mutation(
+            pattern_base,
+            std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t) + 1u,
+            "size_t-Ueberlauf der U32-Musterlaenge wurde akzeptiert.");
+        require_rejected_without_mutation(
+            0xFFFFFFFCu, 2u, "32-Bit-Adressraum-Ueberlauf wurde akzeptiert.");
+        require_rejected_without_mutation(
+            pattern_base + 60u, 2u, "Regionsgrenzen-Ueberlauf wurde akzeptiert.");
+        require_rejected_without_mutation(
+            pattern_base + 0x10000u, 1u, "Read-only-U32-Mustercommit wurde akzeptiert.");
+        require_rejected_without_mutation(
+            pattern_base + 0x20000u, 1u, "Nichtlinearer U32-Mustercommit wurde akzeptiert.");
+        require_rejected_without_mutation(
+            pattern_base + 0x30000u, 1u, "Unmapped U32-Mustercommit wurde akzeptiert.");
     }
 
     std::cout << "Regionbasierter Speicherbus erfolgreich.\n";

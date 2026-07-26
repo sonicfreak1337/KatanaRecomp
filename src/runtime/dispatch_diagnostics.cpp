@@ -7,6 +7,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace katana::runtime {
@@ -24,6 +25,44 @@ bool same_event(const DispatchDiagnosticEvent& left,
            left.fallback_action == right.fallback_action &&
            left.guest_instructions == right.guest_instructions && left.exit_pc == right.exit_pc &&
            left.error == right.error;
+}
+
+void hash_key_byte(std::uint64_t& hash, const std::uint8_t value) noexcept {
+    hash ^= value;
+    hash *= 1'099'511'628'211ull;
+}
+
+template <typename T>
+void hash_key_scalar(std::uint64_t& hash, const T value) noexcept {
+    using U = std::make_unsigned_t<T>;
+    const auto bits = static_cast<U>(value);
+    for (std::size_t byte = 0u; byte < sizeof(U); ++byte)
+        hash_key_byte(hash, static_cast<std::uint8_t>(bits >> (byte * 8u)));
+}
+
+void hash_key_optional(std::uint64_t& hash,
+                       const std::optional<std::uint32_t> value) noexcept {
+    hash_key_byte(hash, value.has_value() ? 1u : 0u);
+    if (value) hash_key_scalar(hash, *value);
+}
+
+std::uint64_t event_key(const DispatchDiagnosticEvent& event) noexcept {
+    std::uint64_t hash = 14'695'981'039'346'656'037ull;
+    hash_key_scalar(hash, event.callsite);
+    hash_key_scalar(hash, event.source_virtual);
+    hash_key_scalar(hash, event.source_physical);
+    hash_key_optional(hash, event.virtual_target);
+    hash_key_optional(hash, event.canonical_target);
+    hash_key_scalar(hash, event.pr);
+    hash_key_scalar(hash, static_cast<std::uint8_t>(event.block_end));
+    hash_key_scalar(hash, static_cast<std::uint8_t>(event.origin));
+    hash_key_scalar(hash, static_cast<std::uint8_t>(event.alias_origin));
+    hash_key_scalar(hash, static_cast<std::uint8_t>(event.fallback_reason));
+    hash_key_scalar(hash, static_cast<std::uint8_t>(event.fallback_action));
+    hash_key_scalar(hash, event.guest_instructions);
+    hash_key_scalar(hash, event.exit_pc);
+    hash_key_scalar(hash, static_cast<std::uint8_t>(event.error));
+    return hash;
 }
 
 std::string hex32(const std::uint32_t value) {
@@ -70,6 +109,7 @@ DispatchDiagnosticRecorder::DispatchDiagnosticRecorder(const std::size_t capacit
         throw std::invalid_argument("Dispatchdiagnostik braucht eine positive Kapazitaet.");
     }
     events_.reserve(capacity_);
+    event_index_.reserve(capacity_);
 }
 
 void DispatchDiagnosticRecorder::record(DispatchDiagnosticEvent event) {
@@ -83,20 +123,34 @@ void DispatchDiagnosticRecorder::record(DispatchDiagnosticEvent event) {
     if (total_occurrences_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Dispatchdiagnosezaehler ist uebergelaufen.");
     }
-    const auto duplicate =
-        std::find_if(events_.begin(), events_.end(), [&event](const auto& current) {
-            return same_event(current, event);
-        });
-    if (duplicate != events_.end() &&
-        duplicate->occurrences == std::numeric_limits<std::uint64_t>::max()) {
+    const auto key = event_key(event);
+    std::optional<std::size_t> duplicate_index;
+    const auto [candidate_begin, candidate_end] = event_index_.equal_range(key);
+    for (auto candidate = candidate_begin; candidate != candidate_end; ++candidate) {
+        if (candidate->second < events_.size() &&
+            same_event(events_[candidate->second], event)) {
+            duplicate_index = candidate->second;
+            break;
+        }
+    }
+    if (duplicate_index &&
+        events_[*duplicate_index].occurrences ==
+            std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Dispatchereigniszaehler ist uebergelaufen.");
     }
-    if (duplicate != events_.end()) {
-        ++duplicate->occurrences;
+    if (duplicate_index) {
+        ++events_[*duplicate_index].occurrences;
         ++total_occurrences_;
     } else {
         if (events_.size() < capacity_) {
-            events_.push_back(std::move(event));
+            const auto index = events_.size();
+            events_.push_back(event);
+            try {
+                event_index_.emplace(key, index);
+            } catch (...) {
+                events_.pop_back();
+                throw;
+            }
         } else {
             // Bounded heavy-hitter retention: an unseen event replaces the
             // least frequent retained key.  If the new key then becomes a hot
@@ -106,6 +160,20 @@ void DispatchDiagnosticRecorder::record(DispatchDiagnosticEvent event) {
                 events_.begin(), events_.end(), [](const auto& left, const auto& right) {
                     return left.occurrences < right.occurrences;
                 });
+            const auto index = static_cast<std::size_t>(least - events_.begin());
+            const auto old_key = event_key(*least);
+            const auto [old_begin, old_end] = event_index_.equal_range(old_key);
+            const auto indexed_old = std::find_if(
+                old_begin, old_end, [index](const auto& entry) {
+                    return entry.second == index;
+                });
+            if (indexed_old == old_end) {
+                throw std::logic_error(
+                    "Dispatchdiagnostik-Keyindex ist inkonsistent.");
+            }
+            auto index_node = event_index_.extract(indexed_old);
+            index_node.key() = key;
+            event_index_.insert(std::move(index_node));
             *least = std::move(event);
             if (dropped_unique_events_ != std::numeric_limits<std::uint64_t>::max())
                 ++dropped_unique_events_;
@@ -125,6 +193,7 @@ bool DispatchDiagnosticRecorder::try_record(DispatchDiagnosticEvent event) noexc
 
 void DispatchDiagnosticRecorder::clear() noexcept {
     events_.clear();
+    event_index_.clear();
     total_occurrences_ = 0u;
     dropped_unique_events_ = 0u;
 }
