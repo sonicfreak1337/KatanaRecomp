@@ -24,11 +24,11 @@ katana::testing::SstTestCase fixture() {
         test.cycles[index].actions = katana::testing::SstCycle::fetch_action;
         test.cycles[index].fetch_address = 0x1000u + static_cast<std::uint32_t>(index * 2u);
     }
-    test.cycles[1].actions |= katana::testing::SstCycle::read_action;
-    test.cycles[1].read_address = 0x2000u;
-    test.cycles[1].read_size = 4u;
-    test.cycles[1].read_value = 0x12345678u;
-    test.cycles[2].actions |= katana::testing::SstCycle::write_action;
+    test.cycles[2].actions |=
+        katana::testing::SstCycle::read_action | katana::testing::SstCycle::write_action;
+    test.cycles[2].read_address = 0x2000u;
+    test.cycles[2].read_size = 4u;
+    test.cycles[2].read_value = 0x12345678u;
     test.cycles[2].write_address = 0x2004u;
     test.cycles[2].write_size = 2u;
     test.cycles[2].write_value = 0xABCDu;
@@ -67,6 +67,10 @@ int main() {
     try {
         {
             ValidComparison value;
+            require(value.memory.size() == 2u &&
+                        value.memory[0].executing_guest_pc == value.test.cycles[1].fetch_address &&
+                        value.memory[1].executing_guest_pc == value.test.cycles[1].fetch_address,
+                    "SST cycle data access was not attributed to the preceding fetch");
             require_classification(value.input, ResultClassification::Pass, "valid control");
         }
         {
@@ -137,7 +141,22 @@ int main() {
         }
         {
             auto value = fixture();
-            value.cycles[1].read_address = 0x8C000000u;
+            value.cycles[2].actions = katana::testing::SstCycle::fetch_action;
+            value.cycles[0].actions |= katana::testing::SstCycle::read_action;
+            value.cycles[0].read_address = 0x2000u;
+            value.cycles[0].read_size = 4u;
+            value.cycles[0].read_value = 0x12345678u;
+            bool rejected = false;
+            try {
+                static_cast<void>(expected_memory_observations(value));
+            } catch (const katana::testing::SstHarnessInvalid&) {
+                rejected = true;
+            }
+            require(rejected, "unattributable cycle-zero data access was accepted");
+        }
+        {
+            auto value = fixture();
+            value.cycles[2].read_address = 0x8C000000u;
             value.cycles[2].write_address = 0x8C000004u;
             value.initial.sr &= ~katana::runtime::sr_md_mask;
             const auto user = classify_case_applicability(
@@ -154,7 +173,7 @@ int main() {
         {
             auto value = fixture();
             value.initial.pc = 0x8C001000u;
-            value.cycles[1].read_address = 0x8C000000u;
+            value.cycles[2].read_address = 0x8C000000u;
             value.cycles[2].write_address = 0x8C000004u;
             for (std::size_t index = 0u; index < value.cycles.size(); ++index)
                 value.cycles[index].fetch_address =

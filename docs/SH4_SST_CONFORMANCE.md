@@ -90,7 +90,10 @@ pauschal bei `PC+8`. Ein nicht gebundenes Ziel endet als typisierter
 `cycles[].fetch_addr` ist das PC-, Kontrollfluss- und Delay-Slot-Orakel; nativer
 Code liest zur Laufzeit keine Opcodebytes aus Gast-RAM. Der echte
 `GuestMemoryAccessSink` beobachtet ausschließlich Datenzugriffe während der
-Ausführung.
+Ausführung. Das Upstream-Traceformat speichert einen Datenzugriff im
+Cycle-Eintrag nach dem Fetch der ausführenden Instruktion. Der Harness ordnet
+ihn deshalb der unmittelbar vorherigen `fetch_addr` zu; daraus wird keine
+Hardware-Pipeline- oder Taktgenauigkeit abgeleitet.
 
 Die Ergebnisse der Speicherprofile bleiben getrennt:
 

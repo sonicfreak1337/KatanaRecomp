@@ -62,12 +62,22 @@ expected_native_instructions(const SstTestCase& test, const bool tested_has_dela
 std::vector<SstMemoryObservation> expected_memory_observations(const SstTestCase& test) {
     std::vector<SstMemoryObservation> result;
     result.reserve(test.cycles.size() * 2u);
-    for (const auto& cycle : test.cycles) {
+    for (std::size_t cycle_index = 0u; cycle_index < test.cycles.size(); ++cycle_index) {
+        const auto& cycle = test.cycles[cycle_index];
         if (!cycle.has_fetch()) {
             throw SstHarnessInvalid(
                 "Cannot attribute SST data access without a fetch-address oracle");
         }
-        append_expected_memory(cycle, cycle.fetch_address, result);
+        if (!cycle.has_read() && !cycle.has_write()) continue;
+        if (cycle_index == 0u || !test.cycles[cycle_index - 1u].has_fetch()) {
+            throw SstHarnessInvalid(
+                "SST data access precedes the instruction fetch needed for attribution");
+        }
+
+        // The upstream recorder stores a data access in the entry after the
+        // instruction's fetch. This is a trace-format convention, not evidence
+        // of a hardware pipeline. Attribute the event to the preceding fetch.
+        append_expected_memory(cycle, test.cycles[cycle_index - 1u].fetch_address, result);
     }
     return result;
 }
