@@ -28,6 +28,24 @@ void canonicalize(Instruction& instruction) {
         operation_accumulator_effects(instruction.operation, instruction.special_register);
 }
 
+void replace_with_nop(Instruction& instruction) {
+    instruction.operation = Operation::Nop;
+    instruction.destination_register = 0u;
+    instruction.source_register = 0u;
+    instruction.branch_register = 0u;
+    instruction.immediate = 0;
+    instruction.displacement = 0;
+    instruction.special_register = SpecialRegister::None;
+    instruction.effective_address.reset();
+    instruction.target_address.reset();
+    instruction.resolved_targets.clear();
+    instruction.forwarded_value_register.reset();
+    instruction.dynamic_target_class = DynamicTargetClass::NotApplicable;
+    instruction.is_privileged = false;
+    instruction.branch_register_relative = false;
+    canonicalize(instruction);
+}
+
 void replace_with_constant(Instruction& instruction,
                            const std::uint8_t destination,
                            const std::uint32_t value) {
@@ -350,12 +368,14 @@ OptimizationResult eliminate_dead_block_code(BasicBlock& block) {
         }
 
         if (overwritten) {
-            block.instructions.erase(block.instructions.begin() +
-                                     static_cast<std::ptrdiff_t>(index));
+            // A dead architectural register write may lose its host-side effect,
+            // but its guest instruction boundary, timing, and source PC remain
+            // observable. Keep a semantic NOP instead of
+            // shortening the native instruction stream.
+            replace_with_nop(block.instructions[index]);
             ++result.changes;
-        } else {
-            ++index;
         }
+        ++index;
     }
     return result;
 }

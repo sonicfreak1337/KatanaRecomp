@@ -61,7 +61,7 @@ int main() {
     constexpr std::array<std::uint8_t, 38> bytes = {
         0x06, 0xB0, 0x09, 0x00, 0x08, 0xB0, 0x09, 0x00, 0x0A, 0xB0, 0x09, 0x00, 0x0B,
         0x00, 0x09, 0x00, 0x19, 0x00, 0x0B, 0x00, 0x09, 0x00, 0x09, 0x00, 0x37, 0x24,
-        0x0B, 0x00, 0x09, 0x00, 0x09, 0x00, 0x54, 0x36, 0x0B, 0x00, 0x09, 0x00};
+        0x0B, 0x00, 0x09, 0x00, 0x09, 0x00, 0x64, 0x36, 0x0B, 0x00, 0x09, 0x00};
 
     const auto lines = katana::sh4::disassemble(bytes, 0x8C010000u);
 
@@ -102,6 +102,12 @@ int main() {
     require(source.find("const bool carry =") != std::string::npos &&
                 source.find("const bool borrow =") != std::string::npos,
             "DIV1 behandelt Carry oder Borrow nicht explizit.");
+
+    const auto divisor_snapshot = source.find("const std::uint32_t divisor = cpu.r[6];");
+    const auto destination_shift = source.find("cpu.r[6] = (cpu.r[6] << 1u)");
+    require(divisor_snapshot != std::string::npos && destination_shift != std::string::npos &&
+                divisor_snapshot < destination_shift,
+            "DIV1 Rn,Rn liest den Divisor nicht vor der Rn-Verschiebung.");
 
     std::cout << "Alle KR-1304 Decoder-, IR- und Codegen-Tests erfolgreich.\n";
 

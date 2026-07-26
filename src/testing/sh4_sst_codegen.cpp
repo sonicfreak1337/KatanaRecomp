@@ -341,6 +341,21 @@ std::optional<std::uint32_t> canonical_address_for_sst_slot(const SstCodeForm& f
     return canonical_slot_addresses(form)[slot];
 }
 
+std::optional<std::uint32_t> sst_code_form_horizon_block_leader(const SstCodeForm& form) {
+    const auto canonical = canonical_slot_addresses(form);
+    const auto last_slot = form.fetch_slots.back();
+    if (last_slot >= normal_code_slot_count + form.external_slot_count)
+        throw SstHarnessInvalid("SST horizon references an invalid code slot");
+    if (katana::sh4::decode(opcode_for_slot(form, last_slot)).changes_control_flow())
+        return std::nullopt;
+
+    const auto successor = *canonical[last_slot] + 2u;
+    for (std::uint8_t slot = 0u; slot < normal_code_slot_count + form.external_slot_count; ++slot) {
+        if (*canonical[slot] == successor) return successor;
+    }
+    return std::nullopt;
+}
+
 bool sst_code_form_requires_contextual_delay_slot_entries(const SstCodeForm& form) {
     const auto canonical = canonical_slot_addresses(form);
     for (std::size_t index = 0u; index + 1u < form.fetch_slots.size(); ++index) {

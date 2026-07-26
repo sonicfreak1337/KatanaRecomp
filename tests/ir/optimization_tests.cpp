@@ -106,11 +106,25 @@ int main() {
     auto& dead_function = dead_program.front();
     const auto dead_result = katana::ir::eliminate_dead_code(dead_function);
     const auto& dead_instructions = dead_function.blocks.front().instructions;
-    require(dead_result.changes == 1u && dead_instructions.size() == 4u &&
-                dead_instructions[1].source_address == 0x8C030004u,
-            "Dead-Code-Elimination entfernt keine eindeutig ueberschriebene Definition.");
+    require(dead_result.changes == 1u && dead_instructions.size() == 5u &&
+                dead_instructions[1].operation == katana::ir::Operation::Nop &&
+                dead_instructions[1].source_address == 0x8C030002u &&
+                dead_instructions[1].original_opcode == 0xE202u &&
+                dead_instructions[2].source_address == 0x8C030004u,
+            "Dead-Code-Elimination bewahrt die architektonische Instruktionsgrenze nicht.");
     require(katana::ir::verify_function(dead_function).empty(),
             "Dead-Code-Elimination erzeugt ungueltige Katana-IR.");
+    const auto dead_cpp =
+        katana::codegen::emit_cpp_program(dead_program, dead_function.entry_address);
+    const auto tombstone_begin = dead_cpp.find("// katana-guest 0x8C030002");
+    const auto tombstone_end = dead_cpp.find("// katana-guest 0x8C030004", tombstone_begin);
+    require(tombstone_begin != std::string::npos && tombstone_end != std::string::npos,
+            "Dead-Code-NOP fehlt im generierten C++.");
+    const auto tombstone_cpp = dead_cpp.substr(tombstone_begin, tombstone_end - tombstone_begin);
+    require(tombstone_cpp.find("/* nop */") != std::string::npos &&
+                tombstone_cpp.find("katana::runtime::relocate_code_address(0x8C030002u), 1u);") !=
+                    std::string::npos,
+            "Dead-Code-NOP verliert Instruktionsversuch oder Originaltiming im C++-Backend.");
 
     auto cfg_function = dead_function;
     katana::ir::Instruction unreachable_nop;

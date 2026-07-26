@@ -95,6 +95,19 @@ int main() {
     require(has_issue(katana::ir::verify_function(invalid_transform), "synthetische Operation"),
             "Ursprungsoperation und transformierte IR werden vermischt.");
 
+    auto invalid_tombstone = program.front();
+    auto& control_tombstone = invalid_tombstone.blocks.front().instructions[1];
+    control_tombstone.operation = katana::ir::Operation::Nop;
+    control_tombstone.widths = katana::ir::operation_operand_widths(control_tombstone.operation);
+    control_tombstone.status_effects =
+        katana::ir::instruction_status_effects(control_tombstone.operation);
+    control_tombstone.memory_effects =
+        katana::ir::instruction_memory_effects(control_tombstone.operation);
+    control_tombstone.accumulator_effects =
+        katana::ir::operation_accumulator_effects(control_tombstone.operation);
+    require(has_issue(katana::ir::verify_function(invalid_tombstone), "synthetische Operation"),
+            "Effektvoller Originalopcode wird als NOP-Tombstone akzeptiert.");
+
     const std::array<katana::ir::Function, 2> duplicate_entries = {program.front(),
                                                                    program.front()};
     require(has_issue(katana::ir::verify_program(duplicate_entries), "doppelt vorhanden"),

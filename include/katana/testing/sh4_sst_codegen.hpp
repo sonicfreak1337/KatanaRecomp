@@ -74,6 +74,13 @@ struct SstCodeRelocationRecipe {
 [[nodiscard]] std::optional<std::uint32_t> canonical_address_for_sst_slot(const SstCodeForm& form,
                                                                           std::uint8_t slot);
 
+// Returns a materialized, delay-slot-safe linear block boundary immediately
+// after the fourth reference fetch. Splitting there prevents a native block
+// from crossing the fixed external-oracle horizon without inventing a function
+// root. A terminal control-flow instruction already provides its own boundary.
+[[nodiscard]] std::optional<std::uint32_t>
+sst_code_form_horizon_block_leader(const SstCodeForm& form);
+
 // Product CFG construction needs independent proven entries whenever one
 // physical instruction can be both an owner's delay slot and a normal target.
 // This includes a statically visible self-slot target even when the concrete

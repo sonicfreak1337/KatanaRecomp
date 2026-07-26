@@ -1115,7 +1115,8 @@ lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
     return lower_program(LoweringContext(source_blocks, resolved_edges), functions);
 }
 
-std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis) {
+std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis,
+                                    const std::span<const std::uint32_t> additional_block_leaders) {
     std::vector<std::uint32_t> seeds;
     seeds.reserve(analysis.recursive.functions.size());
     for (const auto& function : analysis.recursive.functions) {
@@ -1153,8 +1154,11 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     // precompiled code.  Keeping them out of `seeds` also preserves ordinary fallthrough within
     // the containing function instead of manufacturing a function return at every table entry.
     auto block_leaders = seeds;
+    block_leaders.insert(block_leaders.end(), candidate_leaders.begin(), candidate_leaders.end());
+    // Callers may request block boundaries for execution-policy reasons without
+    // promoting those addresses to function-discovery evidence.
     block_leaders.insert(
-        block_leaders.end(), candidate_leaders.begin(), candidate_leaders.end());
+        block_leaders.end(), additional_block_leaders.begin(), additional_block_leaders.end());
     std::sort(block_leaders.begin(), block_leaders.end());
     block_leaders.erase(std::unique(block_leaders.begin(), block_leaders.end()),
                         block_leaders.end());

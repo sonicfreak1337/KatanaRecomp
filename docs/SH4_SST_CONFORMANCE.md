@@ -25,6 +25,15 @@ Testindizes gebunden. Ein anderer Corpus-Commit, ein anderer Manifest-Hash,
 eine beschädigte Datei oder ein stale Waiver beendet den Lauf als
 Infrastruktur-/Corpusfehler.
 
+Der gepinnte Corpus enthält 43 exakt indexierte `DIV1 Rn,Rn`-Fälle aus einer
+alten Reicast-Referenzimplementierung, die das aliasierende `Rm` erst nach der
+Verschiebung von `Rn` liest. Das widerspricht der Reihenfolge in Renesas
+SH-4 Software Manual Rev.6.00, Abschnitt 9.19. Flycast korrigierte denselben
+geerbten Fehler mit Commit `d92790e69f4033fe1f35d72be2b9b539457d5e5b`.
+Diese Fälle bleiben deshalb sichtbar als
+`not-applicable-reference-known-bug`; Katana übernimmt nicht die fehlerhafte
+Oracle-Semantik.
+
 Der Corpus ist MIT-lizenziert, Copyright (c) 2024 SingleStepTests. Er wird
 nicht in KatanaRecomp kopiert. Lizenz- und Redistributionshinweise stehen in
 `THIRD_PARTY_NOTICES.md`.
@@ -86,6 +95,13 @@ Jede tatsächlich erwartete externe Fetch-Adresse erhält einen eigenen,
 vorab kompilierten Catch-all-Block mit `opcodes[4]`. `opcodes[4]` liegt nie
 pauschal bei `PC+8`. Ein nicht gebundenes Ziel endet als typisierter
 `fail-unbound-target`.
+
+Wenn der materialisierte Code direkt hinter dem vierten Referenz-Fetch
+weitergeht, fügt ausschließlich der SST-Generator dort einen zusätzlichen
+Basic-Block-Leader ein. Dieser Leader ist keine Funktionsevidenz. Weil das
+Konformitätsprofil lokales Block-Chaining an der Plattformgrenze ablehnt, kehrt
+der native Block damit exakt am Oracle-Horizont zurück; es werden weder
+Instruktionen abgeschnitten noch Ausnahmen zur Ablaufsteuerung erfunden.
 
 `cycles[].fetch_addr` ist das PC-, Kontrollfluss- und Delay-Slot-Orakel; nativer
 Code liest zur Laufzeit keine Opcodebytes aus Gast-RAM. Der echte

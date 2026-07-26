@@ -214,6 +214,23 @@ int main() {
         });
     require(guarded_function != guarded_program.end() && guarded_function->blocks.size() == 1u,
             "Bekannter dynamischer Codeblock wurde nicht fuer AOT-Rekompilierung materialisiert.");
+    constexpr std::array<std::uint32_t, 1> policy_leader = {0x8C020006u};
+    const auto policy_split_program = katana::ir::lower_program(guarded_analysis, policy_leader);
+    const auto policy_split_function =
+        std::find_if(policy_split_program.begin(),
+                     policy_split_program.end(),
+                     [](const auto& function) { return function.entry_address == 0x8C020004u; });
+    require(policy_split_program.size() == guarded_program.size() &&
+                policy_split_function != policy_split_program.end() &&
+                policy_split_function->blocks.size() == 2u &&
+                policy_split_function->blocks[0].start_address == 0x8C020004u &&
+                policy_split_function->blocks[1].start_address == policy_leader.front() &&
+                policy_split_function->blocks[1].instructions.size() == 2u &&
+                policy_split_function->blocks[1].instructions.front().delay_slot.role ==
+                    katana::ir::DelaySlotRole::Owner &&
+                policy_split_function->blocks[1].instructions.back().delay_slot.role ==
+                    katana::ir::DelaySlotRole::Slot,
+            "Zusaetzlicher Block-Leader erzeugt eine Funktion oder trennt Owner und Delay Slot.");
 
     constexpr std::size_t scaling_function_count = 4096u;
     constexpr std::uint32_t scaling_base = 0x8C100000u;

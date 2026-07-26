@@ -24,10 +24,13 @@ alle betroffenen Beziehungen. Unbekannte Registerwirkungen leeren den Aliaszusta
 
 ## Dead-Code-Elimination
 
-`eliminate_dead_code` entfernt nur reine Registerdefinitionen, die im selben Block
-vor jeder Nutzung durch eine weitere reine Definition desselben Registers ersetzt
-werden. Blockanfaenge bleiben stabil. Delay Slots sowie Status-, Speicher-,
-Akkumulator-, Privileg- und unbekannte Effekte bilden harte Grenzen.
+`eliminate_dead_code` entfernt nur den semantischen Schreibeffekt reiner
+Registerdefinitionen, die im selben Block vor jeder Nutzung durch eine weitere
+reine Definition desselben Registers ersetzt werden. Die Instruktion bleibt als
+kanonischer NOP-Tombstone mit Quell-PC, Originalopcode und Originaltiming erhalten.
+Damit bleiben nicht nur Blockanfaenge, sondern alle architektonischen
+Instruktionsgrenzen stabil. Delay Slots sowie Status-, Speicher-, Akkumulator-,
+Privileg- und unbekannte Effekte bilden harte Grenzen.
 
 ## CFG-Simplifizierung
 

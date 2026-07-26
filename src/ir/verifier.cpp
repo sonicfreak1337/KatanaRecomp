@@ -47,6 +47,26 @@ bool requires_special_register(const Operation operation) noexcept {
            operation == Operation::LoadSpecialRegisterPostIncrement;
 }
 
+bool is_dead_gpr_write_tombstone(const Instruction& instruction) noexcept {
+    if (instruction.operation != Operation::Nop) return false;
+    switch (instruction.original_operation) {
+    case Operation::MovImmediate:
+    case Operation::Constant32:
+    case Operation::MovRegister:
+    case Operation::AddImmediate:
+    case Operation::AddRegister:
+    case Operation::SubRegister:
+    case Operation::NegateRegister:
+    case Operation::NotRegister:
+    case Operation::AndRegister:
+    case Operation::OrRegister:
+    case Operation::XorRegister:
+        return true;
+    default:
+        return false;
+    }
+}
+
 const Instruction& controlling_instruction(const BasicBlock& block) {
     const auto& last = block.instructions.back();
     if (last.delay_slot.role == DelaySlotRole::Slot && block.instructions.size() >= 2u) {
@@ -226,7 +246,8 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
             }
             if (instruction.original_operation != Operation::Unknown &&
                 instruction.operation != instruction.original_operation &&
-                instruction.operation != Operation::Constant32) {
+                instruction.operation != Operation::Constant32 &&
+                !is_dead_gpr_write_tombstone(instruction)) {
                 add_issue(
                     issues,
                     instruction.source_address,

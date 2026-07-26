@@ -436,9 +436,17 @@ void waiver_tests() {
 
     const auto checked_in =
         katana::testing::parse_sh4_sst_waivers_file("tests/sh4_sst/waivers.json");
+    require(checked_in.waivers.size() == 1u,
+            "Eingecheckte Waiver-Datei enthaelt nicht exakt die bekannte Referenzluecke.");
+    const auto& known_div1_bug = checked_in.waivers.front();
     require(checked_in.corpus_commit == katana::testing::sh4_sst_corpus_commit &&
-                checked_in.waivers.empty(),
-            "Eingecheckte leere Waiver-Datei verletzt den Parservertrag.");
+                known_div1_bug.filename == "0011nnnnmmmm0100_sz0_pr0.json.bin" &&
+                known_div1_bug.classification ==
+                    ResultClassification::NotApplicableReferenceKnownBug &&
+                known_div1_bug.case_indices.size() == 43u &&
+                known_div1_bug.case_indices.front() == 2u &&
+                known_div1_bug.case_indices.back() == 494u && !known_div1_bug.evidence.empty(),
+            "Eingecheckter DIV1-Referenzwaiver verletzt den exakten Parservertrag.");
 }
 
 void report_tests() {

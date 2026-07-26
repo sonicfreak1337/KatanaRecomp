@@ -138,6 +138,65 @@ int main() {
             "Kontextuelle Delay-Slot-Einstiege unterscheiden statisches Ziel, dynamischen "
             "Wiedereintritt, normalen Delay Slot und nichtverzoegerten Folgesprung falsch.");
 
+        SstTestCase short_loop;
+        short_loop.initial.pc = 0x10000000u;
+        short_loop.opcodes = {0x0009u, 0x89FCu, 0x311Cu, 0x0009u, 0x322Cu};
+        const std::array loop_addresses{
+            short_loop.initial.pc,
+            short_loop.initial.pc + 2u,
+            short_loop.initial.pc - 2u,
+            short_loop.initial.pc,
+        };
+        for (std::size_t index = 0u; index < loop_addresses.size(); ++index) {
+            short_loop.cycles[index].actions = SstCycle::fetch_action;
+            short_loop.cycles[index].fetch_address = loop_addresses[index];
+        }
+        const auto short_loop_form = make_sst_code_form(short_loop);
+        const auto short_loop_leader = sst_code_form_horizon_block_leader(short_loop_form);
+        require(short_loop_leader &&
+                    *short_loop_leader == *canonical_address_for_sst_slot(short_loop_form, 1u),
+                "Kurze Schleife erhaelt keine AOT-Blockgrenze nach dem vierten Fetch.");
+
+        auto short_delayed_loop = short_loop;
+        short_delayed_loop.opcodes = {0x0009u, 0x8DFDu, 0x311Cu, 0x0009u, 0x322Cu};
+        short_delayed_loop.cycles[2].fetch_address = short_delayed_loop.initial.pc + 4u;
+        const auto short_delayed_loop_form = make_sst_code_form(short_delayed_loop);
+        const auto short_delayed_loop_leader =
+            sst_code_form_horizon_block_leader(short_delayed_loop_form);
+        require(short_delayed_loop_leader &&
+                    *short_delayed_loop_leader ==
+                        *canonical_address_for_sst_slot(short_delayed_loop_form, 1u),
+                "Verzoegerte kurze Schleife erhaelt keine Owner/Slot-sichere Blockgrenze.");
+
+        auto wrapped_delayed_loop = short_delayed_loop;
+        wrapped_delayed_loop.initial.pc = 0xFFFFFFFCu;
+        wrapped_delayed_loop.cycles[0].fetch_address = 0xFFFFFFFCu;
+        wrapped_delayed_loop.cycles[1].fetch_address = 0xFFFFFFFEu;
+        wrapped_delayed_loop.cycles[2].fetch_address = 0x00000000u;
+        wrapped_delayed_loop.cycles[3].fetch_address = 0xFFFFFFFCu;
+        const auto wrapped_delayed_loop_form = make_sst_code_form(wrapped_delayed_loop);
+        const auto wrapped_delayed_loop_leader =
+            sst_code_form_horizon_block_leader(wrapped_delayed_loop_form);
+        require(wrapped_delayed_loop_leader &&
+                    wrapped_delayed_loop_form.normal_pc_wrap_mask != 0u &&
+                    *wrapped_delayed_loop_leader ==
+                        *canonical_address_for_sst_slot(wrapped_delayed_loop_form, 1u),
+                "PC-Wraparound verliert die kanonische Vier-Fetch-Blockgrenze.");
+
+        require(!sst_code_form_horizon_block_leader(first),
+                "Nicht materialisierter Horizontnachfolger wurde als Block-Leader erfunden.");
+
+        auto final_delay_owner = self_slot_not_taken;
+        final_delay_owner.opcodes[3u] = 0xA000u;
+        const auto final_delay_owner_form = make_sst_code_form(final_delay_owner);
+        require(!sst_code_form_horizon_block_leader(final_delay_owner_form),
+                "Vier-Fetch-Horizont trennt einen Branch-Owner von seinem Delay Slot.");
+        auto final_plain_branch = self_slot_not_taken;
+        final_plain_branch.opcodes[3u] = 0x8900u;
+        const auto final_plain_branch_form = make_sst_code_form(final_plain_branch);
+        require(!sst_code_form_horizon_block_leader(final_plain_branch_form),
+                "Terminaler BT erzeugt eine redundante lineare Vier-Fetch-Blockgrenze.");
+
         std::cout << "SH-4 SST deterministic code-form tests passed.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

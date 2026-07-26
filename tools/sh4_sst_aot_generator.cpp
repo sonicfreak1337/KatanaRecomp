@@ -576,9 +576,29 @@ void generate_form(FormRecord& record) {
         }
     }
 
-    auto program = ir::lower_program(analyzed);
+    std::vector<std::uint32_t> horizon_leaders;
+    if (const auto leader = sst_codegen::sst_code_form_horizon_block_leader(record.form))
+        horizon_leaders.push_back(*leader);
+    auto program = ir::lower_program(analyzed, horizon_leaders);
     if (program.empty())
         throw std::runtime_error("supported SST form lowered to an empty program: " + record.key);
+    if (!horizon_leaders.empty()) {
+        const auto horizon = sst_codegen::canonical_address_for_sst_slot(
+            record.form, record.form.fetch_slots.back());
+        bool observed_horizon = false;
+        bool crossed_horizon = false;
+        for (const auto& function : program) {
+            for (const auto& block : function.blocks) {
+                for (std::size_t index = 0u; index < block.instructions.size(); ++index) {
+                    if (!horizon || block.instructions[index].source_address != *horizon) continue;
+                    observed_horizon = true;
+                    crossed_horizon = crossed_horizon || index + 1u != block.instructions.size();
+                }
+            }
+        }
+        if (!observed_horizon || crossed_horizon)
+            throw std::runtime_error("supported SST form lost its four-fetch AOT block boundary");
+    }
     const auto& contract = codegen::native_aot_emission_contract(
         codegen::NativeAotEmissionProfile::ExternalConformance);
     static_cast<void>(ir::optimize_program(program, contract.optimization_options));

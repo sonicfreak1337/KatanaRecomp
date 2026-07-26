@@ -24,7 +24,11 @@ lower_program(std::span<const katana::sh4::DisassemblyLine> lines,
               std::span<const katana::analysis::FunctionInfo> functions,
               std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges = {});
 
+// Additional leaders split existing functions without becoming discovery
+// seeds. Callers must not place one at an instruction marked only as a delay
+// slot; an owner/slot pair is an atomic basic-block terminator.
 [[nodiscard]] std::vector<Function>
-lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis);
+lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis,
+              std::span<const std::uint32_t> additional_block_leaders = {});
 
 } // namespace katana::ir

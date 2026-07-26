@@ -16,7 +16,12 @@
   Interpreter-, Diagnose- und Laufzeitdecoderpfade abgesichert. Runtime-ABI
   49, Backend-Interface-ABI 4 und Portprojektvertrag 33 versionieren die
   gemeinsame native AOT-Profilgrenze. Der normale Build behaelt den externen
-  Corpus standardmaessig deaktiviert.
+  Corpus standardmaessig deaktiviert. Tote reine Registerwrites bleiben als
+  zeit- und PC-treue NOP-Tombstones beobachtbar; ein generatorlokaler
+  Block-Leader beendet kurze Schleifen exakt hinter dem vierten
+  Referenz-Fetch. 43 indexgenaue `DIV1 Rn,Rn`-Faelle bleiben als alter,
+  upstream bestaetigter Reicast-Referenzfehler sichtbar, statt dessen
+  Post-Shift-Aliassemantik in das Produkt zu uebernehmen.
 - Der nach dem sichtbaren Sega-Logo belegte `KR-4851`-Hotspot ist als
   allgemeiner SH-4-Exception-/Codegenfehler geschlossen. `trap_pending`
   bezeichnet den gesamten Zeitraum vom Exceptioneintritt bis `RTE`; der
