@@ -121,7 +121,71 @@ if(NOT generated_result EQUAL 0 OR
     "${generated_output} ${generated_error}")
 endif()
 
-file(WRITE "${fixture}/port/build/katana-incremental-marker" "keep-build-cache\n")
+string(REGEX MATCH "Inkrementeller Hostbuild-Cache: ([^\r\n]+)"
+       port_build_cache_match "${port_output}")
+if(NOT port_build_cache_match)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Port-CLI meldet keinen stabilen Hostbuild-Cache: ${port_output}")
+endif()
+set(port_build "${CMAKE_MATCH_1}")
+file(TO_CMAKE_PATH "${port_build}" port_build)
+get_filename_component(port_workspace "${port_build}" DIRECTORY)
+get_filename_component(port_workspace_name "${port_workspace}" NAME)
+if(NOT port_workspace_name MATCHES "^\\.katana-port-work-[0-9a-f]+$" OR
+   NOT EXISTS "${port_workspace}/CMakeLists.txt" OR
+   NOT EXISTS "${port_build}/CMakeCache.txt" OR
+   EXISTS "${fixture}/port/build" OR EXISTS "${fixture}/port/build-ninja")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Portexport trennt den stabilen Buildcache nicht sauber vom vorgebauten Paket: ${port_build}")
+endif()
+
+file(READ "${port_build}/CMakeCache.txt" port_cmake_cache)
+string(REPLACE "\\" "/" port_cmake_cache "${port_cmake_cache}")
+set(expected_cache_workspace "${port_workspace}")
+set(expected_cache_build "${port_build}")
+set(cache_home_key "CMAKE_HOME_DIRECTORY:INTERNAL=")
+set(cache_build_key "CMAKE_CACHEFILE_DIR:INTERNAL=")
+if(WIN32)
+  string(TOLOWER "${port_cmake_cache}" port_cmake_cache)
+  string(TOLOWER "${expected_cache_workspace}" expected_cache_workspace)
+  string(TOLOWER "${expected_cache_build}" expected_cache_build)
+  string(TOLOWER "${cache_home_key}" cache_home_key)
+  string(TOLOWER "${cache_build_key}" cache_build_key)
+endif()
+string(FIND "${port_cmake_cache}"
+       "${cache_home_key}${expected_cache_workspace}" cache_source_position)
+string(FIND "${port_cmake_cache}"
+       "${cache_build_key}${expected_cache_build}" cache_build_position)
+if(cache_source_position EQUAL -1 OR cache_build_position EQUAL -1)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Hostbuild-Cache verweist nicht auf das stabile Arbeits-/Buildverzeichnis")
+endif()
+
+file(GLOB publish_stages "${fixture}/.katana-port-publish-*")
+if(publish_stages)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Atomarer Portexport hinterlaesst Publishing-Staging: ${publish_stages}")
+endif()
+
+# Der Cache muss auch nach dem atomaren Publish direkt fuer einen inkrementellen
+# Runtime-Neubau verwendbar bleiben; dabei darf kein Disc-Installationsschritt noetig sein.
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" --build "${port_build}" --target cli_game
+          --config RelWithDebInfo --parallel 2
+  RESULT_VARIABLE cached_build_result
+  OUTPUT_VARIABLE cached_build_output
+  ERROR_VARIABLE cached_build_error
+)
+if(NOT cached_build_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Stabiler Hostbuild-Cache ist nach dem Publish unbrauchbar: "
+    "${cached_build_output} ${cached_build_error}")
+endif()
+
+file(WRITE "${port_build}/katana-incremental-marker" "keep-build-cache\n")
 execute_process(
   COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
           --output "${fixture}/port" --target-name cli_game
@@ -129,8 +193,14 @@ execute_process(
   OUTPUT_VARIABLE incremental_port_output
   ERROR_VARIABLE incremental_port_error
 )
-if(NOT incremental_port_result EQUAL 0 OR
-   NOT EXISTS "${fixture}/port/build/katana-incremental-marker" OR
+string(REGEX MATCH "Inkrementeller Hostbuild-Cache: ([^\r\n]+)"
+       incremental_build_cache_match "${incremental_port_output}")
+set(incremental_port_build "${CMAKE_MATCH_1}")
+file(TO_CMAKE_PATH "${incremental_port_build}" incremental_port_build)
+if(NOT incremental_port_result EQUAL 0 OR NOT incremental_build_cache_match OR
+   NOT "${incremental_port_build}" STREQUAL "${port_build}" OR
+   NOT EXISTS "${port_build}/katana-incremental-marker" OR
+   EXISTS "${fixture}/port/build" OR EXISTS "${fixture}/port/build-ninja" OR
    NOT EXISTS "${fixture}/port/user-data/content/game.katana-disc")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR

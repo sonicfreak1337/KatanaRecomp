@@ -1152,42 +1152,71 @@ std::size_t configured_host_build_jobs() {
     return static_cast<std::size_t>(jobs);
 }
 
-void seed_incremental_port_stage(const std::filesystem::path& published,
-                                 const std::filesystem::path& stage) {
-    if (!std::filesystem::exists(published)) return;
-    const auto root_status = std::filesystem::symlink_status(published);
-    if (!std::filesystem::is_directory(root_status) || std::filesystem::is_symlink(root_status))
-        throw std::runtime_error("Vorheriger Port ist kein sicherer regulaerer Ordner.");
-    std::filesystem::create_directories(stage);
-    for (std::filesystem::recursive_directory_iterator iterator(published), end; iterator != end;
+bool safe_regular_port_directory_exists(const std::filesystem::path& root,
+                                        const std::string_view description) {
+    std::error_code status_error;
+    const auto status = std::filesystem::symlink_status(root, status_error);
+    if (status_error == std::errc::no_such_file_or_directory ||
+        status.type() == std::filesystem::file_type::not_found)
+        return false;
+    if (status_error)
+        throw std::runtime_error(std::string(description) +
+                                 " konnte nicht sicher geprueft werden.");
+    if (!std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+        throw std::runtime_error(std::string(description) +
+                                 " ist kein sicherer regulaerer Ordner.");
+    return true;
+}
+
+bool excluded_from_port_distribution(const std::filesystem::path& relative) {
+    if (relative.empty()) return false;
+    const auto top_level = relative.begin()->generic_string();
+    return top_level == "user-data" || top_level == "build" ||
+           top_level.starts_with("build-");
+}
+
+void copy_port_tree_for_distribution(const std::filesystem::path& source,
+                                     const std::filesystem::path& destination) {
+    if (!safe_regular_port_directory_exists(source, "Portquelle")) return;
+    if (safe_regular_port_directory_exists(destination, "Portkopieziel"))
+        throw std::runtime_error("Portkopieziel existiert bereits.");
+    std::filesystem::create_directories(destination);
+    for (std::filesystem::recursive_directory_iterator iterator(source), end; iterator != end;
          ++iterator) {
-        const auto relative = iterator->path().lexically_relative(published);
-        if (!relative.empty() && *relative.begin() == "user-data") {
+        const auto relative = iterator->path().lexically_relative(source);
+        if (excluded_from_port_distribution(relative)) {
             if (iterator->is_directory()) iterator.disable_recursion_pending();
             continue;
         }
         const auto status = iterator->symlink_status();
         if (std::filesystem::is_symlink(status))
-            throw std::runtime_error("Vorheriger Port enthaelt einen symbolischen Link.");
+            throw std::runtime_error("Portquelle enthaelt einen symbolischen Link.");
         if (iterator->path().extension() == ".katana-disc") {
             if (iterator->is_directory()) iterator.disable_recursion_pending();
             continue;
         }
-        const auto destination = stage / relative;
+        const auto target = destination / relative;
         if (std::filesystem::is_directory(status)) {
-            std::filesystem::create_directories(destination);
+            std::filesystem::create_directories(target);
             continue;
         }
         if (!std::filesystem::is_regular_file(status))
-            throw std::runtime_error("Vorheriger Port enthaelt einen nicht regulaeren Eintrag.");
-        std::filesystem::create_directories(destination.parent_path());
+            throw std::runtime_error("Portquelle enthaelt einen nicht regulaeren Eintrag.");
+        std::filesystem::create_directories(target.parent_path());
         std::filesystem::copy_file(
-            iterator->path(), destination, std::filesystem::copy_options::overwrite_existing);
+            iterator->path(), target, std::filesystem::copy_options::overwrite_existing);
+        std::error_code permission_error;
+        std::filesystem::permissions(target,
+                                     status.permissions(),
+                                     std::filesystem::perm_options::replace,
+                                     permission_error);
+        if (permission_error)
+            throw std::runtime_error("Portdateirechte konnten nicht uebernommen werden.");
         std::error_code timestamp_error;
         std::filesystem::last_write_time(
-            destination, std::filesystem::last_write_time(iterator->path()), timestamp_error);
+            target, std::filesystem::last_write_time(iterator->path()), timestamp_error);
         if (timestamp_error)
-            throw std::runtime_error("Portcache-Zeitstempel konnte nicht uebernommen werden.");
+            throw std::runtime_error("Portdatei-Zeitstempel konnte nicht uebernommen werden.");
     }
 }
 
@@ -1224,17 +1253,22 @@ int export_port_project(const std::filesystem::path& gdi_path,
     };
     const auto stage_key =
         katana::io::sha256_bytes(absolute_output.generic_string() + ':' + target_name);
-    const auto stage =
-        absolute_output.parent_path() / (".katana-port-stage-" + stage_key.substr(0u, 12u));
+    const auto workspace =
+        absolute_output.parent_path() / (".katana-port-work-" + stage_key.substr(0u, 12u));
+    const auto publish_stage =
+        absolute_output.parent_path() / (".katana-port-publish-" + stage_key.substr(0u, 12u));
     std::error_code cleanup_error;
-    std::filesystem::remove_all(stage, cleanup_error);
-    if (cleanup_error) throw std::runtime_error("Altes Port-Staging konnte nicht entfernt werden.");
+    if (safe_regular_port_directory_exists(publish_stage, "Altes Port-Publishing"))
+        std::filesystem::remove_all(publish_stage, cleanup_error);
+    if (cleanup_error)
+        throw std::runtime_error("Altes Port-Publishing konnte nicht entfernt werden.");
     try {
-        seed_incremental_port_stage(absolute_output, stage);
+        if (!safe_regular_port_directory_exists(workspace, "Port-Arbeitsverzeichnis"))
+            copy_port_tree_for_distribution(absolute_output, workspace);
         std::cout << "KATANA_PORT_PHASE analysis-codegen\n" << std::flush;
         const auto report = katana::codegen::export_dreamcast_port_project(
             gdi_path,
-            stage,
+            workspace,
             {target_name,
              KATANA_RECOMP_VERSION,
              {},
@@ -1252,6 +1286,8 @@ int export_port_project(const std::filesystem::path& gdi_path,
         use_ninja = true;
         const auto build_path = report.output_root / "build";
 #endif
+        static_cast<void>(
+            safe_regular_port_directory_exists(build_path, "Inkrementeller Hostbuild-Cache"));
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
 #ifdef _WIN32
@@ -1334,6 +1370,9 @@ int export_port_project(const std::filesystem::path& gdi_path,
                 "Runtime-Abhaengigkeitsmanifest konnte nicht geschrieben werden.");
         runtime_manifest.close();
         std::filesystem::create_directories(report.output_root / "user-data");
+        std::cout << "KATANA_PORT_PHASE package\n" << std::flush;
+        copy_port_tree_for_distribution(report.output_root, publish_stage);
+        std::filesystem::create_directories(publish_stage / "user-data");
         const auto stale = std::filesystem::path(absolute_output.string() + ".katana-stale-port");
         std::filesystem::remove_all(stale, cleanup_error);
         if (cleanup_error)
@@ -1341,7 +1380,7 @@ int export_port_project(const std::filesystem::path& gdi_path,
         if (std::filesystem::exists(absolute_output))
             std::filesystem::rename(absolute_output, stale);
         try {
-            std::filesystem::rename(report.output_root, absolute_output);
+            std::filesystem::rename(publish_stage, absolute_output);
             katana::codegen::preserve_local_port_user_data(stale, absolute_output);
         } catch (...) {
             std::filesystem::remove_all(absolute_output, cleanup_error);
@@ -1354,10 +1393,11 @@ int export_port_project(const std::filesystem::path& gdi_path,
                   << "Partitionen: " << report.partitions << '\n'
                   << "Installations-Recipe-Tracks: " << report.disc_tracks << '\n'
                   << "Retail-Sektoren im Portpaket: 0\n"
+                  << "Inkrementeller Hostbuild-Cache: " << build_path.string() << '\n'
                   << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
         return 0;
     } catch (...) {
-        std::filesystem::remove_all(stage, cleanup_error);
+        std::filesystem::remove_all(publish_stage, cleanup_error);
         throw;
     }
 }
