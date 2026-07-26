@@ -822,14 +822,27 @@ int run_test(const int argc, char* argv[]) {
     const auto render_failures_before_failure =
         hle_runtime_state.pvr_registers->render_failure_count();
     hle_runtime_state.pvr_registers->write(katana::runtime::pvr_register::StartRender, 1u);
-    static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 64u));
+    std::optional<katana::runtime::PvrRenderFailure> typed_render_failure;
+    try {
+        static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 64u));
+    } catch (const katana::runtime::PvrRenderFailed& error) {
+        typed_render_failure = error.failure();
+    }
     require(hle_runtime_state.pvr_registers->render_completion_count() ==
                     render_completions_before_failure &&
                 hle_runtime_state.pvr_registers->render_failure_count() ==
                     render_failures_before_failure + 1u &&
                 render_done_count() == render_done_before_failure &&
-                hle_runtime_state.pvr_renderer->first_error().has_value(),
-            "Fehlgeschlagener PVR-Renderpfad signalisiert RenderDone.");
+                hle_runtime_state.pvr_renderer->first_error().has_value() &&
+                typed_render_failure &&
+                typed_render_failure->request != 0u &&
+                typed_render_failure->generation != 0u &&
+                typed_render_failure->ta_packet_class == "none" &&
+                typed_render_failure->register_digest != 0u &&
+                typed_render_failure->guest_cycle != 0u &&
+                hle_runtime_state.pvr_registers->last_render_failure() ==
+                    typed_render_failure,
+            "Fehlgeschlagener PVR-Renderpfad signalisiert RenderDone oder bleibt untypisiert.");
     hle_runtime_state.pvr_registers->write(
         katana::runtime::pvr_register::FramebufferWriteControl, 0u);
     constexpr std::uint32_t render_background = 0x00100000u;
@@ -1770,6 +1783,8 @@ int run_test(const int argc, char* argv[]) {
     const auto counted_loop_main = read_text(counted_loop_output / "src" / "main.cpp");
     const auto counted_loop_header =
         read_text(counted_loop_output / "generated" / "include" / "katana_port.hpp");
+    const auto counted_loop_port_cmake =
+        read_text(counted_loop_output / "generated" / "katana-port.cmake");
     constexpr std::string_view counted_loop_descriptor =
         "{0x8C010016u, 0x8C010010u, 6u, 0x8C010024u, 0x8C010018u, "
         "0x8C010014u, 0x8C010012u, 8, 15u, 3u, 2u, 1u, 1u, 2u, 4u, "
@@ -1930,6 +1945,26 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             counted_loop_header.find("std::string_view increment_provenance") !=
                 std::string::npos &&
+            counted_loop_port_cmake.find(
+                "option(KATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST") !=
+                std::string::npos &&
+            counted_loop_port_cmake.find(
+                "PRIVATE KATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST=1") !=
+                std::string::npos &&
+            counted_loop_main.find(
+                "#if defined(KATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST)") !=
+                std::string::npos &&
+            counted_loop_main.find("KATANA_PORT_TEST_ACTIVE_MMU") != std::string::npos &&
+            counted_loop_main.find("KATANA_PORT_TEST_DISABLE_COUNTED_LOOP") !=
+                std::string::npos &&
+            counted_loop_main.find("KATANA_COUNTED_LOOP_STATE cpu=") !=
+                std::string::npos &&
+            counted_loop_main.find("module_provenance=") != std::string::npos &&
+            counted_loop_main.find("class ScopedCpuActiveBlockProvenance final") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "const ScopedCpuActiveBlockProvenance active_block_provenance(") !=
+                std::string::npos &&
             counted_loop_dispatch.find("selected_block->get(), *counted_loop") !=
                 std::string::npos &&
             counted_loop_dispatch.find("active_context->scheduler_cycle =") != std::string::npos &&
@@ -1965,6 +2000,10 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             counted_runtime_gate.find("state_.main_ram->size() ==\n"
                                       "                katana::runtime::dreamcast_main_ram_size") !=
+                std::string::npos &&
+            counted_runtime_gate.find(
+                "state_.address_space->mode() ==\n"
+                "                katana::runtime::AddressTranslationMode::NoMmu") !=
                 std::string::npos &&
             counted_loop_main.find("katana::runtime::dreamcast_main_ram_area_bases") !=
                 std::string::npos &&
@@ -3009,7 +3048,8 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_TA_FRAME") !=
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("KR_FIRST_GAMEPLAY_FRAME") !=
+            read_text(output / "src" / "main.cpp")
+                    .find("KR_FIRST_POST_BOOTSTRAP_TA_FRAME") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_PRESENTED_FRAME") !=
                 std::string::npos &&
@@ -3033,6 +3073,11 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KATANA_HOST_PACING_ERROR") !=
                 std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_STORE_QUEUE_PREFETCH_REJECTED") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_PVR_RENDER_FAILED") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("audio_hash") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("source-identity-mismatch") !=
                 std::string::npos &&

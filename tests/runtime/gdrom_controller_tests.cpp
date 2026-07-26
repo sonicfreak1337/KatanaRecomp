@@ -758,6 +758,70 @@ int main() {
             "GD-ROM NoMedia wird nicht auf Sense ASC 3A abgebildet.");
 
     controller.reset();
+    {
+        EventScheduler parameter_contract_scheduler;
+        DreamcastGdRomController parameter_contract_controller(
+            cpu.memory,
+            parameter_contract_scheduler,
+            GdRomDrive(source),
+            {},
+            {},
+            {},
+            {},
+            {},
+            DiscLoadExecutionPolicy::StandaloneTestMode);
+        constexpr std::uint32_t boundary_output = 0x8C006000u;
+        constexpr std::uint32_t last_parameter_word = 0x8CFFFFFCu;
+        constexpr std::uint32_t last_two_parameter_words = 0x8CFFFFF8u;
+        constexpr std::uint32_t last_four_parameter_words = 0x8CFFFFF0u;
+        const auto execute_synchronous_bios_command =
+            [&](const std::uint32_t command, const std::uint32_t parameter_address) {
+            cpu.r[4] = command;
+            cpu.r[5] = parameter_address;
+            const auto request =
+                parameter_contract_controller.bios_call(cpu, 0u, 0u);
+            if (request == 0u) return std::pair{request, 0u};
+            static_cast<void>(
+                parameter_contract_controller.bios_call(cpu, 2u, 0u));
+            cpu.r[4] = request;
+            cpu.r[5] = 0u;
+            return std::pair{
+                request, parameter_contract_controller.bios_call(cpu, 1u, 0u)};
+        };
+
+        cpu.memory.write_u32(last_two_parameter_words, 0u);
+        cpu.memory.write_u32(last_two_parameter_words + 4u, boundary_output);
+        const auto toc_command_18 =
+            execute_synchronous_bios_command(18u, last_two_parameter_words);
+        cpu.memory.write_u32(last_two_parameter_words, 0u);
+        cpu.memory.write_u32(last_two_parameter_words + 4u, boundary_output);
+        const auto toc_command_19 =
+            execute_synchronous_bios_command(19u, last_two_parameter_words);
+        const auto init_command =
+            execute_synchronous_bios_command(24u, 0xE0000000u);
+        const auto nop_command =
+            execute_synchronous_bios_command(29u, 0xE0000000u);
+        cpu.memory.write_u32(last_parameter_word, boundary_output);
+        const auto request_mode_command =
+            execute_synchronous_bios_command(30u, last_parameter_word);
+        cpu.memory.write_u32(last_four_parameter_words, 0u);
+        cpu.memory.write_u32(last_four_parameter_words + 4u, 0u);
+        cpu.memory.write_u32(last_four_parameter_words + 8u, 0u);
+        cpu.memory.write_u32(last_four_parameter_words + 12u, 0u);
+        const auto set_mode_command =
+            execute_synchronous_bios_command(31u, last_four_parameter_words);
+        require(toc_command_18.first != 0u && toc_command_18.second == 2u &&
+                    toc_command_19.first != 0u && toc_command_19.second == 2u &&
+                    init_command.first != 0u && init_command.second == 2u &&
+                    nop_command.first != 0u && nop_command.second == 2u &&
+                    request_mode_command.first != 0u &&
+                    request_mode_command.second == 2u &&
+                    set_mode_command.first != 0u &&
+                    set_mode_command.second == 2u,
+                "GD-ROM-BIOS-Kommandos dereferenzieren ueber ihren exakten "
+                "Parameterwortvertrag hinaus.");
+    }
+
     constexpr std::uint32_t parameters = 0x8C003000u;
     constexpr std::uint32_t destination = 0x8C004000u;
     constexpr std::uint32_t extended_status = 0x8C005000u;

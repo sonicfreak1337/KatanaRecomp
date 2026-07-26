@@ -3,8 +3,8 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 49, Block-ABI 4,
-Backend-Interface-ABI 3, PlatformServices-ABI 11 und Portprojektvertrag 33.
+Der kumulative Integrationsstand verwendet Runtime-ABI 50, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11 und Portprojektvertrag 34.
 
 ## Vertrag
 
@@ -154,10 +154,11 @@ Epochenintervalls hostunabhaengig und reicht exakt dessen `PvrFrame` optional
 an `NativeVideoOutput` weiter. Ein Direct-FB-Marker ohne konsistentes
 Generationsintervall wird nicht akzeptiert. Der titelunabhaengige
 `GuestFrameEvidenceTracker` trennt `KR_FIRST_GUEST_SCANOUT` (Direct-FB oder
-TA), `KR_FIRST_TA_FRAME` und `KR_FIRST_GAMEPLAY_FRAME`. Direct-FB bleibt damit
-echte Gastevidenz, wird aber weder als TA noch als Gameplay bezeichnet. Ein
-Gameplaymarker verlangt Gastprogrammfortschritt und einen TA-Frame nach einem
-Bootstrap- oder bereits bewiesenen Gastscanout. Der kompatible
+TA), `KR_FIRST_TA_FRAME` und `KR_FIRST_POST_BOOTSTRAP_TA_FRAME`. Direct-FB
+bleibt damit echte Gastevidenz, wird aber nicht als TA bezeichnet. Der
+Post-Bootstrap-Marker verlangt Gastprogrammfortschritt und einen TA-Frame nach
+einem Bootstrap- oder bereits bewiesenen Gastscanout; er behauptet ausdruecklich
+noch kein Gameplay. Der kompatible
 `KR_FIRST_GUEST_FRAME` bezeichnet weiterhin nur den ersten echten
 Gastscanout; `KR_FIRST_PRESENTED_FRAME` entsteht getrennt erst nach
 nachweislich erfolgreichem Present. Das relocatierte Runtime-SDK linkt die

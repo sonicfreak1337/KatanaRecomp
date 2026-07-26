@@ -63,7 +63,7 @@ enum class GuestFrameEvidenceMarker : std::uint8_t {
     None = 0u,
     FirstGuestScanout = 1u << 0u,
     FirstTaFrame = 1u << 1u,
-    FirstGameplayFrame = 1u << 2u,
+    FirstPostBootstrapTaFrame = 1u << 2u,
 };
 
 using GuestFrameEvidenceMarkers = std::uint8_t;
@@ -89,21 +89,21 @@ struct GuestFrameEvidenceObservation {
 
 class GuestFrameEvidenceTracker {
   public:
-    // Gameplay evidence remains deliberately conservative and title-independent: a TA frame
-    // must follow either a bootstrap scanout or an earlier proven guest scanout once guest
-    // program progress has been observed.
+    // Post-bootstrap TA evidence remains title-independent: a TA frame must follow either a
+    // bootstrap scanout or an earlier proven guest scanout once guest program progress has
+    // been observed. This deliberately does not claim gameplay.
     [[nodiscard]] GuestFrameEvidenceObservation observe(const GuestFramePumpResult& frame,
                                                         bool guest_program_progressed) noexcept;
 
     [[nodiscard]] bool guest_scanout_seen() const noexcept;
     [[nodiscard]] bool ta_frame_seen() const noexcept;
-    [[nodiscard]] bool gameplay_frame_seen() const noexcept;
+    [[nodiscard]] bool post_bootstrap_ta_frame_seen() const noexcept;
     [[nodiscard]] bool bootstrap_scanout_seen() const noexcept;
 
   private:
     bool guest_scanout_seen_ = false;
     bool ta_frame_seen_ = false;
-    bool gameplay_frame_seen_ = false;
+    bool post_bootstrap_ta_frame_seen_ = false;
     bool bootstrap_scanout_seen_ = false;
 };
 

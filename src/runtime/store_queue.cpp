@@ -6,11 +6,25 @@
 namespace katana::runtime {
 
 StoreQueueSinkError::StoreQueueSinkError(const StoreQueueSinkErrorReason reason,
-                                         std::string detail)
-    : std::runtime_error(std::move(detail)), reason_(reason) {}
+                                         std::string detail,
+                                         std::string packet_class)
+    : std::runtime_error(std::move(detail)), reason_(reason),
+      packet_class_(std::move(packet_class)) {}
 
 StoreQueueSinkErrorReason StoreQueueSinkError::reason() const noexcept {
     return reason_;
+}
+
+const std::string& StoreQueueSinkError::packet_class() const noexcept {
+    return packet_class_;
+}
+
+StoreQueuePrefetchRejected::StoreQueuePrefetchRejected(StoreQueueSinkFault fault)
+    : std::runtime_error("store-queue-prefetch-rejected: " + fault.detail),
+      fault_(std::move(fault)) {}
+
+const StoreQueueSinkFault& StoreQueuePrefetchRejected::fault() const noexcept {
+    return fault_;
 }
 
 Sh4StoreQueues::Sh4StoreQueues(Memory& memory,
@@ -80,8 +94,28 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address,
                               const GuestInstructionOrigin instruction,
                               const std::uint64_t retired_guest_instructions,
                               const std::uint64_t attempted_guest_instructions) {
+    const auto result = prefetch_result(
+        address, instruction, retired_guest_instructions, attempted_guest_instructions);
+    if (result == StoreQueuePrefetchResult::Rejected) {
+        if (last_sink_fault_) throw StoreQueuePrefetchRejected(*last_sink_fault_);
+        throw StoreQueuePrefetchRejected(
+            {StoreQueueSinkErrorReason::DeviceRejected,
+             address & ~31u,
+             0u,
+             "Store-Queue-Sink lehnte PREF ohne Fehlerdetail ab.",
+             {},
+             instruction});
+    }
+    return result == StoreQueuePrefetchResult::Transferred;
+}
+
+StoreQueuePrefetchResult
+Sh4StoreQueues::prefetch_result(const std::uint32_t address,
+                                const GuestInstructionOrigin instruction,
+                                const std::uint64_t retired_guest_instructions,
+                                const std::uint64_t attempted_guest_instructions) {
     if (address < window_start || address > window_end) {
-        return false;
+        return StoreQueuePrefetchResult::NotStoreQueueAddress;
     }
     if ((address & 3u) != 0u) {
         throw MemoryAccessError(MemoryAccessErrorReason::Misaligned,
@@ -120,18 +154,21 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address,
                     error.reason(),
                     transfer.source_address,
                     transfer.target_address,
-                    error.what()};
+                    error.what(),
+                    error.packet_class(),
+                    instruction};
             } catch (...) {
                 try {
                     auto& fallback = last_sink_fault_.emplace();
                     fallback.reason = error.reason();
                     fallback.source_address = transfer.source_address;
                     fallback.target_address = transfer.target_address;
+                    fallback.instruction = instruction;
                 } catch (...) {
                     last_sink_fault_.reset();
                 }
             }
-            return false;
+            return StoreQueuePrefetchResult::Rejected;
         }
     } else {
         memory_.write_bytes_at(
@@ -145,7 +182,7 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address,
             CodeWriteSource::StoreQueue);
     }
     ++transfer_count_;
-    return true;
+    return StoreQueuePrefetchResult::Transferred;
 }
 
 void Sh4StoreQueues::set_prefetch_address_translator(StoreQueueAddressTranslator translator) {

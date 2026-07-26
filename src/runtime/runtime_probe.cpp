@@ -879,6 +879,38 @@ make_runtime_probe_device_snapshot(const PvrRegisterSnapshot& snapshot,
     fields.scalar(snapshot.active_render_start_cycle);
     fields.scalar(snapshot.active_render_payload_digest);
     fields.optional_scalar(snapshot.last_render_start_error);
+    fields.scalar(snapshot.last_render_failure.has_value());
+    fields.scalar(snapshot.last_render_failure
+                      ? snapshot.last_render_failure->request
+                      : 0u);
+    fields.scalar(snapshot.last_render_failure
+                      ? snapshot.last_render_failure->generation
+                      : 0u);
+    fields.scalar(snapshot.last_render_failure
+                      ? static_cast<std::uint64_t>(snapshot.last_render_failure->error)
+                      : 0u);
+    const std::string_view render_failure_packet_class =
+        snapshot.last_render_failure
+            ? std::string_view(snapshot.last_render_failure->ta_packet_class)
+            : std::string_view{};
+    fields.payload(render_failure_packet_class.size(),
+                   [render_failure_packet_class](RuntimeProbeFnv1a64LeV1& hash) {
+                       append_string(hash, render_failure_packet_class);
+                   });
+    fields.scalar(snapshot.last_render_failure
+                      ? snapshot.last_render_failure->register_digest
+                      : 0u);
+    fields.scalar(snapshot.last_render_failure
+                      ? snapshot.last_render_failure->guest_cycle
+                      : 0u);
+    const std::string_view render_failure_detail =
+        snapshot.last_render_failure
+            ? std::string_view(snapshot.last_render_failure->detail)
+            : std::string_view{};
+    fields.payload(render_failure_detail.size(),
+                   [render_failure_detail](RuntimeProbeFnv1a64LeV1& hash) {
+                       append_string(hash, render_failure_detail);
+                   });
     return std::move(fields).finish();
 }
 
@@ -1954,6 +1986,22 @@ make_runtime_probe_device_snapshot(const Sh4StoreQueueSnapshot& snapshot,
                    [sink_fault_detail](RuntimeProbeFnv1a64LeV1& hash) {
                        append_string(hash, sink_fault_detail);
                    });
+    const std::string_view sink_fault_packet_class =
+        snapshot.last_sink_fault ? std::string_view(snapshot.last_sink_fault->packet_class)
+                                 : std::string_view{};
+    fields.payload(sink_fault_packet_class.size(),
+                   [sink_fault_packet_class](RuntimeProbeFnv1a64LeV1& hash) {
+                       append_string(hash, sink_fault_packet_class);
+                   });
+    fields.scalar(snapshot.last_sink_fault
+                      ? snapshot.last_sink_fault->instruction.source_pc
+                      : 0u);
+    fields.scalar(snapshot.last_sink_fault
+                      ? snapshot.last_sink_fault->instruction.runtime_pc
+                      : 0u);
+    fields.scalar(snapshot.last_sink_fault
+                      ? snapshot.last_sink_fault->instruction.valid
+                      : false);
     fields.payload(static_cast<std::uint64_t>(transfer_history.size()),
                    [transfer_history](RuntimeProbeFnv1a64LeV1& hash) {
                        for (const auto& transfer : transfer_history) {

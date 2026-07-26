@@ -661,16 +661,16 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 49, Block-ABI 4,
-Backend-Interface-ABI 3, PlatformServices-ABI 11, Portvertrag 33 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 50, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portvertrag 34 und
 Host-Video-Vertrag 2.
 
 Der Produktfortschritt unterscheidet `GuestProgramDispatched` von
 `GuestProgramProgressed`. Progression verlangt mindestens eine retired
 Instruktion sowie weder eine neue Exceptionkante noch einen Exception-Exit im
 beobachteten Blockabschluss. Nur Progression erfuellt das Produktgate und darf
-zur Gameplay-Evidenz beitragen. Frameevidenz trennt den ersten echten
-Gastscanout, den ersten TA-Frame und den ersten Gameplayframe; ein
+zur Frameevidenz beitragen. Diese trennt den ersten echten Gastscanout, den
+ersten TA-Frame und den ersten TA-Frame nach belegtem Bootstrapfortschritt; ein
 Direct-Framebuffer-Scanout kann nur den ersten Gastscanout ausloesen.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne

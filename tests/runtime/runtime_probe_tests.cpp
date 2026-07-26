@@ -363,7 +363,14 @@ int main() {
                     device.fields.front().id == 1u &&
                     device.fields.front().value ==
                         runtime_probe_device_schema_version,
-                "Ein Vollsnapshot stimmt nicht mit seinem stabilen Device-Schema ueberein.");
+                "Ein Vollsnapshot stimmt nicht mit seinem stabilen Device-Schema ueberein: kind=" +
+                    std::to_string(static_cast<std::uint32_t>(device.kind)) +
+                    " instance=" + std::to_string(device.instance) +
+                    " fields=" + std::to_string(device.fields.size()) +
+                    " expected=" +
+                    std::to_string(schema == runtime_probe_deterministic_v1_device_schemas.end()
+                                       ? 0u
+                                       : schema->field_count));
     }
 
     PvrRegisterSnapshot pvr_register_before;
@@ -382,7 +389,20 @@ int main() {
     require_snapshot_mutation_changes(
         pvr_register_before,
         pvr_register_after,
-        "Aktiver eingefrorener PVR-Renderauftrag oder Overrun fehlt im Devicehash.");
+            "Aktiver eingefrorener PVR-Renderauftrag oder Overrun fehlt im Devicehash.");
+    pvr_register_after = pvr_register_before;
+    pvr_register_after.last_render_failure =
+        PvrRenderFailure{4u,
+                         9u,
+                         PvrRenderError::UnsupportedFeature,
+                         "polygon-header",
+                         0x1122334455667788u,
+                         123u,
+                         "unsupported-format"};
+    require_snapshot_mutation_changes(
+        pvr_register_before,
+        pvr_register_after,
+        "Der strukturierte PVR-Renderfehler fehlt im Devicehash.");
     pvr_register_after = pvr_register_before;
     pvr_register_after.next_render_generation = 7u;
     require_snapshot_mutation_changes(
@@ -699,7 +719,9 @@ int main() {
         StoreQueueSinkFault{StoreQueueSinkErrorReason::UnsupportedInput,
                             0xE0000000u,
                             0x10000000u,
-                            "invalid-packet"};
+                            "invalid-packet",
+                            "reserved-parameter-3",
+                            {0x8C001000u, 0xAC001000u, true}};
     const std::array store_queue_before = {
         make_runtime_probe_device_snapshot(store_queue_snapshot)};
     const std::array store_queue_after = {

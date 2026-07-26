@@ -5,6 +5,7 @@
 #include "katana/io/input_provenance.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/instruction.hpp"
+#include "snapshot_pointer_candidates.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -71,7 +72,14 @@ recognize_snapshot_displaced_absolute_pointer_candidates(
     const std::span<const katana::sh4::DisassemblyLine> lines,
     const std::size_t dispatch_index) {
     constexpr std::uint32_t provenance_byte_budget = 14u;
-    constexpr std::size_t minimum_entries = 4u;
+    constexpr detail::SnapshotPointerCandidateScanPolicy scan_policy{
+        .minimum_entries = 1u,
+        .maximum_scanned_slots = 8u,
+        .maximum_skipped_slots = 2u,
+        .maximum_consecutive_skipped_slots = 1u,
+        .treat_null_as_reserved = true,
+        .reject_truncated_scan = false,
+    };
     if (dispatch_index < 2u || dispatch_index >= lines.size()) return std::nullopt;
     const auto& dispatch = lines[dispatch_index];
     const auto& table_load = lines[dispatch_index - 1u];
@@ -141,14 +149,14 @@ recognize_snapshot_displaced_absolute_pointer_candidates(
         static_cast<std::uint32_t>(table_load.instruction.displacement);
     if (table_address64 > std::numeric_limits<std::uint32_t>::max())
         return std::nullopt;
-    auto result = analyze_snapshot_absolute_pointer_candidates(
+    auto result = detail::analyze_snapshot_pointer_candidates(
         image,
         dispatch.address,
         static_cast<std::uint32_t>(table_address64),
         dispatch.instruction.kind == katana::sh4::InstructionKind::Jsr
             ? JumpTableDispatchKind::Call
             : JumpTableDispatchKind::Jump,
-        minimum_entries);
+        scan_policy);
     if (result.has_value())
         result->reason = "snapshot-displaced-absolute-pointer-candidates";
     return result;
@@ -606,13 +614,18 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
 }
 
 std::optional<JumpTableAnalysis>
-analyze_snapshot_absolute_pointer_candidates(
+detail::analyze_snapshot_pointer_candidates(
     const katana::io::ExecutableImage& image,
     const std::uint32_t evidence_address,
     const std::uint32_t table_address,
     const JumpTableDispatchKind dispatch_kind,
-    const std::size_t minimum_entries) {
-    if (minimum_entries == 0u || minimum_entries > maximum_jump_table_entries)
+    const SnapshotPointerCandidateScanPolicy& policy) {
+    if (policy.minimum_entries == 0u ||
+        policy.minimum_entries > maximum_jump_table_entries ||
+        policy.maximum_scanned_slots < policy.minimum_entries ||
+        policy.maximum_scanned_slots > maximum_jump_table_entries ||
+        policy.maximum_skipped_slots >= policy.maximum_scanned_slots ||
+        policy.maximum_consecutive_skipped_slots > policy.maximum_skipped_slots)
         return std::nullopt;
     const auto resolved_table = image.resolve_segment_address(table_address, 4u);
     if (!resolved_table.has_value() || (*resolved_table & 3u) != 0u) return std::nullopt;
@@ -624,7 +637,7 @@ analyze_snapshot_absolute_pointer_candidates(
         return std::nullopt;
 
     const auto available_entries = (table_segment->bytes.size() - *table_offset) / 4u;
-    const auto scan_limit = std::min(available_entries, maximum_jump_table_entries);
+    const auto scan_limit = std::min(available_entries, policy.maximum_scanned_slots);
     JumpTableAnalysis analysis;
     analysis.dispatch_address = evidence_address;
     analysis.table_address = *resolved_table;
@@ -633,6 +646,8 @@ analyze_snapshot_absolute_pointer_candidates(
     analysis.aot_candidates_only = true;
     analysis.evidence = ControlFlowEvidence::GuardedPartial;
     analysis.entries.reserve(scan_limit);
+    std::size_t skipped_slots = 0u;
+    std::size_t consecutive_skipped_slots = 0u;
     for (std::size_t index = 0u; index < scan_limit; ++index) {
         const auto offset = *table_offset + index * 4u;
         const auto target = static_cast<std::uint32_t>(
@@ -641,23 +656,55 @@ analyze_snapshot_absolute_pointer_candidates(
                                  table_segment->bytes, offset + 2u))
                              << 16u);
         const auto validation = validate_decode_candidate(image, target);
-        if (!validation.valid() || validation.segment == nullptr ||
-            !snapshot_candidate_source(image, *validation.segment))
-            break;
+        if ((policy.treat_null_as_reserved && target == 0u) ||
+            !validation.valid() || validation.segment == nullptr ||
+            !snapshot_candidate_source(image, *validation.segment)) {
+            if (skipped_slots >= policy.maximum_skipped_slots ||
+                consecutive_skipped_slots >=
+                    policy.maximum_consecutive_skipped_slots)
+                break;
+            ++skipped_slots;
+            ++consecutive_skipped_slots;
+            continue;
+        }
         analysis.entries.push_back({index,
                                     *resolved_table + static_cast<std::uint32_t>(index * 4u),
                                     validation.resolved_address,
                                     true,
                                     "snapshot-absolute-target"});
+        consecutive_skipped_slots = 0u;
     }
-    if (analysis.entries.size() < minimum_entries ||
-        (analysis.entries.size() == maximum_jump_table_entries &&
-         available_entries > maximum_jump_table_entries))
+    if (analysis.entries.size() < policy.minimum_entries ||
+        (policy.reject_truncated_scan &&
+         analysis.entries.size() == policy.maximum_scanned_slots &&
+         available_entries > policy.maximum_scanned_slots))
         return std::nullopt;
     analysis.requested_entries = analysis.entries.size();
     analysis.resolved = true;
     analysis.reason = "snapshot-absolute-pointer-candidates";
     return analysis;
+}
+
+std::optional<JumpTableAnalysis>
+analyze_snapshot_absolute_pointer_candidates(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t evidence_address,
+    const std::uint32_t table_address,
+    const JumpTableDispatchKind dispatch_kind,
+    const std::size_t minimum_entries) {
+    return detail::analyze_snapshot_pointer_candidates(
+        image,
+        evidence_address,
+        table_address,
+        dispatch_kind,
+        detail::SnapshotPointerCandidateScanPolicy{
+            .minimum_entries = minimum_entries,
+            .maximum_scanned_slots = maximum_jump_table_entries,
+            .maximum_skipped_slots = 0u,
+            .maximum_consecutive_skipped_slots = 0u,
+            .treat_null_as_reserved = false,
+            .reject_truncated_scan = true,
+        });
 }
 
 std::optional<JumpTableAnalysis>

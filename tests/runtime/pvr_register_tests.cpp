@@ -146,15 +146,32 @@ int main() {
         return result_observer_calls == 1u ? PvrRenderResult::Failed
                                           : PvrRenderResult::Success;
     });
+    const auto expect_render_failure =
+        [](EventScheduler& target, const std::uint64_t cycle) {
+            try {
+                static_cast<void>(target.advance_to(cycle, 1u));
+            } catch (const PvrRenderFailed& error) {
+                return error.failure();
+            }
+            require(false, "PVR-Renderfehler beendet den Produktpfad nicht typisiert.");
+            return PvrRenderFailure{};
+        };
     result_pvr.write(pvr_register::StartRender, 1u);
-    static_cast<void>(result_scheduler.advance_to(3u, 1u));
+    const auto rejected_render = expect_render_failure(result_scheduler, 3u);
     const auto failed_result_snapshot = result_pvr.snapshot();
     require(result_observer_calls == 1u && result_pvr.render_request_count() == 1u &&
                 result_pvr.render_completion_count() == 0u &&
                 result_pvr.render_failure_count() == 1u &&
                 failed_result_snapshot.render_completions == 0u &&
-                failed_result_snapshot.render_failures == 1u,
-            "Fehlgeschlagener PVR-Render wird als Completion gezaehlt oder bleibt unsichtbar.");
+                failed_result_snapshot.render_failures == 1u &&
+                rejected_render.request == 1u && rejected_render.generation == 1u &&
+                rejected_render.error == PvrRenderError::UnsupportedFeature &&
+                rejected_render.ta_packet_class == "none" &&
+                rejected_render.register_digest == 0u &&
+                rejected_render.guest_cycle == 3u &&
+                failed_result_snapshot.last_render_failure == rejected_render &&
+                result_pvr.last_render_failure() == rejected_render,
+            "Fehlgeschlagener PVR-Render verliert typisierten strukturierten Abschluss.");
     result_pvr.write(pvr_register::StartRender, 1u);
     static_cast<void>(result_scheduler.advance_to(6u, 1u));
     require(result_observer_calls == 2u && result_pvr.render_request_count() == 2u &&
@@ -163,17 +180,25 @@ int main() {
             "Erfolgreicher PVR-Renderabschluss wird nicht getrennt von Fehlern gezaehlt.");
     result_pvr.set_render_result_observer({});
     result_pvr.write(pvr_register::StartRender, 1u);
-    static_cast<void>(result_scheduler.advance_to(9u, 1u));
+    const auto missing_render_path = expect_render_failure(result_scheduler, 9u);
     require(result_pvr.render_completion_count() == 1u &&
-                result_pvr.render_failure_count() == 2u,
-            "STARTRENDER ohne produktiven Renderpfad erfindet eine Completion.");
+                result_pvr.render_failure_count() == 2u &&
+                missing_render_path.request == 3u &&
+                missing_render_path.generation == 3u &&
+                missing_render_path.error == PvrRenderError::InternalLifecycle,
+            "STARTRENDER ohne produktiven Renderpfad erfindet eine Completion "
+            "oder bleibt untypisiert.");
     result_pvr.set_render_result_observer([]() -> PvrRenderResult {
         throw std::runtime_error("synthetic-render-observer-failure");
     });
     result_pvr.write(pvr_register::StartRender, 1u);
-    static_cast<void>(result_scheduler.advance_to(12u, 1u));
+    const auto thrown_render_path = expect_render_failure(result_scheduler, 12u);
     require(result_pvr.render_completion_count() == 1u &&
-                result_pvr.render_failure_count() == 3u,
+                result_pvr.render_failure_count() == 3u &&
+                thrown_render_path.request == 4u &&
+                thrown_render_path.generation == 4u &&
+                thrown_render_path.error == PvrRenderError::InternalLifecycle &&
+                thrown_render_path.detail == "synthetic-render-observer-failure",
             "Renderobserver-Exception entkommt untypisiert oder wird als Completion gezaehlt.");
 
     EventScheduler frozen_scheduler;
@@ -419,6 +444,47 @@ int main() {
     static_cast<void>(cadence_scheduler.advance_to(300u, 32u));
     require(cadence_vblank_in == 1u && cadence_vblank_out == 0u,
             "SPG-VBlank-Linie 0 fehlt an der naechsten Framegrenze.");
+
+    EventScheduler wrapped_vblank_scheduler;
+    Memory wrapped_vblank_bus(0u);
+    std::uint64_t wrapped_vblank_in = 0u;
+    std::uint64_t wrapped_vblank_out = 0u;
+    const auto wrapped_vblank_pvr = map_pvr_registers(
+        wrapped_vblank_bus,
+        wrapped_vblank_scheduler,
+        {},
+        PvrTiming{5u, 100u, 100u},
+        [&](const bool entering) {
+            if (entering)
+                ++wrapped_vblank_in;
+            else
+                ++wrapped_vblank_out;
+        });
+    wrapped_vblank_pvr->write(pvr_register::SpgLoad, (9u << 16u) | 9u);
+    wrapped_vblank_pvr->write(pvr_register::FramebufferReadControl, 1u << 23u);
+    wrapped_vblank_pvr->write(pvr_register::SpgControl, 0u);
+    wrapped_vblank_pvr->write(pvr_register::SpgHblankInterrupt,
+                              (1u << 12u) | 0x3FFu);
+    wrapped_vblank_pvr->write(pvr_register::SpgVblankInterrupt,
+                              (2u << 16u) | 8u);
+    require(wrapped_vblank_pvr->in_vblank(),
+            "Gewrappter VBlank-Bereich startet am Rasterpunkt null nicht aktiv.");
+    static_cast<void>(wrapped_vblank_scheduler.advance_to(20u, 32u));
+    require(!wrapped_vblank_pvr->in_vblank() && wrapped_vblank_in == 0u &&
+                wrapped_vblank_out == 1u,
+            "Erstes VBlank-Out eines gewrappten Bereichs besitzt falschen Anfangszustand.");
+    static_cast<void>(wrapped_vblank_scheduler.advance_to(50u, 32u));
+    wrapped_vblank_pvr->write(pvr_register::VideoControl, 0u);
+    require(!wrapped_vblank_pvr->in_vblank(),
+            "Mid-frame-Reschedule setzt gewrappten VBlank faelschlich auf Rasterpunkt null.");
+    static_cast<void>(wrapped_vblank_scheduler.advance_to(79u, 32u));
+    require(!wrapped_vblank_pvr->in_vblank() && wrapped_vblank_in == 0u &&
+                wrapped_vblank_out == 1u,
+            "Mid-frame-Reschedule verschiebt die naechste VBlank-In-Grenze.");
+    static_cast<void>(wrapped_vblank_scheduler.advance_to(80u, 32u));
+    require(wrapped_vblank_pvr->in_vblank() && wrapped_vblank_in == 1u &&
+                wrapped_vblank_out == 1u,
+            "Gewrappter VBlank-Bereich tritt an seiner spaeten In-Grenze nicht erneut ein.");
 
     const auto require_profile = [&](const DreamcastVideoMode mode,
                                      const std::uint32_t load,

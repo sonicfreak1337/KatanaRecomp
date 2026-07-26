@@ -120,11 +120,52 @@ struct PvrTiming {
 };
 
 enum class PvrRenderResult : std::uint8_t { Success, Failed };
+enum class PvrRenderError : std::uint8_t {
+    InvalidTaState,
+    InvalidConfiguration,
+    MemoryRange,
+    UnsupportedFeature,
+    InternalLifecycle
+};
 enum class PvrRenderStartError : std::uint8_t {
     Busy,
     CaptureFailed,
     SchedulerFailure,
     GenerationExhausted,
+};
+
+class PvrRenderJobError final : public std::runtime_error {
+  public:
+    PvrRenderJobError(PvrRenderError error,
+                      std::string ta_packet_class,
+                      std::string detail);
+    [[nodiscard]] PvrRenderError error() const noexcept;
+    [[nodiscard]] const std::string& ta_packet_class() const noexcept;
+
+  private:
+    PvrRenderError error_;
+    std::string ta_packet_class_;
+};
+
+struct PvrRenderFailure {
+    std::uint64_t request = 0u;
+    std::uint64_t generation = 0u;
+    PvrRenderError error = PvrRenderError::InternalLifecycle;
+    std::string ta_packet_class;
+    std::uint64_t register_digest = 0u;
+    std::uint64_t guest_cycle = 0u;
+    std::string detail;
+
+    [[nodiscard]] bool operator==(const PvrRenderFailure&) const = default;
+};
+
+class PvrRenderFailed final : public std::runtime_error {
+  public:
+    explicit PvrRenderFailed(PvrRenderFailure failure);
+    [[nodiscard]] const PvrRenderFailure& failure() const noexcept;
+
+  private:
+    PvrRenderFailure failure_;
 };
 
 struct PvrRegisterSnapshot {
@@ -163,6 +204,7 @@ struct PvrRegisterSnapshot {
     std::uint64_t active_render_start_cycle = 0u;
     std::uint64_t active_render_payload_digest = 0u;
     std::optional<PvrRenderStartError> last_render_start_error;
+    std::optional<PvrRenderFailure> last_render_failure;
 
     [[nodiscard]] std::uint32_t read(const std::uint32_t offset) const {
         if ((offset & 3u) != 0u || offset >= pvr_register_size)
@@ -202,6 +244,8 @@ class PvrRegisterFile final {
     [[nodiscard]] std::uint64_t render_request_count() const noexcept;
     [[nodiscard]] std::uint64_t render_completion_count() const noexcept;
     [[nodiscard]] std::uint64_t render_failure_count() const noexcept;
+    [[nodiscard]] const std::optional<PvrRenderFailure>&
+    last_render_failure() const noexcept;
     [[nodiscard]] std::uint64_t render_overrun_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_count() const noexcept;
     [[nodiscard]] std::uint64_t vblank_in_count() const noexcept;
@@ -249,6 +293,7 @@ class PvrRegisterFile final {
     std::uint64_t render_overruns_ = 0u;
     std::uint64_t next_render_generation_ = 1u;
     std::optional<PvrRenderStartError> last_render_start_error_;
+    std::optional<PvrRenderFailure> last_render_failure_;
     std::uint64_t resets_ = 0u;
     SchedulerResetObserverId reset_observer_ = 0u;
     SchedulerLifetimeToken scheduler_lifetime_;
@@ -653,6 +698,7 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
     void set_guest_memory_access_memory(Memory* memory) noexcept;
+    void reset() noexcept;
     [[nodiscard]] std::uint64_t converted_macroblocks() const noexcept;
     struct Snapshot {
         std::vector<std::uint8_t> input;
@@ -726,14 +772,6 @@ struct PvrGuestFrameProof {
     PvrGuestFrameProofSource source = PvrGuestFrameProofSource::TaRender;
     std::uint64_t write_generation_first = 0u;
     std::uint64_t write_generation_last = 0u;
-};
-
-enum class PvrRenderError : std::uint8_t {
-    InvalidTaState,
-    InvalidConfiguration,
-    MemoryRange,
-    UnsupportedFeature,
-    InternalLifecycle
 };
 
 struct PvrRenderFirstError {

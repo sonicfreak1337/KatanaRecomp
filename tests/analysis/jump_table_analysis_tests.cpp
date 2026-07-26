@@ -273,6 +273,21 @@ int main() {
             "Displaced Callbacktabelle wurde nicht aus dem tatsaechlichen JSR-Datenpfad "
             "erkannt.");
 
+    auto single_displaced_pointer_run = displaced_pointer_run;
+    single_displaced_pointer_run.write_u32_le(0x3050u, 1u);
+    single_displaced_pointer_run.write_u32_le(0x3054u, 1u);
+    const auto single_displaced =
+        katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+            single_displaced_pointer_run, displaced_lines, 7u);
+    require(single_displaced.has_value() && single_displaced->resolved &&
+                single_displaced->aot_candidates_only &&
+                single_displaced->entries.size() == 1u &&
+                single_displaced->entries.front().target == 0x3080u &&
+                single_displaced->reason ==
+                    "snapshot-displaced-absolute-pointer-candidates",
+            "Ein konkret geladener displaced Callbackslot wurde wegen einer "
+            "Mindesttabellengroesse verworfen.");
+
     auto clobbered_displaced_lines = displaced_lines;
     clobbered_displaced_lines[4].instruction = katana::sh4::decode(0xE200u);
     require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(

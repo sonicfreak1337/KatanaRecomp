@@ -105,6 +105,24 @@ int main() {
                     transfers[1].target == StoreQueueTarget::TileAccelerator &&
                     transfers[1].bytes == queues->queue(1u),
                 "QACR-Zielbildung oder exakter 32-Byte-Inhalt ist falsch.");
+        Sh4StoreQueues result_queues(
+            memory,
+            [](const StoreQueueTransfer&) {
+                throw StoreQueueSinkError(StoreQueueSinkErrorReason::UnsupportedInput,
+                                          "synthetic-ta-rejection",
+                                          "reserved-parameter-6");
+            });
+        result_queues.write_qacr(0u, 0x0Cu);
+        constexpr GuestInstructionOrigin result_origin{0x8C001234u, 0x8C005678u, true};
+        require(result_queues.prefetch_result(0xE0001000u, result_origin) ==
+                        StoreQueuePrefetchResult::Rejected &&
+                    result_queues.rejected_transfer_count() == 1u &&
+                    result_queues.last_sink_fault() &&
+                    result_queues.last_sink_fault()->packet_class ==
+                        "reserved-parameter-6" &&
+                    result_queues.last_sink_fault()->instruction.source_pc ==
+                        result_origin.source_pc,
+                "Typisiertes SQ-PREF-Ergebnis verliert Rejection, Paketklasse oder Gast-PC.");
         require_rejected(
             [&] { static_cast<void>(queues->read_p4(0xE0000000u, MemoryAccessWidth::Word)); },
             "Das SQ-Schreibfenster wurde faelschlich als Lesefenster akzeptiert.");
@@ -508,7 +526,19 @@ int main() {
             product_runtime->pvr_ta_fifo->metrics().packets;
         product_runtime->store_queues->write_p4(
             sq_source, 0x60000000u, MemoryAccessWidth::Word);
-        require(!product_runtime->store_queues->prefetch(sq_source) &&
+        bool typed_prefetch_rejection = false;
+        try {
+            static_cast<void>(product_runtime->store_queues->prefetch(
+                sq_source, prefetch_origin, prefetch_retired, prefetch_attempted));
+        } catch (const StoreQueuePrefetchRejected& error) {
+            typed_prefetch_rejection =
+                error.fault().reason == StoreQueueSinkErrorReason::UnsupportedInput &&
+                error.fault().packet_class == "reserved-parameter-3" &&
+                error.fault().target_address == ta_target &&
+                error.fault().instruction.source_pc == prefetch_origin.source_pc &&
+                error.fault().instruction.runtime_pc == prefetch_origin.runtime_pc;
+        }
+        require(typed_prefetch_rejection &&
                     product_runtime->store_queues->transfer_count() ==
                         accepted_sq_transfers &&
                     product_runtime->store_queues->rejected_transfer_count() == 1u &&
@@ -521,8 +551,38 @@ int main() {
                     product_runtime->pvr_ta_fifo->snapshot().first_input_error &&
                     product_runtime->pvr_ta_fifo->snapshot().first_input_error->reason ==
                         PvrTaInputErrorReason::UnsupportedPacket,
-                "Ungueltiges TA-Paket aus echtem SQ-PREF entkommt als Hostexception "
+                "Ungueltiges TA-Paket aus echtem SQ-PREF endet nicht typisiert "
                 "oder committed Teilzustand.");
+
+        constexpr std::uint32_t reset_sentinel_address = 0x8C001FF0u;
+        product_cpu->memory.write_u32(
+            reset_sentinel_address, 0xA55AA55Au, CodeWriteSource::Copy);
+        product_cpu->r[7u] = 0x12345678u;
+        product_runtime->system_asic->raise(
+            SystemAsicEvent::PvrVblank,
+            product_runtime->scheduler->current_cycle());
+        product_runtime->pvr_registers->write(
+            pvr_register::BorderColor, 0x00112233u);
+        product_runtime->pvr_yuv_converter->write_u8(0u, 0x44u);
+        product_runtime->holly_dma.g1->write(0xA0u, 0x55667788u);
+        product_runtime->holly_dma.g2->write(0x00u, 0x00801000u);
+        product_runtime->holly_dma.pvr->write(0x00u, 0x04002000u);
+        product_cpu->memory.write_u32(0xA05F6890u, 0x7611u);
+        require(product_runtime->system_bus_control->system_reset_requests() == 1u &&
+                    product_runtime->system_asic->read(0x00u) == 0u &&
+                    product_runtime->pvr_registers->read(
+                        pvr_register::BorderColor) == 0u &&
+                    product_runtime->pvr_ta_fifo->metrics().packets == 0u &&
+                    product_runtime->pvr_ta_fifo->metrics().rejected_packets == 0u &&
+                    !product_runtime->pvr_ta_aperture->snapshot().packet_active &&
+                    product_runtime->pvr_yuv_converter->snapshot().input.empty() &&
+                    product_runtime->holly_dma.g1->gdrom_read_access_timing() == 0u &&
+                    product_runtime->holly_dma.g2->channel_state(0u).peripheral_address ==
+                        0u &&
+                    product_runtime->holly_dma.pvr->state().peripheral_address == 0u &&
+                    product_cpu->r[7u] == 0x12345678u &&
+                    product_cpu->memory.read_u32(reset_sentinel_address) == 0xA55AA55Au,
+                "SB_SFRES erreicht Holly/PVR/DMA nicht oder simuliert einen CPU-/RAM-Power-on.");
 
         ExecutableCodeTracker movca_tracker;
         static_cast<void>(

@@ -61,8 +61,8 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 49, Block-ABI 4,
-Backend-Interface-ABI 3, PlatformServices-ABI 11, Portprojektvertrag 33 und
+kumulative Stand verwendet Runtime-ABI 50, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 34 und
 Host-Video-Vertrag 2.
 
 `KR-4912` schliesst die allgemeine Lebenszeit dynamischer Codebereiche:

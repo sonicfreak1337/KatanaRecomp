@@ -128,10 +128,24 @@ int main() {
     system_bus->complete_channel2();
     require(bus.read_u32(0x005F6804u) == 0u && bus.read_u32(0x005F6808u) == 0u,
             "PVR-DMA-Completion setzt Systembus-Laenge oder Startstatus nicht zurueck.");
+    std::uint64_t system_reset_observer_calls = 0u;
+    bool system_reset_observer_saw_reset_registers = false;
+    system_bus->set_system_reset_observer([&] {
+        ++system_reset_observer_calls;
+        system_reset_observer_saw_reset_registers =
+            system_bus->read(system_bus_register::Channel2Destination) == 0x10000000u &&
+            system_bus->read(system_bus_register::Channel2Length) == 0u;
+    });
+    bus.write_u32(0x005F6890u, 0x7610u);
+    require(system_reset_observer_calls == 0u,
+            "Falscher Systemreset-Schluessel erreicht angeschlossene Holly-Geraete.");
     bus.write_u32(0x005F6890u, 0x7611u);
     require(system_bus->system_reset_requests() == 1u &&
-                bus.read_u32(0x005F6800u) == 0x10000000u,
-            "Systemreset-Schluessel setzt den Steuerblock nicht deterministisch zurueck.");
+                bus.read_u32(0x005F6800u) == 0x10000000u &&
+                system_reset_observer_calls == 1u &&
+                system_reset_observer_saw_reset_registers,
+            "Systemreset-Schluessel setzt den Steuerblock oder angeschlossene Holly-Geraete "
+            "nicht deterministisch zurueck.");
     static_assert(static_cast<std::uint16_t>(SystemAsicEvent::PvrDma) == 0x000Bu,
                   "Separater PVR-DMA verwendet nicht das reale ASIC-Bit 11.");
     static_assert(static_cast<std::uint16_t>(SystemAsicEvent::Channel2Dma) == 0x0013u,

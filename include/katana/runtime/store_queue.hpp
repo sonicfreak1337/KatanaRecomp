@@ -15,6 +15,11 @@
 namespace katana::runtime {
 
 enum class StoreQueueTarget : std::uint8_t { Ram, TileAccelerator };
+enum class StoreQueuePrefetchResult : std::uint8_t {
+    NotStoreQueueAddress,
+    Transferred,
+    Rejected,
+};
 enum class CacheMaintenanceOperation : std::uint8_t { Ocbi, Ocbp, Ocbwb, Icbi, MovcaLong };
 enum class OperandCacheRamProfile : std::uint8_t { Reject, Modeled };
 enum class StoreQueueSinkErrorReason : std::uint8_t {
@@ -24,11 +29,15 @@ enum class StoreQueueSinkErrorReason : std::uint8_t {
 
 class StoreQueueSinkError final : public std::runtime_error {
   public:
-    StoreQueueSinkError(StoreQueueSinkErrorReason reason, std::string detail);
+    StoreQueueSinkError(StoreQueueSinkErrorReason reason,
+                        std::string detail,
+                        std::string packet_class = {});
     [[nodiscard]] StoreQueueSinkErrorReason reason() const noexcept;
+    [[nodiscard]] const std::string& packet_class() const noexcept;
 
   private:
     StoreQueueSinkErrorReason reason_;
+    std::string packet_class_;
 };
 
 struct StoreQueueSinkFault {
@@ -36,8 +45,26 @@ struct StoreQueueSinkFault {
     std::uint32_t source_address = 0u;
     std::uint32_t target_address = 0u;
     std::string detail;
+    std::string packet_class;
+    GuestInstructionOrigin instruction;
 
-    [[nodiscard]] bool operator==(const StoreQueueSinkFault&) const = default;
+    [[nodiscard]] bool operator==(const StoreQueueSinkFault& other) const {
+        return reason == other.reason && source_address == other.source_address &&
+               target_address == other.target_address && detail == other.detail &&
+               packet_class == other.packet_class &&
+               instruction.source_pc == other.instruction.source_pc &&
+               instruction.runtime_pc == other.instruction.runtime_pc &&
+               instruction.valid == other.instruction.valid;
+    }
+};
+
+class StoreQueuePrefetchRejected final : public std::runtime_error {
+  public:
+    explicit StoreQueuePrefetchRejected(StoreQueueSinkFault fault);
+    [[nodiscard]] const StoreQueueSinkFault& fault() const noexcept;
+
+  private:
+    StoreQueueSinkFault fault_;
 };
 
 struct StoreQueueTransfer {
@@ -98,6 +125,11 @@ class Sh4StoreQueues {
                                 GuestInstructionOrigin instruction = {},
                                 std::uint64_t retired_guest_instructions = 0u,
                                 std::uint64_t attempted_guest_instructions = 0u);
+    [[nodiscard]] StoreQueuePrefetchResult
+    prefetch_result(std::uint32_t address,
+                    GuestInstructionOrigin instruction = {},
+                    std::uint64_t retired_guest_instructions = 0u,
+                    std::uint64_t attempted_guest_instructions = 0u);
     void set_prefetch_address_translator(StoreQueueAddressTranslator translator);
     [[nodiscard]] const std::array<std::uint8_t, 32u>& queue(std::size_t index) const;
     [[nodiscard]] std::uint64_t transfer_count() const noexcept;

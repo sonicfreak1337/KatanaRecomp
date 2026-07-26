@@ -32,9 +32,27 @@ constexpr std::uint32_t bios_command_dma_stream_ex = 38u;
 constexpr std::uint32_t bios_command_pio_stream_ex = 39u;
 
 constexpr std::size_t bios_parameter_word_count(const std::uint32_t command) noexcept {
-    // REQ_MODE defines only its output pointer. Keep the conservative four-word snapshot for
-    // every other command until that command's complete public ABI is represented here.
-    return command == bios_command_request_mode ? 1u : 4u;
+    switch (command) {
+    case bios_command_pio_read:
+    case bios_command_dma_read:
+    case bios_command_dma_stream:
+    case bios_command_set_mode:
+    case bios_command_pio_stream:
+        return 4u;
+    case 18u:
+    case 19u:
+        return 2u;
+    case bios_command_request_mode:
+        return 1u;
+    case 24u:
+    case bios_command_no_operation:
+    case bios_command_dma_stream_ex:
+    case bios_command_pio_stream_ex:
+    default:
+        // Parameterlose und nicht unterstuetzte Kommandos duerfen das architektonisch
+        // irrelevante r5 nicht beruehren.
+        return 0u;
+    }
 }
 
 std::uint32_t be16(const std::vector<std::uint8_t>& bytes, const std::size_t offset) {

@@ -391,9 +391,9 @@ privaten Build bis zum PAL-50-/60-Hz-Menue fuer KR-4851 nachweisen
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
 `KR-4911`, `KR-4912`, `KR-4913`, `KR-4915` und `KR-4850`. Der aktuelle
-Runtimevertrag steht auf Runtime-ABI 49, Block-ABI 4,
-Backend-Interface-ABI 3, PlatformServices-ABI 11, BIOS-ABI 9,
-Portprojektvertrag 33 und Host-Video-Vertrag 2.
+Runtimevertrag steht auf Runtime-ABI 50, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, BIOS-ABI 9,
+Portprojektvertrag 34 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,

@@ -39,6 +39,23 @@ std::uint32_t checked_address_add(const std::uint32_t address, const std::size_t
             MapleDmaError::InvalidDescriptor, address, "Maple-DMA-Adresse laeuft ueber.");
     return address + static_cast<std::uint32_t>(bytes);
 }
+
+bool guest_caused_dma_error(const MapleDmaError error) noexcept {
+    switch (error) {
+    case MapleDmaError::InvalidConfiguration:
+    case MapleDmaError::ProtectedRange:
+    case MapleDmaError::InvalidDescriptor:
+    case MapleDmaError::UnsupportedDescriptor:
+    case MapleDmaError::ResponseRange:
+    case MapleDmaError::AtomicCommitFailure:
+        return true;
+    case MapleDmaError::None:
+    case MapleDmaError::SchedulerFailure:
+    case MapleDmaError::InternalLifecycle:
+        return false;
+    }
+    return false;
+}
 } // namespace
 
 DreamcastMapleController::DreamcastMapleController(Memory& memory,
@@ -114,11 +131,10 @@ void DreamcastMapleController::write(const std::uint32_t offset, const std::uint
         return;
     case DmaStart:
         if ((value & 1u) == 0u || enabled_ == 0u) return;
-        if (state_ == MapleDmaState::Active || completion_event_)
-            throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
-                                command_table_,
-                                "Maple-DMA wurde waehrend eines aktiven Transfers erneut "
-                                "gestartet.");
+        if (state_ == MapleDmaState::Active || completion_event_) {
+            fail(MapleDmaError::InvalidConfiguration, command_table_);
+            return;
+        }
         if (trigger_select_ != 0u) {
             pending_responses_.clear();
             active_ = 1u;
@@ -261,26 +277,26 @@ DreamcastMapleController::decode_recipient(const std::uint8_t bus,
 }
 
 void DreamcastMapleController::start_dma() {
-    if (state_ == MapleDmaState::Active || completion_event_)
-        throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
-                            command_table_,
-                            "Maple-DMA wurde waehrend eines aktiven Transfers erneut "
-                            "gestartet.");
-    if (enabled_ == 0u)
-        throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
-                            command_table_,
-                            "Maple-DMA wurde im deaktivierten Zustand gestartet.");
-
-    active_ = 1u;
-    state_ = MapleDmaState::Active;
-    error_ = MapleDmaError::None;
-    error_address_.reset();
-    hard_trigger_failed_ = false;
-    pending_responses_.clear();
-    tx_address_ = command_table_;
-    std::uint64_t transfer_words = 0u;
-    bool last = false;
     try {
+        if (state_ == MapleDmaState::Active || completion_event_)
+            throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
+                                command_table_,
+                                "Maple-DMA wurde waehrend eines aktiven Transfers erneut "
+                                "gestartet.");
+        if (enabled_ == 0u)
+            throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
+                                command_table_,
+                                "Maple-DMA wurde im deaktivierten Zustand gestartet.");
+
+        active_ = 1u;
+        state_ = MapleDmaState::Active;
+        error_ = MapleDmaError::None;
+        error_address_.reset();
+        hard_trigger_failed_ = false;
+        pending_responses_.clear();
+        tx_address_ = command_table_;
+        std::uint64_t transfer_words = 0u;
+        bool last = false;
         if (!protected_address(command_table_, sizeof(std::uint32_t)) ||
             !memory_.is_readable_linear_range(command_table_, sizeof(std::uint32_t)))
             throw MapleDmaFault(
@@ -401,7 +417,7 @@ void DreamcastMapleController::start_dma() {
         transferred_word_count_ += transfer_words;
     } catch (const MapleDmaFault& fault) {
         fail(fault.error(), fault.address());
-        throw;
+        if (!guest_caused_dma_error(fault.error())) throw;
     } catch (...) {
         fail(MapleDmaError::InternalLifecycle, tx_address_);
         throw;
@@ -499,6 +515,12 @@ void DreamcastMapleController::fail(const MapleDmaError error,
     error_ = error;
     error_address_ = address;
     ++failed_dma_count_;
+    if (!guest_caused_dma_error(error) || !completion_observer_) return;
+    try {
+        completion_observer_();
+    } catch (...) {
+        error_ = MapleDmaError::InternalLifecycle;
+    }
 }
 
 void DreamcastMapleController::handle_scheduler_reset() noexcept {

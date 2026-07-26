@@ -6,6 +6,7 @@
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/binary_reader.hpp"
 #include "katana/sh4/instruction.hpp"
+#include "snapshot_pointer_candidates.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1157,47 +1158,83 @@ void observe_returned_code_address_tables(
     const AbstractState& state,
     std::vector<ReturnedCodeAddressTableCandidate>& candidates) {
     using K = katana::sh4::InstructionKind;
-    std::set<std::uint8_t> base_registers;
+    AbstractValue effective_address;
     switch (line.instruction.kind) {
     case K::MovLongLoad:
-    case K::MovLongLoadPostIncrement:
-    case K::MovLongLoadDisplacement:
-        base_registers.insert(line.instruction.source_register);
+    case K::MovLongLoadPostIncrement: {
+        const auto base_register = line.instruction.source_register;
+        if (state.stack_offsets[base_register].has_value()) return;
+        effective_address = state[base_register];
         break;
-    case K::MovLongLoadR0Indexed:
-        base_registers.insert(0u);
-        base_registers.insert(line.instruction.source_register);
+    }
+    case K::MovLongLoadDisplacement: {
+        const auto base_register = line.instruction.source_register;
+        if (state.stack_offsets[base_register].has_value()) return;
+        effective_address = state[base_register];
+        if (effective_address.known) {
+            effective_address.values =
+                displaced_addresses(effective_address,
+                                    static_cast<std::uint32_t>(
+                                        line.instruction.displacement));
+        }
         break;
+    }
+    case K::MovLongLoadR0Indexed: {
+        const auto base_register = line.instruction.source_register;
+        if (state.stack_offsets[0u].has_value() ||
+            state.stack_offsets[base_register].has_value())
+            return;
+        const auto& index = state[0u];
+        const auto& base = state[base_register];
+        effective_address.known = index.known && base.known;
+        effective_address.guarded = index.guarded || base.guarded;
+        effective_address.complete = index.complete && base.complete;
+        effective_address.call_sites = index.call_sites;
+        effective_address.call_sites.insert(base.call_sites.begin(),
+                                            base.call_sites.end());
+        effective_address.callees = index.callees;
+        effective_address.callees.insert(base.callees.begin(),
+                                         base.callees.end());
+        effective_address.values = indexed_addresses(index, base);
+        break;
+    }
     default:
         return;
     }
 
-    constexpr std::size_t minimum_table_entries = 3u;
-    for (const auto register_index : base_registers) {
-        if (state.stack_offsets[register_index].has_value()) continue;
-        const auto& base = state[register_index];
-        if (!base.known || base.values.empty() ||
-            base.values.size() > maximum_summary_values || base.call_sites.empty() ||
-            base.callees.empty())
-            continue;
-        for (const auto table_address : base.values) {
-            const auto table = analyze_snapshot_absolute_pointer_candidates(
-                image,
-                line.address,
-                table_address,
-                JumpTableDispatchKind::Call,
-                minimum_table_entries);
-            if (!table.has_value()) continue;
-            ReturnedCodeAddressTableCandidate candidate;
-            candidate.table_address = table->table_address;
-            candidate.target_addresses.reserve(table->entries.size());
-            for (const auto& entry : table->entries)
-                candidate.target_addresses.push_back(entry.target);
-            candidate.load_instruction_addresses = {line.address};
-            candidate.evidence_call_sites.assign(base.call_sites.begin(), base.call_sites.end());
-            candidate.evidence_callees.assign(base.callees.begin(), base.callees.end());
-            candidates.push_back(std::move(candidate));
-        }
+    if (!effective_address.known || effective_address.values.empty() ||
+        effective_address.values.size() > maximum_summary_values ||
+        effective_address.call_sites.empty() ||
+        effective_address.callees.empty())
+        return;
+
+    constexpr detail::SnapshotPointerCandidateScanPolicy scan_policy{
+        .minimum_entries = 1u,
+        .maximum_scanned_slots = 8u,
+        .maximum_skipped_slots = 2u,
+        .maximum_consecutive_skipped_slots = 1u,
+        .treat_null_as_reserved = true,
+        .reject_truncated_scan = false,
+    };
+    for (const auto table_address : effective_address.values) {
+        const auto table = detail::analyze_snapshot_pointer_candidates(
+            image,
+            line.address,
+            table_address,
+            JumpTableDispatchKind::Call,
+            scan_policy);
+        if (!table.has_value()) continue;
+        ReturnedCodeAddressTableCandidate candidate;
+        candidate.table_address = table->table_address;
+        candidate.target_addresses.reserve(table->entries.size());
+        for (const auto& entry : table->entries)
+            candidate.target_addresses.push_back(entry.target);
+        candidate.load_instruction_addresses = {line.address};
+        candidate.evidence_call_sites.assign(effective_address.call_sites.begin(),
+                                             effective_address.call_sites.end());
+        candidate.evidence_callees.assign(effective_address.callees.begin(),
+                                          effective_address.callees.end());
+        candidates.push_back(std::move(candidate));
     }
 }
 

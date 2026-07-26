@@ -72,6 +72,7 @@ class DreamcastSystemBusControl final {
   public:
     using Channel2StartObserver =
         std::function<void(std::uint32_t destination, std::uint32_t length)>;
+    using SystemResetObserver = std::function<void()>;
     explicit DreamcastSystemBusControl(Channel2StartObserver channel2_start_observer = {});
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
@@ -80,12 +81,14 @@ class DreamcastSystemBusControl final {
     [[nodiscard]] DreamcastSystemBusSnapshot snapshot() const noexcept;
     void complete_channel2() noexcept;
     [[nodiscard]] bool trigger_channel2();
+    void set_system_reset_observer(SystemResetObserver observer);
 
   private:
     [[nodiscard]] static std::size_t index(std::uint32_t offset);
     std::array<std::uint32_t, system_bus_control_register_size / 4u> registers_{};
     std::uint64_t system_reset_requests_ = 0u;
     Channel2StartObserver channel2_start_observer_;
+    SystemResetObserver system_reset_observer_;
 };
 
 enum class SystemAsicEvent : std::uint16_t {

@@ -4,6 +4,24 @@
 
 ### Geaendert
 
+- Die bootorientierte Gesamtreview schliesst die neuen
+  Callbacktabellen-, Produktfastpath- und Hardwarefehlergrenzen. Zurueckgegebene
+  `MOV.L`-Tabellen bilden Displacement- und `R0+Rm`-Effektivadressen exakt,
+  erlauben bei starker Call-/Return-Provenienz einzelne, kleine und begrenzt
+  lueckenhafte Vektoren und bleiben bewachte AOT-Seeds ohne erfundene CFG-Kante.
+  Counted-Loop-Batching ist auf den echten No-MMU-Modus begrenzt; ein
+  ausgefuehrter generierter Port vergleicht Batch und nativen Skalarpfad ueber
+  CPU-, Scheduler-, Speicher-, TLB-/ITLB- und Modulprovenienz-Zustand und
+  belegt die Ablehnung bei aktiver MMU. Store-Queue- und PVR-Renderablehnungen
+  enden strukturiert statt lautlos, GD-ROM dereferenziert nur die
+  kommandospezifisch benoetigten Parameter, und `SB_SFRES` erreicht den
+  Holly-/PVR-/TA-/DMA-Zustand ohne einen CPU-Power-on-Reset zu erfinden.
+  AICA-Narrow-Reads, Maple-Gastfehler und gewrappter initialer VBlank verwenden
+  nun dieselben logischen Geraetevertraege wie ihre breiten beziehungsweise
+  softwaregetriggerten Gegenstuecke. Der ehemalige Gameplaymarker heisst
+  ehrlich `FirstPostBootstrapTaFrame`. Runtime-ABI 50, Block-ABI 5,
+  Backend-Interface-ABI 4, Portprojektvertrag 34 und Runtime-Probe-Schema 4
+  versionieren die geaenderten oeffentlichen Layouts und Portgrenzen.
 - SingleStepTests/sh4 ist als optionales, auf einen festen Commit und
   Manifesthash gebundenes externes SH-4-Semantikorakel integriert. Der
   C++20-Binaerparser, die deduplizierte native AOT-Codegenerierung ueber die

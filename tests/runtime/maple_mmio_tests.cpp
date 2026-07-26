@@ -166,11 +166,31 @@ int main() {
     require(controller->state() == MapleDmaState::Completed,
             "Transfer an der letzten gueltigen Maple-Schutzfensteradresse schliesst nicht ab.");
     memory.write_u32(0x005F6C04u, protected_first_invalid);
-    require(throws([&] { memory.write_u32(0x005F6C18u, 1u); }) &&
+    const auto completions_before_software_fault = completions;
+    require(!throws([&] { memory.write_u32(0x005F6C18u, 1u); }) &&
                 controller->state() == MapleDmaState::Failed &&
                 controller->error() == MapleDmaError::ProtectedRange &&
+                controller->error_address() == protected_first_invalid &&
+                !controller->hard_trigger_failed() &&
+                completions == completions_before_software_fault + 1u &&
                 scheduler.pending_event_count() == 0u,
-            "Erste Adresse hinter dem Maple-Schutzfenster wird nicht strukturiert abgelehnt.");
+            "Softwaregetriggerter Maple-Gastfehler erreicht Geraete-/ASIC-Zustand nicht "
+            "ohne Hostexception.");
+
+    memory.write_u32(0x005F6C14u, 0u);
+    memory.write_u32(0x005F6C10u, 1u);
+    memory.write_u32(0x005F6C14u, 1u);
+    memory.write_u32(0x005F6C18u, 1u);
+    const auto completions_before_hardware_fault = completions;
+    require(controller->state() == MapleDmaState::Armed &&
+                !throws([&] { controller->hardware_trigger(); }) &&
+                controller->state() == MapleDmaState::Failed &&
+                controller->error() == MapleDmaError::ProtectedRange &&
+                controller->error_address() == protected_first_invalid &&
+                !controller->hard_trigger_failed() &&
+                completions == completions_before_hardware_fault + 1u &&
+                scheduler.pending_event_count() == 0u,
+            "Hardwaregetriggerter Maple-Gastfehler divergiert vom Softwaretriggervertrag.");
 
     memory.write_u32(0x005F6C14u, 0u);
     memory.write_u32(0x005F6C8Cu, 0x61557F00u);
@@ -210,9 +230,10 @@ int main() {
                 controller->error() == MapleDmaError::ResponseRange &&
                 controller->error_address() == response &&
                 failed_response_untouched &&
-                completions == completions_before_failed_commit &&
+                completions == completions_before_failed_commit + 1u &&
                 scheduler.pending_event_count() == 0u,
-            "Maple-Completionfehler schreibt partiell oder tritt aus dem Schedulercallback aus.");
+            "Maple-Completionfehler schreibt partiell, verliert das ASIC-Ereignis oder tritt "
+            "aus dem Schedulercallback aus.");
 
     memory.write_u32(0x005F6C14u, 0u);
     memory.write_u32(0x005F6C8Cu, 0x61557F00u);
@@ -253,14 +274,24 @@ int main() {
     memory.write_u32(table, 0x80000100u);
     memory.write_u32(0x005F6C04u, table);
     memory.write_u32(0x005F6C14u, 1u);
-    require(throws([&] { memory.write_u32(0x005F6C18u, 1u); }),
-            "Unbekanntes Maple-DMA-Deskriptormuster wurde akzeptiert.");
+    const auto completions_before_unsupported_descriptor = completions;
+    require(!throws([&] { memory.write_u32(0x005F6C18u, 1u); }) &&
+                controller->state() == MapleDmaState::Failed &&
+                controller->error() == MapleDmaError::UnsupportedDescriptor &&
+                controller->error_address() == table &&
+                completions == completions_before_unsupported_descriptor + 1u,
+            "Unbekanntes Maple-DMA-Deskriptormuster erreicht den Gastfehlerpfad nicht.");
 
     memory.write_u32(table, 0x80000000u);
     memory.write_u32(table + 4u, 0x0C002000u);
     memory.write_u32(table + 8u, 0x01002009u);
-    require(throws([&] { memory.write_u32(0x005F6C18u, 1u); }),
-            "Widerspruechliche Maple-Frame-/Deskriptorlaenge wurde akzeptiert.");
+    const auto completions_before_invalid_descriptor = completions;
+    require(!throws([&] { memory.write_u32(0x005F6C18u, 1u); }) &&
+                controller->state() == MapleDmaState::Failed &&
+                controller->error() == MapleDmaError::InvalidDescriptor &&
+                controller->error_address() == table &&
+                completions == completions_before_invalid_descriptor + 1u,
+            "Widerspruechliche Maple-Frame-/Deskriptorlaenge erreicht den Gastfehlerpfad nicht.");
 
     std::cout << "Dreamcast-Maple-MMIO und echter DMA-Responsepfad erfolgreich.\n";
 }

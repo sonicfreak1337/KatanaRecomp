@@ -374,10 +374,10 @@ GuestFrameEvidenceTracker::observe(const GuestFramePumpResult& frame,
         ta_frame_seen_ = true;
         add_marker(GuestFrameEvidenceMarker::FirstTaFrame);
     }
-    if (ta_frame && guest_program_progressed && !gameplay_frame_seen_ &&
+    if (ta_frame && guest_program_progressed && !post_bootstrap_ta_frame_seen_ &&
         (bootstrap_scanout_seen_ || prior_guest_scanout)) {
-        gameplay_frame_seen_ = true;
-        add_marker(GuestFrameEvidenceMarker::FirstGameplayFrame);
+        post_bootstrap_ta_frame_seen_ = true;
+        add_marker(GuestFrameEvidenceMarker::FirstPostBootstrapTaFrame);
     }
     return observation;
 }
@@ -390,8 +390,8 @@ bool GuestFrameEvidenceTracker::ta_frame_seen() const noexcept {
     return ta_frame_seen_;
 }
 
-bool GuestFrameEvidenceTracker::gameplay_frame_seen() const noexcept {
-    return gameplay_frame_seen_;
+bool GuestFrameEvidenceTracker::post_bootstrap_ta_frame_seen() const noexcept {
+    return post_bootstrap_ta_frame_seen_;
 }
 
 bool GuestFrameEvidenceTracker::bootstrap_scanout_seen() const noexcept {

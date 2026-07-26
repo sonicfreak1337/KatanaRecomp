@@ -124,6 +124,7 @@ void DreamcastSystemBusControl::write(const std::uint32_t offset, const std::uin
         if ((value & 0xFFFFu) == 0x7611u) {
             ++system_reset_requests_;
             reset();
+            if (system_reset_observer_) system_reset_observer_();
         }
         return;
     }
@@ -207,6 +208,10 @@ bool DreamcastSystemBusControl::trigger_channel2() {
     return true;
 }
 
+void DreamcastSystemBusControl::set_system_reset_observer(SystemResetObserver observer) {
+    system_reset_observer_ = std::move(observer);
+}
+
 DreamcastSystemAsic::DreamcastSystemAsic(PlatformInterruptRouter& router,
                                          const std::size_t event_capacity) noexcept
     : router_(router), event_capacity_(event_capacity) {}
@@ -232,7 +237,7 @@ void DreamcastSystemAsic::raise(const SystemAsicEvent event, const std::uint64_t
     const auto record = SystemAsicEventRecord{guest_cycle, sequence, event};
     last_event_ = record;
     if (total_events_ != std::numeric_limits<std::uint64_t>::max()) ++total_events_;
-    const auto note_dropped_event = [this] noexcept {
+    const auto note_dropped_event = [this]() noexcept {
         if (dropped_events_ != std::numeric_limits<std::uint64_t>::max())
             ++dropped_events_;
     };

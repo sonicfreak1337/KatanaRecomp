@@ -151,7 +151,8 @@ int main() {
                 !has_guest_frame_evidence_marker(
                     bootstrap_observation.markers, GuestFrameEvidenceMarker::FirstTaFrame) &&
                 !has_guest_frame_evidence_marker(
-                    bootstrap_observation.markers, GuestFrameEvidenceMarker::FirstGameplayFrame) &&
+                    bootstrap_observation.markers,
+                    GuestFrameEvidenceMarker::FirstPostBootstrapTaFrame) &&
                 bootstrap_observation.write_generation_first == 1u &&
                 bootstrap_observation.write_generation_last == 3u &&
                 evidence.bootstrap_scanout_seen(),
@@ -165,8 +166,11 @@ int main() {
     require(has_guest_frame_evidence_marker(
                 first_ta_observation.markers, GuestFrameEvidenceMarker::FirstTaFrame) &&
                 has_guest_frame_evidence_marker(
-                    first_ta_observation.markers, GuestFrameEvidenceMarker::FirstGameplayFrame),
-            "TA-Frame nach Bootstrapscanout und Gastprogrammfortschritt wird nicht klassifiziert.");
+                    first_ta_observation.markers,
+                    GuestFrameEvidenceMarker::FirstPostBootstrapTaFrame) &&
+                evidence.post_bootstrap_ta_frame_seen(),
+            "TA-Frame nach Bootstrapscanout und Gastprogrammfortschritt wird nicht als "
+            "Post-Bootstrap-TA-Frame klassifiziert.");
 
     GuestFrameEvidenceTracker conservative_evidence;
     const auto first_progressed_ta = conservative_evidence.observe(first_ta_frame, true);
@@ -175,14 +179,18 @@ int main() {
                 has_guest_frame_evidence_marker(
                     first_progressed_ta.markers, GuestFrameEvidenceMarker::FirstTaFrame) &&
                 !has_guest_frame_evidence_marker(
-                    first_progressed_ta.markers, GuestFrameEvidenceMarker::FirstGameplayFrame),
-            "Erster TA-Scanout nach bereits beobachtetem Fortschritt reicht allein als Gameplay.");
+                    first_progressed_ta.markers,
+                    GuestFrameEvidenceMarker::FirstPostBootstrapTaFrame),
+            "Erster TA-Scanout nach bereits beobachtetem Fortschritt reicht allein als "
+            "Post-Bootstrap-Nachweis.");
     auto second_ta_frame = first_ta_frame;
     second_ta_frame.render_generation = 5u;
     const auto second_progressed_ta = conservative_evidence.observe(second_ta_frame, true);
     require(has_guest_frame_evidence_marker(
-                second_progressed_ta.markers, GuestFrameEvidenceMarker::FirstGameplayFrame),
-            "Zweiter TA-Scanout nach Gastprogrammfortschritt liefert keinen Gameplaynachweis.");
+                second_progressed_ta.markers,
+                GuestFrameEvidenceMarker::FirstPostBootstrapTaFrame),
+            "Zweiter TA-Scanout nach Gastprogrammfortschritt liefert keinen "
+            "Post-Bootstrap-TA-Nachweis.");
 #ifdef _WIN32
     require(native_video_available(), "Win32-Hostvideo wird nicht als verfuegbar gemeldet.");
     auto video = create_native_video_output(

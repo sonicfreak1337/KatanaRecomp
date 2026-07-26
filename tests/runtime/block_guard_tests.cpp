@@ -23,6 +23,8 @@ BlockExit guarded_block(CpuState&, BlockExecutionContext&) {
 int main() {
     try {
         RuntimeAddressSpace space;
+        require(space.mode() == AddressTranslationMode::NoMmu,
+                "Der Adressraum meldet seinen initialen No-MMU-Modus nicht.");
         const auto fast = space.translate(0xAC001234u, TranslationAccess::Instruction);
         require(fast.no_mmu_fastpath && fast.physical_address == 0x0C001234u,
                 "No-MMU-Fastpath ist nicht getrennt oder behauptet falsche Kanonisierung.");
@@ -34,6 +36,8 @@ int main() {
                 "SH-4-On-Chip-RAM wird faelschlich als externer physischer Bus kanonisiert.");
 
         space.set_mode(AddressTranslationMode::Mmu);
+        require(space.mode() == AddressTranslationMode::Mmu,
+                "Der Adressraum meldet einen aktivierten MMU-Modus nicht.");
         space.write_mmucr(1u);
         require(space.translate(0x7E000FFCu, TranslationAccess::Read, true).physical_address ==
                     0x7E000FFCu,

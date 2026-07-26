@@ -39,7 +39,7 @@ struct DreamcastRuntimeState;
 class SystemReplayLog;
 
 inline constexpr std::uint32_t runtime_probe_schema_version = 4u;
-inline constexpr std::uint64_t runtime_probe_device_schema_version = 3u;
+inline constexpr std::uint64_t runtime_probe_device_schema_version = 4u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
 inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
 inline constexpr std::size_t runtime_probe_replay_coverage_class_count = 12u;
@@ -243,14 +243,14 @@ struct RuntimeProbeDeviceSchema {
 
 inline constexpr std::array<RuntimeProbeDeviceSchema, 35u>
     runtime_probe_deterministic_v1_device_schemas = {{
-        {RuntimeProbeDeviceKind::Pvr, 0u, 41u},
+        {RuntimeProbeDeviceKind::Pvr, 0u, 51u},
         {RuntimeProbeDeviceKind::SystemBus, 0u, 23u},
         {RuntimeProbeDeviceKind::Aica, 0u, 15u},
         {RuntimeProbeDeviceKind::GdRom, 0u, 73u},
         {RuntimeProbeDeviceKind::Maple, 0u, 28u},
         {RuntimeProbeDeviceKind::Dmac, 0u, 57u},
         {RuntimeProbeDeviceKind::InterruptController, 0u, 3u},
-        {RuntimeProbeDeviceKind::StoreQueue, 0u, 25u},
+        {RuntimeProbeDeviceKind::StoreQueue, 0u, 30u},
         {RuntimeProbeDeviceKind::HollyDma, 0u, 42u},
         {RuntimeProbeDeviceKind::HollyDma, 1u, 33u},
         {RuntimeProbeDeviceKind::HollyDma, 2u, 86u},

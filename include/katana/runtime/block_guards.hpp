@@ -89,6 +89,9 @@ class RuntimeAddressSpace {
   public:
     static constexpr std::uint32_t page_size = 4096u;
     void set_mode(AddressTranslationMode mode) noexcept;
+    [[nodiscard]] AddressTranslationMode mode() const noexcept {
+        return mode_;
+    }
     void write_mmucr(std::uint32_t value) noexcept;
     void write_pteh(std::uint32_t value) noexcept;
     void ldtlb(TlbMapping mapping);

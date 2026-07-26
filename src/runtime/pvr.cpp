@@ -13,6 +13,28 @@
 
 namespace katana::runtime {
 
+PvrRenderJobError::PvrRenderJobError(const PvrRenderError error,
+                                     std::string ta_packet_class,
+                                     std::string detail)
+    : std::runtime_error(std::move(detail)), error_(error),
+      ta_packet_class_(std::move(ta_packet_class)) {}
+
+PvrRenderError PvrRenderJobError::error() const noexcept {
+    return error_;
+}
+
+const std::string& PvrRenderJobError::ta_packet_class() const noexcept {
+    return ta_packet_class_;
+}
+
+PvrRenderFailed::PvrRenderFailed(PvrRenderFailure failure)
+    : std::runtime_error("pvr-render-failed: " + failure.detail),
+      failure_(std::move(failure)) {}
+
+const PvrRenderFailure& PvrRenderFailed::failure() const noexcept {
+    return failure_;
+}
+
 PvrRegisterFile::PvrRegisterFile(EventScheduler& scheduler,
                                  const PvrTiming timing,
                                  std::function<void()> render_observer,
@@ -155,6 +177,7 @@ PvrRegisterSnapshot PvrRegisterFile::snapshot() const {
         result.active_render_payload_digest = active_job.payload_digest;
     }
     result.last_render_start_error = last_render_start_error_;
+    result.last_render_failure = last_render_failure_;
     return result;
 }
 
@@ -375,18 +398,43 @@ void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
             "PVR-Rendercompletion besitzt keinen veroeffentlichten Frozen Job.");
     auto frozen_job = std::move(found->second);
     render_jobs_.erase(found);
+    const auto fail = [&](const PvrRenderError error,
+                          std::string ta_packet_class,
+                          std::string detail) -> void {
+        ++render_failures_;
+        last_render_failure_ = PvrRenderFailure{
+            frozen_job.request,
+            frozen_job.generation,
+            error,
+            std::move(ta_packet_class),
+            frozen_job.payload_digest,
+            scheduler_.current_cycle(),
+            std::move(detail),
+        };
+        throw PvrRenderFailed(*last_render_failure_);
+    };
     if (!frozen_job.execute) {
-        ++render_failures_;
-        return;
+        fail(PvrRenderError::InternalLifecycle,
+             "none",
+             "PVR-Renderauftrag besitzt keinen Ausfuehrungspfad.");
     }
+    auto result = PvrRenderResult::Failed;
     try {
-        if (frozen_job.execute() == PvrRenderResult::Success)
-            ++render_completions_;
-        else
-            ++render_failures_;
+        result = frozen_job.execute();
+    } catch (const PvrRenderJobError& error) {
+        fail(error.error(), error.ta_packet_class(), error.what());
+    } catch (const std::exception& error) {
+        fail(PvrRenderError::InternalLifecycle, "none", error.what());
     } catch (...) {
-        ++render_failures_;
+        fail(PvrRenderError::InternalLifecycle,
+             "none",
+             "Unbekannte Exception im PVR-Renderauftrag.");
     }
+    if (result != PvrRenderResult::Success)
+        fail(PvrRenderError::UnsupportedFeature,
+             "none",
+             "PVR-Renderauftrag wurde ohne Fehlerdetail abgelehnt.");
+    ++render_completions_;
 }
 
 void PvrRegisterFile::handle_scheduler_reset() {
@@ -405,6 +453,9 @@ std::uint64_t PvrRegisterFile::render_completion_count() const noexcept {
 }
 std::uint64_t PvrRegisterFile::render_failure_count() const noexcept {
     return render_failures_;
+}
+const std::optional<PvrRenderFailure>& PvrRegisterFile::last_render_failure() const noexcept {
+    return last_render_failure_;
 }
 std::uint64_t PvrRegisterFile::render_overrun_count() const noexcept {
     return render_overruns_;
@@ -484,11 +535,14 @@ void PvrRegisterFile::cancel_scan_events() noexcept {
 
 void PvrRegisterFile::reschedule_scanout() {
     cancel_scan_events();
+    const auto current_cycle = scheduler_.current_cycle();
+    const auto preserve_scan_phase =
+        scan_frame_cycles_ != 0u && current_cycle >= scan_epoch_cycle_;
     const auto load = registers_[index(pvr_register::SpgLoad)];
     const auto horizontal = static_cast<std::uint64_t>(load & 0x3FFu) + 1u;
     const auto vertical = static_cast<std::uint64_t>((load >> 16u) & 0x3FFu) + 1u;
     scan_frame_cycles_ = 0u;
-    scan_epoch_cycle_ = scheduler_.current_cycle();
+    if (!preserve_scan_phase) scan_epoch_cycle_ = current_cycle;
     in_vblank_ = false;
     if (horizontal <= 1u || vertical <= 1u) return;
     const auto pixels = horizontal * vertical;
@@ -520,6 +574,14 @@ void PvrRegisterFile::reschedule_scanout() {
     const auto vblank = registers_[index(pvr_register::SpgVblankInterrupt)];
     const auto start = vblank & 0x3FFu;
     const auto end = (vblank >> 16u) & 0x3FFu;
+    if (start < vertical && end < vertical) {
+        const auto elapsed = current_cycle - scan_epoch_cycle_;
+        const auto frame_cycle = elapsed % scan_frame_cycles_;
+        const auto scanline = std::min<std::uint64_t>(
+            vertical - 1u, frame_cycle * vertical / scan_frame_cycles_);
+        in_vblank_ = start <= end ? scanline >= start && scanline < end
+                                  : scanline >= start || scanline < end;
+    }
     if (start < vertical) schedule_scan_event(start, true);
     if (end < vertical) schedule_scan_event(end, false);
     const auto hblank_interrupt = registers_[index(pvr_register::SpgHblankInterrupt)];
@@ -538,10 +600,17 @@ void PvrRegisterFile::reschedule_scanout() {
 void PvrRegisterFile::schedule_scan_event(const std::uint32_t line, const bool entering) {
     const auto load = registers_[index(pvr_register::SpgLoad)];
     const auto vertical = static_cast<std::uint64_t>((load >> 16u) & 0x3FFu) + 1u;
-    const auto delay = line == 0u
-                           ? scan_frame_cycles_
-                           : std::max<std::uint64_t>(
-                                 1u, scan_frame_cycles_ * line / vertical);
+    const auto target_frame_cycle =
+        line == 0u
+            ? 0u
+            : std::max<std::uint64_t>(1u, scan_frame_cycles_ * line / vertical);
+    const auto elapsed = scheduler_.current_cycle() >= scan_epoch_cycle_
+                             ? scheduler_.current_cycle() - scan_epoch_cycle_
+                             : 0u;
+    const auto current_frame_cycle = elapsed % scan_frame_cycles_;
+    const auto delay = target_frame_cycle > current_frame_cycle
+                           ? target_frame_cycle - current_frame_cycle
+                           : scan_frame_cycles_ - current_frame_cycle + target_frame_cycle;
     const auto event = scheduler_.schedule_after(
         delay,
         [this, entering](const auto id, const auto) { handle_scan_event(id, entering); },
@@ -579,8 +648,15 @@ void PvrRegisterFile::schedule_hblank_event(const std::uint32_t line) {
         (registers_[index(pvr_register::SpgHblankInterrupt)] >> 16u) & 0x3FFu) %
                                      horizontal;
     const auto pixel = static_cast<std::uint64_t>(line) * horizontal + horizontal_position;
-    const auto delay = std::max<std::uint64_t>(
+    const auto target_frame_cycle = std::max<std::uint64_t>(
         1u, (scan_frame_cycles_ * pixel + total_pixels - 1u) / total_pixels);
+    const auto elapsed = scheduler_.current_cycle() >= scan_epoch_cycle_
+                             ? scheduler_.current_cycle() - scan_epoch_cycle_
+                             : 0u;
+    const auto current_frame_cycle = elapsed % scan_frame_cycles_;
+    const auto delay = target_frame_cycle > current_frame_cycle
+                           ? target_frame_cycle - current_frame_cycle
+                           : scan_frame_cycles_ - current_frame_cycle + target_frame_cycle;
     hblank_event_ = scheduler_.schedule_after(
         delay,
         [this, line](const auto id, const auto) { handle_hblank_event(id, line); },
@@ -2442,6 +2518,14 @@ void PvrYuvConverterMemoryDevice::write_u8(const std::uint32_t offset,
 
 void PvrYuvConverterMemoryDevice::set_guest_memory_access_memory(Memory* const memory) noexcept {
     guest_memory_access_memory_ = memory;
+}
+
+void PvrYuvConverterMemoryDevice::reset() noexcept {
+    input_.clear();
+    configuration_ = std::numeric_limits<std::uint32_t>::max();
+    destination_ = std::numeric_limits<std::uint32_t>::max();
+    frame_macroblock_ = 0u;
+    converted_macroblocks_ = 0u;
 }
 
 void PvrYuvConverterMemoryDevice::convert_macroblock() {

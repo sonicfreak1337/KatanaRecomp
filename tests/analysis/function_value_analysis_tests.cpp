@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -94,6 +95,117 @@ summary(const katana::analysis::ControlFlowAnalysisResult& analysis,
                      owner->registers.end(),
                      [reg](const auto& candidate) { return candidate.register_index == reg; });
     return value == owner->registers.end() ? nullptr : &*value;
+}
+
+katana::io::ExecutableImage returned_table_load_image(
+    const std::vector<std::uint16_t>& setup_opcodes,
+    const std::uint16_t load_opcode,
+    const std::vector<std::uint32_t>& returned_addresses,
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>>& table_slots) {
+    require(!returned_addresses.empty() && returned_addresses.size() <= 8u,
+            "Returned-Table-Testfixture erhielt keine begrenzte Rueckgabemenge.");
+    std::vector<std::uint8_t> bytes(0xE0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    const auto put_return = [&](const std::size_t address,
+                                const std::uint32_t value) {
+        require(value <= 0x7Fu,
+                "Returned-Table-Testfixture braucht positive MOV-Immediate-Werte.");
+        put_u16(address,
+                static_cast<std::uint16_t>(0xE000u | value)); // mov #value,r0
+        put_u16(address + 2u, 0x000Bu);                       // rts
+        put_u16(address + 4u, 0x0009u);                       // nop (delay)
+    };
+
+    put_u16(0x00u, 0xB00Eu); // bsr 0x20
+    put_u16(0x02u, 0x0009u); // nop (delay)
+    auto cursor = 0x04u;
+    for (const auto opcode : setup_opcodes) {
+        put_u16(cursor, opcode);
+        cursor += 2u;
+    }
+    require(cursor + 6u <= 0x20u,
+            "Returned-Table-Testfixture ueberlappt den Accessor.");
+    put_u16(cursor, load_opcode);
+    put_u16(cursor + 2u, 0x000Bu); // rts
+    put_u16(cursor + 4u, 0x0009u); // nop (delay)
+
+    const auto branch_count = returned_addresses.size() - 1u;
+    const auto default_return = 0x20u + branch_count * 2u;
+    for (std::size_t index = 0u; index < branch_count; ++index) {
+        const auto branch_address = 0x20u + index * 2u;
+        const auto target_address = default_return + (index + 1u) * 6u;
+        const auto displacement =
+            (target_address - (branch_address + 4u)) / 2u;
+        require(displacement <= 0x7Fu,
+                "Returned-Table-Testfixture ueberschritt den BT-Bereich.");
+        put_u16(branch_address,
+                static_cast<std::uint16_t>(0x8900u | displacement));
+        put_return(target_address, returned_addresses[index]);
+    }
+    put_return(default_return, returned_addresses.back());
+
+    for (const auto [address, value] : table_slots) {
+        require(address <= bytes.size() - 4u,
+                "Returned-Table-Testslot liegt ausserhalb des Images.");
+        put_u32(address, value);
+    }
+    for (const auto handler : {0xC0u, 0xC4u, 0xC8u, 0xCCu}) {
+        put_u16(handler, 0x000Bu);
+        put_u16(handler + 2u, 0x0009u);
+    }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.set_initial_snapshot_entry(0u);
+    image.add_segment({".returned-table-load",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       std::move(bytes),
+                       katana::io::ImageSourceKind::DiscBootFile,
+                       katana::io::ImageLoadPhase::Initial,
+                       "synthetic-returned-table-load"});
+    image.add_entry_point(0u);
+    return image;
+}
+
+katana::analysis::FunctionValueAnalysisResult
+returned_table_values(const katana::io::ExecutableImage& image) {
+    const auto lines =
+        katana::sh4::disassemble(image.segments().front().bytes, 0u);
+    constexpr std::array<std::uint32_t, 2u> function_entries{0u, 0x20u};
+    return katana::analysis::analyze_function_values(
+        image, lines, function_entries);
+}
+
+const katana::analysis::ReturnedCodeAddressTableCandidate*
+returned_table_candidate(
+    const katana::analysis::FunctionValueAnalysisResult& analysis,
+    const std::uint32_t table_address) {
+    const auto found = std::find_if(
+        analysis.returned_code_address_table_candidates.begin(),
+        analysis.returned_code_address_table_candidates.end(),
+        [table_address](const auto& candidate) {
+            return candidate.table_address == table_address;
+        });
+    return found == analysis.returned_code_address_table_candidates.end()
+               ? nullptr
+               : &*found;
 }
 
 } // namespace
@@ -328,12 +440,205 @@ int main() {
     short_return_table_image.write_u32_le(0x48u, 1u);
     const auto short_return_table =
         katana::analysis::analyze_control_flow(short_return_table_image);
-    require(std::none_of(short_return_table.recursive.functions.begin(),
-                         short_return_table.recursive.functions.end(),
-                         [](const auto& function) {
-                             return function.address == 0x54u;
-                         }),
-            "Nicht ausreichend begrenzte Zweiereintragstabelle wurde als Familie expandiert.");
+    require(std::any_of(short_return_table.recursive.functions.begin(),
+                        short_return_table.recursive.functions.end(),
+                        [](const auto& function) {
+                            return function.address == 0x54u &&
+                                   function.origins ==
+                                       std::vector{katana::analysis::FunctionOrigin::
+                                                       GuardedSnapshot};
+                        }) &&
+                std::none_of(short_return_table.recursive.functions.begin(),
+                             short_return_table.recursive.functions.end(),
+                             [](const auto& function) {
+                                 return function.address == 0x58u;
+                             }),
+            "Bewiesene Zweiereintragstabelle wurde nicht begrenzt inventarisiert.");
+
+    auto single_return_table_image = short_return_table_image;
+    single_return_table_image.write_u32_le(0x44u, 1u);
+    const auto single_return_table =
+        katana::analysis::analyze_control_flow(single_return_table_image);
+    require(std::any_of(single_return_table.recursive.functions.begin(),
+                        single_return_table.recursive.functions.end(),
+                        [](const auto& function) {
+                            return function.address == 0x50u &&
+                                   std::find(
+                                       function.origins.begin(),
+                                       function.origins.end(),
+                                       katana::analysis::FunctionOrigin::
+                                           GuardedSnapshot) !=
+                                       function.origins.end();
+                        }) &&
+                std::none_of(single_return_table.recursive.functions.begin(),
+                             single_return_table.recursive.functions.end(),
+                             [](const auto& function) {
+                                 return function.address == 0x54u;
+                             }),
+            "Konkret geladener einzelner Callbackslot erreichte das bewachte AOT-Inventar "
+            "nicht.");
+
+    [] {
+        constexpr auto mov_r0_r12 = std::uint16_t{0x6C03u};
+        constexpr auto nop = std::uint16_t{0x0009u};
+        constexpr auto movt_r0 = std::uint16_t{0x0029u};
+        constexpr auto shll2_r0 = std::uint16_t{0x4008u};
+        constexpr auto mov_l_at_r12_r3 = std::uint16_t{0x63C2u};
+        constexpr auto mov_l_at_r12_post_r3 = std::uint16_t{0x63C6u};
+        constexpr auto mov_l_at_4_r12_r3 = std::uint16_t{0x53C1u};
+        constexpr auto mov_l_at_r0_r12_r3 = std::uint16_t{0x03CEu};
+        constexpr auto mov_l_at_r0_r0_r3 = std::uint16_t{0x030Eu};
+
+        const auto direct = returned_table_values(returned_table_load_image(
+            {mov_r0_r12, nop}, mov_l_at_r12_r3, {0x70u}, {{0x70u, 0xC0u}}));
+        const auto* direct_table = returned_table_candidate(direct, 0x70u);
+        require(direct_table != nullptr &&
+                    direct_table->target_addresses ==
+                        std::vector<std::uint32_t>{0xC0u} &&
+                    direct_table->load_instruction_addresses ==
+                        std::vector<std::uint32_t>{0x08u} &&
+                    direct_table->evidence_call_sites ==
+                        std::vector<std::uint32_t>{0x00u} &&
+                    direct_table->evidence_callees ==
+                        std::vector<std::uint32_t>{0x20u},
+                "MOV.L @Rm verlor den einzelnen provenance-starken Callbackslot.");
+
+        const auto post_increment = returned_table_values(
+            returned_table_load_image({mov_r0_r12, nop},
+                                      mov_l_at_r12_post_r3,
+                                      {0x70u},
+                                      {{0x70u, 0xC0u}, {0x74u, 0xC4u}}));
+        const auto* post_increment_table =
+            returned_table_candidate(post_increment, 0x70u);
+        require(post_increment_table != nullptr &&
+                    post_increment_table->target_addresses ==
+                        std::vector<std::uint32_t>({0xC0u, 0xC4u}),
+                "MOV.L @Rm+ verwendete nicht den alten Basiswert fuer die "
+                "Zweierslottabelle.");
+
+        const auto displaced = returned_table_values(returned_table_load_image(
+            {mov_r0_r12, nop},
+            mov_l_at_4_r12_r3,
+            {0x6Cu},
+            {{0x70u, 0xC0u}}));
+        require(returned_table_candidate(displaced, 0x70u) != nullptr &&
+                    returned_table_candidate(displaced, 0x6Cu) == nullptr,
+                "MOV.L @(disp,Rm) addierte den skalierten Decoder-Displacement nicht "
+                "exakt.");
+
+        const auto indexed = returned_table_values(returned_table_load_image(
+            {mov_r0_r12, movt_r0, shll2_r0},
+            mov_l_at_r0_r12_r3,
+            {0x60u, 0x70u},
+            {{0x60u, 0xC0u},
+             {0x64u, 0xC4u},
+             {0x70u, 0xC8u},
+             {0x74u, 0xCCu}}));
+        for (const auto address : {0x60u, 0x64u, 0x70u, 0x74u}) {
+            const auto* table = returned_table_candidate(indexed, address);
+            require(table != nullptr &&
+                        table->evidence_call_sites ==
+                            std::vector<std::uint32_t>{0x00u} &&
+                        table->evidence_callees ==
+                            std::vector<std::uint32_t>{0x20u},
+                    "MOV.L @(R0,Rm) verlor eine endliche kartesische "
+                    "Effektivadresse.");
+        }
+
+        const auto same_register = returned_table_values(
+            returned_table_load_image({nop, nop},
+                                      mov_l_at_r0_r0_r3,
+                                      {0x38u, 0x3Cu},
+                                      {{0x70u, 0xC0u},
+                                       {0x74u, 0xC4u},
+                                       {0x78u, 0xC8u}}));
+        for (const auto address : {0x70u, 0x74u, 0x78u}) {
+            require(returned_table_candidate(same_register, address) != nullptr,
+                    "MOV.L @(R0,R0) verlor eine kartesische Selbstsumme.");
+        }
+
+        const auto sparse = returned_table_values(returned_table_load_image(
+            {mov_r0_r12, nop},
+            mov_l_at_r12_r3,
+            {0x70u},
+            {{0x70u, 0u},
+             {0x74u, 0xC0u},
+             {0x78u, 0xC4u},
+             {0x7Cu, 1u},
+             {0x80u, 0xC8u}}));
+        const auto* sparse_table = returned_table_candidate(sparse, 0x70u);
+        require(sparse_table != nullptr &&
+                    sparse_table->target_addresses ==
+                        std::vector<std::uint32_t>({0xC0u, 0xC4u, 0xC8u}),
+                "Eng begrenzte Null-/Reservierungsslots kappten die "
+                "provenance-starke Callbacktabelle.");
+
+        const auto excessive_gap = returned_table_values(
+            returned_table_load_image({mov_r0_r12, nop},
+                                      mov_l_at_r12_r3,
+                                      {0x70u},
+                                      {{0x70u, 0u},
+                                       {0x74u, 1u},
+                                       {0x78u, 0xC0u}}));
+        require(excessive_gap.returned_code_address_table_candidates.empty(),
+                "Zwei aufeinanderfolgende unbelegte Slots wurden ueber das enge "
+                "Callbackfenster hinweg geraten.");
+
+        const std::vector<std::uint32_t> too_many_returned_bases{
+            0x60u, 0x64u, 0x68u, 0x6Cu, 0x70u, 0x74u, 0x78u, 0x7Cu};
+        const auto excessive_cartesian = returned_table_values(
+            returned_table_load_image({mov_r0_r12, movt_r0, shll2_r0},
+                                      mov_l_at_r0_r12_r3,
+                                      too_many_returned_bases,
+                                      {{0x60u, 0xC0u}}));
+        require(excessive_cartesian.returned_code_address_table_candidates.empty(),
+                "Kartesische Effektivadressen ueberschritten das bestehende "
+                "Achtkandidatenlimit.");
+
+        std::vector<std::uint8_t> local_bytes(0xE0u, 0x09u);
+        const auto put_local_u16 = [&local_bytes](const std::size_t offset,
+                                                  const std::uint16_t value) {
+            local_bytes[offset] = static_cast<std::uint8_t>(value);
+            local_bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_local_u32 = [&local_bytes](const std::size_t offset,
+                                                  const std::uint32_t value) {
+            local_bytes[offset] = static_cast<std::uint8_t>(value);
+            local_bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            local_bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            local_bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+        put_local_u16(0x00u, 0xEC70u); // mov #0x70,r12
+        put_local_u16(0x02u, mov_l_at_r12_r3);
+        put_local_u16(0x04u, 0x000Bu);
+        put_local_u16(0x06u, nop);
+        put_local_u32(0x70u, 0xC0u);
+        put_local_u16(0xC0u, 0x000Bu);
+        put_local_u16(0xC2u, nop);
+        katana::io::ExecutableImage local_image;
+        local_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        local_image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        local_image.add_segment({".local-table",
+                                 0u,
+                                 0u,
+                                 local_bytes.size(),
+                                 katana::io::SegmentKind::Mixed,
+                                 {true, true, true},
+                                 std::move(local_bytes),
+                                 katana::io::ImageSourceKind::DiscBootFile,
+                                 katana::io::ImageLoadPhase::Initial,
+                                 "synthetic-local-table"});
+        local_image.add_entry_point(0u);
+        const auto local_lines =
+            katana::sh4::disassemble(local_image.segments().front().bytes, 0u);
+        constexpr std::array<std::uint32_t, 1u> local_entries{0u};
+        const auto local_values = katana::analysis::analyze_function_values(
+            local_image, local_lines, local_entries);
+        require(local_values.returned_code_address_table_candidates.empty(),
+                "Lokaler Tabellenzeiger ohne Call-/Return-Provenienz wurde als "
+                "Returned-Callbacktabelle akzeptiert.");
+    }();
 
     [] {
         const auto multi_image =

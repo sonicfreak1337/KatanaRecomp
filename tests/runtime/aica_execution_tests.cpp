@@ -227,6 +227,24 @@ int main() {
                 byte_execution->arm7_reset_asserted(),
             "Timerhighbyte oder Channel-Controlhighbyte aktualisiert die AICA-Semantik nicht.");
 
+    auto narrow_read_execution = std::make_shared<AicaExecutionController>();
+    AicaRegisterFile narrow_read_registers(narrow_read_execution);
+    narrow_read_registers.write(0x2890u, 0xA5A50211u, MemoryAccessWidth::Word);
+    narrow_read_execution->timer(0u).configure(0x7Cu, 2u, true);
+    narrow_read_execution->interrupts().request(0xA1B2C3D4u);
+    require(narrow_read_registers.read(0x2890u, MemoryAccessWidth::Byte) == 0x7Cu &&
+                narrow_read_registers.read(0x2891u, MemoryAccessWidth::Byte) == 0x02u &&
+                narrow_read_registers.read(0x2890u, MemoryAccessWidth::Halfword) == 0x027Cu &&
+                narrow_read_registers.read(0x2892u, MemoryAccessWidth::Halfword) == 0xA5A5u &&
+                narrow_read_registers.read(0x2890u, MemoryAccessWidth::Word) == 0xA5A5027Cu,
+            "AICA-Timerreads rekonstruieren Byte-, Halfword- und Wordbreiten nicht aus "
+            "demselben logischen Registerwert.");
+    require(narrow_read_registers.read(0x28B8u, MemoryAccessWidth::Byte) == 0xD4u &&
+                narrow_read_registers.read(0x28B9u, MemoryAccessWidth::Byte) == 0xC3u &&
+                narrow_read_registers.read(0x28BAu, MemoryAccessWidth::Halfword) == 0xA1B2u &&
+                narrow_read_registers.read(0x28B8u, MemoryAccessWidth::Word) == 0xA1B2C3D4u,
+            "AICA-Interruptpending liefert bei Narrow-Reads veraltete Registerbytes.");
+
     EventScheduler reset_scheduler;
     auto reset_execution =
         std::make_shared<AicaExecutionController>(&reset_scheduler);

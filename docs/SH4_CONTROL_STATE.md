@@ -35,7 +35,7 @@ Exception- und Interrupt-Eintritt.
   invalidiert beide.
 
 Block-ABI 2 fuehrte dafuer die Endtypen `ExceptionReturn` und `Sleep` ein; der
-aktuelle kumulative Vertrag steht auf Block-ABI 4. `Exception` bezeichnet den
+aktuelle kumulative Vertrag steht auf Block-ABI 5. `Exception` bezeichnet den
 Uebergang in einen normalen Gast-Handler;
 nachfolgende Handlerbloecke behalten ihre regulaere Abschlussart. `Return`
 bleibt der normale Subroutine-Return.

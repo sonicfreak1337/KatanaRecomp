@@ -140,25 +140,58 @@ void AicaRegisterFile::check(const std::uint32_t offset, const MemoryAccessWidth
 std::uint32_t AicaRegisterFile::read(const std::uint32_t offset,
                                      const MemoryAccessWidth width) const {
     check(offset, width);
-    if (offset == 0x2C00u && execution_) {
-        auto value = static_cast<std::uint32_t>(registers_[0x2C00u] & 0xFEu) |
-                     static_cast<std::uint32_t>(execution_->arm7_reset_asserted());
-        if (width != MemoryAccessWidth::Byte)
-            value |= static_cast<std::uint32_t>(registers_[offset + 1u]) << 8u;
+    const auto stored_word = [this](const std::uint32_t register_offset) {
+        std::uint32_t value = 0u;
+        for (std::size_t index = 0u; index < sizeof(value); ++index)
+            value |= static_cast<std::uint32_t>(registers_[register_offset + index])
+                     << (index * 8u);
         return value;
-    }
-    if (execution_ && width == MemoryAccessWidth::Word) {
-        if (offset == 0x28B8u) return execution_->interrupts().pending();
-    }
-    if (execution_ && width != MemoryAccessWidth::Byte && offset >= 0x2890u && offset <= 0x2898u &&
-        (offset & 3u) == 0u) {
-        const auto timer = static_cast<std::size_t>((offset - 0x2890u) / 4u);
-        const auto stored = static_cast<std::uint32_t>(registers_[offset + 1u] & 7u) << 8u;
-        return stored | execution_->timer(timer).counter();
-    }
+    };
+    const auto logical_byte = [this, &stored_word](const std::uint32_t byte_offset) {
+        if (!execution_) return registers_[byte_offset];
+
+        constexpr std::uint32_t timer_base = 0x2890u;
+        constexpr std::uint32_t timer_stride = 4u;
+        constexpr std::uint32_t timer_end =
+            timer_base +
+            static_cast<std::uint32_t>(AicaExecutionController::timer_count) * timer_stride;
+        if (byte_offset >= timer_base && byte_offset < timer_end) {
+            const auto timer =
+                static_cast<std::size_t>((byte_offset - timer_base) / timer_stride);
+            const auto register_offset =
+                timer_base + static_cast<std::uint32_t>(timer) * timer_stride;
+            const auto value =
+                (stored_word(register_offset) & 0xFFFFFF00u) |
+                static_cast<std::uint32_t>(execution_->timer(timer).counter());
+            return static_cast<std::uint8_t>(
+                value >> ((byte_offset - register_offset) * 8u));
+        }
+
+        constexpr std::uint32_t interrupt_pending_offset = 0x28B8u;
+        if (byte_offset >= interrupt_pending_offset &&
+            byte_offset < interrupt_pending_offset + sizeof(std::uint32_t)) {
+            return static_cast<std::uint8_t>(
+                execution_->interrupts().pending() >>
+                ((byte_offset - interrupt_pending_offset) * 8u));
+        }
+
+        constexpr std::uint32_t arm_reset_offset = 0x2C00u;
+        if (byte_offset >= arm_reset_offset &&
+            byte_offset < arm_reset_offset + sizeof(std::uint32_t)) {
+            const auto value =
+                (stored_word(arm_reset_offset) & 0xFFFFFFFEu) |
+                static_cast<std::uint32_t>(execution_->arm7_reset_asserted());
+            return static_cast<std::uint8_t>(
+                value >> ((byte_offset - arm_reset_offset) * 8u));
+        }
+        return registers_[byte_offset];
+    };
+
     std::uint32_t result = 0u;
     for (std::size_t index = 0u; index < width_bytes(width); ++index) {
-        result |= static_cast<std::uint32_t>(registers_[offset + index]) << (index * 8u);
+        result |= static_cast<std::uint32_t>(
+                      logical_byte(offset + static_cast<std::uint32_t>(index)))
+                  << (index * 8u);
     }
     return result;
 }

@@ -32,8 +32,8 @@ freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
 ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
 geschlossen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 49, Block-ABI 4,
-Backend-Interface-ABI 3, PlatformServices-ABI 11, Portprojektvertrag 33 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 50, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 34 und
 Host-Video-Vertrag 2.
 
 Runtime-ABI 48 trennt den Handler-Lifetime-Pegel `trap_pending` von einer neu
@@ -565,8 +565,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 49, Block-ABI 4, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 11, Portprojektvertrag 33 und Host-Video-Vertrag 2 bilden
+Runtime-ABI 50, Block-ABI 5, Backend-Interface-ABI 4, BIOS-ABI 9,
+PlatformServices-ABI 11, Portprojektvertrag 34 und Host-Video-Vertrag 2 bilden
 den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

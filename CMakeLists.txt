@@ -2422,6 +2422,18 @@ set_tests_properties(
     katana-port-cli-tests
     PROPERTIES TIMEOUT 300 RESOURCE_LOCK katana-external-port-build
 )
+add_test(
+    NAME katana-counted-loop-differential-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
+        -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+        -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_counted_loop_differential.cmake
+)
+set_tests_properties(
+    katana-counted-loop-differential-tests
+    PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
+)
 
 add_executable(katana-codegen-metadata-tests tests/codegen/metadata_tests.cpp)
 target_link_libraries(katana-codegen-metadata-tests PRIVATE katana_core katana_runtime)
