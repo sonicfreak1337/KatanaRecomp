@@ -831,7 +831,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
          runtime_modules,
          disc_load_transactions,
          direct_scanout](
-            const GuestWriteEvent& event) {
+            const GuestWriteEvent& event) noexcept {
             if (const auto renderer = direct_scanout.lock())
                 renderer->observe_vram_write(event.address, event.size, event.bytes_changed);
             if (const auto transactions = disc_load_transactions.lock();
@@ -862,7 +862,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                 blocks->erase_overlapping_physical(backing, extent_size));
                     }
                 });
-        });
+        },
+        GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
     state.store_queue_transfers->reserve(1024u);
     state.dropped_store_queue_transfers = std::make_shared<std::uint64_t>(0u);

@@ -194,6 +194,14 @@ struct GuestWriteEvent {
 
 using GuestWriteObserver = std::function<void(const GuestWriteEvent&)>;
 
+enum class GuestWriteObserverContract : std::uint8_t {
+    General,
+    // The observer may decide only from the event and update its own code/module
+    // bookkeeping. It must be nonthrowing; it must neither inspect nor mutate CPU,
+    // scheduler, memory metrics, mappings, backing bytes, or diagnostic/observer state.
+    StableForPrevalidatedLinearWrites,
+};
+
 struct GuestMemoryAccessEvent {
     MemoryAccessOperation operation = MemoryAccessOperation::Read;
     GuestMemoryAccessOrigin access_origin = GuestMemoryAccessOrigin::Memory;
@@ -296,9 +304,13 @@ class Memory {
     void clear_mmio_trace_handler() noexcept;
     [[nodiscard]] bool has_mmio_trace_handler() const noexcept;
 
-    void set_guest_write_observer(GuestWriteObserver observer);
+    void set_guest_write_observer(
+        GuestWriteObserver observer,
+        GuestWriteObserverContract contract = GuestWriteObserverContract::General);
     void clear_guest_write_observer() noexcept;
     [[nodiscard]] bool has_guest_write_observer() const noexcept;
+    [[nodiscard]] bool
+    guest_write_observer_allows_prevalidated_linear_writes() const noexcept;
 
     void set_guest_memory_access_sink(GuestMemoryAccessSink sink) noexcept;
     void clear_guest_memory_access_sink() noexcept;
@@ -455,6 +467,8 @@ class Memory {
     MemoryAccessObserver trace_handler_;
     MemoryAccessObserver mmio_trace_handler_;
     GuestWriteObserver guest_write_observer_;
+    GuestWriteObserverContract guest_write_observer_contract_ =
+        GuestWriteObserverContract::General;
     GuestMemoryAccessSink guest_memory_access_sink_;
     bool mmio_access_tracking_enabled_ = false;
     mutable std::optional<LastMmioAccessRecord> last_mmio_access_;

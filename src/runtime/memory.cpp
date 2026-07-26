@@ -736,16 +736,26 @@ bool Memory::has_mmio_trace_handler() const noexcept {
     return static_cast<bool>(mmio_trace_handler_);
 }
 
-void Memory::set_guest_write_observer(GuestWriteObserver observer) {
+void Memory::set_guest_write_observer(GuestWriteObserver observer,
+                                      const GuestWriteObserverContract contract) {
     guest_write_observer_ = std::move(observer);
+    guest_write_observer_contract_ =
+        guest_write_observer_ ? contract : GuestWriteObserverContract::General;
 }
 
 void Memory::clear_guest_write_observer() noexcept {
     guest_write_observer_ = {};
+    guest_write_observer_contract_ = GuestWriteObserverContract::General;
 }
 
 bool Memory::has_guest_write_observer() const noexcept {
     return static_cast<bool>(guest_write_observer_);
+}
+
+bool Memory::guest_write_observer_allows_prevalidated_linear_writes() const noexcept {
+    return !guest_write_observer_ ||
+           guest_write_observer_contract_ ==
+               GuestWriteObserverContract::StableForPrevalidatedLinearWrites;
 }
 
 void Memory::set_guest_memory_access_sink(const GuestMemoryAccessSink sink) noexcept {

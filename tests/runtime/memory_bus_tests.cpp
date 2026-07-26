@@ -70,6 +70,7 @@ int main(const int argc, const char* const* argv) {
     using katana::runtime::MemoryAccessErrorReason;
     using katana::runtime::MemoryLookupMode;
     using katana::runtime::MemoryRegionAccess;
+    using katana::runtime::GuestWriteObserverContract;
 
     require(argc > 0 && argv[0] != nullptr,
             "Testprozess besitzt keinen Pfad fuer den Fail-stop-Kindprozess.");
@@ -87,6 +88,19 @@ int main(const int argc, const char* const* argv) {
 #endif
 
     Memory bus(0u);
+    require(bus.guest_write_observer_allows_prevalidated_linear_writes(),
+            "Fehlender GuestWriteObserver blockiert vorvalidierte lineare Writes.");
+    bus.set_guest_write_observer([](const katana::runtime::GuestWriteEvent&) {});
+    require(!bus.guest_write_observer_allows_prevalidated_linear_writes(),
+            "Allgemeiner GuestWriteObserver wird faelschlich als batch-stabil eingestuft.");
+    bus.set_guest_write_observer(
+        [](const katana::runtime::GuestWriteEvent&) {},
+        GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+    require(bus.guest_write_observer_allows_prevalidated_linear_writes(),
+            "Explizit stabiler GuestWriteObserver wird vom Batch-Vertrag abgelehnt.");
+    bus.clear_guest_write_observer();
+    require(bus.guest_write_observer_allows_prevalidated_linear_writes(),
+            "Geloeschter GuestWriteObserver hinterlaesst einen unsicheren Batch-Vertrag.");
     const auto work_ram = std::make_shared<LinearMemoryDevice>(16u);
     const auto adjacent_ram = std::make_shared<LinearMemoryDevice>(16u);
     const auto boot_rom = std::make_shared<LinearMemoryDevice>(8u);

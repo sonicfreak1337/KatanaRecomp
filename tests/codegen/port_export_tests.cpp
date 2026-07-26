@@ -1768,23 +1768,13 @@ int run_test(const int argc, char* argv[]) {
     const auto counted_loop_dispatch =
         read_text(counted_loop_output / "generated" / "code" / "runtime-dispatch.cpp");
     const auto counted_loop_main = read_text(counted_loop_output / "src" / "main.cpp");
+    const auto counted_loop_header =
+        read_text(counted_loop_output / "generated" / "include" / "katana_port.hpp");
     constexpr std::string_view counted_loop_descriptor =
-        "{0x8C010016u, 0x8C010010u, 6u, 0x8C010024u, 0x8C010014u, "
-        "0x8C010012u, 8, 15u, 3u, 2u, 1u, 1u, 7u, 2u, true, 12u, "
-        "\"generated-block-8C010016\"}";
-    const auto previous_write = counted_loop_main.find("counter_backing_offset, previous_counter");
-    const auto synthetic_utlb_advance =
-        counted_loop_main.find("advance_utlb_access_counter(", previous_write);
-    const auto aggregated_cycles =
-        counted_loop_main.find("batch_cycles - descriptor.store_guest_cycles", previous_write);
-    const auto pre_store_flush =
-        counted_loop_main.find("flush_pending_guest_cycles(cpu_, *this)", aggregated_cycles);
-    const auto final_store_attempt =
-        counted_loop_main.find("GuestInstructionAttempt store_attempt", pre_store_flush);
-    const auto final_write =
-        counted_loop_main.find("counter_address, final_counter", final_store_attempt);
-    const auto final_store_flush =
-        counted_loop_main.find("flush_pending_guest_cycles(cpu_, *this)", final_write);
+        "{0x8C010016u, 0x8C010010u, 6u, 0x8C010024u, 0x8C010018u, "
+        "0x8C010014u, 0x8C010012u, 8, 15u, 3u, 2u, 1u, 1u, 2u, 4u, "
+        "7u, 2u, 2u, 2u, true, 7u, 12u, \"generated-block-8C010016\", "
+        "\"generated-block-8C010010\"}";
     const auto counted_loop_call = counted_loop_dispatch.find("try_product_counted_loop_batch(");
     const auto ordinary_block_execute =
         counted_loop_dispatch.find("execute_runtime_block(", counted_loop_call);
@@ -1797,6 +1787,125 @@ int run_test(const int argc, char* argv[]) {
             ? std::string_view{}
             : std::string_view{counted_loop_main}.substr(
                   counted_loop_method_begin, counted_loop_method_end - counted_loop_method_begin);
+    const auto counted_limit_attempt =
+        counted_loop_method.find("GuestInstructionAttempt limit_attempt");
+    const auto counted_limit_read = std::min(
+        {counted_loop_method.find("guest_read_u16_at(", counted_limit_attempt),
+         counted_loop_method.find("guest_read_s16_at(", counted_limit_attempt),
+         counted_loop_method.find("guest_read_u32_at(", counted_limit_attempt)});
+    const auto counted_first_flush =
+        counted_loop_method.find("flush_pending_guest_cycles(cpu_, *this)");
+    const auto counted_prefix_flush = counted_loop_method.find(
+        "flush_pending_guest_cycles(cpu_, *this)",
+        counted_first_flush == std::string::npos
+            ? std::string::npos
+            : counted_first_flush + 1u);
+    const auto counted_post_flush_contract =
+        counted_loop_method.find("post_flush_batch_contract", counted_prefix_flush);
+    const auto counted_post_flush_limit_snapshot =
+        counted_loop_method.find("post_flush_limit_unchanged", counted_post_flush_contract);
+    const auto counted_first_read_attempt = counted_loop_method.find(
+        "GuestInstructionAttempt first_counter_read_attempt",
+        counted_post_flush_contract);
+    const auto counted_first_read =
+        counted_loop_method.find("guest_read_u32_at(", counted_first_read_attempt);
+    const auto counted_scalar_guard =
+        counted_loop_method.find("const auto finish_scalar_guard", counted_first_read);
+    const auto counted_first_round_tail =
+        counted_loop_method.find("first_round_tail_guest_cycles", counted_scalar_guard);
+    const auto counted_synthetic_reads =
+        counted_loop_method.find("admitted * 3u - 2u", counted_first_round_tail);
+    const auto counted_remaining_attempts = counted_loop_method.find(
+        "cpu_.attempted_guest_instructions += remaining_batch_instructions",
+        counted_synthetic_reads);
+    const auto counted_intermediate_store_loop =
+        counted_loop_method.find("iteration < admitted", counted_remaining_attempts);
+    const auto counted_intermediate_value =
+        counted_loop_method.find("iteration * descriptor.step",
+                                 counted_intermediate_store_loop);
+    const auto counted_intermediate_write =
+        counted_loop_method.find("cpu_.memory.write_u32(",
+                                 counted_intermediate_store_loop);
+    const auto counted_final_store_attempt = counted_loop_method.find(
+        "GuestInstructionAttempt store_attempt", counted_intermediate_write);
+    const auto counted_final_write =
+        counted_loop_method.find("guest_write_u32_at(", counted_final_store_attempt);
+    const auto counted_final_exception_flush = counted_loop_method.find(
+        "flush_pending_guest_cycles(cpu_, *this)", counted_final_write);
+    const auto counted_final_flush = counted_loop_method.find(
+        "flush_pending_guest_cycles(cpu_, *this)",
+        counted_final_exception_flush == std::string::npos
+            ? std::string::npos
+            : counted_final_exception_flush + 1u);
+    const auto counted_dynamic_kind =
+        counted_loop_dispatch.find("const auto counted_fastpath_kind", counted_loop_call);
+    const auto counted_dynamic_kind_store = counted_loop_dispatch.find(
+        "counted_loop->store_instruction_address", counted_dynamic_kind);
+    const auto counted_dynamic_kind_fallthrough = counted_loop_dispatch.find(
+        "BlockEndKind::Fallthrough", counted_dynamic_kind_store);
+    const auto counted_fastpath_finalize =
+        counted_loop_dispatch.find("finalize_product_fastpath(", counted_loop_call);
+    const auto counted_dynamic_source =
+        counted_loop_dispatch.find("cpu.active_instruction_pc", counted_fastpath_finalize);
+    const auto counted_dynamic_physical_source = counted_loop_dispatch.find(
+        "cpu.active_instruction_physical_pc", counted_dynamic_source);
+    const auto counted_post_flush_scope =
+        counted_post_flush_contract == std::string::npos ||
+                counted_first_read_attempt == std::string::npos ||
+                counted_first_read_attempt < counted_post_flush_contract
+            ? std::string_view{}
+            : counted_loop_method.substr(
+                  counted_post_flush_contract,
+                  counted_first_read_attempt - counted_post_flush_contract);
+    const auto counted_contract_proof_begin = counted_loop_main.find(
+        "std::optional<CountedLoopContract> prove_counted_loop_contract(");
+    const auto counted_contract_proof_end = counted_loop_main.find(
+        "static constexpr std::uint64_t local_block_chain_guest_cycle_budget",
+        counted_contract_proof_begin);
+    const auto counted_contract_proof =
+        counted_contract_proof_begin == std::string::npos ||
+                counted_contract_proof_end == std::string::npos ||
+                counted_contract_proof_end < counted_contract_proof_begin
+            ? std::string_view{}
+            : std::string_view{counted_loop_main}.substr(
+                  counted_contract_proof_begin,
+                  counted_contract_proof_end - counted_contract_proof_begin);
+    const auto counted_alias_proof_begin = counted_loop_main.find(
+        "bool counted_loop_counter_aliases_are_inert(");
+    const auto counted_alias_proof_end =
+        counted_loop_main.find("std::optional<CountedLoopContract>",
+                               counted_alias_proof_begin);
+    const auto counted_alias_proof =
+        counted_alias_proof_begin == std::string::npos ||
+                counted_alias_proof_end == std::string::npos ||
+                counted_alias_proof_end < counted_alias_proof_begin
+            ? std::string_view{}
+            : std::string_view{counted_loop_main}.substr(
+                  counted_alias_proof_begin,
+                  counted_alias_proof_end - counted_alias_proof_begin);
+    const auto counted_runtime_gate_begin = counted_loop_main.find(
+        "bool runtime_state_allows_counted_loop_batch()");
+    const auto counted_runtime_gate_end = counted_loop_main.find(
+        "bool proves_counted_instruction_block(", counted_runtime_gate_begin);
+    const auto counted_runtime_gate =
+        counted_runtime_gate_begin == std::string::npos ||
+                counted_runtime_gate_end == std::string::npos ||
+                counted_runtime_gate_end < counted_runtime_gate_begin
+            ? std::string_view{}
+            : std::string_view{counted_loop_main}.substr(
+                  counted_runtime_gate_begin,
+                  counted_runtime_gate_end - counted_runtime_gate_begin);
+    const auto counted_gate_begin = counted_loop_main.find(
+        "counted_loop_batching_enabled_ = !diagnostic_partial_port &&");
+    const auto counted_gate_end =
+        counted_loop_main.find("mmio_wait_loop_batching_enabled_", counted_gate_begin);
+    const auto counted_gate =
+        counted_gate_begin == std::string::npos ||
+                counted_gate_end == std::string::npos ||
+                counted_gate_end < counted_gate_begin
+            ? std::string_view{}
+            : std::string_view{counted_loop_main}.substr(
+                  counted_gate_begin, counted_gate_end - counted_gate_begin);
     require(counted_loop_dispatch.find("std::array<CountedLoopBatchDescriptor, 1u> "
                                        "counted_loop_batch_descriptors") != std::string::npos,
             "Exakte positive Counted-Loop-Fixture erzeugt nicht genau einen Descriptor.");
@@ -1805,43 +1914,77 @@ int run_test(const int argc, char* argv[]) {
             "Counted-Loop-Descriptor verliert Adressen, Register, Timing oder Schrittweite: " +
                 counted_loop_dispatch.substr(counted_loop_array, 320u));
     require(
-        counted_loop_dispatch.find("selected_block->get(), *counted_loop") != std::string::npos &&
+        counted_loop_header.find("struct CountedLoopBatchDescriptor") != std::string::npos &&
+            counted_loop_header.find(
+                "std::uint32_t first_counter_read_instruction_address") !=
+                std::string::npos &&
+            counted_loop_header.find("std::uint8_t limit_width") != std::string::npos &&
+            counted_loop_header.find("std::uint8_t guard_instruction_count") !=
+                std::string::npos &&
+            counted_loop_header.find("std::uint8_t prefix_guest_cycles") !=
+                std::string::npos &&
+            counted_loop_header.find(
+                "std::uint8_t first_counter_read_guest_cycles") !=
+                std::string::npos &&
+            counted_loop_header.find("std::uint64_t guard_guest_cycles") !=
+                std::string::npos &&
+            counted_loop_header.find("std::string_view increment_provenance") !=
+                std::string::npos &&
+            counted_loop_dispatch.find("selected_block->get(), *counted_loop") !=
+                std::string::npos &&
             counted_loop_dispatch.find("active_context->scheduler_cycle =") != std::string::npos &&
             counted_loop_call != std::string::npos && ordinary_block_execute != std::string::npos &&
             counted_loop_call < ordinary_block_execute &&
-            counted_loop_main.find(
-                "Counted loops start with a PC-relative RAM read") != std::string::npos &&
-            counted_loop_main.find("counted_loop_batching_enabled_ = false") !=
+            counted_gate_begin != std::string::npos &&
+            counted_gate_end != std::string::npos &&
+            counted_gate.find("!runtime_probe_mode_ && replay_log_ == nullptr") !=
+                std::string::npos &&
+            counted_gate.find("\"KATANA_PORT_PROGRESS_INTERVAL\"") !=
+                std::string::npos &&
+            counted_gate.find("\"KATANA_PORT_COUNTED_LOOP_TRACE\"") ==
+                std::string::npos &&
+            counted_gate.find("counted_loop_batching_enabled_ = false") !=
                 std::string::npos &&
             counted_loop_main.find("selected_block.runtime_registered") != std::string::npos &&
             counted_loop_main.find("selected_block.aot_template") != std::string::npos &&
-            counted_loop_main.find("selected_block.provenance != descriptor.guard_provenance") !=
+            counted_loop_method.find(
+                "selected_block.provenance, descriptor.guard_provenance") !=
                 std::string::npos &&
-            counted_loop_main.find("selected_block.provenance.ends_with(\"-mmu-variant\")") !=
+            counted_loop_main.find("actual.starts_with(expected)") !=
+                std::string::npos &&
+            counted_loop_main.find("actual.ends_with(\"-mmu-variant\")") !=
+                std::string::npos &&
+            counted_contract_proof.find(
+                "increment->second.identity, descriptor.increment_provenance") !=
                 std::string::npos &&
             counted_loop_main.find("(counter_address & 3u) != 0u") != std::string::npos &&
-            counted_loop_main.find("descriptor.limit_address % limit_size != 0u") !=
+            counted_loop_main.find(
+                "descriptor.limit_address % descriptor.limit_width != 0u") !=
                 std::string::npos &&
-            counted_loop_main.find("module_catalog->resolve(counter_address + offset, 1u)") !=
+            counted_alias_proof.find("counter_address + offset, 1u") !=
                 std::string::npos &&
-            counted_loop_main.find("state_.main_ram->size() !=\n"
-                                   "                katana::runtime::dreamcast_main_ram_size") !=
+            counted_runtime_gate.find("state_.main_ram->size() ==\n"
+                                      "                katana::runtime::dreamcast_main_ram_size") !=
                 std::string::npos &&
             counted_loop_main.find("katana::runtime::dreamcast_main_ram_area_bases") !=
                 std::string::npos &&
-            counted_loop_main.find("mirror <\n"
-                                   "                         "
-                                   "katana::runtime::dreamcast_main_ram_mirrors_per_area") !=
+            counted_loop_main.find(
+                "mirror < katana::runtime::dreamcast_main_ram_mirrors_per_area") !=
                 std::string::npos &&
             counted_loop_method.find("carried_guest_cycles") == std::string::npos &&
             counted_loop_method.find(
-                "return counted_loop_batch_rejected(\"entry-pending\")") !=
+                "quantum / descriptor.round_guest_cycles") != std::string::npos &&
+            counted_loop_method.find(
+                "descriptor.round_guest_cycles - descriptor.prefix_guest_cycles") !=
                 std::string::npos &&
             counted_loop_method.find(
-                "quantum / descriptor.round_guest_cycles") != std::string::npos &&
-            counted_loop_method.find("available / descriptor.round_guest_cycles") !=
+                "available - first_round_tail_guest_cycles") != std::string::npos &&
+            counted_loop_method.find(
+                "*remaining - first_round_tail_guest_cycles - 1u") !=
                 std::string::npos &&
-            counted_loop_method.find("(*remaining - 1u)") != std::string::npos &&
+            counted_loop_method.find(
+                "batch_cycles - descriptor.prefix_guest_cycles") !=
+                std::string::npos &&
             counted_loop_main.find("struct ProvenMemoryTranslation") != std::string::npos &&
             counted_loop_main.find("prove_contiguous_translation(") != std::string::npos &&
             counted_loop_main.find("prove_main_ram_translation(") != std::string::npos &&
@@ -1854,14 +1997,19 @@ int run_test(const int argc, char* argv[]) {
             counted_loop_main.find("physical != "
                                    "katana::runtime::canonical_physical_address(address)") ==
                 std::string::npos &&
-            counted_loop_main.find("counter_read->physical_address != "
-                                   "counter_write->physical_address") !=
+            counted_loop_main.find("counter_read->physical_address !=\n"
+                                   "                counter_write->physical_address") !=
                 std::string::npos &&
-            counted_loop_main.find("counter_read->utlb_slot != counter_write->utlb_slot") !=
+            counted_contract_proof.find("counter_read->no_mmu_fastpath") !=
+                std::string::npos &&
+            counted_contract_proof.find("counter_write->no_mmu_fastpath") !=
+                std::string::npos &&
+            counted_contract_proof.find("limit_read->no_mmu_fastpath") !=
+                std::string::npos &&
+            occurrences(counted_contract_proof, "utlb_slot != 0xFFu") == 3u &&
+            counted_loop_main.find("state.cache_control->on_chip_ram_device()") !=
                 std::string::npos &&
             counted_loop_main.find("cpu_.address_space.get() == state_.address_space.get()") !=
-                std::string::npos &&
-            counted_loop_main.find("state.cache_control->on_chip_ram_device()") !=
                 std::string::npos &&
             counted_loop_main.find("Sh4CacheControl::operand_ram_enable") !=
                 std::string::npos &&
@@ -1873,44 +2021,152 @@ int run_test(const int argc, char* argv[]) {
                 "translated->physical_address, size, device.get(), false") !=
                 std::string::npos &&
             counted_loop_main.find("const bool counter_is_on_chip_ram") != std::string::npos &&
-            counted_loop_main.find("state_.cache_control->read_on_chip_ram(") !=
+            occurrences(counted_loop_main,
+                        "state_.cache_control->read_on_chip_ram(") == 0u &&
+            counted_loop_main.find("utlb_accesses_per_round") ==
                 std::string::npos &&
-            counted_loop_main.find("state_.cache_control->write_on_chip_ram(") !=
-                std::string::npos &&
-            counted_loop_main.find("const auto utlb_accesses_per_round =") !=
-                std::string::npos &&
-            counted_loop_main.find("batch_utlb_accesses - counter_write_utlb_accesses") !=
+            counted_loop_main.find("advance_utlb_access_counter(") ==
                 std::string::npos &&
             counted_loop_main.find("*counter_backing < *limit_backing + limit_size") !=
                 std::string::npos &&
             counted_loop_main.find("\"KATANA_PORT_LIFECYCLE_TEST\"") != std::string::npos &&
-            counted_loop_method.find("batch_cycles >\n"
+            counted_loop_method.find("remaining_batch_cycles >\n"
                                      "                std::numeric_limits<std::uint64_t>::max() - "
                                      "scheduler_cycle") !=
                 std::string::npos &&
             counted_loop_main.find("constexpr std::uint64_t quantum = 131'072u") !=
                 std::string::npos &&
-            previous_write != std::string::npos &&
-            synthetic_utlb_advance != std::string::npos &&
-            aggregated_cycles != std::string::npos && pre_store_flush != std::string::npos &&
-            final_store_attempt != std::string::npos && final_write != std::string::npos &&
-            final_store_flush != std::string::npos &&
-            previous_write < synthetic_utlb_advance &&
-            synthetic_utlb_advance < aggregated_cycles && aggregated_cycles < pre_store_flush &&
-            pre_store_flush < final_store_attempt && final_store_attempt < final_write &&
-            final_write < final_store_flush &&
-            counted_loop_main.find("descriptor.store_instruction_address, true") !=
+            counted_limit_attempt != std::string::npos &&
+            counted_limit_read != std::string::npos &&
+            counted_first_flush != std::string::npos &&
+            counted_prefix_flush != std::string::npos &&
+            counted_post_flush_contract != std::string::npos &&
+            counted_first_read_attempt != std::string::npos &&
+            counted_first_read != std::string::npos &&
+            counted_scalar_guard != std::string::npos &&
+            counted_first_round_tail != std::string::npos &&
+            counted_synthetic_reads != std::string::npos &&
+            counted_remaining_attempts != std::string::npos &&
+            counted_intermediate_store_loop != std::string::npos &&
+            counted_intermediate_value != std::string::npos &&
+            counted_intermediate_write != std::string::npos &&
+            counted_final_store_attempt != std::string::npos &&
+            counted_final_write != std::string::npos &&
+            counted_final_exception_flush != std::string::npos &&
+            counted_final_flush != std::string::npos &&
+            counted_limit_attempt < counted_limit_read &&
+            counted_limit_read < counted_first_flush &&
+            counted_first_flush < counted_prefix_flush &&
+            counted_prefix_flush < counted_post_flush_contract &&
+            counted_post_flush_contract < counted_post_flush_limit_snapshot &&
+            counted_post_flush_limit_snapshot < counted_first_read_attempt &&
+            counted_post_flush_contract < counted_first_read_attempt &&
+            counted_contract_proof_begin != std::string::npos &&
+            counted_contract_proof_end != std::string::npos &&
+            counted_alias_proof_begin != std::string::npos &&
+            counted_alias_proof_end != std::string::npos &&
+            counted_runtime_gate_begin != std::string::npos &&
+            counted_runtime_gate_end != std::string::npos &&
+            counted_loop_main.find("struct CountedLoopContract") !=
                 std::string::npos &&
-            counted_loop_main.find("cpu_.active_instruction_physical_pc = store_physical") !=
+            counted_loop_method.find("struct CountedLoopContract") ==
                 std::string::npos &&
-            counted_loop_main.find("advance_utlb_access_counter(\n"
-                                   "            cpu_, synthetic_utlb_accesses)") !=
+            counted_loop_method.find("const auto prove_counted_loop_contract") ==
                 std::string::npos &&
+            counted_runtime_gate.find(
+                "guest_write_observer_allows_prevalidated_linear_writes()") !=
+                std::string::npos &&
+            counted_alias_proof.find(
+                "katana::runtime::dreamcast_main_ram_area_bases") !=
+                std::string::npos &&
+            counted_alias_proof.find(
+                "katana::runtime::dreamcast_main_ram_mirrors_per_area") !=
+                std::string::npos &&
+            counted_alias_proof.find(
+                "state_.runtime_blocks->may_overlap_active_physical(") !=
+                std::string::npos &&
+            counted_alias_proof.find(
+                "state_.module_catalog->may_overlap_active_extent(") !=
+                std::string::npos &&
+            counted_contract_proof.find("selected_physical_origin") !=
+                std::string::npos &&
+            counted_contract_proof.find("selected_block") ==
+                std::string::npos &&
+            counted_post_flush_scope.find("selected_block") ==
+                std::string::npos &&
+            counted_post_flush_scope.find(
+                "post_flush_contract->limit_backing_offset") !=
+                std::string::npos &&
+            counted_post_flush_scope.find(
+                "static_cast<std::uint16_t>(limit_bits)") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "!post_flush_batch_contract || !post_flush_limit_unchanged") !=
+                std::string::npos &&
+            counted_first_read_attempt < counted_first_read &&
+            counted_first_read < counted_scalar_guard &&
+            counted_scalar_guard < counted_first_round_tail &&
+            counted_first_round_tail < counted_synthetic_reads &&
+            counted_synthetic_reads < counted_remaining_attempts &&
+            counted_remaining_attempts < counted_intermediate_store_loop &&
+            counted_intermediate_store_loop < counted_intermediate_value &&
+            counted_intermediate_value < counted_intermediate_write &&
+            counted_intermediate_write < counted_final_store_attempt &&
+            counted_final_store_attempt < counted_final_write &&
+            counted_final_write < counted_final_exception_flush &&
+            counted_final_exception_flush < counted_final_flush &&
+            counted_loop_method.find("return false;", counted_prefix_flush) ==
+                std::string::npos &&
+            counted_loop_method.find(
+                "return finish_scalar_guard();", counted_scalar_guard) !=
+                std::string::npos &&
+            counted_loop_method.find("account_prevalidated_unobserved_accesses(") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "cpu_.attempted_guest_instructions += remaining_batch_instructions") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "cpu_.retired_guest_instructions += remaining_batch_instructions") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "for (std::uint64_t iteration = 1u;") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "descriptor.store_instruction_address,\n"
+                "            store_contract->store_physical, true") !=
+                std::string::npos &&
+            counted_loop_main.find(
+                "cpu_.active_instruction_physical_pc = "
+                "store_contract->store_physical") !=
+                std::string::npos &&
+            counted_dynamic_kind != std::string::npos &&
+            counted_dynamic_kind_store != std::string::npos &&
+            counted_dynamic_kind_fallthrough != std::string::npos &&
+            counted_fastpath_finalize != std::string::npos &&
+            counted_dynamic_source != std::string::npos &&
+            counted_dynamic_physical_source != std::string::npos &&
+            counted_loop_call < counted_dynamic_kind &&
+            counted_dynamic_kind < counted_dynamic_kind_store &&
+            counted_dynamic_kind_store < counted_dynamic_kind_fallthrough &&
+            counted_dynamic_kind_fallthrough < counted_fastpath_finalize &&
+            counted_fastpath_finalize < counted_dynamic_source &&
+            counted_dynamic_source < counted_dynamic_physical_source &&
+            counted_dynamic_physical_source < ordinary_block_execute &&
+            occurrences(counted_loop_method, "cpu_.memory.write_u32(") == 1u &&
             occurrences(counted_loop_method, "guest_write_u32_at(") == 1u &&
-            occurrences(counted_loop_method, "state_.main_ram->write_u32(") == 1u &&
-            occurrences(counted_loop_method, "state_.cache_control->write_on_chip_ram(") == 1u,
-        "Der vorerst deaktivierte Counted-Loop-Pfad verliert Fail-Closed-Gate, statische "
-        "Produktisolation oder seine dokumentierte spaetere Staged-Prefix-Basis.");
+            occurrences(counted_loop_method, "state_.main_ram->write_u32(") == 0u &&
+            occurrences(counted_loop_method,
+                        "state_.cache_control->write_on_chip_ram(") == 0u &&
+            counted_loop_method.find(
+                "cpu_.active_instruction_pc = descriptor.store_instruction_address") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "cpu_.active_instruction_physical_pc = "
+                "store_contract->store_physical") !=
+                std::string::npos,
+        "Der produktive Counted-Loop-Pfad verliert Staged-Prefix, Post-Flush-Proof, "
+        "exakte Event-/Budget-/Zaehlerformeln, Observer-Store-Reihenfolge oder "
+        "dynamische Exit-Provenienz.");
 
     auto counted_loop_diagnostic_options = options;
     counted_loop_diagnostic_options.diagnostic_partial = true;
@@ -1924,6 +2180,115 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 counted_loop_diagnostic_dispatch.find(counted_loop_descriptor) == std::string::npos,
             "Diagnose-/Interpreterports enthalten einen Produkt-Counted-Loop-Fastpath.");
+
+    const auto counted_loop_disc =
+        katana::platform::load_dreamcast_gdi_boot(counted_loop_gdi);
+    const auto counted_loop_image =
+        katana::platform::make_dreamcast_disc_executable(counted_loop_disc);
+    const auto counted_loop_analysis =
+        katana::analysis::analyze_control_flow(counted_loop_image);
+    const auto counted_loop_program =
+        katana::ir::lower_program(counted_loop_analysis);
+    std::vector<katana::io::InputProvenance> counted_loop_inputs;
+    const auto& counted_loop_source_descriptor =
+        counted_loop_disc.source->descriptor();
+    counted_loop_inputs.push_back(katana::io::capture_input_provenance(
+        "gdi-descriptor", counted_loop_source_descriptor.resolved_path));
+    for (const auto& track : counted_loop_source_descriptor.tracks)
+        counted_loop_inputs.push_back(katana::io::capture_input_provenance(
+            "gdi-track-" + std::to_string(track.number), track.resolved_path));
+    const auto require_rejected_counted_loop_ir =
+        [&](const std::string_view fixture_name,
+            const std::uint32_t instruction_address,
+            auto&& mutate) {
+            auto negative_program = counted_loop_program;
+            bool mutated = false;
+            for (auto& function : negative_program) {
+                for (auto& block : function.blocks) {
+                    for (auto& instruction : block.instructions) {
+                        if (instruction.source_address != instruction_address) continue;
+                        mutate(instruction);
+                        mutated = true;
+                    }
+                }
+            }
+            require(mutated,
+                    "Counted-Loop-Negativfixture findet ihre Zielinstruktion nicht: " +
+                        std::string(fixture_name));
+            const auto fixture_identity =
+                "counted-loop-" + std::string(fixture_name);
+            const auto negative_output =
+                fixture.root / (fixture_identity + "-port");
+            static_cast<void>(export_dreamcast_port_project(
+                {counted_loop_image,
+                 counted_loop_analysis,
+                 negative_program,
+                 counted_loop_inputs,
+                 katana::platform::dreamcast_disc_boot_address,
+                 katana::platform::dreamcast_disc_boot_address,
+                 counted_loop_disc.boot_file.size(),
+                 fixture_identity},
+                negative_output,
+                options));
+            const auto negative_dispatch = read_text(
+                negative_output / "generated" / "code" / "runtime-dispatch.cpp");
+            require(
+                negative_dispatch.find(
+                    "std::array<CountedLoopBatchDescriptor, 0u> "
+                    "counted_loop_batch_descriptors") != std::string::npos &&
+                    negative_dispatch.find(counted_loop_descriptor) ==
+                        std::string::npos,
+                "Counted-Loop-Negativfixture erzeugt einen Produkt-Fastpath: " +
+                    std::string(fixture_name));
+        };
+    require_rejected_counted_loop_ir(
+        "limit-width",
+        0x8C010016u,
+        [](auto& instruction) {
+            require(instruction.memory_effects.width ==
+                        katana::ir::OperandWidth::Bits16,
+                    "Counted-Loop-Limitfixture beginnt nicht als 16-Bit-Read.");
+            const auto region = instruction.memory_effects.region;
+            instruction.operation =
+                katana::ir::Operation::LoadByteSigned;
+            instruction.original_operation = instruction.operation;
+            instruction.widths =
+                katana::ir::operation_operand_widths(instruction.operation);
+            instruction.memory_effects = katana::ir::instruction_memory_effects(
+                instruction.operation,
+                instruction.destination_register,
+                instruction.source_register);
+            instruction.memory_effects.region = region;
+        });
+    for (const auto [name, address] :
+         std::array{std::pair{"guard-counter-normal-ram", 0x8C010018u},
+                    std::pair{"increment-counter-normal-ram", 0x8C010010u},
+                    std::pair{"store-counter-normal-ram", 0x8C010014u}}) {
+        require_rejected_counted_loop_ir(
+            name,
+            address,
+            [](auto& instruction) {
+                require(instruction.memory_effects.region !=
+                            katana::ir::MemoryRegionKind::NormalRam,
+                        "Dynamische Counted-Loop-Adresse ist unerwartet statisches RAM.");
+                instruction.memory_effects.region =
+                    katana::ir::MemoryRegionKind::NormalRam;
+            });
+    }
+    for (const auto [name, address] :
+         std::array{std::pair{"limit-no-cycle-flush", 0x8C010016u},
+                    std::pair{"guard-counter-no-cycle-flush", 0x8C010018u},
+                    std::pair{"increment-counter-no-cycle-flush", 0x8C010010u},
+                    std::pair{"store-no-cycle-flush", 0x8C010014u}}) {
+        require_rejected_counted_loop_ir(
+            name,
+            address,
+            [](auto& instruction) {
+                require(instruction.original_opcode != 0x0009u,
+                        "Counted-Loop-Timingfixture ist bereits ein NOP.");
+                instruction.original_opcode = 0x0009u;
+            });
+    }
 
     write_binary(counted_loop_disc_directory / "high.bin", counted_loop_boot_track(false));
     const auto rejected_counted_loop_output = fixture.root / "rejected-counted-loop-port";
@@ -1959,8 +2324,10 @@ int run_test(const int argc, char* argv[]) {
             "Mirror-Alias-Negativfixture verliert ihren statischen Counted-Loop-Descriptor.");
     require(
         aliased_counted_loop_main.find(
-            ": main_ram_backing_offset(counter_physical, 4u)") != std::string::npos &&
-            aliased_counted_loop_main.find("const auto limit_backing = main_ram_backing_offset(") !=
+            ": dreamcast_main_ram_backing_offset(counter_physical, 4u)") !=
+                std::string::npos &&
+            aliased_counted_loop_main.find(
+                "const auto limit_backing = dreamcast_main_ram_backing_offset(") !=
                 std::string::npos &&
             aliased_counted_loop_main.find("*counter_backing < *limit_backing + limit_size &&") !=
                 std::string::npos &&
