@@ -10,6 +10,13 @@
 
 namespace katana::codegen {
 
+inline constexpr std::uint32_t stable_partition_address_span = 0x0004'0000u;
+
+[[nodiscard]] constexpr std::uint32_t
+stable_partition_address_key(const std::uint32_t address) noexcept {
+    return address / stable_partition_address_span;
+}
+
 struct PartitionOptions {
     std::size_t maximum_functions = 128u;
     std::size_t maximum_instructions = 4096u;

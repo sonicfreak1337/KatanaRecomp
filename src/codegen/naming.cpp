@@ -42,8 +42,11 @@ deterministic_translation_unit_name(const TranslationUnitPartition& partition,
         throw std::invalid_argument("Codegen-Partition besitzt keinen kanonischen SHA-256-Hash.");
     }
     std::ostringstream output;
-    output << "unit-" << std::dec << std::setfill('0') << std::setw(5) << partition.index << "-v"
-           << std::uppercase << std::hex << std::setw(8) << partition.first_entry_address << "-"
+    // The sequential partition ordinal is deliberately absent from the path.
+    // A new function can add an earlier partition without renaming otherwise
+    // identical later translation units.
+    output << "unit-v" << std::setfill('0') << std::uppercase << std::hex << std::setw(8)
+           << partition.first_entry_address << "-"
            << std::setw(8) << partition.last_entry_address << "-" << std::nouppercase
            << partition.content_sha256.substr(0u, 16u) << suffix;
     return output.str();

@@ -62,14 +62,20 @@ partition_translation_units(const std::span<const katana::ir::Function> function
     std::vector<TranslationUnitPartition> result;
     for (const auto function_index : order) {
         const auto count = instruction_count(functions[function_index]);
+        const auto entry = functions[function_index].entry_address;
         if (count > options.maximum_instructions) {
             throw std::length_error(
                 "Funktion an Gastadresse " +
-                std::to_string(functions[function_index].entry_address) +
+                std::to_string(entry) +
                 " ueberschreitet das Instruktionslimit einer Translation Unit.");
         }
+        const bool crossed_stable_address_region =
+            !result.empty() &&
+            stable_partition_address_key(result.back().last_entry_address) !=
+                stable_partition_address_key(entry);
         const bool needs_partition =
-            result.empty() || result.back().function_indices.size() >= options.maximum_functions ||
+            result.empty() || crossed_stable_address_region ||
+            result.back().function_indices.size() >= options.maximum_functions ||
             (result.back().instruction_count != 0u &&
              count > options.maximum_instructions -
                          std::min(result.back().instruction_count, options.maximum_instructions));
@@ -79,7 +85,6 @@ partition_translation_units(const std::span<const katana::ir::Function> function
         auto& partition = result.back();
         partition.function_indices.push_back(function_index);
         partition.instruction_count += count;
-        const auto entry = functions[function_index].entry_address;
         if (partition.function_indices.size() == 1u) {
             partition.first_entry_address = entry;
         }
