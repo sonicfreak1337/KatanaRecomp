@@ -1,4 +1,5 @@
 #include "katana/analysis/jump_table_analysis.hpp"
+#include "katana/sh4/decoder.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -210,6 +211,98 @@ int main() {
                  no_snapshot_contract, absolute_lines, 3u)
                  .has_value(),
             "Schreibbare Sprungtabellendaten wurden ohne partiellen Snapshotvertrag verwendet.");
+
+    katana::io::ExecutableImage displaced_pointer_run;
+    std::vector<std::uint8_t> displaced_bytes(0xA0u, 0u);
+    const auto put_displaced_u32 = [&displaced_bytes](const std::size_t offset,
+                                                      const std::uint32_t value) {
+        displaced_bytes[offset] = static_cast<std::uint8_t>(value);
+        displaced_bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        displaced_bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        displaced_bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    // mov.l literal,r3; independent store; mov r3,r2; nop; independent store;
+    // mov.l @(12,r2),r3; jsr @r3; nop
+    const std::array<std::uint16_t, 9> displaced_opcodes{
+        0xD30Bu, 0x2452u, 0x6233u, 0x0009u, 0x2452u,
+        0x2452u, 0x5323u, 0x430Bu, 0x0009u};
+    for (std::size_t index = 0u; index < displaced_opcodes.size(); ++index) {
+        displaced_bytes[index * 2u] =
+            static_cast<std::uint8_t>(displaced_opcodes[index]);
+        displaced_bytes[index * 2u + 1u] =
+            static_cast<std::uint8_t>(displaced_opcodes[index] >> 8u);
+    }
+    put_displaced_u32(0x30u, 0x3040u);
+    for (std::size_t index = 0u; index < 4u; ++index) {
+        put_displaced_u32(0x4Cu + index * 4u,
+                          0x3080u + static_cast<std::uint32_t>(index * 4u));
+        displaced_bytes[0x80u + index * 4u] = 0x0Bu;
+        displaced_bytes[0x82u + index * 4u] = 0x09u;
+    }
+    put_displaced_u32(0x5Cu, 1u);
+    displaced_pointer_run.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    displaced_pointer_run.add_segment({".displaced-bootstrap",
+                                       0x3000u,
+                                       0u,
+                                       displaced_bytes.size(),
+                                       katana::io::SegmentKind::Mixed,
+                                       {true, true, true},
+                                       std::move(displaced_bytes),
+                                       katana::io::ImageSourceKind::DiscBootFile,
+                                       katana::io::ImageLoadPhase::Initial,
+                                       "synthetic-displaced-bootstrap"});
+    const auto displaced_lines = katana::sh4::disassemble(
+        displaced_pointer_run.segments()[0].bytes, 0x3000u);
+    const auto displaced =
+        katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+        displaced_pointer_run, displaced_lines, 7u);
+    require(displaced.has_value() && displaced->resolved &&
+                displaced->aot_candidates_only &&
+                displaced->dispatch_address == 0x300Eu &&
+                displaced->table_address == 0x304Cu &&
+                displaced->dispatch_kind ==
+                    katana::analysis::JumpTableDispatchKind::Call &&
+                displaced->evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                displaced->entries.size() == 4u &&
+                displaced->entries.front().target == 0x3080u &&
+                displaced->entries.back().target == 0x308Cu &&
+                displaced->reason ==
+                    "snapshot-displaced-absolute-pointer-candidates",
+            "Displaced Callbacktabelle wurde nicht aus dem tatsaechlichen JSR-Datenpfad "
+            "erkannt.");
+
+    auto clobbered_displaced_lines = displaced_lines;
+    clobbered_displaced_lines[4].instruction = katana::sh4::decode(0xE200u);
+    require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+                 displaced_pointer_run, clobbered_displaced_lines, 7u)
+                 .has_value(),
+            "Ein zwischenzeitlich ueberschriebenes Tabellenbasisregister wurde akzeptiert.");
+    auto crossing_control_flow_lines = displaced_lines;
+    crossing_control_flow_lines[1].instruction = katana::sh4::decode(0xA000u);
+    require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+                 displaced_pointer_run, crossing_control_flow_lines, 7u)
+                 .has_value(),
+            "Rueckwaertige Tabellenprovenienz ueberschritt eine Kontrollflussgrenze.");
+    auto missing_copy_lines = displaced_lines;
+    missing_copy_lines[2].instruction = katana::sh4::decode(0x0009u);
+    require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+                 displaced_pointer_run, missing_copy_lines, 7u)
+                 .has_value(),
+            "Displaced Tabellenbasis wurde ohne die beobachtete Registerkopie geraten.");
+    auto mismatched_branch_lines = displaced_lines;
+    mismatched_branch_lines[6].instruction = katana::sh4::decode(0x5423u);
+    require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+                 displaced_pointer_run, mismatched_branch_lines, 7u)
+                 .has_value(),
+            "Displaced Load in ein anderes Register wurde dem JSR zugeschrieben.");
+    auto delay_slot_base_lines = displaced_lines;
+    delay_slot_base_lines[0].is_delay_slot = true;
+    require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+                 displaced_pointer_run, delay_slot_base_lines, 7u)
+                 .has_value(),
+            "PC-relative Tabellenbasis im Delay Slot wurde als stabile Provenienz akzeptiert.");
 
     constexpr std::uint32_t call_island_base = 0x00400000u;
     const auto call_island_image = [](const std::size_t return_handler_count,

@@ -65,6 +65,95 @@ bool snapshot_candidate_source(const katana::io::ExecutableImage& image,
            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent;
 }
 
+std::optional<JumpTableAnalysis>
+recognize_snapshot_displaced_absolute_pointer_candidates(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index) {
+    constexpr std::uint32_t provenance_byte_budget = 14u;
+    constexpr std::size_t minimum_entries = 4u;
+    if (dispatch_index < 2u || dispatch_index >= lines.size()) return std::nullopt;
+    const auto& dispatch = lines[dispatch_index];
+    const auto& table_load = lines[dispatch_index - 1u];
+    if (!contiguous(table_load, dispatch) ||
+        table_load.instruction.kind !=
+            katana::sh4::InstructionKind::MovLongLoadDisplacement ||
+        table_load.instruction.destination_register !=
+            dispatch.instruction.branch_register)
+        return std::nullopt;
+
+    auto tracked_register = table_load.instruction.source_register;
+    const katana::sh4::DisassemblyLine* base_load = nullptr;
+    bool copied_base_register = false;
+    auto next_address = table_load.address;
+    for (auto cursor = dispatch_index - 1u; cursor > 0u;) {
+        --cursor;
+        const auto& candidate = lines[cursor];
+        if (candidate.address > std::numeric_limits<std::uint32_t>::max() - 2u ||
+            candidate.address + 2u != next_address)
+            break;
+        next_address = candidate.address;
+        if (candidate.address > dispatch.address ||
+            dispatch.address - candidate.address > provenance_byte_budget)
+            break;
+        if (candidate.instruction.changes_control_flow()) break;
+        if ((general_register_write_mask(candidate.instruction) &
+             static_cast<std::uint16_t>(1u << tracked_register)) == 0u)
+            continue;
+        if (candidate.instruction.kind ==
+                katana::sh4::InstructionKind::MovRegister &&
+            candidate.instruction.destination_register == tracked_register) {
+            copied_base_register = true;
+            tracked_register = candidate.instruction.source_register;
+            continue;
+        }
+        if (candidate.instruction.kind ==
+                katana::sh4::InstructionKind::MovLongLoadPcRelative &&
+            candidate.instruction.destination_register == tracked_register) {
+            base_load = &candidate;
+        }
+        break;
+    }
+    if (base_load == nullptr || !copied_base_register || base_load->is_delay_slot)
+        return std::nullopt;
+
+    const auto resolved_base_load = image.resolve_segment_address(base_load->address, 2u);
+    const auto* base_load_segment =
+        resolved_base_load.has_value() ? image.find_segment(*resolved_base_load, 2u) : nullptr;
+    if (base_load_segment == nullptr || !base_load_segment->permissions.executable ||
+        !snapshot_candidate_source(image, *base_load_segment))
+        return std::nullopt;
+    const auto literal_address64 =
+        ((static_cast<std::uint64_t>(base_load->address) + 4u) & ~std::uint64_t{3u}) +
+        static_cast<std::uint32_t>(base_load->instruction.displacement);
+    if (literal_address64 > std::numeric_limits<std::uint32_t>::max())
+        return std::nullopt;
+    const auto resolved_literal = image.resolve_segment_address(
+        static_cast<std::uint32_t>(literal_address64), 4u);
+    const auto* literal_segment =
+        resolved_literal.has_value() ? image.find_segment(*resolved_literal, 4u) : nullptr;
+    if (literal_segment == nullptr ||
+        !snapshot_candidate_source(image, *literal_segment))
+        return std::nullopt;
+
+    const auto table_address64 =
+        static_cast<std::uint64_t>(image.read_u32_le(*resolved_literal)) +
+        static_cast<std::uint32_t>(table_load.instruction.displacement);
+    if (table_address64 > std::numeric_limits<std::uint32_t>::max())
+        return std::nullopt;
+    auto result = analyze_snapshot_absolute_pointer_candidates(
+        image,
+        dispatch.address,
+        static_cast<std::uint32_t>(table_address64),
+        dispatch.instruction.kind == katana::sh4::InstructionKind::Jsr
+            ? JumpTableDispatchKind::Call
+            : JumpTableDispatchKind::Jump,
+        minimum_entries);
+    if (result.has_value())
+        result->reason = "snapshot-displaced-absolute-pointer-candidates";
+    return result;
+}
+
 bool relative_register_transform(const katana::sh4::DecodedInstruction& instruction,
                                  const std::uint8_t register_index) {
     if (instruction.destination_register != register_index) return false;
@@ -581,6 +670,11 @@ recognize_snapshot_absolute_jump_table_candidates(
     if (dispatch.instruction.kind != katana::sh4::InstructionKind::Jmp &&
         dispatch.instruction.kind != katana::sh4::InstructionKind::Jsr)
         return std::nullopt;
+
+    if (auto displaced = recognize_snapshot_displaced_absolute_pointer_candidates(
+            image, lines, dispatch_index);
+        displaced.has_value())
+        return displaced;
 
     std::optional<std::size_t> indexed_load_index;
     for (std::size_t distance = 1u; distance <= 3u && distance <= dispatch_index; ++distance) {

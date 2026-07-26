@@ -649,6 +649,98 @@ int main() {
             "Snapshotziele wurden nicht als dispatchbare AOT-Bloecke mit erhaltenem "
             "Funktionsfallthrough materialisiert.");
 
+    const auto displaced_snapshot_image = [] {
+        std::vector<std::uint8_t> bytes(0xA0u, 0u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+        const std::array<std::uint16_t, 9> opcodes{
+            0xD30Bu, 0x2452u, 0x6233u, 0x0009u, 0x2452u,
+            0x2452u, 0x5323u, 0x430Bu, 0x0009u};
+        for (std::size_t index = 0u; index < opcodes.size(); ++index)
+            put_u16(index * 2u, opcodes[index]);
+        put_u16(0x12u, 0x000Bu);
+        put_u16(0x14u, 0x0009u);
+        put_u32(0x30u, 0x3040u);
+        for (std::size_t index = 0u; index < 4u; ++index) {
+            put_u32(0x4Cu + index * 4u,
+                    0x3080u + static_cast<std::uint32_t>(index * 4u));
+            put_u16(0x80u + index * 4u, 0x000Bu);
+            put_u16(0x82u + index * 4u, 0x0009u);
+        }
+        put_u32(0x5Cu, 1u);
+        katana::io::ExecutableImage image;
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".displaced-snapshot",
+                           0x3000u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-displaced-snapshot"});
+        image.add_entry_point(0x3000u);
+        return image;
+    };
+    const auto displaced_snapshot =
+        katana::analysis::analyze_control_flow(displaced_snapshot_image());
+    const auto displaced_table = std::find_if(
+        displaced_snapshot.jump_tables.begin(),
+        displaced_snapshot.jump_tables.end(),
+        [](const auto& table) {
+            return table.dispatch_address == 0x300Eu;
+        });
+    const std::vector<std::uint32_t> displaced_targets{
+        0x3080u, 0x3084u, 0x3088u, 0x308Cu};
+    require(displaced_table != displaced_snapshot.jump_tables.end() &&
+                displaced_table->resolved &&
+                displaced_table->aot_candidates_only &&
+                displaced_table->table_address == 0x304Cu &&
+                displaced_table->reason ==
+                    "snapshot-displaced-absolute-pointer-candidates" &&
+                displaced_table->entries.size() == displaced_targets.size(),
+            "Displaced Callbacktabelle erreichte den Kontrollflussfixpunkt nicht.");
+    const auto displaced_resolution = std::find_if(
+        displaced_snapshot.indirect_control_flow.begin(),
+        displaced_snapshot.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x300Eu;
+        });
+    require(displaced_resolution != displaced_snapshot.indirect_control_flow.end() &&
+                displaced_resolution->status ==
+                    katana::analysis::ResolutionStatus::Unresolved &&
+                displaced_resolution->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                displaced_resolution->targets.empty() &&
+                displaced_resolution->analysis_candidates == displaced_targets &&
+                std::none_of(displaced_snapshot.resolved_edges.begin(),
+                             displaced_snapshot.resolved_edges.end(),
+                             [](const auto& edge) {
+                                 return edge.instruction_address == 0x300Eu;
+                             }),
+            "Displaced Snapshotkandidaten wurden eingefroren oder zu CFG-Kanten erhoben.");
+    for (const auto target : displaced_targets) {
+        require(has_instruction(displaced_snapshot, target) &&
+                    std::binary_search(
+                        displaced_snapshot.recursive.guarded_candidate_instruction_addresses
+                            .begin(),
+                        displaced_snapshot.recursive.guarded_candidate_instruction_addresses.end(),
+                        target),
+                "Displaced Snapshotziel wurde nicht als bewachter AOT-Kandidat dekodiert.");
+    }
+
     [] {
     constexpr std::uint32_t relative_table_base = 0x00600000u;
     constexpr std::uint32_t relative_table_dispatch = relative_table_base + 0x0Eu;
