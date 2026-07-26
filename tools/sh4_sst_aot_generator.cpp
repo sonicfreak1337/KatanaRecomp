@@ -433,9 +433,12 @@ io::ExecutableImage make_synthetic_image(const FormRecord& record,
         const auto slot = record.form.fetch_slots[index];
         const auto opcode = form_opcode_for_slot(record.form, slot);
         const auto decoded = sh4::decode(opcode);
+        // A standalone synthetic RTS has no caller context and therefore is
+        // deliberately not an overrideable indirect-dispatch site. Its
+        // observed continuation is already seeded as a separate function,
+        // while the emitted return keeps the live PR authoritative.
         const bool indirect = decoded.control_flow == sh4::ControlFlowKind::IndirectBranch ||
-                              decoded.control_flow == sh4::ControlFlowKind::IndirectCall ||
-                              decoded.control_flow == sh4::ControlFlowKind::Return;
+                              decoded.control_flow == sh4::ControlFlowKind::IndirectCall;
         if (!indirect) continue;
         const auto target_index = index + (decoded.has_delay_slot ? 2u : 1u);
         if (target_index >= record.form.fetch_slots.size()) continue;
