@@ -147,6 +147,40 @@ void Sh4CacheControl::write_on_chip_ram(const std::uint32_t offset,
         on_chip_ram_[index_for(offset + byte)] = static_cast<std::uint8_t>(value >> (byte * 8u));
 }
 
+PreparedDeviceU32Write
+Sh4CacheControl::prepare_on_chip_ram_u32_write(
+    const std::uint32_t offset) noexcept {
+    if ((value_ & operand_ram_enable) == 0u ||
+        (offset & (sizeof(std::uint32_t) - 1u)) != 0u ||
+        offset > sh4_on_chip_ram_aperture_size - sizeof(std::uint32_t))
+        return {};
+
+    const auto index_for = [this](const std::uint32_t byte_offset) {
+        const auto address = sh4_on_chip_ram_address + byte_offset;
+        const auto bank =
+            (address >> ((value_ & operand_index_mode) != 0u ? 13u : 1u)) &
+            0x1000u;
+        return static_cast<std::uint32_t>(
+            bank | (address & 0x0FFFu));
+    };
+
+    PreparedDeviceU32Write prepared;
+    prepared.context = this;
+    for (std::uint32_t byte = 0u; byte < sizeof(std::uint32_t); ++byte)
+        prepared.byte_offsets[byte] = index_for(offset + byte);
+    prepared.commit_callback =
+        [](void* const context,
+           const std::array<std::uint32_t, 4u>& byte_offsets,
+           const std::uint32_t value) noexcept {
+            auto& state = *static_cast<Sh4CacheControl*>(context);
+            for (std::uint32_t byte = 0u; byte < sizeof(std::uint32_t); ++byte) {
+                state.on_chip_ram_[byte_offsets[byte]] =
+                    static_cast<std::uint8_t>(value >> (byte * 8u));
+            }
+        };
+    return prepared;
+}
+
 Sh4CacheControlSnapshot Sh4CacheControl::snapshot() const noexcept {
     return {
         value_,
@@ -194,6 +228,9 @@ std::shared_ptr<Sh4CacheControl> map_sh4_cache_control(Memory& memory) {
         },
         [state](const auto offset, const auto value, const auto width) {
             state->write_on_chip_ram(offset, value, width);
+        },
+        [state](const auto offset) {
+            return state->prepare_on_chip_ram_u32_write(offset);
         });
     state->on_chip_ram_device_ = on_chip_ram;
     memory.map_region("sh4-on-chip-ram", sh4_on_chip_ram_address, std::move(on_chip_ram));

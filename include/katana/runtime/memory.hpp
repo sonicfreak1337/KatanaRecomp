@@ -73,6 +73,24 @@ struct LinearMemoryProjection {
     }
 };
 
+struct PreparedDeviceU32Write {
+    using CommitCallback = void (*)(void* context,
+                                    const std::array<std::uint32_t, 4u>& byte_offsets,
+                                    std::uint32_t value) noexcept;
+
+    void* context = nullptr;
+    std::array<std::uint32_t, 4u> byte_offsets{};
+    CommitCallback commit_callback = nullptr;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return context != nullptr && commit_callback != nullptr;
+    }
+
+    void commit(const std::uint32_t value) const noexcept {
+        commit_callback(context, byte_offsets, value);
+    }
+};
+
 class MemoryAccessError final : public std::runtime_error {
   public:
     MemoryAccessError(MemoryAccessErrorReason reason,
@@ -113,6 +131,8 @@ class MemoryDevice {
     virtual void write_u32(std::uint32_t offset, std::uint32_t value);
     [[nodiscard]] virtual LinearMemoryProjection
     linear_projection(std::uint32_t offset, MemoryAccessWidth width) const noexcept;
+    [[nodiscard]] virtual PreparedDeviceU32Write
+    prepare_prevalidated_u32_write(std::uint32_t offset) noexcept;
 };
 
 class LinearMemoryDevice final : public MemoryDevice {
@@ -140,12 +160,15 @@ class LinearMemoryDevice final : public MemoryDevice {
 using MmioReadHandler = std::function<std::uint32_t(std::uint32_t offset, MemoryAccessWidth width)>;
 using MmioWriteHandler =
     std::function<void(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width)>;
+using MmioPrepareU32WriteHandler =
+    std::function<PreparedDeviceU32Write(std::uint32_t offset)>;
 
 class MmioMemoryDevice final : public MemoryDevice {
   public:
     MmioMemoryDevice(std::size_t size,
                      MmioReadHandler read_handler,
-                     MmioWriteHandler write_handler);
+                     MmioWriteHandler write_handler,
+                     MmioPrepareU32WriteHandler prepare_u32_write_handler = {});
 
     [[nodiscard]] std::size_t size() const noexcept override;
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
@@ -154,6 +177,8 @@ class MmioMemoryDevice final : public MemoryDevice {
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
     void write_u16(std::uint32_t offset, std::uint16_t value) override;
     void write_u32(std::uint32_t offset, std::uint32_t value) override;
+    [[nodiscard]] PreparedDeviceU32Write
+    prepare_prevalidated_u32_write(std::uint32_t offset) noexcept override;
 
   private:
     void check(std::uint32_t offset, MemoryAccessWidth width) const;
@@ -163,6 +188,7 @@ class MmioMemoryDevice final : public MemoryDevice {
     std::size_t size_ = 0u;
     MmioReadHandler read_handler_;
     MmioWriteHandler write_handler_;
+    MmioPrepareU32WriteHandler prepare_u32_write_handler_;
 };
 
 struct MemoryRegionInfo {
@@ -347,7 +373,8 @@ class Memory {
               additional_indexed_region_hits_(
                   std::exchange(other.additional_indexed_region_hits_, 0u)),
               observer_(std::move(other.observer_)),
-              changed_words_(std::move(other.changed_words_)) {}
+              changed_words_(std::move(other.changed_words_)),
+              device_write_(std::exchange(other.device_write_, {})) {}
         PreparedRepeatedU32Sequence&
         operator=(PreparedRepeatedU32Sequence&&) noexcept = delete;
         ~PreparedRepeatedU32Sequence() = default;
@@ -368,6 +395,7 @@ class Memory {
         std::size_t additional_indexed_region_hits_ = 0u;
         GuestWriteObserver observer_;
         std::vector<std::uint8_t> changed_words_;
+        PreparedDeviceU32Write device_write_;
     };
 
     explicit Memory(std::size_t legacy_size = 1024u * 1024u,
@@ -608,6 +636,9 @@ class Memory {
     [[nodiscard]] const MappedRegion* indexed_region(std::uint32_t address,
                                                      std::size_t width,
                                                      bool record_lookup_metrics = true) const noexcept;
+    [[nodiscard]] const MappedRegion*
+    prevalidated_writable_region(std::uint32_t address,
+                                 std::size_t size) const noexcept;
     [[nodiscard]] const MappedRegion*
     prevalidated_writable_linear_region(std::uint32_t address,
                                         std::size_t size) const noexcept;

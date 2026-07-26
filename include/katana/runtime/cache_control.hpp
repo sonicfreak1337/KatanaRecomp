@@ -60,6 +60,9 @@ class Sh4CacheControl final {
   private:
     friend std::shared_ptr<Sh4CacheControl> map_sh4_cache_control(Memory& memory);
 
+    [[nodiscard]] PreparedDeviceU32Write
+    prepare_on_chip_ram_u32_write(std::uint32_t offset) noexcept;
+
     std::uint32_t value_ = 0u;
     std::uint64_t instruction_invalidations_ = 0u;
     std::weak_ptr<MemoryDevice> on_chip_ram_device_;

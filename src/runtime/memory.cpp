@@ -293,6 +293,11 @@ MemoryDevice::linear_projection(const std::uint32_t,
     return {};
 }
 
+PreparedDeviceU32Write
+MemoryDevice::prepare_prevalidated_u32_write(const std::uint32_t) noexcept {
+    return {};
+}
+
 LinearMemoryDevice::LinearMemoryDevice(const std::size_t size) : bytes_(size, 0u) {
     if (size == 0u) {
         throw std::invalid_argument("Eine lineare Speicherregion darf nicht leer sein.");
@@ -370,9 +375,11 @@ void LinearMemoryDevice::check(const std::uint32_t offset) const {
 
 MmioMemoryDevice::MmioMemoryDevice(const std::size_t size,
                                    MmioReadHandler read_handler,
-                                   MmioWriteHandler write_handler)
+                                   MmioWriteHandler write_handler,
+                                   MmioPrepareU32WriteHandler prepare_u32_write_handler)
     : size_(size), read_handler_(std::move(read_handler)),
-      write_handler_(std::move(write_handler)) {
+      write_handler_(std::move(write_handler)),
+      prepare_u32_write_handler_(std::move(prepare_u32_write_handler)) {
     if (size_ == 0u) {
         throw std::invalid_argument("Eine MMIO-Region darf nicht leer sein.");
     }
@@ -407,6 +414,18 @@ void MmioMemoryDevice::write_u16(const std::uint32_t offset, const std::uint16_t
 
 void MmioMemoryDevice::write_u32(const std::uint32_t offset, const std::uint32_t value) {
     write(offset, value, MemoryAccessWidth::Word);
+}
+
+PreparedDeviceU32Write
+MmioMemoryDevice::prepare_prevalidated_u32_write(
+    const std::uint32_t offset) noexcept {
+    if (!prepare_u32_write_handler_) return {};
+    try {
+        check(offset, MemoryAccessWidth::Word);
+        return prepare_u32_write_handler_(offset);
+    } catch (...) {
+        return {};
+    }
 }
 
 void MmioMemoryDevice::check(const std::uint32_t offset, const MemoryAccessWidth width) const {
@@ -1484,30 +1503,42 @@ Memory::prepare_prevalidated_repeated_u32_sequence(
         mmio_access_tracking_enabled_ || mmio_trace_handler_ || guest_memory_access_sink_ ||
         !guest_write_observer_allows_prevalidated_linear_writes())
         return std::nullopt;
-    const auto* const mapped =
-        prevalidated_writable_linear_region(address, word_size);
+    const auto* const mapped = prevalidated_writable_region(address, word_size);
     if (mapped == nullptr) return std::nullopt;
 
     const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
-    const auto backing = mapped->linear->bytes();
     PreparedRepeatedU32Sequence prepared;
+    if (mapped->linear == nullptr) {
+        prepared.device_write_ = mapped->device->prepare_prevalidated_u32_write(
+            static_cast<std::uint32_t>(offset));
+        if (!prepared.device_write_) return std::nullopt;
+    }
     std::uint32_t final_value = first_value;
     try {
         prepared.observer_ = guest_write_observer_;
         if (prepared.observer_) {
             prepared.changed_words_.reserve(word_count);
-            std::uint32_t previous =
-                static_cast<std::uint32_t>(backing[offset]) |
-                (static_cast<std::uint32_t>(backing[offset + 1u]) << 8u) |
-                (static_cast<std::uint32_t>(backing[offset + 2u]) << 16u) |
-                (static_cast<std::uint32_t>(backing[offset + 3u]) << 24u);
             auto next = first_value;
-            for (std::size_t word = 0u; word < word_count; ++word) {
-                prepared.changed_words_.push_back(
-                    static_cast<std::uint8_t>(previous != next));
-                previous = next;
-                final_value = next;
-                next += step;
+            if (mapped->linear != nullptr) {
+                const auto backing = mapped->linear->bytes();
+                std::uint32_t previous =
+                    static_cast<std::uint32_t>(backing[offset]) |
+                    (static_cast<std::uint32_t>(backing[offset + 1u]) << 8u) |
+                    (static_cast<std::uint32_t>(backing[offset + 2u]) << 16u) |
+                    (static_cast<std::uint32_t>(backing[offset + 3u]) << 24u);
+                for (std::size_t word = 0u; word < word_count; ++word) {
+                    prepared.changed_words_.push_back(
+                        static_cast<std::uint8_t>(previous != next));
+                    previous = next;
+                    final_value = next;
+                    next += step;
+                }
+            } else {
+                // Scalar non-linear writes conservatively report bytes_changed=true.
+                prepared.changed_words_.assign(word_count, std::uint8_t{1u});
+                final_value = first_value +
+                    static_cast<std::uint32_t>(
+                        static_cast<std::uint64_t>(word_count - 1u) * step);
             }
         } else {
             final_value = first_value +
@@ -1534,13 +1565,17 @@ Memory::prepare_prevalidated_repeated_u32_sequence(
 void Memory::commit_prepared_repeated_u32_sequence(
     PreparedRepeatedU32Sequence prepared) noexcept {
     constexpr std::size_t word_size = sizeof(std::uint32_t);
-    auto backing = prepared.linear_->writable_bytes();
-    auto* const target =
-        backing.data() + static_cast<std::ptrdiff_t>(prepared.offset_);
-    target[0u] = static_cast<std::uint8_t>(prepared.final_value_);
-    target[1u] = static_cast<std::uint8_t>(prepared.final_value_ >> 8u);
-    target[2u] = static_cast<std::uint8_t>(prepared.final_value_ >> 16u);
-    target[3u] = static_cast<std::uint8_t>(prepared.final_value_ >> 24u);
+    if (prepared.linear_ != nullptr) {
+        auto backing = prepared.linear_->writable_bytes();
+        auto* const target =
+            backing.data() + static_cast<std::ptrdiff_t>(prepared.offset_);
+        target[0u] = static_cast<std::uint8_t>(prepared.final_value_);
+        target[1u] = static_cast<std::uint8_t>(prepared.final_value_ >> 8u);
+        target[2u] = static_cast<std::uint8_t>(prepared.final_value_ >> 16u);
+        target[3u] = static_cast<std::uint8_t>(prepared.final_value_ >> 24u);
+    } else {
+        prepared.device_write_.commit(prepared.final_value_);
+    }
     prepared.owner_->performance_counters_.unobserved_accesses +=
         prepared.word_count_;
     prepared.owner_->performance_counters_.unobserved_accesses +=
@@ -1872,8 +1907,8 @@ const Memory::MappedRegion* Memory::indexed_region(const std::uint32_t address,
 }
 
 const Memory::MappedRegion*
-Memory::prevalidated_writable_linear_region(const std::uint32_t address,
-                                            const std::size_t size) const noexcept {
+Memory::prevalidated_writable_region(const std::uint32_t address,
+                                     const std::size_t size) const noexcept {
     if (lookup_mode_ != MemoryLookupMode::Indexed || size == 0u ||
         size > address_space_size - static_cast<std::uint64_t>(address))
         return nullptr;
@@ -1891,9 +1926,22 @@ Memory::prevalidated_writable_linear_region(const std::uint32_t address,
         }
     }
     if (mapped == nullptr ||
-        mapped->info.access != MemoryRegionAccess::ReadWrite ||
-        mapped->linear == nullptr)
+        mapped->info.access != MemoryRegionAccess::ReadWrite)
         return nullptr;
+
+    const auto offset =
+        static_cast<std::size_t>(region_offset(mapped->info, address));
+    if (offset > mapped->device->size() ||
+        size > mapped->device->size() - offset)
+        return nullptr;
+    return mapped;
+}
+
+const Memory::MappedRegion*
+Memory::prevalidated_writable_linear_region(const std::uint32_t address,
+                                            const std::size_t size) const noexcept {
+    const auto* const mapped = prevalidated_writable_region(address, size);
+    if (mapped == nullptr || mapped->linear == nullptr) return nullptr;
 
     const auto offset =
         static_cast<std::size_t>(region_offset(mapped->info, address));
