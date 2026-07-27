@@ -199,8 +199,10 @@ struct MmioWaitLoopBatchProof {
         std::uint32_t backedge_instruction_address = 0u;
         std::uint8_t pointer_register = 0u;
         std::uint8_t value_register = 0u;
-        std::uint8_t test_mask = 0u;
+        std::uint8_t mask_register = 0xFFu;
         std::uint8_t round_instruction_count = 0u;
+        std::uint32_t test_mask = 0u;
+        bool pointer_from_register = false;
         bool branch_on_true = false;
         std::uint64_t round_guest_cycles = 0u;
         std::uint64_t pre_read_guest_cycles = 0u;
@@ -1270,7 +1272,12 @@ std::vector<MmioWaitLoopBatchProof> mmio_wait_loop_batch_proofs(
 
     std::vector<MmioWaitLoopBatchProof> result;
     for (const auto& loop : audit.loops) {
-        if (loop.classification != Classification::MmioPoll ||
+        const bool statically_resolved_pointer =
+            loop.classification == Classification::MmioPoll;
+        const bool runtime_resolved_pointer =
+            loop.classification == Classification::Unknown &&
+            loop.unresolved_guard_access;
+        if ((!statically_resolved_pointer && !runtime_resolved_pointer) ||
             loop.header_address != loop.latch_address ||
             loop.block_addresses != std::vector<std::uint32_t>{loop.header_address} ||
             duplicate_block_addresses.contains(loop.header_address))
@@ -1279,7 +1286,11 @@ std::vector<MmioWaitLoopBatchProof> mmio_wait_loop_batch_proofs(
         if (block_found == blocks.end()) continue;
         const auto& block = *block_found->second;
         if (block.start_address > std::numeric_limits<std::uint32_t>::max() - 8u) continue;
-        if (block.instructions.size() != 4u || block.has_indirect_successor)
+        const bool pointer_from_register =
+            runtime_resolved_pointer && block.instructions.size() == 3u;
+        if ((!pointer_from_register &&
+             (!statically_resolved_pointer || block.instructions.size() != 4u)) ||
+            block.has_indirect_successor)
             continue;
         bool contiguous = true;
         for (std::size_t index = 0u; index < block.instructions.size(); ++index) {
@@ -1292,77 +1303,108 @@ std::vector<MmioWaitLoopBatchProof> mmio_wait_loop_batch_proofs(
         }
         if (!contiguous) continue;
 
-        const auto& pointer_load = block.instructions[0];
-        const auto& mmio_read = block.instructions[1];
-        const auto& test = block.instructions[2];
-        const auto& branch = block.instructions[3];
-        const auto exit_address = static_cast<std::uint32_t>(block.start_address + 8u);
+        const auto read_index = pointer_from_register ? std::size_t{0u} : std::size_t{1u};
+        const auto test_index = read_index + 1u;
+        const auto branch_index = test_index + 1u;
+        const auto* pointer_load =
+            pointer_from_register ? nullptr : &block.instructions.front();
+        const auto& mmio_read = block.instructions[read_index];
+        const auto& test = block.instructions[test_index];
+        const auto& branch = block.instructions[branch_index];
+        const auto block_size =
+            static_cast<std::uint32_t>(block.instructions.size() * 2u);
+        const auto exit_address =
+            static_cast<std::uint32_t>(block.start_address + block_size);
         auto successors = block.successors;
         std::sort(successors.begin(), successors.end());
         auto expected_successors =
             std::vector<std::uint32_t>{block.start_address, exit_address};
         std::sort(expected_successors.begin(), expected_successors.end());
-        if (pointer_load.operation != Operation::LoadLongPcRelative ||
-            !pointer_load.effective_address ||
-            pointer_load.memory_effects.access != katana::ir::MemoryAccessKind::Read ||
-            pointer_load.memory_effects.width != katana::ir::OperandWidth::Bits32 ||
-            pointer_load.memory_effects.access_count != 1u ||
-            pointer_load.memory_effects.region != katana::ir::MemoryRegionKind::NormalRam ||
-            mmio_read.operation != Operation::LoadLong ||
-            mmio_read.source_register != pointer_load.destination_register ||
+        const bool immediate_mask = test.operation == Operation::TestImmediate;
+        const bool register_mask = test.operation == Operation::TestRegister;
+        if (mmio_read.operation != Operation::LoadLong ||
             mmio_read.memory_effects.access != katana::ir::MemoryAccessKind::Read ||
             mmio_read.memory_effects.width != katana::ir::OperandWidth::Bits32 ||
             mmio_read.memory_effects.access_count != 1u ||
-            mmio_read.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam ||
-            test.operation != Operation::TestImmediate ||
+            (!pointer_from_register &&
+             mmio_read.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam) ||
+            (!immediate_mask && !register_mask) ||
             test.destination_register != mmio_read.destination_register ||
-            test.immediate <= 0 || test.immediate > 0xFF ||
+            (immediate_mask && (test.immediate <= 0 || test.immediate > 0xFF)) ||
+            (register_mask &&
+             (test.source_register == mmio_read.destination_register ||
+              test.source_register == mmio_read.source_register)) ||
             (branch.operation != Operation::BranchIfTrue &&
              branch.operation != Operation::BranchIfFalse) ||
             !branch.target_address || *branch.target_address != block.start_address ||
             successors != expected_successors)
             continue;
 
+        if (pointer_from_register) {
+            if (mmio_read.source_register == mmio_read.destination_register ||
+                loop.unresolved_guard_read_instruction_addresses !=
+                    std::vector<std::uint32_t>{mmio_read.source_address} ||
+                !loop.accesses.empty())
+                continue;
+        } else if (pointer_load->operation != Operation::LoadLongPcRelative ||
+                   !pointer_load->effective_address ||
+                   pointer_load->memory_effects.access !=
+                       katana::ir::MemoryAccessKind::Read ||
+                   pointer_load->memory_effects.width !=
+                       katana::ir::OperandWidth::Bits32 ||
+                   pointer_load->memory_effects.access_count != 1u ||
+                   pointer_load->memory_effects.region !=
+                       katana::ir::MemoryRegionKind::NormalRam ||
+                   mmio_read.source_register != pointer_load->destination_register) {
+            continue;
+        }
+
         const katana::analysis::HardwareLoopAccessEvidence* proven_read = nullptr;
         bool invalid_access = false;
-        for (const auto& access : loop.accesses) {
-            if (access.instruction_address == mmio_read.source_address) {
-                if (proven_read != nullptr || !access.guards_loop ||
-                    access.kind != AccessKind::Read || access.width != 4u ||
-                    access.region != Region::SystemAsic || !access.aperture_mapped ||
-                    access.canonical_address !=
-                        katana::runtime::system_asic_physical_base ||
-                    access.runtime_support !=
-                        katana::analysis::HardwareRuntimeSupport::Implemented) {
+        if (!pointer_from_register) {
+            for (const auto& access : loop.accesses) {
+                if (access.instruction_address == mmio_read.source_address) {
+                    if (proven_read != nullptr || !access.guards_loop ||
+                        access.kind != AccessKind::Read || access.width != 4u ||
+                        access.region != Region::SystemAsic || !access.aperture_mapped ||
+                        access.canonical_address !=
+                            katana::runtime::system_asic_physical_base ||
+                        access.runtime_support !=
+                            katana::analysis::HardwareRuntimeSupport::Implemented) {
+                        invalid_access = true;
+                        break;
+                    }
+                    proven_read = &access;
+                } else if (access.instruction_address != pointer_load->source_address ||
+                           access.kind != AccessKind::Read || access.width != 4u ||
+                           !access.linear_memory) {
                     invalid_access = true;
                     break;
                 }
-                proven_read = &access;
-            } else if (access.instruction_address != pointer_load.source_address ||
-                       access.kind != AccessKind::Read || access.width != 4u ||
-                       !access.linear_memory) {
-                invalid_access = true;
-                break;
             }
+            if (invalid_access || proven_read == nullptr) continue;
         }
-        if (invalid_access || proven_read == nullptr) continue;
 
-        const auto literal_physical = katana::runtime::canonical_physical_address(
-            *pointer_load.effective_address);
-        if (literal_physical < katana::runtime::dreamcast_main_ram_area_bases.front() ||
-            literal_physical >
-                katana::runtime::dreamcast_main_ram_area_bases.front() +
-                    katana::runtime::dreamcast_main_ram_size - 4u ||
-            katana::runtime::canonical_physical_address(proven_read->guest_address) !=
-                proven_read->canonical_address)
-            continue;
+        if (!pointer_from_register) {
+            const auto literal_physical = katana::runtime::canonical_physical_address(
+                *pointer_load->effective_address);
+            if (literal_physical <
+                    katana::runtime::dreamcast_main_ram_area_bases.front() ||
+                literal_physical >
+                    katana::runtime::dreamcast_main_ram_area_bases.front() +
+                        katana::runtime::dreamcast_main_ram_size - 4u ||
+                katana::runtime::canonical_physical_address(
+                    proven_read->guest_address) != proven_read->canonical_address)
+                continue;
+        }
 
         std::uint64_t round_guest_cycles = 0u;
         for (const auto& instruction : block.instructions)
             round_guest_cycles +=
                 katana::sh4::instruction_timing(instruction.original_opcode).guest_cycles;
-        const auto pre_read_guest_cycles =
-            katana::sh4::instruction_timing(pointer_load.original_opcode).guest_cycles;
+        const auto pre_read_guest_cycles = pointer_from_register
+            ? std::uint64_t{0u}
+            : katana::sh4::instruction_timing(pointer_load->original_opcode).guest_cycles;
         const auto read_guest_cycles =
             katana::sh4::instruction_timing(mmio_read.original_opcode).guest_cycles;
         const auto test_guest_cycles =
@@ -1372,8 +1414,9 @@ std::vector<MmioWaitLoopBatchProof> mmio_wait_loop_batch_proofs(
         constexpr auto byte_max =
             static_cast<std::uint64_t>(std::numeric_limits<std::uint8_t>::max());
         if (round_guest_cycles == 0u || round_guest_cycles > 4096u ||
-            pre_read_guest_cycles == 0u ||
-            pre_read_guest_cycles >= round_guest_cycles ||
+            (!pointer_from_register &&
+             (pre_read_guest_cycles == 0u ||
+              pre_read_guest_cycles >= round_guest_cycles)) ||
             read_guest_cycles == 0u || read_guest_cycles > byte_max ||
             test_guest_cycles == 0u || test_guest_cycles > byte_max ||
             branch_guest_cycles == 0u || branch_guest_cycles > byte_max ||
@@ -1383,15 +1426,24 @@ std::vector<MmioWaitLoopBatchProof> mmio_wait_loop_batch_proofs(
         MmioWaitLoopBatchProof::Descriptor descriptor;
         descriptor.loop_header = block.start_address;
         descriptor.read_site = mmio_read.source_address;
-        descriptor.pointer_literal_address = *pointer_load.effective_address;
-        descriptor.mmio_guest_address = proven_read->guest_address;
-        descriptor.mmio_physical_address = proven_read->canonical_address;
+        descriptor.pointer_literal_address =
+            pointer_from_register ? 0u : *pointer_load->effective_address;
+        descriptor.mmio_guest_address =
+            pointer_from_register ? 0u : proven_read->guest_address;
+        descriptor.mmio_physical_address = pointer_from_register
+            ? katana::runtime::system_asic_physical_base
+            : proven_read->canonical_address;
         descriptor.backedge_instruction_address = branch.source_address;
-        descriptor.pointer_register = pointer_load.destination_register;
+        descriptor.pointer_register = pointer_from_register
+            ? mmio_read.source_register
+            : pointer_load->destination_register;
         descriptor.value_register = mmio_read.destination_register;
-        descriptor.test_mask = static_cast<std::uint8_t>(test.immediate);
+        descriptor.mask_register = register_mask ? test.source_register : 0xFFu;
         descriptor.round_instruction_count =
             static_cast<std::uint8_t>(block.instructions.size());
+        descriptor.test_mask =
+            immediate_mask ? static_cast<std::uint32_t>(test.immediate) : 0u;
+        descriptor.pointer_from_register = pointer_from_register;
         descriptor.branch_on_true = branch.operation == Operation::BranchIfTrue;
         descriptor.round_guest_cycles = round_guest_cycles;
         descriptor.pre_read_guest_cycles = pre_read_guest_cycles;
@@ -1486,8 +1538,10 @@ std::string generated_header(const std::string& entry_namespace) {
            "    std::uint32_t backedge_instruction_address = 0u;\n"
            "    std::uint8_t pointer_register = 0u;\n"
            "    std::uint8_t value_register = 0u;\n"
-           "    std::uint8_t test_mask = 0u;\n"
+           "    std::uint8_t mask_register = 0xFFu;\n"
            "    std::uint8_t round_instruction_count = 0u;\n"
+           "    std::uint32_t test_mask = 0u;\n"
+           "    bool pointer_from_register = false;\n"
            "    bool branch_on_true = false;\n"
            "    std::uint64_t round_guest_cycles = 0u;\n"
            "    std::uint64_t pre_read_guest_cycles = 0u;\n"
@@ -2160,6 +2214,12 @@ std::string handwritten_main(
            "        std::uint64_t batched_rounds = 0u;\n"
            "        std::uint64_t batched_guest_cycles = 0u;\n"
            "    };\n"
+           "    struct MmioWaitLoopBatchCounters {\n"
+           "        std::uint64_t attempts = 0u;\n"
+           "        std::uint64_t admissions = 0u;\n"
+           "        std::uint64_t batched_rounds = 0u;\n"
+           "        std::uint64_t batched_guest_cycles = 0u;\n"
+           "    };\n"
            "  public:\n"
            "    PortPlatformServices(katana::runtime::CpuState& cpu,\n"
            "                         const katana::runtime::DreamcastRuntimeState& state,\n"
@@ -2193,8 +2253,7 @@ std::string handwritten_main(
            "        constexpr std::array counted_loop_debug_environment{\n"
            "            \"KATANA_PORT_BLOCK_LIMIT\", \"KATANA_PORT_PROGRESS_INTERVAL\",\n"
            "            \"KATANA_RUNTIME_PROBE\", \"KATANA_PORT_WAIT_LOOP_TRACE\",\n"
-           "            \"KATANA_PORT_DIAGNOSTICS\", \"KATANA_PORT_DIAGNOSTICS_FULL\",\n"
-           "            \"KATANA_PORT_MEMORY_PROBES\", \"KATANA_PORT_LIFECYCLE_TEST\"};\n"
+           "            \"KATANA_PORT_LIFECYCLE_TEST\"};\n"
            "        for (const auto* name : counted_loop_debug_environment)\n"
            "            if (const auto* value = std::getenv(name);\n"
            "                value != nullptr && *value != '\\0')\n"
@@ -2211,8 +2270,7 @@ std::string handwritten_main(
            "        constexpr std::array mmio_wait_loop_debug_environment{\n"
            "            \"KATANA_PORT_BLOCK_LIMIT\", \"KATANA_PORT_PROGRESS_INTERVAL\",\n"
            "            \"KATANA_RUNTIME_PROBE\", \"KATANA_PORT_WAIT_LOOP_TRACE\",\n"
-           "            \"KATANA_PORT_COUNTED_LOOP_TRACE\", \"KATANA_PORT_DIAGNOSTICS\",\n"
-           "            \"KATANA_PORT_DIAGNOSTICS_FULL\", \"KATANA_PORT_MEMORY_PROBES\",\n"
+           "            \"KATANA_PORT_COUNTED_LOOP_TRACE\",\n"
            "            \"KATANA_PORT_LIFECYCLE_TEST\"};\n"
            "        for (const auto* name : mmio_wait_loop_debug_environment)\n"
            "            if (const auto* value = std::getenv(name);\n"
@@ -2223,8 +2281,7 @@ std::string handwritten_main(
            "        constexpr std::array memory_fill_loop_debug_environment{\n"
            "            \"KATANA_PORT_BLOCK_LIMIT\", \"KATANA_PORT_PROGRESS_INTERVAL\",\n"
            "            \"KATANA_RUNTIME_PROBE\",\n"
-           "            \"KATANA_PORT_WAIT_LOOP_TRACE\", \"KATANA_PORT_DIAGNOSTICS\",\n"
-           "            \"KATANA_PORT_DIAGNOSTICS_FULL\", \"KATANA_PORT_MEMORY_PROBES\",\n"
+           "            \"KATANA_PORT_WAIT_LOOP_TRACE\",\n"
            "            \"KATANA_PORT_LIFECYCLE_TEST\"};\n"
            "        for (const auto* name : memory_fill_loop_debug_environment)\n"
            "            if (const auto* value = std::getenv(name);\n"
@@ -2241,8 +2298,7 @@ std::string handwritten_main(
            "        constexpr std::array composite_callback_debug_environment{\n"
            "            \"KATANA_PORT_BLOCK_LIMIT\", \"KATANA_PORT_PROGRESS_INTERVAL\",\n"
            "            \"KATANA_RUNTIME_PROBE\", \"KATANA_PORT_WAIT_LOOP_TRACE\",\n"
-           "            \"KATANA_PORT_DIAGNOSTICS\", \"KATANA_PORT_DIAGNOSTICS_FULL\",\n"
-           "            \"KATANA_PORT_MEMORY_PROBES\", \"KATANA_PORT_LIFECYCLE_TEST\"};\n"
+           "            \"KATANA_PORT_LIFECYCLE_TEST\"};\n"
            "        for (const auto* name : composite_callback_debug_environment)\n"
            "            if (const auto* value = std::getenv(name);\n"
            "                value != nullptr && *value != '\\0')\n"
@@ -2500,6 +2556,16 @@ std::string handwritten_main(
            "               << rejected(FlagPollBatchRejectionStage::CpuCounterOverflow)\n"
            "               << \" reject_poll_memory_accounting=\"\n"
            "               << rejected(FlagPollBatchRejectionStage::MemoryAccounting)\n"
+           "               << '\\n';\n"
+           "    }\n"
+           "    void report_mmio_wait_loop_batch_statistics(std::ostream& output) const {\n"
+           "        output << \"KATANA_MMIO_WAIT_BATCH_STATS attempts=\"\n"
+           "               << mmio_wait_loop_batch_counters_.attempts\n"
+           "               << \" admissions=\" << mmio_wait_loop_batch_counters_.admissions\n"
+           "               << \" batched_rounds=\"\n"
+           "               << mmio_wait_loop_batch_counters_.batched_rounds\n"
+           "               << \" batched_guest_cycles=\"\n"
+           "               << mmio_wait_loop_batch_counters_.batched_guest_cycles\n"
            "               << '\\n';\n"
            "    }\n"
            "    void register_executable_block(\n"
@@ -3604,9 +3670,16 @@ std::string handwritten_main(
            entry_namespace +
            "::MmioWaitLoopBatchDescriptor& descriptor) {\n"
            "        constexpr std::uint64_t quantum = 131'072u;\n"
+           "        ++mmio_wait_loop_batch_counters_.attempts;\n"
+           "        const bool pointer_from_register = descriptor.pointer_from_register;\n"
+           "        const bool mask_from_register =\n"
+           "            descriptor.mask_register < cpu_.r.size();\n"
+           "        const auto block_size = pointer_from_register ? 6u : 8u;\n"
+           "        const auto read_offset = pointer_from_register ? 0u : 2u;\n"
+           "        const auto test_offset = read_offset + 2u;\n"
+           "        const auto branch_offset = test_offset + 2u;\n"
            "        const auto runtime_state_allows_batch = [&] {\n"
-           "            return (cpu_.interrupts_blocked() || cpu_.interrupt_mask() == 15u) &&\n"
-           "                cpu_.memory.watchpoint_count() == 0u &&\n"
+           "            return cpu_.memory.watchpoint_count() == 0u &&\n"
            "                !cpu_.memory.has_trace_handler() &&\n"
            "                !cpu_.memory.has_mmio_trace_handler() &&\n"
            "                !cpu_.memory.mmio_access_tracking_enabled() &&\n"
@@ -3619,7 +3692,8 @@ std::string handwritten_main(
            "                state_.system_asic && state_.address_space &&\n"
            "                cpu_.address_space &&\n"
            "                cpu_.address_space.get() == state_.address_space.get() &&\n"
-           "                state_.scheduler && state_.code_tracker &&\n"
+           "                state_.scheduler && state_.interrupt_controller &&\n"
+           "                state_.interrupt_router && state_.code_tracker &&\n"
            "                state_.disc_load_transactions &&\n"
            "                !state_.disc_load_transactions->transaction_active() &&\n"
            "                active_block_variant_.has_value();\n"
@@ -3627,18 +3701,29 @@ std::string handwritten_main(
            "        if (!mmio_wait_loop_batching_enabled_ ||\n"
            "            descriptor.mmio_physical_address !=\n"
            "                katana::runtime::system_asic_physical_base ||\n"
-           "            descriptor.read_site != descriptor.loop_header + 2u ||\n"
+           "            descriptor.read_site != descriptor.loop_header + read_offset ||\n"
            "            descriptor.backedge_instruction_address !=\n"
-           "                descriptor.loop_header + 6u ||\n"
+           "                descriptor.loop_header + branch_offset ||\n"
            "            descriptor.pointer_register >= cpu_.r.size() ||\n"
            "            descriptor.value_register >= cpu_.r.size() ||\n"
-           "            descriptor.test_mask == 0u ||\n"
-           "            descriptor.round_instruction_count != 4u ||\n"
+           "            (mask_from_register\n"
+           "                 ? descriptor.test_mask != 0u ||\n"
+           "                       descriptor.mask_register == descriptor.pointer_register ||\n"
+           "                       descriptor.mask_register == descriptor.value_register\n"
+           "                 : descriptor.mask_register != 0xFFu ||\n"
+           "                       descriptor.test_mask == 0u) ||\n"
+           "            (pointer_from_register\n"
+           "                 ? descriptor.pointer_literal_address != 0u ||\n"
+           "                       descriptor.mmio_guest_address != 0u ||\n"
+           "                       descriptor.pointer_register == descriptor.value_register ||\n"
+           "                       descriptor.round_instruction_count != 3u ||\n"
+           "                       descriptor.pre_read_guest_cycles != 0u\n"
+           "                 : descriptor.round_instruction_count != 4u ||\n"
+           "                       descriptor.pre_read_guest_cycles == 0u ||\n"
+           "                       descriptor.pre_read_guest_cycles >=\n"
+           "                           descriptor.round_guest_cycles) ||\n"
            "            descriptor.round_guest_cycles == 0u ||\n"
            "            descriptor.round_guest_cycles > quantum ||\n"
-           "            descriptor.pre_read_guest_cycles == 0u ||\n"
-           "            descriptor.pre_read_guest_cycles >=\n"
-           "                descriptor.round_guest_cycles ||\n"
            "            descriptor.read_guest_cycles == 0u ||\n"
            "            descriptor.test_guest_cycles == 0u ||\n"
            "            descriptor.branch_guest_cycles == 0u ||\n"
@@ -3653,7 +3738,7 @@ std::string handwritten_main(
            "            selected_block.physical_origin !=\n"
            "                katana::runtime::canonical_physical_address(\n"
            "                    descriptor.loop_header) ||\n"
-           "            selected_block.size != 8u ||\n"
+           "            selected_block.size != block_size ||\n"
            "            selected_block.end_kind !=\n"
            "                katana::runtime::BlockEndKind::ConditionalBranch ||\n"
            "            (selected_block.provenance != descriptor.block_provenance &&\n"
@@ -3664,6 +3749,19 @@ std::string handwritten_main(
            "              !selected_block.provenance.ends_with(\"-mmu-variant\"))))\n"
            "            return false;\n"
            "        if (!runtime_state_allows_batch()) return false;\n"
+           "        if (cpu_.pending_guest_cycles != 0u) return false;\n"
+           "        if (pointer_from_register &&\n"
+           "            katana::runtime::canonical_physical_address(\n"
+           "                cpu_.r[descriptor.pointer_register]) !=\n"
+           "                descriptor.mmio_physical_address) return false;\n"
+           "        const auto has_acceptable_pending_interrupt = [&] {\n"
+           "            if (cpu_.interrupts_blocked() || cpu_.interrupt_mask() == 15u)\n"
+           "                return false;\n"
+           "            static_cast<void>(state_.interrupt_router->synchronize());\n"
+           "            const auto pending = state_.interrupt_controller->highest_pending();\n"
+           "            return pending && pending->level > cpu_.interrupt_mask();\n"
+           "        };\n"
+           "        if (has_acceptable_pending_interrupt()) return false;\n"
            "        const auto selected_physical_origin = selected_block.physical_origin;\n"
            "        const auto proves_instruction_block = [&](const auto& registration) {\n"
            "            try {\n"
@@ -3706,20 +3804,27 @@ std::string handwritten_main(
            "                registration->second.identity) ||\n"
            "            !proves_instruction_block(registration->second))\n"
            "            return false;\n"
-           "        const auto literal = prove_main_ram_translation(\n"
-           "            cpu_, state_, descriptor.pointer_literal_address, 4u,\n"
-           "            katana::runtime::TranslationAccess::Read);\n"
            "        const auto main_ram_base =\n"
            "            katana::runtime::dreamcast_main_ram_area_bases.front();\n"
-           "        if (!literal || !literal->no_mmu_fastpath ||\n"
-           "            literal->utlb_slot != 0xFFu ||\n"
-           "            literal->physical_address < main_ram_base ||\n"
-           "            literal->physical_address >\n"
-           "                main_ram_base + katana::runtime::dreamcast_main_ram_size - 4u)\n"
-           "            return false;\n"
-           "        const auto proven_literal_value = state_.main_ram->read_u32(\n"
-           "            literal->physical_address - main_ram_base);\n"
-           "        if (proven_literal_value != descriptor.mmio_guest_address) return false;\n"
+           "        std::optional<ProvenMemoryTranslation> literal;\n"
+           "        auto proven_literal_value = pointer_from_register\n"
+           "            ? cpu_.r[descriptor.pointer_register] : 0u;\n"
+           "        if (!pointer_from_register) {\n"
+           "            literal = prove_main_ram_translation(\n"
+           "                cpu_, state_, descriptor.pointer_literal_address, 4u,\n"
+           "                katana::runtime::TranslationAccess::Read);\n"
+           "            if (!literal || !literal->no_mmu_fastpath ||\n"
+           "                literal->utlb_slot != 0xFFu ||\n"
+           "                literal->physical_address < main_ram_base ||\n"
+           "                literal->physical_address >\n"
+           "                    main_ram_base +\n"
+           "                        katana::runtime::dreamcast_main_ram_size - 4u)\n"
+           "                return false;\n"
+           "            proven_literal_value = state_.main_ram->read_u32(\n"
+           "                literal->physical_address - main_ram_base);\n"
+           "            if (proven_literal_value != descriptor.mmio_guest_address)\n"
+           "                return false;\n"
+           "        }\n"
            "        const auto mmio = prove_contiguous_translation(\n"
            "            cpu_, state_, proven_literal_value, 4u,\n"
            "            katana::runtime::TranslationAccess::Read);\n"
@@ -3729,8 +3834,8 @@ std::string handwritten_main(
            "                mmio->physical_address, 4u,\n"
            "                state_.system_asic_device.get(), false))\n"
            "            return false;\n"
-           "        std::uint32_t literal_value = 0u;\n"
-           "        {\n"
+           "        auto literal_value = proven_literal_value;\n"
+           "        if (!pointer_from_register) {\n"
            "            const katana::runtime::GuestInstructionAttempt pointer_attempt(\n"
            "                cpu_, descriptor.loop_header,\n"
            "                descriptor.pre_read_guest_cycles);\n"
@@ -3748,9 +3853,16 @@ std::string handwritten_main(
            "            }\n"
            "        }\n"
            "        katana::runtime::flush_pending_guest_cycles(cpu_, *this);\n"
+           "        const auto test_mask = mask_from_register\n"
+           "            ? cpu_.r[descriptor.mask_register] : descriptor.test_mask;\n"
            "        bool post_flush_batch_contract =\n"
            "            cpu_.pending_guest_cycles == 0u && runtime_state_allows_batch() &&\n"
-           "            literal_value == descriptor.mmio_guest_address;\n"
+           "            !has_acceptable_pending_interrupt() &&\n"
+           "            literal_value == proven_literal_value && test_mask != 0u &&\n"
+           "            (!pointer_from_register ||\n"
+           "             cpu_.r[descriptor.pointer_register] == proven_literal_value) &&\n"
+           "            (!mask_from_register ||\n"
+           "             cpu_.r[descriptor.mask_register] == test_mask);\n"
            "        if (post_flush_batch_contract) {\n"
            "            const auto post_registration =\n"
            "                executable_blocks_.find(descriptor.loop_header);\n"
@@ -3758,7 +3870,7 @@ std::string handwritten_main(
            "                post_registration != executable_blocks_.end() &&\n"
            "                post_registration->second.physical_origin ==\n"
            "                    selected_physical_origin &&\n"
-           "                post_registration->second.size == 8u &&\n"
+           "                post_registration->second.size == block_size &&\n"
            "                post_registration->second.timing_class ==\n"
            "                    katana::runtime::ExecutableBlockTimingClass::RequiresCycleFlush &&\n"
            "                post_registration->second.maximum_guest_cycles ==\n"
@@ -3767,7 +3879,7 @@ std::string handwritten_main(
            "                    post_registration->second.identity) &&\n"
            "                proves_instruction_block(post_registration->second);\n"
            "        }\n"
-           "        if (post_flush_batch_contract) {\n"
+           "        if (post_flush_batch_contract && !pointer_from_register) {\n"
            "            const auto post_literal = prove_main_ram_translation(\n"
            "                cpu_, state_, descriptor.pointer_literal_address, 4u,\n"
            "                katana::runtime::TranslationAccess::Read);\n"
@@ -3801,7 +3913,7 @@ std::string handwritten_main(
            "                    cpu_.memory.has_guest_memory_access_sink()\n"
            "                    ? katana::runtime::GuestInstructionOrigin{\n"
            "                          descriptor.read_site,\n"
-           "                          selected_physical_origin + 2u, true}\n"
+           "                          selected_physical_origin + read_offset, true}\n"
            "                    : katana::runtime::GuestInstructionOrigin{};\n"
            "                mmio_value = katana::runtime::guest_read_u32_at(\n"
            "                    cpu_, read_origin, literal_value);\n"
@@ -3814,11 +3926,11 @@ std::string handwritten_main(
            "            }\n"
            "        }\n"
            "        const bool test_result =\n"
-           "            (mmio_value & descriptor.test_mask) == 0u;\n"
+           "            (mmio_value & test_mask) == 0u;\n"
            "        const auto finish_scalar_round = [&] {\n"
            "            {\n"
            "                const katana::runtime::GuestInstructionAttempt test_attempt(\n"
-           "                    cpu_, descriptor.loop_header + 4u,\n"
+           "                    cpu_, descriptor.loop_header + test_offset,\n"
            "                    descriptor.test_guest_cycles);\n"
            "                cpu_.t = test_result;\n"
            "            }\n"
@@ -3827,7 +3939,7 @@ std::string handwritten_main(
            "                    cpu_, descriptor.backedge_instruction_address,\n"
            "                    descriptor.branch_guest_cycles);\n"
            "                cpu_.pc = test_result == descriptor.branch_on_true\n"
-           "                    ? descriptor.loop_header : descriptor.loop_header + 8u;\n"
+           "                    ? descriptor.loop_header : descriptor.loop_header + block_size;\n"
            "            }\n"
            "            katana::runtime::flush_pending_guest_cycles(cpu_, *this);\n"
            "            return true;\n"
@@ -3870,12 +3982,15 @@ std::string handwritten_main(
            "            admitted * descriptor.round_guest_cycles;\n"
            "        const auto batch_instructions =\n"
            "            admitted * descriptor.round_instruction_count;\n"
+           "        const auto already_attempted_instructions =\n"
+           "            pointer_from_register ? 1u : 2u;\n"
            "        if (batch_cycles < descriptor.pre_read_guest_cycles ||\n"
-           "            batch_instructions < 2u)\n"
+           "            batch_instructions < already_attempted_instructions)\n"
            "            return finish_scalar_round();\n"
            "        const auto remaining_batch_cycles =\n"
            "            batch_cycles - descriptor.pre_read_guest_cycles;\n"
-           "        const auto remaining_batch_instructions = batch_instructions - 2u;\n"
+           "        const auto remaining_batch_instructions =\n"
+           "            batch_instructions - already_attempted_instructions;\n"
            "        if (remaining_batch_cycles >\n"
            "                std::numeric_limits<std::uint64_t>::max() -\n"
            "                    cpu_.total_guest_cycles ||\n"
@@ -3889,10 +4004,14 @@ std::string handwritten_main(
            "                    cpu_.retired_guest_instructions)\n"
            "            return finish_scalar_round();\n"
            "        const auto additional_rounds = admitted - 1u;\n"
+           "        const auto memory_accesses_per_additional_round =\n"
+           "            pointer_from_register ? 1u : 2u;\n"
            "        if (additional_rounds >\n"
-           "                std::numeric_limits<std::uint64_t>::max() / 2u)\n"
+           "                std::numeric_limits<std::uint64_t>::max() /\n"
+           "                    memory_accesses_per_additional_round)\n"
            "            return finish_scalar_round();\n"
-           "        const auto synthetic_memory_accesses = additional_rounds * 2u;\n"
+           "        const auto synthetic_memory_accesses =\n"
+           "            additional_rounds * memory_accesses_per_additional_round;\n"
            "        if (!cpu_.memory.account_prevalidated_unobserved_accesses(\n"
            "                synthetic_memory_accesses, synthetic_memory_accesses))\n"
            "            return finish_scalar_round();\n"
@@ -3903,10 +4022,13 @@ std::string handwritten_main(
            "        cpu_.active_instruction_pc =\n"
            "            descriptor.backedge_instruction_address;\n"
            "        cpu_.active_instruction_physical_pc =\n"
-           "            selected_physical_origin + 6u;\n"
+           "            selected_physical_origin + branch_offset;\n"
            "        cpu_.pending_guest_cycles +=\n"
            "            remaining_batch_cycles - descriptor.read_guest_cycles;\n"
            "        katana::runtime::flush_pending_guest_cycles(cpu_, *this);\n"
+           "        ++mmio_wait_loop_batch_counters_.admissions;\n"
+           "        mmio_wait_loop_batch_counters_.batched_rounds += admitted;\n"
+           "        mmio_wait_loop_batch_counters_.batched_guest_cycles += batch_cycles;\n"
            "        return true;\n"
            "    }\n"
            "    bool try_counted_loop_batch(\n"
@@ -4654,6 +4776,7 @@ std::string handwritten_main(
            "    std::unordered_set<std::uint32_t> chainable_blocks_;\n"
            "    std::optional<katana::runtime::BlockVariantKey> active_block_variant_;\n"
            "    FlagPollBatchCounters flag_poll_batch_counters_;\n"
+           "    MmioWaitLoopBatchCounters mmio_wait_loop_batch_counters_;\n"
            "    bool guest_program_dispatched_ = false;\n"
            "    bool guest_program_progressed_ = false;\n"
            "    bool eager_host_poll_ = false;\n"
@@ -5484,6 +5607,7 @@ std::string handwritten_main(
            "            }\n"
            "            std::cerr << '\\n';\n"
            "            services.report_flag_poll_batch_statistics(std::cerr);\n"
+           "            services.report_mmio_wait_loop_batch_statistics(std::cerr);\n"
            "        };\n"
            "        " +
            entry_namespace +
@@ -6546,8 +6670,10 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                    << symbol(descriptor.backedge_instruction_address) << "u, "
                    << static_cast<unsigned>(descriptor.pointer_register) << "u, "
                    << static_cast<unsigned>(descriptor.value_register) << "u, "
-                   << static_cast<unsigned>(descriptor.test_mask) << "u, "
+                   << static_cast<unsigned>(descriptor.mask_register) << "u, "
                    << static_cast<unsigned>(descriptor.round_instruction_count) << "u, "
+                   << descriptor.test_mask << "u, "
+                   << (descriptor.pointer_from_register ? "true" : "false") << ", "
                    << (descriptor.branch_on_true ? "true" : "false") << ", "
                    << descriptor.round_guest_cycles << "u, "
                    << descriptor.pre_read_guest_cycles << "u, "
