@@ -2068,30 +2068,63 @@ bool merge_candidate_input(CandidateInput& destination,
     return changed;
 }
 
-bool requires_isolated_store_harvest(const CandidateInput& input) {
-    if (input.observations.empty()) return false;
+bool requires_isolated_store_harvest(
+    const CandidateInput& input,
+    const std::uint32_t call_site,
+    const AbstractState& observation) {
     if (input.unknown_ingress || input.expected_call_sites.empty() ||
         !std::all_of(
             input.expected_call_sites.begin(),
             input.expected_call_sites.end(),
             [&](const auto call_site) { return input.observations.contains(call_site); }))
         return true;
-    for (const auto call_site : input.expected_call_sites) {
-        const auto& observation = input.observations.at(call_site);
-        for (std::uint8_t index = 4u; index <= 7u; ++index) {
-            const auto& observed = observation[index];
-            const auto& merged = input.state[index];
-            if (!observed.known || observed.values.empty()) continue;
-            if (!merged.known ||
-                std::any_of(observed.values.begin(),
-                            observed.values.end(),
-                            [&](const auto value) {
-                                return std::find(
-                                           merged.values.begin(), merged.values.end(), value) ==
-                                       merged.values.end();
-                            }))
-                return true;
-        }
+    if (!input.expected_call_sites.contains(call_site)) return true;
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        const auto& observed = observation[index];
+        const auto& merged = input.state[index];
+        if (!observed.known || observed.values.empty()) continue;
+        if (!merged.known ||
+            std::any_of(observed.values.begin(),
+                        observed.values.end(),
+                        [&](const auto value) {
+                            return std::find(
+                                       merged.values.begin(), merged.values.end(), value) ==
+                                   merged.values.end();
+                        }))
+            return true;
+    }
+    return false;
+}
+
+bool guarded_inventory_store_instruction(
+    const katana::sh4::InstructionKind kind) noexcept {
+    using K = katana::sh4::InstructionKind;
+    switch (kind) {
+    case K::MovLongStore:
+    case K::MovLongStorePreDecrement:
+    case K::MovLongStoreDisplacement:
+    case K::MovLongStoreR0Indexed:
+    case K::MovLongStoreGbrDisplacement:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool function_contains_guarded_inventory_store(
+    const FunctionInfo& function,
+    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    for (const auto block_address : function.block_addresses) {
+        const auto block = blocks.find(block_address);
+        if (block == blocks.end()) continue;
+        if (std::any_of(
+                block->second->lines.begin(),
+                block->second->lines.end(),
+                [](const auto& line) {
+                    return guarded_inventory_store_instruction(
+                        line.instruction.kind);
+                }))
+            return true;
     }
     return false;
 }
@@ -2216,6 +2249,26 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         function_by_address.emplace(function.entry_address, &function);
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
+    }
+    std::unordered_set<std::uint32_t> functions_reaching_guarded_inventory_store;
+    functions_reaching_guarded_inventory_store.reserve(functions.size());
+    std::deque<std::uint32_t> pending_store_reachability;
+    for (const auto& function : functions) {
+        if (!function_contains_guarded_inventory_store(function, block_index))
+            continue;
+        functions_reaching_guarded_inventory_store.insert(
+            function.entry_address);
+        pending_store_reachability.push_back(function.entry_address);
+    }
+    while (!pending_store_reachability.empty()) {
+        const auto callee = pending_store_reachability.front();
+        pending_store_reachability.pop_front();
+        const auto callers = callers_by_callee.find(callee);
+        if (callers == callers_by_callee.end()) continue;
+        for (const auto caller : callers->second) {
+            if (functions_reaching_guarded_inventory_store.insert(caller).second)
+                pending_store_reachability.push_back(caller);
+        }
     }
     for (const auto& line : lines) {
         if (line.instruction.control_flow != katana::sh4::ControlFlowKind::Call ||
@@ -2347,8 +2400,13 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                                   std::make_move_iterator(evaluation.resolutions.end()));
         const auto& input = candidate_inputs.at(function->entry_address);
         if (image.guest_call_abi() == katana::io::GuestCallAbi::SuperHC &&
-            !result.budget_exhausted && requires_isolated_store_harvest(input)) {
+            !result.budget_exhausted &&
+            functions_reaching_guarded_inventory_store.contains(
+                function->entry_address)) {
             for (const auto& [call_site, observation] : input.observations) {
+                if (!requires_isolated_store_harvest(
+                        input, call_site, observation))
+                    continue;
                 auto isolated_evaluation = evaluate_function(
                     image,
                     *function,
@@ -2380,6 +2438,8 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         candidate_inputs.find(forwarded.callee);
                     if (forwarded_function == function_by_address.end() ||
                         forwarded_input == candidate_inputs.end() ||
+                        !functions_reaching_guarded_inventory_store.contains(
+                            forwarded.callee) ||
                         !requires_forwarded_isolated_store_harvest(
                             image, forwarded.state, forwarded_input->second.state))
                         return;
