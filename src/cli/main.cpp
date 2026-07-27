@@ -1140,7 +1140,6 @@ std::optional<std::string> configured_environment_value(const char* name) {
 std::size_t configured_host_build_jobs() {
     constexpr std::size_t maximum_jobs = 256u;
     auto configured = configured_environment_value("KATANA_HOST_BUILD_JOBS");
-    if (!configured) configured = configured_environment_value("KATANA_PORT_CODEGEN_JOBS");
     if (!configured) {
         return std::min<std::size_t>(maximum_jobs,
                                      std::max(1u, std::thread::hardware_concurrency()));

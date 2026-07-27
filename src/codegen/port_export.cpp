@@ -4866,6 +4866,10 @@ std::string handwritten_main(
            "            throw;\n"
            "        }\n"
            "        if (host.state() == katana::runtime::HostRuntimeState::Shutdown) {\n"
+           "            if (const auto* final_progress =\n"
+           "                    std::getenv(\"KATANA_PORT_FINAL_PROGRESS\");\n"
+           "                final_progress != nullptr && *final_progress != '\\0')\n"
+           "                report_progress();\n"
            "            host.require_clean_shutdown();\n"
            "            if (state.scheduler->pending_event_count() != 0u)\n"
            "                throw std::runtime_error(\"Host-Shutdown hinterliess "
@@ -5204,21 +5208,6 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             return "Fallthrough";
         }
     };
-    const auto dispatch_site_class = [](const katana::ir::DynamicTargetClass target_class) {
-        using C = katana::ir::DynamicTargetClass;
-        switch (target_class) {
-        case C::GuardedComplete:
-        case C::GuardedPartial:
-            return "Guarded";
-        case C::RuntimeOnly:
-            return "RuntimeOnly";
-        case C::Unresolved:
-            return "Unresolved";
-        case C::NotApplicable:
-            return "NotDynamic";
-        }
-        return "NotDynamic";
-    };
     struct NativeTemplateEmission {
         struct PatchTarget {
             std::uint32_t live_value = 0u;
@@ -5411,10 +5400,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     struct DispatchBlock {
         std::uint32_t owner;
         std::uint32_t address;
-        std::uint32_t exit_source;
         std::uint32_t size;
         const char* end_kind;
-        katana::ir::DynamicTargetClass target_class;
         const char* timing_class;
         std::uint64_t maximum_guest_cycles;
     };
@@ -5436,14 +5423,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 continue;
             }
             std::uint32_t end = block.start_address + 2u;
-            const katana::ir::Instruction* terminal = nullptr;
             auto timing_class = katana::runtime::ExecutableBlockTimingClass::PureCpu;
             std::uint64_t maximum_guest_cycles = 0u;
             std::unordered_set<std::uint32_t> timed_instructions;
             for (const auto& instruction : block.instructions) {
                 end = std::max(end, instruction.source_address + 2u);
-                if (instruction.delay_slot.role != katana::ir::DelaySlotRole::Slot)
-                    terminal = &instruction;
                 if (!timed_instructions.insert(instruction.source_address).second) continue;
                 const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
                 maximum_guest_cycles += timing.guest_cycles;
@@ -5478,11 +5462,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             dispatch_blocks.push_back(
                 {function.entry_address,
                  block.start_address,
-                 terminal != nullptr ? terminal->source_address : block.start_address,
                  end - block.start_address,
                  end_kind(block),
-                 terminal != nullptr ? terminal->dynamic_target_class
-                                     : katana::ir::DynamicTargetClass::NotApplicable,
                  timing_class_name,
                  std::max<std::uint64_t>(1u, maximum_guest_cycles)});
         }
@@ -5561,9 +5542,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         << "    std::uint64_t maximum_guest_cycles);\n";
     for (std::size_t shard = 0u; shard < shard_count; ++shard) {
         const auto suffix = shard_symbol(shard);
-        internal_header << "bool note_block_entry_shard_" << suffix
-                        << "(std::uint32_t address) noexcept;\n"
-                        << "void append_static_blocks_shard_" << suffix
+        internal_header << "void append_static_blocks_shard_" << suffix
                         << "(std::vector<katana::runtime::RuntimeBlock>& blocks);\n"
                         << "void register_executable_blocks_shard_" << suffix
                         << "(const katana::runtime::RuntimeBlockTable& table, "
@@ -5620,29 +5599,6 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 << "}\n";
         }
         shard_output << "} // namespace\n\n"
-                     << "bool note_block_entry_shard_" << suffix
-                     << "(const std::uint32_t address) noexcept {\n"
-                     << "    switch (address) {\n";
-        for (auto index = begin; index < end; ++index) {
-            const auto& block = dispatch_blocks[index];
-            const auto address = symbol(block.address);
-            const auto exit_source = symbol(block.exit_source);
-            shard_output << "    case 0x" << address << "u:\n"
-                         << "        active_exit_source = {"
-                            "katana::runtime::relocate_code_address(0x"
-                         << exit_source
-                         << "u), katana::runtime::canonical_physical_address("
-                            "katana::runtime::relocate_code_address(0x"
-                         << exit_source << "u))};\n"
-                         << "        active_exit_kind = katana::runtime::BlockEndKind::"
-                         << block.end_kind << ";\n"
-                         << "        active_exit_site_class = "
-                            "katana::runtime::DynamicDispatchSiteClass::"
-                         << dispatch_site_class(block.target_class) << ";\n"
-                         << "        return true;\n";
-        }
-        shard_output << "    default: return false;\n"
-                     << "    }\n}\n\n"
                      << "void append_static_blocks_shard_" << suffix
                      << "(std::vector<katana::runtime::RuntimeBlock>& blocks) {\n";
         for (auto index = begin; index < end; ++index) {
@@ -6351,38 +6307,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "    throw std::runtime_error(\"Runtime-Blockbudget erschoepft.\");\n"
            "}\n"
            "} // namespace\n\n"
-           "void note_block_entry(const std::uint32_t address) noexcept {\n"
-           "    const auto source_address = "
-           "katana::runtime::unrelocate_code_address(address);\n"
-           "    const bool matched = [&]() noexcept {\n";
-    const auto emit_note_router = [&](const auto& self,
-                                      const std::size_t begin,
-                                      const std::size_t end,
-                                      const std::string_view indentation) -> void {
-        if (end - begin == 1u) {
-            output << indentation << "return runtime_dispatch_detail::note_block_entry_shard_"
-                   << shard_symbol(begin) << "(source_address);\n";
-            return;
-        }
-        const auto middle = begin + (end - begin) / 2u;
-        const auto pivot = dispatch_blocks[middle * dispatch_blocks_per_shard - 1u].address;
-        output << indentation << "if (source_address <= 0x" << symbol(pivot) << "u) {\n";
-        const auto nested = std::string(indentation) + "    ";
-        self(self, begin, middle, nested);
-        output << indentation << "} else {\n";
-        self(self, middle, end, nested);
-        output << indentation << "}\n";
-    };
-    emit_note_router(emit_note_router, 0u, shard_count, "        ");
-    output << "    }();\n"
-              "    if (matched) return;\n"
-              "    active_exit_source = {address, "
-              "katana::runtime::canonical_physical_address(address)};\n"
-              "    active_exit_kind = katana::runtime::BlockEndKind::Fallthrough;\n"
-              "    active_exit_site_class = "
-              "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
-              "}\n\n"
-           << "void static_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "void static_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
               "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call,\n"
               "        katana::runtime::RuntimeDispatchClass::GuardedFallback, false,\n"
               "        DispatchChainBoundary::NestedCall);\n"
@@ -6976,10 +6901,9 @@ static PortExportResult export_dreamcast_port_project_impl(
                                                              functions,
                                                              functions.front().entry_address,
                                                              request_options);
-        const CppBackend backend;
         return ProjectArtifact{std::filesystem::path("code") /
                                    deterministic_translation_unit_name(partition, emitted_program),
-                               backend.emit(request).joined_text()};
+                               emit_cpp_port_translation_unit(request).joined_text()};
     };
     const auto codegen_jobs = port_codegen_jobs(partitions.size());
     std::vector<std::optional<ProjectArtifact>> generated(partitions.size());

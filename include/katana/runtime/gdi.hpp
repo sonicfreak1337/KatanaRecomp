@@ -73,6 +73,8 @@ class GdiDiscSource final : public DiscSource {
     [[nodiscard]] std::size_t sector_cache_capacity() const noexcept;
 
   private:
+    friend std::string packed_disc_content_identity(const GdiDiscSource& source);
+
     explicit GdiDiscSource(GdiDescriptor descriptor);
     [[nodiscard]] std::vector<std::uint8_t> read_data_sector(std::uint64_t absolute_lba) const;
     [[nodiscard]] std::vector<std::uint8_t> read_data_sectors(std::uint64_t absolute_lba,
@@ -90,6 +92,8 @@ class GdiDiscSource final : public DiscSource {
     mutable std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> sector_cache_;
     mutable std::vector<std::uint64_t> sector_cache_order_;
     mutable std::mutex cache_mutex_;
+    mutable std::once_flag packed_content_identity_once_;
+    mutable std::string packed_content_identity_;
     DiscCacheMode cache_mode_ = DiscCacheMode::Enabled;
     mutable GdiIoCounters io_counters_;
 };

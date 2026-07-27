@@ -25,6 +25,12 @@ class CppBackend final : public Backend {
     [[nodiscard]] BackendEmission emit(const BackendRequest& request) const override;
 };
 
+// Product ports own the runtime-dispatch TLS metadata consumed after a generated
+// block returns.  Emitting the statically known block-exit metadata directly
+// avoids routing every local basic-block entry through another translation unit.
+[[nodiscard]] BackendEmission
+emit_cpp_port_translation_unit(const BackendRequest& request);
+
 [[nodiscard]] std::string emit_cpp_program(std::span<const katana::ir::Function> functions,
                                            std::uint32_t entry_address);
 

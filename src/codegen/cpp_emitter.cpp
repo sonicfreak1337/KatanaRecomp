@@ -32,6 +32,8 @@ std::string cpp_service_function_name(const std::uint32_t address) {
 
 namespace {
 
+enum class BlockEntryMetadataMode : std::uint8_t { None, Routed, Direct };
+
 std::string hex32(const std::uint32_t value) {
     std::ostringstream output;
 
@@ -52,6 +54,63 @@ std::string unrelocated_code_address(const std::string_view value) {
 std::uint32_t fallthrough_address(const katana::ir::Instruction& instruction) {
     return instruction.source_address +
            (instruction.delay_slot.role == katana::ir::DelaySlotRole::Owner ? 4u : 2u);
+}
+
+const katana::ir::Instruction*
+terminal_instruction(const katana::ir::BasicBlock& block) noexcept {
+    const katana::ir::Instruction* terminal = nullptr;
+    for (const auto& instruction : block.instructions) {
+        if (instruction.delay_slot.role != katana::ir::DelaySlotRole::Slot)
+            terminal = &instruction;
+    }
+    return terminal;
+}
+
+std::string_view block_end_kind_name(const katana::ir::BasicBlock& block) noexcept {
+    using O = katana::ir::Operation;
+    const auto* terminal = terminal_instruction(block);
+    if (terminal == nullptr) return "Fallthrough";
+    switch (terminal->operation) {
+    case O::Branch:
+        return "StaticBranch";
+    case O::BranchIfTrue:
+    case O::BranchIfFalse:
+        return "ConditionalBranch";
+    case O::JumpRegister:
+        return "DynamicBranch";
+    case O::Call:
+    case O::CallRegister:
+        return "Call";
+    case O::Return:
+        return "Return";
+    case O::ReturnFromException:
+        return "ExceptionReturn";
+    case O::Sleep:
+        return "Sleep";
+    case O::TrapAlways:
+        return "Exception";
+    default:
+        return "Fallthrough";
+    }
+}
+
+std::string_view
+dynamic_dispatch_site_class_name(const katana::ir::BasicBlock& block) noexcept {
+    using C = katana::ir::DynamicTargetClass;
+    const auto* terminal = terminal_instruction(block);
+    if (terminal == nullptr) return "NotDynamic";
+    switch (terminal->dynamic_target_class) {
+    case C::GuardedComplete:
+    case C::GuardedPartial:
+        return "Guarded";
+    case C::RuntimeOnly:
+        return "RuntimeOnly";
+    case C::Unresolved:
+        return "Unresolved";
+    case C::NotApplicable:
+        return "NotDynamic";
+    }
+    return "NotDynamic";
 }
 
 bool has_proven_linear_ram_access(const katana::ir::Instruction& instruction) noexcept {
@@ -2503,7 +2562,7 @@ void emit_block(std::ostringstream& output,
                 const std::unordered_set<std::uint32_t>& current_blocks,
                 const bool single_block,
                 const bool guarded_local_block_chaining,
-                const bool note_external_block_entry,
+                const BlockEntryMetadataMode block_entry_metadata_mode,
                 const bool external_instruction_observer) {
     const auto segment = block.start_address >> 29u;
     if (segment == 4u || segment == 5u) {
@@ -2512,9 +2571,26 @@ void emit_block(std::ostringstream& output,
             output << "            case " << hex32(direct_alias) << ":\n";
     }
     output << "            case " << hex32(block.start_address) << ": {\n";
-    if (note_external_block_entry)
+    if (block_entry_metadata_mode == BlockEntryMetadataMode::Routed) {
         output << "                note_block_entry(" << relocated_code_address(block.start_address)
                << ");\n";
+    } else if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct) {
+        const auto* terminal = terminal_instruction(block);
+        const auto exit_source =
+            terminal != nullptr ? terminal->source_address : block.start_address;
+        output << "                const auto katana_block_exit_virtual_source = "
+               << relocated_code_address(exit_source) << ";\n"
+               << "                runtime_dispatch_detail::active_exit_source = {\n"
+               << "                    katana_block_exit_virtual_source,\n"
+               << "                    katana::runtime::canonical_physical_address("
+                  "katana_block_exit_virtual_source)};\n"
+               << "                runtime_dispatch_detail::active_exit_kind = "
+                  "katana::runtime::BlockEndKind::"
+               << block_end_kind_name(block) << ";\n"
+               << "                runtime_dispatch_detail::active_exit_site_class = "
+                  "katana::runtime::DynamicDispatchSiteClass::"
+               << dynamic_dispatch_site_class_name(block) << ";\n";
+    }
     if (!single_block) {
         output << "                const auto block_retired_before = "
                   "cpu.retired_guest_instructions;\n"
@@ -2637,7 +2713,10 @@ BackendCapabilities CppBackend::capabilities() const noexcept {
            capability(BackendCapability::PlatformServices);
 }
 
-BackendEmission CppBackend::emit(const BackendRequest& request) const {
+namespace {
+
+BackendEmission emit_cpp_backend(const BackendRequest& request,
+                                 const BlockEntryMetadataMode block_entry_metadata_mode) {
     const auto functions = request.functions;
     const auto entry_address = request.entry_address;
     std::unordered_set<std::uint32_t> known_functions;
@@ -2653,8 +2732,10 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
     std::ostringstream function_bodies;
     std::ostringstream metadata;
 
-    declarations << "#include \"katana/runtime/block_abi.hpp\"\n"
-                 << "#include \"katana/runtime/exception.hpp\"\n"
+    declarations << "#include \"katana/runtime/block_abi.hpp\"\n";
+    if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct)
+        declarations << "#include \"katana/runtime/indirect_dispatch.hpp\"\n";
+    declarations << "#include \"katana/runtime/exception.hpp\"\n"
                  << "#include \"katana/runtime/fpu.hpp\"\n"
                  << "#include \"katana/runtime/platform_services.hpp\"\n"
                  << "#include \"katana/runtime/runtime.hpp\"\n"
@@ -2681,9 +2762,19 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "using katana::runtime::raise_trapa;\n"
                  << "using katana::runtime::return_from_exception;\n";
     if (request.external_dynamic_dispatch) {
-        declarations << "void static_call(CpuState& cpu, std::uint32_t target);\n"
-                     << "void note_block_entry(std::uint32_t address) noexcept;\n"
-                     << "void resolved_call(CpuState& cpu, std::uint32_t target);\n"
+        declarations << "void static_call(CpuState& cpu, std::uint32_t target);\n";
+        if (block_entry_metadata_mode == BlockEntryMetadataMode::Routed) {
+            declarations << "void note_block_entry(std::uint32_t address) noexcept;\n";
+        } else if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct) {
+            declarations
+                << "namespace runtime_dispatch_detail {\n"
+                << "extern thread_local katana::runtime::BlockAddress active_exit_source;\n"
+                << "extern thread_local katana::runtime::BlockEndKind active_exit_kind;\n"
+                << "extern thread_local katana::runtime::DynamicDispatchSiteClass "
+                   "active_exit_site_class;\n"
+                << "} // namespace runtime_dispatch_detail\n";
+        }
+        declarations << "void resolved_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_jump(CpuState& cpu, std::uint32_t target);\n"
                      << "void runtime_only_call(CpuState& cpu, std::uint32_t target);\n"
@@ -2754,13 +2845,16 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         }
 
         for (const auto& block : function.blocks) {
+            const auto effective_block_entry_metadata_mode =
+                request.external_dynamic_dispatch ? block_entry_metadata_mode
+                                                  : BlockEntryMetadataMode::None;
             emit_block(function_bodies,
                        block,
                        known_functions,
                        current_blocks,
                        request.single_block_execution,
                        request.guarded_local_block_chaining,
-                       request.external_dynamic_dispatch,
+                       effective_block_entry_metadata_mode,
                        request.external_instruction_observer);
         }
 
@@ -2791,6 +2885,23 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
              << "} // namespace " << request.symbol_namespace << "\n";
 
     return {declarations.str(), function_bodies.str(), metadata.str()};
+}
+
+} // namespace
+
+BackendEmission CppBackend::emit(const BackendRequest& request) const {
+    return emit_cpp_backend(
+        request,
+        request.external_dynamic_dispatch ? BlockEntryMetadataMode::Routed
+                                          : BlockEntryMetadataMode::None);
+}
+
+BackendEmission emit_cpp_port_translation_unit(const BackendRequest& request) {
+    if (!request.external_dynamic_dispatch) {
+        throw std::invalid_argument(
+            "Direkte Port-Blockmetadaten brauchen externen Runtime-Dispatch.");
+    }
+    return emit_cpp_backend(request, BlockEntryMetadataMode::Direct);
 }
 
 std::string emit_cpp_program(const std::span<const katana::ir::Function> functions,
