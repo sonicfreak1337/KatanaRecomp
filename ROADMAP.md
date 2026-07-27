@@ -1,783 +1,238 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Historischer Ausgangsmeilenstein: `v0.48.0` (Produktgate nicht abgeschlossen)
-Aktuelle Phase: `v0.49.0` - statischer Produktrecompiler und Executable-First-Bring-up
+
+Aktuelle Phase: `v0.49.0` - statischer Dreamcast-Recompiler, externe Spielprojekte und produktiver Sonic-Adventure-Bring-up
+
 Erster oeffentlicher Release: `v0.50.0` Alpha
-Weitere geplante Stufen: `v0.75.0` Beta und `v1.0.0` Stable
 
 ## Produktziel
 
-KatanaRecomp ist ein allgemeines Dreamcast-Recompiler-Framework mit Runtime-SDK
-und generischer Port- und Installer-API. Titelbezogene Installer-, Integrations-
-oder Enhancementlogik ist ausdruecklich kein Produktbestandteil.
-
-KatanaRecomp wandelt rechtmaessig lokal bereitgestellte Dreamcast-Programme in
-eigenstaendige native Portprojekte um. Analyzer, generierter Code und Runtime
-bleiben getrennt. Proprietaere Spiel-, BIOS- oder Assetdaten gehoeren weder in
-das Repository noch in verteilbare Pakete.
-
-Das verbindliche Architekturmodell ist XenonRecomp-artige statische
-Rekompilierung. Der v0.49-Entwicklungspfad extrahiert die Boot-Executable
-einmalig aus der eigenen `.gdi` und verwendet danach ein unveraenderliches
-hashgebundenes Artefakt fuer Analyse, Codegen und Warmbuild. `.gdi` bleibt
-Nutzerinstallationsquelle und Eingang des finalen NativeDiscBoot. Die getrennte
-Runtime implementiert nur typisierte Dreamcast-Plattformgrenzen; ein normaler
-Portlauf darf weder SH-4-Interpreter/JIT noch einen Emulationsfallback oder
-Titelhacks enthalten. Der begrenzte Interpreter bleibt ausschliesslich im
-expliziten `diagnostic_partial`-Profil.
-
-## Planungsregeln
-
-1. Allgemeine Semantik vor Titelsonderfaellen.
-2. Oberstes End-to-End-Ziel bleibt ein lauffaehiger privater
-   Sonic-Adventure-PAL-Produktport. Die Bootursachenanalyse und erneute
-   600-Millionen-Zyklen-Abnahme sind fuer den v0.49-Architekturcommit
-   ausdruecklich vertagt und werden nicht durch synthetische Erfolge ersetzt.
-3. Unbekannte Ziele, Opcodes, BIOS-Aufrufe und MMIO-Zugriffe duerfen nicht still
-   erfolgreich sein.
-4. Private Retaildaten bleiben ausserhalb von Repository, CI, Paketen und
-   oeffentlichen Berichten.
-5. Sonic Adventure dient als private Retail-Testbench; seine Produktlogik
-   gehoert weiterhin nicht in das allgemeine Framework.
-6. Private Retail-Laeufe duerfen nur allgemeine Frameworkfehler aufdecken; jeder
-   Fix wird primaer durch weiteren Sonic-Fortschritt bestaetigt. Synthetische
-   Tests sind nur zulaessig, wenn sie einen konkret dort beobachteten Blocker
-   schneller isolieren als ein erneuter Produktlauf; sie sind keine
-   standardmaessige Lieferpflicht.
-7. Breite CTest-, Gate- und Funktionsmatrizen werden waehrend der Entwicklung
-   nicht mehr routinemaessig ausgefuehrt oder erweitert. Das funktionierende
-   Produkt ist der Test; vorhandene historische Gateevidenz bleibt lediglich
-   als Historie erhalten.
-8. Ein globaler Projektprozentsatz wird nicht mehr gepflegt. Neue zukuenftige
-   Arbeit darf den scheinbaren Fortschritt nicht rueckwaerts rechnen.
-9. Task-IDs sind ab dem ersten Merge unveraenderlich. Entfallene oder ersetzte
-   Aufgaben bleiben in `docs/TASK_ID_REGISTRY.md` registriert.
-
-## Fertiggestellte Grundlage
-
-Die historischen Detailtasks bleiben in Git nachvollziehbar und werden hier
-nicht mehr einzeln wiederholt.
-
-| Bereich | Stand |
-|---|---|
-| SH-4 Integer, Systemregister und FPU-Grundlage | umgesetzt und getestet |
-| Loader, GDI, ISO9660 und rekursive Analyse | umgesetzt |
-| Static-/Dynamic-AOT, Katana-IR und C++-Backend | umgesetzt; Function-Level-Optimierung wird konservativ erweitert |
-| Speicherbus, Exceptions, Interrupts, Scheduler und DMA | umgesetzt |
-| BIOS-HLE, System-ASIC, Maple, PVR-Minimalpfad, AICA-HLE und GD-ROM | umgesetzt, Genauigkeit noch begrenzt |
-| Executable-First, DirectBoot, GDI-Installation, Portexport und native Hostruntime | umgesetzt |
-| Externe Spielprojektschnittstelle | allgemeiner hashgebundener Vertrag umgesetzt; Titelintegration bleibt extern |
-| Private Retailanalyse | Schema 4: 142.380 Instruktionen, 1.542 Funktionen, null unbekannte SH-4-Instruktionen und null bekannte Hardwareluecken; zwei partielle Adressen und 492 unaufgeloeste Poll-/Guard-Loops halten `--strict` offen |
-
-## v0.49.0 - Statischer Produktrecompiler
-
-### Ziel
-
-KatanaRecomp, KatanaRuntime und titelbezogene Portprojekte besitzen getrennte
-Verantwortungen. Der fruehe Bring-up arbeitet executable-first; der normale
-Produkt-Hotpath fuehrt bereits validierte statische AOT-Funktionszeiger aus
-und verlaesst native Regionen nur an echten dynamischen oder
-architektonischen Grenzen.
-
-### Umgesetzt
-
-- direkter validierter Ausfuehrungsdeskriptor ohne zweites Tabellenlookup;
-- zweistufiger Static-AOT-Tier und getrennter Dynamic-AOT-Tier;
-- frueher P1-/P2-Inline-Cache sowie Modul-/Relocation-/Blockgenerationguards;
-- native Funktionslabels, direkte AOT-Calls und Host-Stackwaechter;
-- konservative Register- und Haupt-RAM-Fastpaths;
-- ereignisgetriebene IRQ-Metadaten und gebuendelte Gastzyklen;
-- reduzierte Replay-, Lifecycle-, Diagnose- und RuntimeOnly-Hotpatharbeit;
-- `runtime_core`-Paket, schmale AOT-ABI, PCH, stabile Partitionen und
-  getrennte Bring-up-/Gatebuilds;
-- `extract-boot-executable`, `port-executable`, DirectBoot und externer
-  Spielprojektvertrag.
-
-### Vertagt
-
-- erneute inhaltliche Diagnose des schwarzen privaten Bootbilds;
-- reale 600-Millionen-Zyklen-Abnahme des finalen v0.49-Stands;
-- belegte 200-MHz-Produktleistung und sichtbarer SEGA-Screen;
-- reales clang-cl/MSVC-A/B auf einem Host mit installierter clang-cl-Toolchain.
-
-Diese Punkte bleiben Produktabnahme, werden aber nicht als Voraussetzung fuer
-den gelieferten generischen Architekturumbau ausgegeben. Eine eigene feste
-POD-Crash-Capsule, ein automatisch begrenztes Triggered-Deep-Trace-Fenster und
-ein CLI-Scaffold fuer externe Spielprojekte bleiben ebenfalls offene
-Konsolidierung.
-
-## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
-
-### Ziel
-
-Vor weiterer Retail-Codeentdeckung werden alle vorhandenen CPU-, Runtime-,
-Kontrollfluss-, Speicher- und Buildvertraege korrigiert, differenziell
-abgesichert und vermessen. Danach muss jede erreichbare indirekte Stelle
-statisch bewiesen, vollstaendig bewacht oder durch einen expliziten
-Runtime-only-Vertrag behandelt sein.
-
-Eine private Sonic-`game.exe` darf am Ende dieses Meilensteins gebaut, aber
-nicht gestartet werden.
-
-### Stufe A: P0-Core-Korrektheit
-
-- [x] `KR-4611` - SH-4-Kontrollzustand, Delay Slots, RTE, SLEEP und Interrupts
-- [x] `KR-4612` - Store Queue und Cacheadressierung
-- [x] `KR-4613` - einheitliche Gastwrites und Codeinvalidierung
-- [x] `KR-4614` - kontexttreue, sounde Kontrollfluss- und Wertanalyse
-- [x] `KR-4615` - stabile und skalierbare Runtime-Blockregistry
-- [x] `KR-4616` - einheitliches Gasttiming und Scheduler-/Geraeteintegration
-- [x] `KR-4617` - unabhaengige Cross-Engine- und CFG-Konformitaetstests
-- [x] `KR-4618` - Core-Korrektheitsgate
-
-### Stufe B: P1-Performance und Build
-
-- [x] `KR-4621` - Speicher-, Dispatch- und Invalidierungs-Hotpaths
-- [x] `KR-4622` - inkrementelle Kontrollflussanalyse, IR und Codegen
-- [x] `KR-4623` - Disc-, GDI-, ISO- und GD-ROM-I/O
-- [x] `KR-4624` - Buildgraph, Cache und Testmatrix
-- [x] `KR-4625` - Performance-/Buildgate
-
-### Stufe C: Retail-Kontrollfluss und Build
-
-- [x] `KR-4715` - ungeloeste Kontrollflussfront inventarisieren
-- [x] `KR-4716` - ABI-erhaltene Callback-, Parameter- und Stackwerte
-- [x] `KR-4717` - Objekt-, Feld- und VTable-Points-to
-- [x] `KR-4718` - expliziter Runtime-only-Dispatch
-- [x] `KR-4719` - privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
-- [x] `KR-4703` - VMU-/Flash-Arbeitskopien und Host-Pacing
-- [x] `KR-4704` - v0.47 Gate-Vorbereitung
-- [x] `KR-4705` - v0.47 interne Freigabe
-
-`KR-4704` ist technisch bestanden. Das Gate trennt ausfuehrbare
-Speicherberechtigung von statischer, materialisierbarer und aktuell
-dispatchbarer Abdeckung. Unbekannte Speicherbytes bleiben unbekannt und nicht
-implizit ausfuehrbar; jeder Kontrolltransfer erreicht einen gueltigen Block,
-den validierten Demand-Pfad oder bricht vor Gastwirkung strukturiert ab.
-Der private doppelte Build-only-Nachweis meldet `unknown_instructions=0`,
-`guarded_partial=0`, `unresolved=0`, `reachable_abort_edges=0`,
-`uncovered_control_targets=0` und `dispatch_paths_without_validation=0`.
-Beide frischen Hostbuilds besitzen identische portable Metadaten und Quellen;
-kein Runtimeprozess wurde fuer die Gateevidenz gestartet. `KR-4705` ist
-freigegeben und abgeschlossen; die aktive Entwicklung liegt in v0.48.
-
-### Verbindliche Reihenfolge
+KatanaRecomp ist ein statischer SH-4-Recompiler mit einer getrennt installierbaren KatanaRuntime. Ein konkretes Spiel wird in einem eigenen, hashgebundenen Recomp-Projekt gebaut.
 
 ```text
-KR-4611 bis KR-4617
-  -> KR-4618
-  -> KR-4621 bis KR-4624
-  -> KR-4625
-  -> KR-4715
-  -> KR-4716 und KR-4717
-  -> KR-4718
-  -> KR-4719
-  -> KR-4703
-  -> KR-4704
-  -> KR-4705
+KatanaRecomp
+  -> analysiert SH-4
+  -> erzeugt natives C++
+
+KatanaRuntime
+  -> stellt die gemeinsamen Dreamcast-Plattformgrenzen bereit
+
+SonicAdventureRecomp
+  -> bindet generierten SA-Code, lokale Originaldaten, DirectBoot, Hooks und Patches
+  -> erzeugt die startbare Produkt-EXE
 ```
 
-### Gate
+KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte Build- und Installationsprodukte. Titeladressen, Titelhooks, private Symbole und Installationsprofile gehoeren in das jeweilige externe Spielprojekt.
 
-- Debug und RelWithDebInfo liefern dieselben Gastresultate
-- Hint-Direktiven koennen keine Beweise oder Exportvollstaendigkeit erzeugen
-- Delay Slots, Fallthroughs und Funktionsgrenzen sind kontexttreu
-- Site-Vollstaendigkeit wird getrennt von einzelnen Kandidatenkanten modelliert
-- unbekannte Caller und Callkontexte koennen keine zu kleine Zielmenge erzeugen
-- alle Gastwrites invalidieren ueberdeckten generierten Code korrekt
-- Scheduler, TMU, RTC, DMA und GD-ROM verwenden einen gemeinsamen Gastzyklusvertrag
-- Analyse-, Codegen-, Disc- und Buildbudgets bestehen
-- `unresolved == 0`
-- eine frei lizenzierte Anwendung erreicht `KR_V047_NATIVE_HOST_READY`
-- der private Sonic-Workflow erzeugt reproduzierbar eine `game.exe`
-- der Harness beweist `execution_mode=build-only` und
-  `game_executable_started=false`
-- keine proprietaeren Daten oder privaten Identitaetsmerkmale gelangen ins Repo
+## Unverhandelbare Grenzen
 
-## v0.48.0 - Native Disc Boot und erster echter Gastframe
+- kein allgemeiner SH-4-Interpreter im normalen Produktport
+- kein JIT
+- kein Emulationsfallback
+- keine stillen No-op-Stubs oder erfundenen Hardwareerfolge
+- keine Sonic-spezifischen Adressen im generischen Katana-Kern
+- keine Retail-, BIOS- oder Assetdaten im Repository oder verteilbaren Paket
+- Flycast und XenonRecomp sind Referenzen, keine Codequellen
+- das echte erzeugte Produkt ist die Bring-up-Abnahme
+- keine neuen breiten Testmatrizen waehrend des Spiel-Bring-ups
 
-### Ziel
+## Verifizierter Ausgangsstand
 
-Der Recompiler fuehrt den disc-eigenen Systembootstrap und die Bootdatei als
-native AOT-Segmente aus und erreicht einen scanoutgebundenen, vom Gast
-erzeugten Frame. Sonic Adventure PAL ist die private Haupttestbench; Sonic
-Shuffle PAL und Ecco dienen dem allgemeinen Architekturabgleich. Implementiert
-werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA-, PVR-, Maple-
-und Hosteingabevertraege.
-
-### Grundlage und migrierte Bring-up-Tasks
-
-- [x] `KR-4831` - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
-- [x] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
-- [x] `KR-4912` - Dynamische Codebereiche, Module und Overlays
-- [x] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
-- [x] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
-
-### Native-Boot-Tasks
-
-- [x] `KR-4841` - Clean-Room-Referenz- und Nicht-Emulationsvertrag
-- [x] `KR-4842` - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
-- [x] `KR-4843` - Alias-korrekter nativer Disc-Systembootstrap
-- [x] `KR-4844` - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
-- [x] `KR-4845` - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
-- [x] `KR-4846` - GD-ROM-BIOS-Requestqueue, Status und TOC
-- [ ] `KR-4847` - GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming
-- [x] `KR-4848` - Runtimecode, Disc-Module, Overlays und latentes AOT
-- [ ] `KR-4849` - TA-Eingang und PVR-Kommandopfad
-- [x] `KR-4850` - Erster scanoutgebundener Gastframe
-- [ ] `KR-4851` - Boot- und Frame-Hotpath
-- [ ] `KR-4852` - Konsolidierte v0.48-Validierung
-- [ ] `KR-4853` - v0.48 Boot-Gate-Vorbereitung
-- [ ] `KR-4854` - v0.48 interne Freigabe
-
-### Post-Frame-Controller-Tasks
-
-- [x] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
-- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
-
-Beide Controlleraufgaben gehoeren verbindlich zu v0.48. Sie durften erst nach
-dem P0-Framebeweis aus `KR-4850` beginnen; diese Voraussetzung ist inzwischen
-erfuellt. Der native, automatisiert pruefbare Produktvertrag aus `KR-4814` ist
-abgeschlossen. `KR-4914` bleibt offen, weil ohne bootendes Spiel noch keine
-praktische interaktive Sitzung nachgewiesen werden kann; dieser Nachweis bleibt
-vor der konsolidierten Validierung `KR-4852` verpflichtend.
-
-Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4848`, `KR-4911` bis `KR-4913`,
-`KR-4915`, `KR-4850` und `KR-4814` sind abgeschlossen. `KR-4842` bindet
-MMU-bewusste lineare Peeks, nicht mutierende
-Geraetesnapshots, statische Wait-Loop-/Guard-Provenienz und den versionierten
-dynamischen Wait-Loop-Trace an eine deterministische Produktprobe. Der
-Diagnose=0/1-A/B-Lauf bestand mit zwei frischen, identisch auf 100.000
-Gastzyklen budgetierten Laeufen: Die normativen Felder waren gleich,
-Executable und Disc-Pack blieben unveraendert, Systemreplay v3 war
-vollstaendig und versiegelt, und beide Laeufe erzeugten null
-Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen; das damals
-freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen.
-
-`KR-4915` und `KR-4850` wurden vor ihren Boot- und TA-Voraussetzungen durch den
-legitimen IP.BIN-Direct-Framebuffer-Pfad vorgezogen: Ein privater PAL-AOT-Lauf
-erreicht hostunabhaengig `KR_FIRST_GUEST_FRAME` und danach
-`KR_FIRST_PRESENTED_FRAME`. Dieser Nachweis schloss `KR-4848`, `KR-4849` und
-den Spielboot damals noch nicht ab; `KR-4848` ist inzwischen geschlossen. Der
-belegte Frame gibt die v0.48-Controlleraufgaben `KR-4814` und `KR-4914` frei;
-`KR-4814` ist inzwischen abgeschlossen. Die praktische interaktive Sitzung in
-`KR-4914` bleibt mangels Spielboot-Nachweis vor `KR-4852` verpflichtend.
-
-Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
-native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
-SH-4-DMAC-Channel-2-Pfad verwendet den oeffentlichen Dreamcast-Vertrag `RS=2`,
-32-Byte-Bursts, inkrementierende Quelle, festes Ziel und `DMAOR.DME+DDT` und ist
-bis TA-Object-List/EOL synthetisch verbunden. Fuer Direct-Texture-Ziele
-`0x11`/`0x13` progressiert das Ziel mehrteiliger Transfers jetzt pro
-32-Byte-Einheit. P1-/P2-Codealiase dispatchen denselben nativen Block.
-Beschreibbare absolute Pointertabellen und Fixed-Stride-`BSRF`-Handlerinseln des
-garantierten Anfangssnapshots liefern nur vorab kompilierbare `RuntimeOnly`-
-Kandidaten: Sie erzeugen keine erfundenen CFG-Kanten und ihre Ziele werden als
-Basic-Block-Leader, nicht als Funktionsseeds behandelt. Der damit exportierte
-private PAL-Port wurde aus der unveraenderten Original-GDI lokal installiert
-und verliess den frueheren `BSRF`-Dispatchstopp. Die anschliessend belegten
-BIOS-Kommandos `NOP`, `REQ_MODE` und `SET_MODE` teilen ihren persistenten
-Modezustand mit der Paketoberflaeche. Der folgende budgetierte Lauf erreichte
-345.568.225 Gastzyklen, 7.421.380 native Bloecke und spaetere PVR-
-Registerwrites, bevor der native Inneneinstieg `0x8C654F5C` fehlte.
-
-Dieser Einstieg gehoert zu einer begrenzten `MOV.W`-/`BRAF`-Relative16-Tabelle
-und nicht zu einer weiteren `BSRF`-Insel. Der aktuelle statische PAL-Audit
-liefert 87 Tabelleneintraege, 76 eindeutige AOT-Kandidaten und 73 Ziele, die im
-vorherigen Port fehlten. Sie werden nun als native Blockleader vorbereitet,
-waehrend der live geladene Dispatch `RuntimeOnly` bleibt. Der Snapshotcache ist
-imagegebunden, P2-Tabellenaliase werden physisch aufgeloest und lokale
-AOT-Blockketten reichen die exakte tatsaechliche Terminatorquelle samt
-Siteklasse an den externen Dispatch weiter. Der frische PAL-Lauf bestaetigt den
-Fix: Der alte Fehler bei `0x8C654F5C` ist verschwunden, und 761.011 beobachtete
-Dispatchereignisse bleiben ohne Fehler. Der neue Haupthotspot
-`0x8C6658D0 -> 0x8C65247E` ist mit 696.053 Aufrufen ein endlicher
-4-Byte-Kopier-/Initialisierungsloop und kein fehlender Zielblock. TA-Eingang,
-Rendergeneration und Gastframe waren an dieser Zwischenstufe noch unbelegt;
-`KR-4848` und `KR-4849` bleiben offen. Runtime-ABI 39, Block-ABI 3,
-Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
-versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
-ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
-
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 48, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 32 und
-Host-Video-Vertrag 2.
-Systemreplay v6 trennt `ExactEvents` und `DigestStream`. Der exakte Modus
-behaelt den bisherigen begrenzten Ereignisstrom und markiert eine Saettigung
-als Drop. Der Produktprobe behaelt im Digestmodus 4.096 Praefixzeugen, zaehlt,
-validiert und hasht jedoch den gesamten Strom. Zusammengefasste Ereignisse
-sind daher keine Drops; Coverage, Klassenzahlen, Ordnungsdigest und finaler
-Gastzustand bleiben gebunden. Runtime-Probe-Schema 3 weist Speichermodus,
-Kapazitaet, Gesamt-, behaltene und zusammengefasste Anzahl sowie
-`exact_event_stream` aus. Der ungekeyte FNV-Digest ist deterministische
-Evidenz, keine Authentisierung. Standard-JSON redigiert weiterhin `code`,
-`address`, `value`, `detail`, `auxiliary`, `event_hash` und
-`final_guest_state_hash`.
-Das Profil `deterministic-v1` bindet zusaetzlich alle zwoelf erforderlichen
-Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt, Video,
-Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception, kontrollierter
-Fallback und Gastcheckpoint vor dem ersten Ereignis sowie einen geordneten,
-domain-separierten Digest. Die zentrale Observation-Session schreibt
-Dispatch-Hits und -Misses, Fallbacks, Exceptions und streng monotone
-Checkpoints gegen Gastzyklus und Resetepoche; GD-ROM-, DMA-, PVR- und
-AICA-Schedulerereignisse besitzen stabile Codes.
-
-Die Runtime-Endklassen unterscheiden `budget-reached`, `hang`,
-`guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
-stabiler Checkpoint halten intern vollstaendige CPU-Snapshots und frieren nach
-dem ersten Fehler ein. Das parsebare Fault-v1-JSON gibt nur allowlist-redigierte
-Klassen- und Checkpointfelder aus. Der private A/B-Runner validiert Fault- und
-Checkpointzeilen strikt und schreibt redigierte Fehlerpakete ausserhalb des
-Repositorys atomar und write-once. Das fokussierte Gate bestand 8/8 in 6,60
-Sekunden, `katana-port-cli-tests` 1/1 in 155,67 Sekunden. Ein frischer privater
-PAL-A/B-Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
-normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
-Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
-versiegelt und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen
-und `KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht
-ausgefuehrt.
-
-`KR-4913` ist mit zwei frischen Diagnose-aus/an-Probes bis jeweils
-356.000.000 Gastzyklen abgeschlossen. Beide Laeufe banden insgesamt je
-137.057.656 Replayereignisse ohne Drop, behielten 4.096 Praefixzeugen und
-lieferten identische normative Felder sowie denselben letzten Checkpoint. Die
-Replays waren vollstaendig und versiegelt, die Artefakte blieben unveraendert;
-zusammen liefen beide Probes 175,3 Sekunden. Ein direkter
-Bestaetigungslauf emittierte `runtime-started` und
-`guest-program-entered` und endete nach 83,9 Sekunden kontrolliert. Fallback,
-Trap und stille Fehler konnten den Erfolg nicht erzeugen. Der frische Port
-umfasst 1.873 Funktionen, 37 Partitionen und null Retailsektoren; die lokale
-Installation umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
-unveraendert. Der Eintritt in BootExecutable ist damit belegt. Der dabei
-gefundene erste Spielhotspot nach dem Sega-Logo ist allgemein behoben:
-`trap_pending` bleibt waehrend des gesamten Exceptionhandlers gesetzt und
-darf nicht als neue Delay-Slot-Exception interpretiert werden. Eine monotone
-Exceptiongeneration schuetzt jetzt BSR, BSRF, JSR, direkte native
-Aufrufketten, Port-Blockwrapper und Diagnosegrenzen. Der frische
-Produktnachweis erreicht damit nicht mehr die alte Zwei-Instruktions-
-JSR-Schleife.
-
-Der einmalig exportierte und gebaute v7-Port unter Runtime-ABI 48 und
-Portprojektvertrag 32 umfasst 1.873 Funktionen, 37 Partitionen und drei
-latente Module. Export und Hostbuild dauerten 187,8 Sekunden, die lokale
-Installation 16,8 Sekunden. Der deterministische Probe-Lauf dauerte
-73,5 Sekunden, der Detail-Lauf 49,2 Sekunden. Beide Gastframemarker werden am
-sichtbaren Sega-Bild erreicht. Der naechste eindeutige, interpreterfrei
-typisierte Missing-AOT liegt bei `0x8C65E96A -> 0x8C652150`; der Detail-Lauf
-weist 7.422.352 Dispatch-Hits mit einem Miss sowie 2.609.376
-`RuntimeOnly`-Hits mit einem Miss und null Fallbacks aus. Die Quelle
-katalogisiert nun endliche, mit bewiesener Aufrufargument-Provenienz ueber
-nicht-Stack-bezogene 32-Bit-Stores weitergereichte Codepointer als bewachte
-AOT-Inventarseeds, ohne die live geladene Dispatchkante als statische
-CFG-Kante einzufrieren. Die fokussierten
-Regressionen sind gruen. Ein zweiter privater Build/v8 und das v0.48-Vollgate
-wurden bewusst nicht ausgefuehrt. Der PAL-50-/60-Hz-Auswahlbildschirm ist
-noch nicht erreicht; deshalb bleibt `KR-4851` offen. v6 bleibt bis zum
-weitergehenden Nachweis erhalten, die Original-GDI blieb unveraendert.
-
-`KR-4912` schliesst die generische Lebenszeit dynamischer Codebereiche.
-Load, Relocation, Replace und Unload erzeugen monotone Modulinkarnationen;
-byteidentische Multi-Extent-Loads erhalten vorhandene Bloecke und Provenienz.
-Byteidentische CPU-, FPU-, Store-Queue-, Copy- und DMA-Writes invalidieren
-keinen Code, waehrend bewiesene Runtimewrites einen internen Snapshot bis zu
-einem zusammenhaengenden Tail samt Delay Slot erweitern koennen.
-P0-/P1-/P2-Aliase werden MMU-sicher auf dieselbe physische Blockherkunft
-gefaltet. Modulwechsel und Unload bereinigen davon abhaengige Materializer-
-Origins, Tracker-Handles und Tabellenbindungen, ohne fremde Owner in
-Multi-Extent-Luecken zu invalidieren. Ein ueberlaufender
-Relocation-Generation-Zaehler wird atomar vor jeder Mutation abgelehnt. Identische
-Validierungssnapshots werden geteilt, gegen das Speicherbudget gerechnet und
-nach der letzten Herkunft wieder freigegeben. Replay meldet eine tatsaechliche
-Materialisierung unabhaengig vom Stichprobenintervall; oeffentliche Berichte
-redigieren Modulidentitaeten, Quellidentitaeten und Bytes. Der normale
-Produktport besitzt weiterhin keinen Interpreter und beendet ungebundenen Code
-typisiert. Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
-interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Es lief weder ein
-privater Retaillauf noch eine Vollsuite oder `KR-4852`. Die an diesem
-KR-4912-Zwischenstand offenen Disc-Ladetransaktionen und latenten AOT-Module
-sind inzwischen durch `KR-4848` geschlossen.
-
-Der Hardwareauditor verwendet mit `katana.hardware-audit.v4` skalierbare
-Dominatorberechnung und echte natuerliche Loops. Er klassifiziert
-`counter`, `ram_poll`, `mmio_poll`, `mixed` oder konservativ `unknown` und
-weist getrennte Access-/Guard-Evidenz aus. Die vier Area-3-RAM-Spiegel werden
-kanonisch zusammengefuehrt. GBR-MOV, `TST.B` als Read,
-`AND.B`/`XOR.B`/`OR.B` sowie `TAS.B` als RMW, FMOV, PC-relative
-`MOV.W`/`MOV.L`, `STC.L`/`LDC.L` und `MAC.W`/`MAC.L` sind als
-Speicherfamilien abgedeckt; FMOV verwendet wegen unbekanntem FPSCR.SZ eine
-konservative Adressunion. Teilweise bekannte MAC-Basen bleiben einzeln
-sichtbar, Predecrement wrappt modulo 2 hoch 32. OCRAM wird als Geraeteapertur
-statt als linearer RAM-Poll klassifiziert. Guard-Provenienz folgt T-neutralen
-Instruktionen und einem eindeutigen Vorgaenger und stoppt an echten
-T-Schreibern oder Merges. Unaufgeloeste Reads und konservative Kandidaten einer
-noch unvollstaendigen Condition-Domaene bleiben sichtbar; insbesondere
-FMOV-/FCMP-Faelle erhalten ohne vollstaendigen FPU-Modus-/Bankbeweis kein
-`guards_loop`. `--strict` lehnt partielle Hardwareadressen sowie diese
-unaufgeloesten Poll-/Guard-Loops ab; `--fail-on-gap` bleibt auf eindeutige
-Luecken beschraenkt. Der Berichts-Scope lautet fuer ein einzelnes
-Executable-Image `executable_image` und fuer Disc-Audits
-`native_disc_aot_boot_graph`. Delay-Slot-Doppelkontexte, wurzellose SCCs und
-ein 4.096-Block-Skalierungsfall sind regressionsgesichert. Unvollstaendige
-Definitionen oder Vorgaenger werden nicht als Beweis benutzt.
-
-Der aktuelle normale SA-PAL-Disc-Audit ist gruen: 142.380 Instruktionen, 1.542
-Funktionen, null unbekannte Instruktionen, 58.630 Speicherstellen
-(18.159 vollstaendig aufgeloest, 40.471 unaufgeloest oder partiell), null
-bekannte Luecken, zwei partielle Adressen und 1.095 Loops. Die Klassen sind
-48 `counter`, eine `mmio_poll`, zwei `ram_poll` und 1.044 `unknown`.
-492 `unresolved_poll_guard_loops` halten den Strict-Modus bewusst rot. Sie
-bleiben konservative statische Diagnose, sind aber nicht mehr der
-Abschlussblocker von `KR-4842`.
-
-Freie Diagnosepeeks uebersetzen ueber die aktive Gast-MMU und sind auf
-Haupt-RAM, VRAM und AICA-RAM begrenzt. MMIO, Observer, Watchpoints,
-Speicherzaehler sowie CPU-/Exceptionzustand bleiben unveraendert. Der letzte
-MMIO-Zugriff wird im Hotpath als allokationsfreier POD gehalten und erst beim
-terminalen Bericht mit einem Regionsstring versehen. PVR- und
-Systembus-Snapshots bewegen auch pending Render-/Channel-2-Zustaende nicht.
-Runtime-Probe-Schema 1 erfasst CPU, Scheduler, Haupt-RAM, VRAM, AICA-RAM,
-Flash, VMU, Replay und exakt 35 produktive Geraeteinstanzen mit 867
-kanonischen Feldern. Device-Schema 1 und `fnv1a64-le-v1` versionieren die
-domain-separierten Hashes.
-Runtime-ABI 42 fuehrt zusaetzlich einen seiteneffektfreien POD-Zugriffssink
-mit Quell-/Laufzeit-PC ein. AOT, begrenzter Diagnoseinterpreter, Store-Queue-
-`PREF`, PVR-Render und PVR-YUV behalten ihre Writer-Herkunft; VRAM32 wird auf
-das gemeinsame lineare Backing projiziert. `RuntimeWaitLoopTrace` v1
-verdichtet Wertlaeufe und Writer anhand generischer, deterministisch
-deduplizierter Auditdeskriptoren und eines vorab sortierten Read-Site-Index.
-MMIO-Werte werden aus dem bereits ausgefuehrten Zugriff uebernommen, ohne
-zweiten Handleraufruf. Bytegenaue lineare Writerlinks werden als
-`exact-backing-bytes`, nichtlineare MMIO-Ueberschneidungen lediglich als
-`physical-range-candidate` ausgewiesen. Der Backing-Index vermeidet
-Location-Vollscans fuer unbeteiligte lineare Writes. Nur der aktive Trace
-vergleicht bei Wrapperwrites die seiteneffektfreie lineare Projektion,
-bestimmt skalare und Range-Aenderungen bytegenau und verwirft No-op-Writer.
-Produkt-`GuestWriteObserver` und Scanout-Evidenz bleiben konservativ und bei
-Trace aus/an identisch. Nur `KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den
-Rohwerttrace, unabhaengig vom breiten Diagnoseschalter. Eine leere
-Deskriptorliste installiert weder Recorder noch Sink; bei tatsaechlich
-erzeugtem Recorder warnt der Port einmalig auf `stderr` vor nur lokal und
-nicht ungeprueft teilbaren Rohwerten. Das JSON deklariert
-`contains_raw_guest_values:true`,
-`writer_scope:"since-previous-sample"` sowie ungueltige skalare Range-Werte
-als `scalar_value_valid:false` und `value:null`. Strukturell ungueltige
-Access-Events erhoehen `invalid_access_events` und erzwingen
-`complete:false`, statt als bloss irrelevante gueltige Events zu gelten. RAII
-entfernt den Sink vor der terminalen Ausgabe. Der Trace-aus-Fastpath fuehrt
-weder Recorderallokation noch Projektion aus.
-Die Registervarianten von `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B` sind im
-begrenzten Interpreter geschlossen; `FMOV` verarbeitet Doppelwortzugriffe low
-nach high. Der vorangegangene fokussierte Zwischenblock bestand 22/22 in
-1,57 Sekunden, der Port-CLI-Nachweis 1/1 in 151,12 Sekunden. Der
-abschliessende Runner `katana-private-runtime-probe-ab` v1 bestand zwei
-Laeufe mit Profil `deterministic-v1`, Gastzyklusbudget 100.000 und
-Hosttimeout 120 Sekunden. Diagnose aus/an lieferte
-`normative_fields_equal=true`, `executable_and_pack_unchanged=true`,
-`replay_complete_and_sealed=true` und null/null Tracezeilen. Damit ist
-`KR-4842` abgeschlossen. Eine Vollsuite und `KR-4852` wurden nicht
-ausgefuehrt.
-
-Der private Retailrunner liest Runtime-ABI und Portprojektvertrag strikt aus
-`cmake/KatanaVersions.cmake`; malformed, doppelte oder nullwertige Definitionen
-sowie JSON-Werte vom Typ String oder Double werden abgelehnt. Das exportierte
-ASan-Paketinterface transportiert die erforderlichen Compile-/Link-Usage-
-Requirements, und sowohl der ASan-instrumentierte als auch der nicht
-instrumentierte Out-of-Tree-Consumer sind gruen.
-
-Der Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-Indizes einmalig
-auf; Codegen und Projektausgabe reichen die Hostparallelitaet durch. Der CLI-
-Hostbuild waehlt dynamisch die CPU-Threadzahl, akzeptiert
-`KATANA_HOST_BUILD_JOBS` und kann unter Windows einen getrennten Ninja-Build
-verwenden; auf dem primaeren Rechner laufen zwoelf Jobs. Grosse
-Dispatchregistries werden in Shards zu maximal 512 Bloecken zerlegt. Der
-balancierte Router und genau ein Wrapper pro Owner und Shard reduzieren beim
-aktuellen PAL-Port die zentrale `runtime-dispatch.cpp` von 36.703.886 Byte und
-525.996 Zeilen auf 34.879 Byte und 607 Zeilen; 43 Shards bleiben bei maximal
-393.454 Byte. Eine 513-Block-Regression prueft zwei Shards samt Entfernung
-veralteter Dateien, und das vollstaendige synthetische Ninja-/MSVC-Projekt
-linkt in 15 Sekunden. Die fokussierte Suite besteht 6/6. Unter
-Windows verwendet die Eingabeprovenienz den nativen BCrypt-SHA-256-Pfad mit
-grossen Chunks. Funktionsdiscovery und CFG-Simplifizierung besitzen lineare
-Adressindizes; stabile, datenschutzneutrale Export-Subphasen grenzen weitere
-budgetierte Laeufe ohne einen unbudgetierten Profiler ein.
-
-Der optimierte 12-Job-Export des neuen PAL-Ports dauerte 140,5 Sekunden und
-erzeugte 1.856 Funktionen, 37 Codepartitionen sowie 43 Dispatchshards bei null
-Retailsektoren im Portpaket. Die unveraenderte Original-GDI wurde lokal mit
-drei Tracks und 521.461 Sektoren installiert; die Quelle blieb erhalten und
-der alte `gdrom-mode-fix`-Port wurde erst nach erfolgreichem Ersatz entfernt.
-Der 30-Sekunden-Lauf blieb ueber 312.939.023 Zyklen und 1.000.000
-Rootdispatches stabil. Der 100-Millionen-Zyklen-Snapshot belegt `IP.BIN`-AOT
-mit 48.471 Runtime-only-Treffern ohne Fehler, Fallback oder Materialisierung;
-bei 320 Millionen Zyklen sind Spielecode, zwei GD-ROM-Kommandos und ein spaeter
-PVR-Registerwrite erreicht, aber in diesem frueheren Lauf noch kein TA-,
-Render- oder Framebeweis.
-
-Der nachfolgende hardwaregenaue Scanoutblock fuehrt Read- und Write-
-Framebuffer ueber dieselbe logische 32-Bit-VRAM-Abbildung. Er deckt
-`RGB0555` samt Concatbits, gepacktes `RGB888`, Modulus 0/1/>1, PAL-Weave und
-feldweisen PAL-Scanout ab. Backing-Byte-adressierte Dirty-Evidenz plus das
-vorherige Scanout-Abbild verhindern sichtbare False-Proofs durch Offscreen-
-Writes oder unveraenderte Bilddaten.
-Der damit erneuerte private AOT-Lauf erreicht innerhalb eines
-50-Millionen-Gastzyklusbudgets in 5,3 Sekunden erstmals
-`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` aus dem recompilierten
-`IP.BIN`; TA bleibt null. Der erwartete Budget-Exit folgt, bevor
-BootExecutable oder Spielboot erreicht werden. Dieser vorgezogene Marker
-schliesst die offenen strukturierten Disc-Ladevorgaenge, den Materializer und
-den TA-Pfad nicht.
-
-Das zugehoerige fokussierte Kern-Gate bestand 11/11; das damalige
-ABI-39-CTest-Zwischengate bestand 178/178 Eintraege in rund 4:04 Minuten.
-Beides bleibt historische First-Frame-/KR-4848-Evidenz. Nach Replay-v2-,
-Hardwareaudit-v3-, Runner- und Paketvertragskorrekturen ist der x64-Kern-/
-Runtime-Build der Desktop-GUI-off-Konfiguration erneut mit zwoelf parallelen
-Jobs gruen; deren vollstaendiges CTest-Zwischengate auf Codecommit `924ea89`
-besteht 183/183 Eintraege in 312,97 Sekunden: 181 regulaere Passes und zwei
-erwartete `PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests
-sind nicht Teil dieser 183; der Runner-Selbsttest ist separat gruen. Der Lauf
-validiert den aktuellen Entwicklungsstand, schliesst aber weder `KR-4852` noch
-das spaetere Freigabegate vorzeitig ab.
-
-Der historisch unmittelbar nach dem ABI-39-178er-Gate frisch neu exportierte
-Vertrag-24-Port umfasst unter Runtime-ABI 39 und Block-ABI 3 genau 1.860
-Funktionen, 37 Codepartitionen und null Retailsektoren. Die read-only
-Originaldisc-Installation ist mit drei Tracks und 521.461 Sektoren erneut
-erfolgreich. Der abschliessende 50-Millionen-Lauf reproduziert beide
-Framemarker mit zwei Gast-/Direct-FB-Frames und 302.287 geaenderten
-Direct-FB-Pixeln; TA, Rendergeneration und Materializer bleiben null. Diese
-Evidenz bleibt historisch und ist kein ABI-40-Portnachweis.
-
-`KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
-(`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
-
-### Verbindliche Reihenfolge
+Quellstand der Review:
 
 ```text
-KR-4831 und KR-4841
-  -> KR-4843 -> KR-4844 -> KR-4845 -> KR-4846 -> KR-4847
-KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
-KR-4843 und KR-4912 -> KR-4848 -> KR-4913
-KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
-KR-4850 -> KR-4814 -> KR-4914
-KR-4850 -> KR-4851
-KR-4851 und KR-4914
-  -> KR-4852 (finaler normaler Sonic-Produktnachweis)
-  -> KR-4853 (uebernimmt die unveraenderte Produktevidenz; kein neuer Lauf)
-  -> KR-4854
+aa1cd51655fdefec5a9891152487f902f91046c6
+Document v0.49 product measurements
 ```
 
-`KR-4913`, `KR-4915` und `KR-4850` sind als beobachtete Marker erfuellt. Die
-Reihenfolge bleibt fuer die noch offenen Produkt- und Freigabevertraege
-verbindlich; insbesondere werden `KR-4847`, `KR-4849` und der weitere
-Spielboot dadurch nicht uebersprungen.
+Der Umbau hat echte Architekturgrundlagen geliefert:
 
-Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
-Waehrend aller offenen Aufgaben bestimmt der normale Sonic-Produktlauf den
-Fortschritt. `KR-4852` buendelt genau einen frischen Portexport, die lokale
-Originaldisc-Installation und den normalen Lauf bis zum definierten sichtbaren
-Spielmeilenstein. Vollstaendiges CTest, Sanitizer-Gate und breite
-Funktionsmatrizen entfallen als regulaere Entwicklungs- und Freigabeschritte.
-`KR-4853` uebernimmt danach ausschliesslich die unveraenderte Produktevidenz
-und synchronisiert die Freigabedokumente; es startet keinen zweiten Build oder
-Produktlauf. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
+- installierbares `KatanaRecomp::runtime_core`
+- schmale AOT-ABI und Precompiled Header fuer generierte TUs
+- getrennte Static-/Dynamic-AOT-Tiers
+- validierte Ausfuehrungsdeskriptoren ohne normales zweites Tabellenlookup
+- P1-/P2-Inline-Cache
+- native Blocklabels und erste direkte native Calls
+- konservative Registerlokalisierung und Haupt-RAM-Fastpaths
+- executable-first Artefakt aus der eigenen `.gdi`
+- allgemeine externe `GameProjectDefinition`
+- Bring-up-/Gate-Buildprofile sowie Partition- und Metadatencache
 
-### Gate
-
-- der Einstieg erfolgt am virtuellen P2-PC `0xAC008300` mit physischer
-  Codeherkunft `0x0C008000`; PC-relative Semantik behaelt den Alias
-- IP.BIN und Bootdatei laufen als getrennte native AOT-Segmente
-- BIOS- und GD-ROM-Aufrufe bilden kleine, typisierte Plattformgrenzen; der
-  Produktpfad emuliert weder Firmware noch eine SH-4-CPU
-- Runtimecode, Module und Overlays werden nur mit bytebewiesener Herkunft
-  aktiviert; unbekannte RAM-Bytes sind nicht ausfuehrbar
-- `KR_GUEST_PROGRAM_ENTERED` belegt echten Gastkontrollfluss ausserhalb der
-  Hostgrenzen
-- `KR_FIRST_GUEST_FRAME` verlangt einen aktiven Scanout und entweder eine
-  validierte TA-Rendergeneration oder backing-byte-adressierte Direct-FB-
-  Evidenz mit einem gegen das vorherige Scanout-Abbild sichtbar geaenderten
-  Pixel; Offscreen-Writes und Blanking zaehlen nicht. Hostpraesentation ist ein
-  separater Checkpoint
-- Fastpath und Referenzpfad erzeugen bytegleiche Gastresultate
-- keine festen Spieladressen, Spielbytes, Titelhacks oder uebernommenen
-  Emulatorimplementierungen gelangen in den Produktpfad
-- Quell-GDIs werden nie geloescht; Retaildaten und private Identitaeten bleiben
-  ausserhalb von Repository, CI und verteilbaren Paketen
-- der finale normale Sonic-Produktnachweis laeuft erst, wenn alle v0.48-
-  Implementierungsaufgaben abgeschlossen sind. Die unveraenderte erfolgreiche
-  Produktevidenz erfuellt die am 23.07.2026 erteilte Standing
-  Approval automatisch: `KR-4854` darf ohne weiteren Review-Stopp als
-  release-ready abgeschlossen werden
-- v0.48 wird nur intern freigegeben und nicht getaggt. Tags beginnen erst mit
-  der Alpha
-
-## Historischer, abgeloester v0.49-Integrationsplan
-
-Dieser Abschnitt bleibt ausschliesslich zur Nachvollziehbarkeit der
-registrierten Task-IDs erhalten. Er beschreibt nicht mehr den aktuellen
-v0.49-Lieferumfang; die aktive v0.49-Architekturphase steht oben. Offene
-Alpha-Integration wird vor einem oeffentlichen Release neu eingeplant.
-
-### Ziel
-
-Nach dem nativen Boot-, Frame- und Controller-Gate werden die in v0.48
-geschlossenen Eingabevertraege mit Runtime-SDK, Portworkflow, Harness, GUI, CI
-und Paketierung zu einem allgemeinen Alpha-Candidate integriert. Die
-v0.48-Basis bleibt dabei unveraendert und Sonic Adventure liefert keine
-titelspezifischen Produktvertraege.
-
-### Migrierte Integrationsaufgaben
-
-- [ ] `KR-4801` - Versioniertes Runtime-SDK fuer externe Port-Projekte
-- [ ] `KR-4802` - Gemeinsamer CLI-/GUI-Portexport und Buildworkflow
-- [ ] `KR-4803` - Out-of-Tree-`game.exe`-Integration
-- [ ] `KR-4811` - Private Harnessmodi und technisch erzwungener No-run-Vertrag
-- [ ] `KR-4812` - Strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz
-- [ ] `KR-4813` - Content-addressed Harness- und Portbuildbeschleunigung
-- [ ] `KR-4821` - Versionierte Jobtelemetrie und belastbarer Fortschritt
-- [ ] `KR-4822` - GUI-Informationsarchitektur und responsives Layout
-- [ ] `KR-4823` - Diagnostik-, Ergebnis-, Log- und Workflow-QOL
-- [ ] `KR-4824` - Unveraenderliche Task-ID-Registry und Roadmaplinter
-- [ ] `KR-4916` - Menue, Eingabe und spielbare Szene
-
-### Urspruengliche, wiederhergestellte Release-Candidate-Tasks
-
-- [ ] `KR-4901` - Alpha-CI-Konfiguration fuer Windows und Linux
-- [ ] `KR-4902` - Reproduzierbare Pakete sowie Daten- und Lizenzaudit
-- [ ] `KR-4903` - Alpha-Checkpoint- und Gate-Automatisierung einfrieren
-- [ ] `KR-4904` - v0.49 Gate-Vorbereitung: Tests und Build
-- [ ] `KR-4905` - v0.49 interne Kandidaten-Freigabe
-
-### Verbindliche Reihenfolge
+Die aktuelle Produktevidenz ist trotzdem nicht ausreichend:
 
 ```text
-KR-4854
-  -> KR-4801, KR-4811, KR-4821 und KR-4824
-  -> KR-4802
-  -> KR-4803
-  -> KR-4812 und KR-4813
-  -> KR-4822 und KR-4823
-KR-4812, KR-4823 und KR-4914
-  -> KR-4916
-  -> KR-4901, KR-4902 und KR-4903
-  -> KR-4904
-  -> KR-4905
+MSVC:     600.000.000 Gastzyklen in 14,8563 s = 40,3869 MHz
+clang-cl: 600.000.000 Gastzyklen in 14,1289 s = 42,4662 MHz
+zentrale Dispatches: 52.329.316
+sichtbarer Meilenstein: keiner
 ```
 
-### Gate
+Die alte NativeDiscBoot-Linie erreichte das Sega-Bild. Der neue DirectBoot-Pfad soll dieses Bild nicht anzeigen, weil das Sega-Logo aus IP.BIN stammt. Der fehlende Sega-Screen ist daher allein kein DirectBoot-Fehler. Ein DirectBoot-Produkt muss stattdessen ab `BootExecutable` beziehungsweise `GameEntry` bewertet werden.
 
-- zwei deterministische Probes erreichen dieselben Checkpoints und Kernmetriken
-- ein separater interaktiver Lauf erlaubt lokale Controllersteuerung
-- `KR_GUEST_PROGRAM_ENTERED`, `KR_FIRST_GUEST_FRAME`,
-  `KR_GUEST_INPUT_INTERACTIVE` und `KR_CONTROLLED_RETAIL_SCENE` beruhen auf
-  versionierten titelunabhaengigen Gastereignissen
-- Hostsmokes werden nicht als Gastframe, Gastaudio oder Gasteingabe gezaehlt
-- dynamische Module und ersetzter RAM-Code koennen nicht still stale Bloecke
-  ausfuehren
-- Boot, Gastvideo und Gastinput machen unter echter Gastlast gemeinsam Fortschritt
-- fruehe SH-4-/Holly-Initialisierung verwendet geschlossene Registervertraege;
-  ungebundene DMA-Starts duerfen keinen Erfolg simulieren
-- Maple-, PVR- und weitere DMA-Pfade muessen Gastdeskriptoren, Gastzeit,
-  Speicherwrites und ASIC-Completion gemeinsam nachweisen
-- CI, Pakete, Datenschutz-, Lizenz- und Referenzaudits bestehen
-- keine Retaildaten gelangen in Pakete, CI, Repository oder oeffentliche Berichte
-- `KR_V049_ALPHA_CANDIDATE_READY` wird erreicht
-- KR-4904 stoppt zwingend fuer Nutzerreview
+## Reviewbefunde
 
-## v0.50.0 Alpha - Oeffentliches Release
+### 1. DirectBoot verwendet den falschen Handoff-Begriff
 
-### Tasks
+Der aktuelle DirectBoot startet die Haupt-Executable bei `0x8C010000`, wendet aber einen fest codierten `DreamcastPostBiosCpuState` an. IP.BIN laeuft zwischen BIOS und Haupt-Executable, richtet Stack, VBR, Cache und Hardware ein und kann RAM- sowie Geraetezustand veraendern. Ein Post-BIOS-Zustand ist daher kein bewiesener Post-IP.BIN-/Game-Entry-Zustand.
 
-- [ ] `KR-4999` - Alpha-Gate-Vorbereitung
-- [ ] `KR-5000` - v0.50.0 Alpha-Release
+Der aktuelle Vertrag bindet im Wesentlichen CPU-Spezialregister. Er bindet nicht vollstaendig:
 
-### Alpha-Gate
+- alle GPR-/Bank-/FPU-Zustaende am Game-Entry
+- niedrige RAM-Seiten und weitere von IP.BIN veraenderte RAM-Bereiche
+- PVR-, GD-ROM-/G1-, DMAC-, AICA-, Maple- und Systembuszustand
+- Scheduler- und pending-Interruptzustand
+- den exakten PR-/Returnvertrag des Transfers von IP.BIN zur Haupt-Executable
 
-- die unveraenderte v0.49-Kandidatenbasis besteht frische Debug- und
-  RelWithDebInfo-/Release-Builds
-- private deterministische Testbench-Laeufe erreichen denselben generischen
-  Runtimecheckpoint; oeffentliche Gates verwenden verteilbare Regressionen
-- eine getrennte interaktive Sitzung bestaetigt praktische Controllerbedienung
-- Boot, Auswahl und mindestens eine kontrollierbare Spielszene funktionieren
-- Video, Eingabe, Disc-I/O, Scheduler, DMA und Interrupts machen messbaren
-  Gastfortschritt
-- `silent_failures == 0`
-- Fehler- und Budgetpfade liefern redigierte Diagnoseberichte
-- Windows ist Alpha-Zielplattform; Linux baut Core, CLI und Tests
-- Release und Repository enthalten keine Retaildaten
+DirectBoot braucht deshalb einen eigenen `GameEntryHandoff`-Vertrag. Der vorhandene Post-BIOS-Vertrag bleibt fuer NativeDiscBoot erhalten.
 
-## v0.75.0 Beta - Breite Frameworkkompatibilitaet
+### 2. DirectBoot und NativeDiscBoot werden mit falschen visuellen Erwartungen verglichen
 
-### Ziel
+`NativeDiscBoot` fuehrt IP.BIN aus und kann das Sega-Lizenzbild erzeugen.
 
-Mehrere rechtmaessig lokal bereitgestellte Dreamcast-Programme laufen ueber
-lange Sitzungen mit belastbaren persistenten Daten. Private Retail-Testbenches
-decken unterschiedliche Lastprofile ab. Grafik, Audio und Performance sind
-fuer den dokumentierten Frameworkumfang brauchbar.
+`DirectBootExecutable` ueberspringt IP.BIN und darf deshalb keinen Sega-Screen als Pflichtmeilenstein besitzen. Seine Pflichtmeilensteine sind:
 
-### Tasks
+```text
+BootExecutableEntry
+GameCodeProgressed
+FirstGameFramebufferWrite oder FirstTaFrame
+FirstVisibleGameFrame
+TitleScreen
+```
 
-- [ ] `KR-6001` - Langzeit-Retailabdeckung und Save-Kompatibilitaet
-- [ ] `KR-6002` - PVR- und AICA-Genauigkeit
-- [ ] `KR-6003` - Performance, Pacing und Langzeitstabilitaet
-- [ ] `KR-6004` - Mehrtitel-Kompatibilitaet und Debuggerwerkzeuge
-- [ ] `KR-7499` - Beta-Gate-Vorbereitung
-- [ ] `KR-7500` - v0.75.0 Beta-Release
+### 3. Function-Level-AOT faellt im Produkt zu haeufig in den Zentraldispatch zurueck
 
-### Beta-Gate
+52.329.316 zentrale Dispatches fuer 600.000.000 Gastzyklen bedeuten nur etwa 11,5 Gastzyklen pro Zentraldispatch. Das ist mit einem Xenon-artigen Function-AOT-Hotpath unvereinbar.
 
-- mindestens ein privates Retail-Testprofil laeuft ueber eine definierte lange
-  Sitzung ohne titelbezogene Frameworkausnahme
-- mehrere Last-, Save- und Modulszenarien besitzen eine adressfreie Statusmatrix
-- Save, Laden, Neustart und VMU-Arbeitskopien sind belastbar
-- mehrere rechtmaessig lokal bereitgestellte Titel erreichen interaktive Szenen
-- Grafik, Audio, Eingabe, DMA, Timer und Interrupts arbeiten zusammen
-- Performancebudgets, Fallbackrate, Invalidierungen und Schedulerjitter werden
-  pro Testprofil berichtet
-- Abstuerze und Haenger erzeugen verwertbare Berichte
+Der aktuelle native Call-/Labelpfad ist an `can_chain_executable_block()` gekoppelt. Dieser akzeptiert nur `PureCpu` und `LinearRamOnly`, prueft Scheduler-, Interrupt-, Mapping-, Varianten- und Codegenerationen und lehnt viele normale Funktionen mit Speicher- oder Geraetegrenzen komplett ab. Dadurch werden Calls und Blockuebergaenge, die innerhalb einer nativen Funktion mit einem gezielten Safepoint korrekt weiterlaufen koennten, erneut zentral dispatcht.
 
-## v1.0.0 Stable - Stabiles Recompiler-Framework
+Chaining, direkte native Callfaehigkeit und aufgeschobener Schedulercommit muessen getrennte Vertraege werden:
 
-### Ziel
+- `NativeEntrySafe`
+- `DirectCallEligible`
+- `CompletionDeferrable`
+- `RequiresSafepointBeforeEntry`
 
-v1.0 verspricht keine vollstaendige Dreamcast-Kompatibilitaet. Es verspricht
-einen stabilen, dokumentierten und reproduzierbaren Rahmen fuer den klar
-ausgewiesenen unterstuetzten Bereich.
+Eine Funktion mit MMIO darf einen direkten nativen Call erhalten, wenn vor dem MMIO ein Safepoint emittiert wird. Sie muss nicht allein wegen eines spaeteren MMIO-Zugriffs komplett ueber den Zentraldispatcher aufgerufen werden.
 
-### Tasks
+### 4. Die Spielprojekt-API ist noch kein benutzbares externes Produkt
 
-- [ ] `KR-9001` - Oeffentliche Vertrage und Supportumfang einfrieren
-- [ ] `KR-9002` - Plattformpakete, Installation und Migration
-- [ ] `KR-9003` - Langzeit-QA, Dokumentation und Wartung
-- [ ] `KR-9999` - v1.0 Gate-Vorbereitung
-- [ ] `KR-10000` - v1.0.0 Release
+`GameProjectDefinition` modelliert Funktionsgrenzen, Tabellen, Hooks, Symbole, Identitaeten und eine Bootkonfiguration. Es fehlen aber:
 
-### Stable-Gate
+- ein serialisierbarer, versionsgebundener Descriptor
+- CLI-Laden und Validierung dieses Descriptors
+- ein generiertes externes Projekt-Scaffold
+- symbolische Hookbindung fuer ein separates Spielrepository
+- ein Game-Entry-Handoff-Provider
+- ein lokaler Entwicklerinstaller, der exakt denselben Contentvertrag wie der spaetere Nutzerinstaller verwendet
 
-- CLI, Manifest, Runtime-ABI, SDK und Replayformat sind versioniert
-- keine bekannte stille Fehlkompilierung besteht im unterstuetzten Bereich
-- der unterstuetzte Spiele- und Hardwareumfang ist explizit dokumentiert
-- Windows-Pakete und der definierte Linux-Support sind reproduzierbar
-- Upgrade- und Migrationspfade sind getestet
-- Kompatibilitaetskorpus, Langzeitlaeufe, Audits und Crashberichte bestehen
-- Repository und Pakete enthalten keine BIOS-, Disc-, Spiel- oder Assetdaten
+Ausserdem wird `GameProjectFunctionBoundary::size` aktuell nicht als echte Analyzer-Funktionsgrenze weitergereicht. Der Analyzer-Override kennt nur eine Startadresse. Damit ist ein zentraler Xenon-artiger Titelhinweis derzeit nur teilweise wirksam.
 
-## Nach v1.0
+### 5. Registerlokalisierung ist zu konservativ und technisch fragil
 
-- weitere Spiele und Firmwareprofile
-- genauere PVR-, AICA-, MMU- und Cachemodelle
-- weitere Codegen-Backends und Plattformen
-- integrierter Debugger und Remote-Debugging
-- Hardwarevergleich und automatisierte Referenztraces
-- Netzwerkhardware, Modem und Broadband Adapter
-- Modding- und Forschungswerkzeuge
+Die aktuelle Lokalisierung gilt nur fuer reine Leaf-Funktionen ohne Speicher, FPU, Spezialregister oder Calls. Sie bestimmt Registerverwendung durch Textsuche im bereits erzeugten C++ und ersetzt `cpu.r[n]` anschliessend textuell.
 
-## Nicht-Ziele bis v1.0
+Das muss durch IR-/Liveness-basierte Registerlokalisierung ersetzt werden. Post-hoc-Stringersetzung ist kein stabiler Codegenvertrag und darf nicht auf komplexere Funktionen ausgeweitet werden.
 
-- perfekte Zyklusgenauigkeit aller Dreamcast-Komponenten
-- vollstaendige Kompatibilitaet mit jedem Dreamcast-Titel
-- vollstaendige LLE aller Firmware- und Audiopfade
-- jede seltene Peripherie und Netzwerkhardware
-- titelbezogene Patches als Ersatz fuer allgemeine Semantik
+### 6. Die Runtimegrenzen sind getrennt, aber der AOT-Includevertrag bleibt breit
+
+`aot_runtime_abi.hpp` inkludiert weiterhin mehrere breite Runtimeheader. Das vergroessert die Rebuildflaeche generierter TUs. Der Header muss auf echte ABI-PODs und schmale Intrinsics reduziert werden.
+
+### 7. Der Build ist warm brauchbar, kalt noch zu teuer
+
+Der warme Export liegt bei rund 2,3 Sekunden. Der erste vollstaendige Export/Build bleibt mit rund 199 Sekunden teuer. Der naechste Buildfokus ist deshalb nicht ein weiterer Exportcache, sondern:
+
+- Runtime-only-Aenderung ohne AOT-Reemission
+- Hook-only-Aenderung nur im Spielprojekt
+- mehr parallele, stabile AOT-TUs ohne uebermaessige Headerkosten
+- realer MSVC-/clang-cl-Produktvergleich
+- phasengetrennte Messung von Analyse, Emission, Compile und Link
+
+## Verbindlicher v0.49-Kritischer Pfad
+
+```text
+KR-4951 Produktgate nach Gastzyklen und getrennte visuelle Meilensteine
+  |
+  +--> KR-4952 Post-IP.BIN-Spielhandoff fuer DirectBootExecutable
+  |      -> KR-4953 Privates Game-Entry-Handoff-Artefakt aus Original-GDI
+  |      -> KR-4954 Deklaratives externes Spielprojekt und CLI-Scaffold
+  |      -> KR-4955 Explizite Funktionsgrenzen und Tabellenhinweise End-to-End
+  |      -> KR-4961 Externes SonicAdventureRecomp-Bring-up-Projekt
+  |      -> KR-4962 NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry
+  |
+  +--> KR-4956 Static-AOT-Dispatchflucht inventarisieren und schliessen
+         -> KR-4957 Direkte native Calls ueber sichere Timinggrenzen
+         -> KR-4958 IR-basierte Registerlokalisierung und RAM-Regionen
+         -> KR-4959 Ereignisgetriebene Scheduler-/IRQ-Safepoints
+         -> KR-4960 200-MHz-Produkt-Hotpath
+
+KR-4963 Inkrementeller Runtime-/Spielbuild und Compiler-A/B laeuft parallel.
+
+KR-4960 + KR-4961 + KR-4962 + KR-4963
+  -> KR-4964 v0.49 Produktabnahme bis sichtbarem Spielbild
+```
+
+## Produktmeilensteine
+
+### B0 - Game-Entry korrekt
+
+- Haupt-Executable aus der eigenen GDI identifiziert und hashgebunden
+- exakter Post-IP.BIN-Handoff angewendet
+- erster native Block bei `0x8C010000` erreicht
+- kein Interpreter/JIT/Fallback
+
+### B1 - Gamecode macht Fortschritt
+
+- fester Gastzyklus-Checkpoint erreicht
+- kein Missing-AOT oder stiller Geraetefehler
+- DirectBoot und NativeDiscBoot stimmen ab dem Game-Entry in den normativen Zustandsdigests ueberein
+
+### B2 - Sichtbares Spielbild
+
+- Direct-FB- oder TA-Ausgabe stammt aus der Haupt-Executable
+- aktiver Scanout liest den erzeugten Bereich
+- Host praesentiert den Frame
+
+### B3 - Echtzeit
+
+- mindestens 200 MHz effektive Gastgeschwindigkeit im normalen Produktpfad
+- Zielreserve mindestens 250 MHz unpaced
+- Diagnose-off und billige Produktdiagnose verwenden denselben schnellen Ausfuehrungspfad
+
+### B4 - Titelbild und Eingabe
+
+- Titelbild oder erster interaktiver Spielscreen
+- Controller im real gestarteten Spiel nachgewiesen
+- mehrminuetiger stabiler Lauf
+
+## Arbeitsregeln
+
+- Eine Implementierungsrunde endet mit einem echten Produktlauf.
+- Bootkorrektheit wird bei festem Gastzyklusziel gemessen, nicht bei fixer Hostzeit.
+- NativeDiscBoot und DirectBoot werden ab demselben Game-Entry verglichen.
+- Keine neue breite Testsuite. Ein kleiner Regressionstest ist nur fuer einen bereits beobachteten Produktfehler erlaubt.
+- Keine weiteren Controller-, GUI-, Paketierungs- oder Komfortarbeiten vor B2.
+- Kein Hardwareausbau auf Verdacht. Der naechste Produktendpunkt entscheidet.
+- Roadmap- und Taskstatus werden erst nach dem Produktlauf aktualisiert.
+
+## Nicht auf dem aktuellen P0-Pfad
+
+- vollstaendige Dreamcast-Kompatibilitaet fuer weitere Titel
+- umfassendes Replay jeder Gastinstruktion
+- vollstaendige PVR-/AICA-Featureabdeckung ohne SA-Produktbefund
+- GUI-Politur
+- oeffentliche Releasepaketierung
+- neue Konformitaetsmatrizen
+
+## v0.49 Definition of Done
+
+`v0.49.0` ist erst abgeschlossen, wenn:
+
+- KatanaRecomp, KatanaRuntime und ein externes Spielprojekt sauber getrennt gebaut werden koennen
+- die Haupt-Executable aus der Original-GDI lokal installiert und direkt gestartet werden kann
+- DirectBoot einen bewiesenen Post-IP.BIN-/Game-Entry-Handoff nutzt
+- NativeDiscBoot und DirectBoot ab dem Game-Entry denselben normativen Zustand liefern
+- der normale Produktport mindestens 200 MHz erreicht
+- ein sichtbarer, von der Haupt-Executable erzeugter Spiel-/TA-Frame erreicht wird
+- keine Sonic-Adressen, Retailbytes oder Titelhooks im generischen Katana-Kern liegen
+- keine neue umfangreiche Testsuite den Produktnachweis ersetzt
