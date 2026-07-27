@@ -262,7 +262,7 @@ void emit_multi_block_completion(std::ostringstream& output,
 void emit_terminal_instruction_completion(std::ostringstream& output,
                                           const int indent,
                                           const bool single_block) {
-    if (single_block) return;
+    static_cast<void>(single_block);
     emit_indent(output, indent);
     output << "terminal_instruction_attempt.complete();\n";
 }
@@ -1761,7 +1761,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                   "katana::runtime::flush_pending_guest_cycles(cpu, *services);\n";
     }
     emit_indent(output, indent + 1);
-    output << "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(\n";
+    output << "katana::runtime::ExplicitGuestInstructionAttempt "
+              "guest_instruction_attempt(\n";
     emit_indent(output, indent + 2);
     output << "cpu, " << relocated_code_address(instruction.source_address) << ", "
            << timing.guest_cycles << "u);\n";
@@ -1779,6 +1780,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
         instruction.operation == katana::ir::Operation::Prefetch;
     if (!may_raise_memory_error) {
         emit_simple_instruction(output, instruction, indent + 1);
+        emit_indent(output, indent + 1);
+        output << "guest_instruction_attempt.complete();\n";
         if (instruction.operation == katana::ir::Operation::Unknown) {
             emit_multi_block_completion(output, indent + 1, single_block, true);
             emit_indent(output, indent + 1);
@@ -1799,6 +1802,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     emit_indent(output, indent + 3);
     output << ": katana::runtime::GuestInstructionOrigin{};\n";
     emit_simple_instruction(output, instruction, indent + 2);
+    emit_indent(output, indent + 2);
+    output << "guest_instruction_attempt.complete();\n";
     emit_indent(output, indent + 1);
     output << "} catch (const katana::runtime::MemoryAccessError& error) {\n";
     emit_indent(output, indent + 2);
@@ -1925,7 +1930,8 @@ void emit_terminal(std::ostringstream& output,
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
     emit_instruction_observer(output, instruction, indent, external_instruction_observer);
     emit_indent(output, indent);
-    output << "katana::runtime::GuestInstructionAttempt terminal_instruction_attempt(\n";
+    output << "katana::runtime::ExplicitGuestInstructionAttempt "
+              "terminal_instruction_attempt(\n";
     emit_indent(output, indent + 1);
     output << "cpu, " << relocated_code_address(instruction.source_address) << ", "
            << timing.guest_cycles << "u);\n";

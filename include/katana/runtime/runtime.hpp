@@ -221,6 +221,58 @@ void add_guest_instruction_cycles(CpuState& cpu, std::uint64_t guest_cycles) noe
 void retire_guest_instruction(CpuState& cpu) noexcept;
 [[nodiscard]] std::uint64_t take_pending_guest_cycles(CpuState& cpu) noexcept;
 [[nodiscard]] std::uint64_t elapsed_guest_cycles(const CpuState& cpu) noexcept;
+[[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
+
+// Native AOT code has an explicit successful-instruction edge.  Using that edge
+// avoids the exception-runtime query and out-of-line RAII destructor required by
+// the generic interpreter-facing attempt below.  If host unwinding or a guest
+// exception leaves the instruction early, complete() is never reached (or sees a
+// changed generation), so the instruction remains attempted but not retired.
+class ExplicitGuestInstructionAttempt final {
+  public:
+    ExplicitGuestInstructionAttempt(CpuState& cpu,
+                                    const std::uint32_t instruction_pc,
+                                    const std::uint64_t guest_cycles) noexcept
+        : cpu_(cpu),
+          exception_generation_on_entry_(cpu.exception_generation) {
+        ++cpu_.attempted_guest_instructions;
+        cpu_.active_instruction_pc = instruction_pc;
+        const auto block_offset =
+            instruction_pc - cpu_.active_block_virtual_start;
+        cpu_.active_instruction_physical_pc =
+            cpu_.active_block_size != 0u &&
+                    block_offset < cpu_.active_block_size
+                ? cpu_.active_block_physical_start + block_offset
+                : canonical_physical_address(instruction_pc);
+        cpu_.pending_guest_cycles += guest_cycles;
+    }
+
+    ExplicitGuestInstructionAttempt(
+        const ExplicitGuestInstructionAttempt&) = delete;
+    ExplicitGuestInstructionAttempt& operator=(
+        const ExplicitGuestInstructionAttempt&) = delete;
+    ExplicitGuestInstructionAttempt(ExplicitGuestInstructionAttempt&&) = delete;
+    ExplicitGuestInstructionAttempt& operator=(
+        ExplicitGuestInstructionAttempt&&) = delete;
+    ~ExplicitGuestInstructionAttempt() = default;
+
+    void complete() noexcept {
+        if (!completed_ &&
+            cpu_.exception_generation == exception_generation_on_entry_) {
+            ++cpu_.retired_guest_instructions;
+            completed_ = true;
+        }
+    }
+
+    [[nodiscard]] std::uint64_t exception_generation_on_entry() const noexcept {
+        return exception_generation_on_entry_;
+    }
+
+  private:
+    CpuState& cpu_;
+    std::uint64_t exception_generation_on_entry_ = 0u;
+    bool completed_ = false;
+};
 
 class GuestInstructionAttempt final {
   public:
