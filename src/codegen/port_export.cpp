@@ -237,7 +237,13 @@ struct MemoryFillLoopBatchProof {
 };
 
 struct CompositeCallbackBatchProof {
+    enum class Kind : std::uint8_t {
+        MemoryCopy,
+        FlagPollEqualImmediate,
+    };
+
     struct Descriptor {
+        Kind kind = Kind::MemoryCopy;
         std::uint32_t call_block_address = 0u;
         std::uint32_t call_instruction_address = 0u;
         std::uint32_t continuation_address = 0u;
@@ -255,6 +261,10 @@ struct CompositeCallbackBatchProof {
         std::uint8_t destination_register = 0u;
         std::uint8_t count_register = 0u;
         std::uint8_t limit_register = 0u;
+        std::uint8_t flag_base_register = 0u;
+        std::uint8_t flag_value_register = 0u;
+        std::int32_t flag_displacement = 0;
+        std::uint32_t flag_expected_value = 0u;
         std::uint8_t current_round_instruction_count = 0u;
         std::uint8_t subsequent_round_instruction_count = 0u;
         std::uint64_t call_block_guest_cycles = 0u;
@@ -448,6 +458,10 @@ std::vector<CompositeCallbackBatchProof> composite_callback_batch_proofs(
         const katana::ir::BasicBlock* return_block = nullptr;
         std::uint64_t guest_cycles = 0u;
     };
+    struct ReturnCallbackProof {
+        const katana::ir::BasicBlock* block = nullptr;
+        std::uint64_t guest_cycles = 0u;
+    };
 
     std::unordered_map<std::uint32_t, BlockOwner> blocks;
     std::unordered_map<std::uint32_t, std::vector<BlockOwner>> block_owners;
@@ -635,6 +649,30 @@ std::vector<CompositeCallbackBatchProof> composite_callback_batch_proofs(
         }
     }
 
+    std::unordered_map<std::uint32_t, ReturnCallbackProof> return_callbacks;
+    for (const auto& [callback_address, owners] : block_owners) {
+        if (owners.empty())
+            continue;
+        const auto& callback = *owners.front().block;
+        if (std::any_of(owners.begin(), owners.end(), [&](const auto& owner) {
+                return !equivalent_ir_block(callback, *owner.block);
+            }) ||
+            !exact_contiguous_block(callback, 2u) ||
+            callback.has_indirect_successor ||
+            !exact_successors(callback, {}) ||
+            !exact_delay_roles(callback,
+                               {katana::ir::DelaySlotRole::Owner,
+                                katana::ir::DelaySlotRole::Slot}) ||
+            callback.instructions[0].operation != Operation::Return ||
+            callback.instructions[1].operation != Operation::Nop)
+            continue;
+        const auto cycles = block_guest_cycles(callback);
+        if (!cycles || *cycles == 0u || *cycles > 4096u)
+            continue;
+        return_callbacks.emplace(
+            callback_address, ReturnCallbackProof{&callback, *cycles});
+    }
+
     std::unordered_map<std::uint32_t,
                        const katana::analysis::IndirectControlFlowResolution*>
         resolution_by_callsite;
@@ -646,6 +684,36 @@ std::vector<CompositeCallbackBatchProof> composite_callback_batch_proofs(
             continue;
         resolution_by_callsite.emplace(resolution.instruction_address, &resolution);
     }
+
+    struct SingletonCallResolution {
+        const katana::analysis::IndirectControlFlowResolution* resolution = nullptr;
+        std::uint32_t candidate = 0u;
+    };
+    std::unordered_map<std::uint32_t, SingletonCallResolution>
+        singleton_resolution_by_callsite;
+    std::unordered_set<std::uint32_t> duplicate_singleton_callsites;
+    for (const auto& resolution : indirect_control_flow) {
+        if (resolution.kind != katana::analysis::IndirectControlFlowKind::Call)
+            continue;
+        auto candidates = resolution.targets;
+        if (resolution.target)
+            candidates.push_back(*resolution.target);
+        candidates.insert(candidates.end(),
+                          resolution.analysis_candidates.begin(),
+                          resolution.analysis_candidates.end());
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                         candidates.end());
+        if (candidates.size() != 1u)
+            continue;
+        if (!singleton_resolution_by_callsite
+                 .emplace(resolution.instruction_address,
+                          SingletonCallResolution{&resolution, candidates.front()})
+                 .second)
+            duplicate_singleton_callsites.insert(resolution.instruction_address);
+    }
+    for (const auto callsite : duplicate_singleton_callsites)
+        singleton_resolution_by_callsite.erase(callsite);
 
     std::vector<CompositeCallbackBatchProof> result;
     for (const auto& function : program) {
@@ -813,6 +881,138 @@ std::vector<CompositeCallbackBatchProof> composite_callback_batch_proofs(
             }
         }
     }
+
+    for (const auto& function : program) {
+        for (const auto& call_block : function.blocks) {
+            if (duplicate_block_addresses.contains(call_block.start_address) ||
+                !exact_contiguous_block(call_block, 2u) ||
+                !call_block.has_indirect_successor ||
+                !exact_delay_roles(call_block,
+                                   {katana::ir::DelaySlotRole::Owner,
+                                    katana::ir::DelaySlotRole::Slot}))
+                continue;
+            const auto& call = call_block.instructions[0];
+            const auto& delay = call_block.instructions[1];
+            if (call.operation != Operation::CallRegister ||
+                delay.operation != Operation::Nop)
+                continue;
+            const auto resolution =
+                singleton_resolution_by_callsite.find(call.source_address);
+            if (resolution == singleton_resolution_by_callsite.end() ||
+                resolution->second.resolution->register_index !=
+                    call.branch_register)
+                continue;
+            const auto callback =
+                return_callbacks.find(resolution->second.candidate);
+            if (callback == return_callbacks.end())
+                continue;
+            if (call.source_address >
+                std::numeric_limits<std::uint32_t>::max() - 4u)
+                continue;
+            const auto continuation_address = call.source_address + 4u;
+            if (!exact_successors(call_block, {continuation_address}))
+                continue;
+            const auto continuation_found = blocks.find(continuation_address);
+            if (continuation_found == blocks.end() ||
+                duplicate_block_addresses.contains(continuation_address) ||
+                continuation_found->second.function != &function)
+                continue;
+            const auto& continuation = *continuation_found->second.block;
+            if (!exact_contiguous_block(continuation, 3u) ||
+                continuation.has_indirect_successor ||
+                !exact_delay_roles(continuation,
+                                   {katana::ir::DelaySlotRole::None,
+                                    katana::ir::DelaySlotRole::None,
+                                    katana::ir::DelaySlotRole::None}))
+                continue;
+            const auto& load = continuation.instructions[0];
+            const auto& compare = continuation.instructions[1];
+            const auto& branch = continuation.instructions[2];
+            if (load.operation != Operation::LoadLongDisplacement ||
+                load.forwarded_value_register.has_value() ||
+                load.memory_effects.access != katana::ir::MemoryAccessKind::Read ||
+                load.memory_effects.width != katana::ir::OperandWidth::Bits32 ||
+                load.memory_effects.access_count != 1u ||
+                load.memory_effects.region ==
+                    katana::ir::MemoryRegionKind::Volatile ||
+                load.displacement < 0 ||
+                compare.operation != Operation::CompareEqualImmediate ||
+                compare.destination_register != load.destination_register ||
+                load.destination_register != 0u ||
+                branch.operation != Operation::BranchIfFalse ||
+                !branch.target_address.has_value() ||
+                *branch.target_address != call_block.start_address)
+                continue;
+            if (continuation_address >
+                std::numeric_limits<std::uint32_t>::max() - 6u)
+                continue;
+            const auto exit_address = continuation_address + 6u;
+            if (!exact_successors(
+                    continuation, {call_block.start_address, exit_address}))
+                continue;
+
+            const auto call_cycles = block_guest_cycles(call_block);
+            const auto continuation_cycles = block_guest_cycles(continuation);
+            if (!call_cycles || !continuation_cycles ||
+                callback->second.guest_cycles >
+                    std::numeric_limits<std::uint64_t>::max() -
+                        *continuation_cycles)
+                continue;
+            const auto current_cycles =
+                callback->second.guest_cycles + *continuation_cycles;
+            if (current_cycles >
+                std::numeric_limits<std::uint64_t>::max() - *call_cycles)
+                continue;
+            const auto subsequent_cycles = current_cycles + *call_cycles;
+            const auto current_instructions =
+                callback->second.block->instructions.size() +
+                continuation.instructions.size();
+            const auto subsequent_instructions =
+                current_instructions + call_block.instructions.size();
+            constexpr auto byte_max =
+                static_cast<std::uint64_t>(
+                    std::numeric_limits<std::uint8_t>::max());
+            if (current_cycles == 0u || subsequent_cycles == 0u ||
+                current_cycles > 4096u || subsequent_cycles > 4096u ||
+                current_instructions > byte_max ||
+                subsequent_instructions > byte_max)
+                continue;
+
+            CompositeCallbackBatchProof::Descriptor descriptor;
+            descriptor.kind =
+                CompositeCallbackBatchProof::Kind::FlagPollEqualImmediate;
+            descriptor.call_block_address = call_block.start_address;
+            descriptor.call_instruction_address = call.source_address;
+            descriptor.continuation_address = continuation_address;
+            descriptor.exit_address = exit_address;
+            descriptor.kernel_address = callback->second.block->start_address;
+            descriptor.source_load_instruction_address = load.source_address;
+            descriptor.outer_branch_instruction_address = branch.source_address;
+            descriptor.call_block_size =
+                static_cast<std::uint32_t>(call_block.instructions.size() * 2u);
+            descriptor.continuation_size =
+                static_cast<std::uint32_t>(continuation.instructions.size() * 2u);
+            descriptor.kernel_size = static_cast<std::uint32_t>(
+                callback->second.block->instructions.size() * 2u);
+            descriptor.callback_register = call.branch_register;
+            descriptor.flag_base_register = load.source_register;
+            descriptor.flag_value_register = load.destination_register;
+            descriptor.flag_displacement = load.displacement;
+            descriptor.flag_expected_value =
+                static_cast<std::uint32_t>(compare.immediate);
+            descriptor.current_round_instruction_count =
+                static_cast<std::uint8_t>(current_instructions);
+            descriptor.subsequent_round_instruction_count =
+                static_cast<std::uint8_t>(subsequent_instructions);
+            descriptor.call_block_guest_cycles = *call_cycles;
+            descriptor.continuation_guest_cycles = *continuation_cycles;
+            descriptor.kernel_guest_cycles = callback->second.guest_cycles;
+            descriptor.current_round_guest_cycles = current_cycles;
+            descriptor.subsequent_round_guest_cycles = subsequent_cycles;
+            result.push_back({descriptor});
+        }
+    }
+
     std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
         return std::tuple{left.descriptor.call_instruction_address,
                           left.descriptor.kernel_address} <
@@ -1321,7 +1521,13 @@ std::string generated_header(const std::string& entry_namespace) {
            "    std::string_view guard_provenance;\n"
            "    std::string_view body_provenance;\n"
            "};\n"
+           "enum class CompositeCallbackBatchKind : std::uint8_t {\n"
+           "    MemoryCopy,\n"
+           "    FlagPollEqualImmediate,\n"
+           "};\n"
            "struct CompositeCallbackBatchDescriptor {\n"
+           "    CompositeCallbackBatchKind kind =\n"
+           "        CompositeCallbackBatchKind::MemoryCopy;\n"
            "    std::uint32_t call_block_address = 0u;\n"
            "    std::uint32_t call_instruction_address = 0u;\n"
            "    std::uint32_t continuation_address = 0u;\n"
@@ -1339,6 +1545,10 @@ std::string generated_header(const std::string& entry_namespace) {
            "    std::uint8_t destination_register = 0u;\n"
            "    std::uint8_t count_register = 0u;\n"
            "    std::uint8_t limit_register = 0u;\n"
+           "    std::uint8_t flag_base_register = 0u;\n"
+           "    std::uint8_t flag_value_register = 0u;\n"
+           "    std::int32_t flag_displacement = 0;\n"
+           "    std::uint32_t flag_expected_value = 0u;\n"
            "    std::uint8_t current_round_instruction_count = 0u;\n"
            "    std::uint8_t subsequent_round_instruction_count = 0u;\n"
            "    std::uint64_t call_block_guest_cycles = 0u;\n"
@@ -2299,6 +2509,319 @@ std::string handwritten_main(
            "        cpu_.active_block_size = found->second.size;\n"
            "        return true;\n"
            "    }\n"
+           "    bool try_composite_callback_flag_poll_batch(\n"
+           "            const katana::runtime::RuntimeBlock& selected_block,\n"
+           "            const " +
+           entry_namespace +
+           "::CompositeCallbackBatchDescriptor& descriptor) {\n"
+           "        constexpr std::uint64_t quantum = 131'072u;\n"
+           "        const auto reject = [](const std::string_view stage) {\n"
+           "            return composite_callback_batch_rejected(stage);\n"
+           "        };\n"
+           "        const auto runtime_state_allows_batch = [&] {\n"
+           "            return cpu_.memory.watchpoint_count() == 0u &&\n"
+           "                !cpu_.memory.has_trace_handler() &&\n"
+           "                !cpu_.memory.has_mmio_trace_handler() &&\n"
+           "                !cpu_.memory.mmio_access_tracking_enabled() &&\n"
+           "                !cpu_.memory.has_guest_memory_access_sink() &&\n"
+           "                cpu_.memory.guest_write_observer_allows_prevalidated_linear_writes() &&\n"
+           "                cpu_.memory.lookup_mode() ==\n"
+           "                    katana::runtime::MemoryLookupMode::Indexed &&\n"
+           "                state_.main_ram &&\n"
+           "                state_.main_ram->size() ==\n"
+           "                    katana::runtime::dreamcast_main_ram_size &&\n"
+           "                state_.address_space && cpu_.address_space &&\n"
+           "                cpu_.address_space.get() == state_.address_space.get() &&\n"
+           "                state_.address_space->mode() ==\n"
+           "                    katana::runtime::AddressTranslationMode::NoMmu &&\n"
+           "                state_.scheduler && state_.interrupt_controller &&\n"
+           "                state_.interrupt_router && state_.code_tracker &&\n"
+           "                state_.runtime_blocks && state_.module_catalog &&\n"
+           "                state_.disc_load_transactions &&\n"
+           "                !state_.disc_load_transactions->transaction_active() &&\n"
+           "                active_block_variant_.has_value();\n"
+           "        };\n"
+           "        if (!composite_callback_batching_enabled_ ||\n"
+           "            descriptor.kind != " +
+           entry_namespace +
+           "::CompositeCallbackBatchKind::FlagPollEqualImmediate ||\n"
+           "            descriptor.call_instruction_address !=\n"
+           "                descriptor.call_block_address ||\n"
+           "            descriptor.continuation_address !=\n"
+           "                descriptor.call_instruction_address + 4u ||\n"
+           "            descriptor.exit_address != descriptor.continuation_address + 6u ||\n"
+           "            descriptor.kernel_return_address != 0u ||\n"
+           "            descriptor.source_load_instruction_address !=\n"
+           "                descriptor.continuation_address ||\n"
+           "            descriptor.target_store_instruction_address != 0u ||\n"
+           "            descriptor.outer_branch_instruction_address !=\n"
+           "                descriptor.continuation_address + 4u ||\n"
+           "            descriptor.call_block_size != 4u ||\n"
+           "            descriptor.continuation_size != 6u ||\n"
+           "            descriptor.kernel_size != 4u ||\n"
+           "            descriptor.kernel_return_size != 0u ||\n"
+           "            descriptor.current_round_instruction_count != 5u ||\n"
+           "            descriptor.subsequent_round_instruction_count != 7u ||\n"
+           "            descriptor.call_block_guest_cycles == 0u ||\n"
+           "            descriptor.continuation_guest_cycles == 0u ||\n"
+           "            descriptor.kernel_guest_cycles == 0u ||\n"
+           "            descriptor.kernel_return_guest_cycles != 0u ||\n"
+           "            descriptor.current_round_guest_cycles !=\n"
+           "                descriptor.continuation_guest_cycles +\n"
+           "                    descriptor.kernel_guest_cycles ||\n"
+           "            descriptor.subsequent_round_guest_cycles !=\n"
+           "                descriptor.current_round_guest_cycles +\n"
+           "                    descriptor.call_block_guest_cycles ||\n"
+           "            descriptor.current_round_guest_cycles > quantum ||\n"
+           "            descriptor.subsequent_round_guest_cycles > quantum ||\n"
+           "            descriptor.callback_register >= cpu_.r.size() ||\n"
+           "            descriptor.flag_base_register >= cpu_.r.size() ||\n"
+           "            descriptor.flag_value_register != 0u ||\n"
+           "            descriptor.flag_displacement < 0 ||\n"
+           "            descriptor.flag_displacement > 60 ||\n"
+           "            (descriptor.flag_displacement & 3) != 0)\n"
+           "            return reject(\"poll-descriptor\");\n"
+           "        if (!runtime_state_allows_batch())\n"
+           "            return reject(\"poll-runtime-state\");\n"
+           "        if (cpu_.pending_guest_cycles != 0u)\n"
+           "            return reject(\"poll-not-at-clean-safepoint\");\n"
+           "        if (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u) {\n"
+           "            static_cast<void>(state_.interrupt_router->synchronize());\n"
+           "            const auto pending = state_.interrupt_controller->highest_pending();\n"
+           "            if (pending && pending->level > cpu_.interrupt_mask())\n"
+           "                return reject(\"poll-interrupt-pending\");\n"
+           "        }\n"
+           "\n"
+           "        const auto provenance_matches = [](const std::string_view actual,\n"
+           "                                                  const std::string_view expected) {\n"
+           "            if (actual == expected || actual.ends_with(expected)) return true;\n"
+           "            constexpr std::string_view mmu_suffix = \"-mmu-variant\";\n"
+           "            if (actual.size() < expected.size() + mmu_suffix.size() ||\n"
+           "                !actual.ends_with(\"-mmu-variant\")) return false;\n"
+           "            const auto expected_offset =\n"
+           "                actual.size() - mmu_suffix.size() - expected.size();\n"
+           "            return\n"
+           "                (actual.size() == expected.size() + mmu_suffix.size() &&\n"
+           "                 actual.starts_with(expected)) ||\n"
+           "                actual.substr(expected_offset, expected.size()) == expected;\n"
+           "        };\n"
+           "        const auto live_target = cpu_.r[descriptor.callback_register];\n"
+           "        if (cpu_.pc != live_target || selected_block.size != descriptor.kernel_size ||\n"
+           "            selected_block.end_kind != katana::runtime::BlockEndKind::Return)\n"
+           "            return reject(\"poll-live-target\");\n"
+           "        const bool static_kernel =\n"
+           "            !selected_block.runtime_registered && !selected_block.aot_template &&\n"
+           "            live_target == descriptor.kernel_address &&\n"
+           "            selected_block.virtual_start == descriptor.kernel_address &&\n"
+           "            selected_block.physical_origin ==\n"
+           "                katana::runtime::canonical_physical_address(\n"
+           "                    descriptor.kernel_address) &&\n"
+           "            provenance_matches(selected_block.provenance,\n"
+           "                               descriptor.kernel_provenance);\n"
+           "        bool mapped_kernel = false;\n"
+           "        if (selected_block.aot_template &&\n"
+           "            selected_block.virtual_start == live_target &&\n"
+           "            selected_block.physical_origin ==\n"
+           "                katana::runtime::canonical_physical_address(live_target)) {\n"
+           "            const auto& contract = *selected_block.aot_template;\n"
+           "            const auto& mapping = contract.mapping;\n"
+           "            if (live_target >= mapping.runtime_start) {\n"
+           "                const auto offset = static_cast<std::uint64_t>(live_target) -\n"
+           "                    mapping.runtime_start;\n"
+           "                const auto source = static_cast<std::uint64_t>(\n"
+           "                    mapping.source_start) + offset;\n"
+           "                const auto callback_end = offset + descriptor.kernel_size;\n"
+           "                const bool mutable_overlap = std::any_of(\n"
+           "                    contract.mutable_ranges.begin(),\n"
+           "                    contract.mutable_ranges.end(), [&](const auto& range) {\n"
+           "                        const auto range_end =\n"
+           "                            static_cast<std::uint64_t>(range.offset) + range.size;\n"
+           "                        return offset < range_end && range.offset < callback_end;\n"
+           "                    });\n"
+           "                mapped_kernel = source == descriptor.kernel_address &&\n"
+           "                    callback_end <= mapping.extent &&\n"
+           "                    contract.validation_extent >= mapping.extent &&\n"
+           "                    !mutable_overlap;\n"
+           "            }\n"
+           "        }\n"
+           "        if (!static_kernel && !mapped_kernel)\n"
+           "            return reject(\"poll-candidate-provenance\");\n"
+           "        const ScopedCpuActiveBlockProvenance active_block_provenance(\n"
+           "            cpu_, selected_block.virtual_start,\n"
+           "            selected_block.physical_origin, selected_block.size);\n"
+           "\n"
+           "        const auto call_block =\n"
+           "            executable_blocks_.find(descriptor.call_block_address);\n"
+           "        const auto continuation =\n"
+           "            executable_blocks_.find(descriptor.continuation_address);\n"
+           "        const auto kernel =\n"
+           "            executable_blocks_.find(descriptor.kernel_address);\n"
+           "        if (call_block == executable_blocks_.end() ||\n"
+           "            continuation == executable_blocks_.end() ||\n"
+           "            kernel == executable_blocks_.end() ||\n"
+           "            call_block->second.physical_origin !=\n"
+           "                katana::runtime::canonical_physical_address(\n"
+           "                    descriptor.call_block_address) ||\n"
+           "            continuation->second.physical_origin !=\n"
+           "                katana::runtime::canonical_physical_address(\n"
+           "                    descriptor.continuation_address) ||\n"
+           "            kernel->second.physical_origin !=\n"
+           "                katana::runtime::canonical_physical_address(\n"
+           "                    descriptor.kernel_address) ||\n"
+           "            call_block->second.size != descriptor.call_block_size ||\n"
+           "            continuation->second.size != descriptor.continuation_size ||\n"
+           "            kernel->second.size != descriptor.kernel_size ||\n"
+           "            call_block->second.timing_class !=\n"
+           "                katana::runtime::ExecutableBlockTimingClass::PureCpu ||\n"
+           "            continuation->second.timing_class !=\n"
+           "                katana::runtime::ExecutableBlockTimingClass::RequiresCycleFlush ||\n"
+           "            kernel->second.timing_class !=\n"
+           "                katana::runtime::ExecutableBlockTimingClass::PureCpu ||\n"
+           "            call_block->second.maximum_guest_cycles !=\n"
+           "                descriptor.call_block_guest_cycles ||\n"
+           "            continuation->second.maximum_guest_cycles !=\n"
+           "                descriptor.continuation_guest_cycles ||\n"
+           "            kernel->second.maximum_guest_cycles !=\n"
+           "                descriptor.kernel_guest_cycles ||\n"
+           "            !provenance_matches(call_block->second.identity,\n"
+           "                               descriptor.call_block_provenance) ||\n"
+           "            !provenance_matches(continuation->second.identity,\n"
+           "                               descriptor.continuation_provenance) ||\n"
+           "            !provenance_matches(kernel->second.identity,\n"
+           "                               descriptor.kernel_provenance) ||\n"
+           "            !state_.code_tracker->dispatchable(call_block->second.identity) ||\n"
+           "            !state_.code_tracker->dispatchable(continuation->second.identity) ||\n"
+           "            !state_.code_tracker->dispatchable(kernel->second.identity))\n"
+           "            return reject(\"poll-registered-blocks\");\n"
+           "        const auto proves_instruction_block = [&](const std::uint32_t address,\n"
+           "                                                    const auto& registration) {\n"
+           "            try {\n"
+           "                if (state_.address_space->instruction_translation_path(\n"
+           "                        address, cpu_.privileged_mode()) !=\n"
+           "                    katana::runtime::InstructionTranslationPath::Direct)\n"
+           "                    return false;\n"
+           "                const auto inspected = state_.address_space->inspect_translation(\n"
+           "                    address, katana::runtime::TranslationAccess::Instruction,\n"
+           "                    cpu_.privileged_mode());\n"
+           "                if (katana::runtime::canonical_physical_address(\n"
+           "                        inspected.physical_address) !=\n"
+           "                        registration.physical_origin ||\n"
+           "                    !inspected.no_mmu_fastpath || inspected.utlb_slot != 0xFFu ||\n"
+           "                    !state_.address_space->prove_instruction_mapping(\n"
+           "                        address, registration.physical_origin, registration.size,\n"
+           "                        cpu_.privileged_mode()))\n"
+           "                    return false;\n"
+           "                const auto variant = katana::runtime::block_variant_key(\n"
+           "                    state_.address_space->guard_for(\n"
+           "                        address, cpu_.read_fpscr(), cpu_.privileged_mode()),\n"
+           "                    active_block_variant_->runtime_generation);\n"
+           "                return variant == *active_block_variant_;\n"
+           "            } catch (...) {\n"
+           "                return false;\n"
+           "            }\n"
+           "        };\n"
+           "        if (!proves_instruction_block(descriptor.call_block_address,\n"
+           "                                      call_block->second) ||\n"
+           "            !proves_instruction_block(descriptor.continuation_address,\n"
+           "                                      continuation->second) ||\n"
+           "            !proves_instruction_block(descriptor.kernel_address,\n"
+           "                                      kernel->second))\n"
+           "            return reject(\"poll-instruction-mapping\");\n"
+           "        if (cpu_.pr != descriptor.continuation_address)\n"
+           "            return reject(\"poll-entry-registers\");\n"
+           "\n"
+           "        const auto flag_address = static_cast<std::uint32_t>(\n"
+           "            cpu_.r[descriptor.flag_base_register] +\n"
+           "            static_cast<std::uint32_t>(descriptor.flag_displacement));\n"
+           "        if ((flag_address & 3u) != 0u)\n"
+           "            return reject(\"poll-alignment\");\n"
+           "        const auto flag_read = prove_main_ram_translation(\n"
+           "            cpu_, state_, flag_address, 4u,\n"
+           "            katana::runtime::TranslationAccess::Read);\n"
+           "        if (!flag_read || !flag_read->no_mmu_fastpath ||\n"
+           "            flag_read->utlb_slot != 0xFFu)\n"
+           "            return reject(\"poll-ram-translation\");\n"
+           "        const auto flag_backing = dreamcast_main_ram_backing_offset(\n"
+           "            flag_read->physical_address, 4u);\n"
+           "        if (!flag_backing)\n"
+           "            return reject(\"poll-ram-backing\");\n"
+           "\n"
+           "        const auto rounds_for_cycle_budget = [&](const std::uint64_t budget) {\n"
+           "            return budget < descriptor.current_round_guest_cycles\n"
+           "                ? std::uint64_t{0u}\n"
+           "                : std::uint64_t{1u} +\n"
+           "                    (budget - descriptor.current_round_guest_cycles) /\n"
+           "                        descriptor.subsequent_round_guest_cycles;\n"
+           "        };\n"
+           "        auto admitted = rounds_for_cycle_budget(quantum);\n"
+           "        const auto scheduler_cycle = state_.scheduler->current_cycle();\n"
+           "        if (const auto event = state_.scheduler->next_event_cycle()) {\n"
+           "            if (*event <= scheduler_cycle)\n"
+           "                return reject(\"poll-scheduler-event-due\");\n"
+           "            admitted = std::min(\n"
+           "                admitted, rounds_for_cycle_budget(*event - scheduler_cycle - 1u));\n"
+           "        }\n"
+           "        if (const auto remaining = state_.scheduler->remaining_guest_cycles()) {\n"
+           "            if (*remaining == 0u)\n"
+           "                return reject(\"poll-scheduler-budget-empty\");\n"
+           "            admitted = std::min(\n"
+           "                admitted, rounds_for_cycle_budget(*remaining - 1u));\n"
+           "        }\n"
+           "        if (admitted == 0u)\n"
+           "            return reject(\"poll-empty-batch\");\n"
+           "        const auto flag_value = state_.main_ram->read_u32(*flag_backing);\n"
+           "        const bool complete = flag_value == descriptor.flag_expected_value;\n"
+           "        if (complete) admitted = 1u;\n"
+           "        const auto subsequent_rounds = admitted - 1u;\n"
+           "        if (subsequent_rounds >\n"
+           "                (std::numeric_limits<std::uint64_t>::max() -\n"
+           "                 descriptor.current_round_guest_cycles) /\n"
+           "                    descriptor.subsequent_round_guest_cycles ||\n"
+           "            subsequent_rounds >\n"
+           "                (std::numeric_limits<std::uint64_t>::max() -\n"
+           "                 descriptor.current_round_instruction_count) /\n"
+           "                    descriptor.subsequent_round_instruction_count)\n"
+           "            return reject(\"poll-accounting-overflow\");\n"
+           "        const auto batch_guest_cycles =\n"
+           "            descriptor.current_round_guest_cycles +\n"
+           "            subsequent_rounds * descriptor.subsequent_round_guest_cycles;\n"
+           "        const auto batch_instructions =\n"
+           "            static_cast<std::uint64_t>(\n"
+           "                descriptor.current_round_instruction_count) +\n"
+           "            subsequent_rounds * descriptor.subsequent_round_instruction_count;\n"
+           "        if (batch_guest_cycles >\n"
+           "                std::numeric_limits<std::uint64_t>::max() - scheduler_cycle ||\n"
+           "            batch_guest_cycles >\n"
+           "                std::numeric_limits<std::uint64_t>::max() -\n"
+           "                    cpu_.total_guest_cycles ||\n"
+           "            batch_guest_cycles >\n"
+           "                std::numeric_limits<std::uint64_t>::max() -\n"
+           "                    cpu_.pending_guest_cycles ||\n"
+           "            batch_instructions >\n"
+           "                std::numeric_limits<std::uint64_t>::max() -\n"
+           "                    cpu_.attempted_guest_instructions ||\n"
+           "            batch_instructions >\n"
+           "                std::numeric_limits<std::uint64_t>::max() -\n"
+           "                    cpu_.retired_guest_instructions)\n"
+           "            return reject(\"poll-cpu-counter-overflow\");\n"
+           "        if (!cpu_.memory.account_prevalidated_unobserved_accesses(\n"
+           "                admitted, admitted))\n"
+           "            return reject(\"poll-memory-accounting\");\n"
+           "\n"
+           "        cpu_.r[descriptor.flag_value_register] = flag_value;\n"
+           "        cpu_.pr = descriptor.continuation_address;\n"
+           "        cpu_.t = complete;\n"
+           "        cpu_.pc = complete ? descriptor.exit_address\n"
+           "                           : descriptor.call_block_address;\n"
+           "        cpu_.active_instruction_pc = descriptor.outer_branch_instruction_address;\n"
+           "        cpu_.active_instruction_physical_pc =\n"
+           "            continuation->second.physical_origin + 4u;\n"
+           "        cpu_.attempted_guest_instructions += batch_instructions;\n"
+           "        cpu_.retired_guest_instructions += batch_instructions;\n"
+           "        cpu_.pending_guest_cycles += batch_guest_cycles;\n"
+           "        trace_composite_callback_batch_admission(admitted);\n"
+           "        return true;\n"
+           "    }\n"
            "    bool try_composite_callback_batch(\n"
            "            const katana::runtime::RuntimeBlock& selected_block,\n"
            "            const " +
@@ -2331,7 +2854,15 @@ std::string handwritten_main(
            "                !state_.disc_load_transactions->transaction_active() &&\n"
            "                active_block_variant_.has_value();\n"
            "        };\n"
+           "        if (descriptor.kind == " +
+           entry_namespace +
+           "::CompositeCallbackBatchKind::FlagPollEqualImmediate)\n"
+           "            return try_composite_callback_flag_poll_batch(\n"
+           "                selected_block, descriptor);\n"
            "        if (!composite_callback_batching_enabled_ ||\n"
+           "            descriptor.kind != " +
+           entry_namespace +
+           "::CompositeCallbackBatchKind::MemoryCopy ||\n"
            "            descriptor.call_instruction_address !=\n"
            "                descriptor.call_block_address + 4u ||\n"
            "            descriptor.continuation_address !=\n"
@@ -5796,7 +6327,13 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     if (!diagnostic_interpreter) {
         for (const auto& proof : composite_callback_batches) {
             const auto& descriptor = proof.descriptor;
-            output << "    {0x" << symbol(descriptor.call_block_address) << "u, 0x"
+            const auto kind =
+                descriptor.kind ==
+                        CompositeCallbackBatchProof::Kind::FlagPollEqualImmediate
+                    ? "CompositeCallbackBatchKind::FlagPollEqualImmediate"
+                    : "CompositeCallbackBatchKind::MemoryCopy";
+            output << "    {" << kind << ", 0x"
+                   << symbol(descriptor.call_block_address) << "u, 0x"
                    << symbol(descriptor.call_instruction_address) << "u, 0x"
                    << symbol(descriptor.continuation_address) << "u, 0x"
                    << symbol(descriptor.exit_address) << "u, 0x"
@@ -5813,6 +6350,10 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                    << static_cast<unsigned>(descriptor.destination_register) << "u, "
                    << static_cast<unsigned>(descriptor.count_register) << "u, "
                    << static_cast<unsigned>(descriptor.limit_register) << "u, "
+                   << static_cast<unsigned>(descriptor.flag_base_register) << "u, "
+                   << static_cast<unsigned>(descriptor.flag_value_register) << "u, "
+                   << descriptor.flag_displacement << ", "
+                   << descriptor.flag_expected_value << "u, "
                    << static_cast<unsigned>(
                           descriptor.current_round_instruction_count)
                    << "u, "
@@ -5830,8 +6371,13 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                    << symbol(descriptor.continuation_address)
                    << "\", \"generated-block-"
                    << symbol(descriptor.kernel_address)
-                   << "\", \"generated-block-"
-                   << symbol(descriptor.kernel_return_address) << "\"},\n";
+                   << "\", ";
+            if (descriptor.kind == CompositeCallbackBatchProof::Kind::MemoryCopy)
+                output << "\"generated-block-"
+                       << symbol(descriptor.kernel_return_address) << "\"";
+            else
+                output << "\"\"";
+            output << "},\n";
         }
     }
     output << "}};\n\n";

@@ -10,14 +10,19 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
+#include <future>
 #include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -30,6 +35,8 @@ constexpr std::size_t maximum_guarded_code_inventory = 1'024u;
 constexpr std::size_t maximum_forwarded_store_contexts = 64u;
 constexpr std::size_t maximum_memory_values = 256u;
 constexpr std::size_t maximum_fixpoint_iterations = 65'536u;
+constexpr std::size_t maximum_parallel_resolution_jobs = 12u;
+constexpr std::size_t minimum_parallel_resolution_functions = 64u;
 constexpr std::int32_t maximum_stack_distance = 4'096;
 
 std::vector<std::vector<std::uint32_t>>
@@ -174,6 +181,9 @@ void normalize(std::vector<std::uint32_t>& values) {
 
 class GuardedCodeInventoryCollector {
   public:
+    explicit GuardedCodeInventoryCollector(const bool defer_stored_admission = false)
+        : defer_stored_admission_(defer_stored_admission) {}
+
     const std::optional<JumpTableAnalysis>& stored_snapshot_table(
         const katana::io::ExecutableImage& image,
         const std::uint32_t evidence_address,
@@ -209,28 +219,10 @@ class GuardedCodeInventoryCollector {
                              right.store_instruction_addresses;
                   });
         for (auto& candidate : candidates) {
-            if (!admit(candidate.target_address)) continue;
-            candidate.guarded = true;
-            const auto [stored, inserted] =
-                stored_candidates_.try_emplace(candidate.target_address,
-                                               std::move(candidate));
-            if (inserted) continue;
-            auto& destination = stored->second;
-            destination.complete =
-                destination.complete && candidate.complete;
-            destination.guarded = true;
-            destination.store_instruction_addresses.insert(
-                destination.store_instruction_addresses.end(),
-                candidate.store_instruction_addresses.begin(),
-                candidate.store_instruction_addresses.end());
-            destination.evidence_call_sites.insert(
-                destination.evidence_call_sites.end(),
-                candidate.evidence_call_sites.begin(),
-                candidate.evidence_call_sites.end());
-            destination.evidence_callees.insert(
-                destination.evidence_callees.end(),
-                candidate.evidence_callees.begin(),
-                candidate.evidence_callees.end());
+            if (defer_stored_admission_)
+                deferred_stored_candidates_.push_back(std::move(candidate));
+            else
+                collect_stored_candidate(std::move(candidate));
         }
     }
 
@@ -243,38 +235,28 @@ class GuardedCodeInventoryCollector {
                       return left.load_instruction_addresses <
                              right.load_instruction_addresses;
                   });
-        for (auto& candidate : candidates) {
-            table_scan_truncated_ =
-                table_scan_truncated_ || candidate.scan_truncated;
-            normalize(candidate.target_addresses);
-            if (candidate.target_addresses.empty()) continue;
-            const auto [stored, inserted] =
-                returned_tables_.try_emplace(candidate.table_address,
-                                             std::move(candidate));
-            if (inserted) continue;
-            auto& destination = stored->second;
-            destination.target_addresses.insert(
-                destination.target_addresses.end(),
-                candidate.target_addresses.begin(),
-                candidate.target_addresses.end());
-            destination.load_instruction_addresses.insert(
-                destination.load_instruction_addresses.end(),
-                candidate.load_instruction_addresses.begin(),
-                candidate.load_instruction_addresses.end());
-            destination.evidence_call_sites.insert(
-                destination.evidence_call_sites.end(),
-                candidate.evidence_call_sites.begin(),
-                candidate.evidence_call_sites.end());
-            destination.evidence_callees.insert(
-                destination.evidence_callees.end(),
-                candidate.evidence_callees.begin(),
-                candidate.evidence_callees.end());
-            destination.scan_truncated =
-                destination.scan_truncated || candidate.scan_truncated;
+        for (auto& candidate : candidates)
+            collect_returned_candidate(std::move(candidate));
+    }
+
+    void replay_into(GuardedCodeInventoryCollector& destination) && {
+        if (!defer_stored_admission_ || destination.defer_stored_admission_)
+            throw std::logic_error(
+                "Guarded-Code-Inventar besitzt einen ungueltigen Replay-Vertrag.");
+        for (auto& candidate : deferred_stored_candidates_)
+            destination.collect_stored_candidate(std::move(candidate));
+        for (auto& [table_address, candidate] : returned_tables_) {
+            static_cast<void>(table_address);
+            destination.collect_returned_candidate(std::move(candidate));
         }
+        destination.table_scan_truncated_ =
+            destination.table_scan_truncated_ || table_scan_truncated_;
     }
 
     GuardedCodeInventory finish() {
+        if (defer_stored_admission_)
+            throw std::logic_error(
+                "Deferred Guarded-Code-Inventar muss vor Finish zusammengefuehrt werden.");
         GuardedCodeInventory inventory;
         inventory.stored_code_addresses.reserve(stored_candidates_.size());
         for (auto& [target, candidate] : stored_candidates_) {
@@ -309,6 +291,52 @@ class GuardedCodeInventoryCollector {
     }
 
   private:
+    void collect_stored_candidate(StoredCodeAddressCandidate candidate) {
+        if (!admit(candidate.target_address)) return;
+        candidate.guarded = true;
+        const auto [stored, inserted] =
+            stored_candidates_.try_emplace(candidate.target_address, std::move(candidate));
+        if (inserted) return;
+        auto& destination = stored->second;
+        destination.complete = destination.complete && candidate.complete;
+        destination.guarded = true;
+        destination.store_instruction_addresses.insert(
+            destination.store_instruction_addresses.end(),
+            candidate.store_instruction_addresses.begin(),
+            candidate.store_instruction_addresses.end());
+        destination.evidence_call_sites.insert(destination.evidence_call_sites.end(),
+                                               candidate.evidence_call_sites.begin(),
+                                               candidate.evidence_call_sites.end());
+        destination.evidence_callees.insert(destination.evidence_callees.end(),
+                                            candidate.evidence_callees.begin(),
+                                            candidate.evidence_callees.end());
+    }
+
+    void collect_returned_candidate(ReturnedCodeAddressTableCandidate candidate) {
+        table_scan_truncated_ = table_scan_truncated_ || candidate.scan_truncated;
+        normalize(candidate.target_addresses);
+        if (candidate.target_addresses.empty()) return;
+        const auto [stored, inserted] =
+            returned_tables_.try_emplace(candidate.table_address, std::move(candidate));
+        if (inserted) return;
+        auto& destination = stored->second;
+        destination.target_addresses.insert(destination.target_addresses.end(),
+                                             candidate.target_addresses.begin(),
+                                             candidate.target_addresses.end());
+        destination.load_instruction_addresses.insert(
+            destination.load_instruction_addresses.end(),
+            candidate.load_instruction_addresses.begin(),
+            candidate.load_instruction_addresses.end());
+        destination.evidence_call_sites.insert(destination.evidence_call_sites.end(),
+                                               candidate.evidence_call_sites.begin(),
+                                               candidate.evidence_call_sites.end());
+        destination.evidence_callees.insert(destination.evidence_callees.end(),
+                                            candidate.evidence_callees.begin(),
+                                            candidate.evidence_callees.end());
+        destination.scan_truncated =
+            destination.scan_truncated || candidate.scan_truncated;
+    }
+
     bool admit(const std::uint32_t target) {
         if (admitted_targets_.contains(target)) return true;
         if (admitted_targets_.size() >= maximum_guarded_code_inventory) {
@@ -324,6 +352,8 @@ class GuardedCodeInventoryCollector {
     std::map<std::uint32_t, ReturnedCodeAddressTableCandidate> returned_tables_;
     std::unordered_map<std::uint32_t, std::optional<JumpTableAnalysis>>
         stored_snapshot_tables_;
+    std::vector<StoredCodeAddressCandidate> deferred_stored_candidates_;
+    bool defer_stored_admission_ = false;
     bool candidate_inventory_truncated_ = false;
     bool table_scan_truncated_ = false;
 };
@@ -2464,21 +2494,27 @@ analyze_function_values(const katana::io::ExecutableImage& image,
               [](const auto* left, const auto* right) {
                   return left->entry_address < right->entry_address;
               });
-    for (const auto* function : resolution_functions) {
-        auto evaluation = evaluate_function(image,
-                                            *function,
-                                            block_index,
-                                            indirect_callees,
-                                            summaries,
-                                            candidate_inputs[function->entry_address].state,
-                                            true,
-                                            false,
-                                            &guarded_inventory_collector);
-        resolution_count += evaluation.resolutions.size();
-        result.resolutions.insert(result.resolutions.end(),
-                                  std::make_move_iterator(evaluation.resolutions.begin()),
-                                  std::make_move_iterator(evaluation.resolutions.end()));
-        const auto& input = candidate_inputs.at(function->entry_address);
+
+    struct ResolutionFunctionResult {
+        FunctionEvaluation evaluation;
+        GuardedCodeInventoryCollector inventory{true};
+    };
+    const auto& final_candidate_inputs = std::as_const(candidate_inputs);
+    const auto& final_function_by_address = std::as_const(function_by_address);
+    const auto evaluate_resolution_function = [&](const std::size_t function_index) {
+        ResolutionFunctionResult function_result;
+        const auto* function = resolution_functions[function_index];
+        const auto& input = final_candidate_inputs.at(function->entry_address);
+        function_result.evaluation =
+            evaluate_function(image,
+                              *function,
+                              block_index,
+                              indirect_callees,
+                              summaries,
+                              input.state,
+                              true,
+                              false,
+                              &function_result.inventory);
         if (image.guest_call_abi() == katana::io::GuestCallAbi::SuperHC &&
             !result.budget_exhausted &&
             functions_reaching_guarded_inventory_store.contains(
@@ -2496,7 +2532,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                     isolated_store_input(call_site, observation),
                     false,
                     true,
-                    &guarded_inventory_collector,
+                    &function_result.inventory,
                     call_site);
                 struct ForwardedStoreContext {
                     const FunctionInfo* function = nullptr;
@@ -2513,11 +2549,11 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         maximum_forwarded_store_contexts)
                         return;
                     const auto forwarded_function =
-                        function_by_address.find(forwarded.callee);
+                        final_function_by_address.find(forwarded.callee);
                     const auto forwarded_input =
-                        candidate_inputs.find(forwarded.callee);
-                    if (forwarded_function == function_by_address.end() ||
-                        forwarded_input == candidate_inputs.end() ||
+                        final_candidate_inputs.find(forwarded.callee);
+                    if (forwarded_function == final_function_by_address.end() ||
+                        forwarded_input == final_candidate_inputs.end() ||
                         !functions_reaching_guarded_inventory_store.contains(
                             forwarded.callee) ||
                         !requires_forwarded_isolated_store_harvest(
@@ -2555,7 +2591,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                                              forwarded.observation),
                         false,
                         true,
-                        &guarded_inventory_collector,
+                        &function_result.inventory,
                         call_site);
                     for (const auto& nested :
                          forwarded_evaluation.call_arguments)
@@ -2563,6 +2599,57 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                 }
             }
         }
+        return function_result;
+    };
+
+    std::vector<std::optional<ResolutionFunctionResult>> function_results(
+        resolution_functions.size());
+    auto resolution_jobs = std::size_t{1u};
+    if (resolution_functions.size() >= minimum_parallel_resolution_functions) {
+        resolution_jobs =
+            std::min(resolution_functions.size(),
+                     std::min(maximum_parallel_resolution_jobs,
+                              static_cast<std::size_t>(
+                                  std::max(1u, std::thread::hardware_concurrency()))));
+    }
+    if (resolution_jobs == 1u) {
+        for (std::size_t index = 0u; index < resolution_functions.size(); ++index)
+            function_results[index].emplace(evaluate_resolution_function(index));
+    } else {
+        std::atomic_size_t next_function = 0u;
+        std::vector<std::exception_ptr> errors(resolution_functions.size());
+        std::vector<std::future<void>> workers;
+        workers.reserve(resolution_jobs);
+        for (std::size_t worker = 0u; worker < resolution_jobs; ++worker) {
+            workers.push_back(std::async(std::launch::async, [&] {
+                for (;;) {
+                    const auto index =
+                        next_function.fetch_add(1u, std::memory_order_relaxed);
+                    if (index >= resolution_functions.size()) return;
+                    try {
+                        function_results[index].emplace(
+                            evaluate_resolution_function(index));
+                    } catch (...) {
+                        errors[index] = std::current_exception();
+                    }
+                }
+            }));
+        }
+        for (auto& worker : workers)
+            worker.get();
+        for (const auto& error : errors) {
+            if (error) std::rethrow_exception(error);
+        }
+    }
+
+    for (auto& function_result : function_results) {
+        auto resolved = std::move(*function_result);
+        resolution_count += resolved.evaluation.resolutions.size();
+        result.resolutions.insert(
+            result.resolutions.end(),
+            std::make_move_iterator(resolved.evaluation.resolutions.begin()),
+            std::make_move_iterator(resolved.evaluation.resolutions.end()));
+        std::move(resolved.inventory).replay_into(guarded_inventory_collector);
         ++completed_functions;
         if (completed_functions <= 16u || completed_functions % 128u == 0u ||
             completed_functions == functions.size())
