@@ -1,52 +1,86 @@
 # KatanaRecomp Task-Katalog
 
-Dieses Dokument enthaelt die aktiven v0.49-Produktaufgaben. Historische Detailtasks bleiben in Git und in `TASK_ID_REGISTRY.md` nachvollziehbar.
+Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgaben bleiben in Git und in `TASK_ID_REGISTRY.md` nachvollziehbar.
 
 ## Verbindliche Regeln
 
 - Oberste Prioritaet ist ein lauffaehiger Sonic-Adventure-PAL-Produktport.
-- Der echte Produktport ist die Bring-up-Abnahme.
-- Bootkorrektheit wird bei festem Gastzyklusziel bewertet, Performance ueber die Hostzeit fuer genau dieses Ziel.
-- DirectBoot besitzt keinen Sega-Screen als Pflichtmeilenstein; dieses Bild gehoert zu IP.BIN und damit NativeDiscBoot.
+- Das echte Endprodukt ist die Bring-up-Abnahme.
+- Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach fixer Hostzeit.
+- DirectBoot besitzt keinen Sega-Screen als Pflichtmeilenstein; dieses Bild gehoert zu IP.BIN.
 - Keine neue breite Testsuite, Funktionsmatrix oder vorsorgliche Regression.
-- Ein kleiner Test ist nur fuer einen konkret beobachteten Produktfehler erlaubt, wenn er die naechste Produktiteration messbar verkuerzt.
-- Keine Sonic-Adressen, Titelhooks oder Retailbytes im generischen Katana-Kern.
+- Kleine vorhandene Tests duerfen nur angepasst werden, wenn eine sonst schwer sichtbare Datenkorruption abgesichert werden muss.
+- Produktlaeufe erfolgen erst nach einem zusammenhaengenden Implementierungsblock.
+- Keine Sonic-Adressen, Titelhooks oder Retailbytes im generischen Katana-Code.
 - Kein Interpreter, JIT oder Emulationsfallback im normalen Produktpfad.
-- Dokumentation und Taskstatus werden erst nach dem echten Produktlauf aktualisiert.
-- Durch einen bestaetigten Nachfolgeexport ersetzte, unbrauchbare Portordner
-  werden gezielt geloescht; aktuelle Referenzen, Boot-Executable-Artefakte und
-  Nutzerdaten bleiben davon getrennt.
+- Dokumentation und Taskstatus werden erst nach realer Produktevidenz als abgeschlossen markiert.
 
 ## Aktueller Produktstand
 
-Reviewbasis:
-
 ```text
-aa1cd51655fdefec5a9891152487f902f91046c6
+Dokumentations-HEAD: 69f3d122613338672d0e74d8a775c772d090746d
+Code-HEAD:           31c5575bd4e89c2bc85c20a14f4d1745fbbc987f
+
+Gastzyklen:          600.000.000
+Hostzeit:            14,0113 s
+effektive Gast-MHz:  42,8225
+Zentraldispatches:   52.329.316
+GD-ROM-Kommandos:    70
+AICA-Audiopuffer:    180
+Frames:              0
+sichtbarer Screen:   keiner
+letzter PC:          0x8C65A624
 ```
 
-Aktuelle Messung:
+## Aktueller erster Blocker
+
+Der konkrete Waitvertrag liegt im ADXT-/mwSnd-Soundpfad:
 
 ```text
-MSVC:     600.000.000 Gastzyklen / 14,8563 s / 40,3869 MHz
-clang-cl: 600.000.000 Gastzyklen / 14,1289 s / 42,4662 MHz
-zentrale Dispatches: 52.329.316
-sichtbarer DirectBoot-Meilenstein: keiner
+Objekt:               0x8C8D3908
+Completion-Flag:      0x8C8D3920
+Poll-Callback:        0x8C666D42 (RTS; NOP)
+Completion-Writer:    0x8C65A458
 ```
 
-Der aktuelle DirectBoot startet die Haupt-Executable, nutzt aber einen Post-BIOS- statt eines bewiesenen Post-IP.BIN-/Game-Entry-Handoffs. Gleichzeitig verlaesst der neue Function-AOT-Pfad seine nativen Regionen viel zu haeufig.
+Der Waitpfad setzt `[object+24]` auf `0` und pollt danach auf `1`. Der Writer setzt dasselbe Feld auf `1`. Alle sechs statisch aufgeloesten Caller liegen in ADXT-/mwSnd-Soundpfaden.
 
-## Empfohlene Reihenfolge
+Wahrscheinliche Fehlerzone:
 
 ```text
-KR-4951
-  +--> KR-4952 -> KR-4953 -> KR-4954 -> KR-4955 -> KR-4961 -> KR-4962
-  +--> KR-4956 -> KR-4957 -> KR-4958 -> KR-4959 -> KR-4960
+ADXT/mwSnd-Worker
+  -> G2/AICA/DMAC
+  -> Scheduler/IRQ
+  -> Completion-Writer
+```
 
-KR-4963 parallel nach KR-4951
+Maple/VMU ist fuer diesen konkreten Poll nicht belegt.
 
-KR-4960 + KR-4961 + KR-4962 + KR-4963
-  -> KR-4964
+## Verbindliche Reihenfolge
+
+```text
+KR-4965 Sound-Completion
+  +--> KR-4966 relatives Produktgate
+  +--> KR-4967 CompletePlatform-Koordinator
+         +--> KR-4968 Sound-/DMA-/IRQ-Handoff
+         +--> KR-4969 PVR-/Frame-Handoff
+         +--> KR-4970 produkt-sicherer Maple-/VMU-Handoff
+                    -> KR-4952 und KR-4953 abschliessen
+                    -> KR-4962 Game-Entry-Paritaet und Produktboot
+
+Danach Performance:
+KR-4955 -> KR-4956 -> KR-4957 -> KR-4958
+                                -> KR-4959
+                                -> KR-4960
+
+Spielprojekt:
+KR-4954 -> KR-4961
+
+Build:
+KR-4963 parallel nach stabiler Handoff-Grundlage
+
+Final:
+KR-4960 + KR-4961 + KR-4962 + KR-4963 -> KR-4964
 ```
 
 ---
@@ -55,34 +89,19 @@ KR-4960 + KR-4961 + KR-4962 + KR-4963
 
 Prioritaet: P0
 
-Abhaengigkeiten: keine
+Status: Baseline umgesetzt. Das Folgeproblem der absoluten statt relativen Schedulergrenze und der fehlenden Pflichtmeilensteinwertung wird in `KR-4966` geschlossen.
 
-### Umfang
+### Bereits umgesetzt
 
-- hostzeitbasiertes Drei-Sekunden-Bootgate entfernen
-- ein festes Gastzyklusziel fuer vergleichbare Produktlaeufe verwenden
-- Host-Watchdog nur gegen echten Hanger verwenden
-- NativeDiscBoot- und DirectBoot-Meilensteine trennen
-- mindestens folgende Marker unterscheiden:
-  - `BootExecutableEntry`
-  - `GameCodeProgressed`
-  - `FirstGameFramebufferWrite`
-  - `FirstTaFrame`
-  - `FirstVisibleGameFrame`
-  - `TitleScreen`
-- Produktbericht um Gastzyklen, Hostzeit, effektive MHz und Zentraldispatches ergaenzen
-- keine Diagnoseoption aktivieren, die den normalen Produktpfad veraendert
+- 600-Millionen-Gastzyklus-Gate
+- getrennte NativeDisc-/DirectBoot-Meilensteine
+- Host-Watchdog nur gegen Hanger
+- Bericht fuer Hostzeit, MHz, Dispatches und sichtbaren Meilenstein
 
-### Akzeptanz
+### Offene Folgerisiken
 
-- derselbe Gastzyklus-Checkpoint wird fuer Vorher-/Nachhervergleiche verwendet
-- DirectBoot gilt nicht wegen eines fehlenden Sega-Screens als gescheitert
-- NativeDiscBoot darf das Sega-Bild weiterhin als eigenen IP.BIN-Meilenstein melden
-- der reale Produktport wird mindestens bis 600.000.000 Gastzyklen ausgefuehrt
-
-Status: umgesetzt. Das Gate verwendet exakt 600.000.000 Gastzyklen,
-getrennte Bootpfad-Meilensteine und einen grosszuegigen Host-Watchdog.
-Diagnose-Handoff-Capture und -Apply sind im Produktgate explizit verboten.
+- nach Scheduler-Handoff waere `600.000.000` derzeit ein absolutes Maximum statt einer Laufdauer ab Game-Entry
+- `visible_screen=none` kann noch mit Exitcode 0 und `first_problem=none` enden
 
 ---
 
@@ -90,44 +109,24 @@ Diagnose-Handoff-Capture und -Apply sind im Produktgate explizit verboten.
 
 Prioritaet: P0
 
-Abhaengigkeiten: KR-4951
+Abhaengigkeiten: KR-4967, KR-4968, KR-4969, KR-4970
 
-### Problem
-
-`DirectBootExecutable` startet bei `0x8C010000`, verwendet aber einen fest codierten `DreamcastPostBiosCpuState`. IP.BIN liegt zwischen BIOS und Haupt-Executable und erzeugt einen eigenen Game-Entry-Zustand.
-
-### Umgesetzter Zwischenstand
-
-- `GameEntryHandoff` Schema 2 trennt Post-BIOS- und Game-Entry-Vertrag.
-- Die Bindung umfasst Executable-/Contentidentitaet, Konsolenprofil,
-  Runtime-ABI, Plattformzustandsvertrag und Descriptoridentitaet.
-- CPU, hashgebundene RAM-Operationen, Geraete und Scheduler sind typisiert.
-- `CpuMemoryDiagnostic` kann CPU und RAM vorvalidiert anwenden und meldet
-  Geraete/Scheduler weiterhin als ausstehend.
-
-Die Aufgabe bleibt offen, bis ein `CompletePlatform`-Handoff angewendet und
-im echten DirectBoot-Produktlauf nachgewiesen ist.
+Status: Aktiv. Schema, Identitaetsbindung und CPU/RAM-Diagnostik existieren; `CompletePlatform` fehlt.
 
 ### Umfang
 
-- `PostBiosCpuState` und `GameEntryHandoff` als getrennte Vertraege modellieren
-- den DirectBoot-Vertrag auf einen Post-IP.BIN-/Game-Entry-Zustand umstellen
-- alle architektonisch sichtbaren CPU-Felder erfassen:
-  - R0-R15 und Bankregister
-  - PC, PR, SR, GBR, VBR, DBR
-  - MACH, MACL, FPUL, FPSCR und erforderliche FPU-Zustaende
-  - SSR, SPC, SGR und Exceptionzustand
-- RAM-Handoff als typisierte Operationen beziehungsweise private Seitenreferenzen modellieren
-- Geraetehandoff fuer mindestens PVR, GD-ROM/G1, DMAC, AICA, Maple, Systembus und Interruptzustand modellieren
-- Scheduler-/pending-Eventzustand nur typisiert und reproduzierbar uebernehmen
-- bestehenden NativeDiscBoot-Post-BIOS-Vertrag nicht umdeuten
+- Post-BIOS- und Post-IP.BIN-/Game-Entry-Vertrag getrennt halten
+- CPU, RAM, Geraete, IRQ und Scheduler normativ erfassen
+- produktiven `CompletePlatform`-Apply verwenden
+- CPU/MMU und finalen PC/PR erst nach vollstaendig vorbereitetem Plattformcommit veroeffentlichen
+- unvollstaendige Handoffs vor dem ersten Gastblock ablehnen
 
 ### Akzeptanz
 
-- DirectBoot verwendet keinen BIOS-Return-PR als unbelegten Game-Entry-PR
-- der Handoff ist an Contentidentitaet, Bootdateihash, Konsolenprofil, Runtime-ABI und Handoff-Schema gebunden
-- unvollstaendige oder inkompatible Handoffs werden vor Gastcode abgelehnt
-- keine Retailbytes werden in das Repository geschrieben
+- kein fest codierter BIOS-Return-PR als Game-Entry-Vertrag
+- Handoff ist an Content, Bootdatei, Konsolenprofil, Runtime-ABI und Schema gebunden
+- NativeDisc und DirectBoot besitzen am Entry gleiche Subsystemdigests
+- keine Retailbytes im Repository
 
 ---
 
@@ -135,274 +134,242 @@ im echten DirectBoot-Produktlauf nachgewiesen ist.
 
 Prioritaet: P0
 
-Abhaengigkeiten: KR-4952
+Abhaengigkeiten: KR-4967, KR-4968, KR-4969, KR-4970
+
+Status: Aktiv. Artefaktformat und CPU/RAM-Capture sind umgesetzt; Plattform-Capture fehlt.
 
 ### Umfang
 
-- NativeDiscBoot bis zum ersten Kontrolltransfer in die BootExecutable-Range ausfuehren
-- unmittelbar vor der ersten Haupt-Executable-Instruktion einen privaten Handoff erfassen
-- einen deterministischen Diff gegen den normalen Runtime-Initialzustand erzeugen
-- CPU-, RAM-, Geraete-, Scheduler- und Interruptzustand getrennt serialisieren
-- Retaildaten nur als lokale Content-Slices beziehungsweise private Seitenartefakte speichern
-- Manifest zuletzt schreiben und danach erneut validieren
-- zwei identische Captures derselben GDI muessen bytegleich sein
-- CLI-Befehle fuer Capture, Inspect und Verify bereitstellen
-
-### Umgesetzter Zwischenstand
-
-Das private Artefaktformat 2 und ein owning, `noexcept` lesender Provider sind
-implementiert. Payloads sind titelgebunden und werden ueber Offset, Groesse
-und SHA-256 referenziert; Descriptor und Slices werden vor dem Apply
-vollstaendig validiert. Der aktuelle Capture erzeugt absichtlich nur ein
-`CpuMemoryDiagnostic`-Artefakt. Vollstaendige Geraete-/Schedulerdaten sowie
-der produktive Paritaetslauf bleiben offen.
+- NativeDisc unmittelbar vor der ersten BootExecutable-Instruktion erfassen
+- deterministische RAM-/VRAM-/AICA-RAM-Deltas
+- typisierte Geraete- und Schedulerdaten
+- private Content-Slices hashgebunden speichern
+- Product- und Diagnostic-Handoffprofile trennen
+- VMU/Saves nicht aus einem alten Capture ueberschreiben
 
 ### Akzeptanz
 
-- derselbe lokale Handoff kann einen DirectBoot-Lauf reproduzierbar starten
-- Artefakt und Original-GDI bleiben ausserhalb des Repositorys
-- ein Handoff einer anderen Discversion oder Runtime-ABI wird abgelehnt
-- DirectBoot erreicht mindestens `GameCodeProgressed`
+- derselbe lokale Handoff startet DirectBoot reproduzierbar
+- Artefakt und Original-GDI bleiben ausserhalb des Repositories
+- andere Discversion oder Runtime-ABI wird abgelehnt
+- Product-Handoff bewahrt aktuelle Nutzerdaten
 
 ---
 
 ## [ ] KR-4954 - Deklaratives externes Spielprojekt und CLI-Scaffold
 
-Prioritaet: P0
+Prioritaet: P1
 
 Abhaengigkeiten: KR-4952
 
 ### Umfang
 
-- versioniertes TOML- oder JSON-Schema fuer `GameProjectDefinition`
+- versionierter TOML-/JSON-Descriptor fuer `GameProjectDefinition`
 - CLI-Laden, Validierung und Hashbindung
-- symbolische Namen fuer native Overrides und Mid-Function-Hooks
-- generiertes CMake-Scaffold fuer ein externes Spielprojekt
-- installierte `KatanaRecomp`-Werkzeuge und `KatanaRecomp::runtime_core` verwenden
-- kein `add_subdirectory` des vollstaendigen Katana-Quellbaums im normalen Spielprojekt
-- lokale Contentwurzel und private generierte AOT-Quellen gitignored halten
-- DirectBoot- und NativeDiscBoot-Konfiguration im Descriptor erlauben
-- Game-Entry-Handoff-Manifest referenzieren
+- symbolische native Overrides und Mid-Function-Hooks
+- externes CMake-Scaffold gegen installierte Runtime
+- private generierte AOT-Quellen und Contentwurzel gitignored
+- DirectBoot-, NativeDisc- und GameEntryHandoff-Konfiguration
 
 ### Akzeptanz
 
-- ein neues externes Projekt kann ohne eigenen C++-Exporter erzeugt werden
-- Hooknamen werden beim Spielprojektbuild zu nativen Funktionen aufgeloest
-- der nackte Descriptor enthaelt keine Retailbytes
-- eine Runtime-only-Aenderung erzwingt keinen erneuten SH-4-Export
+- externes Projekt ohne eigenen C++-Exporter erzeugbar
+- keine Retailbytes im Descriptor
+- Runtime-only-Aenderung erfordert keinen SH-4-Neuexport
+- Hook-only-Aenderung baut nur das Spielprojekt
 
 ---
 
 ## [ ] KR-4955 - Explizite Funktionsgrenzen und Tabellenhinweise End-to-End
 
-Prioritaet: P0
+Prioritaet: P0 nach stabilem DirectBoot
 
-Abhaengigkeiten: KR-4954
+Abhaengigkeiten: KR-4962
 
 ### Problem
 
-`GameProjectFunctionBoundary` besitzt eine Groesse, der aktuelle Analyzer-Override uebernimmt aber nur die Startadresse. Der Xenon-artige Titelvertrag ist dadurch unvollstaendig.
+`GameProjectFunctionBoundary::size` wird derzeit nicht als exakte Analyzer-Funktionsgrenze uebernommen.
 
 ### Umfang
 
-- Analyzer-Override um eine explizite Funktionsgroesse beziehungsweise Endadresse erweitern
-- Analyzer-ABI und Descriptorversion erhoehen
-- Funktionsgrenzen exakt und nicht als blossen Seed anwenden
-- Jump Tables und Callbacktabellen aus dem externen Descriptor an Analyse und Codegen binden
-- Konflikte mit automatisch bewiesenen Grenzen sichtbar melden
-- Hookadressen als architektonische Grenzen erhalten
-- keine Hinweise als Vollstaendigkeitsbeweis umdeuten
+- Analyzer-Override um Groesse oder Endadresse erweitern
+- Funktionsintervall exakt anwenden
+- Jump-/Callbacktabellen aus dem Spielprojekt binden
+- Konflikte mit automatischer Analyse sichtbar melden
+- Hookadressen als Architekturgrenzen bewahren
 
 ### Akzeptanz
 
-- ein extern definiertes Funktionsintervall wird exakt emittiert
-- keine Nachbarbytes werden still als Teil der Funktion aufgenommen
-- bekannte Jump-/Callbacktabellen erzeugen native Kandidaten mit Live-Target-Guard
+- extern definiertes Funktionsintervall wird exakt emittiert
+- Nachbarbytes werden nicht still aufgenommen
 - falsche Discidentitaet deaktiviert alle Titelhinweise
 
 ---
 
 ## [ ] KR-4956 - Static-AOT-Dispatchflucht inventarisieren und schliessen
 
-Prioritaet: P0
+Prioritaet: P0 Performance
 
-Abhaengigkeiten: KR-4951
+Abhaengigkeiten: KR-4955
+
+Status: Zaehler und `KATANA_STATIC_AOT_ESCAPE_STATS` existieren; reale Top-Ursachen muessen aus dem Produktlauf in den Status uebernommen werden.
 
 ### Umfang
 
-- produktnahe POD-Zaehler fuer jede Rueckkehr zum Zentraldispatcher
-- mindestens folgende Ursachen trennen:
-  - Callziel nicht bekannt
-  - Ziel nicht native-entry-safe
-  - Timingklasse nicht deferrable
-  - Schedulerereignis faellig
-  - Interrupt akzeptierbar
-  - MMIO-/Architekturgrenze
-  - Hookgrenze
-  - Varianten-/Generationguard
-  - Call-Depth-Limit
-  - Partitions-/Symbolgrenze
-- keine Strings, Maps oder Heapallokationen im Hotpath
-- terminale Top-Ursachen und Top-Callsites ausgeben
-- 600-Millionen-Zyklen-Produktlauf ausfuehren
+- vorhandene Escape-Statistik im normalen Produktlauf erfassen
+- dominante Gruende und Top-Sites bestimmen
+- keine neue parallele Diagnoseinfrastruktur bauen
+- die zwei groessten produktiven Fluchtursachen zuerst schliessen
 
 ### Akzeptanz
 
-- die 52.329.316 Zentraldispatches sind vollstaendig nach Ursachen klassifiziert
-- der dominante Rueckfallgrund ist konkret benannt
-- die Zaehler veraendern Produktdurchsatz und Fastpaths nicht messbar
+- alle Zentraldispatches sind klassifiziert
+- dominante Gruende sind mit Produktzahlen belegt
+- Messung veraendert den schnellen Produktpfad nicht
 
 ---
 
 ## [ ] KR-4957 - Direkte native Calls ueber sichere Timinggrenzen
 
-Prioritaet: P0
+Prioritaet: P0 Performance
 
 Abhaengigkeiten: KR-4956
 
-### Problem
-
-`can_chain_executable_block()` koppelt direkte Callfaehigkeit an `PureCpu`/`LinearRamOnly`. Eine Funktion mit spaeterem MMIO wird dadurch komplett zentral dispatcht, obwohl ein Safepoint vor dem MMIO genuegt.
-
 ### Umfang
 
-- Vertraege trennen:
-  - `NativeEntrySafe`
-  - `DirectCallEligible`
-  - `CompletionDeferrable`
-  - `RequiresSafepointBeforeEntry`
-- bekannte direkte Calls partitionsuebergreifend nativ ausfuehren
-- pending Gastzyklen bei Bedarf vor dem Callee oder seiner ersten Architekturgrenze committen
-- direkte Rueckkehr zur nativen Continuation
-- Call-Depth-Guard nur als Stackschutz, nicht als regulaerer Dispatchpfad
-- Funktionsoverrides und Mid-Hooks weiterhin ueber die externe Hookgrenze leiten
+- `NativeEntrySafe`, `DirectCallEligible`, `CompletionDeferrable` und `RequiresSafepointBeforeEntry` trennen
+- bekannte Calls partitionsuebergreifend nativ ausfuehren
+- Safepoints an echten MMIO-/Scheduler-/IRQ-Grenzen statt pauschal am Call
+- direkte native Continuation und Return
+- Hookgrenzen weiterhin respektieren
 
 ### Akzeptanz
 
-- Funktionen mit internem MMIO duerfen direkt nativ aufgerufen werden
-- Scheduler- und Interruptreihenfolge bleibt korrekt
-- Zentraldispatches sinken im selben Produktlauf deutlich
-- kein Missing-AOT oder stiller Hook-Bypass entsteht
+- Funktionen mit spaeterem MMIO duerfen nativ betreten werden
+- Scheduler-/IRQ-Reihenfolge bleibt korrekt
+- Zentraldispatches sinken im gleichen Produktpfad deutlich
 
 ---
 
 ## [ ] KR-4958 - IR-basierte Registerlokalisierung und RAM-Regionen
 
-Prioritaet: P1
+Prioritaet: P1 Performance
 
 Abhaengigkeiten: KR-4957
 
 ### Umfang
 
-- post-hoc-Textsuche und `replace_all_text()` aus der Registerlokalisierung entfernen
-- echte IR-Use/Def- und Livenessinformationen verwenden
+- C++-Textsuche und `replace_all_text()` aus der Lokalisierung entfernen
+- IR-Use/Def und Liveness verwenden
 - GPR, T, PR, GBR, MACH/MACL und FPUL schrittweise lokalisieren
-- Spillgrenzen fuer MMIO, Exceptions, Interrupts, Hooks, SR-/Bankwechsel und dynamischen Dispatch
-- bewiesene P1-/P2-Haupt-RAM-Regionen mit einem gemeinsamen Guard direkt adressieren
-- Codeinvalidierung und Writeobserver als gebuendelte Wirkung erhalten
+- Spillgrenzen fuer MMIO, Exception, IRQ, Hook, SR-/Bankwechsel und dynamischen Dispatch
+- bewiesene P1-/P2-Haupt-RAM-Regionen direkt binden
 
 ### Akzeptanz
 
-- keine semantische C++-Textumschreibung fuer Register mehr
-- lokalisierte Funktionen duerfen normale Speicherzugriffe und direkte Calls enthalten
-- Produktdurchsatz steigt ohne geaenderte Gastzyklen oder sichtbaren Bootrueckschritt
+- keine semantische C++-Stringersetzung fuer Register
+- normale Speicherzugriffe und direkte Calls in lokalisierten Funktionen
+- gleiche Gastzyklen und gleicher sichtbarer Meilenstein
 
 ---
 
 ## [ ] KR-4959 - Ereignisgetriebene Scheduler-/IRQ-Safepoints
 
-Prioritaet: P1
+Prioritaet: P1 Performance und Korrektheit
 
-Abhaengigkeiten: KR-4956
+Abhaengigkeiten: KR-4968, KR-4956
 
 ### Umfang
 
-- Interrupt-Epoch, hoechstes Pending-Level und Pending-Maske als billigen Guard verwenden
-- vollen Routerwalk nur bei Geraeteaenderung, Acknowledge, IMASK-/BL-Aenderung oder Annahme
+- Interrupt-Epoch, hoechstes Pending-Level und Pending-Maske als billigen Guard
+- voller Routerwalk nur bei echter Zustandsaenderung
 - Schedulercommit ueber native Regionen sammeln
-- Safepoints nur vor faelligen Ereignissen, MMIO, Exceptions, Hooks, SR-/MMU-Aenderungen oder Cycle-Quantum
-- Host-Lifecycle nicht pro Zentraldispatch ueber die Wall-Clock pollen
-- Replay ohne aktives Log sofort und ohne Samplingarbeit verlassen
+- Safepoints vor faelligen Events, MMIO, Exceptions, Hooks, SR-/MMU-Aenderungen oder Quantum
+- Host-Lifecycle nicht pro Dispatch ueber Wall-Clock pollen
 
 ### Akzeptanz
 
-- IRQ-/Schedulerarbeit pro Gastzyklus sinkt messbar
-- keine Interrupt- oder DMA-Completion wird verschoben oder verloren
-- Produktpfad und billige Diagnose verwenden dieselbe Ausfuehrungsarchitektur
+- keine verlorene Sound-/DMA-/IRQ-Completion
+- IRQ-/Schedulerarbeit pro Gastzyklus sinkt
+- Produkt- und billige Diagnose nutzen dieselbe Architektur
 
 ---
 
 ## [ ] KR-4960 - 200-MHz-Produkt-Hotpath
 
-Prioritaet: P0
+Prioritaet: P0 Performance-Gate
 
 Abhaengigkeiten: KR-4957, KR-4958, KR-4959
 
 ### Umfang
 
-- Static-AOT-Tier ohne Materializerarbeit im Normalfall
-- bereits validierten Ausfuehrungsdeskriptor direkt verwenden
-- Block-/Fastpathdeskriptor ohne zweiten Lookup oder linearen Scan weiterreichen
-- Function-AOT-Regionen statt Owner-Wrapper/PC-Switch so weit wie sicher moeglich ausfuehren
-- keine Erfolgsstrings oder detaillierten RuntimeOnly-Sitemaps im Hotpath
-- Host-Samplingprofil mit Gastfunktionssymbolen bereitstellen
-- MSVC und clang-cl mit demselben Produktport vergleichen
+- statisches AOT ohne Materializerarbeit im Normalfall
+- validierten Ausfuehrungsdeskriptor direkt verwenden
+- Block-/Fastpathmetadaten ohne Lookup weiterreichen
+- Function-AOT statt Owner-Wrapper/PC-Switch so weit wie sicher
+- `dynamic_cast` aus bekannten Produktfastpaths entfernen
+- keine Erfolgsstrings oder detaillierten Sitemaps im Hotpath
+- MSVC und clang-cl am selben Produktport vergleichen
 
 ### Akzeptanz
 
-- mindestens 200 MHz im normalen ungedrosselten Produktlauf
+- mindestens 200 MHz im normalen Produktlauf
 - Zielreserve mindestens 250 MHz unpaced
-- 600.000.000 Gastzyklen werden ohne Diagnosepfadwechsel erreicht
-- der Pacer begrenzt erst oberhalb des korrekten 200-MHz-Gastvertrags
+- sichtbarer Bootmeilenstein bleibt erhalten
+- keine kuenstlich reduzierten Gastzyklen oder Geraetelatenzen
 
 ---
 
 ## [ ] KR-4961 - Externes SonicAdventureRecomp-Bring-up-Projekt
 
-Prioritaet: P0
+Prioritaet: P1 nach produktivem Handoff
 
-Abhaengigkeiten: KR-4953, KR-4954, KR-4955
+Abhaengigkeiten: KR-4954, KR-4955, KR-4953
 
 ### Umfang
 
-Diese Aufgabe liefert ein eigenstaendiges externes Spielprojekt, nicht Sonic-Code im Katana-Kern.
-
-- `SonicAdventureRecomp`-Projekt aus dem Scaffold erzeugen
-- generierten SA-Code lokal und gitignored halten
-- PAL-Discidentitaet, Funktionsgrenzen, Tabellen, Symbole und Hooks im Spielprojekt halten
-- lokale Entwicklerinstallation ausserhalb des Repositorys
-- spaeteren Nutzerinstaller auf denselben `OriginalDiscValidator`-/Contentvertrag stuetzen
-- DirectBoot als Bring-up-Standard, NativeDiscBoot als Referenzpfad
-- private Adressen und Hashes nur im privaten beziehungsweise dafuer vorgesehenen Spielprojekt halten
+- externes `SonicAdventureRecomp` aus Scaffold
+- generierter SA-Code lokal/gitignored
+- PAL-Identitaet, Funktionen, Tabellen, Symbole und Hooks im Spielprojekt
+- lokale Entwicklerinstallation ausserhalb des Repositories
+- spaeterer Nutzerinstaller auf demselben Contentvertrag
+- DirectBoot als Bring-up, NativeDisc als Referenz
 
 ### Akzeptanz
 
-- Katana-Kern und Runtime enthalten keine Sonic-Adressen
-- SA-Projekt baut gegen installierte Runtime und verwendet Recompiler als Tool
-- bestehende Originaldaten werden lokal installiert und nicht erneut ins Repo kopiert
-- echter SA-Produktlauf startet aus dem Spielprojekt
+- Katana-Kern und Runtime enthalten keine Sonic-Sonderfaelle
+- echter SA-Produktlauf startet aus dem externen Projekt
+- Originaldaten bleiben lokal
 
 ---
 
 ## [ ] KR-4962 - NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry
 
-Prioritaet: P0
+Prioritaet: P0 Boot-Gate
 
-Abhaengigkeiten: KR-4953, KR-4961
+Abhaengigkeiten: KR-4952, KR-4953, KR-4967, KR-4968, KR-4969, KR-4970
 
 ### Umfang
 
-- NativeDiscBoot bis unmittelbar vor die erste BootExecutable-Instruktion ausfuehren
-- DirectBoot mit dem erfassten Game-Entry-Handoff starten
-- CPU-, RAM-, Geraete-, Scheduler- und Interruptdigests am selben Punkt vergleichen
-- erste Abweichung typisieren und nur deren Ursache korrigieren
-- Sega-Screen nicht als DirectBoot-Erwartung verwenden
+- NativeDisc bis unmittelbar vor erste BootExecutable-Instruktion
+- DirectBoot mit CompletePlatform-Handoff
+- per Subsystem Digests vergleichen:
+  - CPU/MMU
+  - Main RAM/VRAM/AICA RAM
+  - PVR/SPG/ASIC/IRQ
+  - GD-ROM/G1/DMAC
+  - AICA/G2/Sound
+  - Maple/VMU
+  - Timer/Scheduler
+- erste Abweichung typisieren
+- danach 600 Millionen Gastzyklen **ab Entry** laufen
 
 ### Akzeptanz
 
-- beide Pfade besitzen am Game-Entry denselben normativen Zustand
-- Unterschiede sind ausschliesslich explizit erlaubte Host-/Diagnosefelder
-- DirectBoot erreicht danach denselben Gamecode-Checkpoint wie NativeDiscBoot
+- normative Entry-Digests stimmen
+- ADXT-/mwSnd-Completionwriter fortgeschritten
+- mindestens `FirstGameFramebufferWrite` oder `FirstTaFrame`
+- bei verfehltem Meilenstein Exitcode 3 und konkreter Blocker
 
 ---
 
@@ -410,26 +377,25 @@ Abhaengigkeiten: KR-4953, KR-4961
 
 Prioritaet: P1
 
-Abhaengigkeiten: KR-4951
+Abhaengigkeiten: stabile Handoff-Grundlage
+
+Status: Warmexport etwa 2,3 Sekunden; Kaltbuild und externe Hook-only-Schleife bleiben offen.
 
 ### Umfang
 
-- Laufzeiten fuer Analyse, IR, Emission, Runtimecompile, AOT-Compile und Link getrennt messen
-- Runtime-only-Aenderung nur Runtime rebuilden und Spiel relinken
-- Hook-only-Aenderung nur Spielprojekt rebuilden
-- `aot_runtime_abi.hpp` auf schmale POD-/Intrinsic-Abhaengigkeiten reduzieren
-- stabile AOT-TUs und PCH beibehalten
-- Bring-up mit inkrementellem Link und ohne LTCG
-- Gatebuild separat voll optimieren
-- realen MSVC-/clang-cl-Vergleich desselben Ports ausfuehren
+- Analyse, IR, Emission, Runtimecompile, AOT-Compile und Link getrennt messen
+- Runtime-only nur Runtime rebuilden und Spiel relinken
+- Hook-only nur Spielprojekt bauen
+- AOT-ABI-Header weiter verschlanken
+- Bring-up ohne LTCG, Gate voll optimiert
+- MSVC-/clang-cl-Produktvergleich
 
 ### Akzeptanz
 
-- warmer Runtimefix plus Relink unter 30 Sekunden als Ziel
-- Hook-only-Warmbuild unter 15 Sekunden als Ziel
-- geaenderte AOT-Partition unter 90 Sekunden als Ziel
-- unveraenderte Partitionen werden nicht re-emittiert oder neu kompiliert
-- keine synthetische Benchmark ersetzt die reale Produktbuildzeit
+- Runtimefix plus Relink unter 30 Sekunden als Ziel
+- Hook-only unter 15 Sekunden als Ziel
+- geaenderte AOT-Partition unter 90 Sekunden
+- unveraenderte Partitionen nicht neu emittieren
 
 ---
 
@@ -441,17 +407,205 @@ Abhaengigkeiten: KR-4960, KR-4961, KR-4962, KR-4963
 
 ### Umfang
 
-- frischen externen SA-Produktport bauen
-- vorhandene lokale Originaldiscinstallation identitaetspruefen
-- DirectBoot bis mindestens zum ersten sichtbaren Spiel-/TA-Frame ausfuehren
-- NativeDiscBoot als Paritaetsreferenz bis zum Game-Entry ausfuehren
-- mindestens 200 MHz und die Buildziele dokumentieren
-- keine Vollsuite als Ersatz fuer das Produkt ausgeben
+- externen SA-Produktport bauen
+- lokale Originaldiscinstallation identitaetspruefen
+- CompletePlatform-DirectBoot bis sichtbarem Spiel-/TA-Frame
+- NativeDisc als Entry-Paritaetsreferenz
+- 200-MHz- und Buildziele dokumentieren
 
 ### Akzeptanz
 
-- `BootExecutableEntry`, `GameCodeProgressed` und `FirstVisibleGameFrame` erreicht
-- kein Interpreter, JIT, Emulationsfallback oder Sonic-Sonderfall im Katana-Kern
-- Produkt laeuft mindestens mit 200 MHz
-- Originaldaten bleiben lokal und ausserhalb des Repositorys
-- verbleibender naechster Produktblocker ist konkret benannt
+- `BootExecutableEntry`
+- `GameCodeProgressed`
+- Sound-Completion
+- `FirstVisibleGameFrame`
+- mindestens 200 MHz
+- keine Retaildaten oder Sonic-Sonderfaelle im Katana-Kern
+
+---
+
+## [ ] KR-4965 - ADXT/mwSnd-Sound-Completion bis zum Writer schliessen
+
+Prioritaet: P0 - zuerst
+
+Abhaengigkeiten: keine
+
+### Produktbefund
+
+- Objekt `0x8C8D3908`
+- Completion-Flag `0x8C8D3920`
+- Poll-Callback `0x8C666D42`
+- Completion-Writer `0x8C65A458`
+- sechs statische Caller in ADXT-/mwSnd-Soundpfaden
+
+### Umfang
+
+- Ausloeser des Soundworkers bestimmen
+- G2-/AICA-/DMAC-Transfer und erwartete IRQ-/Schedulerkante zuordnen
+- erste verlorene Kante zwischen Workerstart und Completion-Writer belegen
+- allgemeine Ursache reparieren
+- kein direktes Hostsetzen des Completion-Flags
+- keine private Adresse als generische Sonderbehandlung
+
+### Produktabnahme
+
+Erst nach der zusammenhaengenden Implementierung ein normaler DirectBoot mit derselben post-entry Gastarbeit wie die Baseline.
+
+Erfolg:
+
+- Gast erreicht den echten Completion-Writer und Flag wird `1`, oder
+- ein engerer allgemeiner Blocker ist belegt.
+
+Keine neue breite Soundtestmatrix.
+
+---
+
+## [ ] KR-4966 - Post-Entry-Produktgate und erforderliche Meilensteine
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4951
+
+### Umfang
+
+- Gastzyklusbudget als Laufdauer ab Game-Entry definieren
+- restaurierten Schedulerzyklus nicht vom Laufbudget abziehen
+- erforderlichen Produktmeilenstein im GameProject definieren
+- `visible_screen=none` nicht als erfolgreichen Endzustand melden
+- Exitcodes unterscheiden:
+  - `0` Meilenstein erreicht
+  - `3` Budget erreicht, Meilenstein verfehlt
+  - `1` typisierter Fehler
+
+### Akzeptanz
+
+- NativeDisc und DirectBoot erhalten dieselbe post-entry Gastarbeit
+- schwarzer Lauf endet nicht mit Erfolg
+- Produktbericht nennt den verfehlten Meilenstein als erstes Problem
+
+---
+
+## [ ] KR-4967 - Atomarer CompletePlatform-Capture-/Apply-Koordinator
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4966
+
+### Umfang
+
+- globaler Prepare-/Commit-Vertrag
+- alle Allokationen, Deltas, Geraeteplaene und Events vor Mutation vorbereiten
+- passive Geraeterestoreplaene
+- Schedulerzeit und Eventrehydrierung
+- CPU/MMU zuletzt committen
+- kein fallibler Schritt nach Commitbeginn
+- per Subsystem semantische Digests
+
+### Akzeptanz
+
+- kein teilweise angewendeter Handoff
+- Produktpfad entfernt `game-entry-handoff-complete-platform-apply-unavailable`
+- fehlendes oder inkonsistentes Subsystem wird vor Gastcode abgelehnt
+
+---
+
+## [ ] KR-4968 - AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4965, KR-4967
+
+### Umfang
+
+- AICA Register, RTC und Execution Controller
+- G2-Kanaele und laufende Transfers
+- SH-4-DMAC/G2-Kopplung
+- System-ASIC-/IRQ-Quellen fuer Soundcompletion
+- TMU/RTC, soweit fuer Workerfortschritt erforderlich
+- typisierte ausstehende Events
+- aktive Transfers mit frischen Event-IDs rehydrieren
+
+### Akzeptanz
+
+- aktiver Soundtransfer besitzt genau passende Events und IRQ-Quellen
+- Worker-/Completionwriter verhalten sich in NativeDisc und DirectBoot gleich
+- keine verlorene oder doppelte Completion
+
+---
+
+## [ ] KR-4969 - PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4967
+
+### Umfang
+
+- PVR Registerfile und SPG-Timing
+- Framebufferbasis, SOF1/SOF2 und Scanoutzustand
+- VRAM-Deltas
+- TA FIFO/YUV/Renderzustand nur soweit am Entry aktiv
+- System-ASIC-Masken und pending Quellen
+- laufende Render-/DMA-Ereignisse typisiert rehydrieren
+
+### Akzeptanz
+
+- NativeDisc und DirectBoot besitzen gleichen aktiven Scanoutzustand
+- Gamecode-Framebufferwrite oder TA-Frame kann sichtbar werden
+- kein Hostframe wird ohne Gastnachweis erfunden
+
+---
+
+## [ ] KR-4970 - Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4967
+
+Status: Maple Snapshot, Codec, passive Restore und Event-Rehydration existieren; GameEntry-Adapter und Product-Profil fehlen.
+
+### Umfang
+
+- `DiagnosticLossless` und `ProductHandoff` trennen
+- Product-Handoff bewahrt aktuelle VMU-Working-Copy und Saves
+- Topologie, Controller-/VMU-Typ, MMIO- und DMA-Zustand uebernehmen
+- Diagnosehistorie und reine Hostmetriken nicht als Produktzustand behandeln
+- aktive Maple-DMA exakt einem typisierten Schedulerereignis zuordnen
+- vorbereiteten `noexcept` Commitplan liefern
+
+### Akzeptanz
+
+- kein Savegame-Rollback durch Handoff
+- aktive DMA besitzt exakt eine Completion
+- inaktive DMA besitzt kein Completionevent
+- NativeDisc und DirectBoot stimmen in gastseitig sichtbarem Maple-Zustand
+
+---
+
+## Geplante Produktlaeufe
+
+### Lauf A - nach KR-4965
+
+- gewoehnlicher DirectBoot
+- gleiche post-entry Gastarbeit wie Baseline
+- Sound-Completionwriter oder engerer Blocker
+
+### Lauf B - nach KR-4967 bis KR-4970
+
+- NativeDisc Capture am Entry
+- DirectBoot Apply bis vor ersten Spielblock
+- Subsystemdigests vergleichen
+
+### Lauf C - nach KR-4962
+
+- 600 Millionen Gastzyklen ab Entry
+- mindestens FirstGameFramebufferWrite oder FirstTaFrame
+- Exitcode 3 bei verfehltem Meilenstein
+
+### Lauf D - nach KR-4960
+
+- derselbe Produktpfad
+- mindestens 200 MHz
+- sichtbarer Meilenstein bleibt erhalten
+
+Zwischen diesen Produktlaeufen sind keine Vollsuiten vorgesehen. Ein kleiner bestehender Test darf nur angepasst werden, wenn eine schwer sichtbare Datenkorruption sonst nicht abgesichert werden kann.

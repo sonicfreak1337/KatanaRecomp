@@ -58,26 +58,38 @@
 
 | ID | Titel | Status |
 |---|---|---|
-| KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | abgeschlossen |
-| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | aktiv P0 |
-| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | aktiv P0, CPU/RAM-Diagnostik umgesetzt |
-| KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | geplant P0 |
-| KR-4955 | Explizite Funktionsgrenzen und Tabellenhinweise End-to-End | geplant P0 |
-| KR-4956 | Static-AOT-Dispatchflucht inventarisieren und schliessen | aktiv P0 |
-| KR-4957 | Direkte native Calls ueber sichere Timinggrenzen | geplant P0 |
-| KR-4958 | IR-basierte Registerlokalisierung und RAM-Regionen | geplant P1 |
-| KR-4959 | Ereignisgetriebene Scheduler-/IRQ-Safepoints | geplant P1 |
-| KR-4960 | 200-MHz-Produkt-Hotpath | geplant P0 |
-| KR-4961 | Externes SonicAdventureRecomp-Bring-up-Projekt | geplant P0, externes Produktprojekt |
-| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | geplant P0 |
-| KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | geplant P1 |
+| KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | abgeschlossen, Folgearbeit KR-4966 |
+| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | aktiv P0, blockiert durch KR-4967 bis KR-4970 |
+| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | aktiv P0, CPU/RAM umgesetzt |
+| KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | geplant P1 |
+| KR-4955 | Explizite Funktionsgrenzen und Tabellenhinweise End-to-End | geplant P0 nach stabilem DirectBoot |
+| KR-4956 | Static-AOT-Dispatchflucht inventarisieren und schliessen | aktiv P0 Performance |
+| KR-4957 | Direkte native Calls ueber sichere Timinggrenzen | geplant P0 Performance |
+| KR-4958 | IR-basierte Registerlokalisierung und RAM-Regionen | geplant P1 Performance |
+| KR-4959 | Ereignisgetriebene Scheduler-/IRQ-Safepoints | geplant P1 Performance und Korrektheit |
+| KR-4960 | 200-MHz-Produkt-Hotpath | geplant P0 Performance-Gate |
+| KR-4961 | Externes SonicAdventureRecomp-Bring-up-Projekt | geplant P1 |
+| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | geplant P0 Boot-Gate |
+| KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | aktiv P1 |
 | KR-4964 | v0.49 Produktabnahme bis sichtbarem Spielbild | Gate |
+| KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | aktiv P0, erster Produktblocker |
+| KR-4966 | Post-Entry-Produktgate und erforderliche Meilensteine | geplant P0 |
+| KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | geplant P0 |
+| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | geplant P0 |
+| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | geplant P0 |
+| KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | geplant P0 |
 
 ## Aktuelle Meilensteinzuordnung
 
-- v0.48 bleibt historische NativeDiscBoot- und erster-Frame-Arbeit.
-- v0.49 verwendet `KR-4951` bis `KR-4964` als verbindlichen Produktpfad.
-- `KR-4847`, `KR-4849`, `KR-4914` und `KR-4916` werden nur dann in den aktiven Pfad gezogen, wenn ein echter SA-Produktlauf sie als naechsten Blocker belegt.
+- `KR-4965` ist der erste aktive Produktblocker.
+- `KR-4966` korrigiert den Mess- und Meilensteinvertrag vor einem produktiven Schedulerrestore.
+- `KR-4967` bis `KR-4970` vervollstaendigen `KR-4952` und `KR-4953`.
+- `KR-4962` ist der erste reale CompletePlatform-Bootnachweis.
+- `KR-4955` bis `KR-4960` folgen nach einem stabilen Game-Entry-Produktmeilenstein.
+- `KR-4954` und `KR-4961` erzeugen danach das externe Spielprojekt.
+- `KR-4963` laeuft parallel, sobald die Handoff-Grundlage stabil ist.
+- `KR-4964` ist das abschliessende v0.49-Produktgate.
+- `KR-4847`, `KR-4849`, `KR-4914` und `KR-4916` werden nur aktiv, wenn ein echter SA-Produktlauf sie als naechsten Blocker belegt.
 - `KR-4901` bis `KR-4905` beginnen erst nach `KR-4964`.
 
 ## Geplanter Lintervertrag

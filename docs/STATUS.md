@@ -2,1525 +2,339 @@
 
 Aktuelle interne Version: `v0.49.0`
 
-v0.49 trennt KatanaRecomp, die interpreterfreie `runtime_core` und externe
-Spieltitelprojekte. Der Produktdispatch besitzt einen kompakten statischen
-AOT-Tier, einen generationgesicherten dynamischen Tier und direkt
-ausfuehrbare validierte Blockdeskriptoren. Function-Level-AOT verwendet native
-Labels, guardierte direkte Calls, konservative Registerlokalisierung und
-direkte Haupt-RAM-Guards. IRQ-, Scheduler-, Replay-, Lifecycle- und
-RuntimeOnly-Arbeit wurde aus dem normalen Erfolgs-Hotpath verschoben oder
-ereignisgetrieben gemacht.
-
-Der Entwicklungsworkflow ist executable-first: Eine eigene `.gdi` erzeugt
-einmalig ein privates `boot.katana-executable`; weitere Exporte arbeiten
-danach ohne erneutes Discparsing. Bei unveraenderten, verifizierten
-Versionen/Identitaeten ueberspringt der Whole-Export-Cache auch Analyse, IR und
-Codeemission, baut und publiziert das reale Spieltarget aber erneut. `.gdi`
-bleibt Nutzerinstallation und finaler NativeDiscBoot sowie Referenz fuer den
-Game-Entry. DirectBoot startet dagegen executable-first. `GameEntryHandoff`
-Schema 2, der titelgebundene private Artefaktprovider und die Einbindung in
-den Spielprojektvertrag sind umgesetzt. Der derzeitige ehrliche
-`CpuMemoryDiagnostic`-Pfad erfasst und appliziert nur CPU und RAM; Geraete-
-und Schedulerzustand sind noch ausstehend. Maple besitzt nun einen
-verlustfreien portablen Zustandsvertrag fuer Bus, Controller, VMU-Quell- und
-Arbeitsbytes sowie DMA. Prozesslokale Scheduler-IDs werden nicht uebernommen;
-ein aktiver DMA wird mit einem typisierten Ereignis und frischer ID
-rehydriert. Ein vollstaendiger Produkt-Handoff
-muss unabdingbar alle 21 kanonischen Geraeteklassen samt Maple/VMU,
-Schedulerereignissen und IRQ-Quellen enthalten; der Aufrufer kann diese
-Pflichtmenge nicht abschwaechen. Capture und Diagnose-Apply sind
-deshalb im Produktgate verboten und belegen noch keinen erfolgreichen
-DirectBoot. Der CLI-Portbuild erkennt ein gemeinsam installiertes
-`runtime-sdk` als CMake-Paket; der volle Quellbaum wird nur als
-`EXCLUDE_FROM_ALL`-Fallback eingebunden.
-
-Portprojektvertrag 52 serialisiert die vollstaendige Game-Entry-Bindung in
-`katana-game-project-v2` und bindet die Game-Entry-/Spielprojektidentitaet in
-den Whole-Export-Schluessel. Der Versionswechsel invalidiert vorherige
-Whole-Export-Treffer. Alte, durch einen bestaetigten Nachfolgeexport ersetzte
-Portordner werden gezielt entfernt; aktuelle DirectBoot- und
-NativeDisc-Referenzen, Boot-Executable-Artefakte und Nutzerdaten bleiben
-davon getrennt.
-
-Die v0.49-Architektur ist gezielt gebaut und mit bestehenden kleinen
-Vertragstests geprueft. Der reale executable-first Produktport erreichte mit
-beiden Hostcompilern exakt 600.000.000 Gastzyklen und endete kontrolliert ohne
-neues AOT-, Runtime- oder Geraeteproblem. MSVC benoetigte 14,8563 Sekunden
-Produktzeit (40,3869 effektive Gast-MHz), clang-cl 14,1289 Sekunden
-(42,4662 MHz). Beide Laeufe zaehlten 52.329.316 zentrale Dispatches und
-praesentierten keinen klassifizierbaren Frame. Damit sind Messvertrag und
-Compiler-A/B erfuellt, nicht aber der sichtbare SEGA-Nachweis oder das
-200-MHz-Ziel. Die weitere Bootursachenanalyse bleibt wie angeordnet vertagt.
-
-Der juengste MSVC-Gateexport `DirectBoot-v23` entstand aus Quellstand
-`31c5575` und umfasst 1.939 Funktionen in 42 Partitionen. Die lokale
-Installation aus einer validierten PAL-GDI war mit drei Tracks und 521.461
-Sektoren erfolgreich. Der anschliessende normale Produktlauf erreichte exakt
-600.000.000 Gastzyklen in 14,0113 Sekunden Hostzeit, entsprechend 42,8225
-effektiven Gast-MHz, und zaehlte 52.329.316 zentrale Dispatches. Er erreichte
-`GameCodeProgressed` und endete kontrolliert mit Exitcode 0; zugleich blieben
-`visible_screen=none`, `frames=0` und `first_problem=none`. Der letzte PC war
-`0x8C65A624` (dezimal 2.355.471.908), GD-ROM meldete 70 abgeschlossene
-Kommandos und AICA 180 gerenderte Audiopuffer. Das war ein gewoehnlicher
-DirectBoot ohne externes `GameEntryHandoff`; der Lauf prueft den neuen
-Handoff-Pfad daher nicht. Der geraeteuebergreifende
-`CompletePlatform`-Apply bleibt unimplementiert und endet im Produktpfad nach
-vollstaendig identitaetsgebundenem Staging weiterhin ausdruecklich
-fail-closed.
-
-Der echte warme Export dauerte 2,258 Sekunden mit MSVC und 2,297 Sekunden mit
-clang-cl. Die resultierenden EXEs waren 67.062.272 beziehungsweise 69.149.696
-Bytes gross. Der erste MSVC-Umbauexport dauerte rund 199,5 Sekunden und
-enthielt Analyse, Codeemission und Hostbuild; der nachfolgende erste
-clang-cl-Build dauerte 67,457 Sekunden bei bereits warmem Whole-Export-Cache
-und ist deshalb kein symmetrischer Kaltbuildvergleich.
-
-Die externe Spielprojektschnittstelle ist ein C++-Export-/Runtimevertrag, noch
-kein CLI-Descriptor oder Projektgenerator. Eine feste 16-Ereignis-POD-Crash-
-Capsule ist an Blockdispatch, MMIO, Scheduler und den ersten terminalen Fehler
-gebunden. Der normale Produktlauf bindet weder die detaillierte RuntimeOnly-Map
-noch den Map-basierten Dispatchrecorder an den Erfolgs-Hotpath und waehlt
-Fastpathdeskriptoren ohne lineare Runtime-Scans. Ein automatisch begrenztes
-Triggered-Deep-Trace-Fenster bleibt offene Konsolidierung.
-
-Ein realer privater A/B-Nachweis erfasste NativeDisc exakt am ersten
-Executable-Block bei Gastzyklus 415.233.270 und applizierte CPU/RAM im
-executable-first DirectBoot. Der Direct-Lauf fuehrte ab `0x8C010000`
-600.000.001 Gastzyklen in 12,6443 Sekunden aus (47,4522 MHz,
-52.329.316 zentrale Dispatches), erreichte `GameCodeProgressed`, aber keinen
-Frame. Native- und Direct-Entry besitzen identische CPU-/RAM-Inhalte, jedoch
-abweichende Scheduler-/Geraetedigests; Direct steht bei Schedulerzyklus 0.
-Die VMU ist in beiden Pfaden auf Maple Port 0/Unit 1 vorhanden, und ihre
-persistenten Dateien sind byteidentisch. Offen ist daher der vollstaendige
-Maple-/DMA-/ASIC-/Scheduler-Handoff, nicht eine fehlende VMU-Datei.
-
-Aktuelle Produktvertraege: Runtime-ABI 62, Block-ABI 5, Analyzer-ABI 2,
-PlatformServices-ABI 13, Backend-Interface-ABI 8, Portprojektvertrag 52,
-GameEntryHandoff-Schema 2, GameEntryHandoff-Artefaktformat 2,
-Spielprojektvertrag 2, Native-AOT-Emissionsprofil 8 und
-Crash-Capsule-Vertrag 1.
-
-Aktuelle Dokumente:
-[`ARCHITECTURE_V049.md`](ARCHITECTURE_V049.md),
-[`EXECUTABLE_FIRST_DEVELOPMENT.md`](EXECUTABLE_FIRST_DEVELOPMENT.md) und
-[`PORT_BUILD_PROFILES.md`](PORT_BUILD_PROFILES.md).
-
-## Historischer v0.48-Verlauf
-
-Der native IP.BIN-Boot erreicht BootExecutable
-nachweislich; `KR-4913`, `KR-4915` und `KR-4850` sind abgeschlossen. Der erste
-nach dem Sega-Logo belegte `KR-4851`-Hotspot war ein allgemeiner
-Exception-Edge-Fehler im nativen Aufrufpfad und ist synthetisch geschlossen.
-Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
-fokussierte Tests. Der danach genau einmal frisch exportierte Produktport
-umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger normaler sichtbarer
-Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor jedem Gastframe:
-Nach Annahme der Gastzeit lehnt der Counted-Loop-Fastpath seinen vorbereiteten
-U32-Sequenzcommit ab und beendet den Lauf typisiert. Das ist ein
-Bootregressionsbefund gegenueber dem historischen v7-Lauf; der native
-PAL-50-/60-Hz-Auswahlbildschirm ist weiterhin nicht erreicht. Ein zweiter
-Produktlauf, die Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
-`KR-4847` schliesst jetzt auch Scheduler-Admission-Ueberlaeufe fuer PACKET,
-BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
-`BSY`; offen bleiben EX 38/39 und laufende G1-Overrun-/Timeout-Grenzen.
-`KR-4848` ist abgeschlossen: atomare strukturierte Ladetransaktionen binden
-identische Disc-Reloads und mehrteilige bekannte Module erst nach exakter
-Content-/Byteidentitaet an natives AOT. `KR-4849` bleibt trotz synthetisch
-verbundenem Channel-2-/TA-EOL-Pfad
-fuer den produktiven Gastpfad offen. `KR-4842` bindet fuer freie Probes
-MMU-bewusst echte lineare Backings und fuer Geraetezustand nicht mutierende
-Snapshots.
-Hardware-Audit-Schema 4 erkennt Natural Loops ueber skalierbare Dominatoren,
-deckt die bislang fehlenden GBR-, Byte-Read/RMW-, TAS-, FMOV-, PC-relativen,
-STC.L-/LDC.L- und MAC-Speicherfamilien ab und klassifiziert Counter-, RAM-Poll-,
-MMIO-Poll-, Mixed- und Unknown-Loops samt aufgeloester und konservativ
-unaufgeloester Guard-Evidenz.
-Der versionierte Runtime-Trace liefert dynamische Wertwechselfolgen und echte
-Writer-Provenienz. Der abschliessende Diagnose=0/1-A/B-Produktlauf bestand mit
-zwei frischen Laeufen. Damit ist `KR-4842` abgeschlossen; das damals
-freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
-ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
-geschlossen.
-
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 52, Block-ABI 5,
-Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11,
-Portprojektvertrag 37 und Host-Video-Vertrag 2. Systemreplay-Schema 8,
-Runtime-Probe-Schema 5 und Device-Schema 5 binden die aktuellen Replay- und
-Geraetezustaende.
-
-`KR-4814` ist abgeschlossen. Der generierte Produktport pollt den nativen
-Windows-Controllerpfad an Gast-Safepoints und fuehrt XInput-, WinMM-Joystick-,
-Keyboard-, Hotplug-, Fokus- und Controller-1-Ereignisse durch dieselbe
-monotone `ControllerInputTimeline`. Nur geaenderte Zustaende werden in die
-`HostRuntimeSession` gespiegelt; Maple liest direkt aus der Timeline den
-letzten am jeweiligen Transaktionszyklus sichtbaren Zustand. Normalisierung,
-Deadzones, aktiv-niedrige Buttons, Trigger und beide Analogsticks besitzen
-denselben Vertrag fuer Xbox-, DualSense-, DualShock- und Standardgamepads.
-Deterministische Probes erreichen den nativen Poller nicht und verwenden
-weiterhin Replay- beziehungsweise neutralen Input. `KR-4914` bleibt offen:
-Ohne bootendes Spiel ist eine getrennte interaktive Sitzung noch nicht
-nachweisbar. Sechs fokussierte Controller-, Maple-, Runtime-, Homebrew- und
-Portexporttests bestanden 6/6; der getrennte Produktpfad
-`katana-port-cli-tests` bestand 1/1. Hostvideo, Scheduler-Safepoint und
-PlatformServices bestanden ergaenzend 3/3, der installierte
-SDK-/Packagevertrag 1/1, insgesamt damit 11/11 fokussierte Tests. Ein
-Voll-CTest und eine interaktive Sitzung liefen nicht.
-
-Die Callbackanalyse verwendet fuer CFG/Datenfluss weiterhin maximal acht
-Werte, fuehrt bewachte AOT-Seeds aber in einem getrennten 1.024-Ziele-Inventar.
-Unabhaengige Registrare verlieren deshalb bei Kandidat neun nicht mehr ihre
-bereits belegten Ziele. Effektivadressen, gleiches `R0`-Indexregister,
-Callsite-Stackprovenienz sowie einzelne, kleine und begrenzt lueckenhafte
-Returned-Table-Scans sind explizit getestet. Budget- und 64-Slot-Scanende
-werden als Truncation berichtet; kein Kandidat wird zur festen CFG-Kante.
-
-Runtime-ABI 52 bindet den zweiphasigen linearen Produktcommit mit
-skalaridentischer `GuestWriteEvent`-Folge. Portprojektvertrag 37 bindet den
-streng bewiesenen indirekten Callback-Fill-Fastpath. Counted-, Memory-Fill-
-und Composite-Batches muessen Mapping, Observerkopie, Changed-Flags und alle
-Allokationen vor der Gastzeitannahme vorbereiten. Danach ist der RAM-Commit
-`noexcept` und nicht mehr ablehnbar; ein Prepare-Fehler faellt ohne
-Schedulerwirkung skalar zurueck. Ein Lifecycleabbruch darf weder CPU, RAM,
-Schedulerbeobachtung noch Provenienz veraendern. Memory-Fill verlangt einen
-stabilen Observervertrag,
-Composite-Fill bleibt No-MMU, und Counted Loop darf bei aktiver MMU nur
-bewiesen direkte P1-/P2-Bereiche verwenden. Die ausgefuehrten
-Differentialtests vergleichen den vollstaendigen Architekturzustand gegen
-den nativen Skalarpfad. PVR-Vollreset beginnt eine neue Rasterepoche und
-leitet auch gewrappten VBlank am aktuellen Rasterpunkt ab; Maple trennt den
-abgeschlossenen DMA-Commit von der anschliessenden IRQ-/ASIC-Publikation.
-
-Runtime-ABI 48 trennt den Handler-Lifetime-Pegel `trap_pending` von einer neu
-entstandenen Exceptionkante. Jeder Exceptioneintritt erhoeht eine monotone
-Generation; `RTE` beendet den Handler, veraendert diese Evidenz aber nicht.
-Generierte Aufrufe, direkte native Aufrufketten, Portwrapper und die begrenzte
-Interpretergrenze brechen deshalb nur bei einem Generationwechsel ab. Der
-Zustand ist in Probe, Replay-Gastzustandshash, Differentialcheckpoints und
-Crashberichten gebunden. Elf fokussierte Regressionen bestanden 11/11; ein
-Vollgate und `KR-4852` liefen nicht.
-
-Der historische, damals einmalig exportierte und gebaute private v7-Port umfasst
-1.873 Funktionen, 37 Partitionen und drei latente Module. Export und
-Hostbuild benoetigten 187,8 Sekunden, die lokale Installation 16,8 Sekunden.
-Der deterministische Probe-Lauf dauerte 73,5 Sekunden, der Detail-Lauf
-49,2 Sekunden. `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` werden
-am sichtbaren Sega-Bild erreicht. Der Detail-Lauf zaehlt 7.422.352
-Dispatch-Hits mit einem Miss sowie 2.609.376 `RuntimeOnly`-Hits mit einem Miss
-und null Fallbacks. Die allgemeine Analyse katalogisiert jetzt endliche
-Codepointer, die mit bewiesener Aufrufargument-Provenienz ueber
-nicht-Stack-bezogene 32-Bit-Stores weitergereicht werden, als bewachte
-AOT-Inventarseeds. Das liefert keine feste Runtime-
-Dispatchkante; der live geladene Wert bleibt massgeblich. Diese Evidenz
-beschreibt nur v7. Der aktuelle Lauf erreicht wegen der oben genannten
-Counted-Loop-Commitregression nicht mehr das Sega-Bild. `KR-4851` bleibt
-offen.
-
-`KR-4912` modelliert Load, Relocation, Replace und Unload als monotone
-Modulinkarnationen. Byteidentische Multi-Extent-Loads und byteidentische CPU-,
-FPU-, Store-Queue-, Copy- und DMA-Writes erhalten vorhandene Bloecke samt
-Provenienz. Bewiesene Runtimewrites koennen einen zusammenhaengenden
-Snapshotschwanz einschliesslich Delay Slot kontrolliert erweitern.
-P0-/P1-/P2-Aliase werden unter der aktiven MMU auf dieselbe physische
-Blockherkunft gefaltet. Ersetzte oder inaktive Module entfernen abhaengige
-Materializer-Origins, Tracker-Handles und Tabellenbindungen, ohne fremde Owner
-in Multi-Extent-Luecken zu invalidieren. Ein ueberlaufender
-Relocation-Generation-Zaehler wird atomar vor jeder Mutation abgelehnt.
-
-Identische Validierungssnapshots teilen einen gegen das Speicherbudget
-gerechneten Proof; retained, peak und reclaimed Bytes bleiben sichtbar, und
-die letzte Herkunft gibt den Proof wieder frei. Tatsaechliche
-Materialisierungen werden unabhaengig von der Diagnoseabtastung im Replay
-beobachtet. Oeffentliche Probe-, Fault- und Materialisierungsberichte
-redigieren private Modul-/Quellidentitaeten und Gastbytes. Der normale
-Produktport besitzt keinen Interpreter und beendet ungebundenen Code typisiert.
-Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
-interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Fuer diesen
-Abschluss liefen weder ein privater Retaillauf noch eine Vollsuite oder
-`KR-4852`; bei diesem KR-4912-Zwischenabschluss blieben strukturierte
-Disc-Ladetransaktionen und die Registry latenter AOT-Module noch offen.
-
-Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
-Diagnose-/Schedulergrenzen. Freie Probes uebersetzen ueber die aktive Gast-MMU,
-lehnen ein nichtlineares Geraet selbst dann vor dessen Handler ab, wenn es
-versehentlich explizit erlaubt wurde, und veraendern weder CPU-/Exceptionzustand
-noch Observer, Watchpoints oder Speicherzaehler. Produktprobes umfassen damit
-nur Haupt-RAM, VRAM und AICA-RAM, nicht Flash oder MMIO. Der letzte
-MMIO-Zugriff bleibt im Gast-Hotpath ein allokationsfreier POD; erst der
-terminale Bericht erzeugt den Regionsstring. PVR- und Systembus-Snapshots
-bewegen ausstehende Render- oder Channel-2-Arbeit nicht. GD-ROM-PACKET liefert bei einer
-undarstellbaren Schedulerfrist `READY|ERR`, ABRT-Sense und einen finalen
-Command-IRQ. BIOS-Read und -Streaming liefern denselben Fehler als einmaligen
-Vierwortstatus mit null Bytes und lassen den naechsten Request zu. Die
-vorangegangenen konsolidierten fokussierten Regressionen bestanden 22/22 in
-1,57 Sekunden; der Port-CLI-Nachweis bestand 1/1 in 151,12 Sekunden.
-
-Runtime-ABI 42 bindet den seiteneffektfreien POD-Zugriffssink und
-`RuntimeWaitLoopTrace` v1. Native AOT-Bloecke und der begrenzte
-Diagnoseinterpreter melden Quell- und Laufzeit-PC. Store-Queue-`PREF`,
-PVR-Render und PVR-YUV tragen ihre Writer-Herkunft; die VRAM32-Sicht
-projiziert auf dasselbe lineare Backing. Der Portexport erzeugt aus dem
-Hardwareaudit generische, deterministisch deduplizierte Guard- und
-Kandidatendeskriptoren und indiziert Read-Sites vorab statt sie pro Zugriff
-linear zu durchsuchen. MMIO-Werte werden aus dem bereits ausgefuehrten Zugriff
-uebernommen. Bytegenaue lineare Writerlinks tragen
-`exact-backing-bytes`; nichtlineare MMIO-Ueberschneidungen bleiben
-`physical-range-candidate`. Backing-indizierte Locations vermeiden
-Vollscans fuer unbeteiligte lineare Writes. Nur der aktive Trace vergleicht
-Wrapperwrites gegen deren seiteneffektfreies lineares Backing, bestimmt
-skalare und Range-Aenderungen bytegenau und verwirft No-op-Writer.
-Produktobserver und Scanout-Evidenz bleiben konservativ und bei Trace aus/an
-identisch. Nur `KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den
-Rohwerttrace,
-unabhaengig von `KATANA_PORT_DIAGNOSTICS`. Eine leere Deskriptorliste erzeugt
-weder Recorder noch Sink; sonst warnt der Port einmalig auf `stderr` vor nur
-lokal und nicht ungeprueft teilbaren Rohwerten. Das JSON deklariert
-`contains_raw_guest_values:true`, `writer_scope:"since-previous-sample"` und
-ungueltige skalare Range-Werte mit `scalar_value_valid:false` und `value:null`.
-Strukturell ungueltige Access-Events erhoehen `invalid_access_events` und
-erzwingen `complete:false`, statt im Zaehler fuer bloss irrelevante gueltige
-Events zu verschwinden. RAII entfernt den Sink vor der terminalen Ausgabe.
-Ohne Trace-Opt-in bleibt der Fastpath ohne Recorderallokation oder Projektion.
-PlatformServices-ABI 10 fuehrt die genaue `PREF`-Instruktionsherkunft bis zur
-Store Queue. Die Registervarianten `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B`
-sind im begrenzten Interpreter geschlossen; doppelte `FMOV`-Speicherzugriffe
-laufen low nach high.
-
-Runtime-ABI 43 und Portprojektvertrag 27 binden
-`katana.runtime-probe` Version 1 mit Profil `deterministic-v1`,
-Device-Schema 1 und Hashvertrag `fnv1a64-le-v1`. CPU, Scheduler, Haupt-RAM,
-VRAM, AICA-RAM, Flash, VMU, Replay und exakt 35 produktive Geraeteinstanzen
-mit 867 kanonischen Feldern gehen in domain-separierte Hashes ein. Der private
-A/B-Runner bestand zwei Laeufe mit 100.000 Gastzyklen und 120 Sekunden
-Hosttimeout. Diagnose aus/an lieferte gleiche normative Felder,
-unveraendertes Executable und Disc-Pack, vollstaendiges und versiegeltes Replay
-sowie null/null Wait-Loop-Tracezeilen. Eine Vollsuite und `KR-4852` wurden
-nicht ausgefuehrt.
-
-Systemreplay-Schema 8 trennt den exakten Ereignisstrom von `DigestStream` und
-bindet UTLB, Fault-Herkunft, Exceptiongeneration sowie
-Attempted-/Retired-/Cycle-Zustand in den finalen Gastzustandshash.
-Der Produktmodus behaelt standardmaessig 4.096 und maximal 65.536
-Praefixzeugen, validiert, zaehlt und hasht aber auch jedes zusammengefasste
-Ereignis. Zusammenfassung ist kein Drop; ein echter Drop verhindert weiterhin
-Versiegelung und Replay. Runtime-Probe-Schema 5 weist Speichermodus,
-Aufbewahrungskapazitaet, Gesamt-, behaltene und zusammengefasste Ereignisse
-sowie `exact_event_stream`, `hooks_complete`, `observed_complete` und die
-erwartete Positivmaske aus. `deterministic-v1` verlangt weiterhin die
-zwoelf Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt,
-Video, Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception,
-kontrollierter Fallback und Gastcheckpoint; nur Gastexception und
-kontrollierter Fallback sind kontingente Negativpfade, alle anderen Klassen
-muessen fuer `observed_complete` tatsaechlich vorkommen. Die exakten zwoelf
-Klassenzaehler sind in Probe, Validator und finaler Digestdomain gebunden.
-Eine zentrale Observation-Session
-schreibt Dispatch-Hits und -Misses, Fallbacks, Exceptions und streng monotone
-Checkpoints gegen Gastzyklus und Resetepoche. Der ungekeyte FNV-Digest ist
-deterministische Evidenz, keine Authentisierung.
-
-Typisierte Endklassen unterscheiden `budget-reached`, `hang`,
-`guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
-stabiler Checkpoint halten intern vollstaendige CPU-Snapshots und frieren nach
-dem ersten Fehler ein. Das Fault-v1-JSON bleibt auf Klassen- und
-Checkpointfelder allowlist-redigiert. Der private A/B-Runner validiert Fault-
-und Checkpointzeilen strikt und schreibt private Fehlerpakete ausserhalb des
-Repositorys atomar und write-once. Das fokussierte Gate bestand 8/8 in 6,60
-Sekunden, `katana-port-cli-tests` 1/1 in 155,67 Sekunden. Ein frischer privater
-PAL-A/B-Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
-normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
-Original-GDI und Tracks unveraendert, beide Replays vollstaendig und versiegelt
-und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen und
-`KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
-
-Der KR-4913-Abschluss verwendet einen vorbereiteten MMU-bewussten
-Gastprogrammbereich und zwei frische Diagnose-aus/an-Probes mit je
-356.000.000 Gastzyklen. Beide Laeufe banden je 137.057.656 Ereignisse ohne
-Drop, behielten 4.096 Praefixzeugen und lieferten identische normative Felder
-sowie denselben letzten Checkpoint. Die Replays waren vollstaendig und
-versiegelt, die Artefakte unveraendert; zusammen liefen die Probes 175,3
-Sekunden. Ein direkter Bestaetigungslauf emittierte `runtime-started` und
-`guest-program-entered` und endete nach 83,9 Sekunden kontrolliert. Fallback,
-Trap oder stiller Fehler galt nicht als Erfolg. Der frische Port umfasst 1.873
-Funktionen, 37 Partitionen und null Retailsektoren; die lokale Installation
-umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
-unveraendert.
-
-Der mit Runtime-ABI 38 eingefuehrte Zwischenblock schliesst zwei allgemeine
-Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die
-vollstaendige beschreibbare Zielspanne vor dem Start. Ein Fehler traegt Phase,
-Adresse, exakt committed Praefix und Residue; der Transfer ist vor dem
-Faultobserver angehalten. Der gebundene GD-ROM-Controller uebernimmt diese
-Evidenz als stabilen CHECK-/Sense- und Requestfehler, waehrend interne Backend-
-oder Schedulerfehler keine Hardware-ASIC-Ereignisse vortaeuschen. Store-Queue-
-`PREF` verwendet bei `MMUCR.AT=0` QACR und bei `AT=1` die UTLB. Ausrichtung,
-`SQMD`, ASID/SV, Schreibschutz, Dirty-Bit, TLB-Miss und Multiple-Hit werden
-atomar vor jeder Sinkwirkung geprueft. Der native Emitter faengt diese
-adressabhaengigen `PREF`-Speicherfehler explizit und uebergibt sie an den
-architektonischen SH-4-Exceptioneintritt; sie koennen nicht als Hostexception
-aus dem Produktport entkommen.
-
-Der generische C++-Emitter setzt bei nach Funktionsdiscovery nachfolgerlosen
-Bloecken in jedem Backendmodus den Fallthrough-PC auf die echte
-Folgeinstruktion. Eine kompilierte Regression prueft Einzelblock, lokales
-Chaining und normalen Backendpfad. Die Produktinvariante leitet den erwarteten
-PC aus der tatsaechlichen Terminatorquelle ab und vergleicht nicht mehr mit dem
-Wrapper-Einstieg; damit ist der zuvor beobachtete Fehlalarm bei einer gueltigen
-lokalen AOT-Kette beseitigt.
-
-Der optimierte ABI-38-Export der privaten Sonic-Adventure-PAL-Testbench dauerte
-mit zwoelf Jobs 140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Er
-enthaelt 1.856 Funktionen und 37 Codepartitionen bei Portprojektvertrag 23 und
-Backend-Interface-ABI 3. Im Portpaket liegen null Retailsektoren. Die lokale
-Discinstallation war erfolgreich; die unveraenderte Original-GDI blieb
-erhalten.
-
-Der aktuelle private Sonic-Adventure-PAL-AOT-Lauf erreicht innerhalb eines
-50-Millionen-Gastzyklusbudgets in 5,3 Sekunden erstmals
-`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`. Der recompilierte
-Discbootstrap `IP.BIN` beschreibt den sichtbaren Read-Framebuffer direkt; TA-
-Transfers und TA-Rendergeneration bleiben null. Der kontrollierte Budget-Exit
-ist erwartet. BootExecutable und der eigentliche Spielboot werden an dieser
-Grenze noch nicht erreicht.
-
-Read- und Write-Framebuffer verwenden dieselbe hardwaregenaue logische
-32-Bit-VRAM-Sicht. Der Scanout dekodiert opakes `RGB0555` samt Concatbits,
-gepacktes `RGB888`, den `FB_R_SIZE`-Modulus 0/1/>1 sowie gewebte und getrennte
-PAL-Felder. Backing-Byte-adressierte Dirty-Evidenz plus das vorherige
-Scanout-Abbild verhindern sichtbare False-Proofs durch Offscreen-Writes,
-unveraenderte Bilddaten oder Blanking. Der normale Produktport besitzt
-weiterhin keinen Interpreterpfad; weder Retailbytes noch eine private Adresse
-werden als
-Spielsonderfall uebernommen. Die damals offenen strukturierten Disc-
-Ladevorgaenge und der allgemeine Materializer sind inzwischen durch
-`KR-4848` geschlossen.
-
-Der Export baut CFG-, Kanten- und Writer-Slice-Indizes einmalig auf, reicht die
-konfigurierte Hostparallelitaet bis zum Projektschreiber durch und hasht grosse
-Provenienzeingaben unter Windows ueber BCrypt in 4-MiB-Chunks. Statische
-Dispatchregistries werden allgemein in maximal 512 Bloecke grosse Shards
-zerlegt. Jeder Owner besitzt pro Shard genau einen Wrapper; ein balancierter
-Router waehlt den Shard. Beim aktuellen PAL-Port schrumpft die zentrale
-`runtime-dispatch.cpp` von 36.703.886 Byte/525.996 Zeilen auf 34.879 Byte/607
-Zeilen; der groesste der 43 Shards misst 393.454 Byte. Eine synthetische
-513-Block-Regression prueft zwei Shards samt Entfernung veralteter Dateien; das
-vollstaendige synthetische Ninja-/MSVC-Projekt kompiliert und linkt in 15
-Sekunden. Das aktuelle fokussierte Kern-Gate besteht 11/11. Der x64-Kern-/
-Runtime-Build der Desktop-GUI-off-Konfiguration ist mit zwoelf parallelen Jobs
-gruen; deren vollstaendiges CTest-Zwischengate auf Quellstand `924ea89`
-besteht 183/183 Eintraege in 312,97 Sekunden, darunter 181 regulaere Passes und
-zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und
-Harness-Tests sind nicht Teil dieser 183; der Runner-Selbsttest ist separat
-gruen. Dies ist ausdruecklich kein Abschluss von `KR-4852`, `KR-4853` oder
-`KR-4854`. Der CLI-
-Hostbuild verwendet `KATANA_HOST_BUILD_JOBS`, ersatzweise die
-Codegen-Workerzahl oder die gemeldete CPU-Threadzahl.
-
-Fuer die restliche v0.48-Implementierung laufen nur fokussierte Targets und
-Regressionen. Das naechste Vollgate folgt erst nach Abschluss aller
-v0.48-Implementierungen. Der Nutzer hat am 23.07.2026 eine Standing Approval
-erteilt: Ist dieses finale Gate vollstaendig gruen, gilt die Review automatisch
-als bestanden und v0.48 ohne weitere Freigabefrage als erreicht sowie
-release-ready. Die Pre-Alpha-Freigabe bleibt ungetaggt; Tags beginnen erst mit
-der Alpha.
-
-Der private Retail-Runner bezieht Runtime-ABI und Portprojektvertrag strikt aus
-der kanonischen `cmake/KatanaVersions.cmake`. Fehlende, doppelte, ungueltige
-oder nullwertige Definitionen und typkoerzierte JSON-Vertragswerte wie Strings
-oder Gleitkommazahlen werden abgelehnt. Sanitizer-Builds des statischen
-Runtime-SDK exportieren ihre erforderlichen Compiler- und Linkoptionen als
-`KatanaRecomp::runtime`-Usage-Requirements, sodass auch der installierte
-Out-of-Tree-Verbraucher dasselbe ASan-ABI-Profil verwendet. Dies ist ein
-belegter Teilstand von `KR-4801`; das Task bleibt bis zum vollstaendigen
-minimalen, reproduzierbaren externen SDK offen.
-
-Historische ABI-39-Portevidenz: Nach dem damaligen 178/178-Zwischengate wurde
-der Vertrag-24-Port unter Runtime-ABI 39 und Block-ABI 3 frisch neu exportiert
-und gebaut: 1.860 Funktionen, 37
-Codepartitionen und null Retailsektoren. Die lokale read-only Installation der
-Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
-50-Millionen-Lauf reproduziert `KR_FIRST_GUEST_FRAME` und
-`KR_FIRST_PRESENTED_FRAME` mit `frames=2`, `pvr_guest_frames=2`,
-`pvr_direct_frames=2` und 302.287 geaenderten Direct-FB-Pixeln. TA,
-Rendergeneration und Materializer bleiben null; der Budget-Exit ist erwartet.
-
-Die in dieser historischen ABI-39-Evidenz noch offenen Disc-
-Ladetransaktionen, der Materializer und die latente Registry sind inzwischen
-durch `KR-4848` geschlossen. Der erste
-Gastframe und sein Host-Present sind belegt; Spielboot und BootExecutable
-bleiben offen.
-Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
-Danach: `v0.49.0` Alpha-Candidate
-Erster oeffentlicher Release: `v0.50.0` Alpha
-
-## Aktiver P0: Vom ersten Sonic-Adventure-PAL-Frame bis zum Spielboot
-
-Stand 2026-07-23: `KR-4831`, `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845`,
-`KR-4846` sowie die vorgezogenen Marker `KR-4915` und `KR-4850` sind
-abgeschlossen. Das
-verbindliche Produktziel bleibt XenonRecomp-artig:
-`IP.BIN` und BootExecutable werden statisch aus SH-4 in nativen PC-Code
-rekompiliert; die Zielruntime stellt nur typisierte Dreamcast-
-Plattformgrenzen bereit und ist weder normaler Interpreter/JIT noch Discplayer
-oder Titelhackschicht. Der normale Export emittiert und linkt jetzt keinen SH-4-
-Interpreter; ein fehlendes AOT-Ziel endet als typisierter Materialisierungs-/
-Dispatchfehler. Nur `diagnostic_partial` enthaelt und deklariert den begrenzten
-Diagnoseinterpreter. `KR-4848` ist inzwischen geschlossen: Strukturierte Disc-
-Ladetransaktionen, der allgemeine native Materializer und vorab kompilierte
-latente Module sind atomar und identitaetsgebunden integriert.
-
-Der aktuelle Kernblock erweitert `KR-4847` um einen gemeinsamen BIOS-/
-Taskfile-Besitzer, Dreamcast-SPI 11 bis 14, einen 32-Byte-Modepuffer und
-persistenten Sense/CHECK-Zustand. SPI `REQ_STAT` liefert zusaetzlich einen
-bereichsgeprueften 10-Byte-Laufwerks-/Track-/FAD-Status. PIO-DataIn/DataOut
-bleibt phasen- und
-ByteCount-gebunden; `CD_READ` mit `Features.Bit0` verwendet dagegen einen
-eigenen `DmaIn`-Pfad ohne PIO-DRQ oder Zwischen-IRQ und meldet erst nach dem
-letzten DMA-Byte den finalen Status-IRQ. Asynchrone BIOS-Completions sind vom
-quittierbaren Taskfile-IRQ-Latch getrennt; sequenzielle BIOS-Reads verlieren
-damit keine Flanke. Persistenter Sense-Payload setzt bei einem erfolgreichen
-Folgekommando nicht mehr faelschlich dessen ATA-`ERR`. Der fokussierte GD-ROM-
-Regressionstest besteht nach diesem Integrationsfix 1/1. Asynchrone Read- und
-BIOS-TOC-Zielpuffer werden vor jeder Mutation MMU-bewusst als vollstaendig
-linear schreibbarer Bereich validiert; ungueltige, ueberlaufende oder MMIO-
-Ziele enden ohne Teilwrite und Host-Exception als `InvalidField`. BIOS-
-`CD_CMD_NOP`, `REQ_MODE` und `SET_MODE` folgen nun ebenfalls der gemeinsamen
-Requestqueue. Mode-Read und -Write teilen den persistenten Zustand mit dem
-Paketvertrag; `REQ_MODE` validiert seinen 16-Byte-Gastpuffer atomar und meldet
-im Vierwortstatus die historisch sichtbaren zehn Modebytes. `KR-4848`
-besitzt physisch kanonische aktive Modulextents: Teilwrites erhalten
-unveraenderte Prefix-/Suffixbereiche,
-Copy/DMA entfernt veraltete Runtimeprovenienz und ein 4-KiB-Seitenindex weist
-Writes ohne moegliche Extentueberlappung vor dem Katalogscan ab. Ein
-vorvalidierter Ersatz derselben Modul-ID ist atomar; die neue Negativregression
-belegt, dass eine Ablehnung Katalog, Bloecke, Tracker, Provenienz und Metriken
-unveraendert laesst. Ein Load-Write-Tracker klassifiziert die tatsaechlichen
-Copy-/DMA-Writes eines BIOS-/GD-Reloads. Byteidentische Bootbytes erhalten
-vorhandene native AOT-Bloecke; bestehende Modulabdeckung wird nicht dupliziert,
-frische bytegleiche Bereiche verlieren ihren Provenienznachweis aber nicht.
-Geaenderte Bytes werden durch den beobachteten Gastwrite exakt einmal
-invalidiert. MMU-PIO ist an die committed physische Range gebunden und lehnt
-nichtlineare TLB-Spannen atomar ab. Codewrites ueber `0x0C` bis `0x0F` treffen
-dasselbe Haupt-RAM-AOT-Backing, auch ueber eine 16-MiB-Spiegelgrenze.
-
-`KR-4849` fuehrt Store-Queue-Pakete und den realen SH-4-DMAC-Channel 2 in den
-gemeinsamen TA-FIFO. Channel 2 verwendet den externen Memory-to-Device-Request
-`RS=2`, 32-Byte-Einheiten, inkrementierende Quelle, festes Ziel, Burstmodus und
-`DMAOR.DME+DDT` aus allen vier physischen Area-3-RAM-Spiegeln. Eine Runtime-End-
-to-End-Regression belegt Haupt-RAM bis TA-
-Object-List/EOL sowie die getrennte Channel-2-Completion; falsche Richtung und
-Cycle-Steal scheitern sichtbar. Fuer Direct-Texture-Ziele `0x11`/`0x13`
-progressiert das Ziel jetzt pro 32-Byte-Einheit; die generische P1-Luecke ist
-geschlossen.
-Der Hintergrundpfad bildet den festen Overscan-Quad einschliesslich HScale,
-D-Attributen und texturierter X/U-Erweiterung ab. `KR-4850` akzeptiert am
-echten Scheduler-VBlank-In zwei gleichwertig echte Gastquellen: eine
-pixelvalidierte TA-Rendergeneration oder backing-byte-adressierte Direct-FB-
-Evidenz, die gegen das vorherige Scanout-Abbild einen sichtbaren Pixelwechsel
-belegt. Read und Write verwenden dieselbe logische 32-Bit-VRAM-Sicht.
-`RGB0555` ist opak und uebernimmt die Concatbits; gepacktes `RGB888`,
-Modulus 0/1/>1, PAL-Weave und getrennte PAL-Felder sind regressionsgesichert.
-Die Kombination aus Dirty-Evidenz und Scanout-Abbild weist Offscreen-Writes,
-unveraenderte Bilddaten und Blanking ab. Der gemeinsame Proof-Pump
-trennt Gastbeweis und erfolgreichen Host-Present.
-
-Der vorgezogene private PAL-AOT-Lauf erreicht mit einem
-50-Millionen-Gastzyklusbudget in 5,3 Sekunden erstmals
-`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`. Quelle ist der
-recompilierte IP.BIN-Direct-Framebuffer; TA bleibt null. Der anschliessende
-Budget-Exit ist erwartet. Das vollstaendige CTest-Zwischengate der x64-
-Desktop-GUI-off-Konfiguration auf Quellstand `924ea89` ist mit 183/183
-Eintraegen in 312,97 Sekunden und zwoelf parallelen Jobs bestanden, darunter
-181 regulaere Passes und zwei erwartete
-Regex-`PASS_REGULAR_EXPRESSION`-Erfolge; Desktop-GUI- und Harness-Tests sind
-nicht Teil dieser 183. Das einzige finale Freigabegate folgt erst nach
-Abschluss aller v0.48-Implementierungen. An diesem historischen Checkpoint
-waren BootExecutable, Spielboot, `KR-4848` und der produktive TA-Pfad noch
-offen; `KR-4848` ist inzwischen geschlossen.
-
-Die folgenden Abschnitte dokumentieren fruehere Bring-up-Zwischenstaende.
-Dortige Aussagen, ein Gastframe sei noch nicht belegt, gelten jeweils nur fuer
-den beschriebenen damaligen Lauf und nicht fuer den aktuellen Direct-FB-
-Nachweis.
-
-Der allgemeine Disc-Hardwareauditor erfasst fuer den aktuellen privaten
-SA-PAL-AOT-Bootgraph unter Schema 4 142.380 erreichbare SH-4-Instruktionen in
-1.542 Funktionen. Es bleiben keine unbekannten SH-4-Instruktionen und keine
-bekannte statische Hardwareluecke. Von 58.630 Speicherstellen sind 18.159
-vollstaendig aufgeloest und 40.471 unaufgeloest oder partiell; zwei
-Hardwareadressen bleiben partiell.
-Der SCIF-Produktpfad, AICA-ARM-Reset, PVR-Blank/Border-Scanout und die komplette
-Store-Queue-/Channel-2-DMAC-/TA-/ASIC-Kette sind allgemein implementiert.
-Schema 4 ergaenzt Natural-Loop-Bloecke und Backedges ueber eine skalierbare
-Dominatorberechnung, klassifiziert Counter-, RAM-Poll-, MMIO-Poll-, Mixed- und
-Unknown-Loops und berichtet Access-/Guard-Evidenz. Area-3-Haupt-RAM-Spiegel
-werden kanonisiert. Der Zugriffskatalog erfasst GBR-MOV, `TST.B` als Read,
-`AND.B`/`XOR.B`/`OR.B` sowie `TAS.B` als RMW, FMOV mit konservativer
-FPSCR.SZ-Adressunion, PC-relative `MOV.W`/`MOV.L`, `STC.L`/`LDC.L` und beide
-Reads von `MAC.W`/`MAC.L`. Teilweise bekannte MAC-Basen bleiben einzeln
-erhalten; Predecrement verwendet 32-Bit-Wraparound. OCRAM ist eine
-Geraeteapertur und kein linearer RAM-Poll. Guard-Provenienz folgt T-neutralen
-Instruktionen und eindeutigen Vorgaengern und stoppt an echten T-Schreibern
-oder Merges. Unaufgeloeste Reads sowie konservative Kandidaten einer
-unvollstaendigen Condition-Domaene bleiben getrennt von bewiesenen
-`guards_loop`-Zugriffen. FMOV-/FCMP-Faelle ohne vollstaendigen
-FPSCR.PR/SZ-, FR/XF-, FPUL- oder Vektorbeweis bleiben bewusst `unknown`.
-`--strict` macht partielle Hardwareadressen und diese unaufgeloesten
-Poll-/Guard-Faelle zu einem Fehler; `--fail-on-gap` behaelt seine engere
-Semantik. Einzelbilder berichten `scope=executable_image`, Disc-Audits
-`scope=native_disc_aot_boot_graph`. Delay-Slot-Doppelkontexte, wurzellose SCCs
-und ein 4.096-Block-Skalierungstest sichern die statische Seite.
-
-Der aktuelle Audit enthaelt 1.095 Natural Loops: 48 `counter`, eine
-`mmio_poll`, zwei `ram_poll` und 1.044 `unknown`. Der normale Audit ist bei
-null bekannten Luecken gruen. Zwei partielle Adressen und 492
-`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot, sind
-aber nicht mehr der verbleibende Abschlussgrund von `KR-4842`.
-
-MMU-bewusste lineare Peeks veraendern MMIO, Observer, Watchpoints, Metriken und
-CPU-/Exceptionzustand nicht. Last-MMIO-Tracking ist im Gast-Hotpath
-allokationsfrei; PVR- und Systembus-Snapshots sind auch bei pending Render- und
-Channel-2-Zustaenden nicht mutierend. Der POD-Zugriffssink beobachtet AOT und
-begrenzten Interpreter mit Quell-/Laufzeit-PC sowie Store-Queue-, PVR-Render-,
-PVR-YUV-, VRAM32- und bereits ausgefuehrte MMIO-Zugriffe, ohne Readwerte oder
-MMIO-Handler erneut abzufragen. Der aktive Trace darf fuer die
-No-op-Klassifikation eines Wrapperwrites dessen lineares Backing vorab
-seiteneffektfrei vergleichen.
-Lineare Backing-Writerlinks sind bytegenau beweisbar; physische MMIO-
-Range-Links bleiben explizite Kandidaten. Der nur ueber
-`KATANA_PORT_WAIT_LOOP_TRACE=1` aktivierte versionierte
-Wait-Loop-Rohwerttrace verdichtet daraus dynamische Wertlaeufe und
-zugehoerige Writer.
-Die vorangegangenen fokussierten Regressionen bestanden 22/22 in 1,57
-Sekunden; der Port-CLI-Nachweis bestand 1/1 in 151,12 Sekunden. Die
-abschliessende Probe erfasst zusaetzlich CPU, Scheduler, alle linearen und
-persistenten Speicherbereiche, Replay und 35 Geraeteinstanzen mit 867
-kanonischen Feldern. Der private A/B-Bericht
-`katana-private-runtime-probe-ab` Version 1 meldet fuer zwei Laeufe,
-Gastzyklusbudget 100.000 und Hosttimeout 120 Sekunden `status=success`,
-`normative_fields_equal=true`, `executable_and_pack_unchanged=true`,
-`replay_complete_and_sealed=true` und null/null Tracezeilen. Damit ist
-`KR-4842` abgeschlossen. Eine Vollsuite und `KR-4852` wurden nicht
-ausgefuehrt.
-
-Der generierte Port praesentiert erst nach einem validierten TA- oder
-Direct-FB-Gastframe und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses
-VBlank, Offscreen-Writes oder erzwungenes Blank. Eine optional aktivierte,
-leichtgewichtige Diagnostik
-erfasst letzten MMIO-Zugriff, aktive Interruptquelle, alle relevanten
-DMA-Zustaende, GD-ROM, TA/PVR, AICA und den Demand-Materializer. Der emittierte
-Produktcode wurde mit einer synthetischen High-Density-GDI bis zur nativen EXE
-gebaut. Der aktuelle ABI-30-/Portvertrag-17-PAL-Lauf fuehrt den rekompilierten
-Disc-Systembootstrap stabil aus: 150 Millionen Gastzyklen beziehungsweise
-41.808.508 beobachtete Bloecke laufen ohne Exception bis in dessen belegte
-10.000-Iterationen-Warteschleife. `FB_R_CTRL` ist programmiert; TA, GD-ROM und
-ein echter PVR-Frame wurden bis zu diesem Punkt noch nicht beobachtet. Ein
-5-Millionen-Zyklen-Lauf sank durch gecachtes Hostpolling und das Auslassen von
-Codeinvalidierung fuer reine OCRAM-Stackwrites zunaechst von rund 5,8 auf
-4,265 Sekunden. Invalidierungsgesichertes lokales P1-/P2-Blockchaining senkt
-denselben Lauf weiter auf 2,523 Sekunden; Gastzustand, Zykluszahl und 1.001.521
-beobachtete Bloecke bleiben identisch. Ein erster Gastframe wird weiterhin
-ausdruecklich nicht behauptet. Die zusammenhaengende
-ASan-/Artifact-Gesamtvalidierung ist mit 180 von
-180 Tests bestanden; der anschliessende fokussierte Produktpfadlauf ist mit 28
-von 28 Tests gruen. Der danach frisch exportierte und lokal aus der
-unveraenderten PAL-Disc installierte Port erreichte 17.092.443 beobachtete
-Bloecke beziehungsweise 50.829.325 Gastzyklen. Der naechste allgemeine Blocker
-ist damit belegt: Der Gast erreicht seinen zur Laufzeit installierten
-Exception-Handler bei `VBR+0x100`, dessen Haupt-RAM-Bytes der bisher nur fuer
-vorab katalogisierte Quellen offene Materializer noch als `unknown-source`
-abwies. TA/PVR blieben bis dahin inaktiv; ein erster Gastframe wird weiterhin
-ausdruecklich nicht behauptet.
-
-Der allgemeine Fix verfolgt geaenderte Haupt-RAM-Bytes kanonisch und autorisiert
-erst beim echten Kontrolltransfer einen bytegenauen, auf 128 Bytes begrenzten
-Runtime-Code-Snapshot. Unbeschriebenes RAM bleibt gesperrt; jeder
-ueberlappende Write entwertet Snapshot und Runtimeblock. Die gezielte
-Materializer-Regression besteht unter AddressSanitizer. Der erneute private
-PAL-Nachweis materialisierte den Handler nachweislich als Interpreterblock und
-erreichte dessen Zugriff auf `EXPEVT` bei `0xFF000024`. Damit wurde die naechste
-allgemeine Luecke sichtbar: `TRA`, `EXPEVT` und `INTEVT` existierten nur als
-interner CPU-Zustand, aber noch nicht im produktiven P4-Bus. Alle drei
-32-Bit-R/W-Register sind nun samt Area-7-Alias, reservierten Bitmasken und
-Hardwareauditorabdeckung implementiert. Der folgende private Nachweis las
-`EXPEVT=0x100` korrekt und materialisierte sieben Handlerbloecke. Als Ursache
-der Exception ist nun die bisher absichtliche Ablehnung von `DMAOR.DDT`
-belegt. Der allgemeine DMAC-Vertrag akzeptiert das R/W-Modusbit jetzt und
-bildet begrenzte DDT-Requestqueues sowie den TR-only-Wiederholpfad ab. TA/PVR
-blieben im folgenden 100-Millionen-Zyklen-Lauf zwar ohne Exception, doch ein
-PVR-Softreset setzte faelschlich den gesamten Registerblock zurueck und liess
-`SPG_STATUS` dauerhaft auf Scanline null stehen. TA-, Core- und
-SDRAM-Interface-Reset sind nun getrennt; SPG-/Framebufferzustand und aktives
-Scanouttiming bleiben erhalten. Der frische private PAL-Port verlaesst diese
-Warteschleife, programmiert `FB_R_CTRL`, `FB_R_SIZE` und `VO_CONTROL` und
-erreicht nach 51.288.624 Gastzyklen neuen Runtimecode ohne Exception. Vier
-dynamische Interpreterbloecke wurden korrekt materialisiert; ein spaeterer
-Sprung auf eine innere Instruktion desselben Snapshots wurde jedoch als
-ueberlappendes zweites Modul abgewiesen. Der allgemeine Materializer verwendet
-solche geraden Inneneinstiege nun nur fuer interpretergestuetzte Bloecke und
-nur nach erneuter Byte-, Generation-, Varianten- und Herkunftspruefung. Native
-Inneneinstiege bleiben gesperrt; Rewrite- und Aliasinvalidierung sind durch
-Regressionsfaelle belegt. Der erneute PAL-Nachweis deckte ausserdem einen
-ueberbrueckenden, erst in umgekehrter Reihenfolge entdeckten Nachbarblock auf.
-Der generierte Demand-Interpreter materialisiert deshalb genau eine Instruktion
-beziehungsweise einen Kontrolltransfer samt untrennbarem Delay-Slot. Die
-gezielten Export-, Interpreter- und Modulregressionen sind gruen; der private
-Produktlauf erreicht damit rund 51,3 Millionen Gastzyklen ohne Block-Overlap.
-Der dort folgende Address-Error ist auf `0x00710000` eingegrenzt: Der Auditor
-hatte das AICA-RTC-Fenster faelschlich als implementiert bewertet, obwohl die
-Runtime nur die AICA-Register bis `0x00707FFF` mappte. Die drei RTC-Register
-sind nun samt Gastzeit, Write-Enable, Breiten, Aliasen und Reset allgemein
-implementiert; auch der Auditorvertrag besitzt positive und negative
-Registertests. Im ersten ABI-22-Lauf ist der RTC-Address-Error nachweislich
-verschwunden. Der folgende `INTEVT=0x3A0`-Fallback belegte stattdessen eine
-vertauschte System-ASIC-Zuordnung: Das vom Gast aktivierte Level-6-Maskenfenster
-wurde als Level 2 zugestellt. Die drei Leitungen sind nun allgemein auf
-Level 2/4/6 und `INTEVT` `0x3A0/0x360/0x320` korrigiert. Der nachfolgende Lauf
-isolierte den gueltigen SYSTEM-1-Rueckweg nach abgeschlossener
-Gastinitialisierung. Der Vergleich mit dem freien Reios-Handoff zeigte, dass
-der native Direktstart nur PC/SP/VBR/SR, nicht aber den uebrigen BIOS-CPU- und
-Geraetezustand setzte. Dieser allgemeine Handoff umfasst jetzt `T`, `FPSCR`,
-GBR/SSR/SPC/SGR/DBR/PR, DMAOR, AICA-Masken und PAL-Portzustand. Ein echter
-Address-Error deckte anschliessend auf, dass der alte SYSINFO-HLE-Stub mit
-`VBR+0x100` kollidierte. Alle HLE-Stubs liegen nun ausserhalb der
-SH-4-Exceptionvektoren. Der neue Dispatch-Hotspotbericht wies zudem 2.097.152
-Aufrufe desselben gueltigen
-Vier-Byte-Kopierpfads als Bootzeit-Hotspot statt als Dispatchfehler nach.
-
-Der anschliessende PAL-Lauf erreichte reproduzierbar `SYSTEM 1`. Ein erster
-Shortcut setzte nur den CPU-Handoff und sprang direkt zur vorhandenen
-Bootdatei; der erneute Audit verwarf diesen unvollstaendigen Vertrag. Der
-allgemeine Runtimepfad liest jetzt Bootstrap und Bootdatei erneut aus der
-gebundenen Discquelle, rekonstruiert den definierten BIOS-RAM-Zustand samt
-Vektoren und setzt DMAOR, AICA-Masken, Cache sowie PAL-Port erneut. Der Einstieg
-erfolgt wieder ueber den P2-Systembootstrap bei `0xAC008300`. Der direkte
-GD2-BIOS-Einstieg `0x8C0010F0` ist als zusaetzlicher Aliasblock vorhanden.
-Synthetische Regressionen veraendern Bootbytes und Geraetezustand vor SYSTEM 1
-und beweisen deren Wiederherstellung.
-
-Der erweiterte Kontrollflussaudit belegt den anschliessenden Soft-Reboot als
-absichtlichen Fatalpfad des fruehen Gastcodes. Ein unabhaengiger
-Flycast-/SH-4-Abgleich deckte dabei einen echten allgemeinen Portfehler auf:
-Pinmodus 3 wurde wie GPIO-Ausgang behandelt und machte aus dem PAL-Composite-
-Wert `0x0300` faelschlich `0x0304`. Die korrigierte 2-Bit-Modusdekodierung ist
-regressionsgetestet. Der private A/B-Lauf erreicht danach weiterhin keinen
-GD-ROM-/TA-/PVR-Zugriff; der vorgelagerte Statuspfad bleibt daher aktiver P0.
-
-Speicherproben vor dem Fatalpfad belegen die Ursache inzwischen enger: Das
-gesamte physische Disc-Systembereich ab `0x0C008000` war null, weil der bisherige
-Direct-Boot nur die Bootdatei nach `0x8C010000` lud. Der PAL-SYSINFO-Wert war
-dagegen korrekt. Der gegen Flycast-Reios und die lokale BIOS-Zerlegung
-abgeglichene, aber eigenstaendig implementierte Produktvertrag liest deshalb
-die ersten 16 Datensektoren als separates Bootstrapsegment, nimmt dessen
-Einstieg bei `0xAC008300` in Analyse, IR und nativen Codegen auf und laedt
-Bootstrap sowie Hauptprogramm vor dem Gaststart. Die sieben Sektoren nach
-`0x8C008100` bleiben davon getrennt die Semantik des BIOS-Discpruefaufrufs.
-Sechs fokussierte Boot-, Manifest-, GUI- und Portexportregressionen sind gruen;
-der erste frische PAL-Nachweis erreichte den nativen Bootstrap und belegte
-`CCR.ORA` sowie einen Stack im SH-4-On-Chip-RAM. Das zuvor fehlende allgemeine
-OCRAM-Modell bildet nun das 8-KiB-Backing, ORA/OIX-Indexierung, Reset,
-MMU-Ausnahme und Hardwareaudit ab. Der danach frisch exportierte ABI-30-Port
-erreicht mit der unveraenderten PAL-Disc 5.000.000 Gastzyklen und 1.001.521
-Gastbloecke ohne Exception oder Materializerfehler. Der letzte beobachtete
-MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
-ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
-Folgelauf weiterhin offen.
-
-Runtime-ABI 52, Block-ABI 5, Analyzer-ABI 1, Backend-Interface-ABI 4,
-BIOS-ABI 9, PlatformServices-ABI 11, Portprojektvertrag 37 und
-Host-Video-Vertrag 2 bilden den kumulativen v0.48-Stand ab.
-PlatformServices-ABI 10 versioniert zusaetzlich die genaue
-`PREF`-Instruktionsherkunft bis zur Store Queue.
-
-Der anschliessende statische Flycast-/KallistiOS-Abgleich hat den noch vor
-PVR liegenden BIOS-Statuspfad konkretisiert. Der produktive GD-ROM-BIOS-Dienst
-verwendet nun die oeffentlichen PROCESSING-/COMPLETED-/NOT_FOUND-Werte, vier
-Statuswoerter mit Bytezahl, einen echten EXEC_SERVER-Uebergang und getrennte
-408-Byte-LOW/HIGH-TOCs. G1 fuehrt konfigurierte und laufende Zaehler getrennt;
-`SYSTEM 0` restauriert den Boot-Livezaehler. Freie Gastproben sind MMU-bewusst
-und koennen keine MMIO-Leseeffekte mehr ausloesen. `SYSTEM 1` endet als
-typisierter BIOS-Menue-Ausgang mit Register- und letztem GD-ROM-Zustand, statt
-einen Emulatorersatz-Neustart auszufuehren. Ein begrenztes BIOS-Ereignislog
-wird auf diesem Pfad automatisch ausgegeben. Konsolenprofil und PAL/NTSC/VGA
-sind explizit und werden nicht aus `JUE` abgeleitet. Diese Runde ist
-implementiert und kompiliert; die folgenden fokussierten Regressionen und
-privaten PAL-Laeufe haben den Pfad inzwischen ohne Dispatchfehler fortgesetzt.
-Ein erster Gastframe wird weiterhin nicht behauptet.
-
-Die erste fokussierte `KR-4846`-Ergaenzung schloss Abbruch, getrennte INIT-/
-RESET-Semantik, aktiven Laufwerksstatus und den tatsaechlich unterstuetzten
-Datentypvertrag. Der folgende `KR-4847`-Block fuehrt nun die Callbackausfuehrung,
-Streamingkommandos und den gemeinsamen G1-Transferpfad aus. PIO-Callbacks sind
-registrierter Zustand; DMA-Selektor 5 ist dagegen ein einmaliger IRQ-Handoff
-nach Abschluss und lehnt Vorabregistrierung ab. Ein erster Gastframe wird
-weiterhin nicht behauptet.
-
-WinCE-Bootlayouts und gescrambelte Nicht-GD-ROM-Bootdateien bleiben eine
-bewusste allgemeine Loadergrenze. Bis ein eigenstaendiger nativer Segment- und
-Descramble-Vertrag implementiert ist, lehnt der Loader beide Klassen stabil ab
-und behauptet keine falsche Portfaehigkeit.
-
-Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
-RTC-Schreiblatch, vollstaendige MMU-Miss-/Multiple-Hit-Semantik, `MMUCR.SV`,
-physisch gebundene AOT-/Demand-Varianten, bytegenaue Runtime-Codepromotion,
-pixelgebundenen Gastframe-Nachweis sowie zustandsfuehrende Holly-DMA-Fehler.
-Separater PVR-DMA ist jetzt vom Channel-2-Ereignis getrennt und an Kanal 0 des
-SH-4-DMAC samt Residue gebunden; AICA triggert G2 nur noch ueber einen echten
-expliziten Request. Die zehn fokussierten ASan-Regressionen sind gruen. Ein
-frischer Export und die einmalige lokale Installation aus der unveraenderten
-PAL-GDI sind erfolgt. Der erste budgetierte Produktlauf erreichte 51,3 Mio.
-Gastzyklen und 17,29 Mio. Dispatchbloecke mit 367 erfolgreichen dynamischen
-Materialisierungen, aber weiterhin ohne TA-/PVR-Aktivitaet oder Gastframe. Er
-legte eine reihenfolgeabhaengige Ueberlappung zweier Runtime-Code-Snapshots
-offen. Der allgemeine Katalog begrenzt ein neu entdecktes Fenster nun am
-Beginn jedes bereits aktiven Nachbarmoduls; die fokussierte Regression fuer
-rueckwaerts entdeckte Codebereiche ist gruen. Der erneute PAL-Nachweis
-beseitigt die Runtime-Code-Ueberlappung und beendet sich sauber nach 51,3 Mio.
-Gastzyklen mit 367 erfolgreichen dynamischen Materialisierungen. Er deckt den
-naechsten allgemeinen Kontrollflussfehler auf: Der Root-Dispatcher behandelte
-das erste `RTS` eines runtime-materialisierten Aufrufs wie das Ende des
-gesamten Portprogramms. Programmroot und verschachtelte Host-Aufrufgrenzen sind
-nun getrennt; der Root folgt dem gelatchten Gast-Returnziel und endet nur an
-seinem expliziten Einstiegssentinel. Der folgende private Lauf erreicht 582
-erfolgreiche Runtime-Materialisierungen und endet nun sichtbar statt
-faelschlich erfolgreich. Dabei wird der BIOS-SYSTEM-Vektor aufgerufen. Dessen
-Funktionscode wurde bisher irrig aus dem fuer Cacheadressen verwendeten `r7`
-gelesen; KallistiOS, die lokale BIOS-Analyse und Flycast-Reios belegen fuer
-diesen Vektor uebereinstimmend das erste SH-4-C-Argument `r4`. BIOS-ABI 2
-korrigiert den Selektor und bindet die zurueckkehrenden Funktionen 0 und 2 an
-ASIC/PVR beziehungsweise den lokalen GD-ROM-Bootstrap. Der erneute private
-Nachweis steht aus; ein Gastframe wird bis dahin weiterhin nicht behauptet.
-
-Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
-Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,
-waehrend `user-data` und `*.katana-disc` niemals in Staging oder Paket gelangen.
-Nach erfolgreicher atomarer Publikation wird das lokale `user-data` direkt vom
-alten in den neuen Port verschoben; ein Fehler rollt auf den exakten alten Port
-samt Disc-Cache, Flash und VMU zurueck. Der private PAL-Rebuild hat diesen Pfad
-mit erhaltenem 1.227.063.528-Byte-Pack und ohne liegengebliebene Stage-/Stale-
-Verzeichnisse bestaetigt.
-Bytegleiche Quellen behalten ihre Zeitstempel; AOT-Codegen und MSVC-Kompilierung
-arbeiten parallel. Die Workerzahl folgt der Host-CPU und kann mit
-`KATANA_PORT_CODEGEN_JOBS` begrenzt werden. Eine zusaetzliche identische Regeneration erhoehte den
-synthetischen Gesamt-Porttest nur um rund fuenf Sekunden. `KR-4813` bleibt fuer
-den weitergehenden content-addressed Analyse-/IR-Cache offen.
-
-## KR-4831 technisch abgeschlossen
-
-Der verteilbare Portexport schreibt keinen vollstaendigen Retail-Disc-Pack
-mehr. Er veroeffentlicht eine spielagnostische, pfadfreie
-`game.katana-install`-Recipe mit Descriptor-, Boot-, Content- und
-Track-SHA-256 sowie der kanonischen Trackgeometrie. Der generierte native
-AOT-Port verlangt einmalig `game.exe --install-disc <eigene.gdi>`, validiert
-die Originaldisc vollstaendig und erzeugt den lokalen Pack atomar nur unter
-`user-data/content/`. Synthetische Differenz-, Negativ- und CLI-End-to-End-
-Tests sind gruen; Sonic Adventure PAL und Sonic Shuffle PAL bleiben private,
-read-only Kompatibilitaetsfixtures und erhalten keine Sonderlogik.
-
-Der abschliessende Identitaetsblock verwendet jetzt Disc-Pack-Format 2 und
-Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
-wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
-Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
-veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im damaligen
-Runtime-ABI 30 und Portprojektvertrag 18 enthalten. Das damalige kumulative
-v0.48-Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
-PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
-in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die
-Originaldisc installiert 521.461 Sektoren ausschliesslich lokal. Der echte
-PVR-DMA-Steuerblock ab `0x005F7C00` und alle vier SH-4-Cachearray-Aperturen
-sind nun geschlossen; der Vergleichslauf erreicht 17.516.050 native
-AOT-Bloecke in 50 Mio. Gastzyklen ohne Exception. In diesem damaligen Lauf
-steht ein Gastframe weiterhin aus.
-
-Die danach isolierte permanente Wartestelle las `SPG_STATUS` bei
-`0xA05F810C`, waehrend der HLE-Handoff `SPG_LOAD=0` hinterlassen hatte. Der
-Syncgenerator leitet Scanline, Field und Blank nun aus Gastzeit und
-dokumentierten Registerfeldern ab. Der Firmware-Handoff waehlt fuer Europa das
-PAL-Interlace-Profil und fuer Japan/Nordamerika NTSC-Interlace; zusaetzlich
-sind PAL/NTSC non-interlaced und VGA geschlossen getestet. Der frische private
-PAL-Port verlaesst `0x8C6044DE` nachweislich und erreicht bei 10 Mio.
-Gastzyklen `0x8C0100E2` ohne Exception. TA-/PVR-Aktivitaet und der erste
-Gastframe stehen weiterhin aus.
-
-Der anschliessende P0-Runtimeblock korrigiert den zweiten SH-4-Ausfuehrungskern
-und seine AOT-Grenze: Pre-Decrement-Fault-Rollback, SHAD/SHLD bei negativen
-32er-Vielfachen, PR-Sichtbarkeit und -Rollback im Delay-Slot sowie die
-Instruktionszaehlung sind durch eine eigene Regression belegt. Jeder native
-AOT-Block kehrt fuer den naechsten Instruction Fetch in den zentralen
-Dispatcher zurueck. MMU-Varianten werden nur bei identischer physischer
-Codeherkunft an vorhandenen AOT-Code gebunden; echte Remaps verwenden keinen
-stale Block. URC/URB und Multiple-Hit sind geschlossen getestet.
-
-GD-ROM-Paketkommandos und G1-DMA schliessen nun erst nach Gastzeit ab. Bytes
-werden vor der G1-Completion nicht sichtbar, normale Paketfehler bleiben im
-ATA-Vertrag, und ein fehlgeschlagener PVR-Render erzeugt kein `RenderDone`.
-Direct- und HLE-Firmwaremodus sind getrennt. Der C++-Emitter routet jeden
-Gastzugriff direkt ueber die MMU-Helfer statt durch globale Textersetzung.
-Die fokussierten P0-Regressionen und der vollstaendige 180er-Debug-Gate sind
-gruen. Ein neuer privater PAL-Lauf ist noch nicht erfolgt, daher bleibt der
-erste echte Gastframe offen.
-
-## Privater PAL-Runtime-Bring-up
-
-Ein frischer privater Hostbuild hat eine allgemeine MSVC-Parallelitaetsluecke offengelegt:
-mehrere AOT-Uebersetzungseinheiten schrieben gleichzeitig dieselbe Ziel-PDB und konnten mit
-`C1041` abbrechen. Runtime und generierte AOT-Bibliothek verwenden deshalb nun explizit `/FS`;
-der erneute Produktbuild ist erfolgreich. Er veroeffentlichte 896 Funktionen in 14
-AOT-Partitionen und drei Installer-Recipe-Tracks bei weiterhin null Retailsektoren im
-verteilbaren Paket. Der lokale Disc-Installations- und Laufzeitnachweis stand
-fuer diesen damaligen Build noch aus und wurde in den folgenden Runden
-nachgeholt.
-
-Sonic Adventure PAL erreicht reproduzierbar mehr als 5,1 Millionen native
-AOT-Bloecke, weiterhin ohne Gastframe. Die erste belegte Ausnahme bei
-`0xFFD00000` wurde durch die vollstaendige SH-4-INTC-Registerfamilie behoben.
-Der anschliessende Halt bei `0xA05F6800` fuehrte zu einem allgemeinen Audit
-des Holly-Systembus-Steuerblocks: `0x005F6800..0x005F68AC`, seine direkten
-Segmentaliase und die angrenzenden PVR-/G2-DMA-Triggermasken sind nun mit
-geschlossenen Breiten-, Masken- und Zugriffsvertraegen umgesetzt. Channel 2
-fuehrt Channel-2-TA-DMA ueber den realen Systembusblock und SH-4-DMAC aus;
-ASIC-Triggermasken starten den davon getrennten PVR-DMA-Controller bei
-`0x005F7C00` und G2-DMA gastzeitgebunden. Kein Pfad taeuscht Transfererfolg vor.
-
-Die folgende Probe erreichte denselben Blockstand und identifizierte
-`SB_MDSTAR` bei `0xA05F6C04` als naechste allgemeine Luecke. Der vollstaendige
-Maple-Steuerblock ist inzwischen an einen echten, gastzeitgebundenen DMA-Pfad
-angeschlossen: begrenzte Kommandotabellen, Schutzfenster, Controller-/VMU-
-Transaktionen, DMA-Antwortwrites und genau eine System-ASIC-Completion sind
-synthetisch sowie unter AddressSanitizer geprueft. Der bestehende High-Level-
-Bus bleibt fuer direkte Plattformtests verfuegbar, waehrend Gastzugriffe den
-MMIO-Pfad verwenden.
-
-Der vollstaendig ausgelesene Rest derselben PAL-Initialisierungstabelle belegt
-anschliessend G2-DMA, PVR-DMA und einen auf Null gesetzten GD-DMA-Start. Die
-G1-/G2-/PVR-DMA-Registerfamilien und alle Direktsegmente sind nun geschlossen
-gemappt. AICA/G2 und PVR verwenden echte, gastzeitgebundene DMA-Kopien mit
-Zaehlern und ASIC-Completion; lineare Speicherregionen werden dabei ohne
-Byte-fuer-Byte-Dispatch kopiert. GD-ROM-DMA darf initialisiert und deaktiviert
-werden, verweigert einen aktiven Start aber weiterhin sichtbar, bis Discquelle,
-Laenge und Completion an denselben Vertrag gebunden sind.
-
-Der daraufhin frisch exportierte und aus der unveraenderten Originaldisc lokal
-installierte Port erreichte 5.112.299 native Bloecke. Die naechste belegte
-Ausnahme war ein Schreibzugriff auf `0x00000100`: Der Gast installiert dort
-nicht etwa Low-Memory-Code, sondern kopiert seinen Handler nach `VBR + 0x100`.
-Der direkte Runtime-Handoff hatte faelschlich den SH-4-Resetwert `VBR=0`
-beibehalten. Der allgemeine Dreamcast-Spielhandoff verwendet nun die reale
-Haupt-RAM-Vektorbasis `0x8C000000`; eine synthetische Produktpfadregression
-haelt den Vertrag fest. Der folgende private Lauf bestaetigte den Fix und
-erreichte 5.112.471 native Bloecke ohne SH-4-Exception. Er stoppte erst an
-einem Runtime-only-Call auf einen P2-Codealias: Die unveraenderten Zielbytes
-liegen im initialen Bootimage und beginnen an einer gueltigen
-Instruktionsgrenze, waren der Analyse aber nur unter ihrem P1-Namen bekannt.
-Der allgemeine Image-, Analyse- und Dispatchvertrag normalisiert deshalb nun
-P0/P1/P2-Codealiase, kompiliert beschreibbare Snapshotkandidaten unter ihrer
-kanonischen Imageadresse vor und bewahrt das angeforderte Aliasziel getrennt
-vom nativen Ausfuehrungs-PC. Der erneut exportierte und lokal installierte Port
-ueberschreitet diese Grenze; die unveraenderte Original-GDI bleibt erhalten.
-
-Der angrenzende Analyseaudit bindet auch explizite Einstiegspunkte,
-Funktionssymbole, zusaetzliche Seeds und absolute wie relative Sprungtabellen
-an denselben kanonischen Aliasvertrag. Der Vollstaendigkeitstest deckt wieder
-alle 159 normalen SH-4-Metadatenregeln ab; seine alte 156er-Schranke war nach
-den drei bereits implementierten Cache-/TLB-Befehlen selbst veraltet.
-Zusaetzlich erkennt die Analyse zusammenhaengende absolute Pointerlaeufe aus
-dem garantierten Anfangssnapshot. Beschreibbare Tabellen bleiben
-`RuntimeOnly` mit `GuardedPartial`-Herkunft und fuehren ihre Anfangswerte nur
-als `analysis_candidates`; sie erzeugen weder bewiesene CFG-Kanten noch
-Funktionsseeds. Akzeptierte Ziele werden als eigene Basic-Block-Leader
-kompiliert, damit der weiterhin massgebliche Laufzeitload validiert in den
-nativen Block eintreten kann. Ein impliziter Funktionsreturn am Kandidatenziel
-wird dadurch vermieden.
-
-Ein zweiter kandidaten-only Vertrag deckt ungeloeste, speicherabgeleitete
-`BSRF`-Calls ab. In einem initialen, ausfuehrbaren Nicht-RuntimeMemory-Snapshot
-muss genau eine maximal lange Insel aus mindestens vier Return-Handlern mit
-demselben geraden Stride, `RTS` plus Delay-Slot und einem terminalen `BRA`-Slot
-existieren. Die Ziele bleiben `RuntimeOnly`; der geladene relative Laufzeitwert
-ist autoritativ. Die Insel erzeugt weder CFG-Kanten noch Funktionen. Der echte
-statische PAL-Audit erkennt die beiden Dispatches `0xAC00D994` und
-`0xAC00D9A0` sowie die Kandidaten im Bereich `0xAC00D9AA..0xAC00D9E6`; der
-bisherige Stopp bei `0xAC00D9BC` liegt in dieser vorbereiteten Menge.
-
-Der anschliessende PVR-Audit hat weitere spielagnostische Produktluecken
-geschlossen: HOLLY2-Packed-Color liest bei untexturierten Vertices die Base
-Color aus `0x18`; 64-Byte-Floatparameter erhalten Base- und Offsetfarbe; beide
-Intensity-Modi besitzen korrekte Face-Color- und Vertexvertraege. Der
-Software-Rasterizer fuehrt Tabellen-, Per-Vertex- und Tabellenmodus-2-Fog
-sowie RGB-Color-Clamp nun wirklich aus, statt die TSP-Bits nur zu speichern.
-Texturkoordinaten sind jetzt perspektivisch ueber die reziproke W-Tiefe.
-Vierfach-Supersampling und Sekundaer-Akkumulation laufen im Fragmentpfad.
-Trilinear-Pass A/B bleibt dagegen bis zu einer echten D-basierten
-Mipmap-Levelwahl sichtbar abgewiesen; der vorherige einzelne, nur gewichtete
-Bilinear-Sample wird nicht mehr faelschlich als Trilinearbild ausgegeben.
-Der SA-gestuetzte Gesamtcheck hat danach eine allgemeine TA-Registerluecke
-belegt: Das Spiel programmiert `TA_NEXT_OPB_INIT`, waehrend die Runtime bei
-`TA_LIST_INIT` irrtuemlich `TA_OL_BASE` als Arbeitszeiger verwendete und
-`TA_LIST_CONT` keinen Parserpfad besass. Beide Befehle folgen nun dem
-dokumentierten HOLLY-Vertrag. Fortsetzungen erhalten abgeschlossene Primitive,
-setzen den transienten Parserzustand kontrolliert zurueck und werden waehrend
-offener oder unvollstaendiger Parameter abgewiesen. Adressmasken und read-only
-Arbeitszeiger sind in Register- und FIFO-Regressionen geschlossen.
-
-Der aktuelle private PAL-Nachweis verliess zunaechst die SCANINT1-Wartestelle;
-SCANINT1 ist damit kein belegter PVR-Fehler. Auch der fruehere PR-Blocker bei
-`0xAC00B700` und der kandidaten-only `BSRF`-Stopp sind im folgenden Lauf
-verschwunden. Die erste Probe des neu exportierten Ports deckte stattdessen die
-fehlenden BIOS-Modekommandos 30/31 auf. Nach deren allgemeiner Korrektur lief
-der unveraenderte Gast bis 345.568.225 Hardwarezyklen und 7.421.380 native
-Bloecke, absolvierte beide GD-ROM-Kommandos und schrieb spaetere PVR-Register.
-Der naechste typisierte Fehler ist ein fehlender nativer Inneneinstieg bei
-`0x8C654F5C`. TA-Transfers, Renderrequests und echte Gastframes bleiben null.
-Der Inneneinstieg stammt aus einer begrenzten `MOV.W`-/`BRAF`-Relative16-
-Tabelle. Der statische Audit findet ueber fuenf Tabellen 87 Eintraege, 76
-eindeutige Ziele und 73 Kandidaten, die im vorherigen Port fehlten. Der
-Anfangssnapshot darf sie nun als native Blockleader bereitstellen, ohne den
-live geladenen `RuntimeOnly`-Dispatch in eine feste Kante umzudeuten.
-Imagegebundener Snapshotcache, physische P2-Aliasaufloesung und die exakte
-Fortsetzungsmetadatenuebergabe ueber lokale Blockketten sichern den Vertrag.
-Der dazugehoerige neue Export, die lokale Installation aus der erhaltenen
-Original-GDI und die budgetierten Produktlaeufe sind abgeschlossen. Der alte
-Fehler bei `0x8C654F5C` ist verschwunden; 761.011 Dispatchereignisse bleiben
-fehlerfrei. Der neue Haupthotspot ist als endlicher 4-Byte-Kopier-/
-Initialisierungsloop klassifiziert, nicht als fehlender Zielblock.
-Der offene Audit richtet sich titelunabhaengig auf AOT-, Register-, Timing-,
-DMA-, FIFO- und Completionvertraege; feste Spieladressen werden nicht zum
-Produktvertrag.
-
-Die Eingabeprovenienz verwendet unter Windows jetzt den nativen BCrypt-SHA-256-
-Pfad mit 4-MiB-Chunks. Zusammen mit den einmalig aufgebauten Analyseindizes und
-der parallelen Projektausgabe bleibt der private Export ein budgetierter
-Werkzeuglauf statt einer seriellen Dauerprobe. Der CLI-Hostbuild kann seine
-Workerzahl ueber `KATANA_HOST_BUILD_JOBS` setzen und den Windows-Port in einem
-getrennten Ninja-Build parallel erzeugen; der primaere Host verwendet zwoelf
-Jobs.
-
-Die PAL-GDI und alle Trackquellen bleiben unveraendert; veraltete
-Portausgaben werden nur nach erfolgreichem Ersatz entfernt.
-
-## KR-4704 technisch bestanden
-
-Die aktuelle Kontrollflussfront umfasst in der privaten Build-only-Analyse
-55.202 Instruktionen und 813 Funktionen. Die drei zuvor unbekannten
-Cacheinstruktionen sind als allgemeine SH-4-Decoder-, IR-, Backend- und
-Runtimepfade umgesetzt. OCBP und OCBWB verwenden einen expliziten kohaerenten
-Operand-Cache-Vertrag: Der aktuelle Referenzspeicher besitzt keine verborgene
-Dirty-Line und meldet deshalb weder erfundenen Write-back noch Speicherwrite.
-
-Die sieben vollstaendig ungeloesten Sites und die 1.708 zuvor partiell
-bewachten Sites wurden nach Herkunft und Vollstaendigkeit neu klassifiziert.
-Beschreibbare Tabellen, zusammengefuehrte unvollstaendige Kontexte und echte
-Laufzeitzeiger verwenden den validierenden Runtime-only-Dispatcher. Fruehere
-Kandidaten bleiben nur als `analysis_candidates` fuer die monotone Analyse
-erhalten und werden nicht als vollstaendige Laufzeitzielmenge exportiert. Der
-Dispatcher akzeptiert ausschliesslich registrierte, ausgerichtete und fuer die
-aktive Codegeneration gueltige Bloecke; ein Miss bricht strukturiert ab.
-
-Der aktuelle private Aggregatstand ist `resolved=1`,
-`guarded_complete=0`, `guarded_partial=0`, `runtime_only=1.826`,
-`unresolved=0`, `unknown_instructions=0` und
-`reachable_abort_edges=0`, `uncovered_control_targets=0` und
-`dispatch_paths_without_validation=0`. Der neue Gatevertrag verlangt nicht
-mehr die statische Klassifikation aller Bytes mit ausfuehrbarer
-Speicherberechtigung. Unbekannter Speicher bleibt unbekannt und nicht
-dispatchbar, bis ein validierter Kontrolltransfer ihn erreicht. Der private
-doppelte Build-only-Nachweis ist erfolgreich; beide frischen Hostbuilds
-besitzen identische portable Metadaten und generierte Quellen. Das aktuelle
-Executable wurde als damaliges Gateartefakt neu gehasht, aber nicht gestartet.
-
-Persistenz und Host-Pacing besitzen nun eigene Regressionen. Windows liest
-Nutzerdatenpfade ohne unsicheren `getenv`-Pfad, Firmwarefehler werden in der
-vertraglich richtigen Reihenfolge diagnostiziert, und der generierte Port
-bindet persistente Flash-/VMU-Arbeitskopien sowie den ganzzahligen Hostpacer
-ein. Gate und Paketierung erkennen die Visual-Studio-/Ninja-Werkzeuge robust,
-vermeiden doppelte `PATH`-/`Path`-Eintraege, behandeln ASan im Releasepaket als
-optional und testen den relocatable Port mit getrenntem Nutzerdatenpfad.
-
-Der neue v0.47-Gate-Runner verbindet frische Debug-/RelWithDebInfo-Builds,
-GUI-Paket, Harness-Selbsttest, privaten doppelten Build-only-Nachweis,
-Datenaudit und atomische Root-GUI-Verteilung. Der Rootstand enthaelt eine
-aktuelle verifizierte `KatanaRecomp-GUI.exe`, den Dialoghelfer und das
-zugehoerige Runtime-SDK. Die fokussierten Decoder-, Analyse-, IR-, Backend-,
-Runtime-, Portexport- und GUI-Regressionen sowie der relocatable synthetische
-GDI-Paketbuild bestehen. KR-4704 und die anschliessende interne Freigabe
-KR-4705 sind abgeschlossen; die aktive Arbeit liegt in v0.48.
-
-Das neue exakte Inventar klassifiziert die zuvor pauschal betrachteten Bytes:
-`proven_reachable_code`, `runtime_discovered_code`,
-`unreachable_decodable_code`, `embedded_data`, `literal_pool`, `jump_table`,
-`pointer_table`, `padding`, `overlay_candidate`, `module_candidate`,
-`compressed_or_encoded` und `unknown_executable`. Oeffentliche Aggregate sind
-adressfrei; lokale Details werden zusaetzlich nach Segment, Discdatei,
-Ladephase und Schreibbarkeit gruppiert. 4-KiB-Seiten werden nach Rolle,
-Beweisklasse, Referenz-, Relocation- und Zielevidenz, Entropie, Decodedichte
-und Abstand zu bewiesenem Code gruppiert. Eine gueltige SH-4-Decodierung allein
-ist kein Codebeweis. Anschliessend werden reale Ladegroesse,
-Reservierung, Zero-Fill, Code-/Datensegmente, Boot-/Nachladerollen,
-Berechtigungen, Alignment und Padding im Loadervertrag geprueft.
-
-Reachability wird von der Pflicht zur Vorabkompilierung getrennt. Nur
-`initially_reachable` und `statically_discoverable` gehoeren ohne weiteren
-Vertrag zwingend in den statischen Bestand; `loadable_module` und
-`runtime_materializable` duerfen das Gate nur mit sicherer Herkunfts-,
-Byteidentitaets-, Lebenszeit-, Invalidierungs- und Materialisierungskette
-verlassen. Neue Module und Overlays erhalten synthetische Fixtures. Die
-Demand-driven-Materialisierung validiert Ziel und Herkunft, findet oder baut
-einen budgetierten Block, registriert ihn und dispatcht erst danach. Sie bleibt
-deterministisch und abschaltbar. Ein Interpreter ist nur im expliziten
-`diagnostic_partial`-Profil vorhanden; der normale Produktport bindet nur
-nativen AOT-Code und endet bei fehlendem Ziel typisiert.
-Runtime-only-Sites werden nach Aufrufen, Zielvielfalt, Stabilitaet, Misses,
-Materialisierungen und Invalidierungen profiliert, damit nachweislich mono-
-oder klein polymorphe Sites spaeter sicher spezialisiert werden koennen.
-
-Die allgemeine Grundlage ist nun umgesetzt. Der GDI-Loader beschreibt die
-rohe Bootdatei als `mixed` statt pauschal als Code; ihre 6.735.296 Dateibytes
-sind exakt committed, ohne reservierten Zero-Fill. Der private reine
-Analyselauf fand 110.404 initial erreichbare Instruktionsbytes und 16.554
-bewiesene Literalpoolbytes. MOVA liefert nur eine Adressreferenz und wird nicht
-mehr faelschlich als Literalpool gerechnet. 408.019 gleichfoermige Bytes
-bleiben als unbewiesene Padding-Kandidaten unbekannt; 6.200.319 Bytes bleiben
-`unknown_executable`. Insgesamt bleiben 6.608.338 unbekannte Speicherbytes,
-die ohne validierten Kontrolltransfer weder statisch analysiert noch
-dispatchbar sind.
-Bewiesenes Padding ist nur fuer streng quellgebundenes, ausgerichtetes
-Dateiend-Fill ohne Referenz-, Relocation-, Modul- oder Kontrollflussevidenz
-zulaessig; im privaten Abbild erfuellt aktuell kein Kandidat diesen Vertrag.
-Module, Overlays, Lebenszeit, Relocationen, Byteidentitaet,
-Invalidierung, budgetierte Materialisierung und Runtime-only-Siteprofile sind
-synthetisch abgesichert. Runtime-ABI 14, Portprojektvertrag 6 und
-Anwendungsvertrag 7 versionieren die Erweiterung. Die 1.603 dominant
-unbekannten Seiten sind adressfrei in 14 Ursachengruppen zerlegt; die groessten
-Gruppen besitzen keine Referenz, Relocation oder Kontrollflussevidenz und
-werden nach Entropie und Decodedichte statt einzeln nach Adresse priorisiert.
-Der Gesamtvertrag steht in
-[`EXECUTABLE_INVENTORY_AND_MODULES.md`](EXECUTABLE_INVENTORY_AND_MODULES.md).
-
-## KR-4703 umgesetzt
-
-Flash und VMU verwenden getrennte lokale Arbeitskopien in einem versionierten,
-SHA-256-gebundenen Primaer-/Recoverycontainer. Nutzerquellen werden nur gelesen
-und vor jedem atomischen Save erneut verifiziert. Defekte Primaerkopien werden
-nur aus einer vollstaendig validierten Recovery wiederhergestellt; keine
-Fehlerbehandlung beschreibt oder ersetzt die Quelle. Die portable
-Projektidentitaet trennt die Nutzerdaten verschiedener Ports.
-
-Der generierte Port bindet persistentes Command-Flash und eine VMU ein. Ein
-ganzzahliger Hostpacer wartet an Video-Gastzyklen auf monotone Hostdeadlines,
-ohne Scheduler-, Audio-, Video- oder Eingabesemantik aus Hostzeit abzuleiten.
-Pause und Resume ankern neu; Shutdown stoppt Ausgabe und Scheduler und speichert
-beide Abbilder genau einmal. Pacing- und Persistenzstatus sind strukturiert und
-ohne lokale Pfade oder Nutzdaten diagnostizierbar. Runtime-ABI 13,
-Hostruntimevertrag 2 und Portprojektvertrag 5 versionieren die Erweiterung.
-
-Vertrag und gesammelte Regressionen stehen in
-[`MUTABLE_STORAGE_AND_PACING.md`](MUTABLE_STORAGE_AND_PACING.md). Die
-Regressionen sind umgesetzt und fokussiert ausgefuehrt; ihre Wiederholung in
-beiden frischen Gateprofilen bleibt Bestandteil von KR-4704.
-
-## KR-4621 umgesetzt
-
-Der Speicherbus verwendet einen abschaltbaren 64-KiB-Regionsindex, native
-lineare 16-/32-Bit-Zugriffe und einen ereignisfreien Pfad ohne Trace oder
-Watchpoint. Exakter virtueller Dispatch besitzt einen direkten Hashindex; die
-Codeinvalidierung untersucht ueber einen Page-to-Block-Index nur beruehrte
-Kandidaten. Geordnete beziehungsweise lineare Referenzmodi bleiben fuer
-Differenzlaeufe erhalten.
-
-Invalidierungs-, Dispatch- und Store-Queue-Diagnostik sind fest begrenzt und
-melden verworfene Details ueber Aggregatzaehler. Automatische DMA-Transfers
-koennen deterministisch bis vor das naechste fremde Schedulerereignis
-gebuendelt werden; Einzeltransfer-, externe Request- und Round-Robin-Pfade
-bleiben als Referenz erhalten. Vertrag und Gate-Messpunkte stehen in
-[`P1_HOTPATHS.md`](P1_HOTPATHS.md).
-
-## KR-4622 umgesetzt
-
-Kontrollfluss-Fixpunkte uebernehmen bekannte Kontextschluessel und dekodieren
-bei neuen Seeds nur die Deltafront. Die Funktionswertanalyse ordnet ihre
-monotone Worklist nach Callgraph-SCCs und reiht Caller beziehungsweise Callees
-nur bei geaenderter Summary oder geaendertem Ingress erneut ein. Immutable
-Instruktionsarenen, Blockspans, gemeinsame Adressindizes und internierte
-Evidence-IDs bilden die gemeinsame Analysegrundlage.
-
-Jump-Table-Snapshots sind SHA-256-gebunden und begrenzt. Codegenpartitionen
-tragen einen kanonischen IR-Hash und koennen als Delta ermittelt werden; der
-Codegencache verwendet Schema 3 mit SHA-256-Schluesseln und atomarem,
-konkurrenzsicherem Publish. Vertrag und Budgets stehen in
-[`P1_INCREMENTAL_ANALYSIS.md`](P1_INCREMENTAL_ANALYSIS.md).
-
-## KR-4623 umgesetzt
-
-Trackdateien werden einmal read-only geoeffnet und danach ueber persistente
-Handles gelesen. GDI besitzt Tracknummer- und LBA-Indizes, gebuendelte
-Trackreads sowie einen abschaltbaren, auf 256 Sektoren begrenzten Cache.
-ISO9660 cacht Verzeichnisse und Extents mit festen Obergrenzen; Cache-an und
-Referenzmodus behalten identische Bytes und Pfadfehler.
-
-Descriptor- und Track-SHA-256 werden beim Oeffnen erfasst und vom Portexport
-wiederverwendet. Die portable GDI-Identitaet ist jetzt SHA-256-basiert.
-GD-ROM-Completions bleiben ohne Hostuhr auf dem zentralen Gastscheduler. Der
-Vertrag steht in [`P1_DISC_IO.md`](P1_DISC_IO.md).
-
-## KR-4624 umgesetzt
-
-Core und CLI sind der GUI-freie Standardbuild. MSVC, GCC und Clang besitzen
-Debug-/RelWithDebInfo-Presets und werden in derselben sechsfachen CI-Matrix
-regressionsgeprueft. Ein optionaler Compilerlauncher bindet ccache oder sccache
-ein; alle Tests tragen stabile Subsystemlabels fuer getrennte Shards.
-
-Projekt-, Paket- und ABI-Versionen entstehen aus kanonischen CMake-Werten. Das
-installierbare `KatanaRecomp::runtime`-Paket bleibt von Analyzerquellen frei;
-`KatanaRecomp::analyzer` ist ein getrennter Zusatz. Ein echter Out-of-Tree-
-Consumer prueft diese Grenze. Vertrag und Ausgangsbaseline stehen in
-[`P1_BUILD_GRAPH.md`](P1_BUILD_GRAPH.md).
-
-## KR-4625 umgesetzt
-
-Das Performance-/Buildgate erstellt Quality-Debug und RelWithDebInfo jeweils
-frisch mit fester Linkparallelitaet. Quality-Debug bestand 168 von 168 Tests
-mit MSVC-ASan und statischer Analyse; RelWithDebInfo bestand 167 von 167 Tests.
-Beide Profile besitzen dasselbe Inventar aus 167 Core-Regressionen. Format-,
-Qualitaetsvertrags- und Referenz-/Lizenzaudit sind erfolgreich, alle
-instrumentierten Performancevertraege halten ihre Budgets und private
-Retaildaten wurden nicht verwendet.
-
-`Memory::write_bytes()` prueft gebuendelte Zielbereiche und vorhandene Bytes
-vollstaendig vor dem Commit. Ein Fehler an einer Regions- oder
-Schreibschutzgrenze veraendert kein Praefix; ein spaeter Geraetefehler meldet
-jeden bereits geschriebenen Bereich noch vor dem Weiterwerfen zur
-Codeinvalidierung. Write-only-MMIO wird dabei nicht vorgelesen und gilt
-pessimistisch als geaendert. Das erzeugte Ninja-Projekt konfiguriert Runtime-
-Includes, Buildvertrag und Hosttoolchain wirklich und wird in einer frischen
-Regression gebaut. Das Gate wiederholt ausschliesslich erkannte Windows-
-Linkerausgabesperren und protokolliert Versuch, Exitcode und Grund. Der lokale
-JSON-Bericht wird durch einen identischen
-Windows-CI-Buildgate als GitHub-Actions-Artifact unabhaengig nachvollziehbar.
-Damit ist Stufe B abgeschlossen und KR-4715 beginnt.
-
-## KR-4715 umgesetzt
-
-Indirekte Stellen werden als `resolved`, `guarded_complete`,
-`guarded_partial`, `runtime_only` oder `unresolved` disjunkt gezaehlt. Jede
-offene Stelle traegt genau eine typisierte Callback-, Parameter-, Stack-,
-Objekt/VTable-, Tabellen-, unbeschraenkte Speicher- oder Laufzeitzeigerklasse
-und eine maschinenlesbare Evidenzherkunft. Partielle Kandidaten bleiben im
-dynamischen Default und koennen Anwendungs-Vollstaendigkeit nicht herstellen.
-
-Der lokale Bericht `katana-control-flow-v3` behaelt Adressen und Einzeldetails;
-`katana-control-flow-frontier-v1` enthaelt ausschliesslich adressfreie
-Aggregatzaehler. Anwendungsworkflow, Buildplan und Portmetadaten geben die
-Klassen getrennt aus. Der Vertrag steht in
-[`CONTROL_FLOW_FRONTIER.md`](CONTROL_FLOW_FRONTIER.md). KR-4716 ist der naechste
-Task.
-
-Die Review-Nacharbeit zaehlt validierte Hint-Kandidaten mit erhaltenem
-dynamischem Default als `guarded_partial`, ohne ihren internen
-`Unresolved`-Status oder die schwache `HintCandidate`-Evidenz aufzuwerten.
-
-## KR-4716 umgesetzt
-
-Die SH-C-Funktionswertanalyse vereinigt R8 bis R14 erst nach Beobachtung aller
-bekannten direkten beziehungsweise vollstaendig bewachten Callstellen.
-Unbekannte Caller und partielle indirekte Calleemengen bleiben unbekannter
-Ingress. Endliche indirekte Calleemengen duerfen vollstaendige R0-Summaries
-vereinigen; Guard und Vollstaendigkeit bleiben dabei getrennte Fakten.
-
-R13-Callbacks behalten ihre eigene Herkunft. Feste Longword-Spills und
-Reloads ueber symbolische SP-/Framepointeroffsets werden innerhalb eines
-4096-Byte-Fensters erhalten. Unbekannte oder entkommene Aliase invalidieren
-Stackfakten konservativ. Ein hartes Fixpunktbudget verhindert unbestimmte
-Analysezeiten und stuft bei Erschoepfung alle betroffenen Beweise herab. Der
-Vertrag steht in [`ABI_VALUE_ANALYSIS.md`](ABI_VALUE_ANALYSIS.md). KR-4717 ist
-der naechste Task.
-
-## KR-4717 umgesetzt
-
-Eine begrenzte abstrakte Objektfeldtabelle verfolgt dominante Longword-
-Initialisierungsstores und Loads ueber Register, feste Stackspills sowie
-konstante Feld- und VTable-Slotoffsets. Vollstaendige Memory-Return-Summaries
-erhalten Konstruktorwirkungen ueber bekannte Calls. Mehrere vollstaendige
-Typwerte bleiben eine endliche bewachte Menge. Framepointer- und Objektpfade
-besitzen getrennte Herkunftsklassen.
-
-Unbekannte, partielle oder ueberlappende Stores sowie Calls und nicht
-modellierte Speicherseiteneffekte invalidieren Objektfakten konservativ.
-Beschreibbare statische VTables werden niemals allein aus dem Imageinhalt
-eingefroren. Der Vertrag steht in
-[`OBJECT_POINTS_TO.md`](OBJECT_POINTS_TO.md). KR-4718 ist der naechste Task.
-
-## KR-4718 umgesetzt
-
-Die Berichtstaxonomie wird bis in die IR- und Codeausgabe getragen. Nur als
-echte Laufzeitquelle klassifizierte Stellen erhalten `runtime_only`; Hints,
-Overrides und unbekannte Quellen koennen diesen Pfad nicht auswaehlen.
-`guarded_complete` und `guarded_partial` behalten ihren bewachten Default,
-waehrend `unresolved` im generierten Port sichtbar und ohne Tabellendispatch
-abbricht.
-
-Der Runtime-only-Dispatcher akzeptiert ausschliesslich ausgerichtete exakte
-Instruktionsanfaenge aktiver, generationsgueltiger Bloecke mit Backendfunktion.
-Virtuelle und kanonische physische Aliase werden gegen denselben registrierten
-Executable-Image-/Blocktabellenvertrag geprueft. Misses stoppen den Lauf; es
-gibt weder No-op noch geratenes Ziel. Begrenzte Zaehler erfassen Hits, Misses,
-kontrollierte Fallbacks und den ersten Fehler maschinenlesbar. Runtime-ABI 12,
-Backend-Interface-ABI 2 und Portprojektvertrag 4 versionieren die Erweiterung.
-Der Vertrag und die bei KR-4704 auszufuehrenden Regressionen stehen in
-[`RUNTIME_ONLY_DISPATCH.md`](RUNTIME_ONLY_DISPATCH.md). KR-4719 ist der
-naechste Task.
-
-## KR-4719 umgesetzt
-
-Der private Harness verlangt Configversion 2 und ausschliesslich
-`execution_mode=build-only`. Sein einziger Prozessstarter unterscheidet Tool-
-und Runtimeprozesse und verwirft jede Runtimefunktion vor `Process.Start`.
-Frische zufaellig benannte Jobziele koennen eine vorhandene stale `game.exe`
-nicht als Erfolg wiederverwenden.
-
-Zwei offizielle Buildjobs muessen vollstaendige Kontrollflussabdeckung, die
-Analyse-/Codegen-/Hostbuild-Checkpoints und genau ein hashverifiziertes
-aktuelles Executable liefern. Manifest-GDI, Jobresultat, Resultindex und
-Portmetadaten werden intern an dieselbe Projektidentitaet gebunden; portable
-Metadaten und generierte Quellen muessen zwischen beiden Jobs bytegleich sein.
-Der atomare Bericht gibt nur Aggregate, Boolvertraege und allgemeine
-Fehlerklassen aus. Er kann hoechstens `KR_RETAIL_ANALYSIS_CONTINUES` melden und setzt
-`game_executable_started=false` sowie `runtime_processes_started=0`.
-
-Der ausfuehrbare Vertrag steht in
-[`PRIVATE_RETAIL_DEBUG.md`](PRIVATE_RETAIL_DEBUG.md). Der echte private
-Doppelnachweis wird gemaess Handoff erst mit der frischen Gate-CLI in KR-4704
-ausgefuehrt. KR-4703 ist der naechste Implementierungstask.
-
-## Historischer Reviewbefund vor KR-4611 bis KR-4618
-
-Der folgende Befund dokumentiert ausschliesslich den damaligen Ausgangspunkt.
-Die Kontrollflussrisiken wurden mit KR-4611 bis KR-4614, die Harness- und
-Gatepunkte mit KR-4616 bis KR-4618 abgearbeitet. Der aktuelle Stand steht in
-den jeweiligen Umsetzungsabschnitten weiter unten.
-
-Die damalige Kontrollflusspruefung hatte folgende P0-Soundnessrisiken gefunden:
-
-- Hint-Direktiven werden als `Resolved` und damit als Beweis behandelt
-- Delay-Slot-Kontext wird global nur nach Adresse gespeichert
-- Basic Blocks koennen Fallthrough ueber Adressluecken erzeugen
-- Site-Vollstaendigkeit wird auf ein Kantenbit reduziert
-- unbekannte Caller und abweichende Callkontexte koennen Zielmengen verkleinern
-- Kontextaufloesungen werden nur nach Instruktionsadresse dedupliziert
-
-Der damalige private Harness startete nach erfolgreichem Build automatisch
-`game.exe`.
-Das widerspricht dem aktuellen v0.47-Build-only-Vertrag. Metriken werden noch
-aus Textregexen gelesen, stdout und stderr verlieren ihre Reihenfolge und
-Hostsmokes sind nicht ausreichend von Gastfortschritt getrennt.
-
-Die Controllergrundlage existiert in Maple und Hostruntime. Der generierte Port
-pollt Eingaben jedoch erst nach dem synchronen Gastlauf. Controllerunterstuetzung
-braucht deshalb vor allem eine echte verschraenkte Runtime-Schleife, nicht noch
-eine weitere Taste in einem Enum. `KR-4814` und die private interaktive Sitzung
-`KR-4914` gehoeren als Post-Frame-Arbeit verbindlich zu v0.48. Der durch
-`KR-4850` belegte Gastframe gibt beide Aufgaben frei; sie muessen vor dem
-einzigen finalen Vollgate in `KR-4852` abgeschlossen sein. Spielboot bleibt
-dabei P0, Controllerintegration P1.
-
-Die GUI besitzt intern mehrere Seiten und strukturierte Jobereignisse, zeigt
-unter Windows aber fast nur eine Fliesstextzusammenfassung, zwei Balken und ein
-Logfeld. Layout und Aktualisierung sind hart kodiert beziehungsweise
-pollingbasiert.
-
-Der vollstaendige Befund steht in
-[`CONTROL_FLOW_HARNESS_GUI_REVIEW_2026-07-18.md`](CONTROL_FLOW_HARNESS_GUI_REVIEW_2026-07-18.md).
-
-## Task-ID-Korrektur
-
-Die historischen Bedeutungen von `KR-4801` bis `KR-4805` und `KR-4901` werden
-wiederhergestellt. Die zwischenzeitlich mit diesen IDs bezeichneten
-Alpha-Aufgaben erhalten `KR-4911` bis `KR-4916`.
-
-Die kanonische Historie steht in
-[`TASK_ID_REGISTRY.md`](TASK_ID_REGISTRY.md).
-
-## KR-4611 umgesetzt
-
-Der SH-4-Kontrollzustand verwendet fuer R0 bis R7 jetzt die effektive
-Bankauswahl `SR.MD && SR.RB`. BSR, BSRF und JSR schreiben PR vor ihrem Delay
-Slot; ein PR-Schreibzugriff des Slots bleibt dadurch sichtbar. RTE und SLEEP
-besitzen getrennte Blockendtypen in Block-ABI 2. Der Portdispatcher setzt nach
-normalen Gast-Exceptions und Interrupts am jeweiligen Handlervektor fort,
-behandelt RTE als dynamische Fortsetzung bei SPC und fuehrt waehrend SLEEP
-keinen weiteren Block vor der Annahme eines Interrupts aus.
-
-Exceptionursache, Gast-Eventcode und Vektor werden aus einer gemeinsamen
-Metadatentabelle abgeleitet. Die spaeter bei KR-4617 und KR-4618 umzusetzenden
-und auszufuehrenden Testanforderungen stehen in
-[`SH4_CONTROL_STATE.md`](SH4_CONTROL_STATE.md).
-
-## KR-4612 umgesetzt
-
-SQ0 und SQ1 werden jetzt durch Adressbit 5 gewaehlt. Das Schreibfenster
-`0xE0000000` bis `0xE3FFFFFF`, das getrennte Longword-Lesefenster ab
-`0xFF001000`, QACR0/QACR1 und PREF verwenden denselben Queuevertrag. P4- und
-QACR-Zugriffe pruefen Fenster, Breite, Ausrichtung und Queuegrenzen zentral.
-
-Operand-Cache-RAM unterstuetzt explizite Byte-, Word- und
-Longword-Little-Endian-Zugriffe mit Ausrichtungs- und Bereichspruefung. ICBI
-invalidiert die ausgerichtete 32-Byte-Codezeile. OCBI bleibt ohne
-Cachetagmodell sichtbar nicht unterstuetzt. OCBP und OCBWB durchlaufen einen
-expliziten kohaerenten Runtimevertrag, der im aktuellen direkten Speichermodell
-korrekt keine verborgene Dirty-Line und keinen Write-back meldet. Vertrag und
-gesammelte Gate-Testanforderungen stehen in
-[`STORE_QUEUE_CACHE.md`](STORE_QUEUE_CACHE.md).
-
-## KR-4613 umgesetzt
-
-`Memory` ist jetzt die gemeinsame beobachtbare Commitgrenze fuer CPU-, FPU-,
-DMA-, Store-Queue-, Copy- und Fallbackwrites. Lineares RAM wird vor der
-Invalidierung auf Byteidentitaet geprueft; gebuendelte Writes melden einen
-gemeinsamen Bereich. Generierte Stores koennen den Tracker dadurch nicht mehr
-umgehen.
-
-Geaenderte physische Bereiche invalidieren Trackerbloecke, Aliase und
-eingehende Links und entfernen ueberlappende Eintraege der zentralen
-Runtime-Blocktabelle. Zusaetzlich verweigern trackergebundene Tabellen stale
-virtuelle, physische und Alias-Lookups, sodass Direktdispatch und Inline-Cache
-kein invalidiertes Ziel ausfuehren koennen. Vertrag und die bei KR-4617/KR-4618
-nachzuholenden Tests stehen in [`GUEST_WRITES.md`](GUEST_WRITES.md).
-
-## KR-4614 umgesetzt
-
-Kontrollfluss-Sites, CFG-Kanten, Funktionskandidaten und Jump Tables verwenden
-die sieben typisierten Evidenzklassen von `ProvenComplete` bis `Unresolved`.
-Hints bleiben unverbindliche Kandidaten und koennen die ungeloeste Front oder
-den Export nicht verkleinern. Forced Overrides behalten den Runtime-Default.
-
-Die rekursive Worklist unterscheidet Adresse, eingehenden Kontext,
-Delay-Slot-Owner und Evidenz. Basic Blocks erzeugen Fallthrough nur an der
-exakten Folgeadresse und paaren Owner/Slot nur gegenseitig bei `PC + 2`.
-Unbekannte Caller tainten Kandidateneingaenge; Zielmengen aller Callkontexte
-und vollstaendige Summaries endlicher indirekter Callees werden konservativ
-vereinigt. Dynamische Herkunft verwendet einen begrenzten CFG-Backward-Slice
-statt eines linearen Acht-Instruktions-Fensters.
-
-Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden Regressionen
-stehen in [`CONTROL_FLOW_SOUNDNESS.md`](CONTROL_FLOW_SOUNDNESS.md).
-
-## KR-4615 umgesetzt
-
-Die Runtime-Blocktabelle gibt keine Adressen verschiebbarer Vektorelemente
-mehr heraus. Dispatch, Inline-Cache und generierter Port verwenden stabile
-`RuntimeBlockHandle` aus Record-ID und Generation und loesen sie unmittelbar
-vor dem Zugriff erneut auf. Erase und physische Invalidierung markieren
-Records stale; eine dynamische Reaktivierung derselben Identitaet behaelt die
-ID und liefert eine neue Generation.
-
-Statische Bloecke werden vom Port sortiert in einem Bulk registriert und
-danach versiegelt. Statische und dynamische virtuelle, physische und
-Aliasindizes bleiben getrennt; aktive virtuelle Bereiche und physische Seiten
-bilden die Mutationsindizes. Exakte Lookups sind logarithmisch und physische
-Invalidierungen untersuchen nur beruehrte Seiten. Runtime-ABI 10 versioniert
-die Handle- und Bulk-Registry-Schnittstelle.
-
-Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden Last-, Alias-
-und Mutationsregressionen stehen in
-[`RUNTIME_BLOCK_REGISTRY.md`](RUNTIME_BLOCK_REGISTRY.md).
-
-## KR-4616 umgesetzt
-
-Gastzeitvertrag 1 verwendet den `EventScheduler` als einzige monotone
-64-Bit-Zyklusuhr. Generierte Bloecke verbrauchen relative Instruktionskosten
-ueber PlatformServices-ABI 5; Fallback-Safepoints, Blockaustritte und
-Runtimemetriken lesen denselben Schedulerstand. Runtime-ABI 11 versioniert
-diese Schnittstelle.
-
-TMU, RTC und DMA verwenden ihre Hardwarefristen weiterhin auf diesem
-Scheduler. GD-ROM besitzt keine eigene fortzuschaltende Uhr mehr: `submit`
-plant seine Completion direkt. PVR-Renderstarts erhalten ebenfalls eine
-Schedulerfrist, bevor der System-ASIC-Abschluss sichtbar wird. Resets
-reaktivieren laufende Timer-/DMA-Fristen deterministisch und entfernen stale
-GD-ROM-/PVR-Completions.
-
-`KATANA_GUEST_CYCLE_BUDGET` wird von `game.exe` als positive 64-Bit-Zahl
-validiert und direkt im Scheduler durchgesetzt. SLEEP prueft zuerst bereits
-annehmbare Interrupts, springt andernfalls zum naechsten Ereignis und kann
-weder ohne Wakeupquelle noch ueber das Gastbudget hinaus still weiterlaufen.
-Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden
-Reihenfolge-, Budget- und Cross-Engine-Regressionen stehen in
-[`GUEST_TIMING.md`](GUEST_TIMING.md).
-
-## KR-4617 umgesetzt
-
-Die synthetische Core-Suite enthaelt nun unabhaengige Referenzvektoren fuer
-alle P0-Vertraege: die Vier-Zustaende-Registerbankmatrix, PR vor Call-Delay
-Slots, RTE-/Exceptionmetadaten, SQ-Bit-5-Adressierung, alle Gastwritequellen,
-Aliasinvalidierung, generationsgesicherte Blockhandles und den gemeinsamen
-Gastzeitvertrag. Erfolgs-, Grenz- und sichtbare Fehlerfaelle sind getrennt.
-
-CFG-Regressionen pruefen Hint- und Forced-Override-Evidenz, erhaltene
-Runtime-Defaults, Adressluecken, partielle Sites, normale und Delay-Slot-
-Kontexte, unbekannte Caller sowie exhaustive kleine Conditional-Graphen.
-Fixpunktterminierung wird nur noch gegen ein oberes Budget geprueft; interne
-Iterationszahlen sind kein Testvertrag mehr.
-
-Die Tests passen zu Runtime-ABI 11, PlatformServices-ABI 5 und dem stabilen
-Blockhandle-API. Gemaess Gate-Arbeitsmodell wurden bei KR-4617 weder
-Konfiguration noch Build oder Tests gestartet. Die Debug-/RelWithDebInfo-
-Ausfuehrung und der Konfigurationsvergleich folgen gesammelt in KR-4618.
-
-## KR-4618 umgesetzt
-
-Das Core-Korrektheitsgate erstellt `build-current` fuer Quality-Debug und
-RelWithDebInfo jeweils frisch. Quality-Debug bestand 171 von 171 Tests mit
-MSVC-ASan und statischer Analyse; RelWithDebInfo bestand 170 von 170 Tests.
-Beide Profile besitzen dasselbe Inventar aus 170 Core-Regressionen. Der
-zusaetzliche Debug-Test prueft gezielt die ausgelieferte MSVC-ASan-Runtime.
-
-Format-, Qualitaetsvertrags- und Referenz-/Lizenzaudit sind erfolgreich. Die
-exakten Referenzvektoren bestanden in beiden Konfigurationen; private
-Retaildaten wurden nicht verwendet. Der maschinenlesbare Gatebericht wurde
-unter `build-current/reports/core-correctness-gate.json` erzeugt. Damit ist die
-P0-Core-Korrektheitsstufe abgeschlossen und KR-4621 beginnt die Performance-
-und Buildstufe.
-
-## Naechste Reihenfolge
+Aktueller Dokumentations-HEAD:
 
 ```text
-v0.47:
-KR-4611 bis KR-4618
--> KR-4621 bis KR-4624 -> KR-4625
--> KR-4715 -> KR-4716 und KR-4717 -> KR-4718
--> KR-4719 -> KR-4703 -> KR-4704 -> KR-4705
-
-v0.48 Native Disc Boot und erster echter Gastframe:
-KR-4831 und KR-4841
--> KR-4843 -> KR-4844 -> KR-4845 -> KR-4846 -> KR-4847
-KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
-KR-4843 und KR-4912 -> KR-4848 -> KR-4913
-KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
-KR-4850 -> KR-4814 -> KR-4914
-KR-4850 -> KR-4851
-KR-4851 und KR-4914
--> KR-4852 (einziges finales Vollgate; gruen = Nutzerreview bestanden)
--> KR-4853 (unveraenderter Gatebericht, kein erneuter Build oder Test)
--> KR-4854
-
-v0.49 Port-, Harness-, GUI-Integration und Alpha-Candidate:
-KR-4801 bis KR-4803, KR-4811 bis KR-4813 und KR-4821 bis KR-4824
--> KR-4916
--> KR-4901 bis KR-4903 -> KR-4904 -> KR-4905
-
-v0.50:
-KR-4999 -> KR-5000
+69f3d122613338672d0e74d8a775c772d090746d
+Record fresh DirectBoot PAL product run
 ```
 
-## Private Laufzeitgrenze
+Aktueller Code-HEAD:
 
-Sonic Adventure PAL darf fuer den v0.48-Bring-up lokal gebaut und gestartet
-werden. Deterministische Diagnoseproben und interaktive Sitzungen bleiben von
-Release-Gateevidenz getrennt; private Retaildaten, BIOSdaten und lokale
-Installationspacks duerfen weder committed noch verteilt werden.
+```text
+31c5575bd4e89c2bc85c20a14f4d1745fbbc987f
+Bind lossless Maple state to game handoff
+```
 
-## Bestehende Funktionssicherung
+## Zielarchitektur
 
-- keine bestehende korrekte Regression wird entfernt oder abgeschwaecht
-- falsche historische Erwartungen werden durch unabhaengige Vektoren ersetzt
-- jeder Fastpath behaelt einen deaktivierbaren Referenzpfad
-- Debug und RelWithDebInfo muessen dieselben Gastresultate liefern
-- Performance darf keine Beweis-, Guard- oder Runtime-Default-Semantik aendern
-- Retailbefunde werden nur als allgemeine, verteilbare Regression umgesetzt
+KatanaRecomp, KatanaRuntime und das spaetere externe Spielprojekt sind getrennte Produkte:
+
+```text
+KatanaRecomp
+  -> SH-4-Analyse, IR, Optimierung und C++-Codegen
+
+KatanaRuntime
+  -> gemeinsame Dreamcast-Laufzeitbibliothek
+
+SonicAdventureRecomp
+  -> titelgebundener Code, Handoff, Hooks, Installer und Produkt-EXE
+```
+
+KatanaRecomp und KatanaRuntime bleiben im selben Repository. Das konkrete Spielprojekt wird extern aufgebaut. Generischer Katana-Code darf keine Sonic-spezifischen Adresshacks oder Retailbytes enthalten.
+
+## Aktueller Produktnachweis
+
+Der juengste normale PAL-DirectBoot wurde aus `31c5575` mit MSVC erzeugt. Er verwendete kein externes `GameEntryHandoff`.
+
+```text
+Funktionen:            1.939
+Partitionen:           42
+Discinstallation:      3 Tracks / 521.461 Sektoren
+Gastzyklen:            600.000.000
+Hostzeit:              14,0113 s
+effektive Gast-MHz:    42,8225
+Zentraldispatches:     52.329.316
+GD-ROM-Kommandos:      70
+AICA-Audiopuffer:      180
+Frames:                0
+sichtbarer Screen:     keiner
+letzter PC:            0x8C65A624
+Exitcode:              0
+first_problem:         none
+```
+
+Der Lauf beweist:
+
+- Spielcode wird langfristig nativ ausgefuehrt.
+- Es entsteht kein Missing-AOT.
+- GD-ROM und AICA machen messbaren Fortschritt.
+- Es liegt kein typisierter Runtime-, Dispatch- oder PVR-Abbruch vor.
+
+Der Lauf beweist nicht:
+
+- einen korrekten Post-IP.BIN-Ausgangszustand,
+- einen erfolgreichen `CompletePlatform`-Handoff,
+- einen sichtbaren Spiel-Frame,
+- Echtzeitgeschwindigkeit.
+
+`visible_screen=none` darf kuenftig nicht mehr als vollstaendiger Produkterfolg gelten.
+
+## Aktueller erster Blocker: ADXT-/mwSnd-Sound-Completion
+
+Der konkrete produktive Waitvertrag ist jetzt eingegrenzt:
+
+```text
+Objekt:               0x8C8D3908
+Completion-Flag:      0x8C8D3920
+Poll-Callback:        0x8C666D42
+Completion-Writer:    0x8C65A458
+```
+
+Der Waitpfad setzt `[object+24]` zunaechst auf `0` und prueft danach fortlaufend auf `1`. Der Poll-Callback besteht nur aus `RTS; NOP`. Der erwartete Completion-Pfad schreibt tatsaechlich `1` nach `[object+24]`. Alle sechs statisch aufgeloesten Caller dieses Waitvertrags liegen in ADXT-/mwSnd-Soundpfaden.
+
+Die wahrscheinlichste Fehlerzone ist:
+
+```text
+ADXT/mwSnd-Worker
+  -> G2/AICA/DMAC
+  -> Scheduler/IRQ
+  -> Completion-Writer
+```
+
+Noch nicht bewiesen ist:
+
+- ob AICA selbst falschen Zustand liefert,
+- ob ein G2-/DMAC-Transfer nicht abschliesst,
+- ob der Gastworker nicht geplant oder fortgesetzt wird,
+- ob ein IRQ fehlt oder falsch quittiert wird,
+- ob der Scheduler eine Completion nicht zustellt.
+
+Maple/VMU ist fuer diesen konkreten Poll nicht belegt und nicht der erste Reparaturfokus.
+
+## GameEntryHandoff-Stand
+
+Vorhanden:
+
+- Schema 2
+- Bindung an Contentidentitaet, Bootdatei, Konsolenprofil, Runtime-ABI und Descriptor
+- CPU-State einschliesslich GPR-/FPU-Baenken, Spezialregistern, UTLB und Exceptionfeldern
+- Main-RAM-/VRAM-/AICA-RAM-Deltas
+- privates Artefaktformat mit Hash- und Groessenpruefung
+- diagnostischer CPU/RAM-Apply
+- kanonische Pflichtmenge von 21 Geraeteklassen
+- Maple-Snapshot, Codec, passiver Restore und typisierte Event-Rehydration
+
+Nicht vorhanden:
+
+- vollstaendiger Geraete-Capture
+- globaler atomarer Prepare-/Commit-Koordinator
+- produktiver `CompletePlatform`-Apply
+- PVR-/SPG-/ASIC-Adapter
+- AICA-/G2-/DMAC-/Sound-Adapter
+- produkt-sicheres Maple-/VMU-Profil
+- konsistente Scheduler-/IRQ-Rehydration
+- per Subsystem vergleichbare Entry-Digests
+
+Der produktive Handoffpfad staged die vollstaendige Bindung, beendet sich danach aber absichtlich mit:
+
+```text
+game-entry-handoff-complete-platform-apply-unavailable
+```
+
+Ein Handoff-DirectBoot kann deshalb im aktuellen Stand definitionsgemaess nicht starten.
+
+## Maple-/VMU-Stand
+
+Der neue Maple-Zustandsvertrag kann diagnostisch erfassen:
+
+- Bustopologie
+- Controller-Framezaehler
+- VMU-Quelle und Working Copy
+- Schreibschutz und Dirty-Zustand
+- Maple-MMIO
+- aktive DMA und ausstehende Antworten
+- frische Scheduler-Event-ID bei Rehydration
+
+Offen:
+
+- Einbindung in `GameEntryHandoff`
+- global atomarer Restore
+- Trennung `DiagnosticLossless` / `ProductHandoff`
+- Schutz aktueller Nutzersaves
+
+Ein dauerhaftes Produkt-Handoff darf keine alte VMU-Working-Copy aus dem Capture ueber aktuelle Spielstaende schreiben.
+
+## PVR-/Frame-Stand
+
+Der alte NativeDiscBoot konnte ueber IP.BIN einen sichtbaren Direct-FB-Frame erzeugen. DirectBoot ueberspringt IP.BIN und soll deshalb nicht auf den Sega-Screen geprueft werden.
+
+IP.BIN hinterlaesst jedoch relevante:
+
+- PVR-/SPG-Register
+- Framebufferbasis
+- VRAM-Inhalt
+- ASIC-/IRQ-Masken
+- Schedulerereignisse
+
+Der aktuelle DirectBoot startet diese Komponenten frisch. Ein fehlender sichtbarer Spiel-Frame ist deshalb weiterhin mit dem unvollstaendigen Handoff vereinbar.
+
+Der naechste visuelle DirectBoot-Meilenstein ist:
+
+```text
+FirstGameFramebufferWrite
+oder
+FirstTaFrame
+danach FirstVisibleGameFrame
+```
+
+## Scheduler-/Gate-Stand
+
+Das aktuelle Gate verwendet 600 Millionen Gastzyklen als absolutes Schedulermaximum.
+
+Der NativeDisc-Game-Entry wurde bei Gastzyklus `415.233.270` erfasst. Nach einem echten Schedulerrestore blieben dadurch nur rund 184,8 Millionen Zyklen post-entry. NativeDisc und DirectBoot waeren damit nicht vergleichbar.
+
+Der neue Vertrag muss eine Laufdauer ab Entry verwenden:
+
+```text
+target_cycle = restored_game_entry_cycle + requested_elapsed_guest_cycles
+```
+
+Zusaetzlich muss das externe Spielprojekt einen erforderlichen Meilenstein angeben.
+
+Empfohlene Exitcodes:
+
+```text
+0 = Meilenstein erreicht
+3 = Gastzyklusbudget erreicht, Meilenstein verfehlt
+1 = typisierter Fehler
+```
+
+## Performance-Stand
+
+Aktuell:
+
+```text
+42,8225 MHz
+52.329.316 Zentraldispatches
+etwa 11,47 Gastzyklen pro Zentraldispatch
+```
+
+Das Ziel ist:
+
+```text
+mindestens 200 MHz effektiv
+mindestens 250 MHz unpaced als Reserve
+```
+
+Bereits vorhanden:
+
+- statisches und dynamisches AOT-Tier
+- validierte Ausfuehrungsdeskriptoren
+- P1-/P2-Inline-Cache
+- native interne Labels
+- erste direkte native Calls
+- konservative Registerlokalisierung
+- `KATANA_STATIC_AOT_ESCAPE_STATS`
+
+Offene Hauptpunkte:
+
+- `GameProjectFunctionBoundary::size` erreicht den Analyzer nicht
+- Function-AOT ist weiterhin stark an Single-Block-/Chainingvertraege gebunden
+- direkte Calls committen zu oft pauschal Blockzeit
+- Registerlokalisierung erfolgt nachtraeglich per C++-Stringersetzung
+- Produktfastpaths verwenden `dynamic_cast`
+- Blockmetadaten werden teilweise erneut per Map gesucht
+- 52 Millionen Zentraldispatches muessen stark reduziert werden
+
+Gastzyklen und Geraetelatenzen duerfen nicht kuenstlich reduziert werden.
+
+## Build-Stand
+
+```text
+Warmer Export MSVC:      2,258 s
+Warmer Export clang-cl:  2,297 s
+Erster MSVC-Umbau:       etwa 199,5 s
+```
+
+Der Warmexport ist brauchbar. Offen bleiben:
+
+- Runtime-only-Rebuild plus Relink
+- Hook-only-Build im externen Spielprojekt
+- kalter Gesamtbuild
+- schmalerer AOT-ABI-Header
+- weniger generische Produkt-/Testlogik in der erzeugten `main.cpp`
+
+## Aktiver kritischer Pfad
+
+```text
+KR-4965 Sound-Completion
+  -> KR-4967 CompletePlatform-Koordinator
+       -> KR-4968 Sound-/DMA-/IRQ-Handoff
+       -> KR-4969 PVR-/Frame-Handoff
+       -> KR-4970 Maple-/VMU-Product-Handoff
+            -> KR-4952 / KR-4953
+            -> KR-4962 Game-Entry-Paritaet und Produktboot
+
+Parallel:
+KR-4966 relatives Produktgate
+
+Nach korrektem Produktboot:
+KR-4955 -> KR-4956 -> KR-4957 -> KR-4958/KR-4959 -> KR-4960
+
+Spielprojekt:
+KR-4954 -> KR-4961
+
+Final:
+KR-4964
+```
+
+## Geplante reale Produktlaeufe
+
+### Lauf A - nach Sound-Completion-Implementierung
+
+Gewoehnlicher DirectBoot mit gleicher post-entry Gastarbeit.
+
+Erwartung:
+
+- Completion-Writer erreicht oder engerer Blocker belegt.
+
+### Lauf B - nach CompletePlatform-Adaptern
+
+- NativeDisc Capture am Game-Entry
+- DirectBoot Apply bis vor ersten Spielblock
+- CPU-, Memory-, PVR-, Sound/DMA-, Maple-, IRQ- und Scheduler-Digests vergleichen
+
+### Lauf C - nach Game-Entry-Paritaet
+
+- 600 Millionen Gastzyklen ab Entry
+- mindestens `FirstGameFramebufferWrite` oder `FirstTaFrame`
+- Exitcode 3 bei verfehltem Meilenstein
+
+### Lauf D - nach Performanceblock
+
+- derselbe Produktpfad und dieselbe Gastarbeit
+- mindestens 200 MHz
+- sichtbarer Meilenstein bleibt erhalten
+
+Zwischen diesen Laeufen sind keine Vollsuiten vorgesehen. Ein kleiner bestehender Vertragstest darf nur angepasst werden, wenn eine schwer sichtbare Datenkorruption sonst nicht abgesichert werden kann.
+
+## Nicht behauptet
+
+Der aktuelle Stand behauptet nicht:
+
+- dass Sonic Adventure bootet
+- dass DirectBoot korrekt initialisiert ist
+- dass der Sega-Screen im DirectBoot erwartet wird
+- dass Maple der aktuelle Soundblocker ist
+- dass AICA allein die Ursache ist
+- dass 42,82 MHz spielbar oder echtzeitfaehig sind
+- dass ein schwarzer Lauf mit Exitcode 0 ein erfolgreiches Produktgate ist
+
+## Aktuelle Vertraege
+
+```text
+Runtime-ABI:                    62
+Block-ABI:                       5
+Analyzer-ABI:                    2
+PlatformServices-ABI:           13
+Backend-Interface-ABI:           8
+Portprojektvertrag:             52
+GameEntryHandoff-Schema:         2
+GameEntryHandoff-Artefakt:       2
+Spielprojektvertrag:             2
+Native-AOT-Emissionsprofil:      8
+Crash-Capsule-Vertrag:           1
+```
+
+Historische Detailverlaeufe bleiben ueber Git-Historie, Changelog und Task-ID-Registry erhalten. Dieses Dokument ist ab jetzt die kompakte Wahrheit fuer den aktuellen `v0.49`-Produktbring-up.

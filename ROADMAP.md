@@ -2,13 +2,13 @@
 
 Status: Pre-Alpha
 
-Aktuelle Phase: `v0.49.0` - statischer Dreamcast-Recompiler, externe Spielprojekte und produktiver Sonic-Adventure-Bring-up
+Aktuelle Phase: `v0.49.0` - Sonic-Adventure-Produktbring-up, vollstaendiger Game-Entry-Handoff und 200-MHz-Hotpath
 
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
 ## Produktziel
 
-KatanaRecomp ist ein statischer SH-4-Recompiler mit einer getrennt installierbaren KatanaRuntime. Ein konkretes Spiel wird in einem eigenen, hashgebundenen Recomp-Projekt gebaut.
+KatanaRecomp ist ein statischer SH-4-Recompiler. KatanaRuntime ist die gemeinsam installierbare Dreamcast-Laufzeitbibliothek. Ein konkretes Spiel wird in einem getrennten, hashgebundenen Recomp-Projekt gebaut.
 
 ```text
 KatanaRecomp
@@ -16,14 +16,14 @@ KatanaRecomp
   -> erzeugt natives C++
 
 KatanaRuntime
-  -> stellt die gemeinsamen Dreamcast-Plattformgrenzen bereit
+  -> stellt gemeinsame Dreamcast-Plattformvertraege bereit
 
 SonicAdventureRecomp
-  -> bindet generierten SA-Code, lokale Originaldaten, DirectBoot, Hooks und Patches
+  -> bindet generierten SA-Code, lokale Originaldaten, Handoffs, Hooks und Patches
   -> erzeugt die startbare Produkt-EXE
 ```
 
-KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte Build- und Installationsprodukte. Titeladressen, Titelhooks, private Symbole und Installationsprofile gehoeren in das jeweilige externe Spielprojekt.
+KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte Build- und Installationsprodukte. Titeladressen, Titelhooks, private Symbole und Installationsprofile gehoeren langfristig in das externe Spielprojekt. Produktbefunde duerfen bis zu dieser Migration in der Bring-up-Dokumentation stehen, aber nie als titelbezogener Sonderfall in generischem Runtime- oder Recompilercode landen.
 
 ## Unverhandelbare Grenzen
 
@@ -31,222 +31,314 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 - kein JIT
 - kein Emulationsfallback
 - keine stillen No-op-Stubs oder erfundenen Hardwareerfolge
-- keine Sonic-spezifischen Adressen im generischen Katana-Kern
+- keine Sonic-spezifischen Adresshacks im generischen Katana-Kern
 - keine Retail-, BIOS- oder Assetdaten im Repository oder verteilbaren Paket
 - Flycast und XenonRecomp sind Referenzen, keine Codequellen
 - das echte erzeugte Produkt ist die Bring-up-Abnahme
 - keine neuen breiten Testmatrizen waehrend des Spiel-Bring-ups
+- Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach fixer Hostzeit
 
 ## Verifizierter Ausgangsstand
 
-Quellstand der Review:
+Aktueller Dokumentations-HEAD:
 
 ```text
-aa1cd51655fdefec5a9891152487f902f91046c6
-Document v0.49 product measurements
+69f3d122613338672d0e74d8a775c772d090746d
+Record fresh DirectBoot PAL product run
 ```
 
-Der Umbau hat echte Architekturgrundlagen geliefert:
-
-- installierbares `KatanaRecomp::runtime_core`
-- schmale AOT-ABI und Precompiled Header fuer generierte TUs
-- getrennte Static-/Dynamic-AOT-Tiers
-- validierte Ausfuehrungsdeskriptoren ohne normales zweites Tabellenlookup
-- P1-/P2-Inline-Cache
-- native Blocklabels und erste direkte native Calls
-- konservative Registerlokalisierung und Haupt-RAM-Fastpaths
-- executable-first Artefakt aus der eigenen `.gdi`
-- allgemeine externe `GameProjectDefinition`
-- Bring-up-/Gate-Buildprofile sowie Partition- und Metadatencache
-
-Die aktuelle Produktevidenz ist trotzdem nicht ausreichend:
+Aktueller Code-HEAD:
 
 ```text
-MSVC:     600.000.000 Gastzyklen in 14,8563 s = 40,3869 MHz
-clang-cl: 600.000.000 Gastzyklen in 14,1289 s = 42,4662 MHz
-zentrale Dispatches: 52.329.316
-sichtbarer Meilenstein: keiner
+31c5575bd4e89c2bc85c20a14f4d1745fbbc987f
+Bind lossless Maple state to game handoff
 ```
 
-Die alte NativeDiscBoot-Linie erreichte das Sega-Bild. Der neue DirectBoot-Pfad soll dieses Bild nicht anzeigen, weil das Sega-Logo aus IP.BIN stammt. Der fehlende Sega-Screen ist daher allein kein DirectBoot-Fehler. Ein DirectBoot-Produkt muss stattdessen ab `BootExecutable` beziehungsweise `GameEntry` bewertet werden.
-
-## Reviewbefunde
-
-### 1. DirectBoot verwendet den falschen Handoff-Begriff
-
-Der aktuelle DirectBoot startet die Haupt-Executable bei `0x8C010000`, wendet aber einen fest codierten `DreamcastPostBiosCpuState` an. IP.BIN laeuft zwischen BIOS und Haupt-Executable, richtet Stack, VBR, Cache und Hardware ein und kann RAM- sowie Geraetezustand veraendern. Ein Post-BIOS-Zustand ist daher kein bewiesener Post-IP.BIN-/Game-Entry-Zustand.
-
-Der aktuelle Vertrag bindet im Wesentlichen CPU-Spezialregister. Er bindet nicht vollstaendig:
-
-- alle GPR-/Bank-/FPU-Zustaende am Game-Entry
-- niedrige RAM-Seiten und weitere von IP.BIN veraenderte RAM-Bereiche
-- PVR-, GD-ROM-/G1-, DMAC-, AICA-, Maple- und Systembuszustand
-- Scheduler- und pending-Interruptzustand
-- den exakten PR-/Returnvertrag des Transfers von IP.BIN zur Haupt-Executable
-
-DirectBoot braucht deshalb einen eigenen `GameEntryHandoff`-Vertrag. Der vorhandene Post-BIOS-Vertrag bleibt fuer NativeDiscBoot erhalten.
-
-Umgesetzter Zwischenstand: `GameEntryHandoff` Schema 2 beschreibt und bindet
-CPU, RAM-Operationen, Geraete und Scheduler getrennt. Ein privater
-titelgebundener Artefaktprovider ist in die Spielprojektschnittstelle
-integriert. Der derzeitige reale Capture-/Apply-Pfad ist jedoch absichtlich
-nur `CpuMemoryDiagnostic`; Geraete und Scheduler bleiben ausstehend und das
-Produktgate verbietet diesen Diagnosepfad. Der Befund ist daher noch nicht
-geschlossen und ein erfolgreicher DirectBoot wird nicht behauptet.
-
-### 2. DirectBoot und NativeDiscBoot werden mit falschen visuellen Erwartungen verglichen
-
-`NativeDiscBoot` fuehrt IP.BIN aus und kann das Sega-Lizenzbild erzeugen.
-
-`DirectBootExecutable` ueberspringt IP.BIN und darf deshalb keinen Sega-Screen als Pflichtmeilenstein besitzen. Seine Pflichtmeilensteine sind:
+Der gewoehnliche PAL-DirectBoot ohne externes `GameEntryHandoff` erreicht:
 
 ```text
-BootExecutableEntry
-GameCodeProgressed
-FirstGameFramebufferWrite oder FirstTaFrame
-FirstVisibleGameFrame
-TitleScreen
+Gastzyklen:           600.000.000
+Hostzeit:             14,0113 s
+effektive Gast-MHz:   42,8225
+zentrale Dispatches:  52.329.316
+GD-ROM-Kommandos:     70
+AICA-Audiopuffer:     180
+Frames:               0
+sichtbarer Screen:    keiner
+letzter PC:           0x8C65A624
+first_problem:        none
 ```
 
-### 3. Function-Level-AOT faellt im Produkt zu haeufig in den Zentraldispatch zurueck
+Der Lauf beweist langen nativen Spielcodefortschritt ohne Missing-AOT oder typisierten Geraeteabbruch. Er beweist keinen korrekten Spielzustand und keinen erfolgreichen Handoff-DirectBoot.
 
-52.329.316 zentrale Dispatches fuer 600.000.000 Gastzyklen bedeuten nur etwa 11,5 Gastzyklen pro Zentraldispatch. Das ist mit einem Xenon-artigen Function-AOT-Hotpath unvereinbar.
+## Neu belegter erster Produktblocker
 
-Der aktuelle native Call-/Labelpfad ist an `can_chain_executable_block()` gekoppelt. Dieser akzeptiert nur `PureCpu` und `LinearRamOnly`, prueft Scheduler-, Interrupt-, Mapping-, Varianten- und Codegenerationen und lehnt viele normale Funktionen mit Speicher- oder Geraetegrenzen komplett ab. Dadurch werden Calls und Blockuebergaenge, die innerhalb einer nativen Funktion mit einem gezielten Safepoint korrekt weiterlaufen koennten, erneut zentral dispatcht.
+Die derzeitige konkrete Laufgrenze ist ein ADXT-/mwSnd-Sound-Completion-Poll:
 
-Chaining, direkte native Callfaehigkeit und aufgeschobener Schedulercommit muessen getrennte Vertraege werden:
+```text
+Objekt:               0x8C8D3908
+Completion-Flag:      0x8C8D3920
+Poll-Callback:        0x8C666D42 (RTS; NOP)
+Completion-Writer:    0x8C65A458
+```
 
-- `NativeEntrySafe`
-- `DirectCallEligible`
-- `CompletionDeferrable`
-- `RequiresSafepointBeforeEntry`
+Der Waitpfad setzt `[object+24]` zunaechst auf `0` und pollt danach auf `1`. Der erwartete Writer schreibt `1` nach `[object+24]`. Saemtliche sechs statisch aufgeloesten Caller des Waitvertrags liegen in ADXT-/mwSnd-Soundpfaden.
 
-Eine Funktion mit MMIO darf einen direkten nativen Call erhalten, wenn vor dem MMIO ein Safepoint emittiert wird. Sie muss nicht allein wegen eines spaeteren MMIO-Zugriffs komplett ueber den Zentraldispatcher aufgerufen werden.
+Die wahrscheinlichste Fehlerzone ist deshalb:
 
-### 4. Die Spielprojekt-API ist noch kein benutzbares externes Produkt
+```text
+ADXT/mwSnd-Worker
+  -> G2/AICA/DMAC
+  -> Scheduler/IRQ-Fortschritt
+  -> Completion-Writer
+```
 
-`GameProjectDefinition` modelliert Funktionsgrenzen, Tabellen, Hooks, Symbole, Identitaeten und eine Bootkonfiguration. Es fehlen aber:
+Noch nicht bewiesen ist, ob AICA selbst falsch arbeitet, der Gastworker nicht fortschreitet, ein DMA-/IRQ-Ereignis fehlt oder der Scheduler die Completion nicht zustellt. Maple/VMU ist fuer diesen konkreten Poll nicht belegt und darf nicht als erste Reparatur behandelt werden.
 
-- ein serialisierbarer, versionsgebundener Descriptor
-- CLI-Laden und Validierung dieses Descriptors
-- ein generiertes externes Projekt-Scaffold
-- symbolische Hookbindung fuer ein separates Spielrepository
-- ein lokaler Entwicklerinstaller, der exakt denselben Contentvertrag wie der spaetere Nutzerinstaller verwendet
+## Weiterhin realer DirectBoot-Mangel
 
-Ausserdem wird `GameProjectFunctionBoundary::size` aktuell nicht als echte Analyzer-Funktionsgrenze weitergereicht. Der Analyzer-Override kennt nur eine Startadresse. Damit ist ein zentraler Xenon-artiger Titelhinweis derzeit nur teilweise wirksam.
+IP.BIN hinterlaesst unter anderem PVR-/SPG-, VRAM-, AICA-, G2-/DMA-, ASIC-/IRQ-, Maple- und Schedulerzustand. Der aktuelle gewoehnliche DirectBoot startet diese Komponenten frisch. Der vorhandene produktive `CompletePlatform`-Pfad validiert und staged den Handoff, bricht aber absichtlich mit `game-entry-handoff-complete-platform-apply-unavailable` ab.
 
-Der Game-Entry-Handoff-Provider und seine deklarative Bindung sind inzwischen
-als C++-Vertrag vorhanden. Noch offen sind der serialisierte
-Spielprojektdescriptor, das Scaffold und der vollstaendige Plattform-Apply.
+Der vollstaendige DirectBoot braucht daher weiterhin:
 
-### 5. Registerlokalisierung ist zu konservativ und technisch fragil
-
-Die aktuelle Lokalisierung gilt nur fuer reine Leaf-Funktionen ohne Speicher, FPU, Spezialregister oder Calls. Sie bestimmt Registerverwendung durch Textsuche im bereits erzeugten C++ und ersetzt `cpu.r[n]` anschliessend textuell.
-
-Das muss durch IR-/Liveness-basierte Registerlokalisierung ersetzt werden. Post-hoc-Stringersetzung ist kein stabiler Codegenvertrag und darf nicht auf komplexere Funktionen ausgeweitet werden.
-
-### 6. Die Runtimegrenzen sind getrennt, aber der AOT-Includevertrag bleibt breit
-
-`aot_runtime_abi.hpp` inkludiert weiterhin mehrere breite Runtimeheader. Das vergroessert die Rebuildflaeche generierter TUs. Der Header muss auf echte ABI-PODs und schmale Intrinsics reduziert werden.
-
-### 7. Der Build ist warm brauchbar, kalt noch zu teuer
-
-Der warme Export liegt bei rund 2,3 Sekunden. Der erste vollstaendige Export/Build bleibt mit rund 199 Sekunden teuer. Der naechste Buildfokus ist deshalb nicht ein weiterer Exportcache, sondern:
-
-- Runtime-only-Aenderung ohne AOT-Reemission
-- Hook-only-Aenderung nur im Spielprojekt
-- mehr parallele, stabile AOT-TUs ohne uebermaessige Headerkosten
-- realer MSVC-/clang-cl-Produktvergleich
-- phasengetrennte Messung von Analyse, Emission, Compile und Link
+- atomaren, geraeteuebergreifenden Capture-/Apply-Koordinator
+- typisierte Schedulerereignisse mit frischen lokalen Event-IDs
+- PVR-/SPG-/VRAM-Zustand fuer den ersten Spiel-Frame
+- AICA-/G2-/DMAC-/IRQ-Zustand fuer den Sound-Completion-Pfad
+- produkt-sicheren Maple-/VMU-Zustand ohne Savegame-Rollback
+- per Subsystem vergleichbare NativeDisc-/DirectBoot-Digests
+- relative Gastzyklusdauer ab Game-Entry statt absolutes Schedulermaximum
 
 ## Verbindlicher v0.49-Kritischer Pfad
 
 ```text
-KR-4951 Produktgate nach Gastzyklen und getrennte visuelle Meilensteine
+KR-4965 ADXT/mwSnd-Sound-Completion bis zum Writer schliessen
   |
-  +--> KR-4952 Post-IP.BIN-Spielhandoff fuer DirectBootExecutable
-  |      -> KR-4953 Privates Game-Entry-Handoff-Artefakt aus Original-GDI
-  |      -> KR-4954 Deklaratives externes Spielprojekt und CLI-Scaffold
-  |      -> KR-4955 Explizite Funktionsgrenzen und Tabellenhinweise End-to-End
-  |      -> KR-4961 Externes SonicAdventureRecomp-Bring-up-Projekt
-  |      -> KR-4962 NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry
+  +--> KR-4966 Post-Entry-Produktgate und erforderliche Meilensteine
   |
-  +--> KR-4956 Static-AOT-Dispatchflucht inventarisieren und schliessen
-         -> KR-4957 Direkte native Calls ueber sichere Timinggrenzen
-         -> KR-4958 IR-basierte Registerlokalisierung und RAM-Regionen
-         -> KR-4959 Ereignisgetriebene Scheduler-/IRQ-Safepoints
-         -> KR-4960 200-MHz-Produkt-Hotpath
+  +--> KR-4967 Atomarer CompletePlatform-Capture-/Apply-Koordinator
+         |
+         +--> KR-4968 AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff
+         +--> KR-4969 PVR-/SPG-/ASIC-Handoff fuer ersten Spiel-Frame
+         +--> KR-4970 Produkt-sicherer Maple-/VMU-Handoff
+                    |
+                    +--> KR-4952 / KR-4953 abschliessen
+                           -> KR-4962 Game-Entry-Paritaet und Produktboot
 
-KR-4963 Inkrementeller Runtime-/Spielbuild und Compiler-A/B laeuft parallel.
+Nach dem ersten korrekten DirectBoot-Produktmeilenstein:
 
-KR-4960 + KR-4961 + KR-4962 + KR-4963
-  -> KR-4964 v0.49 Produktabnahme bis sichtbarem Spielbild
+KR-4955 Explizite Funktionsgrenzen End-to-End
+  -> KR-4956 Static-AOT-Dispatchflucht
+  -> KR-4957 Direkte native Calls
+  -> KR-4958 IR-basierte Registerlokalisierung
+  -> KR-4959 Ereignisgetriebene Safepoints
+  -> KR-4960 200-MHz-Produkt-Hotpath
+
+Parallel nach stabiler Handoff-Grundlage:
+
+KR-4954 Deklaratives Spielprojekt/Scaffold
+  -> KR-4961 Externes SonicAdventureRecomp-Projekt
+
+KR-4963 Inkrementeller Runtime-/Spielbuild
+
+Alle Linien:
+  -> KR-4964 v0.49 Produktabnahme
 ```
+
+## Phase A - Sound-Completion vor weiterer Plattformbreite
+
+Ziel ist nicht, AICA pauschal auszubauen. Zuerst wird der konkrete Completion-Vertrag geschlossen:
+
+1. Ausloeser des ADXT-/mwSnd-Workers bestimmen.
+2. Zugehoerigen G2-/AICA-/DMAC-Transfer und erwartete IRQ-/Schedulerkante identifizieren.
+3. Beweisen, warum `0x8C65A458` nicht erreicht wird.
+4. Allgemeine Ursache reparieren.
+5. Erst danach einen einzigen normalen Produktlauf bis zum gleichen post-entry Gastzyklusziel ausfuehren.
+
+Akzeptanz:
+
+- Completion-Flag wechselt durch den echten Gastwriter von `0` auf `1`, oder
+- ein neuer, engerer allgemeiner Blocker ist belegt.
+- Kein Hostpatch schreibt das Flag direkt.
+- Keine private Adresse wird in generischen Produktcode eingebaut.
+
+## Phase B - CompletePlatform-Handoff
+
+Der Handoff wird nicht als Reihe fallibler `restore_state()`-Aufrufe implementiert. Er braucht einen globalen Prepare-/Commit-Vertrag:
+
+```text
+capture
+-> validate
+-> prepare all allocations and event bindings
+-> commit all noexcept
+-> semantic digest
+-> first guest block
+```
+
+Verbindliche Reihenfolge:
+
+1. Host-/Media-Ausgabe noch nicht starten.
+2. vorhandene Runtimeereignisse kontrolliert entfernen.
+3. RAM/VRAM/AICA-RAM-Deltas vorbereiten.
+4. Geraete passiv vorbereiten.
+5. Schedulerzeit und typisierte Events vorbereiten.
+6. Event-IDs neu erzeugen und den Geraeten zuordnen.
+7. ASIC-/IRQ-Zustand konsolidieren.
+8. CPU/MMU zuletzt committen.
+9. per Subsystem Digests vergleichen.
+10. erst dann Spielcode ausfuehren.
+
+Produktdaten werden getrennt:
+
+- deterministische Bootstrapdeltas
+- bewiesene Baseline
+- nutzereigene Daten wie VMU/Saves
+- zeitabhaengige Ereignisse
+
+Ein Produkt-Handoff darf keine alte VMU-Working-Copy ueber aktuelle Nutzerdaten schreiben.
+
+## Phase C - Produktgates
+
+Boot- und Performancegates verwenden eine relative Laufdauer ab Game-Entry:
+
+```text
+target_cycle = restored_game_entry_cycle + requested_elapsed_guest_cycles
+```
+
+Das Spielprojekt definiert einen erforderlichen Meilenstein. Ein schwarzer Lauf darf nicht mit Exitcode 0 als vollstaendiger Produkterfolg gelten.
+
+Empfohlene Resultate:
+
+```text
+0 = erforderlicher Produktmeilenstein erreicht
+3 = Gastzyklusbudget erreicht, Meilenstein verfehlt
+1 = typisierter Fehler
+```
+
+## Phase D - Xenon-artiger AOT-Hotpath
+
+Der aktuelle Produktpfad bleibt zu blockorientiert. 52.329.316 Zentraldispatches fuer 600 Millionen Gastzyklen sind etwa ein Dispatch je 11,47 Gastzyklen.
+
+Die Performancearbeit erfolgt erst nach einem stabilen Bootmeilenstein und verwendet die bereits vorhandenen `KATANA_STATIC_AOT_ESCAPE_STATS`.
+
+Schwerpunkte:
+
+- explizite Funktionsgroessen wirklich an den Analyzer weitergeben
+- `NativeEntrySafe`, `DirectCallEligible`, `CompletionDeferrable` und `RequiresSafepointBeforeEntry` trennen
+- bekannte Calls und Returns innerhalb nativer Funktionsregionen halten
+- IR-/Liveness-basierte Registerlokalisierung statt C++-Stringersetzung
+- konkrete FastRuntime-Kontexte statt `dynamic_cast` im Produkt-Hotpath
+- Block-/Fastpathmetadaten direkt im validierten Deskriptor mitfuehren
+- mindestens 200 MHz, Zielreserve 250 MHz unpaced
+
+Gastzyklen oder Geraetelatenzen werden nicht kuenstlich reduziert.
+
+## Boot-Testplanung
+
+Das Endprodukt ist der Test. Es werden keine Tests pro Geraetefeld oder Hilfsfunktion angelegt.
+
+### Produktlauf A - nach KR-4965
+
+Gewoehnlicher DirectBoot, gleiche post-entry Gastarbeit wie die Baseline.
+
+Ziel:
+
+- Sound-Completion-Writer erreicht oder engerer Blocker belegt
+- keine Aussage ueber vollstaendigen Handoff
+
+### Produktlauf B - nach KR-4967 bis KR-4970
+
+Zwei reale Laeufe:
+
+1. NativeDisc bis zum Game-Entry und CompletePlatform-Capture
+2. DirectBoot mit CompletePlatform-Apply bis unmittelbar vor den ersten Spielblock
+
+Ziel:
+
+- CPU-, Memory-, PVR-, Sound/DMA-, Maple-, IRQ- und Scheduler-Digests stimmen
+
+### Produktlauf C - nach KR-4962
+
+DirectBoot fuer 600 Millionen Gastzyklen **ab Game-Entry**.
+
+Ziel:
+
+- mindestens `FirstGameFramebufferWrite` oder `FirstTaFrame`
+- bei Nichterreichen Exitcode 3 und konkreter naechster Blocker
+
+### Produktlauf D - nach KR-4960
+
+Derselbe Produktpfad und dieselbe Gastarbeit.
+
+Ziel:
+
+- mindestens 200 MHz effektiv
+- sichtbarer Meilenstein bleibt erhalten
+
+Kleine vorhandene Vertragstests duerfen angepasst werden, wenn eine schwer sichtbare Datenkorruption sonst nicht abgesichert werden kann. Neue breite Matrizen, neue Gateprojekte und Vollsuiten nach jeder Teilaufgabe sind nicht vorgesehen.
 
 ## Produktmeilensteine
 
 ### B0 - Game-Entry korrekt
 
-- Haupt-Executable aus der eigenen GDI identifiziert und hashgebunden
-- exakter Post-IP.BIN-Handoff angewendet
-- erster native Block bei `0x8C010000` erreicht
-- kein Interpreter/JIT/Fallback
+- Haupt-Executable aus eigener GDI identifiziert und hashgebunden
+- vollständiger Post-IP.BIN-Handoff atomar angewendet
+- NativeDisc und DirectBoot besitzen gleiche normative Subsystemdigests
 
-### B1 - Gamecode macht Fortschritt
+### B1 - Soundworker fortgeschritten
 
-- fester Gastzyklus-Checkpoint erreicht
-- kein Missing-AOT oder stiller Geraetefehler
-- DirectBoot und NativeDiscBoot stimmen ab dem Game-Entry in den normativen Zustandsdigests ueberein
+- ADXT-/mwSnd-Completion-Writer wird durch den Gast erreicht
+- kein direktes Hostsetzen des Completion-Flags
+- AICA-/G2-/DMA-/IRQ-/Schedulerkante ist typisiert und reproduzierbar
 
 ### B2 - Sichtbares Spielbild
 
-- Direct-FB- oder TA-Ausgabe stammt aus der Haupt-Executable
+- Haupt-Executable erzeugt Direct-FB- oder TA-Ausgabe
 - aktiver Scanout liest den erzeugten Bereich
 - Host praesentiert den Frame
 
 ### B3 - Echtzeit
 
-- mindestens 200 MHz effektive Gastgeschwindigkeit im normalen Produktpfad
+- mindestens 200 MHz effektive Gastgeschwindigkeit
 - Zielreserve mindestens 250 MHz unpaced
-- Diagnose-off und billige Produktdiagnose verwenden denselben schnellen Ausfuehrungspfad
+- billige Produktdiagnose benutzt denselben schnellen Pfad
 
 ### B4 - Titelbild und Eingabe
 
 - Titelbild oder erster interaktiver Spielscreen
-- Controller im real gestarteten Spiel nachgewiesen
+- Controller im real gestarteten Spiel
 - mehrminuetiger stabiler Lauf
 
 ## Arbeitsregeln
 
 - Eine Implementierungsrunde endet mit einem echten Produktlauf.
-- Bootkorrektheit wird bei festem Gastzyklusziel gemessen, nicht bei fixer Hostzeit.
-- NativeDiscBoot und DirectBoot werden ab demselben Game-Entry verglichen.
-- Keine neue breite Testsuite. Ein kleiner Regressionstest ist nur fuer einen bereits beobachteten Produktfehler erlaubt.
-- Keine weiteren Controller-, GUI-, Paketierungs- oder Komfortarbeiten vor B2.
-- Kein Hardwareausbau auf Verdacht. Der naechste Produktendpunkt entscheidet.
-- Roadmap- und Taskstatus werden erst nach dem Produktlauf aktualisiert.
-- Alte, durch einen bestaetigten Nachfolgeexport ersetzte Portordner werden
-  gezielt geloescht; aktuelle DirectBoot-/NativeDisc-Referenzen,
-  Boot-Executable-Artefakte und Nutzerdaten bleiben erhalten.
+- Produktlaeufe folgen erst nach einem zusammenhaengenden Implementierungsblock.
+- Keine neue breite Testsuite.
+- Keine Controller-, GUI-, Paketierungs- oder Komfortarbeit vor B2.
+- Kein Hardwareausbau auf Verdacht.
+- Roadmap, Tasks und Status werden erst nach realer Produktevidenz als abgeschlossen markiert.
+- Adressen aus dem SA-Bring-up duerfen dokumentiert werden, aber nie titelbezogene Sonderfaelle im generischen Code erzeugen.
 
 ## Nicht auf dem aktuellen P0-Pfad
 
 - vollstaendige Dreamcast-Kompatibilitaet fuer weitere Titel
 - umfassendes Replay jeder Gastinstruktion
-- vollstaendige PVR-/AICA-Featureabdeckung ohne SA-Produktbefund
+- neue PVR-/AICA-Features ohne SA-Produktbefund
 - GUI-Politur
 - oeffentliche Releasepaketierung
 - neue Konformitaetsmatrizen
+- weitere Controller-Haertung
 
 ## v0.49 Definition of Done
 
 `v0.49.0` ist erst abgeschlossen, wenn:
 
-- KatanaRecomp, KatanaRuntime und ein externes Spielprojekt sauber getrennt gebaut werden koennen
-- die Haupt-Executable aus der Original-GDI lokal installiert und direkt gestartet werden kann
-- DirectBoot einen bewiesenen Post-IP.BIN-/Game-Entry-Handoff nutzt
-- NativeDiscBoot und DirectBoot ab dem Game-Entry denselben normativen Zustand liefern
+- Recompiler, Runtime und externes Spielprojekt getrennt gebaut werden koennen
+- die Haupt-Executable aus Original-GDI lokal installiert wird
+- DirectBoot einen vollstaendigen, produkt-sicheren Post-IP.BIN-Handoff nutzt
+- Sound-Completion und erster sichtbarer Spiel-/TA-Frame erreicht werden
+- NativeDisc und DirectBoot ab Game-Entry normativ uebereinstimmen
 - der normale Produktport mindestens 200 MHz erreicht
-- ein sichtbarer, von der Haupt-Executable erzeugter Spiel-/TA-Frame erreicht wird
-- keine Sonic-Adressen, Retailbytes oder Titelhooks im generischen Katana-Kern liegen
-- keine neue umfangreiche Testsuite den Produktnachweis ersetzt
+- VMU/Saves durch den Handoff nicht zurueckgesetzt werden
+- keine Sonic-Sonderfaelle oder Retailbytes im generischen Katana-Kern liegen
+- keine umfangreiche Testsuite den Produktnachweis ersetzt
