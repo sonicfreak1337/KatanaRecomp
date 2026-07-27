@@ -15,6 +15,9 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t maple_mmio_physical_base = 0x005F6C00u;
 inline constexpr std::uint32_t maple_mmio_register_size = 0x100u;
+inline constexpr std::uint32_t dreamcast_maple_state_contract_version = 1u;
+inline constexpr std::uint32_t dreamcast_maple_dma_event_channel = 0u;
+inline constexpr std::uint64_t dreamcast_maple_dma_event_token_v1 = 0u;
 
 namespace maple_register {
 inline constexpr std::uint32_t DmaCommandTable = 0x04u;
@@ -33,6 +36,8 @@ inline constexpr std::uint32_t RxBaseAddress = 0xFCu;
 
 struct MapleDmaTiming {
     std::uint64_t cycles_per_word = 100u;
+
+    [[nodiscard]] bool operator==(const MapleDmaTiming&) const = default;
 };
 
 enum class MapleDmaState : std::uint8_t {
@@ -77,6 +82,9 @@ struct DreamcastMaplePendingResponseSnapshot {
 struct DreamcastMapleControllerSnapshot {
     MapleDmaTiming timing{};
     std::optional<SchedulerEventId> completion_event;
+    // SchedulerEventId is process-local. Handoff artifacts carry the stable
+    // channel/token pair above and receive a fresh ID during rehydration.
+    bool completion_event_rehydration_pending = false;
     std::vector<DreamcastMaplePendingResponseSnapshot> pending_responses;
     std::uint32_t command_table = 0u;
     std::uint32_t trigger_select = 0u;
@@ -100,6 +108,16 @@ struct DreamcastMapleControllerSnapshot {
     std::uint64_t transferred_word_count = 0u;
     std::uint64_t failed_dma_count = 0u;
     bool hard_trigger_failed = false;
+
+    [[nodiscard]] bool operator==(
+        const DreamcastMapleControllerSnapshot&) const = default;
+};
+
+struct DreamcastMapleStateSnapshot {
+    MapleBusStateSnapshot bus;
+    DreamcastMapleControllerSnapshot controller;
+
+    [[nodiscard]] bool operator==(const DreamcastMapleStateSnapshot&) const = default;
 };
 
 class DreamcastMapleController final {
@@ -129,6 +147,18 @@ class DreamcastMapleController final {
     event_publication_error() const noexcept;
     [[nodiscard]] std::uint64_t event_publication_failure_count() const noexcept;
     [[nodiscard]] DreamcastMapleControllerSnapshot snapshot() const;
+    void validate_state_restore(
+        const DreamcastMapleControllerSnapshot& state) const;
+    // Passive restore deliberately discards captured SchedulerEventIds.
+    // A restored active transfer cannot execute until its typed event has
+    // been rehydrated with rehydrate_scheduled_event().
+    void restore_state_passive(
+        const DreamcastMapleControllerSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
     struct PendingResponse {
@@ -178,7 +208,28 @@ class DreamcastMapleController final {
     std::uint64_t transferred_word_count_ = 0u;
     std::uint64_t failed_dma_count_ = 0u;
     bool hard_trigger_failed_ = false;
+    bool completion_event_rehydration_pending_ = false;
 };
+
+[[nodiscard]] DreamcastMapleStateSnapshot
+snapshot_dreamcast_maple_state(const MapleBus& bus,
+                               const DreamcastMapleController& controller);
+void validate_dreamcast_maple_state_restore(
+    const MapleBus& bus,
+    const DreamcastMapleController& controller,
+    const DreamcastMapleStateSnapshot& state);
+void restore_dreamcast_maple_state_passive(
+    MapleBus& bus,
+    DreamcastMapleController& controller,
+    const DreamcastMapleStateSnapshot& state);
+
+// Stable private-payload codec used by GameEntryDeviceKind::Maple. The
+// process-local SchedulerEventId is intentionally omitted; the corresponding
+// GameEntryScheduledEvent carries kind MapleDma, channel 0 and token 0.
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_maple_state(const DreamcastMapleStateSnapshot& state);
+[[nodiscard]] DreamcastMapleStateSnapshot
+decode_dreamcast_maple_state(std::span<const std::uint8_t> bytes);
 
 [[nodiscard]] std::shared_ptr<DreamcastMapleController>
 map_dreamcast_maple_controller(Memory& memory,

@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <variant>
 #include <vector>
 
 namespace katana::runtime {
@@ -102,6 +103,7 @@ class MapleControllerDevice final : public MapleDevice {
     [[nodiscard]] MapleResponse transact_at(const MapleRequest& request,
                                             std::uint64_t guest_cycle) override;
     [[nodiscard]] std::uint64_t sampled_frames() const noexcept;
+    void restore_sampled_frames(std::uint64_t next_frame) noexcept;
 
   private:
     std::shared_ptr<HostInputBackend> input_;
@@ -121,6 +123,19 @@ struct MapleVmuSnapshot {
     [[nodiscard]] bool operator==(const MapleVmuSnapshot&) const = default;
 };
 
+// Complete guest-visible VMU state. This is intentionally separate from the
+// cheap MapleVmuSnapshot used by runtime probes: handoff restore must carry the
+// bytes and may never reconstruct them from a probe digest.
+struct MapleVmuStateSnapshot {
+    std::vector<std::uint8_t> source_image;
+    std::vector<std::uint8_t> working_image;
+    bool write_protected = false;
+    bool working_copy_dirty = false;
+    bool persistent_working_copy = false;
+
+    [[nodiscard]] bool operator==(const MapleVmuStateSnapshot&) const = default;
+};
+
 class MapleVmuDevice final : public MapleDevice {
   public:
     explicit MapleVmuDevice(std::span<const std::uint8_t> image = {});
@@ -134,6 +149,9 @@ class MapleVmuDevice final : public MapleDevice {
     [[nodiscard]] bool working_copy_dirty() const noexcept;
     [[nodiscard]] bool persistent_working_copy() const noexcept;
     [[nodiscard]] MapleVmuSnapshot snapshot() const noexcept;
+    [[nodiscard]] MapleVmuStateSnapshot state_snapshot() const;
+    void validate_state_restore(const MapleVmuStateSnapshot& state) const;
+    void restore_state(const MapleVmuStateSnapshot& state);
 
   private:
     [[nodiscard]] MapleResponse read_block(const MapleRequest& request) const;
@@ -162,6 +180,36 @@ struct MapleBusSnapshot {
     [[nodiscard]] bool operator==(const MapleBusSnapshot&) const = default;
 };
 
+struct MapleControllerDeviceStateSnapshot {
+    std::uint64_t next_frame = 0u;
+
+    [[nodiscard]] bool operator==(
+        const MapleControllerDeviceStateSnapshot&) const = default;
+};
+
+using MaplePeripheralStateSnapshot =
+    std::variant<MapleControllerDeviceStateSnapshot, MapleVmuStateSnapshot>;
+
+struct MapleAttachedPeripheralStateSnapshot {
+    std::uint8_t port = 0u;
+    std::uint8_t unit = 0u;
+    MaplePeripheralStateSnapshot state;
+
+    [[nodiscard]] bool operator==(
+        const MapleAttachedPeripheralStateSnapshot&) const = default;
+};
+
+// Lossless bus state for a product handoff. Unsupported/custom peripherals
+// are rejected instead of being silently represented as an attached bit.
+struct MapleBusStateSnapshot {
+    std::array<bool, maple_port_count * maple_units_per_port> attached{};
+    std::vector<MapleAttachedPeripheralStateSnapshot> peripherals;
+    std::vector<MapleTransactionRecord> history;
+    std::uint64_t next_sequence = 0u;
+
+    [[nodiscard]] bool operator==(const MapleBusStateSnapshot&) const = default;
+};
+
 class MapleBus final {
   public:
     explicit MapleBus(std::function<void()> completion_observer = {});
@@ -181,6 +229,9 @@ class MapleBus final {
                                                                std::uint64_t guest_cycle);
     [[nodiscard]] std::span<const MapleTransactionRecord> history() const noexcept;
     [[nodiscard]] MapleBusSnapshot snapshot() const;
+    [[nodiscard]] MapleBusStateSnapshot state_snapshot() const;
+    void validate_state_restore(const MapleBusStateSnapshot& state) const;
+    void restore_state(const MapleBusStateSnapshot& state);
 
   private:
     [[nodiscard]] static std::size_t slot(std::uint8_t port, std::uint8_t unit);

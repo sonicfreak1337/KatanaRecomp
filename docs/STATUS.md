@@ -21,7 +21,11 @@ Game-Entry. DirectBoot startet dagegen executable-first. `GameEntryHandoff`
 Schema 2, der titelgebundene private Artefaktprovider und die Einbindung in
 den Spielprojektvertrag sind umgesetzt. Der derzeitige ehrliche
 `CpuMemoryDiagnostic`-Pfad erfasst und appliziert nur CPU und RAM; Geraete-
-und Schedulerzustand sind noch ausstehend. Ein vollstaendiger Produkt-Handoff
+und Schedulerzustand sind noch ausstehend. Maple besitzt nun einen
+verlustfreien portablen Zustandsvertrag fuer Bus, Controller, VMU-Quell- und
+Arbeitsbytes sowie DMA. Prozesslokale Scheduler-IDs werden nicht uebernommen;
+ein aktiver DMA wird mit einem typisierten Ereignis und frischer ID
+rehydriert. Ein vollstaendiger Produkt-Handoff
 muss unabdingbar alle 21 kanonischen Geraeteklassen samt Maple/VMU,
 Schedulerereignissen und IRQ-Quellen enthalten; der Aufrufer kann diese
 Pflichtmenge nicht abschwaechen. Capture und Diagnose-Apply sind
@@ -30,8 +34,9 @@ DirectBoot. Der CLI-Portbuild erkennt ein gemeinsam installiertes
 `runtime-sdk` als CMake-Paket; der volle Quellbaum wird nur als
 `EXCLUDE_FROM_ALL`-Fallback eingebunden.
 
-Portprojektvertrag 51 bindet die Game-Entry-/Spielprojektidentitaet in den
-Whole-Export-Schluessel. Der Versionswechsel invalidiert vorherige
+Portprojektvertrag 52 serialisiert die vollstaendige Game-Entry-Bindung in
+`katana-game-project-v2` und bindet die Game-Entry-/Spielprojektidentitaet in
+den Whole-Export-Schluessel. Der Versionswechsel invalidiert vorherige
 Whole-Export-Treffer. Alte, durch einen bestaetigten Nachfolgeexport ersetzte
 Portordner werden gezielt entfernt; aktuelle DirectBoot- und
 NativeDisc-Referenzen, Boot-Executable-Artefakte und Nutzerdaten bleiben
@@ -73,8 +78,8 @@ Die VMU ist in beiden Pfaden auf Maple Port 0/Unit 1 vorhanden, und ihre
 persistenten Dateien sind byteidentisch. Offen ist daher der vollstaendige
 Maple-/DMA-/ASIC-/Scheduler-Handoff, nicht eine fehlende VMU-Datei.
 
-Aktuelle Produktvertraege: Runtime-ABI 61, Block-ABI 5, Analyzer-ABI 2,
-PlatformServices-ABI 13, Backend-Interface-ABI 8, Portprojektvertrag 51,
+Aktuelle Produktvertraege: Runtime-ABI 62, Block-ABI 5, Analyzer-ABI 2,
+PlatformServices-ABI 13, Backend-Interface-ABI 8, Portprojektvertrag 52,
 GameEntryHandoff-Schema 2, GameEntryHandoff-Artefaktformat 2,
 Spielprojektvertrag 2, Native-AOT-Emissionsprofil 8 und
 Crash-Capsule-Vertrag 1.

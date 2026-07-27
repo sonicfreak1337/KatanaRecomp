@@ -19,8 +19,18 @@
   Scheduler- und Geraetezustand weichen ab. VMU-Inhalt und Maple-Anbindung
   sind nachweislich vorhanden und identisch, sodass der vollstaendige
   Plattform-Handoff der konkrete verbleibende DirectBoot-Blocker ist.
-  Damit wird noch kein erfolgreicher DirectBoot behauptet. Portprojektvertrag
-  51 invalidiert inkompatible Whole-Export-Cachetreffer. Ersetzte,
+  Maple kann seinen Bus-, Controller-, VMU- und DMA-Zustand inzwischen
+  verlustfrei als privaten `KATMAP1`-Payload erfassen und passiv
+  wiederherstellen; aktive DMA-Ereignisse erhalten beim Rehydrieren eine
+  frische Scheduler-ID. Unbekannte Maple-Peripherie wird hart abgelehnt.
+  Der generierte Produktpfad akzeptiert Handoff-only-Spielprojekte auch ohne
+  Hooks, bindet Definition, Executable, Konsolenprofil und
+  Descriptor-Identitaet und staged ausschliesslich `CompletePlatform`.
+  Solange der geraeteuebergreifende Apply-Pfad fehlt, endet er danach
+  ausdruecklich statt auf CPU/RAM zurueckzufallen.
+  Damit wird noch kein erfolgreicher DirectBoot behauptet. Runtime-ABI 62 und
+  Portprojektvertrag 52 invalidieren inkompatible Runtime- und
+  Whole-Export-Cachetreffer. Ersetzte,
   unbrauchbare private Portexporte werden nach einem bestaetigten
   Nachfolgeexport gezielt entfernt.
 - v0.49 richtet den Produktpfad als statischen SH-4-Recompiler mit getrenntem

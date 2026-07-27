@@ -346,7 +346,7 @@ void validate_game_project_image_contract(
 std::string game_project_metadata(
     const katana::runtime::GameProjectDefinition& definition) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-game-project-v1\",\"contract_version\":"
+    output << "{\"schema\":\"katana-game-project-v2\",\"contract_version\":"
            << definition.contract_version << ",\"project_id\":"
            << katana::io::quote_json(definition.project_id)
            << ",\"project_version\":"
@@ -363,6 +363,35 @@ std::string game_project_metadata(
                   definition.identity.boot_byte_identity)
            << ",\"direct_boot_configured\":"
            << (definition.boot_config.has_value() ? "true" : "false")
+           << ",\"game_entry_handoff\":";
+    if (definition.game_entry_handoff.has_value()) {
+        const auto& binding = *definition.game_entry_handoff;
+        output
+            << "{\"schema_version\":" << binding.schema_version
+            << ",\"required_runtime_abi\":"
+            << binding.required_runtime_abi
+            << ",\"required_platform_state_contract\":"
+            << binding.required_platform_state_contract
+            << ",\"content_identity\":"
+            << katana::io::quote_json(
+                   binding.executable.content_identity)
+            << ",\"boot_file_name\":"
+            << katana::io::quote_json(
+                   binding.executable.boot_file_name)
+            << ",\"boot_byte_identity\":"
+            << katana::io::quote_json(
+                   binding.executable.boot_byte_identity)
+            << ",\"console_profile\":"
+            << katana::io::quote_json(
+                   katana::runtime::dreamcast_console_profile_name(
+                       binding.console_profile))
+            << ",\"descriptor_identity\":"
+            << katana::io::quote_json(binding.descriptor_identity)
+            << ",\"required_completeness\":\"complete-platform\"}";
+    } else {
+        output << "null";
+    }
+    output
            << ",\"function_boundaries\":[";
     for (std::size_t index = 0u;
          index < definition.function_boundaries.size();
@@ -2077,7 +2106,8 @@ std::string handwritten_main(
     const std::uint32_t boot_address,
     const std::size_t boot_size,
     const katana::runtime::DreamcastRuntimeBootConfig*
-        game_project_boot_config) {
+        game_project_boot_config,
+    const katana::runtime::GameProjectDefinition* game_project) {
     std::ostringstream identity_contract;
     identity_contract
         << "struct ExpectedInput { std::string_view role; std::string_view sha256; };\n"
@@ -2102,6 +2132,60 @@ std::string handwritten_main(
                          "expected_guest_program_range{"
                       << boot_address << "u, " << boot_size << "u};\n"
                       << runtime_wait_loop_descriptor_contract(wait_loop_descriptors);
+    const auto* game_entry_handoff_binding =
+        game_project != nullptr &&
+                game_project->game_entry_handoff.has_value()
+            ? &*game_project->game_entry_handoff
+            : nullptr;
+    identity_contract
+        << "constexpr bool expected_game_entry_handoff = "
+        << (game_entry_handoff_binding != nullptr ? "true" : "false")
+        << ";\n"
+        << "constexpr std::string_view "
+           "expected_game_project_definition_identity = "
+        << katana::io::quote_json(
+               game_project != nullptr
+                   ? katana::runtime::game_project_definition_identity(
+                         *game_project)
+                   : std::string{})
+        << ";\n";
+    if (game_entry_handoff_binding != nullptr) {
+        const auto& binding = *game_entry_handoff_binding;
+        identity_contract
+            << "katana::runtime::GameEntryHandoffBinding "
+               "expected_game_entry_handoff_binding() {\n"
+               "    katana::runtime::GameEntryHandoffBinding binding;\n"
+               "    binding.schema_version = "
+            << binding.schema_version
+            << "u;\n"
+               "    binding.required_runtime_abi = "
+            << binding.required_runtime_abi
+            << "u;\n"
+               "    binding.required_platform_state_contract = "
+            << binding.required_platform_state_contract
+            << "u;\n"
+               "    binding.executable.content_identity = "
+            << katana::io::quote_json(
+                   binding.executable.content_identity)
+            << ";\n"
+               "    binding.executable.boot_file_name = "
+            << katana::io::quote_json(
+                   binding.executable.boot_file_name)
+            << ";\n"
+               "    binding.executable.boot_byte_identity = "
+            << katana::io::quote_json(
+                   binding.executable.boot_byte_identity)
+            << ";\n"
+               "    binding.console_profile = "
+               "katana::runtime::DreamcastConsoleProfile::"
+            << console_profile_enumerator(console_profile)
+            << ";\n"
+               "    binding.descriptor_identity = "
+            << katana::io::quote_json(binding.descriptor_identity)
+            << ";\n"
+               "    return binding;\n"
+               "}\n";
+    }
     std::ostringstream boot_configuration;
     boot_configuration
         << "        katana::runtime::DreamcastRuntimeBootConfig "
@@ -2158,6 +2242,62 @@ std::string handwritten_main(
                     : "NativeDiscBoot")
             << ";\n";
     }
+    std::ostringstream product_game_entry_handoff;
+    if (game_entry_handoff_binding != nullptr) {
+        product_game_entry_handoff
+            << "        if (runtime_boot_config.boot_path !=\n"
+               "                katana::runtime::DreamcastRuntimeBootPath::"
+               "DirectBootExecutable)\n"
+               "            throw std::runtime_error(\n"
+               "                \"game-entry-handoff-product-requires-direct-boot\");\n"
+               "        const auto* registered_game_project =\n"
+               "            katana::runtime::active_game_project_bindings();\n"
+               "        if (registered_game_project == nullptr)\n"
+               "            throw std::runtime_error(\n"
+               "                \"game-entry-handoff-game-project-not-registered\");\n"
+               "        if (katana::runtime::game_project_definition_identity(\n"
+               "                registered_game_project->definition()) !=\n"
+               "            expected_game_project_definition_identity)\n"
+               "            throw std::runtime_error(\n"
+               "                \"game-entry-handoff-game-project-identity-mismatch\");\n"
+               "        const auto expected_handoff_binding =\n"
+               "            expected_game_entry_handoff_binding();\n"
+               "        const auto& registered_definition =\n"
+               "            registered_game_project->definition();\n"
+               "        if (!registered_definition.game_entry_handoff.has_value() ||\n"
+               "            *registered_definition.game_entry_handoff !=\n"
+               "                expected_handoff_binding)\n"
+               "            throw std::runtime_error(\n"
+               "                \"game-entry-handoff-binding-mismatch\");\n"
+               "        const std::array allowed_game_entry_ranges{\n"
+               "            katana::runtime::GameEntryCodeRange{\n"
+               "                expected_guest_program_range.guest_start,\n"
+               "                expected_guest_program_range.byte_size}};\n"
+               "        katana::runtime::GameEntryHandoffRequest "
+               "product_handoff_request;\n"
+               "        product_handoff_request.expected_binding =\n"
+               "            expected_handoff_binding;\n"
+               "        product_handoff_request.allowed_entry_ranges =\n"
+               "            allowed_game_entry_ranges;\n"
+               "        product_handoff_request.memory_layout = {\n"
+               "            static_cast<std::uint32_t>(state.main_ram->size()),\n"
+               "            static_cast<std::uint32_t>(state.vram->size()),\n"
+               "            static_cast<std::uint32_t>(state.aica_ram->size())};\n"
+               "        product_handoff_request.required_devices =\n"
+               "            katana::runtime::"
+               "dreamcast_game_entry_required_devices_v1;\n"
+               "        product_handoff_request.required_completeness =\n"
+               "            katana::runtime::GameEntryHandoffCompleteness::"
+               "CompletePlatform;\n"
+               "        auto validated_product_handoff =\n"
+               "            katana::runtime::validate_and_stage_game_entry_handoff(\n"
+               "                product_handoff_request,\n"
+               "                registered_game_project->"
+               "game_entry_handoff_provider());\n"
+               "        static_cast<void>(validated_product_handoff);\n"
+               "        throw std::runtime_error(\n"
+               "            \"game-entry-handoff-complete-platform-apply-unavailable\");\n";
+    }
     return "#include \"katana_port.hpp\"\n"
            "#include \"katana/runtime/block_guards.hpp\"\n"
            "#include \"katana/runtime/crash_capsule.hpp\"\n"
@@ -2165,6 +2305,7 @@ std::string handwritten_main(
            "#include \"katana/runtime/disc_install.hpp\"\n"
            "#include \"katana/runtime/exception.hpp\"\n"
            "#include \"katana/runtime/game_entry_handoff_artifact.hpp\"\n"
+           "#include \"katana/runtime/game_project.hpp\"\n"
            "#include \"katana/runtime/host_input.hpp\"\n"
            "#include \"katana/runtime/host_runtime.hpp\"\n"
            "#include \"katana/runtime/host_video.hpp\"\n"
@@ -5755,6 +5896,9 @@ std::string handwritten_main(
            "        const bool deterministic_runtime_probe =\n"
            "            deterministic_runtime_probe_requested();\n"
            "        validate_runtime_probe_environment(deterministic_runtime_probe);\n"
+           "        if (expected_game_entry_handoff && deterministic_runtime_probe)\n"
+           "            throw std::invalid_argument(\n"
+           "                \"game-entry-handoff-runtime-probe-conflict\");\n"
            "        const auto configured_guest_cycle_budget =\n"
            "            katana::runtime::guest_cycle_budget_from_environment();\n"
            "        validate_product_gate_environment(configured_guest_cycle_budget);\n"
@@ -5842,6 +5986,9 @@ std::string handwritten_main(
            "            *handoff_capture_value != '\\0';\n"
            "        const bool handoff_apply_requested = handoff_apply_value != nullptr &&\n"
            "            *handoff_apply_value != '\\0';\n"
+           "        if (expected_game_entry_handoff && handoff_apply_requested)\n"
+           "            throw std::invalid_argument(\n"
+           "                \"game-entry-handoff-product-diagnostic-conflict\");\n"
            "        if (handoff_capture_requested && handoff_apply_requested)\n"
            "            throw std::invalid_argument(\n"
            "                \"game-entry-handoff-capture-apply-conflict\");\n"
@@ -5981,6 +6128,7 @@ std::string handwritten_main(
            "        state.maple->attach(0u, 0u,\n"
            "            std::make_shared<katana::runtime::MapleControllerDevice>(\n"
            "                controller_input));\n"
+           + product_game_entry_handoff.str() +
            "        auto lifecycle_input =\n"
            "            std::make_shared<katana::runtime::InjectedHostInput>();\n"
            "        class ControllerContractGamepadSource final\n"
@@ -7056,9 +7204,15 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         external_game_project != nullptr &&
         (!external_game_project->function_overrides.empty() ||
          !external_game_project->mid_function_hooks.empty());
-    const bool required_game_project_hooks =
+    const bool external_game_project_handoff =
         external_game_project != nullptr &&
-        (std::any_of(
+        external_game_project->game_entry_handoff.has_value();
+    const bool external_game_project_runtime_bindings =
+        external_game_project_hooks || external_game_project_handoff;
+    const bool required_game_project_runtime_bindings =
+        external_game_project != nullptr &&
+        (external_game_project_handoff ||
+         std::any_of(
              external_game_project->function_overrides.begin(),
              external_game_project->function_overrides.end(),
              [](const auto& function) {
@@ -8696,11 +8850,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "observations,\n"
            << "                             katana::runtime::CrashCapsule& crash_capsule) {\n"
            << "    katana::runtime::validate_platform_services(services);\n";
-    if (external_game_project_hooks) {
+    if (external_game_project_runtime_bindings) {
         output
             << "    const auto* registered_game_project =\n"
                "        katana::runtime::active_game_project_bindings();\n";
-        if (required_game_project_hooks)
+        if (required_game_project_runtime_bindings)
             output
                 << "    if (registered_game_project == nullptr)\n"
                    "        throw std::runtime_error(\"Erforderliches externes "
@@ -9492,6 +9646,18 @@ static PortExportResult export_dreamcast_port_project_impl(
         report_progress(options, "game-project-validation");
         const auto& game_project = *options.game_project;
         katana::runtime::validate_game_project_definition(game_project);
+        if (game_project.game_entry_handoff.has_value()) {
+            if (!prepared.direct_boot_executable)
+                throw std::invalid_argument(
+                    "Game-Entry-Handoff darf nur in einen "
+                    "DirectBootExecutable-Produktport exportiert werden.");
+            if (katana::runtime::dreamcast_console_profile_name(
+                    game_project.game_entry_handoff->console_profile) !=
+                options.console_profile)
+                throw std::invalid_argument(
+                    "Game-Entry-Handoff-Konsolenprofil passt nicht zum "
+                    "Produktport.");
+        }
         validate_game_project_image_contract(game_project, prepared.image);
         if (!disc_context.has_value())
             throw std::invalid_argument(
@@ -10033,7 +10199,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                                              options.game_project->boot_config
                                                  .has_value()
                                          ? &*options.game_project->boot_config
-                                         : nullptr),
+                                         : nullptr,
+                                     options.game_project),
                     true);
 
     PortExportResult result;

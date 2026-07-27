@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -105,6 +106,11 @@ MapleResponse MapleControllerDevice::transact_at(const MapleRequest& request,
 
 std::uint64_t MapleControllerDevice::sampled_frames() const noexcept {
     return next_frame_;
+}
+
+void MapleControllerDevice::restore_sampled_frames(
+    const std::uint64_t next_frame) noexcept {
+    next_frame_ = next_frame;
 }
 
 MapleVmuDevice::MapleVmuDevice(const std::span<const std::uint8_t> image) {
@@ -217,6 +223,75 @@ MapleVmuSnapshot MapleVmuDevice::snapshot() const noexcept {
     };
 }
 
+MapleVmuStateSnapshot MapleVmuDevice::state_snapshot() const {
+    MapleVmuStateSnapshot result;
+    result.source_image.resize(vmu_storage_size);
+    for (std::size_t offset = 0u; offset < result.source_image.size(); ++offset)
+        result.source_image[offset] = source_byte(offset);
+    if (persistent_image_) {
+        const auto working = persistent_image_->bytes();
+        result.working_image.assign(working.begin(), working.end());
+    } else {
+        result.working_image = working_;
+    }
+    result.write_protected = write_protected_;
+    result.working_copy_dirty = working_copy_dirty();
+    result.persistent_working_copy = persistent_working_copy();
+    return result;
+}
+
+void MapleVmuDevice::validate_state_restore(
+    const MapleVmuStateSnapshot& state) const {
+    if (state.source_image.size() != vmu_storage_size ||
+        state.working_image.size() != vmu_storage_size)
+        throw std::invalid_argument(
+            "VMU-Handoff braucht exakt 128 KiB Quell- und Arbeitsabbild.");
+    if (state.persistent_working_copy != persistent_working_copy())
+        throw std::invalid_argument(
+            "VMU-Handoff und Runtime besitzen unterschiedliche Persistenzvertraege.");
+    if (!state.persistent_working_copy && state.working_copy_dirty)
+        throw std::invalid_argument(
+            "Nichtpersistente VMU darf keinen persistenten Dirty-Zustand tragen.");
+
+    for (std::size_t offset = 0u; offset < vmu_storage_size; ++offset) {
+        if (source_byte(offset) != state.source_image[offset])
+            throw std::invalid_argument(
+                "VMU-Handoff passt nicht zum gebundenen Quellabbild.");
+    }
+
+    if (!persistent_image_) return;
+    const auto current = persistent_image_->bytes();
+    const auto bytes_match =
+        std::equal(current.begin(), current.end(), state.working_image.begin());
+    if (!state.working_copy_dirty &&
+        (persistent_image_->dirty() || !bytes_match))
+        throw std::invalid_argument(
+            "Ein sauberer VMU-Handoff darf keine andere oder bereits dirty "
+            "Arbeitskopie ohne Hostdatei-Commit ersetzen.");
+}
+
+void MapleVmuDevice::restore_state(const MapleVmuStateSnapshot& state) {
+    validate_state_restore(state);
+
+    if (!persistent_image_) {
+        auto restored = state.working_image;
+        working_ = std::move(restored);
+        write_protected_ = state.write_protected;
+        return;
+    }
+
+    persistent_image_->write(0u, state.working_image);
+    if (state.working_copy_dirty && !persistent_image_->dirty()) {
+        // Dirty is host-persistence bookkeeping, but it is part of a lossless
+        // state transfer. Force it without changing the final guest bytes.
+        const auto original = state.working_image.front();
+        persistent_image_->write_byte(
+            0u, static_cast<std::uint8_t>(original ^ 1u));
+        persistent_image_->write_byte(0u, original);
+    }
+    write_protected_ = state.write_protected;
+}
+
 std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {
     if (port >= maple_port_count || unit >= maple_units_per_port) {
         throw std::out_of_range("Maple-Port oder -Unit liegt ausserhalb des Busses.");
@@ -272,6 +347,8 @@ MapleResponse MapleBus::exchange_impl(const std::uint8_t port,
                                       const MapleRequest& request,
                                       const bool notify_completion,
                                       const std::uint64_t guest_cycle) {
+    if (next_sequence_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("Maple-Transaktionssequenz ist uebergelaufen.");
     auto& device = devices_[slot(port, unit)];
     if (!device) {
         throw std::runtime_error("Kein Maple-Geraet an der angeforderten Adresse.");
@@ -294,6 +371,129 @@ MapleBusSnapshot MapleBus::snapshot() const {
     result.history = history_;
     result.next_sequence = next_sequence_;
     return result;
+}
+
+MapleBusStateSnapshot MapleBus::state_snapshot() const {
+    MapleBusStateSnapshot result;
+    for (std::size_t index = 0u; index < devices_.size(); ++index) {
+        const auto& device = devices_[index];
+        result.attached[index] = device != nullptr;
+        if (!device) continue;
+
+        MapleAttachedPeripheralStateSnapshot peripheral;
+        peripheral.port =
+            static_cast<std::uint8_t>(index / maple_units_per_port);
+        peripheral.unit =
+            static_cast<std::uint8_t>(index % maple_units_per_port);
+        if (const auto controller =
+                std::dynamic_pointer_cast<MapleControllerDevice>(device)) {
+            peripheral.state =
+                MapleControllerDeviceStateSnapshot{
+                    controller->sampled_frames()};
+        } else if (const auto vmu =
+                       std::dynamic_pointer_cast<MapleVmuDevice>(device)) {
+            peripheral.state = vmu->state_snapshot();
+        } else {
+            throw std::runtime_error(
+                "Maple-Handoff kann ein unbekanntes Peripheriemodell nicht "
+                "verlustfrei abbilden.");
+        }
+        result.peripherals.push_back(std::move(peripheral));
+    }
+    result.history = history_;
+    result.next_sequence = next_sequence_;
+    return result;
+}
+
+void MapleBus::validate_state_restore(
+    const MapleBusStateSnapshot& state) const {
+    std::array<bool, maple_port_count * maple_units_per_port>
+        described{};
+    std::size_t previous_slot = 0u;
+    bool have_previous = false;
+
+    for (std::size_t index = 0u; index < devices_.size(); ++index) {
+        if (state.attached[index] != static_cast<bool>(devices_[index]))
+            throw std::invalid_argument(
+                "Maple-Handoff passt nicht zur Runtime-Peripherietopologie.");
+    }
+
+    for (const auto& peripheral : state.peripherals) {
+        const auto index = slot(peripheral.port, peripheral.unit);
+        if (have_previous && previous_slot >= index)
+            throw std::invalid_argument(
+                "Maple-Handoff-Peripherie muss eindeutig und geordnet sein.");
+        previous_slot = index;
+        have_previous = true;
+        if (!state.attached[index] || !devices_[index] ||
+            described[index])
+            throw std::invalid_argument(
+                "Maple-Handoff beschreibt eine ungueltige Peripherie.");
+        described[index] = true;
+
+        if (const auto* controller =
+                std::get_if<MapleControllerDeviceStateSnapshot>(
+                    &peripheral.state)) {
+            static_cast<void>(controller);
+            if (!std::dynamic_pointer_cast<MapleControllerDevice>(
+                    devices_[index]))
+                throw std::invalid_argument(
+                    "Maple-Handoff-Controller passt nicht zum Runtimegeraet.");
+        } else if (const auto* vmu =
+                       std::get_if<MapleVmuStateSnapshot>(
+                           &peripheral.state)) {
+            const auto target =
+                std::dynamic_pointer_cast<MapleVmuDevice>(
+                    devices_[index]);
+            if (!target)
+                throw std::invalid_argument(
+                    "Maple-Handoff-VMU passt nicht zum Runtimegeraet.");
+            target->validate_state_restore(*vmu);
+        } else {
+            throw std::invalid_argument(
+                "Maple-Handoff besitzt einen unbekannten Peripheriezustand.");
+        }
+    }
+
+    for (std::size_t index = 0u; index < devices_.size(); ++index) {
+        if (state.attached[index] != described[index])
+            throw std::invalid_argument(
+                "Maple-Handoff fehlt Zustand fuer eine angeschlossene "
+                "Peripherie.");
+    }
+
+    if (state.next_sequence == 0u)
+        throw std::invalid_argument(
+            "Maple-Handoff besitzt eine ungueltige Folgesequenz.");
+    std::uint64_t previous_sequence = 0u;
+    for (const auto& record : state.history) {
+        static_cast<void>(slot(record.port, record.unit));
+        if (record.sequence == 0u ||
+            record.sequence <= previous_sequence ||
+            record.sequence >= state.next_sequence)
+            throw std::invalid_argument(
+                "Maple-Handoff besitzt eine ungueltige Transaktionshistorie.");
+        previous_sequence = record.sequence;
+    }
+}
+
+void MapleBus::restore_state(const MapleBusStateSnapshot& state) {
+    validate_state_restore(state);
+
+    for (const auto& peripheral : state.peripherals) {
+        auto& target = devices_[slot(peripheral.port, peripheral.unit)];
+        if (const auto* controller =
+                std::get_if<MapleControllerDeviceStateSnapshot>(
+                    &peripheral.state)) {
+            std::dynamic_pointer_cast<MapleControllerDevice>(target)
+                ->restore_sampled_frames(controller->next_frame);
+        } else {
+            std::dynamic_pointer_cast<MapleVmuDevice>(target)->restore_state(
+                std::get<MapleVmuStateSnapshot>(peripheral.state));
+        }
+    }
+    history_ = state.history;
+    next_sequence_ = state.next_sequence;
 }
 
 } // namespace katana::runtime
