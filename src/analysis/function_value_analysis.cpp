@@ -174,6 +174,31 @@ void normalize(std::vector<std::uint32_t>& values) {
 
 class GuardedCodeInventoryCollector {
   public:
+    const std::optional<JumpTableAnalysis>& stored_snapshot_table(
+        const katana::io::ExecutableImage& image,
+        const std::uint32_t evidence_address,
+        const std::uint32_t table_address) {
+        const auto cached = stored_snapshot_tables_.find(table_address);
+        if (cached != stored_snapshot_tables_.end()) return cached->second;
+        constexpr detail::SnapshotPointerCandidateScanPolicy scan_policy{
+            .minimum_entries = 4u,
+            .maximum_scanned_slots = 64u,
+            .maximum_skipped_slots = 8u,
+            .maximum_consecutive_skipped_slots = 3u,
+            .treat_null_as_reserved = true,
+            .reject_truncated_scan = false,
+        };
+        auto result = detail::analyze_snapshot_pointer_candidates(
+            image,
+            evidence_address,
+            table_address,
+            JumpTableDispatchKind::Call,
+            scan_policy);
+        return stored_snapshot_tables_
+            .emplace(table_address, std::move(result))
+            .first->second;
+    }
+
     void collect(std::vector<StoredCodeAddressCandidate> candidates) {
         std::sort(candidates.begin(),
                   candidates.end(),
@@ -297,6 +322,8 @@ class GuardedCodeInventoryCollector {
     std::set<std::uint32_t> admitted_targets_;
     std::map<std::uint32_t, StoredCodeAddressCandidate> stored_candidates_;
     std::map<std::uint32_t, ReturnedCodeAddressTableCandidate> returned_tables_;
+    std::unordered_map<std::uint32_t, std::optional<JumpTableAnalysis>>
+        stored_snapshot_tables_;
     bool candidate_inventory_truncated_ = false;
     bool table_scan_truncated_ = false;
 };
@@ -1458,6 +1485,7 @@ void observe_stored_code_addresses(
     const katana::io::ExecutableImage& image,
     const katana::sh4::DisassemblyLine& line,
     const AbstractState& state,
+    GuardedCodeInventoryCollector& guarded_inventory_collector,
     std::vector<StoredCodeAddressCandidate>& candidates) {
     using K = katana::sh4::InstructionKind;
     const auto& instruction = line.instruction;
@@ -1581,29 +1609,22 @@ void observe_stored_code_addresses(
         !finite_resolved_non_stack_destination)
         return;
 
-    constexpr detail::SnapshotPointerCandidateScanPolicy stored_table_scan_policy{
-        .minimum_entries = 4u,
-        .maximum_scanned_slots = 64u,
-        .maximum_skipped_slots = 8u,
-        .maximum_consecutive_skipped_slots = 3u,
-        .treat_null_as_reserved = true,
-        .reject_truncated_scan = false,
-    };
     std::vector<std::uint32_t> validated_candidates;
     validated_candidates.reserve(value.values.size());
     bool all_candidates_valid = true;
     for (const auto candidate : value.values) {
         const auto validation = validate_decode_candidate(image, candidate);
-        if (!validation.valid()) {
-            all_candidates_valid = false;
-            if (!finite_resolved_non_stack_destination) continue;
-            const auto table = detail::analyze_snapshot_pointer_candidates(
-                image,
-                line.address,
-                candidate,
-                JumpTableDispatchKind::Call,
-                stored_table_scan_policy);
-            if (!table.has_value()) continue;
+        const bool scan_stored_table =
+            finite_resolved_non_stack_destination &&
+            (!direct_code_pointer_provenance || !validation.valid());
+        if (scan_stored_table) {
+            const auto& table =
+                guarded_inventory_collector.stored_snapshot_table(
+                    image, line.address, candidate);
+            if (!table.has_value()) {
+                if (!validation.valid()) all_candidates_valid = false;
+                continue;
+            }
             for (const auto& entry : table->entries) {
                 StoredCodeAddressCandidate observation;
                 observation.target_address = entry.target;
@@ -1616,6 +1637,10 @@ void observe_stored_code_addresses(
                     evidence_callees.begin(), evidence_callees.end());
                 candidates.push_back(std::move(observation));
             }
+            if (!direct_code_pointer_provenance) continue;
+        }
+        if (!validation.valid()) {
+            all_candidates_valid = false;
             continue;
         }
         if (direct_code_pointer_provenance)
@@ -1822,7 +1847,11 @@ FunctionEvaluation evaluate_function(
             if (!call && guarded_inventory_collector != nullptr) {
                 std::vector<StoredCodeAddressCandidate> stored_candidates;
                 observe_stored_code_addresses(
-                    image, line, state, stored_candidates);
+                    image,
+                    line,
+                    state,
+                    *guarded_inventory_collector,
+                    stored_candidates);
                 if (isolated_inventory_call_site.has_value()) {
                     for (auto& candidate : stored_candidates) {
                         candidate.complete = false;
