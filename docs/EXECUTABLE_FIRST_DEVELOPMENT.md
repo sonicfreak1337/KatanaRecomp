@@ -69,16 +69,43 @@ Ein Treffer ist an
 `Analyse-/IR-Cache-Hit: ja` erkennbar. Dieser Whole-Export-Cache gilt fuer
 `port-executable` beziehungsweise `probe-port-executable`; der GDI-basierte
 NativeDiscBoot-Export behaelt seine Partitions- und Metadatencaches.
+Portprojektvertrag 51 bindet den erweiterten Spielprojekt- und
+Game-Entry-Vertrag in diesen Schluessel und invalidiert damit aeltere
+Whole-Export-Treffer, statt sie mit einer inkompatiblen Runtimegrenze
+wiederzuverwenden.
 
 ## Zwei Produktpfade
 
 ### DirectBootExecutable
 
-DirectBoot erzeugt einen clean-room definierten Post-BIOS-Zustand und startet
-die verifizierte Boot-Executable direkt nativ. Gemeinsame BIOS-Dienste,
-Scheduler, Interrupts, PVR, AICA, Maple und GD-ROM bleiben aktiv. DirectBoot
-trennt Bootstrapprobleme von Problemen im eigentlichen Spielprogramm; er ist
-kein Interpreter und kein Emulator.
+DirectBoot startet die verifizierte Boot-Executable direkt nativ. Ein
+produktiver Spieleinstieg darf dabei nicht aus einem allgemeinen
+Post-BIOS-Zustand abgeleitet werden, sondern benoetigt einen
+`GameEntryHandoff` Schema 2 des externen Spielprojekts. Die Bindung prueft
+Content, Boot-Executable, Konsolenprofil, Runtime-ABI,
+Plattformzustandsvertrag und Descriptoridentitaet vor dem ersten Gastblock.
+Der private titelgebundene Artefaktprovider besitzt Descriptor und Payloads
+nach dem Laden selbst und stellt nur vorvalidierte, hashgebundene Slices
+bereit.
+
+Der aktuelle Bring-up-Helfer ist ausdruecklich
+`CpuMemoryDiagnostic`: NativeDisc kann CPU und RAM unmittelbar vor der ersten
+Boot-Executable-Instruktion erfassen, und DirectBoot kann genau diesen Anteil
+vor Gastcode anwenden. Geraete- und Schedulerzustand werden noch nicht
+erfasst beziehungsweise wiederhergestellt. Der Lauf meldet diese
+Unvollstaendigkeit, und das normale 600-Millionen-Zyklen-Produktgate verbietet
+sowohl Capture als auch Diagnose-Apply. Dieser Pfad ist Ursachenanalyse, kein
+Beleg fuer einen erfolgreichen DirectBoot.
+
+`CompletePlatform` ist absichtlich nicht teilbar: Der Validator verlangt
+immer den kanonischen Satz aus 21 Geraeteklassen sowie die zugeordneten
+Schedulerereignisse. Dazu gehoeren Maple-Bus, persistente VMU-Anbindung,
+Maple-DMA, System-ASIC und IRQ-Zustand gemeinsam. Eine vorhandene VMU-Datei
+allein ersetzt diesen Laufzeitzustand nicht.
+
+Gemeinsame BIOS-Dienste, Scheduler, Interrupts, PVR, AICA, Maple und GD-ROM
+bleiben aktiv. DirectBoot trennt Bootstrapprobleme von Problemen im
+eigentlichen Spielprogramm; er ist kein Interpreter und kein Emulator.
 
 ### NativeDiscBoot
 
@@ -90,8 +117,17 @@ katana-recomp port .\eigene-disc\game.gdi `
 ```
 
 Dieser Pfad kompiliert auch den disc-eigenen Bootstrap und bleibt das finale
-Genauigkeits- und Kompatibilitaetsgate. Er ist bewusst nicht der schnelle
-Standard fuer jede Entwicklungsiteration.
+Genauigkeits- und Kompatibilitaetsgate sowie die Game-Entry-Referenz. Er ist
+bewusst nicht der schnelle Standard fuer jede Entwicklungsiteration.
+
+## Pflege privater Portexporte
+
+Ein bestaetigter Nachfolgeexport ersetzt alte, unbrauchbare generierte
+Portordner. Solche Altports werden regelmaessig gezielt geloescht, damit
+Diagnose und Messungen nicht versehentlich gegen einen veralteten Vertrag
+laufen. Der aktuelle DirectBoot-Port, die NativeDisc-Referenz, das
+extrahierte Boot-Executable-Artefakt und installierte Nutzerdaten sind davon
+getrennt und werden nicht als Portexport-Abfall behandelt.
 
 ## Nutzerinstallation bleibt discbasiert
 
@@ -119,7 +155,6 @@ Bootkorrektheit zu behaupten:
 ```powershell
 $env:KATANA_GUEST_CYCLE_BUDGET = '600000000'
 $env:KATANA_PORT_FINAL_PROGRESS = '1'
-$env:KATANA_PORT_IGNORE_FOCUS = '1'
 .\GameDirect.exe
 ```
 

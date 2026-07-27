@@ -58,9 +58,9 @@
 
 | ID | Titel | Status |
 |---|---|---|
-| KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | aktiv P0 |
+| KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | abgeschlossen |
 | KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | aktiv P0 |
-| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | geplant P0 |
+| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | aktiv P0, CPU/RAM-Diagnostik umgesetzt |
 | KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | geplant P0 |
 | KR-4955 | Explizite Funktionsgrenzen und Tabellenhinweise End-to-End | geplant P0 |
 | KR-4956 | Static-AOT-Dispatchflucht inventarisieren und schliessen | aktiv P0 |

@@ -55,7 +55,9 @@ Ein separates Projekt darf versions- und hashgebunden enthalten:
 - bekannte Runtimecode-Templates;
 - schwache oder erforderliche native Funktionsoverrides;
 - bedingte Mid-Function-Hooks mit Continue-, Jump-, Return- oder Abort-Aktion;
-- titelbezogene Symbole und optionale Direct-Boot-Konfiguration.
+- titelbezogene Symbole und optionale Direct-Boot-Konfiguration;
+- eine hashgebundene `GameEntryHandoffBinding` sowie den zugehoerigen privaten
+  Runtimeprovider.
 
 Die Schnittstelle validiert Identitaet, Sortierung, Adressbereiche und
 Kontrolltransfervertraege fail-closed. Sie kopiert durch das Binden einer
@@ -67,6 +69,31 @@ Der oeffentliche C++-Vertrag liegt in
 serialisiertes CLI-Descriptorformat und kein Spielprojekt-Scaffold. Das
 externe Projekt muss Definition, Callbackcode und Registrierung selbst in
 sein Portbinary integrieren.
+
+## Game-Entry-Handoff
+
+`GameEntryHandoff` Schema 2 trennt den Spieleinstieg vom allgemeinen
+Post-BIOS-Zustand. Die Bindung umfasst Content- und
+Boot-Executable-Identitaet, Konsolenprofil, Runtime-ABI,
+Plattformzustandsvertrag und Descriptoridentitaet. Der Descriptor modelliert
+den architektonischen CPU-Zustand einschliesslich physischer GPR-/FPU-Baenke,
+MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
+Geraetezustaende und ausstehende Schedulerereignisse.
+
+Private titelgebundene Payloads werden durch den externen
+Spielprojektprovider geliefert. Das Artefaktformat 2 bindet jede Slice an
+Offset, Groesse und SHA-256, wird vor der Freigabe vollstaendig validiert und
+anschliessend vom Provider aus eigenem unveraenderlichem Speicher gelesen.
+Lokale Pfade oder Payloadbytes werden nicht Teil des generischen
+Spielprojektvertrags.
+
+Der derzeit integrierte Capture-/Apply-Schritt ist bewusst als
+`CpuMemoryDiagnostic` klassifiziert. Er kann am sauberen NativeDisc-Game-Entry
+CPU und RAM erfassen und vor DirectBoot-Gastcode vorvalidiert anwenden.
+Geraeteadapter und Schedulerwiederherstellung sind noch nicht implementiert;
+der Apply meldet deshalb `platform_state=pending`. Das Produktgate lehnt
+Capture und Diagnose-Apply ab. Erst ein `CompletePlatform`-Handoff des
+externen Spielprojekts darf als produktiver DirectBoot-Einstieg gelten.
 
 ## Statischer und dynamischer AOT-Dispatch
 
@@ -145,3 +172,5 @@ Deep-Trace-Fenster bleibt offene Diagnosekonsolidierung.
 - Runtimecode wird nur nach Byteidentitaet, Herkunft und Generation aktiviert.
 - DirectBoot und NativeDiscBoot verwenden dieselbe Dreamcast-Runtime; sie
   unterscheiden ausschliesslich die Bootstrapgrenze.
+- Ein CPU-/RAM-Diagnosehandoff wird nicht als vollstaendiger Plattform- oder
+  Bootnachweis ausgegeben.

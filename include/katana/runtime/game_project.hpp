@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/dreamcast_boot.hpp"
+#include "katana/runtime/game_entry_handoff.hpp"
 #include "katana/runtime/native_aot_template.hpp"
 
 #include <cstddef>
@@ -15,7 +16,7 @@ namespace katana::runtime {
 
 class PlatformServices;
 
-inline constexpr std::uint32_t game_project_contract_version = 1u;
+inline constexpr std::uint32_t game_project_contract_version = 2u;
 
 enum class GameProjectControlTransferKind : std::uint8_t {
     Jump,
@@ -141,6 +142,13 @@ struct GameProjectDefinition {
     std::span<const GameProjectSymbol> symbols;
     std::span<const GameProjectCodeIdentity> code_identities;
     std::optional<DreamcastRuntimeBootConfig> boot_config;
+    // Declarative and identity-bound only. The provider that owns any private
+    // descriptor or slice bytes is attached separately at runtime.
+    std::optional<GameEntryHandoffBinding> game_entry_handoff;
+};
+
+struct GameProjectRuntimeProviders {
+    GameEntryHandoffProvider game_entry_handoff;
 };
 
 enum class GameProjectHookApplication : std::uint8_t {
@@ -221,9 +229,15 @@ void validate_game_project_boot_identity(
 
 class GameProjectBindings final {
   public:
-    explicit GameProjectBindings(GameProjectDefinition definition);
+    explicit GameProjectBindings(
+        GameProjectDefinition definition,
+        GameProjectRuntimeProviders runtime_providers = {});
 
     [[nodiscard]] const GameProjectDefinition& definition() const noexcept;
+    [[nodiscard]] const GameProjectRuntimeProviders&
+    runtime_providers() const noexcept;
+    [[nodiscard]] const GameEntryHandoffProvider&
+    game_entry_handoff_provider() const noexcept;
     [[nodiscard]] const GameProjectFunctionBoundary*
     function_containing(std::uint32_t address) const noexcept;
     [[nodiscard]] const GameProjectJumpTable*
@@ -251,6 +265,7 @@ class GameProjectBindings final {
 
   private:
     GameProjectDefinition definition_;
+    GameProjectRuntimeProviders runtime_providers_;
 };
 
 // A game-specific project normally owns one static registration in its own
@@ -259,7 +274,9 @@ class GameProjectBindings final {
 // exclusive and its definition/storage must outlive all generated execution.
 class GameProjectRegistration final {
   public:
-    explicit GameProjectRegistration(GameProjectDefinition definition);
+    explicit GameProjectRegistration(
+        GameProjectDefinition definition,
+        GameProjectRuntimeProviders runtime_providers = {});
     ~GameProjectRegistration();
 
     GameProjectRegistration(const GameProjectRegistration&) = delete;

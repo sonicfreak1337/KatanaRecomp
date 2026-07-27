@@ -104,10 +104,17 @@ Der vollstaendige Discpfad bleibt erhalten:
   --console-profile europe-pal
 ```
 
-`DirectBootExecutable` startet die verifizierte Boot-Executable aus einem
-clean-room definierten Post-BIOS-Zustand. `NativeDiscBoot` kompiliert auch den
-disc-eigenen Bootstrap und bleibt das finale Genauigkeitsgate. Beide verwenden
-dieselbe Dreamcast-Runtime; keiner der beiden Pfade interpretiert SH-4.
+`DirectBootExecutable` ist der executable-first Entwicklungspfad. Ein
+bewiesener Spieleinstieg benoetigt dabei einen titel- und
+Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
+Spielprojekt. Schema 2 und der private Artefaktprovider sind vorhanden; der
+aktuelle Capture-/Apply-Pfad uebernimmt ehrlich nur CPU und RAM als
+`CpuMemoryDiagnostic`. Geraete- und Schedulerzustand sind noch ausstehend,
+weshalb dieser Diagnosepfad im Produktgate verboten ist und noch keinen
+erfolgreichen Spielboot belegt. `NativeDiscBoot` kompiliert auch den
+disc-eigenen Bootstrap und bleibt Referenz- und finales Genauigkeitsgate sowie
+Grundlage der Nutzerinstallation. Beide Pfade verwenden dieselbe
+Dreamcast-Runtime; keiner interpretiert SH-4.
 
 Vollstaendiger Vertrag:
 [Executable-First-Entwicklung](docs/EXECUTABLE_FIRST_DEVELOPMENT.md)
@@ -163,7 +170,6 @@ normale Messvertrag:
 ```powershell
 $env:KATANA_GUEST_CYCLE_BUDGET = '600000000'
 $env:KATANA_PORT_FINAL_PROGRESS = '1'
-$env:KATANA_PORT_IGNORE_FOCUS = '1'
 .\GameDirect.exe
 ```
 

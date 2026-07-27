@@ -13,6 +13,9 @@ Dieses Dokument enthaelt die aktiven v0.49-Produktaufgaben. Historische Detailta
 - Keine Sonic-Adressen, Titelhooks oder Retailbytes im generischen Katana-Kern.
 - Kein Interpreter, JIT oder Emulationsfallback im normalen Produktpfad.
 - Dokumentation und Taskstatus werden erst nach dem echten Produktlauf aktualisiert.
+- Durch einen bestaetigten Nachfolgeexport ersetzte, unbrauchbare Portordner
+  werden gezielt geloescht; aktuelle Referenzen, Boot-Executable-Artefakte und
+  Nutzerdaten bleiben davon getrennt.
 
 ## Aktueller Produktstand
 
@@ -48,7 +51,7 @@ KR-4960 + KR-4961 + KR-4962 + KR-4963
 
 ---
 
-## [ ] KR-4951 - Produktgate nach Gastzyklen und getrennte visuelle Meilensteine
+## [x] KR-4951 - Produktgate nach Gastzyklen und getrennte visuelle Meilensteine
 
 Prioritaet: P0
 
@@ -77,6 +80,10 @@ Abhaengigkeiten: keine
 - NativeDiscBoot darf das Sega-Bild weiterhin als eigenen IP.BIN-Meilenstein melden
 - der reale Produktport wird mindestens bis 600.000.000 Gastzyklen ausgefuehrt
 
+Status: umgesetzt. Das Gate verwendet exakt 600.000.000 Gastzyklen,
+getrennte Bootpfad-Meilensteine und einen grosszuegigen Host-Watchdog.
+Diagnose-Handoff-Capture und -Apply sind im Produktgate explizit verboten.
+
 ---
 
 ## [ ] KR-4952 - Post-IP.BIN-Spielhandoff fuer DirectBootExecutable
@@ -88,6 +95,18 @@ Abhaengigkeiten: KR-4951
 ### Problem
 
 `DirectBootExecutable` startet bei `0x8C010000`, verwendet aber einen fest codierten `DreamcastPostBiosCpuState`. IP.BIN liegt zwischen BIOS und Haupt-Executable und erzeugt einen eigenen Game-Entry-Zustand.
+
+### Umgesetzter Zwischenstand
+
+- `GameEntryHandoff` Schema 2 trennt Post-BIOS- und Game-Entry-Vertrag.
+- Die Bindung umfasst Executable-/Contentidentitaet, Konsolenprofil,
+  Runtime-ABI, Plattformzustandsvertrag und Descriptoridentitaet.
+- CPU, hashgebundene RAM-Operationen, Geraete und Scheduler sind typisiert.
+- `CpuMemoryDiagnostic` kann CPU und RAM vorvalidiert anwenden und meldet
+  Geraete/Scheduler weiterhin als ausstehend.
+
+Die Aufgabe bleibt offen, bis ein `CompletePlatform`-Handoff angewendet und
+im echten DirectBoot-Produktlauf nachgewiesen ist.
 
 ### Umfang
 
@@ -128,6 +147,15 @@ Abhaengigkeiten: KR-4952
 - Manifest zuletzt schreiben und danach erneut validieren
 - zwei identische Captures derselben GDI muessen bytegleich sein
 - CLI-Befehle fuer Capture, Inspect und Verify bereitstellen
+
+### Umgesetzter Zwischenstand
+
+Das private Artefaktformat 2 und ein owning, `noexcept` lesender Provider sind
+implementiert. Payloads sind titelgebunden und werden ueber Offset, Groesse
+und SHA-256 referenziert; Descriptor und Slices werden vor dem Apply
+vollstaendig validiert. Der aktuelle Capture erzeugt absichtlich nur ein
+`CpuMemoryDiagnostic`-Artefakt. Vollstaendige Geraete-/Schedulerdaten sowie
+der produktive Paritaetslauf bleiben offen.
 
 ### Akzeptanz
 

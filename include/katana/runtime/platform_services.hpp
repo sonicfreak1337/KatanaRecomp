@@ -47,6 +47,28 @@ enum class ExecutableBlockTimingClass : std::uint8_t {
     NeverChain,
 };
 
+// POD reason left by the last native-AOT chaining decision. Product dispatch
+// accounting consumes it only when native code returns to the central
+// dispatcher; no strings, containers or allocations are involved.
+enum class ExecutableChainRejectionReason : std::uint8_t {
+    None,
+    DiagnosticMode,
+    ChainingDisabled,
+    MissingRuntimeContract,
+    NoPendingGuestCycles,
+    GameEntryBarrier,
+    TargetNotRegistered,
+    TargetNotNativeEntrySafe,
+    TimingNotDeferrable,
+    CycleQuantum,
+    GuestCycleBudget,
+    SchedulerDue,
+    InterruptAcceptable,
+    AddressTranslation,
+    VariantOrGeneration,
+    CodeGeneration,
+};
+
 enum class PlatformCapability : std::uint64_t {
     Memory = 1ull << 0u,
     Scheduler = 1ull << 1u,
@@ -218,6 +240,10 @@ class PlatformServices {
     }
     [[nodiscard]] virtual bool can_chain_executable_block(std::uint32_t) const noexcept {
         return false;
+    }
+    [[nodiscard]] virtual ExecutableChainRejectionReason
+    last_executable_chain_rejection() const noexcept {
+        return ExecutableChainRejectionReason::MissingRuntimeContract;
     }
     // Product runtimes may retain pending guest cycles across a central dispatch
     // only while the completed block is a proven pure/static region and no

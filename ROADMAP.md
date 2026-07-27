@@ -86,6 +86,14 @@ Der aktuelle Vertrag bindet im Wesentlichen CPU-Spezialregister. Er bindet nicht
 
 DirectBoot braucht deshalb einen eigenen `GameEntryHandoff`-Vertrag. Der vorhandene Post-BIOS-Vertrag bleibt fuer NativeDiscBoot erhalten.
 
+Umgesetzter Zwischenstand: `GameEntryHandoff` Schema 2 beschreibt und bindet
+CPU, RAM-Operationen, Geraete und Scheduler getrennt. Ein privater
+titelgebundener Artefaktprovider ist in die Spielprojektschnittstelle
+integriert. Der derzeitige reale Capture-/Apply-Pfad ist jedoch absichtlich
+nur `CpuMemoryDiagnostic`; Geraete und Scheduler bleiben ausstehend und das
+Produktgate verbietet diesen Diagnosepfad. Der Befund ist daher noch nicht
+geschlossen und ein erfolgreicher DirectBoot wird nicht behauptet.
+
 ### 2. DirectBoot und NativeDiscBoot werden mit falschen visuellen Erwartungen verglichen
 
 `NativeDiscBoot` fuehrt IP.BIN aus und kann das Sega-Lizenzbild erzeugen.
@@ -123,10 +131,13 @@ Eine Funktion mit MMIO darf einen direkten nativen Call erhalten, wenn vor dem M
 - CLI-Laden und Validierung dieses Descriptors
 - ein generiertes externes Projekt-Scaffold
 - symbolische Hookbindung fuer ein separates Spielrepository
-- ein Game-Entry-Handoff-Provider
 - ein lokaler Entwicklerinstaller, der exakt denselben Contentvertrag wie der spaetere Nutzerinstaller verwendet
 
 Ausserdem wird `GameProjectFunctionBoundary::size` aktuell nicht als echte Analyzer-Funktionsgrenze weitergereicht. Der Analyzer-Override kennt nur eine Startadresse. Damit ist ein zentraler Xenon-artiger Titelhinweis derzeit nur teilweise wirksam.
+
+Der Game-Entry-Handoff-Provider und seine deklarative Bindung sind inzwischen
+als C++-Vertrag vorhanden. Noch offen sind der serialisierte
+Spielprojektdescriptor, das Scaffold und der vollstaendige Plattform-Apply.
 
 ### 5. Registerlokalisierung ist zu konservativ und technisch fragil
 
@@ -214,6 +225,9 @@ KR-4960 + KR-4961 + KR-4962 + KR-4963
 - Keine weiteren Controller-, GUI-, Paketierungs- oder Komfortarbeiten vor B2.
 - Kein Hardwareausbau auf Verdacht. Der naechste Produktendpunkt entscheidet.
 - Roadmap- und Taskstatus werden erst nach dem Produktlauf aktualisiert.
+- Alte, durch einen bestaetigten Nachfolgeexport ersetzte Portordner werden
+  gezielt geloescht; aktuelle DirectBoot-/NativeDisc-Referenzen,
+  Boot-Executable-Artefakte und Nutzerdaten bleiben erhalten.
 
 ## Nicht auf dem aktuellen P0-Pfad
 

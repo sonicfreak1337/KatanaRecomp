@@ -3737,7 +3737,10 @@ int run_test(const int argc, char* argv[]) {
                     .find("can_chain_executable_block(std::uint32_t address)") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("registration == nullptr || !registration->chainable") !=
+                    .find("registration == nullptr)") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("Rejection::TargetNotNativeEntrySafe") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("active_block_variant_->runtime_generation") !=
@@ -3824,6 +3827,28 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_PRESENTED_FRAME") !=
                 std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KR_BOOT_EXECUTABLE_ENTRY guest_cycle=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KR_GAME_CODE_PROGRESSED guest_cycle=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KR_FIRST_GAME_FRAMEBUFFER_WRITE") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KR_FIRST_VISIBLE_GAME_FRAME") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("milestone_bits=") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_BRINGUP_RUN") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_STATIC_AOT_ESCAPE_STATS") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("static-aot-escape-classification-mismatch") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp").find("GuestFrameEvidenceTracker") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
@@ -3854,7 +3879,12 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("weakly_canonical") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("source.parent_path().string()") ==
-                std::string::npos,
+                std::string::npos &&
+            read_text(output / "run-product-gate.ps1")
+                    .find("KATANA_GUEST_CYCLE_BUDGET = '600000000'") !=
+                std::string::npos &&
+            read_text(output / "run-product-gate.ps1")
+                    .find("status=host-watchdog-hang") != std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     auto diagnostic_options = options;
     diagnostic_options.diagnostic_partial = true;

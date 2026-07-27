@@ -16,11 +16,26 @@ einmalig ein privates `boot.katana-executable`; weitere Exporte arbeiten
 danach ohne erneutes Discparsing. Bei unveraenderten, verifizierten
 Versionen/Identitaeten ueberspringt der Whole-Export-Cache auch Analyse, IR und
 Codeemission, baut und publiziert das reale Spieltarget aber erneut. `.gdi`
-bleibt Nutzerinstallation und finaler NativeDiscBoot. DirectBoot verwendet
-einen clean-room definierten Post-BIOS-Zustand und dieselbe Dreamcast-Runtime.
-Der CLI-Portbuild erkennt ein gemeinsam installiertes `runtime-sdk` als
-CMake-Paket; der volle Quellbaum wird nur als `EXCLUDE_FROM_ALL`-Fallback
-eingebunden.
+bleibt Nutzerinstallation und finaler NativeDiscBoot sowie Referenz fuer den
+Game-Entry. DirectBoot startet dagegen executable-first. `GameEntryHandoff`
+Schema 2, der titelgebundene private Artefaktprovider und die Einbindung in
+den Spielprojektvertrag sind umgesetzt. Der derzeitige ehrliche
+`CpuMemoryDiagnostic`-Pfad erfasst und appliziert nur CPU und RAM; Geraete-
+und Schedulerzustand sind noch ausstehend. Ein vollstaendiger Produkt-Handoff
+muss unabdingbar alle 21 kanonischen Geraeteklassen samt Maple/VMU,
+Schedulerereignissen und IRQ-Quellen enthalten; der Aufrufer kann diese
+Pflichtmenge nicht abschwaechen. Capture und Diagnose-Apply sind
+deshalb im Produktgate verboten und belegen noch keinen erfolgreichen
+DirectBoot. Der CLI-Portbuild erkennt ein gemeinsam installiertes
+`runtime-sdk` als CMake-Paket; der volle Quellbaum wird nur als
+`EXCLUDE_FROM_ALL`-Fallback eingebunden.
+
+Portprojektvertrag 51 bindet die Game-Entry-/Spielprojektidentitaet in den
+Whole-Export-Schluessel. Der Versionswechsel invalidiert vorherige
+Whole-Export-Treffer. Alte, durch einen bestaetigten Nachfolgeexport ersetzte
+Portordner werden gezielt entfernt; aktuelle DirectBoot- und
+NativeDisc-Referenzen, Boot-Executable-Artefakte und Nutzerdaten bleiben
+davon getrennt.
 
 Die v0.49-Architektur ist gezielt gebaut und mit bestehenden kleinen
 Vertragstests geprueft. Der reale executable-first Produktport erreichte mit
@@ -47,9 +62,22 @@ noch den Map-basierten Dispatchrecorder an den Erfolgs-Hotpath und waehlt
 Fastpathdeskriptoren ohne lineare Runtime-Scans. Ein automatisch begrenztes
 Triggered-Deep-Trace-Fenster bleibt offene Konsolidierung.
 
-Aktuelle Produktvertraege: Runtime-ABI 60, Block-ABI 5, Analyzer-ABI 2,
-PlatformServices-ABI 12, Backend-Interface-ABI 8, Portprojektvertrag 49,
-Native-AOT-Emissionsprofil 8 und Crash-Capsule-Vertrag 1.
+Ein realer privater A/B-Nachweis erfasste NativeDisc exakt am ersten
+Executable-Block bei Gastzyklus 415.233.270 und applizierte CPU/RAM im
+executable-first DirectBoot. Der Direct-Lauf fuehrte ab `0x8C010000`
+600.000.001 Gastzyklen in 12,6443 Sekunden aus (47,4522 MHz,
+52.329.316 zentrale Dispatches), erreichte `GameCodeProgressed`, aber keinen
+Frame. Native- und Direct-Entry besitzen identische CPU-/RAM-Inhalte, jedoch
+abweichende Scheduler-/Geraetedigests; Direct steht bei Schedulerzyklus 0.
+Die VMU ist in beiden Pfaden auf Maple Port 0/Unit 1 vorhanden, und ihre
+persistenten Dateien sind byteidentisch. Offen ist daher der vollstaendige
+Maple-/DMA-/ASIC-/Scheduler-Handoff, nicht eine fehlende VMU-Datei.
+
+Aktuelle Produktvertraege: Runtime-ABI 61, Block-ABI 5, Analyzer-ABI 2,
+PlatformServices-ABI 13, Backend-Interface-ABI 8, Portprojektvertrag 51,
+GameEntryHandoff-Schema 2, GameEntryHandoff-Artefaktformat 2,
+Spielprojektvertrag 2, Native-AOT-Emissionsprofil 8 und
+Crash-Capsule-Vertrag 1.
 
 Aktuelle Dokumente:
 [`ARCHITECTURE_V049.md`](ARCHITECTURE_V049.md),

@@ -105,6 +105,87 @@ void validate_identity_binding(const GameProjectIdentityBinding& identity) {
         throw std::invalid_argument("game-project-boot-byte-identity-invalid");
 }
 
+bool valid_game_entry_boot_file_name(const std::string_view value) noexcept {
+    if (value.empty() || value.size() > 255u || value == "." || value == "..")
+        return false;
+    return std::all_of(value.begin(), value.end(), [](const char character) {
+        const auto byte = static_cast<unsigned char>(character);
+        return byte >= 0x21u && byte <= 0x7Eu && character != '/' &&
+               character != '\\';
+    });
+}
+
+bool valid_game_entry_console_profile(
+    const DreamcastConsoleProfile profile) noexcept {
+    switch (profile) {
+    case DreamcastConsoleProfile::JapanNtsc:
+    case DreamcastConsoleProfile::NorthAmericaNtsc:
+    case DreamcastConsoleProfile::EuropePal:
+    case DreamcastConsoleProfile::Vga:
+        return true;
+    }
+    return false;
+}
+
+void validate_game_entry_binding(
+    const GameProjectDefinition& definition,
+    const GameEntryHandoffBinding& binding) {
+    if (binding.schema_version != game_entry_handoff_schema_version)
+        throw std::invalid_argument(
+            "game-project-game-entry-schema-unsupported");
+    if (binding.required_runtime_abi != abi_version)
+        throw std::invalid_argument(
+            "game-project-game-entry-runtime-abi-unsupported");
+    if (binding.required_platform_state_contract !=
+        game_entry_platform_state_contract_version)
+        throw std::invalid_argument(
+            "game-project-game-entry-platform-contract-unsupported");
+    if (!valid_game_entry_content_identity(
+            binding.executable.content_identity))
+        throw std::invalid_argument(
+            "game-project-game-entry-content-identity-invalid");
+    if (!valid_game_entry_boot_file_name(
+            binding.executable.boot_file_name))
+        throw std::invalid_argument(
+            "game-project-game-entry-boot-file-name-invalid");
+    if (!valid_game_entry_sha256_identity(
+            binding.executable.boot_byte_identity))
+        throw std::invalid_argument(
+            "game-project-game-entry-boot-byte-identity-invalid");
+    if (!valid_game_entry_console_profile(binding.console_profile))
+        throw std::invalid_argument(
+            "game-project-game-entry-console-profile-invalid");
+    if (!valid_game_entry_sha256_identity(binding.descriptor_identity))
+        throw std::invalid_argument(
+            "game-project-game-entry-descriptor-identity-invalid");
+    if (std::string_view(binding.executable.content_identity) !=
+            definition.identity.content_identity ||
+        std::string_view(binding.executable.boot_file_name) !=
+            definition.identity.boot_file_name ||
+        std::string_view(binding.executable.boot_byte_identity) !=
+            definition.identity.boot_byte_identity)
+        throw std::invalid_argument(
+            "game-project-game-entry-executable-identity-mismatch");
+}
+
+void validate_runtime_providers(
+    const GameProjectDefinition& definition,
+    const GameProjectRuntimeProviders& providers) {
+    const auto& game_entry = providers.game_entry_handoff;
+    const bool provider_present =
+        game_entry.context != nullptr || game_entry.describe != nullptr ||
+        game_entry.read_private_slice != nullptr;
+    if (!definition.game_entry_handoff.has_value()) {
+        if (provider_present)
+            throw std::invalid_argument(
+                "game-project-game-entry-provider-without-binding");
+        return;
+    }
+    if (game_entry.describe == nullptr)
+        throw std::invalid_argument(
+            "game-project-game-entry-provider-unavailable");
+}
+
 template <typename Element, typename StartProjection, typename SizeProjection>
 const Element* find_containing(const std::span<const Element> elements,
                                const std::uint32_t address,
@@ -279,6 +360,9 @@ void validate_game_project_definition(
     if (definition.project_version.empty())
         throw std::invalid_argument("game-project-version-empty");
     validate_identity_binding(definition.identity);
+    if (definition.game_entry_handoff.has_value())
+        validate_game_entry_binding(
+            definition, *definition.game_entry_handoff);
 
     require_strictly_sorted(
         definition.function_boundaries,
@@ -522,8 +606,21 @@ void validate_game_project_definition(
             static_cast<std::uint64_t>(identity.address) + identity.size;
     }
 
+    if (definition.game_entry_handoff.has_value() &&
+        !definition.boot_config.has_value())
+        throw std::invalid_argument(
+            "game-project-game-entry-requires-direct-boot");
+
     if (definition.boot_config.has_value()) {
         const auto& config = *definition.boot_config;
+        switch (config.firmware_mode) {
+        case DreamcastRuntimeFirmwareMode::Direct:
+        case DreamcastRuntimeFirmwareMode::HleBiosAbi:
+            break;
+        default:
+            throw std::invalid_argument(
+                "game-project-firmware-mode-invalid");
+        }
         if (config.boot_path != DreamcastRuntimeBootPath::DirectBootExecutable)
             throw std::invalid_argument(
                 "game-project-boot-config-is-not-direct-boot");
@@ -626,6 +723,21 @@ std::string game_project_definition_identity(
                  << config.post_bios_cpu_state.dbr << ':'
                  << config.post_bios_cpu_state.pr << ';';
     }
+    if (definition.game_entry_handoff.has_value()) {
+        const auto& binding = *definition.game_entry_handoff;
+        material
+            << "game-entry-handoff:" << binding.schema_version << ':'
+            << binding.required_runtime_abi << ':'
+            << binding.required_platform_state_contract << ':'
+            << binding.executable.content_identity << ':'
+            << binding.executable.boot_file_name.size() << ':'
+            << binding.executable.boot_file_name << ':'
+            << binding.executable.boot_byte_identity << ':'
+            << static_cast<unsigned>(binding.console_profile) << ':'
+            << binding.descriptor_identity << ';';
+    } else {
+        material << "game-entry-handoff:none;";
+    }
     return "sha256:" + katana::io::sha256_bytes(material.str());
 }
 
@@ -657,14 +769,28 @@ DreamcastRuntimeBootConfig bind_game_project_boot_config(
     return config;
 }
 
-GameProjectBindings::GameProjectBindings(GameProjectDefinition definition)
-    : definition_(std::move(definition)) {
+GameProjectBindings::GameProjectBindings(
+    GameProjectDefinition definition,
+    GameProjectRuntimeProviders runtime_providers)
+    : definition_(std::move(definition)),
+      runtime_providers_(std::move(runtime_providers)) {
     validate_game_project_definition(definition_);
+    validate_runtime_providers(definition_, runtime_providers_);
 }
 
 const GameProjectDefinition&
 GameProjectBindings::definition() const noexcept {
     return definition_;
+}
+
+const GameProjectRuntimeProviders&
+GameProjectBindings::runtime_providers() const noexcept {
+    return runtime_providers_;
+}
+
+const GameEntryHandoffProvider&
+GameProjectBindings::game_entry_handoff_provider() const noexcept {
+    return runtime_providers_.game_entry_handoff;
 }
 
 const GameProjectFunctionBoundary*
@@ -761,8 +887,10 @@ GameProjectBindings::invoke_mid_function_hook(
 }
 
 GameProjectRegistration::GameProjectRegistration(
-    GameProjectDefinition definition)
-    : bindings_(std::move(definition)) {
+    GameProjectDefinition definition,
+    GameProjectRuntimeProviders runtime_providers)
+    : bindings_(
+          std::move(definition), std::move(runtime_providers)) {
     const GameProjectBindings* expected = nullptr;
     if (!active_bindings.compare_exchange_strong(
             expected,

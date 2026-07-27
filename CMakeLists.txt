@@ -344,6 +344,8 @@ set(KATANA_RUNTIME_CORE_SOURCES
     src/runtime/disc_install.cpp
     src/runtime/dreamcast_boot.cpp
     src/runtime/dreamcast_memory.cpp
+    src/runtime/game_entry_handoff.cpp
+    src/runtime/game_entry_handoff_artifact.cpp
     src/runtime/game_project.cpp
     src/runtime/executable_modules.cpp
     src/runtime/native_aot_template.cpp

@@ -4,6 +4,25 @@
 
 ### Geaendert
 
+- `GameEntryHandoff` Schema 2 und Artefaktformat 2 trennen den
+  DirectBoot-Spieleinstieg vom allgemeinen Post-BIOS-Zustand. Das externe
+  Spielprojekt bindet einen privaten titel- und Executable-identitaetsgebundenen
+  Provider; Payloads werden vor dem ersten Gastblock ueber Offset, Groesse und
+  SHA-256 validiert. Der aktuell integrierte
+  `CpuMemoryDiagnostic`-Capture/-Apply uebernimmt bewusst nur CPU und RAM,
+  meldet Geraete und Scheduler als ausstehend und ist im Produktgate verboten.
+  `CompletePlatform` erzwingt unabdingbar alle 21 kanonischen
+  Dreamcast-Geraeteklassen samt Maple/VMU, DMA-, IRQ- und Timerquellen; eine
+  verkuerzte Caller-Liste kann nicht mehr als vollstaendig gelten.
+  Der reale Diagnose-A/B-Lauf erreicht ab dem identischen Entry
+  600.000.001 Gastzyklen und `GameCodeProgressed`, aber keinen Frame:
+  Scheduler- und Geraetezustand weichen ab. VMU-Inhalt und Maple-Anbindung
+  sind nachweislich vorhanden und identisch, sodass der vollstaendige
+  Plattform-Handoff der konkrete verbleibende DirectBoot-Blocker ist.
+  Damit wird noch kein erfolgreicher DirectBoot behauptet. Portprojektvertrag
+  51 invalidiert inkompatible Whole-Export-Cachetreffer. Ersetzte,
+  unbrauchbare private Portexporte werden nach einem bestaetigten
+  Nachfolgeexport gezielt entfernt.
 - v0.49 richtet den Produktpfad als statischen SH-4-Recompiler mit getrenntem
   Werkzeugkern, installierbarer interpreterfreier `runtime_core` und externer
   hashgebundener Spielprojektschnittstelle aus. Validierte
