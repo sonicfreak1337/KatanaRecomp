@@ -16,6 +16,7 @@
 
 namespace katana::runtime {
 
+struct CrashCapsule;
 class LinearMemoryDevice;
 class ExecutableDiscLoadTransactionCoordinator;
 
@@ -578,6 +579,8 @@ class Memory {
     [[nodiscard]] bool mmio_access_tracking_enabled() const noexcept;
     [[nodiscard]] std::optional<MemoryAccessEvent> last_mmio_access() const;
     void clear_last_mmio_access() const noexcept;
+    void attach_crash_capsule(CrashCapsule& capsule) noexcept;
+    void detach_crash_capsule(const CrashCapsule& capsule) noexcept;
     // Compatibility token for generated runtimes. Interrupt delivery is driven by
     // PlatformInterruptRouter::source_epoch(); ordinary MMIO traffic must not advance this
     // value and force a complete interrupt-router walk.
@@ -826,6 +829,7 @@ class Memory {
         GuestWriteObserverContract::General;
     GuestMemoryAccessSink guest_memory_access_sink_;
     MmioInterruptStateSink mmio_interrupt_state_sink_;
+    CrashCapsule* crash_capsule_ = nullptr;
     bool mmio_access_tracking_enabled_ = false;
     mutable std::optional<LastMmioAccessRecord> last_mmio_access_;
     MemoryWatchpointId next_watchpoint_id_ = 1u;

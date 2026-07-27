@@ -18,6 +18,9 @@ Versionen/Identitaeten ueberspringt der Whole-Export-Cache auch Analyse, IR und
 Codeemission, baut und publiziert das reale Spieltarget aber erneut. `.gdi`
 bleibt Nutzerinstallation und finaler NativeDiscBoot. DirectBoot verwendet
 einen clean-room definierten Post-BIOS-Zustand und dieselbe Dreamcast-Runtime.
+Der CLI-Portbuild erkennt ein gemeinsam installiertes `runtime-sdk` als
+CMake-Paket; der volle Quellbaum wird nur als `EXCLUDE_FROM_ALL`-Fallback
+eingebunden.
 
 Die v0.49-Architektur ist gezielt gebaut und mit bestehenden kleinen
 Vertragstests geprueft. Die private Sonic-Bootursachenanalyse, ein neuer
@@ -26,10 +29,16 @@ sichtbarer SEGA-Nachweis, die finale 600-Millionen-Zyklen-Messung und das
 installiert; ein reales Compiler-A/B ist deshalb nicht behauptet.
 
 Die externe Spielprojektschnittstelle ist ein C++-Export-/Runtimevertrag, noch
-kein CLI-Descriptor oder Projektgenerator. Eine eigene feste POD-Crash-Capsule
-und ein automatisch begrenztes Triggered-Deep-Trace-Fenster bleiben ebenfalls
-offene Konsolidierung; der normale Produktlauf deaktiviert bereits die
-detaillierte RuntimeOnly-Map und formatiert Diagnosedetails terminal.
+kein CLI-Descriptor oder Projektgenerator. Eine feste 16-Ereignis-POD-Crash-
+Capsule ist an Blockdispatch, MMIO, Scheduler und den ersten terminalen Fehler
+gebunden. Der normale Produktlauf bindet weder die detaillierte RuntimeOnly-Map
+noch den Map-basierten Dispatchrecorder an den Erfolgs-Hotpath und waehlt
+Fastpathdeskriptoren ohne lineare Runtime-Scans. Ein automatisch begrenztes
+Triggered-Deep-Trace-Fenster bleibt offene Konsolidierung.
+
+Aktuelle Produktvertraege: Runtime-ABI 60, Block-ABI 5, Analyzer-ABI 2,
+PlatformServices-ABI 12, Backend-Interface-ABI 8, Portprojektvertrag 49,
+Native-AOT-Emissionsprofil 8 und Crash-Capsule-Vertrag 1.
 
 Aktuelle Dokumente:
 [`ARCHITECTURE_V049.md`](ARCHITECTURE_V049.md),

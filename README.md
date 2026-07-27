@@ -143,9 +143,11 @@ cmake --build --preset msvc-relwithdebinfo --target katana-recomp
 ```
 
 Das installierbare CMake-Ziel lautet `KatanaRecomp::runtime_core`. Ein direkt
-konfiguriertes Portprojekt kann es per `find_package` verwenden. Der aktuelle
-CLI-Portbuild uebergibt dagegen ein kompatibles Runtime-SDK; ein Quellbaum-SDK
-wird `EXCLUDE_FROM_ALL` eingebunden. Generierte AOT-TUs verwenden die schmale
+konfiguriertes Portprojekt kann es per `find_package` verwenden. Die
+installierte CLI erkennt das Runtimepaket im gemeinsamen Installationspraefix
+automatisch; `KATANA_RUNTIME_PREFIX` waehlt ein anderes installiertes Paket.
+`KATANA_RUNTIME_ROOT` bleibt der explizite Quellbaum-Fallback und wird
+`EXCLUDE_FROM_ALL` eingebunden. Generierte AOT-TUs verwenden die schmale
 `katana/runtime/aot_runtime_abi.hpp` sowie eine PCH.
 
 Profile und Toolchainauswahl:
@@ -178,14 +180,15 @@ Bootursachenanalyse ist vertagt.
 
 - **Produkt-Performance:** feste Aggregatzaehler; RuntimeOnly-Sitedetails und
   deren Map bleiben im normalen Produktlauf deaktiviert.
-- **Fehlerdiagnose:** der bestehende begrenzte Dispatchrecorder wird beim
-  Runtimeaufbau vorreserviert und erst bei Abweichungen beschrieben.
+- **Crash Capsule:** ein fester allokationsfreier POD-Ring haelt letzten Block,
+  MMIO, Schedulerereignis und ersten Fehler; Strings entstehen erst terminal.
+- **Fehlerdiagnose:** der bestehende begrenzte Dispatchrecorder wird nur bei
+  expliziter tiefer Diagnose an den Dispatcher gebunden.
 - **Tiefe Diagnose:** Wait-Loop-Rohwerttrace und vollstaendige
   Dispatchereignisse sind explizite lokale Opt-ins.
 
-Eine eigenstaendige feste POD-Crash-Capsule und ein automatisch durch
-Gastzyklus/PC/Fehler begrenztes Triggerfenster sind in v0.49 noch kein
-abgeschlossener oeffentlicher Runtimevertrag.
+Ein automatisch durch Gastzyklus/PC/Fehler begrenztes Triggerfenster ist in
+v0.49 noch kein abgeschlossener oeffentlicher Runtimevertrag.
 
 Private Pfade, Identitaeten, Gastbytes und Titeladressen gehoeren nicht in
 oeffentliche Berichte.

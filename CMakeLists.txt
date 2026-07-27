@@ -186,8 +186,8 @@ set(
 set(
     KATANA_COMPILER_CACHE
     ""
-    CACHE FILEPATH
-    "Optional compiler-cache executable (for example ccache or sccache)"
+    CACHE STRING
+    "Optional compiler-cache command or absolute executable path (for example ccache or sccache)"
 )
 if(KATANA_COMPILER_CACHE)
     if(IS_ABSOLUTE "${KATANA_COMPILER_CACHE}")
@@ -196,6 +196,7 @@ if(KATANA_COMPILER_CACHE)
         find_program(
             KATANA_COMPILER_CACHE_EXECUTABLE
             NAMES "${KATANA_COMPILER_CACHE}"
+            NO_CACHE
             REQUIRED
         )
     endif()
@@ -4687,6 +4688,11 @@ install(
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
     COMPONENT runtime-sdk
     FILES_MATCHING PATTERN "*.hpp"
+)
+install(
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/io/input_provenance.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana/io
+    COMPONENT runtime-sdk
 )
 install(
     FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp

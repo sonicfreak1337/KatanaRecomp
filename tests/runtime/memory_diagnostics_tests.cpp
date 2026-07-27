@@ -1,3 +1,4 @@
+#include "katana/runtime/crash_capsule.hpp"
 #include "katana/runtime/memory.hpp"
 
 #include <cstdint>
@@ -47,6 +48,7 @@ template <typename Exception, typename Function> bool throws(Function&& function
 } // namespace
 
 int main() {
+    using katana::runtime::CrashCapsule;
     using katana::runtime::LinearMemoryDevice;
     using katana::runtime::Memory;
     using katana::runtime::MemoryAccessErrorReason;
@@ -217,6 +219,9 @@ int main() {
             "Watchpoints oder Trace-Handler lassen sich nicht vollstaendig leeren.");
 
     Memory mmio_diagnostics(0u);
+    CrashCapsule crash_capsule;
+    crash_capsule.note_block(0x8C010000u, 0x8C010000u, 123u);
+    mmio_diagnostics.attach_crash_capsule(crash_capsule);
     std::uint32_t mmio_value = 0u;
     std::vector<MemoryAccessEvent> mmio_trace_events;
     auto mmio = std::make_shared<katana::runtime::MmioMemoryDevice>(
@@ -244,7 +249,14 @@ int main() {
                 last_mmio_write->address == 0x00007000u &&
                 last_mmio_write->width == MemoryAccessWidth::Word &&
                 last_mmio_write->value == 0xA5A55A5Au &&
-                last_mmio_write->region_name == "diagnostic-mmio",
+                last_mmio_write->region_name == "diagnostic-mmio" &&
+                crash_capsule.last_pc == 0x8C010000u &&
+                crash_capsule.last_mmio_address == 0x00007000u &&
+                crash_capsule.last_mmio_value == 0xA5A55A5Au &&
+                crash_capsule.last_mmio_width ==
+                    static_cast<std::uint8_t>(MemoryAccessWidth::Word) &&
+                crash_capsule.last_mmio_operation ==
+                    static_cast<std::uint8_t>(MemoryAccessOperation::Write),
             "Leichtgewichtige MMIO-Diagnostik verliert den letzten erfolgreichen Zugriff.");
     static_cast<void>(mmio_diagnostics.read_u32(0x00007000u));
     const auto last_mmio_read = mmio_diagnostics.last_mmio_access();
@@ -261,6 +273,14 @@ int main() {
                 !mmio_diagnostics.last_mmio_access().has_value() &&
                 !mmio_diagnostics.has_mmio_trace_handler(),
             "Deaktivierte MMIO-Diagnostik behaelt alten Zustand oder Trace-Handler.");
+    mmio_diagnostics.write_u32(0x00007000u, 0x55AA00FFu);
+    require(crash_capsule.last_mmio_value == 0x55AA00FFu &&
+                !mmio_diagnostics.last_mmio_access().has_value(),
+            "Crash Capsule ist faelschlich an die detaillierte MMIO-Diagnostik gekoppelt.");
+    mmio_diagnostics.detach_crash_capsule(crash_capsule);
+    mmio_diagnostics.write_u32(0x00007000u, 0x01020304u);
+    require(crash_capsule.last_mmio_value == 0x55AA00FFu,
+            "Eine geloeste Crash Capsule wird weiterhin beschrieben.");
 
     require(throws<std::invalid_argument>([&observed_bus] {
                 static_cast<void>(observed_bus.add_watchpoint(0x00005000u,

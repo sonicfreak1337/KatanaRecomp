@@ -1,3 +1,4 @@
+#include "katana/runtime/crash_capsule.hpp"
 #include "katana/runtime/scheduler.hpp"
 #include "katana/runtime/system_replay.hpp"
 
@@ -29,6 +30,7 @@ template <typename Exception, typename Function> bool throws(Function&& function
 } // namespace
 
 int main() {
+    using katana::runtime::CrashCapsule;
     using katana::runtime::EventScheduler;
     using katana::runtime::SchedulerAdvanceStatus;
     using katana::runtime::SchedulerEventKind;
@@ -88,6 +90,33 @@ int main() {
         require(throws<std::logic_error>(
                     [&] { reset_scheduler.attach_replay_log(after_reset); }),
                 "Replay-Anbindung nach Schedulerreset muss abgelehnt werden.");
+    }
+
+    {
+        EventScheduler capsule_scheduler;
+        CrashCapsule capsule;
+        capsule.note_block(0x8C020000u, 0x8C020000u, 0u);
+        capsule.note_first_error(7u, 0x8C020000u, 0x8C020100u);
+        capsule.note_first_error(9u, 0x8C030000u, 0x8C030100u);
+        capsule_scheduler.attach_crash_capsule(capsule);
+        const auto event_id = capsule_scheduler.schedule_at(
+            5u, [](const auto, const auto) {}, SchedulerEventKind::MediaVideo);
+        static_cast<void>(capsule_scheduler.advance_to(5u, 1u));
+        require(capsule.last_scheduler_cycle == 5u &&
+                    capsule.last_scheduler_event_id == event_id &&
+                    capsule.last_scheduler_event_kind ==
+                        static_cast<std::uint32_t>(SchedulerEventKind::MediaVideo) &&
+                    capsule.first_error_code == 7u &&
+                    capsule.first_error_pc == 0x8C020000u &&
+                    capsule.first_error_target == 0x8C020100u &&
+                    capsule.event_count == 3u,
+                "Feste Crash Capsule verliert Schedulerereignis oder ersten Fehler.");
+        capsule_scheduler.detach_crash_capsule(capsule);
+        static_cast<void>(capsule_scheduler.schedule_at(
+            6u, [](const auto, const auto) {}, SchedulerEventKind::MediaAudio));
+        static_cast<void>(capsule_scheduler.advance_to(6u, 1u));
+        require(capsule.last_scheduler_cycle == 5u,
+                "Eine geloeste Scheduler-Crash-Capsule wird weiterhin beschrieben.");
     }
 
     EventScheduler scheduler;

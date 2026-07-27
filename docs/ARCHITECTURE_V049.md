@@ -120,14 +120,18 @@ Pending-Maske aktualisiert.
 Produkt-Performance verwendet feste Aggregatzaehler. Detaillierte
 RuntimeOnly-Sitemetriken und ihre Map werden nur im Diagnoseprofil, bei
 expliziten Diagnoseschaltern oder in der Runtimeprobe aktiviert. Der
-vorreservierte Dispatchrecorder wird nur bei Abweichungen beschrieben;
-Formatierung erfolgt terminal. Wait-Loop-Rohwerte und vollstaendige
+vorreservierte Dispatchrecorder ist im normalen Produktmodus nicht an den
+Dispatcher gebunden; Formatierung erfolgt terminal. Fastpathdeskriptoren
+werden anhand stabiler Gastadressen direkt ausgewaehlt und nicht bei jedem
+zentralen Dispatch linear gescannt. Wait-Loop-Rohwerte und vollstaendige
 Dispatchereignisse sind ausdrueckliche lokale Opt-ins.
 
-Eine eigene feste POD-Crash-Capsule und ein automatisch durch
-Gastzyklus/PC/Fehler aktiviertes und begrenztes Deep-Trace-Fenster bleiben
-offene Diagnosekonsolidierung. v0.49 behauptet diese beiden Zielvertraege
-nicht als umgesetzt.
+Die immer aktive Crash Capsule ist ein fester POD-Zustand mit einem
+16-Ereignis-Ring fuer letzten Block, MMIO-Zugriff, Schedulerereignis und ersten
+Fehler. Ihr Aufzeichnungspfad verwendet keine Strings, Maps, Heapallokationen
+oder Locks; erst ein terminaler Fehler formatiert eine Zusammenfassung. Ein
+automatisch durch Gastzyklus/PC/Fehler aktiviertes und begrenztes
+Deep-Trace-Fenster bleibt offene Diagnosekonsolidierung.
 
 ## Sicherheits- und Eigentumsgrenzen
 

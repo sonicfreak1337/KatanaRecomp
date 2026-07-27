@@ -1037,6 +1037,22 @@ int main(const int argc, const char* const* argv) {
     return 0;
 }
 
+std::optional<std::string> configured_environment_value(const char* name) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t value_size = 0u;
+    if (_dupenv_s(&value, &value_size, name) != 0 || value == nullptr) return std::nullopt;
+    std::string result(value);
+    std::free(value);
+    if (result.empty()) return std::nullopt;
+    return result;
+#else
+    const auto* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') return std::nullopt;
+    return std::string(value);
+#endif
+}
+
 std::filesystem::path discover_source_root_for_protection() {
     std::vector<std::filesystem::path> starts{std::filesystem::current_path()};
 #ifdef _WIN32
@@ -1066,28 +1082,45 @@ std::filesystem::path discover_source_root_for_protection() {
     return {};
 }
 
-std::filesystem::path discover_runtime_root_for_build(const std::filesystem::path& source_root) {
-#ifdef _WIN32
-    char* configured_value = nullptr;
-    std::size_t configured_size = 0u;
-    const auto configured_result =
-        _dupenv_s(&configured_value, &configured_size, "KATANA_RUNTIME_ROOT");
-    const auto configured = configured_result == 0 && configured_value != nullptr
-                                ? std::filesystem::path(configured_value)
-                                : std::filesystem::path{};
-    std::free(configured_value);
-    if (!configured.empty()) {
-#else
-    if (const auto* configured = std::getenv("KATANA_RUNTIME_ROOT");
-        configured != nullptr && *configured != '\0') {
-#endif
-        const auto root = std::filesystem::absolute(configured).lexically_normal();
-        if (std::filesystem::exists(root / "CMakeLists.txt") &&
-            std::filesystem::exists(root / "include" / "katana" / "runtime"))
-            return root;
+struct RuntimeBuildBinding {
+    std::filesystem::path package_prefix;
+    std::filesystem::path source_root;
+};
+
+bool is_runtime_source_root(const std::filesystem::path& root) {
+    return std::filesystem::exists(root / "CMakeLists.txt") &&
+           std::filesystem::exists(
+               root / "include" / "katana" / "runtime" / "aot_runtime_abi.hpp");
+}
+
+bool is_runtime_package_prefix(const std::filesystem::path& prefix) {
+    if (!std::filesystem::exists(
+            prefix / "include" / "katana" / "runtime" / "aot_runtime_abi.hpp"))
+        return false;
+    return std::filesystem::exists(
+               prefix / "lib" / "cmake" / "KatanaRecomp" /
+               "KatanaRecompConfig.cmake") ||
+           std::filesystem::exists(
+               prefix / "lib64" / "cmake" / "KatanaRecomp" /
+               "KatanaRecompConfig.cmake") ||
+           std::filesystem::exists(
+               prefix / "share" / "KatanaRecomp" / "KatanaRecompConfig.cmake");
+}
+
+RuntimeBuildBinding
+discover_runtime_binding_for_build(const std::filesystem::path& source_root) {
+    if (const auto configured = configured_environment_value("KATANA_RUNTIME_PREFIX")) {
+        const auto prefix =
+            std::filesystem::absolute(*configured).lexically_normal();
+        if (is_runtime_package_prefix(prefix)) return {prefix, {}};
+        throw std::invalid_argument(
+            "KATANA_RUNTIME_PREFIX bezeichnet kein installiertes KatanaRecomp-Runtime-Paket.");
+    }
+    if (const auto configured = configured_environment_value("KATANA_RUNTIME_ROOT")) {
+        const auto root = std::filesystem::absolute(*configured).lexically_normal();
+        if (is_runtime_source_root(root)) return {{}, root};
         throw std::invalid_argument("KATANA_RUNTIME_ROOT bezeichnet kein kompatibles Runtime-SDK.");
     }
-    if (!source_root.empty()) return source_root;
 
     std::filesystem::path executable;
 #ifdef _WIN32
@@ -1103,13 +1136,22 @@ std::filesystem::path discover_runtime_root_for_build(const std::filesystem::pat
     executable = std::filesystem::read_symlink("/proc/self/exe", link_error);
 #endif
     if (!executable.empty()) {
+        const auto installed_prefix =
+            executable.parent_path().parent_path().lexically_normal();
+        if (is_runtime_package_prefix(installed_prefix))
+            return {installed_prefix, {}};
+
         const auto packaged_sdk = executable.parent_path() / "runtime-sdk";
-        if (std::filesystem::exists(packaged_sdk / "CMakeLists.txt") &&
-            std::filesystem::exists(packaged_sdk / "include" / "katana" / "runtime"))
-            return packaged_sdk;
+        if (is_runtime_package_prefix(packaged_sdk))
+            return {packaged_sdk, {}};
+        if (is_runtime_source_root(packaged_sdk))
+            return {{}, packaged_sdk};
     }
+    if (!source_root.empty()) return {{}, source_root};
+
     throw std::runtime_error(
-        "Runtime-SDK fuer Portbuild fehlt; KATANA_RUNTIME_ROOT kann es explizit angeben.");
+        "Runtime-SDK fuer Portbuild fehlt; KATANA_RUNTIME_PREFIX oder "
+        "KATANA_RUNTIME_ROOT kann es explizit angeben.");
 }
 
 std::string normalized_host_command(const std::string& command) {
@@ -1121,22 +1163,6 @@ std::string normalized_host_command(const std::string& command) {
            command + '"';
 #else
     return command;
-#endif
-}
-
-std::optional<std::string> configured_environment_value(const char* name) {
-#ifdef _WIN32
-    char* value = nullptr;
-    std::size_t value_size = 0u;
-    if (_dupenv_s(&value, &value_size, name) != 0 || value == nullptr) return std::nullopt;
-    std::string result(value);
-    std::free(value);
-    if (result.empty()) return std::nullopt;
-    return result;
-#else
-    const auto* value = std::getenv(name);
-    if (value == nullptr || *value == '\0') return std::nullopt;
-    return std::string(value);
 #endif
 }
 
@@ -1532,7 +1558,7 @@ int export_port_project(const std::filesystem::path& source_path,
                         const std::string& console_profile = "japan-ntsc",
                         const bool boot_executable_artifact = false) {
     const auto source_root = discover_source_root_for_protection();
-    const auto runtime_root = discover_runtime_root_for_build(source_root);
+    const auto runtime_binding = discover_runtime_binding_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
     if (!source_root.empty()) {
         const auto relative_to_source = absolute_output.lexically_relative(source_root);
@@ -1699,7 +1725,13 @@ int export_port_project(const std::filesystem::path& source_path,
 #endif
         configure +=
             " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_PORT_BUILD_PROFILE=" +
-            build_profile + " -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+            build_profile;
+        if (!runtime_binding.package_prefix.empty())
+            configure += " -DKATANA_RUNTIME_ROOT= -DKATANA_RUNTIME_PREFIX=" +
+                         shell_quote(runtime_binding.package_prefix);
+        else
+            configure += " -DKATANA_RUNTIME_PREFIX= -DKATANA_RUNTIME_ROOT=" +
+                         shell_quote(runtime_binding.source_root);
         if (host_linker != "default")
             configure += " -DCMAKE_LINKER_TYPE=" +
                          std::string(host_linker == "msvc" ? "MSVC" : "LLD");

@@ -835,12 +835,13 @@ int main() {
             "auto katana_direct_ram = "
             "cpu.memory.direct_linear_memory_guard(false);") != std::string::npos &&
             guarded_linear_source.find(
-                "services->can_chain_executable_block(cpu.pc) && "
-                "cpu.memory.direct_linear_memory_guard_current("
-                "katana_direct_ram, false)) goto katana_block_8C030002;") !=
+                "services->can_chain_executable_block(cpu.pc)) "
+                "goto katana_block_8C030002;") != std::string::npos &&
+            guarded_linear_source.find(
+                "direct_linear_memory_guard_current(katana_direct_ram, false)") ==
                 std::string::npos,
-        "Der gebuendelte direkte RAM-Guard wird an einer nativen Blockgrenze nicht "
-        "neu validiert.");
+        "Der funktionsgebundene direkte RAM-Guard wird an einer reinen nativen "
+        "Labelgrenze unerwartet erneut validiert.");
 
     constexpr std::array<std::uint8_t, 6> read_modify_write_bytes = {
         0x0Fu,

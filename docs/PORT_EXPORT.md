@@ -41,6 +41,8 @@ KATANA_PORT_LINKER=default|msvc|lld
 KATANA_HOST_BUILD_GENERATOR=Ninja
 KATANA_HOST_BUILD_JOBS=<N>
 KATANA_PORT_CODEGEN_JOBS=<N>
+KATANA_RUNTIME_PREFIX=<installiertes Runtime-SDK, optional>
+KATANA_RUNTIME_ROOT=<Quellbaum-Fallback, optional>
 ```
 
 Weitere Details stehen in

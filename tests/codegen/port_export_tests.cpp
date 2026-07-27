@@ -1840,8 +1840,14 @@ int run_test(const int argc, char* argv[]) {
             "memory_fill_loop_batch_descriptors") != std::string::npos &&
             memory_fill_dispatch.find(memory_fill_descriptor) != std::string::npos &&
             memory_fill_dispatch.find(
-                "descriptor.guard_address == address ||\n"
-                "            descriptor.body_address == address") != std::string::npos &&
+                "case 0x8C01000Au: return &memory_fill_loop_batch_descriptors[0u]") !=
+                std::string::npos &&
+            memory_fill_dispatch.find(
+                "case 0x8C01000Eu: return &memory_fill_loop_batch_descriptors[0u]") !=
+                std::string::npos &&
+            memory_fill_dispatch.find(
+                "for (const auto& descriptor : memory_fill_loop_batch_descriptors)") ==
+                std::string::npos &&
             memory_fill_header.find("struct MemoryFillLoopBatchDescriptor") !=
                 std::string::npos &&
             memory_fill_header.find("bool try_product_memory_fill_loop_batch(") !=
@@ -3109,6 +3115,42 @@ int run_test(const int argc, char* argv[]) {
                 occurrences(runtime_dispatch_shards, "&dispatch_owner_8C010000") == 3u,
             "Runtime-Dispatch ist nicht deterministisch geshardet, dupliziert Wrapper pro Block "
             "oder koppelt neue Exceptionkanten an einen persistenten Trapzustand.");
+    require(
+        generated_main.find("#include \"katana/runtime/crash_capsule.hpp\"") !=
+                std::string::npos &&
+            generated_main.find("cpu_.memory.attach_crash_capsule(crash_capsule_)") !=
+                std::string::npos &&
+            generated_main.find(
+                "state_.scheduler->attach_crash_capsule(crash_capsule_)") !=
+                std::string::npos &&
+            runtime_dispatch.find("active_crash_capsule->note_block(") !=
+                std::string::npos &&
+            runtime_dispatch.find("active_crash_capsule->note_first_error(") !=
+                std::string::npos &&
+            runtime_dispatch.find("KATANA_CRASH_CAPSULE version=") !=
+                std::string::npos &&
+            generated_before.at("include/katana_port.hpp")
+                    .find("katana::runtime::CrashCapsule& crash_capsule") !=
+                std::string::npos,
+        "Der Produktport bindet die feste Crash Capsule nicht an Blockdispatch, MMIO, "
+        "Scheduler und terminale Fehlerausgabe.");
+    require(
+        runtime_dispatch.find(
+            "active_diagnostics = detailed_dispatch_diagnostics_enabled()") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "dispatch_metrics.set_site_details_enabled(\n"
+                "        detailed_dispatch_diagnostics_enabled())") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "for (const auto& descriptor :\n"
+                "                 composite_callback_batch_descriptors)") ==
+                std::string::npos &&
+            runtime_dispatch.find(
+                "composite_callback_batch_descriptors_for(dispatch_callsite)") !=
+                std::string::npos,
+        "Der Produktdispatch bindet Detaildiagnostik oder Fastpathdeskriptoren "
+        "weiterhin pauschal an den Erfolgs-Hotpath.");
     const auto runtime_probe_function =
         generated_main.find("int run_deterministic_runtime_probe(");
     const auto runtime_probe_function_end =
@@ -3439,7 +3481,8 @@ int run_test(const int argc, char* argv[]) {
             runtime_dispatch.find(
                 "ServiceScope scope(\n"
                 "        services, table, context, diagnostics, dispatch_metrics,\n"
-                "        observations, materializer, registered_game_project)") !=
+                "        crash_capsule, observations, materializer, "
+                "registered_game_project)") !=
                 std::string::npos,
         "Generierter Produktpfad verdrahtet Dispatch, Fallback, Guest-Exception, "
         "Checkpoint oder redigiertes Fehlerpaket nicht ueber eine zentrale Observation-Session.");
@@ -3625,6 +3668,16 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             std::filesystem::exists(output / "CMakeLists.txt") &&
             read_text(output / "CMakeLists.txt").find("katana_core") == std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("set(KATANA_RUNTIME_PREFIX \"\" CACHE PATH") != std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("find_package(KatanaRecomp CONFIG REQUIRED PATHS "
+                          "\"${KATANA_RUNTIME_PREFIX}\" NO_DEFAULT_PATH)") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" "
+                          "\"${CMAKE_BINARY_DIR}/katana-runtime\" EXCLUDE_FROM_ALL)") !=
+                std::string::npos &&
             std::filesystem::exists(output / "src" / "main.cpp") &&
             read_text(output / "src" / "main.cpp")
                     .find("DreamcastRuntimeFirmwareMode::HleBiosAbi") != std::string::npos &&
@@ -3671,9 +3724,12 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("next_lifecycle_poll_") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("KATANA_PORT_BLOCK_LIMIT\") == nullptr") != std::string::npos &&
+                    .find("const auto* limit = "
+                          "std::getenv(\"KATANA_PORT_BLOCK_LIMIT\")") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("KATANA_PORT_BLOCK_LIMIT\") == nullptr &&") == std::string::npos &&
+                    .find("return limit == nullptr || *limit == '\\0'") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("std::getenv(\"KATANA_PORT_PROGRESS_INTERVAL\") == nullptr") ==
                 std::string::npos &&

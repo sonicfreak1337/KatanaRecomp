@@ -43,6 +43,12 @@ katana-recomp port-executable `
   --console-profile europe-pal
 ```
 
+Eine zusammen mit `runtime-sdk` installierte CLI findet
+`KatanaRecomp::runtime_core` im gemeinsamen Installationspraefix automatisch.
+Fuer ein anderes installiertes SDK kann `KATANA_RUNTIME_PREFIX` gesetzt
+werden; `KATANA_RUNTIME_ROOT` waehlt stattdessen bewusst den lokalen
+Quellbaum-Fallback.
+
 Der Export liest und verifiziert die Bootbytes, kopiert sie aber nicht in das
 Portprojekt. Das verteilbare Projekt enthaelt nur native AOT-Quellen,
 Metadaten, den Installationsvertrag und die allgemeine Runtimebindung.

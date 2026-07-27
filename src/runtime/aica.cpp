@@ -472,6 +472,13 @@ std::optional<AicaVoiceFirstError> AicaRegisterFile::first_voice_error() const n
     return first_voice_error_;
 }
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+// The public snapshot is intentionally a complete 34 KiB value object. Keeping
+// it on the caller-provided return storage preserves the noexcept contract and
+// avoids diagnostic-only heap allocation.
+#pragma warning(disable : 6262)
+#endif
 AicaRegisterSnapshot AicaRegisterFile::snapshot() const noexcept {
     AicaRegisterSnapshot result;
     result.registers = registers_;
@@ -490,6 +497,9 @@ AicaRegisterSnapshot AicaRegisterFile::snapshot() const noexcept {
     result.first_voice_error = first_voice_error_;
     return result;
 }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 std::uint64_t AicaRegisterFile::write_count() const noexcept {
     return writes_;

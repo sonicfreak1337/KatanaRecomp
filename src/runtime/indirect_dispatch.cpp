@@ -188,7 +188,13 @@ IndirectDispatchError::IndirectDispatchError(const IndirectDispatchKind kind,
                  std::string(dispatch_diagnostic_error_name(error)) +
                  "): " + describe(request, target);
       }()),
-      metrics_json_(std::move(metrics_json)) {
+      metrics_json_(std::move(metrics_json)),
+      kind_(kind),
+      callsite_(callsite),
+      target_(target),
+      source_(source),
+      error_(error),
+      dispatch_class_(dispatch_class) {
     if (metrics_json_.empty()) {
         IndirectDispatchMetrics metrics;
         metrics.record_miss(dispatch_class, error, callsite, target);
@@ -198,6 +204,30 @@ IndirectDispatchError::IndirectDispatchError(const IndirectDispatchKind kind,
 
 const std::string& IndirectDispatchError::metrics_json() const noexcept {
     return metrics_json_;
+}
+
+IndirectDispatchKind IndirectDispatchError::kind() const noexcept {
+    return kind_;
+}
+
+std::uint32_t IndirectDispatchError::callsite() const noexcept {
+    return callsite_;
+}
+
+std::uint32_t IndirectDispatchError::target() const noexcept {
+    return target_;
+}
+
+BlockAddress IndirectDispatchError::source() const noexcept {
+    return source_;
+}
+
+DispatchDiagnosticError IndirectDispatchError::error() const noexcept {
+    return error_;
+}
+
+RuntimeDispatchClass IndirectDispatchError::dispatch_class() const noexcept {
+    return dispatch_class_;
 }
 
 namespace {

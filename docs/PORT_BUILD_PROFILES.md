@@ -45,21 +45,33 @@ Windows-Toolchainvariablen ab.
 ## Runtimepaket
 
 Ein direkt konfiguriertes generiertes Projekt kann das installierte
-CMake-Paket `KatanaRecomp::runtime_core` per `find_package` verwenden. Der
-aktuelle CLI-Workflow uebergibt immer ein kompatibles Runtime-SDK, das aus
-`KATANA_RUNTIME_ROOT`, dem erkannten Quellbaum oder einem neben der
-installierten CLI liegenden `runtime-sdk` stammt. Ein Quellbaum-SDK wird mit
+CMake-Paket `KatanaRecomp::runtime_core` per `find_package` verwenden. Eine
+installierte CLI erkennt dieses Paket im gemeinsamen Installationspraefix
+automatisch. `KATANA_RUNTIME_PREFIX=<Praefix>` waehlt explizit ein anderes
+installiertes Paket; der Pfad muss dessen `include/katana/runtime` und
+eine `KatanaRecompConfig.cmake` unter `lib/cmake/KatanaRecomp`,
+`lib64/cmake/KatanaRecomp` oder `share/KatanaRecomp` enthalten.
+
+`KATANA_RUNTIME_ROOT=<Quellbaum>` ist der explizite Fallback fuer die
+Runtimeentwicklung. Ohne Paket und ohne explizite Variable verwendet eine aus
+dem Repository gestartete CLI den erkannten Quellbaum. Dieser wird mit
 `add_subdirectory(... EXCLUDE_FROM_ALL)` eingebunden und baut dadurch nicht
-den gesamten Analyzer als normalen Portbestandteil. Generierte AOT-TUs
-inkludieren die schmale `katana/runtime/aot_runtime_abi.hpp` und verwenden eine
-gemeinsame PCH.
+den gesamten Analyzer als normalen Portbestandteil. Ein neben der CLI
+liegendes `runtime-sdk` darf entweder dieselbe installierte Paketstruktur oder
+einen Quellbaum-SDK enthalten. Generierte AOT-TUs inkludieren die schmale
+`katana/runtime/aot_runtime_abi.hpp` und verwenden eine gemeinsame PCH.
+Der Produkt-Launcher erhaelt zusaetzlich den kleinen oeffentlichen
+`katana/io/input_provenance.hpp`-Vertrag aus demselben Runtimepaket; weitere
+Analyzerheader gehoeren nicht zum `runtime-sdk`.
 
 Eine reine, ABI-kompatible Runtimeaenderung im verwendeten Quellbaum-SDK
-erneuert Runtimeobjekte und den finalen Link; der verifizierte Whole-Export
-kann dabei bestehen bleiben. Der Whole-Export-Cache ist nicht am
-Quelltextinhalt von Analyzer oder IR adressiert: Er bindet Eingabeartefakt,
-Exportoptionen und die kanonischen Tool-/ABI-/Profilversionen. Deshalb muss
-jede ausgaberelevante inkompatible Aenderung die passende Version erhoehen.
+erneuert Runtimeobjekte und den finalen Link. Solange die gebundene
+Exporteridentitaet unveraendert bleibt, kann der verifizierte Whole-Export
+dabei bestehen bleiben; ein neuer commitgebundener Toolbuild invalidiert
+diesen aeusseren Cache bewusst. Der Whole-Export-Cache bindet
+Eingabeartefakt, Exportoptionen, Git-/Toolidentitaet und die kanonischen
+ABI-/Profilversionen. Deshalb muss jede ausgaberelevante inkompatible
+Aenderung die passende Version erhoehen.
 Partitions- und Metadatencaches besitzen zusaetzliche eigene Identitaeten.
 Auf langen Hostpfaden bleiben die logischen SHA-256-Identitaeten vollstaendig;
 nur das lokale physische Cachelayout verwendet kurze gehashte Komponenten, um

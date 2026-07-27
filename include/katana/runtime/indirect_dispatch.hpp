@@ -137,9 +137,21 @@ class IndirectDispatchError final : public std::runtime_error {
         RuntimeDispatchClass dispatch_class = RuntimeDispatchClass::GuardedFallback,
         std::string metrics_json = {});
     [[nodiscard]] const std::string& metrics_json() const noexcept;
+    [[nodiscard]] IndirectDispatchKind kind() const noexcept;
+    [[nodiscard]] std::uint32_t callsite() const noexcept;
+    [[nodiscard]] std::uint32_t target() const noexcept;
+    [[nodiscard]] BlockAddress source() const noexcept;
+    [[nodiscard]] DispatchDiagnosticError error() const noexcept;
+    [[nodiscard]] RuntimeDispatchClass dispatch_class() const noexcept;
 
   private:
     std::string metrics_json_;
+    IndirectDispatchKind kind_ = IndirectDispatchKind::TailJump;
+    std::uint32_t callsite_ = 0u;
+    std::uint32_t target_ = 0u;
+    BlockAddress source_;
+    DispatchDiagnosticError error_ = DispatchDiagnosticError::UnknownTarget;
+    RuntimeDispatchClass dispatch_class_ = RuntimeDispatchClass::GuardedFallback;
 };
 
 [[nodiscard]] const char* runtime_dispatch_class_name(RuntimeDispatchClass value) noexcept;

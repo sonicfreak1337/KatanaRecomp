@@ -16,6 +16,7 @@ namespace katana::runtime {
 inline constexpr std::uint32_t guest_cycle_contract_version = 2u;
 inline constexpr std::uint64_t dreamcast_guest_cycles_per_second = 200'000'000u;
 
+struct CrashCapsule;
 class SystemReplayLog;
 
 using SchedulerEventId = std::uint64_t;
@@ -117,6 +118,8 @@ class EventScheduler {
     [[nodiscard]] std::uint64_t reset_generation() const noexcept;
     [[nodiscard]] EventSchedulerSnapshot snapshot() const;
     [[nodiscard]] SchedulerLifetimeToken lifetime_token() const noexcept;
+    void attach_crash_capsule(CrashCapsule& capsule) noexcept;
+    void detach_crash_capsule(const CrashCapsule& capsule) noexcept;
     void attach_replay_log(SystemReplayLog& replay_log);
     void set_guest_cycle_budget(std::optional<std::uint64_t> maximum_cycle);
     [[nodiscard]] std::optional<std::uint64_t> guest_cycle_budget() const noexcept;
@@ -139,6 +142,7 @@ class EventScheduler {
     std::map<EventKey, ScheduledEvent> events_;
     std::unordered_map<SchedulerEventId, EventKey> event_keys_;
     std::map<SchedulerResetObserverId, SchedulerResetCallback> reset_observers_;
+    CrashCapsule* crash_capsule_ = nullptr;
     SystemReplayLog* replay_log_ = nullptr;
     std::shared_ptr<const void> lifetime_token_ = std::make_shared<std::uint8_t>();
 };

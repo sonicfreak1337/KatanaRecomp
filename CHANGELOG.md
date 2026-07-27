@@ -4,6 +4,19 @@
 
 ### Geaendert
 
+- v0.49 richtet den Produktpfad als statischen SH-4-Recompiler mit getrenntem
+  Werkzeugkern, installierbarer interpreterfreier `runtime_core` und externer
+  hashgebundener Spielprojektschnittstelle aus. Validierte
+  Ausfuehrungsdeskriptoren vermeiden die zweite Blockaufloesung; ein kompakter
+  Static-AOT-Tier, frueher P1-/P2-Inline-Cache, Function-Level-AOT, native
+  Calls, konservative Register-/RAM-Fastpaths sowie ereignisgetriebene
+  IRQ-/Schedulergrenzen reduzieren den zentralen Produktdispatch.
+  Executable-first-DirectBoot verwendet nach einmaliger privater
+  `.gdi`-Extraktion direkt das Boot-Executable-Artefakt; `.gdi` bleibt
+  Nutzerinstallation und finaler NativeDiscBoot. Eine feste POD-Crash-Capsule,
+  produktseitig abgekoppelte Detaildiagnostik, adressgebundene
+  Fastpathdeskriptoren, Bring-up-/Gateprofile und automatische Bindung des
+  installierten Runtimepakets vervollstaendigen die neue Produktgrenze.
 - Die projektweite Testrichtlinie verwendet ab sofort den normalen privaten
   Sonic-Adventure-PAL-Produktlauf als entscheidendes Fortschritts- und
   Freigabekriterium. Breite Suites, vorsorgliche Funktionsmatrizen und

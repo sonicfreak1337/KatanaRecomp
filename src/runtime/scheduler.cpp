@@ -1,5 +1,6 @@
 #include "katana/runtime/scheduler.hpp"
 
+#include "katana/runtime/crash_capsule.hpp"
 #include "katana/runtime/system_replay.hpp"
 
 #include <algorithm>
@@ -186,6 +187,10 @@ SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycl
         current_cycle_ = deadline;
         ++processed;
         ++processed_event_count_;
+        if (crash_capsule_ != nullptr) {
+            crash_capsule_->note_scheduler(
+                deadline, event_id, static_cast<std::uint32_t>(event.mapped().kind));
+        }
         if (replay_log_ != nullptr) {
             try {
                 SystemReplayEvent replay_event{0u,
@@ -274,6 +279,14 @@ EventSchedulerSnapshot EventScheduler::snapshot() const {
 
 SchedulerLifetimeToken EventScheduler::lifetime_token() const noexcept {
     return lifetime_token_;
+}
+
+void EventScheduler::attach_crash_capsule(CrashCapsule& capsule) noexcept {
+    crash_capsule_ = &capsule;
+}
+
+void EventScheduler::detach_crash_capsule(const CrashCapsule& capsule) noexcept {
+    if (crash_capsule_ == &capsule) crash_capsule_ = nullptr;
 }
 
 void EventScheduler::attach_replay_log(SystemReplayLog& replay_log) {

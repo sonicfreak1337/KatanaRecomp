@@ -2023,12 +2023,12 @@ void emit_block_transition(std::ostringstream& output,
         return;
     }
     if (guarded_local_block_chaining && local_target.has_value()) {
+        // A native label transition has no intervening host/runtime boundary which can
+        // invalidate the function-scoped RAM guard. Calls and multi-block completions retain
+        // their explicit revalidation/refresh below.
         emit_indent(output, indent);
         output << "if (services != nullptr && "
                   "services->can_chain_executable_block(cpu.pc)";
-        if (uses_proven_linear_ram)
-            output << " && cpu.memory.direct_linear_memory_guard_current("
-                      "katana_direct_ram, false)";
         output << ") ";
         if (native_internal_block_labels) {
             output << "goto " << cpp_block_label(*local_target) << ";\n";
@@ -2046,15 +2046,16 @@ void emit_conditional_block_transition(std::ostringstream& output,
                                        const bool guarded_local_block_chaining,
                                        const std::uint32_t branch_target,
                                        const std::uint32_t fallthrough_target,
-                                       const bool both_targets_local,
+                                       const bool branch_target_local,
+                                       const bool fallthrough_target_local,
                                        const bool native_internal_block_labels,
                                        const bool uses_proven_linear_ram) {
-    if (!native_internal_block_labels || !both_targets_local) {
+    if (!native_internal_block_labels) {
         emit_block_transition(output,
                               indent,
                               single_block,
                               guarded_local_block_chaining,
-                              both_targets_local ? std::optional{branch_target} : std::nullopt,
+                              std::nullopt,
                               false,
                               uses_proven_linear_ram);
         return;
@@ -2067,24 +2068,56 @@ void emit_conditional_block_transition(std::ostringstream& output,
             output << "katana_direct_ram = "
                       "cpu.memory.direct_linear_memory_guard(false);\n";
         }
-    } else if (guarded_local_block_chaining) {
         emit_indent(output, indent);
-        output << "if (services == nullptr || "
-                  "!services->can_chain_executable_block(cpu.pc)";
-        if (uses_proven_linear_ram)
-            output << " || !cpu.memory.direct_linear_memory_guard_current("
-                      "katana_direct_ram, false)";
-        output << ") return;\n";
-    } else {
+        output << "if (take_branch) {\n";
+        if (branch_target_local) {
+            emit_indent(output, indent + 1);
+            output << "goto " << cpp_block_label(branch_target) << ";\n";
+        } else {
+            emit_indent(output, indent + 1);
+            output << "continue;\n";
+        }
+        emit_indent(output, indent);
+        output << "}\n";
+        if (fallthrough_target_local) {
+            emit_indent(output, indent);
+            output << "goto " << cpp_block_label(fallthrough_target) << ";\n";
+        } else {
+            emit_indent(output, indent);
+            output << "continue;\n";
+        }
+        return;
+    }
+
+    if (!guarded_local_block_chaining ||
+        (!branch_target_local && !fallthrough_target_local)) {
         emit_indent(output, indent);
         output << "return;\n";
         return;
     }
 
     emit_indent(output, indent);
-    output << "if (take_branch) goto " << cpp_block_label(branch_target) << ";\n";
+    output << "if (take_branch) {\n";
+    if (branch_target_local) {
+        emit_indent(output, indent + 1);
+        output << "if (services != nullptr && "
+                  "services->can_chain_executable_block(cpu.pc))\n";
+        emit_indent(output, indent + 2);
+        output << "goto " << cpp_block_label(branch_target) << ";\n";
+    }
+    emit_indent(output, indent + 1);
+    output << "return;\n";
     emit_indent(output, indent);
-    output << "goto " << cpp_block_label(fallthrough_target) << ";\n";
+    output << "}\n";
+    if (fallthrough_target_local) {
+        emit_indent(output, indent);
+        output << "if (services != nullptr && "
+                  "services->can_chain_executable_block(cpu.pc))\n";
+        emit_indent(output, indent + 1);
+        output << "goto " << cpp_block_label(fallthrough_target) << ";\n";
+    }
+    emit_indent(output, indent);
+    output << "return;\n";
 }
 
 void emit_terminal(std::ostringstream& output,
@@ -2259,8 +2292,8 @@ void emit_terminal(std::ostringstream& output,
             guarded_local_block_chaining,
             *instruction.target_address,
             fallthrough_address(instruction),
-            current_blocks.contains(*instruction.target_address) &&
-                current_blocks.contains(fallthrough_address(instruction)),
+            current_blocks.contains(*instruction.target_address),
+            current_blocks.contains(fallthrough_address(instruction)),
             native_internal_block_labels,
             uses_proven_linear_ram);
         return;

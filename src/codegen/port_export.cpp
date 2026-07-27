@@ -1826,6 +1826,7 @@ std::vector<MmioWaitLoopBatchProof> mmio_wait_loop_batch_proofs(
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
            "#include \"katana/runtime/block_table.hpp\"\n"
+           "#include \"katana/runtime/crash_capsule.hpp\"\n"
            "#include \"katana/runtime/disc.hpp\"\n"
            "#include \"katana/runtime/disc_load_transaction.hpp\"\n"
            "#include \"katana/runtime/executable_modules.hpp\"\n"
@@ -2007,7 +2008,8 @@ std::string generated_header(const std::string& entry_namespace) {
            "                             katana::runtime::PlatformServices& services,\n"
            "                             katana::runtime::RuntimeBlockTable& table,\n"
            "                             katana::runtime::SystemReplayObservationSession& "
-           "observations);\n"
+           "observations,\n"
+           "                             katana::runtime::CrashCapsule& crash_capsule);\n"
            "}\n";
 }
 
@@ -2195,6 +2197,7 @@ std::string handwritten_main(
     }
     return "#include \"katana_port.hpp\"\n"
            "#include \"katana/runtime/block_guards.hpp\"\n"
+           "#include \"katana/runtime/crash_capsule.hpp\"\n"
            "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
            "#include \"katana/runtime/disc_install.hpp\"\n"
            "#include \"katana/runtime/exception.hpp\"\n"
@@ -2665,8 +2668,10 @@ std::string handwritten_main(
            "          replay_observations_(replay_log, state.scheduler.get()),\n"
            "          eager_host_poll_(eager_host_poll),\n"
            "          runtime_probe_mode_(runtime_probe_mode),\n"
-           "          local_block_chaining_enabled_(\n"
-           "              std::getenv(\"KATANA_PORT_BLOCK_LIMIT\") == nullptr) {\n"
+           "          local_block_chaining_enabled_([] {\n"
+           "              const auto* limit = std::getenv(\"KATANA_PORT_BLOCK_LIMIT\");\n"
+           "              return limit == nullptr || *limit == '\\0';\n"
+           "          }()) {\n"
            "        if (runtime_probe_mode_ && replay_log_ != nullptr) {\n"
            "            replay_log_->enable_coverage(\n"
            "                static_cast<katana::runtime::SystemReplayCoverageMask>(\n"
@@ -2740,6 +2745,16 @@ std::string handwritten_main(
            "            scalar != nullptr && std::string_view(scalar) == \"1\")\n"
            "            composite_callback_batching_enabled_ = false;\n"
            "#endif\n"
+           "        cpu_.memory.attach_crash_capsule(crash_capsule_);\n"
+           "        state_.scheduler->attach_crash_capsule(crash_capsule_);\n"
+           "    }\n"
+           "    ~PortPlatformServices() override {\n"
+           "        cpu_.memory.detach_crash_capsule(crash_capsule_);\n"
+           "        if (state_.scheduler)\n"
+           "            state_.scheduler->detach_crash_capsule(crash_capsule_);\n"
+           "    }\n"
+           "    katana::runtime::CrashCapsule& crash_capsule() noexcept {\n"
+           "        return crash_capsule_;\n"
            "    }\n"
            "    std::string_view name() const noexcept override { return \"dreamcast-port\"; }\n"
            "    std::uint32_t abi_version() const noexcept override {\n"
@@ -5377,6 +5392,7 @@ std::string handwritten_main(
            "    std::uint64_t active_block_code_generation_ = 0u;\n"
            "    FlagPollBatchCounters flag_poll_batch_counters_;\n"
            "    MmioWaitLoopBatchCounters mmio_wait_loop_batch_counters_;\n"
+           "    katana::runtime::CrashCapsule crash_capsule_;\n"
            "    bool guest_program_dispatched_ = false;\n"
            "    bool guest_program_progressed_ = false;\n"
            "    bool eager_host_poll_ = false;\n"
@@ -5446,7 +5462,8 @@ std::string handwritten_main(
            "        static_cast<void>(" +
            entry_namespace +
            "::run_runtime(cpu, services, *state.runtime_blocks,\n"
-           "                      services.observation_session()));\n"
+           "                      services.observation_session(),\n"
+           "                      services.crash_capsule()));\n"
            "    } catch (const katana::runtime::RuntimeProbeBudgetReached& reached) {\n"
            "        if (!reached.final_guest_cycle().has_value() ||\n"
            "            *reached.final_guest_cycle() != state.scheduler->current_cycle()) {\n"
@@ -6221,7 +6238,8 @@ std::string handwritten_main(
            "            result = " +
            entry_namespace +
            "::run_runtime(cpu, services, *state.runtime_blocks,\n"
-           "                          services.observation_session());\n"
+           "                          services.observation_session(),\n"
+           "                          services.crash_capsule());\n"
            "        } catch (const katana::runtime::PlatformLifecycleExit&) {\n"
            "            report_progress();\n"
            "            if (state.gdrom)\n"
@@ -6605,6 +6623,17 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     const auto memory_fill_loops = memory_fill_loop_batch_proofs(program);
     const auto composite_callback_batches = composite_callback_batch_proofs(
         program, indirect_control_flow, function_candidates);
+    std::vector<const CompositeCallbackBatchProof*> composite_callback_emission;
+    composite_callback_emission.reserve(composite_callback_batches.size());
+    for (const auto& proof : composite_callback_batches)
+        composite_callback_emission.push_back(&proof);
+    std::stable_sort(
+        composite_callback_emission.begin(),
+        composite_callback_emission.end(),
+        [](const auto* left, const auto* right) {
+            return left->descriptor.call_instruction_address <
+                   right->descriptor.call_instruction_address;
+        });
     const auto symbol = [](const std::uint32_t address) {
         constexpr std::array digits{
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -7095,6 +7124,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "#include \"../include/runtime-dispatch-internal.hpp\"\n"
            << "#include \"katana/runtime/block_abi.hpp\"\n"
            << "#include \"katana/runtime/block_table.hpp\"\n"
+           << "#include \"katana/runtime/crash_capsule.hpp\"\n"
            << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
            << "#include \"katana/runtime/disc.hpp\"\n"
            << "#include \"katana/runtime/disc_load_transaction.hpp\"\n"
@@ -7196,6 +7226,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "nullptr;\n"
            << "thread_local katana::runtime::IndirectDispatchMetrics* active_dispatch_metrics = "
               "nullptr;\n"
+           << "thread_local katana::runtime::CrashCapsule* active_crash_capsule = nullptr;\n"
            << "thread_local katana::runtime::SystemReplayObservationSession* "
               "active_observations = nullptr;\n"
            << "thread_local katana::runtime::DemandBlockMaterializer* active_materializer = "
@@ -7203,6 +7234,20 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "thread_local const katana::runtime::GameProjectBindings* "
               "active_game_project = nullptr;\n"
            << "thread_local std::uint64_t executed_dispatch_blocks = 0u;\n"
+           << "bool detailed_dispatch_diagnostics_enabled() noexcept {\n"
+           << "    static const bool enabled = [] {\n"
+           << "        const auto enabled_by_one = [](const char* name) {\n"
+           << "            const auto* value = std::getenv(name);\n"
+           << "            return value != nullptr && std::string_view(value) == \"1\";\n"
+           << "        };\n"
+           << "        const auto* runtime_probe = std::getenv(\"KATANA_RUNTIME_PROBE\");\n"
+           << "        return enabled_by_one(\"KATANA_PORT_DIAGNOSTICS\") ||\n"
+           << "               enabled_by_one(\"KATANA_PORT_DIAGNOSTICS_FULL\") ||\n"
+           << "               (runtime_probe != nullptr && *runtime_probe != '\\0');\n"
+           << "    }();\n"
+           << "    return " << (diagnostic_interpreter ? "true" : "false")
+           << " || enabled;\n"
+           << "}\n"
            << "enum class DispatchChainBoundary { NestedCall, ProgramRoot };\n"
            << "void dispatch_chain(katana::runtime::CpuState&, std::uint32_t, "
               "katana::runtime::IndirectDispatchKind, "
@@ -7214,14 +7259,18 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "                 katana::runtime::BlockExecutionContext& context,\n"
               "                 katana::runtime::DispatchDiagnosticRecorder& diagnostics,\n"
               "                 katana::runtime::IndirectDispatchMetrics& dispatch_metrics,\n"
+              "                 katana::runtime::CrashCapsule& crash_capsule,\n"
               "                 katana::runtime::SystemReplayObservationSession& observations,\n"
               "                 katana::runtime::DemandBlockMaterializer& materializer,\n"
               "                 const katana::runtime::GameProjectBindings* game_project) {\n"
            << "        if (active_services != nullptr) throw std::runtime_error(\"Runtime-Dispatch "
               "ist nicht reentrant.\");\n"
            << "        active_services = &services; active_table = &table;\n"
-              "        active_context = &context; active_diagnostics = &diagnostics;\n"
+              "        active_context = &context;\n"
+              "        active_diagnostics = detailed_dispatch_diagnostics_enabled()\n"
+              "                                 ? &diagnostics : nullptr;\n"
               "        active_dispatch_metrics = &dispatch_metrics;\n"
+              "        active_crash_capsule = &crash_capsule;\n"
               "        active_observations = &observations;\n"
               "        active_materializer = &materializer;\n"
               "        active_game_project = game_project;\n"
@@ -7229,7 +7278,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    }\n"
            << "    ~ServiceScope() { active_services = nullptr; active_table = nullptr;\n"
               "        active_context = nullptr; active_diagnostics = nullptr;\n"
-              "        active_dispatch_metrics = nullptr; active_observations = nullptr;\n"
+              "        active_dispatch_metrics = nullptr; active_crash_capsule = nullptr;\n"
+              "        active_observations = nullptr;\n"
               "        active_materializer = nullptr; active_game_project = nullptr; }\n"
            << "};\n";
     if (diagnostic_interpreter)
@@ -7254,8 +7304,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << emitted_composite_callback_batch_count
            << "u> composite_callback_batch_descriptors{{\n";
     if (!diagnostic_interpreter) {
-        for (const auto& proof : composite_callback_batches) {
-            const auto& descriptor = proof.descriptor;
+        for (const auto* proof : composite_callback_emission) {
+            const auto& descriptor = proof->descriptor;
             const auto kind =
                 descriptor.kind ==
                         CompositeCallbackBatchProof::Kind::FlagPollEqualImmediate
@@ -7309,7 +7359,33 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             output << "},\n";
         }
     }
-    output << "}};\n\n";
+    output << "}};\n"
+              "struct CompositeCallbackBatchDescriptorRange {\n"
+              "    std::size_t first = 0u;\n"
+              "    std::size_t count = 0u;\n"
+              "};\n"
+              "CompositeCallbackBatchDescriptorRange composite_callback_batch_descriptors_for(\n"
+              "        const std::uint32_t callsite) noexcept {\n"
+              "    switch (callsite) {\n";
+    if (!diagnostic_interpreter) {
+        std::map<std::uint32_t, std::pair<std::size_t, std::size_t>>
+            descriptors_by_callsite;
+        for (std::size_t index = 0u; index < composite_callback_emission.size(); ++index) {
+            const auto callsite =
+                composite_callback_emission[index]->descriptor.call_instruction_address;
+            const auto [entry, inserted] =
+                descriptors_by_callsite.try_emplace(
+                    callsite, std::pair{index, std::size_t{0u}});
+            static_cast<void>(inserted);
+            ++entry->second.second;
+        }
+        for (const auto [callsite, range] : descriptors_by_callsite)
+            output << "    case 0x" << symbol(callsite)
+                   << "u: return {" << range.first << "u, " << range.second << "u};\n";
+    }
+    output << "    default: return {};\n"
+              "    }\n"
+              "}\n\n";
     const auto emitted_memory_fill_loop_count =
         diagnostic_interpreter ? std::size_t{0u} : memory_fill_loops.size();
     output << "constexpr std::array<MemoryFillLoopBatchDescriptor, "
@@ -7345,10 +7421,20 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     output << "}};\n"
               "const MemoryFillLoopBatchDescriptor* memory_fill_loop_descriptor(\n"
               "        const std::uint32_t address) noexcept {\n"
-              "    for (const auto& descriptor : memory_fill_loop_batch_descriptors)\n"
-              "        if (descriptor.guard_address == address ||\n"
-              "            descriptor.body_address == address) return &descriptor;\n"
-              "    return nullptr;\n"
+              "    switch (address) {\n";
+    if (!diagnostic_interpreter) {
+        std::map<std::uint32_t, std::size_t> descriptors_by_address;
+        for (std::size_t index = 0u; index < memory_fill_loops.size(); ++index) {
+            const auto& descriptor = memory_fill_loops[index].descriptor;
+            descriptors_by_address.try_emplace(descriptor.guard_address, index);
+            descriptors_by_address.try_emplace(descriptor.body_address, index);
+        }
+        for (const auto [address, index] : descriptors_by_address)
+            output << "    case 0x" << symbol(address)
+                   << "u: return &memory_fill_loop_batch_descriptors[" << index << "u];\n";
+    }
+    output << "    default: return nullptr;\n"
+              "    }\n"
               "}\n\n";
     const auto emitted_mmio_wait_loop_count =
         diagnostic_interpreter ? std::size_t{0u} : mmio_wait_loops.size();
@@ -7383,9 +7469,18 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     output << "}};\n"
               "const MmioWaitLoopBatchDescriptor* mmio_wait_loop_descriptor(\n"
               "        const std::uint32_t address) noexcept {\n"
-              "    for (const auto& descriptor : mmio_wait_loop_batch_descriptors)\n"
-              "        if (descriptor.loop_header == address) return &descriptor;\n"
-              "    return nullptr;\n"
+              "    switch (address) {\n";
+    if (!diagnostic_interpreter) {
+        std::map<std::uint32_t, std::size_t> descriptors_by_address;
+        for (std::size_t index = 0u; index < mmio_wait_loops.size(); ++index)
+            descriptors_by_address.try_emplace(
+                mmio_wait_loops[index].descriptor.loop_header, index);
+        for (const auto [address, index] : descriptors_by_address)
+            output << "    case 0x" << symbol(address)
+                   << "u: return &mmio_wait_loop_batch_descriptors[" << index << "u];\n";
+    }
+    output << "    default: return nullptr;\n"
+              "    }\n"
               "}\n\n";
     const auto emitted_counted_loop_count =
         diagnostic_interpreter ? std::size_t{0u} : counted_loops.size();
@@ -7423,9 +7518,18 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     output << "}};\n"
               "const CountedLoopBatchDescriptor* counted_loop_descriptor(\n"
               "        const std::uint32_t address) noexcept {\n"
-              "    for (const auto& descriptor : counted_loop_batch_descriptors)\n"
-              "        if (descriptor.guard_address == address) return &descriptor;\n"
-              "    return nullptr;\n"
+              "    switch (address) {\n";
+    if (!diagnostic_interpreter) {
+        std::map<std::uint32_t, std::size_t> descriptors_by_address;
+        for (std::size_t index = 0u; index < counted_loops.size(); ++index)
+            descriptors_by_address.try_emplace(
+                counted_loops[index].descriptor.guard_address, index);
+        for (const auto [address, index] : descriptors_by_address)
+            output << "    case 0x" << symbol(address)
+                   << "u: return &counted_loop_batch_descriptors[" << index << "u];\n";
+    }
+    output << "    default: return nullptr;\n"
+              "    }\n"
               "}\n\n";
     output
         << "std::uint64_t configured_block_budget() {\n"
@@ -7530,13 +7634,19 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                active_observations->observe_block_dispatch_hit(\n"
            "                    dispatch_class, result.materialized);\n"
            "                return result;\n"
-           "            } catch (const katana::runtime::IndirectDispatchError&) {\n"
+           "            } catch (const katana::runtime::IndirectDispatchError& error) {\n"
+           "                active_crash_capsule->note_first_error(\n"
+           "                    static_cast<std::uint32_t>(error.error()),\n"
+           "                    error.callsite(), error.target());\n"
            "                active_observations->observe_block_dispatch_miss(\n"
            "                    *active_dispatch_metrics);\n"
            "                throw;\n"
            "            }\n"
            "        }();\n"
            "        const auto& selected_block = selected.execution;\n"
+           "        active_crash_capsule->note_block(\n"
+           "            selected.diagnostic_target, selected_block.virtual_start,\n"
+           "            active_context->scheduler_cycle);\n"
            "        dispatch_variant = selected_block.variant;\n"
            "        if (selected_block.function == nullptr)\n"
            "            throw std::runtime_error(\"Runtime-Dispatchziel besitzt keinen generierten "
@@ -7711,26 +7821,29 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                    cpu.last_exception_cause);\n"
            "            return fastpath_source;\n"
            "        };\n"
-           "        const CompositeCallbackBatchDescriptor* composite_callback = nullptr;\n"
-           "        if (kind == katana::runtime::IndirectDispatchKind::Call) {\n"
-           "            for (const auto& descriptor :\n"
-           "                 composite_callback_batch_descriptors) {\n"
-           "                if (descriptor.call_instruction_address != dispatch_callsite)\n"
-           "                    continue;\n"
+           "        const auto composite_callbacks =\n"
+           "            kind == katana::runtime::IndirectDispatchKind::Call\n"
+           "                ? composite_callback_batch_descriptors_for(dispatch_callsite)\n"
+           "                : CompositeCallbackBatchDescriptorRange{};\n"
+           "        bool composite_callback_applied = false;\n"
+           "        for (std::size_t candidate = 0u;\n"
+           "             candidate < composite_callbacks.count; ++candidate) {\n"
+           "            const auto& composite_callback =\n"
+           "                composite_callback_batch_descriptors[\n"
+           "                    composite_callbacks.first + candidate];\n"
            "                const auto fastpath_retired_before =\n"
            "                    cpu.retired_guest_instructions;\n"
            "                const auto fastpath_exception_generation_before =\n"
            "                    cpu.exception_generation;\n"
-           "                if (!try_product_composite_callback_batch(\n"
-           "                        cpu, *active_services, selected_block, descriptor))\n"
-           "                    continue;\n"
-           "                composite_callback = &descriptor;\n"
+           "            if (try_product_composite_callback_batch(\n"
+           "                    cpu, *active_services, selected_block,\n"
+           "                    composite_callback)) {\n"
            "                const auto fastpath_source = finalize_product_fastpath(\n"
            "                    fastpath_retired_before,\n"
            "                    fastpath_exception_generation_before,\n"
-           "                    {descriptor.outer_branch_instruction_address,\n"
+           "                    {composite_callback.outer_branch_instruction_address,\n"
            "                     katana::runtime::canonical_physical_address(\n"
-           "                         descriptor.outer_branch_instruction_address)},\n"
+           "                         composite_callback.outer_branch_instruction_address)},\n"
            "                    katana::runtime::BlockEndKind::ConditionalBranch);\n"
            "                target = cpu.pc;\n"
            "                dispatch_callsite = fastpath_source.virtual_address;\n"
@@ -7741,10 +7854,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                dispatch_origin =\n"
            "                    katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
            "                diagnostic = false;\n"
+           "                composite_callback_applied = true;\n"
            "                break;\n"
            "            }\n"
            "        }\n"
-           "        if (composite_callback != nullptr) continue;\n"
+           "        if (composite_callback_applied) continue;\n"
            "        if (const auto* memory_fill_loop =\n"
            "                memory_fill_loop_descriptor(selected.diagnostic_target);\n"
            "            memory_fill_loop != nullptr) {\n"
@@ -7970,7 +8084,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "                             katana::runtime::PlatformServices& services,\n"
            << "                             katana::runtime::RuntimeBlockTable& table,\n"
            << "                             katana::runtime::SystemReplayObservationSession& "
-              "observations) {\n"
+              "observations,\n"
+           << "                             katana::runtime::CrashCapsule& crash_capsule) {\n"
            << "    katana::runtime::validate_platform_services(services);\n";
     if (external_game_project_hooks) {
         output
@@ -8009,14 +8124,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     output << "    katana::runtime::DispatchDiagnosticRecorder diagnostics;\n"
            << "    katana::runtime::IndirectDispatchMetrics dispatch_metrics;\n"
            << "    dispatch_metrics.set_site_details_enabled(\n"
-           << "        " << (diagnostic_interpreter ? "true" : "false") << " ||\n"
-           << "        (std::getenv(\"KATANA_PORT_DIAGNOSTICS\") != nullptr &&\n"
-           << "         std::string_view(std::getenv(\"KATANA_PORT_DIAGNOSTICS\")) == \"1\") ||\n"
-           << "        (std::getenv(\"KATANA_PORT_DIAGNOSTICS_FULL\") != nullptr &&\n"
-           << "         std::string_view(std::getenv(\"KATANA_PORT_DIAGNOSTICS_FULL\")) == "
-              "\"1\") ||\n"
-           << "        (std::getenv(\"KATANA_RUNTIME_PROBE\") != nullptr &&\n"
-           << "         *std::getenv(\"KATANA_RUNTIME_PROBE\") != '\\0'));\n"
+           << "        detailed_dispatch_diagnostics_enabled());\n"
            << "    katana::runtime::BlockExecutionContext context;\n"
            << "    context.scheduler_cycle = services.scheduler_cycle();\n"
            << "    context.scheduler_event_budget = 1024u;\n"
@@ -8179,7 +8287,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    };\n"
            << "    ServiceScope scope(\n"
            << "        services, table, context, diagnostics, dispatch_metrics,\n"
-           << "        observations, materializer, registered_game_project);\n"
+           << "        crash_capsule, observations, materializer, registered_game_project);\n"
            << "    bool guest_cycle_budget_reached = false;\n"
            << "    try {\n"
            << "        dispatch_chain(cpu, 0x" << entry
@@ -8197,6 +8305,25 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "        guest_cycle_budget_reached = true;\n"
            << "    } catch (...) {\n"
            << "        capture_materialization_status();\n"
+           << "        crash_capsule.note_first_error(0xFFFFFFFFu, cpu.pc, cpu.pc);\n"
+           << "        std::cerr << \"KATANA_CRASH_CAPSULE version=\"\n"
+           << "                  << katana::runtime::crash_capsule_contract_version\n"
+           << "                  << \" last_pc=\" << crash_capsule.last_pc\n"
+           << "                  << \" last_block=\" << crash_capsule.last_block\n"
+           << "                  << \" last_mmio_address=\"\n"
+           << "                  << crash_capsule.last_mmio_address\n"
+           << "                  << \" last_mmio_value=\" << crash_capsule.last_mmio_value\n"
+           << "                  << \" last_scheduler_cycle=\"\n"
+           << "                  << crash_capsule.last_scheduler_cycle\n"
+           << "                  << \" last_scheduler_event_id=\"\n"
+           << "                  << crash_capsule.last_scheduler_event_id\n"
+           << "                  << \" last_scheduler_event_kind=\"\n"
+           << "                  << crash_capsule.last_scheduler_event_kind\n"
+           << "                  << \" first_error=\" << crash_capsule.first_error_code\n"
+           << "                  << \" first_error_pc=\" << crash_capsule.first_error_pc\n"
+           << "                  << \" first_error_target=\"\n"
+           << "                  << crash_capsule.first_error_target\n"
+           << "                  << \" ring_events=\" << crash_capsule.event_count << '\\n';\n"
            << "        if (const auto* value = std::getenv(\"KATANA_PORT_DIAGNOSTICS\");\n"
            << "            value != nullptr && std::string_view(value) == \"1\")\n"
            << "            std::cerr << \"KATANA_RUNTIME_DISPATCH_DIAGNOSTICS \"\n"
@@ -8231,6 +8358,8 @@ std::string root_cmake(const bool diagnostic_partial) {
     return "cmake_minimum_required(VERSION 3.25)\n"
            "project(KatanaPort LANGUAGES CXX)\n"
            "set(KATANA_RUNTIME_ROOT \"\" CACHE PATH \"KatanaRecomp source root\")\n"
+           "set(KATANA_RUNTIME_PREFIX \"\" CACHE PATH "
+           "\"Installed KatanaRecomp runtime package prefix\")\n"
            "set(KATANA_PORT_DIAGNOSTIC_RUNTIME " +
            std::string(diagnostic_partial ? "ON" : "OFF") +
            ")\n"
@@ -8244,6 +8373,11 @@ std::string root_cmake(const bool diagnostic_partial) {
            "if(KATANA_RUNTIME_ROOT STREQUAL \"\" AND NOT \"$ENV{KATANA_RUNTIME_ROOT}\" "
               "STREQUAL \"\")\n"
            "  file(TO_CMAKE_PATH \"$ENV{KATANA_RUNTIME_ROOT}\" KATANA_RUNTIME_ROOT)\n"
+           "endif()\n"
+           "if(KATANA_RUNTIME_PREFIX STREQUAL \"\" AND "
+           "NOT \"$ENV{KATANA_RUNTIME_PREFIX}\" STREQUAL \"\")\n"
+           "  file(TO_CMAKE_PATH \"$ENV{KATANA_RUNTIME_PREFIX}\" "
+           "KATANA_RUNTIME_PREFIX)\n"
            "endif()\n"
            "if(NOT \"${CMAKE_LINKER_TYPE}\" STREQUAL \"\" AND "
            "CMAKE_VERSION VERSION_LESS 3.29)\n"
@@ -8275,7 +8409,16 @@ std::string root_cmake(const bool diagnostic_partial) {
            "  set(KATANA_PORT_NAMESPACED_RUNTIME_TARGET KatanaRecomp::runtime_core)\n"
            "  set(KATANA_PORT_SOURCE_RUNTIME_TARGET katana_runtime_core)\n"
            "endif()\n"
-           "if(NOT KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
+           "if(NOT KATANA_RUNTIME_PREFIX STREQUAL \"\")\n"
+           "  find_package(KatanaRecomp CONFIG REQUIRED "
+           "PATHS \"${KATANA_RUNTIME_PREFIX}\" NO_DEFAULT_PATH)\n"
+           "  if(TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "    set(KATANA_PORT_RUNTIME_TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "  else()\n"
+           "    message(FATAL_ERROR \"Installed KatanaRecomp package has no requested "
+           "runtime target\")\n"
+           "  endif()\n"
+           "elseif(NOT KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
            "  add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" "
            "\"${CMAKE_BINARY_DIR}/katana-runtime\" EXCLUDE_FROM_ALL)\n"
            "  if(TARGET \"${KATANA_PORT_SOURCE_RUNTIME_TARGET}\")\n"

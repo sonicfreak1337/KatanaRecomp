@@ -1,5 +1,7 @@
 #include "katana/runtime/memory.hpp"
 
+#include "katana/runtime/crash_capsule.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cstring>
@@ -939,6 +941,14 @@ std::optional<MemoryAccessEvent> Memory::last_mmio_access() const {
 
 void Memory::clear_last_mmio_access() const noexcept {
     last_mmio_access_.reset();
+}
+
+void Memory::attach_crash_capsule(CrashCapsule& capsule) noexcept {
+    crash_capsule_ = &capsule;
+}
+
+void Memory::detach_crash_capsule(const CrashCapsule& capsule) noexcept {
+    if (crash_capsule_ == &capsule) crash_capsule_ = nullptr;
 }
 
 std::uint64_t Memory::mmio_access_epoch() const noexcept {
@@ -2262,6 +2272,12 @@ void Memory::record_mmio_access(const MappedRegion& mapped,
                                 const std::uint32_t value) const noexcept {
     if (!mapped.mmio) return;
     notify_interrupt_source_state_maybe_changed();
+    if (crash_capsule_ != nullptr) {
+        crash_capsule_->note_mmio(static_cast<std::uint8_t>(operation),
+                                  static_cast<std::uint8_t>(width),
+                                  address,
+                                  value);
+    }
     if (mmio_access_tracking_enabled_) {
         last_mmio_access_ =
             LastMmioAccessRecord{operation, address, width, value, mapped.info.base_address};
