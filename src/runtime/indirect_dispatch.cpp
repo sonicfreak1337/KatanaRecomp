@@ -5,6 +5,7 @@
 #include "katana/runtime/executable_modules.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -115,6 +116,34 @@ DispatchDiagnosticError materialization_error(const MaterializationFailure failu
     return DispatchDiagnosticError::UnknownTarget;
 }
 
+constexpr std::size_t dispatch_inline_cache_size = 1024u;
+static_assert((dispatch_inline_cache_size & (dispatch_inline_cache_size - 1u)) == 0u);
+
+struct MonomorphicDispatchCacheEntry {
+    const RuntimeBlockTable* table = nullptr;
+    const DemandBlockMaterializer* materializer = nullptr;
+    const IndirectDispatchMetrics* metrics = nullptr;
+    std::uint32_t callsite = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t physical_target = 0u;
+    IndirectDispatchKind kind = IndirectDispatchKind::TailJump;
+    RuntimeDispatchClass dispatch_class = RuntimeDispatchClass::GuardedFallback;
+    BlockVariantKey effective_variant;
+    BlockDispatchGenerationGuard generation_guard;
+    bool valid = false;
+};
+
+thread_local std::array<MonomorphicDispatchCacheEntry, dispatch_inline_cache_size>
+    dispatch_inline_cache;
+
+std::size_t dispatch_inline_cache_index(const std::uint32_t callsite,
+                                        const IndirectDispatchKind kind) noexcept {
+    auto key = (callsite >> 1u) ^
+               (static_cast<std::uint32_t>(kind) * 0x9E3779B9u);
+    key *= 0x85EBCA6Bu;
+    return static_cast<std::size_t>(key) & (dispatch_inline_cache_size - 1u);
+}
+
 } // namespace
 
 IndirectDispatchError::IndirectDispatchError(const IndirectDispatchKind kind,
@@ -149,13 +178,12 @@ const std::string& IndirectDispatchError::metrics_json() const noexcept {
 
 namespace {
 void record_target(RuntimeOnlySiteMetrics& site, const std::uint32_t target) noexcept {
-    if (std::find(site.targets.begin(), site.targets.end(), target) != site.targets.end()) return;
-    if (site.targets.size() >= 16u) {
-        site.targets_truncated = true;
+    if (site.targets.empty()) {
+        site.targets.push_back(target);
         return;
     }
-    site.targets.push_back(target);
-    std::sort(site.targets.begin(), site.targets.end());
+    if (site.targets.front() != target)
+        site.targets_truncated = true;
 }
 } // namespace
 
@@ -393,6 +421,53 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
             translate_target();
         }
     }
+    if (!architectural_target_fetch_fault && request.metrics != nullptr &&
+        request.materializer != nullptr) {
+        auto& cached = dispatch_inline_cache[
+            dispatch_inline_cache_index(request.callsite, request.kind)];
+        const auto cache_key_matches =
+            cached.valid && cached.table == &table &&
+            cached.materializer == request.materializer &&
+            cached.metrics == request.metrics && cached.callsite == request.callsite &&
+            cached.kind == request.kind &&
+            cached.dispatch_class == request.dispatch_class &&
+            cached.target == target && cached.physical_target == physical &&
+            cached.effective_variant == effective_variant;
+        if (cache_key_matches) {
+            const auto resolved = table.resolve(cached.generation_guard.block);
+            const auto exact_block_matches =
+                resolved && resolved->get().function != nullptr &&
+                resolved->get().size >= 2u &&
+                (resolved->get().virtual_start & 1u) == 0u &&
+                resolved->get().virtual_start == target &&
+                canonical_physical_address(resolved->get().physical_origin) ==
+                    canonical_physical_address(physical) &&
+                resolved->get().variant == effective_variant;
+            if (exact_block_matches &&
+                request.materializer->dispatch_generation_guard_current(
+                    cpu, cached.generation_guard)) {
+                if (request.kind == IndirectDispatchKind::Call)
+                    cpu.pr = request.return_address;
+                cpu.pc = target;
+                request.metrics->record_hit(
+                    request.dispatch_class, request.callsite, target, false);
+                const bool plain_runtime_hit =
+                    request.dispatch_class == RuntimeDispatchClass::RuntimeOnly &&
+                    request.kind == IndirectDispatchKind::TailJump;
+                if (!plain_runtime_hit)
+                    diagnose(request, target, cpu.pr, false, true);
+                return {cached.generation_guard.block,
+                        target,
+                        physical,
+                        cpu.pc,
+                        cpu.pr,
+                        false,
+                        false,
+                        {}};
+            }
+            cached.valid = false;
+        }
+    }
     const auto reject = [&](const DispatchDiagnosticError error) {
         table.mark_rejected(target, effective_variant);
         if (request.metrics != nullptr)
@@ -407,8 +482,6 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                     request.metrics != nullptr ? request.metrics->serialize_json()
                                                                : std::string{});
     };
-    if (request.materializer != nullptr)
-        request.materializer->reconcile_inactive_origins(request.metrics);
     auto block = table.lookup(target, effective_variant);
     bool alias_lookup = false;
     bool variant_materialized = false;
@@ -498,6 +571,27 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
         !variant_materialized && !invalidated && !alias_lookup &&
         !architectural_target_fetch_fault;
     if (!plain_runtime_hit) diagnose(request, target, cpu.pr, alias_lookup, true);
+    if (!architectural_target_fetch_fault && !alias_lookup &&
+        resolved->get().virtual_start == target && request.metrics != nullptr &&
+        request.materializer != nullptr) {
+        if (const auto generation_guard =
+                request.materializer->capture_dispatch_generation_guard(
+                    cpu, *block, resolved->get().runtime_registered)) {
+            auto& cached = dispatch_inline_cache[
+                dispatch_inline_cache_index(request.callsite, request.kind)];
+            cached.table = &table;
+            cached.materializer = request.materializer;
+            cached.metrics = request.metrics;
+            cached.callsite = request.callsite;
+            cached.target = target;
+            cached.physical_target = physical;
+            cached.kind = request.kind;
+            cached.dispatch_class = request.dispatch_class;
+            cached.effective_variant = effective_variant;
+            cached.generation_guard = *generation_guard;
+            cached.valid = true;
+        }
+    }
     return {*block,
             target,
             physical,
@@ -505,7 +599,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
             cpu.pr,
             alias_lookup,
             materialized,
-            describe(request, target) + (alias_lookup ? " alias=physical" : " alias=exact")};
+            {}};
 }
 
 } // namespace katana::runtime

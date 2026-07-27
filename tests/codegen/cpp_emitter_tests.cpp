@@ -806,9 +806,25 @@ int main() {
     first_timing.operation = katana::ir::Operation::Nop;
     katana::ir::Instruction second_timing = first_timing;
     second_timing.source_address = 0x3002u;
+    katana::ir::Instruction faulting_timing = first_timing;
+    faulting_timing.source_address = 0x3004u;
+    faulting_timing.original_opcode = 0x6012u; // MOV.L @R1,R0
+    faulting_timing.original_operation = katana::ir::Operation::LoadLong;
+    faulting_timing.operation = katana::ir::Operation::LoadLong;
+    faulting_timing.source_register = 1u;
+    faulting_timing.widths =
+        katana::ir::operation_operand_widths(faulting_timing.operation);
+    faulting_timing.status_effects =
+        katana::ir::instruction_status_effects(faulting_timing.operation);
+    faulting_timing.memory_effects = katana::ir::instruction_memory_effects(
+        faulting_timing.operation,
+        faulting_timing.destination_register,
+        faulting_timing.source_register);
+    faulting_timing.accumulator_effects =
+        katana::ir::operation_accumulator_effects(faulting_timing.operation);
     katana::ir::BasicBlock timing_block;
     timing_block.start_address = 0x3000u;
-    timing_block.instructions = {first_timing, second_timing};
+    timing_block.instructions = {first_timing, second_timing, faulting_timing};
     katana::ir::Function timing_function;
     timing_function.entry_address = 0x3000u;
     timing_function.blocks = {std::move(timing_block)};
@@ -816,22 +832,37 @@ int main() {
         katana::codegen::emit_cpp_program(std::vector{timing_function}, 0x3000u);
     const auto first_timing_source = emitted_instruction(timing_source, "0x00003000");
     const auto second_timing_source = emitted_instruction(timing_source, "0x00003002");
-    require(first_timing_source.find(
-                "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+    const auto faulting_timing_source = emitted_instruction(timing_source, "0x00003004");
+    const auto batched_attempts =
+        timing_source.find("cpu.attempted_guest_instructions += 2u;");
+    const auto batched_retirements =
+        timing_source.find("cpu.retired_guest_instructions += 2u;", batched_attempts);
+    const auto batched_cycles =
+        timing_source.find("cpu.pending_guest_cycles += 2u;", batched_retirements);
+    require(first_timing_source.find("ExplicitGuestInstructionAttempt") ==
                     std::string_view::npos &&
-                first_timing_source.find(
-                    "katana::runtime::relocate_code_address(0x00003000u), 1u);") !=
+                second_timing_source.find("ExplicitGuestInstructionAttempt") ==
                     std::string_view::npos &&
-                second_timing_source.find(
-                    "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+                batched_attempts != std::string::npos &&
+                batched_retirements != std::string::npos &&
+                batched_cycles != std::string::npos &&
+                count_occurrences(timing_source,
+                                  "cpu.attempted_guest_instructions += 2u;") == 1u &&
+                count_occurrences(timing_source,
+                                  "cpu.retired_guest_instructions += 2u;") == 1u &&
+                count_occurrences(timing_source, "cpu.pending_guest_cycles += 2u;") == 1u &&
+                faulting_timing_source.find(
+                    "ExplicitGuestInstructionAttempt guest_instruction_attempt") !=
                     std::string_view::npos &&
-                second_timing_source.find(
-                    "katana::runtime::relocate_code_address(0x00003002u), 1u);") !=
+                faulting_timing_source.find(
+                    "katana::runtime::relocate_code_address(0x00003004u), 2u);") !=
                     std::string_view::npos &&
+                batched_cycles < timing_source.find("// katana-guest 0x00003004u") &&
                 timing_source.find("katana::runtime::finalize_guest_block(") !=
                     std::string::npos &&
                 timing_source.find("base_guest_cycles_per_instruction") == std::string::npos,
-            "Zwei NOPs besitzen keine zwei getrennten Ein-Zyklus-Attempts mit Blockabschluss.");
+            "Eine reine NOP-Praefixregion wird nicht gebatcht vor der exakten "
+            "Memory-Fault-Grenze verbucht.");
 
     require(
         katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::LoadTlb) ==

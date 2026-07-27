@@ -2054,6 +2054,18 @@ int run_test(const int argc, char* argv[]) {
             : std::string_view{composite_main}.substr(
                   composite_method_begin,
                   composite_method_end - composite_method_begin);
+    const auto flag_poll_method_begin =
+        composite_main.find("bool try_composite_callback_flag_poll_batch(");
+    const auto flag_poll_method_end =
+        composite_main.find("bool try_composite_callback_batch(", flag_poll_method_begin);
+    const auto flag_poll_method =
+        flag_poll_method_begin == std::string::npos ||
+                flag_poll_method_end == std::string::npos ||
+                flag_poll_method_end < flag_poll_method_begin
+            ? std::string_view{}
+            : std::string_view{composite_main}.substr(
+                  flag_poll_method_begin,
+                  flag_poll_method_end - flag_poll_method_begin);
     const auto composite_prepare =
         composite_method.find("prepare_prevalidated_linear_u32_pattern(");
     const auto composite_time_accept =
@@ -2136,6 +2148,60 @@ int run_test(const int argc, char* argv[]) {
             composite_main.find("KATANA_COMPOSITE_CALLBACK_ADMIT iterations=") !=
                 std::string::npos &&
             composite_main.find("KATANA_COMPOSITE_CALLBACK_REJECT stage=") !=
+                std::string::npos &&
+            composite_main.find("enum class FlagPollBatchRejectionStage") !=
+                std::string::npos &&
+            flag_poll_method.find(
+                "guest_write_observer_allows_prevalidated_linear_writes()") ==
+                std::string::npos &&
+            flag_poll_method.find(
+                "katana::runtime::AddressTranslationMode::NoMmu") ==
+                std::string::npos &&
+            flag_poll_method.find("const auto proves_direct_instruction_range") !=
+                std::string::npos &&
+            occurrences(flag_poll_method,
+                        "InstructionTranslationPath::Direct") == 2u &&
+            occurrences(flag_poll_method,
+                        "proves_direct_instruction_range(") == 3u &&
+            flag_poll_method.find(
+                "descriptor.call_block_address,\n"
+                "                call_block->second.physical_origin") !=
+                std::string::npos &&
+            flag_poll_method.find(
+                "live_target, selected_block.physical_origin") !=
+                std::string::npos &&
+            flag_poll_method.find(
+                "descriptor.continuation_address,\n"
+                "                continuation->second.physical_origin") !=
+                std::string::npos &&
+            flag_poll_method.find("!first.no_mmu_fastpath") != std::string::npos &&
+            flag_poll_method.find("!last.no_mmu_fastpath") != std::string::npos &&
+            flag_poll_method.find(
+                "flag_read->mmu_generation != active_block_variant_->mmu_generation") !=
+                std::string::npos &&
+            flag_poll_method.find("++flag_poll_batch_counters_.attempts;") !=
+                std::string::npos &&
+            occurrences(flag_poll_method,
+                        "return reject(FlagPollBatchRejectionStage::") == 18u &&
+            flag_poll_method.find("composite_callback_batch_rejected(") ==
+                std::string::npos &&
+            flag_poll_method.find("trace_composite_callback_batch_admission(") ==
+                std::string::npos &&
+            flag_poll_method.find("++flag_poll_batch_counters_.admissions;") !=
+                std::string::npos &&
+            flag_poll_method.find(
+                "flag_poll_batch_counters_.batched_rounds += admitted;") !=
+                std::string::npos &&
+            flag_poll_method.find(
+                "flag_poll_batch_counters_.batched_guest_cycles += batch_guest_cycles;") !=
+                std::string::npos &&
+            composite_method.find("trace_composite_callback_batch_admission(admitted);") !=
+                std::string::npos &&
+            composite_main.find("KATANA_FLAG_POLL_BATCH_STATS attempts=") !=
+                std::string::npos &&
+            occurrences(composite_main, "\" reject_poll_") == 18u &&
+            composite_main.find(
+                "services.report_flag_poll_batch_statistics(std::cerr);") !=
                 std::string::npos &&
             composite_port_cmake.find(
                 "option(KATANA_INTERNAL_COMPOSITE_CALLBACK_DIFFERENTIAL_TEST") !=

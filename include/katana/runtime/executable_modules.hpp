@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -282,6 +283,17 @@ struct BlockMaterializationMetrics {
     std::uint32_t first_failure_target = 0u;
 };
 
+struct BlockDispatchGenerationGuard {
+    RuntimeBlockHandle block;
+    std::uint64_t code_generation = 0u;
+    std::uint64_t module_generation = 0u;
+    std::uint64_t relocation_generation = 0u;
+    std::uint64_t validation_generation = 0u;
+    bool runtime_registered = false;
+
+    [[nodiscard]] bool operator==(const BlockDispatchGenerationGuard&) const noexcept = default;
+};
+
 struct MaterializedBlockCandidate {
     RuntimeBlock block;
     bool decode_candidate_validated = false;
@@ -329,6 +341,13 @@ class DemandBlockMaterializer final {
                                              std::uint32_t target,
                                              std::optional<std::uint32_t> physical_entry =
                                                  std::nullopt) noexcept;
+    [[nodiscard]] std::optional<BlockDispatchGenerationGuard>
+    capture_dispatch_generation_guard(const CpuState& cpu,
+                                      RuntimeBlockHandle handle,
+                                      bool runtime_registered) const noexcept;
+    [[nodiscard]] bool
+    dispatch_generation_guard_current(const CpuState& cpu,
+                                      const BlockDispatchGenerationGuard& guard) const noexcept;
     void reconcile_inactive_origins(IndirectDispatchMetrics* dispatch_metrics = nullptr);
     void record_invalidation(std::uint32_t address,
                              std::size_t size,
@@ -363,9 +382,17 @@ class DemandBlockMaterializer final {
         RuntimeBlockHandle handle;
         std::shared_ptr<const std::vector<std::uint8_t>> snapshot;
         std::vector<NativeAotTemplateMutableRange> mutable_ranges;
+        std::uint64_t validated_code_generation = 0u;
+        std::uint64_t validation_generation = 0u;
+        bool byte_identity_validated = false;
+        bool generation_observer_validated = false;
         bool interpreter_backed = false;
         bool aot_template = false;
     };
+    [[nodiscard]] MaterializedOrigin* find_origin(RuntimeBlockHandle handle) noexcept;
+    [[nodiscard]] const MaterializedOrigin*
+    find_origin(RuntimeBlockHandle handle) const noexcept;
+    void erase_origin_index(std::size_t erased_index) noexcept;
     [[nodiscard]] static bool
     origin_matches_module(const MaterializedOrigin& origin,
                           const ExecutableModule& module) noexcept;
@@ -374,6 +401,7 @@ class DemandBlockMaterializer final {
     static void bind_origin_to_module(MaterializedOrigin& origin,
                                       const ExecutableModule& module);
     std::vector<MaterializedOrigin> origins_;
+    std::unordered_map<std::uint64_t, std::size_t> origin_indices_;
 };
 
 [[nodiscard]] const char* executable_module_kind_name(ExecutableModuleKind value) noexcept;

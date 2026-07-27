@@ -42,6 +42,17 @@ void materializer_lifecycle_regression() {
     RuntimeBlockTable blocks;
     ExecutableCodeTracker tracker;
     blocks.bind_code_tracker(&tracker);
+    cpu.memory.set_guest_write_observer(
+        [&](const GuestWriteEvent& event) {
+            modules.record_runtime_write(
+                event.address, event.size, event.source, event.bytes_changed);
+            const auto invalidation = tracker.observe_write(
+                event.address, event.size, event.source, event.bytes_changed);
+            if (!invalidation.byte_identical)
+                static_cast<void>(
+                    blocks.erase_overlapping_physical(event.address, event.size));
+        },
+        GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
     BlockMaterializationPolicy policy;
     policy.enabled = true;
     policy.max_blocks = 8u;
@@ -95,7 +106,11 @@ void materializer_lifecycle_regression() {
             "Erste AOT-Bindung wird nicht materialisiert oder detailliert ausgewiesen.");
     const auto first_identity = stable_runtime_block_identity(first_block->get());
     const auto cached = dispatch_indirect(cpu, blocks, request);
+    const auto cached_guard =
+        materializer.capture_dispatch_generation_guard(cpu, cached.block, true);
     require(!cached.materialized && cached.block == first.block &&
+                cached.diagnostic.empty() && cached_guard.has_value() &&
+                materializer.dispatch_generation_guard_current(cpu, *cached_guard) &&
                 diagnostics.total_occurrences() == 1u,
             "Cache-Hit wird faelschlich materialisiert oder als Detailereignis erfasst.");
 
@@ -112,6 +127,8 @@ void materializer_lifecycle_regression() {
 
     auto replacement = source;
     modules.replace(replacement, blocks, tracker);
+    require(!materializer.dispatch_generation_guard_current(cpu, *cached_guard),
+            "Modul-/Codegeneration laesst einen alten Dispatch-Cacheguard bestehen.");
     request.target = 0x2000u;
     request.callsite = 0x80u;
     const auto rebound = dispatch_indirect(cpu, blocks, request);
@@ -363,6 +380,12 @@ void runtime_only_hit_hotloop_regression() {
                                                     false});
     require(static_cast<bool>(registered),
             "Runtime-only-Hotloopblock wurde nicht registriert.");
+    ExecutableModuleCatalog modules;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    BlockMaterializationPolicy disabled_materialization;
+    DemandBlockMaterializer materializer(
+        modules, blocks, &tracker, disabled_materialization, {});
 
     DispatchDiagnosticRecorder diagnostics;
     for (std::size_t index = 0u; index < diagnostics.capacity(); ++index) {
@@ -383,6 +406,15 @@ void runtime_only_hit_hotloop_regression() {
 
     CpuState cpu;
     cpu.write_sr(sr_md_mask);
+    cpu.memory.set_guest_write_observer(
+        [&](const GuestWriteEvent& event) {
+            const auto invalidation = tracker.observe_write(
+                event.address, event.size, event.source, event.bytes_changed);
+            if (!invalidation.byte_identical)
+                static_cast<void>(
+                    blocks.erase_overlapping_physical(event.address, event.size));
+        },
+        GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
     IndirectDispatchMetrics metrics;
     IndirectDispatchRequest request;
     request.kind = IndirectDispatchKind::TailJump;
@@ -394,7 +426,9 @@ void runtime_only_hit_hotloop_regression() {
     request.diagnostics = &diagnostics;
     request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
     request.metrics = &metrics;
+    request.materializer = &materializer;
 
+    blocks.reset_lookup_counters();
     for (std::uint64_t hit = 0u; hit < hotloop_hits; ++hit)
         static_cast<void>(dispatch_indirect(cpu, blocks, request));
 
@@ -410,11 +444,23 @@ void runtime_only_hit_hotloop_regression() {
                 site->second.misses == 0u && site->second.materializations == 0u &&
                 site->second.invalidations == 0u && site->second.targets.size() == 1u &&
                 site->second.targets.front() == target &&
+                blocks.lookup_counters().direct_probes == 2u &&
                 diagnostics.total_occurrences() == detail_occurrences_before &&
                 diagnostics.dropped_unique_events() == dropped_details_before &&
                 retained_details_unchanged,
             "Eine Million reine Runtime-only-Hits aktualisieren nicht nur Metriken oder "
             "betreten weiterhin den linearen Detail-Key-Vergleich.");
+    IndirectDispatchMetrics polymorphic_metrics;
+    polymorphic_metrics.record_hit(
+        RuntimeDispatchClass::RuntimeOnly, callsite, target, false);
+    polymorphic_metrics.record_hit(
+        RuntimeDispatchClass::RuntimeOnly, callsite, target + 2u, false);
+    const auto& polymorphic_site = polymorphic_metrics.runtime_only_sites().at(callsite);
+    require(polymorphic_site.targets.size() == 1u &&
+                polymorphic_site.targets.front() == target &&
+                polymorphic_site.targets_truncated &&
+                polymorphic_site.stability() == RuntimeTargetStability::Dynamic,
+            "Runtime-only-Profil behaelt weiterhin eine detaillierte Zielhistorie.");
 
     DispatchDiagnosticRecorder alias_diagnostics;
     IndirectDispatchMetrics alias_metrics;
@@ -481,6 +527,32 @@ void runtime_only_hit_hotloop_regression() {
                 miss_diagnostics.events().front().error ==
                     DispatchDiagnosticError::UnknownTarget,
             "Runtime-only-Miss verliert sein Detailereignis neben dem Hit-Hotpath.");
+
+    const auto registered_block = blocks.resolve(registered);
+    require(registered_block.has_value(), "Hotloopblock ging vor Codeguard-Test verloren.");
+    const auto identity = stable_runtime_block_identity(registered_block->get());
+    static_cast<void>(tracker.register_block(
+        {identity,
+         canonical_physical_address(target),
+         2u,
+         "runtime-only-hotloop",
+         {},
+         ExecutableBlockOrigin::ImageSegment,
+         {}}));
+    static_cast<void>(
+        tracker.observe_write(target, 2u, CodeWriteSource::Cpu, true));
+    request.kind = IndirectDispatchKind::TailJump;
+    request.target = target;
+    request.diagnostics = nullptr;
+    request.metrics = &metrics;
+    bool stale_cache_rejected = false;
+    try {
+        static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    } catch (const IndirectDispatchError&) {
+        stale_cache_rejected = true;
+    }
+    require(stale_cache_rejected,
+            "Block-/Codegeneration liess einen invalidierten Inline-Cachehit zu.");
 }
 } // namespace
 

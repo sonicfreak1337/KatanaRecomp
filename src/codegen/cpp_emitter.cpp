@@ -2556,6 +2556,53 @@ bool is_control_flow(const katana::ir::Operation operation) {
     return false;
 }
 
+bool can_batch_instruction_accounting(
+    const katana::ir::Instruction& instruction,
+    const katana::sh4::InstructionTiming& timing,
+    const bool external_instruction_observer) {
+    using Operation = katana::ir::Operation;
+    using TimingClass = katana::sh4::InstructionTimingClass;
+
+    const bool pure_timing =
+        timing.timing_class == TimingClass::SimpleInteger ||
+        timing.timing_class == TimingClass::MacDiv;
+
+    return !external_instruction_observer &&
+           instruction.delay_slot.role == katana::ir::DelaySlotRole::None &&
+           !is_control_flow(instruction.operation) &&
+           instruction.operation != Operation::Unknown &&
+           instruction.operation != Operation::Prefetch &&
+           !instruction.is_privileged && !is_fpu_operation(instruction) &&
+           instruction.memory_effects == katana::ir::MemoryEffects{} &&
+           pure_timing && !timing.requires_cycle_flush;
+}
+
+void emit_non_faulting_simple_instruction(std::ostringstream& output,
+                                          const katana::ir::Instruction& instruction,
+                                          const int indent) {
+    emit_indent(output, indent);
+    output << "{\n";
+    emit_indent(output, indent + 1);
+    output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_simple_instruction(output, instruction, indent + 1);
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
+void emit_instruction_accounting_region(std::ostringstream& output,
+                                        const int indent,
+                                        const std::size_t instruction_count,
+                                        const std::uint64_t guest_cycles) {
+    if (instruction_count == 0u) return;
+
+    emit_indent(output, indent);
+    output << "cpu.attempted_guest_instructions += " << instruction_count << "u;\n";
+    emit_indent(output, indent);
+    output << "cpu.retired_guest_instructions += " << instruction_count << "u;\n";
+    emit_indent(output, indent);
+    output << "cpu.pending_guest_cycles += " << guest_cycles << "u;\n";
+}
+
 void emit_block(std::ostringstream& output,
                 const katana::ir::BasicBlock& block,
                 const std::unordered_set<std::uint32_t>& known_functions,
@@ -2602,6 +2649,16 @@ void emit_block(std::ostringstream& output,
     }
 
     std::optional<std::size_t> control_index;
+    std::size_t accounting_region_instruction_count = 0u;
+    std::uint64_t accounting_region_guest_cycles = 0u;
+    const auto emit_pending_accounting_region = [&] {
+        emit_instruction_accounting_region(output,
+                                           4,
+                                           accounting_region_instruction_count,
+                                           accounting_region_guest_cycles);
+        accounting_region_instruction_count = 0u;
+        accounting_region_guest_cycles = 0u;
+    };
 
     for (std::size_t index = 0; index < block.instructions.size(); ++index) {
         const auto& instruction = block.instructions[index];
@@ -2615,9 +2672,23 @@ void emit_block(std::ostringstream& output,
             break;
         }
 
+        const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+        if (can_batch_instruction_accounting(
+                instruction, timing, external_instruction_observer)) {
+            emit_non_faulting_simple_instruction(output, instruction, 4);
+            ++accounting_region_instruction_count;
+            accounting_region_guest_cycles += timing.guest_cycles;
+            continue;
+        }
+
+        emit_pending_accounting_region();
         emit_guarded_simple_instruction(
             output, instruction, 4, single_block, external_instruction_observer);
     }
+
+    // A completed non-faulting prefix must become architecturally visible before
+    // a terminal instruction, block transition, scheduler boundary or return.
+    emit_pending_accounting_region();
 
     if (control_index.has_value()) {
         emit_terminal(output,

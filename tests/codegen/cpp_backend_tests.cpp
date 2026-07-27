@@ -149,7 +149,10 @@ int main() {
                 product_request.external_dynamic_dispatch &&
                 product_request.guarded_local_block_chaining &&
                 !product_request.external_instruction_observer &&
-                product_emission.joined_text().find("note_instruction_entry") == std::string::npos,
+                product_emission.joined_text().find("note_instruction_entry") ==
+                    std::string::npos &&
+                product_emission.functions.find(
+                    "cpu.attempted_guest_instructions += 1u;") != std::string::npos,
             "Produktprofil emittiert nicht den produktiven AOT-Vertrag hookfrei.");
 
     katana::codegen::NativeAotBackendRequestOptions conformance_options;
@@ -179,20 +182,27 @@ int main() {
 
     const auto normal_hook = conformance_emission.functions.find(
         "note_instruction_entry(katana::runtime::relocate_code_address(0x8C010000u), false);");
+    const auto normal_attempt = conformance_emission.functions.find(
+        "ExplicitGuestInstructionAttempt guest_instruction_attempt", normal_hook);
     const auto owner_hook = conformance_emission.functions.find(
         "note_instruction_entry(katana::runtime::relocate_code_address(0x8C010002u), false);");
     const auto terminal_attempt =
-        conformance_emission.functions.find("GuestInstructionAttempt terminal_instruction_attempt");
+        conformance_emission.functions.find(
+            "ExplicitGuestInstructionAttempt terminal_instruction_attempt");
     const auto slot_hook = conformance_emission.functions.find(
         "note_instruction_entry(katana::runtime::relocate_code_address(0x8C010004u), true);");
     const auto slot_attempt = conformance_emission.functions.find(
-        "GuestInstructionAttempt guest_instruction_attempt", slot_hook);
-    require(normal_hook != std::string::npos && owner_hook != std::string::npos &&
-                terminal_attempt != std::string::npos && slot_hook != std::string::npos &&
-                slot_attempt != std::string::npos && normal_hook < owner_hook &&
+        "ExplicitGuestInstructionAttempt guest_instruction_attempt", slot_hook);
+    require(normal_hook != std::string::npos && normal_attempt != std::string::npos &&
+                owner_hook != std::string::npos && terminal_attempt != std::string::npos &&
+                slot_hook != std::string::npos && slot_attempt != std::string::npos &&
+                normal_hook < normal_attempt && normal_attempt < owner_hook &&
                 owner_hook < terminal_attempt && terminal_attempt < slot_hook &&
-                slot_hook < slot_attempt,
-            "Externer Beobachter liegt nicht vor jeder ausgefuehrten Instruktionsart.");
+                slot_hook < slot_attempt &&
+                conformance_emission.functions.find("cpu.attempted_guest_instructions +=") ==
+                    std::string::npos,
+            "Externer Beobachter liegt nicht vor jeder exakten Instruktionsbuchhaltung oder "
+            "laesst Regionenbatching zu.");
 
     bool product_observer_rejected = false;
     try {

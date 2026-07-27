@@ -1702,6 +1702,10 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         {},
         std::move(validation_proof),
         validation_mutable_ranges,
+        0u,
+        0u,
+        false,
+        false,
         interpreter_backed,
         aot_template};
     origins_.reserve(origins_.size() + 1u);
@@ -1709,11 +1713,15 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     pending_origin.handle = handle;
     try {
         origins_.push_back(std::move(pending_origin));
+        origin_indices_.emplace(handle.id, origins_.size() - 1u);
     } catch (...) {
+        if (!origins_.empty() && origins_.back().handle == handle) origins_.pop_back();
+        origin_indices_.erase(handle.id);
         static_cast<void>(blocks_.erase_identity(identity));
         throw;
     }
     if (!validate_for_dispatch(cpu, handle, target, physical_target)) {
+        origin_indices_.erase(handle.id);
         origins_.pop_back();
         static_cast<void>(blocks_.erase_identity(identity));
         return std::nullopt;
@@ -1731,6 +1739,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
                                                         validation_mutable_ranges}));
         }
     } catch (...) {
+        origin_indices_.erase(handle.id);
         origins_.pop_back();
         static_cast<void>(blocks_.erase_identity(identity));
         throw;
@@ -1759,6 +1768,29 @@ const std::vector<BlockMaterializationEvent>& DemandBlockMaterializer::events() 
 
 MaterializationFailure DemandBlockMaterializer::last_failure() const noexcept {
     return last_failure_;
+}
+
+DemandBlockMaterializer::MaterializedOrigin*
+DemandBlockMaterializer::find_origin(const RuntimeBlockHandle handle) noexcept {
+    const auto found = origin_indices_.find(handle.id);
+    if (found == origin_indices_.end() || found->second >= origins_.size()) return nullptr;
+    auto& origin = origins_[found->second];
+    return origin.handle == handle ? &origin : nullptr;
+}
+
+const DemandBlockMaterializer::MaterializedOrigin*
+DemandBlockMaterializer::find_origin(const RuntimeBlockHandle handle) const noexcept {
+    const auto found = origin_indices_.find(handle.id);
+    if (found == origin_indices_.end() || found->second >= origins_.size()) return nullptr;
+    const auto& origin = origins_[found->second];
+    return origin.handle == handle ? &origin : nullptr;
+}
+
+void DemandBlockMaterializer::erase_origin_index(const std::size_t erased_index) noexcept {
+    for (auto index = erased_index; index < origins_.size(); ++index) {
+        const auto found = origin_indices_.find(origins_[index].handle.id);
+        if (found != origin_indices_.end()) found->second = index;
+    }
 }
 
 bool DemandBlockMaterializer::origin_matches_module(
@@ -1841,6 +1873,8 @@ void DemandBlockMaterializer::bind_origin_to_module(MaterializedOrigin& origin,
     origin.source_identity = module.source_identity;
     origin.module_generation = module.generation;
     origin.relocation_generation = module.relocation_generation;
+    origin.byte_identity_validated = false;
+    origin.generation_observer_validated = false;
 }
 
 bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
@@ -1848,28 +1882,33 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
                                                     const std::uint32_t target,
                                                     const std::optional<std::uint32_t>
                                                         physical_entry) noexcept {
-    auto origin = std::find_if(origins_.begin(), origins_.end(), [&](const auto& candidate) {
-        const auto begin = static_cast<std::uint64_t>(candidate.address);
-        const auto end = begin + candidate.block_size;
-        const auto requested = static_cast<std::uint64_t>(target);
-        if (candidate.handle != handle) return false;
+    auto* const origin = find_origin(handle);
+    if (origin == nullptr) {
+        increment(metrics_.dispatch_validation_failures);
+        fail(MaterializationFailure::StaleHandle, target);
+        return false;
+    }
+    const auto begin = static_cast<std::uint64_t>(origin->address);
+    const auto end = begin + origin->block_size;
+    const auto requested = static_cast<std::uint64_t>(target);
+    const auto entry_matches = [&] {
         if (!physical_entry)
-            return candidate.address == target ||
-                   (candidate.interpreter_backed && requested >= begin &&
+            return origin->address == target ||
+                   (origin->interpreter_backed && requested >= begin &&
                     requested + 2u <= end);
-        if (candidate.block_module_address < candidate.module_address) return false;
+        if (origin->block_module_address < origin->module_address) return false;
         const auto block_offset =
-            candidate.block_module_address - candidate.module_address;
+            origin->block_module_address - origin->module_address;
         const auto expected_entry =
-            static_cast<std::uint64_t>(candidate.physical_address) + block_offset;
+            static_cast<std::uint64_t>(origin->physical_address) + block_offset;
         const auto translated_entry =
             static_cast<std::uint64_t>(canonical_physical_address(*physical_entry));
-        return candidate.interpreter_backed
+        return origin->interpreter_backed
                    ? translated_entry >= expected_entry &&
-                         translated_entry + 2u <= expected_entry + candidate.block_size
+                         translated_entry + 2u <= expected_entry + origin->block_size
                    : translated_entry == expected_entry;
-    });
-    if (origin == origins_.end()) {
+    }();
+    if (!entry_matches) {
         increment(metrics_.dispatch_validation_failures);
         fail(MaterializationFailure::StaleHandle, target);
         return false;
@@ -1884,7 +1923,7 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
         module != nullptr && module->source_identity == origin->source_identity &&
         module->generation == origin->module_generation &&
         module->relocation_generation == origin->relocation_generation &&
-        origin_matches_module(*origin, *module);
+        module->materializable(origin->block_module_address, origin->block_size);
     if (!dependency_matches) {
         if (const auto* replacement = compatible_owner(*origin)) {
             bind_origin_to_module(*origin, *replacement);
@@ -1907,8 +1946,23 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
         fail(MaterializationFailure::RelocationMismatch, target);
         return false;
     }
-    if (!origin_matches_module(*origin, *module) ||
+    if (!module->materializable(origin->block_module_address, origin->block_size) ||
         !cpu.memory.contains(origin->physical_address, origin->size)) {
+        increment(metrics_.dispatch_validation_failures);
+        fail(MaterializationFailure::ProvenNonCode, target);
+        return false;
+    }
+    const auto code_generation =
+        tracker_ != nullptr ? tracker_->invalidation_count() : 0u;
+    const auto observed_code_generation =
+        tracker_ != nullptr && cpu.memory.has_guest_write_observer() &&
+        cpu.memory.guest_write_observer_allows_prevalidated_linear_writes();
+    if (observed_code_generation && origin->byte_identity_validated &&
+        origin->generation_observer_validated &&
+        origin->validated_code_generation == code_generation) {
+        return true;
+    }
+    if (!origin_matches_module(*origin, *module)) {
         increment(metrics_.dispatch_validation_failures);
         fail(MaterializationFailure::ProvenNonCode, target);
         return false;
@@ -1937,7 +1991,66 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
              target);
         return false;
     }
+    origin->validated_code_generation = code_generation;
+    origin->byte_identity_validated = true;
+    origin->generation_observer_validated = observed_code_generation;
+    increment(origin->validation_generation);
     return true;
+}
+
+std::optional<BlockDispatchGenerationGuard>
+DemandBlockMaterializer::capture_dispatch_generation_guard(
+    const CpuState& cpu,
+    const RuntimeBlockHandle handle,
+    const bool runtime_registered) const noexcept {
+    if (tracker_ == nullptr || !cpu.memory.has_guest_write_observer() ||
+        !cpu.memory.guest_write_observer_allows_prevalidated_linear_writes())
+        return std::nullopt;
+    BlockDispatchGenerationGuard guard;
+    guard.block = handle;
+    guard.code_generation = tracker_->invalidation_count();
+    guard.runtime_registered = runtime_registered;
+    if (!runtime_registered) return guard;
+
+    const auto* const origin = find_origin(handle);
+    if (origin == nullptr || !origin->byte_identity_validated ||
+        !origin->generation_observer_validated ||
+        origin->validated_code_generation != guard.code_generation)
+        return std::nullopt;
+    const auto* const module = modules_.find(origin->module_id);
+    if (module == nullptr || module->source_identity != origin->source_identity ||
+        module->generation != origin->module_generation ||
+        module->relocation_generation != origin->relocation_generation ||
+        !module->materializable(origin->block_module_address, origin->block_size))
+        return std::nullopt;
+    guard.module_generation = origin->module_generation;
+    guard.relocation_generation = origin->relocation_generation;
+    guard.validation_generation = origin->validation_generation;
+    return guard;
+}
+
+bool DemandBlockMaterializer::dispatch_generation_guard_current(
+    const CpuState& cpu,
+    const BlockDispatchGenerationGuard& guard) const noexcept {
+    if (tracker_ == nullptr || !cpu.memory.has_guest_write_observer() ||
+        !cpu.memory.guest_write_observer_allows_prevalidated_linear_writes() ||
+        tracker_->invalidation_count() != guard.code_generation)
+        return false;
+    if (!guard.runtime_registered) return true;
+
+    const auto* const origin = find_origin(guard.block);
+    if (origin == nullptr || !origin->byte_identity_validated ||
+        !origin->generation_observer_validated ||
+        origin->validated_code_generation != guard.code_generation ||
+        origin->module_generation != guard.module_generation ||
+        origin->relocation_generation != guard.relocation_generation ||
+        origin->validation_generation != guard.validation_generation)
+        return false;
+    const auto* const module = modules_.find(origin->module_id);
+    return module != nullptr && module->source_identity == origin->source_identity &&
+           module->generation == guard.module_generation &&
+           module->relocation_generation == guard.relocation_generation &&
+           module->materializable(origin->block_module_address, origin->block_size);
 }
 
 void DemandBlockMaterializer::reconcile_inactive_origins(
@@ -1975,7 +2088,11 @@ void DemandBlockMaterializer::reconcile_inactive_origins(
         if (dispatch_metrics != nullptr)
             dispatch_metrics->record_invalidation(origin->callsite);
         release_proof(*origin);
+        const auto erased_index =
+            static_cast<std::size_t>(origin - origins_.begin());
+        origin_indices_.erase(origin->handle.id);
         origin = origins_.erase(origin);
+        erase_origin_index(erased_index);
     }
 }
 
@@ -2033,7 +2150,11 @@ void DemandBlockMaterializer::record_invalidation(const std::uint32_t address,
             static_cast<void>(tracker_->retire_block(origin->block_identity));
         dispatch_metrics.record_invalidation(origin->callsite);
         release_proof(*origin);
+        const auto erased_index =
+            static_cast<std::size_t>(origin - origins_.begin());
+        origin_indices_.erase(origin->handle.id);
         origin = origins_.erase(origin);
+        erase_origin_index(erased_index);
     }
 }
 
