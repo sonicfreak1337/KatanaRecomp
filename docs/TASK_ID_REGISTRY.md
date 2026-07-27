@@ -7,11 +7,10 @@
 3. Entfaellt eine Aufgabe, bleibt ihre ID als `retired` registriert.
 4. Wird eine Aufgabe ersetzt oder aufgeteilt, erhaelt jede neue Arbeit eine neue ID.
 5. `superseded_by` ist eine einseitige Historienreferenz, kein Alias.
-6. ROADMAP und TASKS muessen fuer aktive IDs denselben Titel und dieselbe
-   Grundbedeutung verwenden.
+6. ROADMAP und TASKS muessen fuer aktive IDs denselben Titel und dieselbe Grundbedeutung verwenden.
 7. Gate- und Release-IDs werden nie fuer Implementierungsarbeit wiederverwendet.
 
-## Wiederhergestellte historische IDs
+## Historische und bestehende IDs
 
 | ID | Erster stabiler Titel | Status |
 |---|---|---|
@@ -20,75 +19,70 @@
 | KR-4803 | Out-of-Tree-`game.exe`-Integration | aktiv in v0.49 |
 | KR-4804 | v0.48 Gate-Vorbereitung: Tests und Build | retired, superseded_by KR-4853 |
 | KR-4805 | v0.48 interne Meilenstein-Freigabe | retired, superseded_by KR-4854 |
-| KR-4901 | Alpha-CI-Konfiguration fuer Windows und Linux | aktiv in v0.49 |
-| KR-4902 | Reproduzierbare Pakete sowie Daten- und Lizenzaudit | aktiv in v0.49 |
-| KR-4903 | Alpha-Checkpoint- und Gate-Automatisierung einfrieren | aktiv in v0.49 |
-| KR-4904 | v0.49 Gate-Vorbereitung: Tests und Build | aktiv in v0.49 |
-| KR-4905 | v0.49 interne Kandidaten-Freigabe | aktiv in v0.49 |
+| KR-4811 | Private Harnessmodi und technisch erzwungener No-run-Vertrag | historisch |
+| KR-4812 | Strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz | historisch |
+| KR-4813 | Content-addressed Harness- und Portbuildbeschleunigung | historisch |
+| KR-4814 | Nativer Controller und gastzeitgebundene Maple-Eingabe | abgeschlossen |
+| KR-4821 | Versionierte Jobtelemetrie und belastbarer Fortschritt | historisch |
+| KR-4822 | GUI-Informationsarchitektur und responsives Layout | spaeter |
+| KR-4823 | Diagnostik-, Ergebnis-, Log- und Workflow-QOL | spaeter |
+| KR-4824 | Unveraenderliche Task-ID-Registry und Roadmaplinter | aktiv in v0.49 |
+| KR-4831 | Generischer Originaldisc-Installer ohne Retaildaten im Portpaket | abgeschlossen |
+| KR-4841 | Clean-Room-Referenz- und Nicht-Emulationsvertrag | abgeschlossen |
+| KR-4842 | Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation | abgeschlossen |
+| KR-4843 | Alias-korrekter nativer Disc-Systembootstrap | abgeschlossen |
+| KR-4844 | Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard | abgeschlossen |
+| KR-4845 | BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region | abgeschlossen |
+| KR-4846 | GD-ROM-BIOS-Requestqueue, Status und TOC | abgeschlossen |
+| KR-4847 | GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming | offen ausserhalb des aktuellen DirectBoot-P0 |
+| KR-4848 | Runtimecode, Disc-Module, Overlays und latentes AOT | abgeschlossen |
+| KR-4849 | TA-Eingang und PVR-Kommandopfad | offen, produktgetrieben |
+| KR-4850 | Erster scanoutgebundener Gastframe | historisch durch IP.BIN-Direct-FB belegt |
+| KR-4851 | Boot- und Frame-Hotpath | superseded in v0.49 by KR-4956 bis KR-4960 |
+| KR-4852 | Konsolidierte v0.48-Validierung | offen, nicht aktueller P0 |
+| KR-4853 | v0.48 Boot-Gate-Vorbereitung | offen, nicht aktueller P0 |
+| KR-4854 | v0.48 interne Freigabe | offen, nicht aktueller P0 |
+| KR-4901 | Alpha-CI-Konfiguration fuer Windows und Linux | spaeter |
+| KR-4902 | Reproduzierbare Pakete sowie Daten- und Lizenzaudit | spaeter |
+| KR-4903 | Alpha-Checkpoint- und Gate-Automatisierung einfrieren | spaeter |
+| KR-4904 | v0.49 Gate-Vorbereitung: Tests und Build | spaeter |
+| KR-4905 | v0.49 interne Kandidaten-Freigabe | spaeter |
+| KR-4911 | Runtimebeobachtung, Replay und Fehlerpakete | abgeschlossen |
+| KR-4912 | Dynamische Codebereiche, Module und Overlays | abgeschlossen |
+| KR-4913 | CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` | abgeschlossen im historischen NativeDiscBoot |
+| KR-4914 | Private interaktive Runtime-Sitzung mit Controller | offen nach sichtbarem Spielboot |
+| KR-4915 | Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME` | historisch durch IP.BIN-Direct-FB belegt |
+| KR-4916 | Menue, Eingabe und spielbare Szene | offen |
 
-## Migration der versehentlich wiederverwendeten IDs
+## v0.49 Sonic-Adventure-Produktaufgaben
 
-Die Roadmapverdichtung ab Commit
-`9e8257b5fbac8003fae445477bb7a40af67ca34b` verwendete mehrere bestehende IDs
-fuer neue Arbeit. Diese Zuordnung gilt als korrigierter Planungsfehler.
-
-| Zwischenzeitliche Bedeutung | Faelschliche ID | Neue ID |
-|---|---:|---:|
-| Runtimebeobachtung, Replay und Fehlerpakete | KR-4801 | KR-4911 |
-| Dynamische Codebereiche, Module und Overlays | KR-4802 | KR-4912 |
-| CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` | KR-4803 | KR-4913 |
-| Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME` | KR-4804 | KR-4915 |
-| Menue, Eingabe und spielbare Szene | KR-4805 | KR-4916 |
-| Alpha-Haertung, Paketierung, CI und Audit | KR-4901 | KR-4901, KR-4902 und KR-4903 nach urspruenglichem Scope |
-
-## Neue IDs dieser Planung
-
-| ID | Titel |
-|---|---|
-| KR-4811 | Private Harnessmodi und technisch erzwungener No-run-Vertrag |
-| KR-4812 | Strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz |
-| KR-4813 | Content-addressed Harness- und Portbuildbeschleunigung |
-| KR-4814 | Nativer Controller und gastzeitgebundene Maple-Eingabe |
-| KR-4821 | Versionierte Jobtelemetrie und belastbarer Fortschritt |
-| KR-4822 | GUI-Informationsarchitektur und responsives Layout |
-| KR-4823 | Diagnostik-, Ergebnis-, Log- und Workflow-QOL |
-| KR-4824 | Unveraenderliche Task-ID-Registry und Roadmaplinter |
-| KR-4831 | Generischer Originaldisc-Installer ohne Retaildaten im Portpaket |
-| KR-4841 | Clean-Room-Referenz- und Nicht-Emulationsvertrag |
-| KR-4842 | Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation |
-| KR-4843 | Alias-korrekter nativer Disc-Systembootstrap |
-| KR-4844 | Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard |
-| KR-4845 | BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region |
-| KR-4846 | GD-ROM-BIOS-Requestqueue, Status und TOC |
-| KR-4847 | GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming |
-| KR-4848 | Runtimecode, Disc-Module, Overlays und latentes AOT |
-| KR-4849 | TA-Eingang und PVR-Kommandopfad |
-| KR-4850 | Erster scanoutgebundener Gastframe |
-| KR-4851 | Boot- und Frame-Hotpath |
-| KR-4852 | Konsolidierte v0.48-Validierung |
-| KR-4853 | v0.48 Boot-Gate-Vorbereitung |
-| KR-4854 | v0.48 interne Freigabe |
-| KR-4911 | Runtimebeobachtung, Replay und Fehlerpakete |
-| KR-4912 | Dynamische Codebereiche, Module und Overlays |
-| KR-4913 | CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` |
-| KR-4914 | Private interaktive Runtime-Sitzung mit Controller |
-| KR-4915 | Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME` |
-| KR-4916 | Menue, Eingabe und spielbare Szene |
+| ID | Titel | Status |
+|---|---|---|
+| KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | aktiv P0 |
+| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | aktiv P0 |
+| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | geplant P0 |
+| KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | geplant P0 |
+| KR-4955 | Explizite Funktionsgrenzen und Tabellenhinweise End-to-End | geplant P0 |
+| KR-4956 | Static-AOT-Dispatchflucht inventarisieren und schliessen | aktiv P0 |
+| KR-4957 | Direkte native Calls ueber sichere Timinggrenzen | geplant P0 |
+| KR-4958 | IR-basierte Registerlokalisierung und RAM-Regionen | geplant P1 |
+| KR-4959 | Ereignisgetriebene Scheduler-/IRQ-Safepoints | geplant P1 |
+| KR-4960 | 200-MHz-Produkt-Hotpath | geplant P0 |
+| KR-4961 | Externes SonicAdventureRecomp-Bring-up-Projekt | geplant P0, externes Produktprojekt |
+| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | geplant P0 |
+| KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | geplant P1 |
+| KR-4964 | v0.49 Produktabnahme bis sichtbarem Spielbild | Gate |
 
 ## Aktuelle Meilensteinzuordnung
 
-- v0.48: `KR-4814`, `KR-4831`, `KR-4841` bis `KR-4854` sowie `KR-4911`,
-  `KR-4912`, `KR-4913`, `KR-4914` und `KR-4915`; Controllerarbeit
-  `KR-4814`/`KR-4914` beginnt nach dem durch `KR-4850` belegten Gastframe und
-  endet vor dem einzigen finalen Vollgate in `KR-4852`
-- v0.49: `KR-4801` bis `KR-4803`, `KR-4811` bis `KR-4813`, `KR-4821`
-  bis `KR-4824`, `KR-4901` bis `KR-4905` und `KR-4916`
-- `KR-4804` und `KR-4805` sind retired; die Nachfolger sind `KR-4853` und
-  `KR-4854`.
+- v0.48 bleibt historische NativeDiscBoot- und erster-Frame-Arbeit.
+- v0.49 verwendet `KR-4951` bis `KR-4964` als verbindlichen Produktpfad.
+- `KR-4847`, `KR-4849`, `KR-4914` und `KR-4916` werden nur dann in den aktiven Pfad gezogen, wenn ein echter SA-Produktlauf sie als naechsten Blocker belegt.
+- `KR-4901` bis `KR-4905` beginnen erst nach `KR-4964`.
 
 ## Geplanter Lintervertrag
 
-Der spaetere Roadmaplinter muss mindestens pruefen:
+Der Roadmaplinter muss mindestens pruefen:
 
 - doppelte aktive IDs
 - unterschiedliche aktive Titel derselben ID
