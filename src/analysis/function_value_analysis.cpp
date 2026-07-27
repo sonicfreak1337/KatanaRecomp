@@ -1464,6 +1464,8 @@ void observe_stored_code_addresses(
     bool supported = false;
     bool stack_based = false;
     bool vbr_relative_destination = false;
+    bool destination_proven_non_stack = false;
+    std::vector<std::uint32_t> effective_destinations;
     std::set<std::uint32_t> evidence_call_sites;
     std::set<std::uint32_t> evidence_callees;
     const auto include_provenance = [&](const AbstractValue& evidence) {
@@ -1483,39 +1485,44 @@ void observe_stored_code_addresses(
         supported = true;
         vbr_relative_destination =
             state.inventory_vbr_relative[instruction.destination_register];
+        destination_proven_non_stack =
+            !state.inventory_stack_may_alias[instruction.destination_register];
+        effective_destinations = displaced_addresses(
+            state[instruction.destination_register], 0u);
         stack_based =
             !vbr_relative_destination &&
             state.inventory_stack_may_alias[instruction.destination_register] &&
-            !finite_effective_address(
-                displaced_addresses(
-                    state[instruction.destination_register], 0u));
+            !finite_effective_address(effective_destinations);
         include_provenance(state[instruction.destination_register]);
         break;
     case K::MovLongStorePreDecrement:
         supported = true;
         vbr_relative_destination =
             state.inventory_vbr_relative[instruction.destination_register];
+        destination_proven_non_stack =
+            !state.inventory_stack_may_alias[instruction.destination_register];
+        effective_destinations = displaced_addresses(
+            state[instruction.destination_register],
+            static_cast<std::uint32_t>(-4));
         stack_based =
             !vbr_relative_destination &&
             state.inventory_stack_may_alias[instruction.destination_register] &&
-            !finite_effective_address(
-                displaced_addresses(
-                    state[instruction.destination_register],
-                    static_cast<std::uint32_t>(-4)));
+            !finite_effective_address(effective_destinations);
         include_provenance(state[instruction.destination_register]);
         break;
     case K::MovLongStoreDisplacement:
         supported = true;
         vbr_relative_destination =
             state.inventory_vbr_relative[instruction.destination_register];
+        destination_proven_non_stack =
+            !state.inventory_stack_may_alias[instruction.destination_register];
+        effective_destinations = displaced_addresses(
+            state[instruction.destination_register],
+            static_cast<std::uint32_t>(instruction.displacement));
         stack_based =
             !vbr_relative_destination &&
             state.inventory_stack_may_alias[instruction.destination_register] &&
-            !finite_effective_address(
-                displaced_addresses(
-                    state[instruction.destination_register],
-                    static_cast<std::uint32_t>(
-                        instruction.displacement)));
+            !finite_effective_address(effective_destinations);
         include_provenance(state[instruction.destination_register]);
         break;
     case K::MovLongStoreR0Indexed:
@@ -1531,16 +1538,20 @@ void observe_stored_code_addresses(
                 (base_vbr_relative && !r0_vbr_relative &&
                  finite_value(state[0u]));
         }
+        destination_proven_non_stack =
+            !state.inventory_stack_may_alias[0u] &&
+            !state.inventory_stack_may_alias
+                [instruction.destination_register];
+        effective_destinations =
+            indexed_addresses(state[0u],
+                              state[instruction.destination_register],
+                              instruction.destination_register == 0u);
         stack_based =
             !vbr_relative_destination &&
             (state.inventory_stack_may_alias[0u] ||
              state.inventory_stack_may_alias
                  [instruction.destination_register]) &&
-            !finite_effective_address(
-                indexed_addresses(
-                    state[0u],
-                    state[instruction.destination_register],
-                    instruction.destination_register == 0u));
+            !finite_effective_address(effective_destinations);
         include_provenance(state[0u]);
         include_provenance(state[instruction.destination_register]);
         break;
@@ -1554,11 +1565,30 @@ void observe_stored_code_addresses(
 
     const auto& value = state[instruction.source_register];
     include_provenance(value);
-    if (!value.known || value.values.empty() ||
-        value.values.size() > maximum_summary_values ||
-        (evidence_call_sites.empty() &&
-         !vbr_relative_destination))
+    if (!finite_value(value))
         return;
+    const bool finite_resolved_non_stack_destination =
+        !vbr_relative_destination && destination_proven_non_stack &&
+        finite_effective_address(effective_destinations) &&
+        std::ranges::all_of(
+            effective_destinations,
+            [&](const auto address) {
+                return image.resolve_segment_address(address, 4u).has_value();
+            });
+    const bool direct_code_pointer_provenance =
+        !evidence_call_sites.empty() || vbr_relative_destination;
+    if (!direct_code_pointer_provenance &&
+        !finite_resolved_non_stack_destination)
+        return;
+
+    constexpr detail::SnapshotPointerCandidateScanPolicy stored_table_scan_policy{
+        .minimum_entries = 4u,
+        .maximum_scanned_slots = 64u,
+        .maximum_skipped_slots = 8u,
+        .maximum_consecutive_skipped_slots = 3u,
+        .treat_null_as_reserved = true,
+        .reject_truncated_scan = false,
+    };
     std::vector<std::uint32_t> validated_candidates;
     validated_candidates.reserve(value.values.size());
     bool all_candidates_valid = true;
@@ -1566,9 +1596,30 @@ void observe_stored_code_addresses(
         const auto validation = validate_decode_candidate(image, candidate);
         if (!validation.valid()) {
             all_candidates_valid = false;
+            if (!finite_resolved_non_stack_destination) continue;
+            const auto table = detail::analyze_snapshot_pointer_candidates(
+                image,
+                line.address,
+                candidate,
+                JumpTableDispatchKind::Call,
+                stored_table_scan_policy);
+            if (!table.has_value()) continue;
+            for (const auto& entry : table->entries) {
+                StoredCodeAddressCandidate observation;
+                observation.target_address = entry.target;
+                observation.complete = false;
+                observation.guarded = true;
+                observation.store_instruction_addresses = {line.address};
+                observation.evidence_call_sites.assign(
+                    evidence_call_sites.begin(), evidence_call_sites.end());
+                observation.evidence_callees.assign(
+                    evidence_callees.begin(), evidence_callees.end());
+                candidates.push_back(std::move(observation));
+            }
             continue;
         }
-        validated_candidates.push_back(validation.resolved_address);
+        if (direct_code_pointer_provenance)
+            validated_candidates.push_back(validation.resolved_address);
     }
     normalize(validated_candidates);
     const bool complete = value.complete && all_candidates_valid;
