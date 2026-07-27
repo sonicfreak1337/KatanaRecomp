@@ -52,6 +52,22 @@ praesentierten keinen klassifizierbaren Frame. Damit sind Messvertrag und
 Compiler-A/B erfuellt, nicht aber der sichtbare SEGA-Nachweis oder das
 200-MHz-Ziel. Die weitere Bootursachenanalyse bleibt wie angeordnet vertagt.
 
+Der juengste MSVC-Gateexport `DirectBoot-v23` entstand aus Quellstand
+`31c5575` und umfasst 1.939 Funktionen in 42 Partitionen. Die lokale
+Installation aus einer validierten PAL-GDI war mit drei Tracks und 521.461
+Sektoren erfolgreich. Der anschliessende normale Produktlauf erreichte exakt
+600.000.000 Gastzyklen in 14,0113 Sekunden Hostzeit, entsprechend 42,8225
+effektiven Gast-MHz, und zaehlte 52.329.316 zentrale Dispatches. Er erreichte
+`GameCodeProgressed` und endete kontrolliert mit Exitcode 0; zugleich blieben
+`visible_screen=none`, `frames=0` und `first_problem=none`. Der letzte PC war
+`0x8C65A624` (dezimal 2.355.471.908), GD-ROM meldete 70 abgeschlossene
+Kommandos und AICA 180 gerenderte Audiopuffer. Das war ein gewoehnlicher
+DirectBoot ohne externes `GameEntryHandoff`; der Lauf prueft den neuen
+Handoff-Pfad daher nicht. Der geraeteuebergreifende
+`CompletePlatform`-Apply bleibt unimplementiert und endet im Produktpfad nach
+vollstaendig identitaetsgebundenem Staging weiterhin ausdruecklich
+fail-closed.
+
 Der echte warme Export dauerte 2,258 Sekunden mit MSVC und 2,297 Sekunden mit
 clang-cl. Die resultierenden EXEs waren 67.062.272 beziehungsweise 69.149.696
 Bytes gross. Der erste MSVC-Umbauexport dauerte rund 199,5 Sekunden und

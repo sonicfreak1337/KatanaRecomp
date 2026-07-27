@@ -28,7 +28,19 @@
   Descriptor-Identitaet und staged ausschliesslich `CompletePlatform`.
   Solange der geraeteuebergreifende Apply-Pfad fehlt, endet er danach
   ausdruecklich statt auf CPU/RAM zurueckzufallen.
-  Damit wird noch kein erfolgreicher DirectBoot behauptet. Runtime-ABI 62 und
+  Ein davon getrennter, gewoehnlicher `DirectBoot-v23` ohne externes Handoff
+  wurde aus Quellstand `31c5575` mit MSVC als Gateport exportiert: 1.939
+  Funktionen, 42 Partitionen und eine erfolgreiche lokale PAL-Discinstallation
+  mit drei Tracks und 521.461 Sektoren. Der Produktlauf erreichte exakt
+  600.000.000 Gastzyklen in 14,0113 Sekunden beziehungsweise 42,8225 MHz bei
+  52.329.316 zentralen Dispatches. Er meldete `GameCodeProgressed`, 70
+  abgeschlossene GD-ROM-Kommandos und 180 Audiopuffer und endete mit Exitcode
+  0 sowie `first_problem=none`; sichtbar blieben `visible_screen=none` und
+  `frames=0`. Der letzte PC war `0x8C65A624` (dezimal 2.355.471.908). Dieser
+  Lauf belegt weder den weiterhin unimplementierten
+  `CompletePlatform`-Apply noch einen sichtbaren Spielbildschirm.
+  Damit wird noch kein erfolgreicher Handoff-DirectBoot behauptet.
+  Runtime-ABI 62 und
   Portprojektvertrag 52 invalidieren inkompatible Runtime- und
   Whole-Export-Cachetreffer. Ersetzte,
   unbrauchbare private Portexporte werden nach einem bestaetigten
