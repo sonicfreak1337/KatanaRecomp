@@ -172,9 +172,13 @@ Gast-MHz, zentrale Dispatches, technische Framemarker und das erste neue
 AOT-, Runtime- oder Geraeteproblem. Ein sichtbarer Bildschirm wird separat
 anhand einer realen Ausgabeaufnahme klassifiziert.
 
-Der private Sonic-Bootbefund sowie das 200-MHz-Ziel sind mit diesem
-Architekturcommit ausdruecklich nicht neu abgenommen. Die weitere
-Bootursachenanalyse ist vertagt.
+Der executable-first Produktport erreichte mit MSVC und clang-cl jeweils exakt
+600.000.000 Gastzyklen. MSVC lieferte 40,3869 MHz in 14,8563 Sekunden,
+clang-cl 42,4662 MHz in 14,1289 Sekunden; beide Laeufe zaehlten 52.329.316
+zentrale Dispatches, meldeten kein neues technisches Problem und
+praesentierten keinen klassifizierbaren Frame. Das 200-MHz-Ziel und der
+sichtbare SEGA-Nachweis bleiben damit offen; die weitere Bootursachenanalyse
+ist vertagt.
 
 ## Diagnose
 

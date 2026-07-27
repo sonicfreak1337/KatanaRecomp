@@ -17,6 +17,11 @@
   produktseitig abgekoppelte Detaildiagnostik, adressgebundene
   Fastpathdeskriptoren, Bring-up-/Gateprofile und automatische Bindung des
   installierten Runtimepakets vervollstaendigen die neue Produktgrenze.
+  Der reale executable-first Port erreichte mit MSVC und clang-cl jeweils
+  600.000.000 Gastzyklen ohne neues technisches Problem. Gemessen wurden
+  40,3869 beziehungsweise 42,4662 MHz, 2,258 beziehungsweise 2,297 Sekunden
+  Warmexport und identische 52.329.316 zentrale Dispatches. Ein sichtbarer
+  Frame und das 200-MHz-Ziel bleiben offen.
 - Die projektweite Testrichtlinie verwendet ab sofort den normalen privaten
   Sonic-Adventure-PAL-Produktlauf als entscheidendes Fortschritts- und
   Freigabekriterium. Breite Suites, vorsorgliche Funktionsmatrizen und

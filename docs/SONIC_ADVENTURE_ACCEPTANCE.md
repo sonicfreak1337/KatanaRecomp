@@ -120,3 +120,18 @@ Frame-/VRAM-/Scheduler-Hashes vergleichen. Private Pfade, Hashidentitaeten,
 Gastadressen, Screenshots und Retailwerte bleiben im lokalen Handoff und
 ausserhalb dieses Repositorys. Bis dahin darf der Befund weder als
 Bootkorrektheitsnachweis noch als funktionaler Rueckschritt bewertet werden.
+
+## Executable-First-Produktgate vom 27.07.2026
+
+Der aus dem privaten Boot-Executable-Artefakt frisch erzeugte v0.49-Port wurde
+mit MSVC und clang-cl real ausgefuehrt. Beide Laeufe erreichten exakt
+600.000.000 Gastzyklen, meldeten weder AOT-, Runtime- noch Geraeteprobleme und
+erreichten die generischen Checkpoints `KR_GUEST_PROGRAM_DISPATCHED`,
+`KR_GUEST_PROGRAM_PROGRESSED` und `KR_GUEST_PROGRAM_ENTERED`.
+
+MSVC benoetigte 14,8563 Sekunden Produktzeit (40,3869 MHz), clang-cl 14,1289
+Sekunden (42,4662 MHz). Beide Varianten zaehlten 52.329.316 zentrale
+Dispatches. Es wurde kein klassifizierbarer Frame praesentiert; der hoechste
+sichtbare Meilenstein bleibt daher `none`. Das Ergebnis belegt einen stabilen
+DirectBoot-Ausfuehrungspfad und einen echten Compilervergleich, aber weder
+Bootkorrektheit bis zum SEGA-Bild noch das 200-MHz-Ziel.

@@ -88,3 +88,18 @@ Eine belastbare Warmbuildmessung:
 5. berichtet Cachetreffer, Compiler, Linker und Profil.
 
 Ein synthetischer Compilerbenchmark ersetzt diese Messung nicht.
+
+## Reale v0.49-Messung
+
+Der executable-first Produktport wurde mit demselben Eingabeartefakt,
+Bring-up-Profil, Ninja-Generator und Microsoft-Linker gebaut. Der zweite
+identische Export dauerte mit MSVC 2,258 Sekunden und mit clang-cl 2,297
+Sekunden. Die EXE-Groessen betrugen 67.062.272 und 69.149.696 Bytes.
+
+Bei exakt 600.000.000 Gastzyklen erreichte MSVC 40,3869 MHz in 14,8563
+Sekunden, clang-cl 42,4662 MHz in 14,1289 Sekunden. clang-cl war damit 5,15
+Prozent schneller, erzeugte aber eine 3,11 Prozent groessere EXE. Beide
+Produktlaeufe hatten identische 52.329.316 zentrale Dispatches und keinen
+neuen technischen Fehler. Der erste Compilerbuild ist nicht symmetrisch
+vergleichbar: Beim MSVC-Lauf waren Analyse und Codeemission kalt, beim
+clang-cl-Lauf traf der Whole-Export-Cache bereits.

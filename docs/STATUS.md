@@ -23,10 +23,21 @@ CMake-Paket; der volle Quellbaum wird nur als `EXCLUDE_FROM_ALL`-Fallback
 eingebunden.
 
 Die v0.49-Architektur ist gezielt gebaut und mit bestehenden kleinen
-Vertragstests geprueft. Die private Sonic-Bootursachenanalyse, ein neuer
-sichtbarer SEGA-Nachweis, die finale 600-Millionen-Zyklen-Messung und das
-200-MHz-Ziel sind ausdruecklich vertagt. clang-cl war auf dem Messhost nicht
-installiert; ein reales Compiler-A/B ist deshalb nicht behauptet.
+Vertragstests geprueft. Der reale executable-first Produktport erreichte mit
+beiden Hostcompilern exakt 600.000.000 Gastzyklen und endete kontrolliert ohne
+neues AOT-, Runtime- oder Geraeteproblem. MSVC benoetigte 14,8563 Sekunden
+Produktzeit (40,3869 effektive Gast-MHz), clang-cl 14,1289 Sekunden
+(42,4662 MHz). Beide Laeufe zaehlten 52.329.316 zentrale Dispatches und
+praesentierten keinen klassifizierbaren Frame. Damit sind Messvertrag und
+Compiler-A/B erfuellt, nicht aber der sichtbare SEGA-Nachweis oder das
+200-MHz-Ziel. Die weitere Bootursachenanalyse bleibt wie angeordnet vertagt.
+
+Der echte warme Export dauerte 2,258 Sekunden mit MSVC und 2,297 Sekunden mit
+clang-cl. Die resultierenden EXEs waren 67.062.272 beziehungsweise 69.149.696
+Bytes gross. Der erste MSVC-Umbauexport dauerte rund 199,5 Sekunden und
+enthielt Analyse, Codeemission und Hostbuild; der nachfolgende erste
+clang-cl-Build dauerte 67,457 Sekunden bei bereits warmem Whole-Export-Cache
+und ist deshalb kein symmetrischer Kaltbuildvergleich.
 
 Die externe Spielprojektschnittstelle ist ein C++-Export-/Runtimevertrag, noch
 kein CLI-Descriptor oder Projektgenerator. Eine feste 16-Ereignis-POD-Crash-
