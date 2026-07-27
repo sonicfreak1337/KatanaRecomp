@@ -9,7 +9,9 @@
 #include "katana/app/application.hpp"
 #include "katana/cli/exit_code.hpp"
 #include "katana/cli/hardware_audit_policy.hpp"
+#include "katana/codegen/backend.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
+#include "katana/codegen/native_aot_profile.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/codegen/probe.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
@@ -23,6 +25,7 @@
 #include "katana/ir/serialize.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/platform/firmware_diagnostics.hpp"
+#include "katana/runtime/abi.hpp"
 #include "katana/runtime/disc_install.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
@@ -1167,10 +1170,70 @@ bool safe_regular_port_directory_exists(const std::filesystem::path& root,
     return true;
 }
 
+void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
+                                         const std::filesystem::path& build_root) {
+    const auto normalized_port = std::filesystem::absolute(port_root).lexically_normal();
+    const auto normalized_build = std::filesystem::absolute(build_root).lexically_normal();
+    const auto build_name = normalized_build.filename().generic_string();
+    if (normalized_build.parent_path() != normalized_port || build_name.size() <= 6u ||
+        !build_name.starts_with("build-"))
+        throw std::runtime_error(
+            "Fehlgeschlagener Hostbuild besitzt keinen sicher abgeleiteten Buildpfad.");
+    if (!safe_regular_port_directory_exists(normalized_build,
+                                            "Fehlgeschlagener CMake-Configure-Zustand"))
+        return;
+    std::error_code canonical_error;
+    const auto resolved_port = std::filesystem::canonical(normalized_port, canonical_error);
+    if (canonical_error)
+        throw std::runtime_error(
+            "Portwurzel fuer Configure-Bereinigung konnte nicht aufgeloest werden.");
+    const auto resolved_build = std::filesystem::canonical(normalized_build, canonical_error);
+    if (canonical_error || resolved_build.parent_path() != resolved_port)
+        throw std::runtime_error(
+            "Configure-Bereinigung wuerde den sicheren Portbuildpfad verlassen.");
+    std::error_code remove_error;
+    static_cast<void>(std::filesystem::remove_all(normalized_build, remove_error));
+    if (remove_error)
+        throw std::runtime_error(
+            "Fehlgeschlagener CMake-Configure-Zustand konnte nicht entfernt werden.");
+}
+
+#ifdef _WIN32
+void require_optimized_msvc_relwithdebinfo(const std::filesystem::path& build_root) {
+    std::ifstream cache(build_root / "CMakeCache.txt", std::ios::binary);
+    if (!cache)
+        throw std::runtime_error(
+            "CMakeCache fehlt nach erfolgreicher Hostbuild-Konfiguration.");
+    constexpr std::string_view entry = "CMAKE_CXX_FLAGS_RELWITHDEBINFO:";
+    std::string flags;
+    std::string line;
+    while (std::getline(cache, line)) {
+        if (!line.starts_with(entry)) continue;
+        const auto assignment = line.find('=');
+        if (assignment != std::string::npos) flags = line.substr(assignment + 1u);
+        break;
+    }
+    std::transform(flags.begin(), flags.end(), flags.begin(), [](const unsigned char value) {
+        return static_cast<char>(std::toupper(value));
+    });
+    const auto contains = [&flags](const std::string_view option) {
+        return flags.find(option) != std::string::npos;
+    };
+    const bool disabled = contains("/OD") || contains("-O0");
+    const bool enabled = contains("/O1") || contains("/O2") || contains("/OX") ||
+                         contains("-O1") || contains("-O2") || contains("-O3") ||
+                         contains("-OFAST");
+    if (flags.empty() || disabled || !enabled)
+        throw std::runtime_error(
+            "MSVC-RelWithDebInfo-Configure besitzt keine wirksame Optimierung.");
+}
+#endif
+
 bool excluded_from_port_distribution(const std::filesystem::path& relative) {
     if (relative.empty()) return false;
     const auto top_level = relative.begin()->generic_string();
-    return top_level == "user-data" || top_level == "build" ||
+    return top_level == "user-data" || top_level == ".katana-codegen-cache" ||
+           top_level == "build" ||
            top_level.starts_with("build-");
 }
 
@@ -1219,11 +1282,255 @@ void copy_port_tree_for_distribution(const std::filesystem::path& source,
     }
 }
 
-int export_port_project(const std::filesystem::path& gdi_path,
+bool path_is_within(const std::filesystem::path& path,
+                    const std::filesystem::path& root) {
+    const auto relative = path.lexically_relative(root);
+    return !relative.empty() && !relative.is_absolute() &&
+           *relative.begin() != "..";
+}
+
+inline constexpr std::uint32_t executable_port_export_cache_version = 1u;
+
+struct CachedExecutablePortExport {
+    std::string key;
+    std::string tree_identity;
+    std::size_t functions = 0u;
+    std::size_t partitions = 0u;
+    std::size_t disc_tracks = 0u;
+    std::string job_generation;
+    std::string content_identity;
+};
+
+bool valid_cache_digest(const std::string_view value) noexcept {
+    return value.size() == 64u &&
+           std::all_of(value.begin(), value.end(), [](const unsigned char character) {
+               return std::isdigit(character) != 0 ||
+                      (character >= 'a' && character <= 'f');
+           });
+}
+
+std::optional<std::string>
+port_codegen_tree_identity(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> files;
+    constexpr std::array<std::string_view, 4u> required_files{
+        "CMakeLists.txt",
+        ".gitignore",
+        "INSTALL_ORIGINAL_DISC.txt",
+        "content/game.katana-install"};
+    for (const auto relative : required_files) {
+        const auto path = root / relative;
+        std::error_code status_error;
+        const auto status = std::filesystem::symlink_status(path, status_error);
+        if (status_error || !std::filesystem::is_regular_file(status) ||
+            std::filesystem::is_symlink(status))
+            return std::nullopt;
+        files.push_back(path);
+    }
+    constexpr std::array<std::string_view, 2u> generated_directories{
+        "generated", "src"};
+    for (const auto relative : generated_directories) {
+        const auto directory = root / relative;
+        if (!safe_regular_port_directory_exists(
+                directory, "Content-addressed Portcodegen-Verzeichnis"))
+            return std::nullopt;
+        for (std::filesystem::recursive_directory_iterator iterator(directory), end;
+             iterator != end;
+             ++iterator) {
+            const auto status = iterator->symlink_status();
+            if (std::filesystem::is_symlink(status))
+                throw std::runtime_error(
+                    "Content-addressed Portcodegen-Ausgabe enthaelt einen symbolischen Link.");
+            if (std::filesystem::is_regular_file(status))
+                files.push_back(iterator->path());
+            else if (!std::filesystem::is_directory(status))
+                throw std::runtime_error(
+                    "Content-addressed Portcodegen-Ausgabe enthaelt einen unsicheren Eintrag.");
+        }
+    }
+    std::sort(files.begin(), files.end(), [&root](const auto& left, const auto& right) {
+        return left.lexically_relative(root).generic_string() <
+               right.lexically_relative(root).generic_string();
+    });
+    std::ostringstream identity;
+    identity << "katana-port-codegen-tree-v1;";
+    for (const auto& file : files) {
+        const auto relative = file.lexically_relative(root).generic_string();
+        const auto provenance =
+            katana::io::capture_input_provenance("port-codegen-cache", file);
+        identity << relative << ':' << provenance.size << ':' << provenance.sha256 << ';';
+    }
+    return katana::io::sha256_bytes(identity.str());
+}
+
+std::string executable_port_export_cache_key(
+    const katana::platform::DreamcastBootExecutableArtifact& artifact,
+    const std::string_view target_name,
+    const bool diagnostic_partial,
+    const std::string_view console_profile) {
+    std::ostringstream identity;
+    identity << "katana-port-executable-analysis-v"
+             << executable_port_export_cache_version << ':'
+             << artifact.version << ':' << artifact.project_identity << ':'
+             << artifact.install_recipe.content_identity << ':'
+             << artifact.boot_sha256 << ':' << artifact.entry_address << ':'
+             << target_name << ':' << diagnostic_partial << ':' << console_profile << ':'
+             << KATANA_RECOMP_VERSION << ':'
+             << katana::build_contract::katana_git_commit << ':'
+             << katana::build_contract::analyzer_abi_version << ':'
+             << katana::runtime::abi_version << ':'
+             << katana::codegen::backend_interface_abi_version << ':'
+             << katana::codegen::port_project_contract_version << ':'
+             << katana::codegen::port_partition_emission_schema_version << ':'
+             << katana::codegen::port_metadata_cache_schema_version << ':'
+             << katana::codegen::native_aot_emission_profile_version;
+    return katana::io::sha256_bytes(identity.str());
+}
+
+std::filesystem::path executable_port_export_cache_path(
+    const std::filesystem::path& workspace,
+    const std::string_view key) {
+    return workspace / ".katana-codegen-cache" / "whole-export" /
+           ("port-executable-" + std::string(key) + ".state");
+}
+
+std::optional<CachedExecutablePortExport>
+load_cached_executable_port_export(const std::filesystem::path& workspace,
+                                   const std::string_view expected_key) {
+    const auto state_path =
+        executable_port_export_cache_path(workspace, expected_key);
+    std::error_code status_error;
+    const auto status = std::filesystem::symlink_status(state_path, status_error);
+    if (status_error == std::errc::no_such_file_or_directory ||
+        status.type() == std::filesystem::file_type::not_found)
+        return std::nullopt;
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status))
+        return std::nullopt;
+    std::ifstream input(state_path, std::ios::binary);
+    std::string magic;
+    std::uint32_t version = 0u;
+    CachedExecutablePortExport cached;
+    std::string key_name;
+    std::string tree_name;
+    std::string functions_name;
+    std::string partitions_name;
+    std::string tracks_name;
+    std::string job_name;
+    std::string content_name;
+    if (!(input >> magic >> version >> key_name >> cached.key >>
+          tree_name >> cached.tree_identity >> functions_name >> cached.functions >>
+          partitions_name >> cached.partitions >> tracks_name >> cached.disc_tracks >>
+          job_name >> cached.job_generation >> content_name >> cached.content_identity))
+        return std::nullopt;
+    input >> std::ws;
+    if (!input.eof() ||
+        magic != "KATANA_PORT_EXECUTABLE_EXPORT_STATE" ||
+        version != executable_port_export_cache_version ||
+        key_name != "key" || tree_name != "tree" ||
+        functions_name != "functions" || partitions_name != "partitions" ||
+        tracks_name != "tracks" || job_name != "job" ||
+        content_name != "content" || cached.key != expected_key ||
+        !valid_cache_digest(cached.key) ||
+        !valid_cache_digest(cached.tree_identity) ||
+        !valid_cache_digest(cached.job_generation) ||
+        !valid_cache_digest(cached.content_identity) ||
+        cached.functions == 0u || cached.partitions == 0u ||
+        cached.disc_tracks == 0u)
+        return std::nullopt;
+    const auto actual_tree = port_codegen_tree_identity(workspace);
+    if (!actual_tree || *actual_tree != cached.tree_identity)
+        return std::nullopt;
+    const auto recipe_path = workspace / "content" / "game.katana-install";
+    try {
+        const auto recipe = katana::runtime::parse_disc_install_recipe(recipe_path);
+        if (recipe.job_generation != cached.job_generation ||
+            recipe.content_identity != cached.content_identity ||
+            recipe.tracks.size() != cached.disc_tracks)
+            return std::nullopt;
+    } catch (...) {
+        return std::nullopt;
+    }
+    return cached;
+}
+
+void store_cached_executable_port_export(
+    const std::filesystem::path& workspace,
+    const std::string_view key,
+    const katana::codegen::PortExportResult& report) {
+    const auto tree_identity = port_codegen_tree_identity(workspace);
+    if (!tree_identity)
+        throw std::runtime_error(
+            "Content-addressed Portcodegen-Ausgabe ist nach Export unvollstaendig.");
+    const auto state_path = executable_port_export_cache_path(workspace, key);
+    std::filesystem::create_directories(state_path.parent_path());
+    const auto temporary = std::filesystem::path(state_path.string() + ".tmp");
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output << "KATANA_PORT_EXECUTABLE_EXPORT_STATE "
+           << executable_port_export_cache_version << '\n'
+           << "key " << key << '\n'
+           << "tree " << *tree_identity << '\n'
+           << "functions " << report.functions << '\n'
+           << "partitions " << report.partitions << '\n'
+           << "tracks " << report.disc_tracks << '\n'
+           << "job " << report.job_generation << '\n'
+           << "content " << report.content_identity << '\n';
+    output.flush();
+    if (!output)
+        throw std::runtime_error(
+            "Content-addressed Portexport-Status konnte nicht geschrieben werden.");
+    output.close();
+    std::error_code replace_error;
+    std::filesystem::remove(state_path, replace_error);
+    if (replace_error)
+        throw std::runtime_error(
+            "Alter content-addressed Portexport-Status konnte nicht ersetzt werden.");
+    std::filesystem::rename(temporary, state_path, replace_error);
+    if (replace_error)
+        throw std::runtime_error(
+            "Content-addressed Portexport-Status konnte nicht publiziert werden.");
+}
+
+int extract_boot_executable_artifact(
+    const std::filesystem::path& gdi_path,
+    const std::filesystem::path& output_path) {
+    if (gdi_path.empty() || output_path.empty())
+        throw std::invalid_argument(
+            "extract-boot-executable braucht GDI und Ausgabeordner.");
+    const auto absolute_output =
+        std::filesystem::absolute(output_path).lexically_normal();
+    const auto source_root = discover_source_root_for_protection();
+    if (!source_root.empty()) {
+        std::error_code canonical_error;
+        const auto resolved_output =
+            std::filesystem::weakly_canonical(
+                absolute_output, canonical_error);
+        if (canonical_error)
+            throw std::runtime_error(
+                "Privater Boot-Artefaktpfad konnte nicht aufgeloest werden.");
+        if (path_is_within(
+                resolved_output, std::filesystem::canonical(source_root)))
+            throw std::invalid_argument(
+                "Private Dreamcast-Bootbytes duerfen nicht im KatanaRecomp-Quellbaum liegen.");
+    }
+    const auto artifact =
+        katana::platform::extract_dreamcast_boot_executable_artifact(
+            gdi_path, absolute_output);
+    std::cout << "Privates Boot-Executable-Artefakt verifiziert: "
+              << artifact.manifest_path.string() << '\n'
+              << "Bootdatei: " << artifact.metadata.boot_file_name << '\n'
+              << "Boot-SHA-256: " << artifact.boot_sha256 << '\n'
+              << "Content-Identitaet: "
+              << artifact.install_recipe.content_identity << '\n'
+              << "Retailbytes im Repository: 0\n";
+    return 0;
+}
+
+int export_port_project(const std::filesystem::path& source_path,
                         const std::filesystem::path& output_path,
                         const std::string& target_name,
                         const bool diagnostic_partial = false,
-                        const std::string& console_profile = "japan-ntsc") {
+                        const std::string& console_profile = "japan-ntsc",
+                        const bool boot_executable_artifact = false) {
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_root = discover_runtime_root_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
@@ -1256,6 +1563,18 @@ int export_port_project(const std::filesystem::path& gdi_path,
         absolute_output.parent_path() / (".katana-port-work-" + stage_key.substr(0u, 12u));
     const auto publish_stage =
         absolute_output.parent_path() / (".katana-port-publish-" + stage_key.substr(0u, 12u));
+    std::optional<katana::platform::DreamcastBootExecutableArtifact>
+        verified_boot_artifact;
+    std::optional<std::string> whole_export_cache_key;
+    if (boot_executable_artifact) {
+        verified_boot_artifact =
+            katana::platform::load_dreamcast_boot_executable_artifact(source_path);
+        whole_export_cache_key = executable_port_export_cache_key(
+            *verified_boot_artifact,
+            target_name,
+            diagnostic_partial,
+            console_profile);
+    }
     std::error_code cleanup_error;
     if (safe_regular_port_directory_exists(publish_stage, "Altes Port-Publishing"))
         std::filesystem::remove_all(publish_stage, cleanup_error);
@@ -1265,26 +1584,97 @@ int export_port_project(const std::filesystem::path& gdi_path,
         if (!safe_regular_port_directory_exists(workspace, "Port-Arbeitsverzeichnis"))
             copy_port_tree_for_distribution(absolute_output, workspace);
         std::cout << "KATANA_PORT_PHASE analysis-codegen\n" << std::flush;
-        const auto report = katana::codegen::export_dreamcast_port_project(
-            gdi_path,
-            workspace,
-            {target_name,
-             KATANA_RECOMP_VERSION,
-             {},
-             source_root,
-             diagnostic_partial,
-             console_profile,
-             [](const std::string_view phase) {
-                 std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n' << std::flush;
-             }});
-        bool use_ninja = false;
+        katana::codegen::PortExportOptions export_options{
+            target_name,
+            KATANA_RECOMP_VERSION,
+            {},
+            source_root,
+            diagnostic_partial,
+            console_profile,
+            [](const std::string_view phase) {
+                std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n' << std::flush;
+            }};
+        export_options.codegen_cache_root = workspace / ".katana-codegen-cache";
+        katana::codegen::PortExportResult report;
+        bool whole_export_cache_hit = false;
+        if (whole_export_cache_key) {
+            if (const auto cached =
+                    load_cached_executable_port_export(
+                        workspace, *whole_export_cache_key);
+                cached &&
+                verified_boot_artifact &&
+                cached->job_generation ==
+                    verified_boot_artifact->project_identity &&
+                cached->content_identity ==
+                    verified_boot_artifact->install_recipe.content_identity) {
+                report.output_root = workspace;
+                report.functions = cached->functions;
+                report.partitions = cached->partitions;
+                report.codegen_cache_hits = cached->partitions;
+                report.metadata_cache_hit = true;
+                report.disc_install_recipe =
+                    workspace / "content" / "game.katana-install";
+                report.job_generation = cached->job_generation;
+                report.content_identity = cached->content_identity;
+                report.disc_tracks = cached->disc_tracks;
+                report.checkpoints = {
+                    "whole-program-analysis-ir-cache-hit",
+                    "partition-codegen-cache-hit",
+                    "metadata-cache-hit"};
+                whole_export_cache_hit = true;
+                std::cout
+                    << "KATANA_PORT_SUBPHASE whole-program-analysis-ir-cache-hit\n"
+                    << std::flush;
+            }
+        }
+        if (!whole_export_cache_hit) {
+            report =
+                boot_executable_artifact
+                    ? katana::codegen::
+                          export_dreamcast_port_project_from_boot_artifact(
+                              source_path, workspace, export_options)
+                    : katana::codegen::export_dreamcast_port_project(
+                          source_path, workspace, export_options);
+            if (whole_export_cache_key)
+                store_cached_executable_port_export(
+                    workspace, *whole_export_cache_key, report);
+        }
+        const auto build_profile =
+            configured_environment_value("KATANA_PORT_BUILD_PROFILE")
+                .value_or("bringup");
+        if (build_profile != "bringup" && build_profile != "gate")
+            throw std::invalid_argument(
+                "KATANA_PORT_BUILD_PROFILE muss bringup oder gate sein.");
 #ifdef _WIN32
-        use_ninja = configured_environment_value("KATANA_HOST_BUILD_GENERATOR") == "Ninja";
-        const auto build_path = report.output_root / (use_ninja ? "build-ninja" : "build");
+        const auto host_compiler =
+            configured_environment_value("KATANA_PORT_CXX_COMPILER")
+                .value_or("msvc");
+        if (host_compiler != "msvc" && host_compiler != "clang-cl")
+            throw std::invalid_argument(
+                "KATANA_PORT_CXX_COMPILER muss msvc oder clang-cl sein.");
+        const auto host_linker =
+            configured_environment_value("KATANA_PORT_LINKER").value_or("default");
+        if (host_linker != "default" && host_linker != "msvc" &&
+            host_linker != "lld")
+            throw std::invalid_argument(
+                "KATANA_PORT_LINKER muss default, msvc oder lld sein.");
+        const bool use_ninja =
+            configured_environment_value("KATANA_HOST_BUILD_GENERATOR") == "Ninja";
 #else
-        use_ninja = true;
-        const auto build_path = report.output_root / "build";
+        const auto host_compiler = std::string("native");
+        const auto host_linker = std::string("default");
+        const bool use_ninja = true;
+        if (configured_environment_value("KATANA_PORT_CXX_COMPILER") ||
+            configured_environment_value("KATANA_PORT_LINKER"))
+            throw std::invalid_argument(
+                "KATANA_PORT_CXX_COMPILER und KATANA_PORT_LINKER sind nur fuer "
+                "Windows-Portbuilds verfuegbar.");
 #endif
+        const auto generator_identity = use_ninja ? "ninja" : "vs";
+        const auto build_path =
+            report.output_root /
+            ("build-" + host_compiler + '-' + host_linker + '-' +
+             build_profile + '-' + generator_identity);
         static_cast<void>(
             safe_regular_port_directory_exists(build_path, "Inkrementeller Hostbuild-Cache"));
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
@@ -1292,12 +1682,15 @@ int export_port_project(const std::filesystem::path& gdi_path,
 #ifdef _WIN32
         if (use_ninja) {
             configure += " -G Ninja";
+            configure += " -DCMAKE_CXX_COMPILER=" +
+                         std::string(host_compiler == "clang-cl" ? "clang-cl" : "cl");
             if (const auto make_program =
                     configured_environment_value("KATANA_HOST_BUILD_MAKE_PROGRAM"))
                 configure +=
                     " -DCMAKE_MAKE_PROGRAM=" + shell_quote(std::filesystem::path(*make_program));
         } else {
             configure += " -G \"Visual Studio 17 2022\" -A x64";
+            if (host_compiler == "clang-cl") configure += " -T ClangCL";
             configure +=
                 " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" + shell_quote(build_path);
         }
@@ -1305,7 +1698,11 @@ int export_port_project(const std::filesystem::path& gdi_path,
         configure += " -G Ninja";
 #endif
         configure +=
-            " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+            " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_PORT_BUILD_PROFILE=" +
+            build_profile + " -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+        if (host_linker != "default")
+            configure += " -DCMAKE_LINKER_TYPE=" +
+                         std::string(host_linker == "msvc" ? "MSVC" : "LLD");
         if (katana::build_contract::katana_git_commit !=
             "0000000000000000000000000000000000000000") {
             // The incremental port build directory intentionally survives
@@ -1318,9 +1715,38 @@ int export_port_project(const std::filesystem::path& gdi_path,
         std::cout << "KATANA_PORT_PHASE configure\n" << std::flush;
         const auto configure_command = normalized_host_command(configure);
         if (std::system(configure_command.c_str()) != 0) {
+            try {
+                remove_failed_port_host_build_state(report.output_root, build_path);
+            } catch (const std::exception& cleanup_error) {
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    std::string("Port-Hostbuild konnte nicht konfiguriert und sein "
+                                "unvollstaendiger CMake-Zustand nicht bereinigt werden: ") +
+                        cleanup_error.what());
+            }
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
-                                     "Port-Hostbuild konnte nicht konfiguriert werden.");
+                                     "Port-Hostbuild konnte nicht konfiguriert werden; der "
+                                     "unvollstaendige CMake-Zustand wurde entfernt.");
         }
+#ifdef _WIN32
+        try {
+            require_optimized_msvc_relwithdebinfo(build_path);
+        } catch (const std::exception& configuration_error) {
+            try {
+                remove_failed_port_host_build_state(report.output_root, build_path);
+            } catch (const std::exception& cleanup_error) {
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    std::string("Unsicherer Port-Hostbuild-Configure und fehlgeschlagene "
+                                "Bereinigung: ") +
+                        configuration_error.what() + ' ' + cleanup_error.what());
+            }
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                std::string("Unsicherer Port-Hostbuild-Configure wurde verworfen: ") +
+                    configuration_error.what());
+        }
+#endif
         auto build =
             std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
         build += " --parallel " + std::to_string(configured_host_build_jobs());
@@ -1399,8 +1825,17 @@ int export_port_project(const std::filesystem::path& gdi_path,
         std::cout << "Portpaket erzeugt: " << absolute_output.string() << '\n'
                   << "Funktionen: " << report.functions << '\n'
                   << "Partitionen: " << report.partitions << '\n'
+                  << "Codegen-Cache-Hits: " << report.codegen_cache_hits << '\n'
+                  << "Codegen-Cache-Misses: " << report.codegen_cache_misses << '\n'
+                  << "Metadaten-Cache-Hit: "
+                  << (report.metadata_cache_hit ? "ja" : "nein") << '\n'
+                  << "Analyse-/IR-Cache-Hit: "
+                  << (whole_export_cache_hit ? "ja" : "nein") << '\n'
                   << "Installations-Recipe-Tracks: " << report.disc_tracks << '\n'
                   << "Retail-Sektoren im Portpaket: 0\n"
+                  << "Hostcompiler: " << host_compiler << '\n'
+                  << "Hostlinker: " << host_linker << '\n'
+                  << "Buildprofil: " << build_profile << '\n'
                   << "Inkrementeller Hostbuild-Cache: " << build_path.string() << '\n'
                   << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
         return 0;
@@ -1438,10 +1873,16 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] "
               "[--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
            << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
+           << "  katana-recomp extract-boot-executable <eigene.gdi> --output "
+              "<privater-Ordner>\n"
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>]\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
-              "[--console-profile <...>]\n\n"
+              "[--console-profile <...>]\n"
+           << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
+              "--target-name <Name> [--console-profile <...>]\n"
+           << "  katana-recomp probe-port-executable <boot.katana-executable> --output "
+              "<Ordner> --target-name <Name> [--console-profile <...>]\n\n"
            << "  katana-recomp workflow <validate|analyze|codegen|build|run-preflight> "
               "<Projektmanifest> --output <Ordner>\n\n"
            << "Beispiel:\n"
@@ -1596,9 +2037,28 @@ int main(const int argc, char* argv[]) {
             return exit_status(ExitCode::InternalError);
         }
 
+        if (argc == 5 &&
+            std::string_view(argv[1]) == "extract-boot-executable") {
+            if (std::string_view(argv[3]) != "--output")
+                throw std::invalid_argument(
+                    "extract-boot-executable erwartet --output genau einmal.");
+            return extract_boot_executable_artifact(
+                std::filesystem::path(argv[2]),
+                std::filesystem::path(argv[4]));
+        }
+
+        const auto port_command =
+            argc >= 2 ? std::string_view(argv[1]) : std::string_view{};
         if ((argc == 7 || argc == 9) &&
-            (std::string_view(argv[1]) == "port" || std::string_view(argv[1]) == "probe-port")) {
-            const bool diagnostic_partial = std::string_view(argv[1]) == "probe-port";
+            (port_command == "port" || port_command == "probe-port" ||
+             port_command == "port-executable" ||
+             port_command == "probe-port-executable")) {
+            const bool diagnostic_partial =
+                port_command == "probe-port" ||
+                port_command == "probe-port-executable";
+            const bool boot_executable_artifact =
+                port_command == "port-executable" ||
+                port_command == "probe-port-executable";
             std::optional<std::filesystem::path> output_path;
             std::optional<std::string> target_name;
             std::string console_profile = "japan-ntsc";
@@ -1626,7 +2086,8 @@ int main(const int argc, char* argv[]) {
                                        *output_path,
                                        *target_name,
                                        diagnostic_partial,
-                                       console_profile);
+                                       console_profile,
+                                       boot_executable_artifact);
         }
 
         if ((argc == 3 || argc == 4) &&

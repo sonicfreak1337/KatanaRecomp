@@ -283,17 +283,6 @@ struct BlockMaterializationMetrics {
     std::uint32_t first_failure_target = 0u;
 };
 
-struct BlockDispatchGenerationGuard {
-    RuntimeBlockHandle block;
-    std::uint64_t code_generation = 0u;
-    std::uint64_t module_generation = 0u;
-    std::uint64_t relocation_generation = 0u;
-    std::uint64_t validation_generation = 0u;
-    bool runtime_registered = false;
-
-    [[nodiscard]] bool operator==(const BlockDispatchGenerationGuard&) const noexcept = default;
-};
-
 struct MaterializedBlockCandidate {
     RuntimeBlock block;
     bool decode_candidate_validated = false;

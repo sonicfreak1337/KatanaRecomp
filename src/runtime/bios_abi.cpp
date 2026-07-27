@@ -482,6 +482,13 @@ void install_hle_bios_abi(Memory& memory,
                            variant,
                            &bios_abi_block,
                            "hle-bios-abi:" + std::string(vector.name)};
+        // These clean-room service entries execute a native runtime handler
+        // which reads architectural state at the call boundary.  Their code is
+        // therefore valid across direct P1/P2 address-space, MMU, watchpoint and
+        // FPSCR generations.  The coordinated executable-write observer still
+        // removes the entry if a guest actually replaces its RAM stub.
+        block.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
         const auto identity = stable_runtime_block_identity(block);
         static_cast<void>(blocks.register_bootstrap_static(std::move(block)));
         if (code_tracker != nullptr) {

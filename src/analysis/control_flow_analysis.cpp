@@ -838,6 +838,30 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     override_error(
                         *overrides, table.line, table.dispatch_address, "dispatch-not-jmp-or-jsr");
                 }
+                const bool actual_call =
+                    dispatch->instruction.kind ==
+                        katana::sh4::InstructionKind::Jsr ||
+                    dispatch->instruction.kind ==
+                        katana::sh4::InstructionKind::Bsrf;
+                const bool declared_transfer_mismatch =
+                    (table.transfer == JumpTableOverrideTransfer::Call &&
+                     !actual_call) ||
+                    (table.transfer == JumpTableOverrideTransfer::Jump &&
+                     actual_call);
+                if (declared_transfer_mismatch) {
+                    if (hints) {
+                        analysis.directive_diagnostics.push_back(
+                            {table.line,
+                             table.dispatch_address,
+                             AnalysisDirectiveDiagnosticStatus::Rejected,
+                             "declared-transfer-kind-mismatch"});
+                        continue;
+                    }
+                    override_error(*overrides,
+                                   table.line,
+                                   table.dispatch_address,
+                                   "declared-transfer-kind-mismatch");
+                }
                 const auto proven = std::find_if(
                     analysis.indirect_control_flow.begin(),
                     analysis.indirect_control_flow.end(),
@@ -853,14 +877,35 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                          "static-target-already-proven"});
                     continue;
                 }
-                auto jump_table = analyze_jump_table(image,
-                                                     table.dispatch_address,
-                                                     table.table_address,
-                                                     table.entry_count,
-                                                     &jump_table_cache);
+                const auto encoding = [&] {
+                    switch (table.encoding) {
+                    case JumpTableOverrideEncoding::Absolute32:
+                        return JumpTableEncoding::Absolute32;
+                    case JumpTableOverrideEncoding::SignedRelative16:
+                        return JumpTableEncoding::SignedRelative16;
+                    case JumpTableOverrideEncoding::SignedRelative32:
+                        return JumpTableEncoding::SignedRelative32;
+                    }
+                    return JumpTableEncoding::Absolute32;
+                }();
+                auto jump_table =
+                    encoding == JumpTableEncoding::Absolute32 &&
+                            table.entry_stride == sizeof(std::uint32_t) &&
+                            table.relative_base == 0u
+                        ? analyze_jump_table(image,
+                                             table.dispatch_address,
+                                             table.table_address,
+                                             table.entry_count,
+                                             &jump_table_cache)
+                        : analyze_declared_jump_table(image,
+                                                      table.dispatch_address,
+                                                      table.table_address,
+                                                      table.relative_base,
+                                                      table.entry_count,
+                                                      table.entry_stride,
+                                                      encoding);
                 jump_table.dispatch_kind =
-                    (dispatch->instruction.kind == katana::sh4::InstructionKind::Jsr ||
-                     dispatch->instruction.kind == katana::sh4::InstructionKind::Bsrf)
+                    actual_call
                         ? JumpTableDispatchKind::Call
                         : JumpTableDispatchKind::Jump;
                 if (hints) {

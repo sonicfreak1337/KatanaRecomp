@@ -63,6 +63,8 @@ struct IndirectDispatchFirstError {
 
 class IndirectDispatchMetrics final {
   public:
+    void set_site_details_enabled(bool enabled) noexcept;
+    [[nodiscard]] bool site_details_enabled() const noexcept;
     void record_hit(RuntimeDispatchClass dispatch_class,
                     std::uint32_t callsite = 0u,
                     std::uint32_t target = 0u,
@@ -95,6 +97,7 @@ class IndirectDispatchMetrics final {
     std::uint64_t runtime_only_fallbacks_ = 0u;
     std::optional<IndirectDispatchFirstError> first_error_;
     std::map<std::uint32_t, RuntimeOnlySiteMetrics> runtime_only_sites_;
+    bool site_details_enabled_ = true;
 };
 
 struct IndirectDispatchRequest {
@@ -113,6 +116,7 @@ struct IndirectDispatchRequest {
 
 struct IndirectDispatchResult {
     RuntimeBlockHandle block;
+    ValidatedBlockExecution execution;
     std::uint32_t diagnostic_target = 0u;
     std::uint32_t physical_target = 0u;
     std::uint32_t resulting_pc = 0u;

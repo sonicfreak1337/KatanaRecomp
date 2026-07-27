@@ -7,12 +7,15 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 
 namespace katana::runtime {
+
+class RuntimeBlockTable;
 
 enum class StoreQueueTarget : std::uint8_t { Ram, TileAccelerator };
 enum class StoreQueuePrefetchResult : std::uint8_t {
@@ -131,6 +134,13 @@ class Sh4StoreQueues {
                     std::uint64_t retired_guest_instructions = 0u,
                     std::uint64_t attempted_guest_instructions = 0u);
     void set_prefetch_address_translator(StoreQueueAddressTranslator translator);
+    // Scoped integrations may bind a raw table. Product runtimes should bind
+    // shared invalidation owners so Memory-held MMIO callbacks cannot outlive
+    // their code tracker or block table.
+    void bind_runtime_block_table(RuntimeBlockTable* blocks) noexcept;
+    void bind_runtime_code_invalidation(
+        const std::shared_ptr<ExecutableCodeTracker>& tracker,
+        const std::shared_ptr<RuntimeBlockTable>& blocks) noexcept;
     [[nodiscard]] const std::array<std::uint8_t, 32u>& queue(std::size_t index) const;
     [[nodiscard]] std::uint64_t transfer_count() const noexcept;
     [[nodiscard]] std::uint64_t rejected_transfer_count() const noexcept;
@@ -157,6 +167,10 @@ class Sh4StoreQueues {
     StoreQueueSink sink_;
     StoreQueueAddressTranslator address_translator_;
     ExecutableCodeTracker* code_tracker_;
+    RuntimeBlockTable* runtime_blocks_ = nullptr;
+    std::weak_ptr<ExecutableCodeTracker> shared_code_tracker_;
+    std::weak_ptr<RuntimeBlockTable> shared_runtime_blocks_;
+    bool shared_code_invalidation_bound_ = false;
     OperandCacheRamProfile ocram_profile_;
     std::array<std::array<std::uint8_t, 32u>, 2u> queues_{};
     std::array<std::uint32_t, 2u> qacr_{};

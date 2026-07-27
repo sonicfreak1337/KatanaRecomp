@@ -23,7 +23,8 @@ std::string snapshot_key(const katana::io::ExecutableImage& image,
                          const std::uint32_t table_address,
                          const std::uint32_t target_base,
                          const std::size_t entry_count) {
-    const auto entry_size = encoding == JumpTableEncoding::Absolute32 ? 4u : 2u;
+    const auto entry_size =
+        encoding == JumpTableEncoding::SignedRelative16 ? 2u : 4u;
     const auto byte_count =
         entry_count <= maximum_jump_table_entries ? entry_count * entry_size : 0u;
     const auto* segment =
@@ -556,6 +557,116 @@ JumpTableAnalysis analyze_relative_jump_table(const katana::io::ExecutableImage&
     return analysis;
 }
 
+JumpTableAnalysis analyze_declared_jump_table(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t dispatch_address,
+    const std::uint32_t table_address,
+    const std::uint32_t target_base,
+    const std::size_t entry_count,
+    const std::uint32_t entry_stride,
+    const JumpTableEncoding encoding) {
+    JumpTableAnalysis analysis;
+    analysis.dispatch_address = dispatch_address;
+    analysis.table_address = table_address;
+    analysis.target_base = target_base;
+    analysis.requested_entries = entry_count;
+    analysis.encoding = encoding;
+
+    const auto width =
+        encoding == JumpTableEncoding::SignedRelative16 ? 2u : 4u;
+    if (entry_count == 0u || entry_count > maximum_jump_table_entries) {
+        analysis.reason = "entry-count-out-of-range";
+        return analysis;
+    }
+    if (entry_stride < width || (entry_stride % width) != 0u ||
+        (table_address & (width - 1u)) != 0u ||
+        (encoding == JumpTableEncoding::Absolute32 && target_base != 0u)) {
+        analysis.reason = "declared-table-layout-invalid";
+        return analysis;
+    }
+    const auto byte_count =
+        static_cast<std::uint64_t>(entry_count - 1u) * entry_stride + width;
+    const auto table_end =
+        static_cast<std::uint64_t>(table_address) + byte_count;
+    if (table_end > 0x1'0000'0000ull ||
+        byte_count > std::numeric_limits<std::size_t>::max()) {
+        analysis.reason = "table-range-invalid";
+        return analysis;
+    }
+    const auto* segment =
+        image.find_segment(table_address, static_cast<std::size_t>(byte_count));
+    const auto offset =
+        segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
+    if (segment == nullptr || !segment->permissions.readable ||
+        segment->permissions.writable || !offset.has_value() ||
+        *offset > segment->bytes.size() ||
+        byte_count > segment->bytes.size() - *offset) {
+        analysis.reason =
+            segment != nullptr && segment->permissions.writable
+                ? "table-segment-writable"
+                : "table-range-not-immutable";
+        return analysis;
+    }
+
+    analysis.entries.reserve(entry_count);
+    for (std::size_t index = 0u; index < entry_count; ++index) {
+        const auto byte_offset =
+            *offset + static_cast<std::size_t>(index) * entry_stride;
+        const auto entry_address64 =
+            static_cast<std::uint64_t>(table_address) +
+            static_cast<std::uint64_t>(index) * entry_stride;
+        JumpTableEntry entry;
+        entry.index = index;
+        entry.entry_address = static_cast<std::uint32_t>(entry_address64);
+        const auto low =
+            katana::io::read_u16_le(segment->bytes, byte_offset);
+        std::int64_t target = 0;
+        if (encoding == JumpTableEncoding::SignedRelative16) {
+            target = static_cast<std::int64_t>(target_base) +
+                     static_cast<std::int16_t>(low);
+        } else {
+            const auto high =
+                katana::io::read_u16_le(segment->bytes, byte_offset + 2u);
+            const auto raw = static_cast<std::uint32_t>(low) |
+                             (static_cast<std::uint32_t>(high) << 16u);
+            target = encoding == JumpTableEncoding::SignedRelative32
+                         ? static_cast<std::int64_t>(target_base) +
+                               static_cast<std::int32_t>(raw)
+                         : static_cast<std::int64_t>(raw);
+        }
+        if (target < 0 ||
+            target > std::numeric_limits<std::uint32_t>::max()) {
+            entry.reason = "target-address-overflow";
+            analysis.reason = "table-entry-rejected";
+            analysis.entries.push_back(std::move(entry));
+            continue;
+        }
+        entry.target = static_cast<std::uint32_t>(target);
+        const auto validation = validate_decode_candidate(image, entry.target);
+        if (!validation.valid()) {
+            entry.reason = code_address_status_name(validation.status);
+            analysis.reason = "table-entry-rejected";
+        } else {
+            entry.target = validation.resolved_address;
+            entry.accepted = true;
+            entry.reason = "identity-bound-declared-target";
+        }
+        analysis.entries.push_back(std::move(entry));
+    }
+    analysis.resolved = analysis.entries.size() == entry_count &&
+                        std::all_of(
+                            analysis.entries.begin(),
+                            analysis.entries.end(),
+                            [](const auto& entry) {
+                                return entry.accepted;
+                            });
+    if (analysis.resolved)
+        analysis.reason = "identity-bound-declared-table";
+    else if (analysis.reason.empty())
+        analysis.reason = "table-entry-rejected";
+    return analysis;
+}
+
 std::optional<JumpTableAnalysis>
 recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
                                       const std::span<const katana::sh4::DisassemblyLine> lines,
@@ -890,6 +1001,8 @@ const char* jump_table_encoding_name(const JumpTableEncoding encoding) noexcept 
         return "absolute32";
     case JumpTableEncoding::SignedRelative16:
         return "signed-relative16";
+    case JumpTableEncoding::SignedRelative32:
+        return "signed-relative32";
     }
     return "unknown";
 }

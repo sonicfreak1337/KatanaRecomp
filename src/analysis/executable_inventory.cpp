@@ -315,7 +315,8 @@ ExecutableByteInventory build_executable_byte_inventory(const io::ExecutableImag
     }
 
     for (const auto& table : analysis.jump_tables) {
-        const auto width = table.encoding == JumpTableEncoding::Absolute32 ? 4u : 2u;
+        const auto width =
+            table.encoding == JumpTableEncoding::SignedRelative16 ? 2u : 4u;
         for (const auto& entry : table.entries) {
             if (!entry.accepted) continue;
             static_references.insert(entry.entry_address);

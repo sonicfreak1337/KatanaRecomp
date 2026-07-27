@@ -1,4 +1,5 @@
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/runtime.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -44,9 +45,13 @@ int main() {
 
     Memory bus(0u);
     const auto main_ram = map_dreamcast_main_ram(bus);
+    const auto direct_read_guard = bus.direct_linear_memory_guard(false);
 
     require(main_ram->size() == dreamcast_main_ram_size,
             "Das Dreamcast-Haupt-RAM besitzt nicht genau 16 MiB.");
+    require(direct_read_guard &&
+                bus.direct_linear_memory_guard_current(direct_read_guard, false),
+            "Das vollstaendig abgebildete Haupt-RAM besitzt keinen direkten Leseguard.");
     require(bus.region_count() == dreamcast_main_ram_alias_count,
             "Nicht alle Dreamcast-RAM-Aliasfenster wurden registriert.");
     require(main_ram->read_u8(0u) == 0u &&
@@ -93,6 +98,36 @@ int main() {
     bus.write_u8(0x6FFFFFFFu, 0x22u);
     require(bus.read_u8(0xCC000000u) == 0x11u && bus.read_u8(0x8FFFFFFFu) == 0x22u,
             "Erstes oder letztes Byte des RAM-Backings wird nicht gespiegelt.");
+
+    katana::runtime::CpuState cpu;
+    cpu.memory = Memory(0u);
+    static_cast<void>(map_dreamcast_main_ram(cpu.memory));
+    cpu.write_sr(katana::runtime::sr_md_mask);
+    std::size_t observed_writes = 0u;
+    bool last_write_changed = false;
+    cpu.memory.set_guest_write_observer(
+        [&](const katana::runtime::GuestWriteEvent& event) noexcept {
+            ++observed_writes;
+            last_write_changed = event.bytes_changed;
+        },
+        katana::runtime::GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+    katana::runtime::guest_write_u32(cpu, 0x8C000200u, 0x12345678u);
+    require(katana::runtime::guest_read_u32(cpu, 0xAF000200u) == 0x12345678u,
+            "Der direkte privilegierte P1/P2-Haupt-RAM-Pfad ist inkonsistent.");
+    require(observed_writes == 1u && last_write_changed,
+            "Der direkte Haupt-RAM-Store verliert den stabilen Write-Observer.");
+    katana::runtime::guest_write_u32(cpu, 0xAC000200u, 0x12345678u);
+    require(observed_writes == 2u && !last_write_changed,
+            "Der direkte Haupt-RAM-Store meldet bytes_changed nicht exakt.");
+
+    bool traced = false;
+    bus.set_trace_handler([&traced](const katana::runtime::MemoryAccessEvent&) {
+        traced = true;
+    });
+    require(!bus.direct_linear_memory_guard_current(direct_read_guard, false),
+            "Ein Diagnoseobserver invalidiert den direkten RAM-Guard nicht.");
+    static_cast<void>(bus.read_u8(0x0C000000u));
+    require(traced, "Der RAM-Fallback verliert den Diagnoseobserver.");
 
     Memory conflicting_bus(0u);
     conflicting_bus.map_region("collision", 0x8C000000u, std::make_shared<LinearMemoryDevice>(16u));

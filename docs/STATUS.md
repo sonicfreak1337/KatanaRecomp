@@ -1,8 +1,44 @@
 # Projektstatus
 
-Abgeschlossener interner Meilenstein: `v0.47.0`
-Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
-Aktuelle P0-Arbeit: Der native IP.BIN-Boot erreicht BootExecutable
+Aktuelle interne Version: `v0.49.0`
+
+v0.49 trennt KatanaRecomp, die interpreterfreie `runtime_core` und externe
+Spieltitelprojekte. Der Produktdispatch besitzt einen kompakten statischen
+AOT-Tier, einen generationgesicherten dynamischen Tier und direkt
+ausfuehrbare validierte Blockdeskriptoren. Function-Level-AOT verwendet native
+Labels, guardierte direkte Calls, konservative Registerlokalisierung und
+direkte Haupt-RAM-Guards. IRQ-, Scheduler-, Replay-, Lifecycle- und
+RuntimeOnly-Arbeit wurde aus dem normalen Erfolgs-Hotpath verschoben oder
+ereignisgetrieben gemacht.
+
+Der Entwicklungsworkflow ist executable-first: Eine eigene `.gdi` erzeugt
+einmalig ein privates `boot.katana-executable`; weitere Exporte arbeiten
+danach ohne erneutes Discparsing. Bei unveraenderten, verifizierten
+Versionen/Identitaeten ueberspringt der Whole-Export-Cache auch Analyse, IR und
+Codeemission, baut und publiziert das reale Spieltarget aber erneut. `.gdi`
+bleibt Nutzerinstallation und finaler NativeDiscBoot. DirectBoot verwendet
+einen clean-room definierten Post-BIOS-Zustand und dieselbe Dreamcast-Runtime.
+
+Die v0.49-Architektur ist gezielt gebaut und mit bestehenden kleinen
+Vertragstests geprueft. Die private Sonic-Bootursachenanalyse, ein neuer
+sichtbarer SEGA-Nachweis, die finale 600-Millionen-Zyklen-Messung und das
+200-MHz-Ziel sind ausdruecklich vertagt. clang-cl war auf dem Messhost nicht
+installiert; ein reales Compiler-A/B ist deshalb nicht behauptet.
+
+Die externe Spielprojektschnittstelle ist ein C++-Export-/Runtimevertrag, noch
+kein CLI-Descriptor oder Projektgenerator. Eine eigene feste POD-Crash-Capsule
+und ein automatisch begrenztes Triggered-Deep-Trace-Fenster bleiben ebenfalls
+offene Konsolidierung; der normale Produktlauf deaktiviert bereits die
+detaillierte RuntimeOnly-Map und formatiert Diagnosedetails terminal.
+
+Aktuelle Dokumente:
+[`ARCHITECTURE_V049.md`](ARCHITECTURE_V049.md),
+[`EXECUTABLE_FIRST_DEVELOPMENT.md`](EXECUTABLE_FIRST_DEVELOPMENT.md) und
+[`PORT_BUILD_PROFILES.md`](PORT_BUILD_PROFILES.md).
+
+## Historischer v0.48-Verlauf
+
+Der native IP.BIN-Boot erreicht BootExecutable
 nachweislich; `KR-4913`, `KR-4915` und `KR-4850` sind abgeschlossen. Der erste
 nach dem Sega-Logo belegte `KR-4851`-Hotspot war ein allgemeiner
 Exception-Edge-Fehler im nativen Aufrufpfad und ist synthetisch geschlossen.

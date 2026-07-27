@@ -116,20 +116,20 @@ DispatchDiagnosticError materialization_error(const MaterializationFailure failu
     return DispatchDiagnosticError::UnknownTarget;
 }
 
-constexpr std::size_t dispatch_inline_cache_size = 1024u;
+constexpr std::size_t dispatch_inline_cache_size = 4096u;
 static_assert((dispatch_inline_cache_size & (dispatch_inline_cache_size - 1u)) == 0u);
 
 struct MonomorphicDispatchCacheEntry {
     const RuntimeBlockTable* table = nullptr;
     const DemandBlockMaterializer* materializer = nullptr;
-    const IndirectDispatchMetrics* metrics = nullptr;
     std::uint32_t callsite = 0u;
     std::uint32_t target = 0u;
     std::uint32_t physical_target = 0u;
     IndirectDispatchKind kind = IndirectDispatchKind::TailJump;
     RuntimeDispatchClass dispatch_class = RuntimeDispatchClass::GuardedFallback;
     BlockVariantKey effective_variant;
-    BlockDispatchGenerationGuard generation_guard;
+    ValidatedBlockExecution execution;
+    bool direct_p1_p2 = false;
     bool valid = false;
 };
 
@@ -142,6 +142,30 @@ std::size_t dispatch_inline_cache_index(const std::uint32_t callsite,
                (static_cast<std::uint32_t>(kind) * 0x9E3779B9u);
     key *= 0x85EBCA6Bu;
     return static_cast<std::size_t>(key) & (dispatch_inline_cache_size - 1u);
+}
+
+ValidatedBlockExecution make_validated_execution(
+    const RuntimeBlockHandle handle,
+    const RuntimeBlock& block,
+    const std::optional<BlockDispatchGenerationGuard>& reusable_guard = std::nullopt) noexcept {
+    ValidatedBlockExecution execution;
+    execution.block = handle;
+    execution.function = block.function;
+    execution.virtual_start = block.virtual_start;
+    execution.physical_origin = block.physical_origin;
+    execution.size = block.size;
+    execution.variant = block.variant;
+    execution.end_kind = block.end_kind;
+    execution.runtime_registered = block.runtime_registered;
+    execution.provenance = block.provenance;
+    execution.aot_template = block.aot_template ? &*block.aot_template : nullptr;
+    execution.generation_guard =
+        reusable_guard.value_or(BlockDispatchGenerationGuard{
+            .block = handle,
+            .runtime_registered = block.runtime_registered,
+        });
+    execution.generation_guard_reusable = reusable_guard.has_value();
+    return execution;
 }
 
 } // namespace
@@ -194,6 +218,14 @@ RuntimeTargetStability RuntimeOnlySiteMetrics::stability() const noexcept {
     return RuntimeTargetStability::Dynamic;
 }
 
+void IndirectDispatchMetrics::set_site_details_enabled(const bool enabled) noexcept {
+    site_details_enabled_ = enabled;
+}
+
+bool IndirectDispatchMetrics::site_details_enabled() const noexcept {
+    return site_details_enabled_;
+}
+
 void IndirectDispatchMetrics::record_hit(const RuntimeDispatchClass dispatch_class,
                                          const std::uint32_t callsite,
                                          const std::uint32_t target,
@@ -201,6 +233,7 @@ void IndirectDispatchMetrics::record_hit(const RuntimeDispatchClass dispatch_cla
     increment(hits_);
     if (dispatch_class == RuntimeDispatchClass::RuntimeOnly) {
         increment(runtime_only_hits_);
+        if (!site_details_enabled_) return;
         auto& site = runtime_only_sites_[callsite];
         site.callsite = callsite;
         increment(site.calls);
@@ -217,11 +250,13 @@ void IndirectDispatchMetrics::record_miss(const RuntimeDispatchClass dispatch_cl
     increment(misses_);
     if (dispatch_class == RuntimeDispatchClass::RuntimeOnly) {
         increment(runtime_only_misses_);
-        auto& site = runtime_only_sites_[callsite];
-        site.callsite = callsite;
-        increment(site.calls);
-        increment(site.misses);
-        record_target(site, target);
+        if (site_details_enabled_) {
+            auto& site = runtime_only_sites_[callsite];
+            site.callsite = callsite;
+            increment(site.calls);
+            increment(site.misses);
+            record_target(site, target);
+        }
     }
     if (!first_error_.has_value())
         first_error_ = IndirectDispatchFirstError{error, dispatch_class, callsite, target};
@@ -233,6 +268,7 @@ void IndirectDispatchMetrics::record_fallback(const RuntimeDispatchClass dispatc
 }
 
 void IndirectDispatchMetrics::record_invalidation(const std::uint32_t callsite) noexcept {
+    if (!site_details_enabled_) return;
     const auto site = runtime_only_sites_.find(callsite);
     if (site != runtime_only_sites_.end()) increment(site->second.invalidations);
 }
@@ -377,6 +413,170 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     std::uint32_t physical = 0u;
     auto effective_variant = request.variant;
     bool architectural_target_fetch_fault = false;
+    const auto try_cached_dispatch =
+        [&](const BlockVariantKey& candidate_variant,
+            const std::uint32_t candidate_physical,
+            const bool require_direct_p1_p2)
+        -> std::optional<IndirectDispatchResult> {
+        if (architectural_target_fetch_fault) return std::nullopt;
+        auto& cached = dispatch_inline_cache[
+            dispatch_inline_cache_index(request.callsite, request.kind)];
+        const auto cache_key_matches =
+            cached.valid && cached.table == &table &&
+            cached.materializer == request.materializer &&
+            cached.callsite == request.callsite && cached.kind == request.kind &&
+            cached.dispatch_class == request.dispatch_class &&
+            (!require_direct_p1_p2 || cached.direct_p1_p2) &&
+            cached.target == target && cached.physical_target == candidate_physical &&
+            cached.effective_variant == candidate_variant;
+        if (!cache_key_matches) return std::nullopt;
+
+        const auto static_alias_matches =
+            cached.execution.generation_guard.kind ==
+                BlockDispatchGenerationGuardKind::StaticAot &&
+            require_direct_p1_p2 &&
+            canonical_physical_address(cached.execution.virtual_start) ==
+                canonical_physical_address(candidate_physical);
+        const auto exact_block_matches =
+            cached.execution.function != nullptr && cached.execution.size >= 2u &&
+            (cached.execution.virtual_start & 1u) == 0u &&
+            (cached.execution.virtual_start == target || static_alias_matches) &&
+            canonical_physical_address(cached.execution.physical_origin) ==
+                canonical_physical_address(candidate_physical) &&
+            cached.execution.variant == candidate_variant &&
+            cached.execution.generation_guard_reusable;
+        if (!exact_block_matches) {
+            cached.valid = false;
+            return std::nullopt;
+        }
+        const auto guard_current = [&] {
+            if (cached.execution.generation_guard.kind ==
+                BlockDispatchGenerationGuardKind::Materializer)
+                return request.materializer != nullptr &&
+                       request.materializer->dispatch_generation_guard_current(
+                           cpu, cached.execution.generation_guard);
+            if (cached.execution.generation_guard.kind ==
+                BlockDispatchGenerationGuardKind::StaticAot)
+                return table.static_dispatch_generation_guard_current(
+                    cached.execution.generation_guard);
+            return false;
+        }();
+        if (guard_current) {
+            const bool alias_lookup = cached.execution.virtual_start != target;
+            if (request.kind == IndirectDispatchKind::Call)
+                cpu.pr = request.return_address;
+            cpu.pc = cached.execution.virtual_start;
+            if (request.metrics != nullptr)
+                request.metrics->record_hit(
+                    request.dispatch_class, request.callsite, target, false);
+            const bool plain_runtime_hit =
+                request.dispatch_class == RuntimeDispatchClass::RuntimeOnly &&
+                request.kind == IndirectDispatchKind::TailJump && !alias_lookup;
+            if (!plain_runtime_hit)
+                diagnose(request, target, cpu.pr, alias_lookup, true);
+            return IndirectDispatchResult{
+                cached.execution.block,
+                cached.execution,
+                target,
+                candidate_physical,
+                cpu.pc,
+                cpu.pr,
+                alias_lookup,
+                false,
+                {},
+            };
+        }
+        cached.valid = false;
+        return std::nullopt;
+    };
+    const auto try_static_aot_dispatch =
+        [&]() -> std::optional<IndirectDispatchResult> {
+        if (architectural_target_fetch_fault) return std::nullopt;
+        auto execution =
+            table.lookup_static_aot(physical, target, effective_variant);
+        if (!execution) return std::nullopt;
+
+        const bool alias_lookup = execution->virtual_start != target;
+        if (request.kind == IndirectDispatchKind::Call)
+            cpu.pr = request.return_address;
+        cpu.pc = execution->virtual_start;
+        if (request.metrics != nullptr)
+            request.metrics->record_hit(
+                request.dispatch_class, request.callsite, target, false);
+        const bool plain_runtime_hit =
+            request.dispatch_class == RuntimeDispatchClass::RuntimeOnly &&
+            request.kind == IndirectDispatchKind::TailJump && !alias_lookup;
+        if (!plain_runtime_hit)
+            diagnose(request, target, cpu.pr, alias_lookup, true);
+        if (execution->generation_guard_reusable) {
+            auto& cached = dispatch_inline_cache[
+                dispatch_inline_cache_index(request.callsite, request.kind)];
+            cached.table = &table;
+            cached.materializer = request.materializer;
+            cached.callsite = request.callsite;
+            cached.target = target;
+            cached.physical_target = physical;
+            cached.kind = request.kind;
+            cached.dispatch_class = request.dispatch_class;
+            cached.effective_variant = effective_variant;
+            cached.execution = *execution;
+            cached.direct_p1_p2 = true;
+            cached.valid = true;
+        }
+        return IndirectDispatchResult{
+            execution->block,
+            *execution,
+            target,
+            physical,
+            cpu.pc,
+            cpu.pr,
+            alias_lookup,
+            false,
+            {},
+        };
+    };
+
+    bool direct_p1_p2_target = false;
+    if (cpu.address_space) {
+        const auto segment = target >> 29u;
+        if (segment == 4u || segment == 5u) {
+            const auto& cached = dispatch_inline_cache[
+                dispatch_inline_cache_index(request.callsite, request.kind)];
+            if (cached.valid && cached.table == &table &&
+                cached.materializer == request.materializer &&
+                cached.callsite == request.callsite &&
+                cached.kind == request.kind &&
+                cached.dispatch_class == request.dispatch_class &&
+                cached.direct_p1_p2 && cached.target == target &&
+                cpu.address_space->direct_p1_p2_dispatch_guard_current(
+                    target,
+                    cpu.read_fpscr(),
+                    cpu.privileged_mode(),
+                    cached.effective_variant,
+                    request.variant.runtime_generation)) {
+                direct_p1_p2_target = true;
+                physical = cached.physical_target;
+                effective_variant = cached.effective_variant;
+                if (auto hit =
+                        try_cached_dispatch(effective_variant, physical, true))
+                    return std::move(*hit);
+            }
+        }
+    }
+    if (cpu.address_space) {
+        if (const auto guard = cpu.address_space->direct_p1_p2_instruction_guard(
+                target, cpu.read_fpscr(), cpu.privileged_mode())) {
+            direct_p1_p2_target = true;
+            physical = canonical_physical_address(target);
+            effective_variant =
+                block_variant_key(*guard, request.variant.runtime_generation);
+            if (auto cached =
+                    try_cached_dispatch(effective_variant, physical, true))
+                return std::move(*cached);
+            if (auto static_aot = try_static_aot_dispatch())
+                return std::move(*static_aot);
+        }
+    }
     const auto translate_target = [&] {
         effective_variant = request.variant;
         physical = translate_guest_address(cpu,
@@ -385,9 +585,10 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                            MemoryAccessWidth::Halfword,
                                            true);
         if (cpu.address_space) {
-            effective_variant =
-                block_variant_key(cpu.address_space->guard_for(
-                    target, cpu.read_fpscr(), cpu.privileged_mode()));
+            effective_variant = block_variant_key(
+                cpu.address_space->guard_for(
+                    target, cpu.read_fpscr(), cpu.privileged_mode()),
+                request.variant.runtime_generation);
         }
     };
     try {
@@ -421,53 +622,10 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
             translate_target();
         }
     }
-    if (!architectural_target_fetch_fault && request.metrics != nullptr &&
-        request.materializer != nullptr) {
-        auto& cached = dispatch_inline_cache[
-            dispatch_inline_cache_index(request.callsite, request.kind)];
-        const auto cache_key_matches =
-            cached.valid && cached.table == &table &&
-            cached.materializer == request.materializer &&
-            cached.metrics == request.metrics && cached.callsite == request.callsite &&
-            cached.kind == request.kind &&
-            cached.dispatch_class == request.dispatch_class &&
-            cached.target == target && cached.physical_target == physical &&
-            cached.effective_variant == effective_variant;
-        if (cache_key_matches) {
-            const auto resolved = table.resolve(cached.generation_guard.block);
-            const auto exact_block_matches =
-                resolved && resolved->get().function != nullptr &&
-                resolved->get().size >= 2u &&
-                (resolved->get().virtual_start & 1u) == 0u &&
-                resolved->get().virtual_start == target &&
-                canonical_physical_address(resolved->get().physical_origin) ==
-                    canonical_physical_address(physical) &&
-                resolved->get().variant == effective_variant;
-            if (exact_block_matches &&
-                request.materializer->dispatch_generation_guard_current(
-                    cpu, cached.generation_guard)) {
-                if (request.kind == IndirectDispatchKind::Call)
-                    cpu.pr = request.return_address;
-                cpu.pc = target;
-                request.metrics->record_hit(
-                    request.dispatch_class, request.callsite, target, false);
-                const bool plain_runtime_hit =
-                    request.dispatch_class == RuntimeDispatchClass::RuntimeOnly &&
-                    request.kind == IndirectDispatchKind::TailJump;
-                if (!plain_runtime_hit)
-                    diagnose(request, target, cpu.pr, false, true);
-                return {cached.generation_guard.block,
-                        target,
-                        physical,
-                        cpu.pc,
-                        cpu.pr,
-                        false,
-                        false,
-                        {}};
-            }
-            cached.valid = false;
-        }
-    }
+    if (!direct_p1_p2_target)
+        if (auto cached =
+                try_cached_dispatch(effective_variant, physical, false))
+            return std::move(*cached);
     const auto reject = [&](const DispatchDiagnosticError error) {
         table.mark_rejected(target, effective_variant);
         if (request.metrics != nullptr)
@@ -571,28 +729,33 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
         !variant_materialized && !invalidated && !alias_lookup &&
         !architectural_target_fetch_fault;
     if (!plain_runtime_hit) diagnose(request, target, cpu.pr, alias_lookup, true);
+    std::optional<BlockDispatchGenerationGuard> generation_guard;
+    if (request.materializer != nullptr) {
+        generation_guard = request.materializer->capture_dispatch_generation_guard(
+            cpu, *block, resolved->get().runtime_registered);
+    }
+    const auto execution =
+        make_validated_execution(*block, resolved->get(), generation_guard);
     if (!architectural_target_fetch_fault && !alias_lookup &&
-        resolved->get().virtual_start == target && request.metrics != nullptr &&
-        request.materializer != nullptr) {
-        if (const auto generation_guard =
-                request.materializer->capture_dispatch_generation_guard(
-                    cpu, *block, resolved->get().runtime_registered)) {
+        resolved->get().virtual_start == target && request.materializer != nullptr) {
+        if (generation_guard) {
             auto& cached = dispatch_inline_cache[
                 dispatch_inline_cache_index(request.callsite, request.kind)];
             cached.table = &table;
             cached.materializer = request.materializer;
-            cached.metrics = request.metrics;
             cached.callsite = request.callsite;
             cached.target = target;
             cached.physical_target = physical;
             cached.kind = request.kind;
             cached.dispatch_class = request.dispatch_class;
             cached.effective_variant = effective_variant;
-            cached.generation_guard = *generation_guard;
+            cached.execution = execution;
+            cached.direct_p1_p2 = direct_p1_p2_target;
             cached.valid = true;
         }
     }
     return {*block,
+            execution,
             target,
             physical,
             cpu.pc,

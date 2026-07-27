@@ -10,6 +10,8 @@
 namespace katana::codegen {
 namespace {
 
+constexpr std::size_t maximum_portable_cache_path_characters = 220u;
+
 void append_field(std::ostringstream& output, const std::string_view value) {
     output << value.size() << ':' << value << ';';
 }
@@ -87,10 +89,14 @@ void CodegenCache::store(const std::string_view key,
         throw std::runtime_error("Codegen-Cache-Schluessel kollidiert mit abweichendem Inhalt.");
     }
     std::filesystem::create_directories(path.parent_path());
+    std::filesystem::create_directories(root_);
     std::filesystem::path staging;
     std::random_device random;
     for (std::size_t attempt = 0u; attempt < 32u; ++attempt) {
-        staging = path.parent_path() /
+        // Keep staging directly below the configured root. Nesting it below
+        // the full key/artifact path can cross the legacy Windows MAX_PATH
+        // boundary before the final compact cache artifact is published.
+        staging = root_ /
                   (".publish-" + std::to_string(random()) + '-' + std::to_string(random()));
         std::error_code create_error;
         if (std::filesystem::create_directory(staging, create_error)) break;
@@ -142,7 +148,18 @@ std::filesystem::path CodegenCache::artifact_path(const std::string_view key,
             throw std::invalid_argument("Codegen-Cache-Pfadkomponente ist nicht portabel.");
         }
     }
-    return root_ / std::string(key) / relative;
+    const auto direct = root_ / std::string(key) / relative;
+    if (direct.native().size() <= maximum_portable_cache_path_characters)
+        return direct;
+
+    // Logical identities remain complete. Only their local physical layout is
+    // collapsed to one SHA-256 component over the unambiguous key/artifact
+    // pair, retaining the full collision resistance without a long path.
+    std::ostringstream compact_identity;
+    append_field(compact_identity, key);
+    append_field(compact_identity, relative.generic_string());
+    return root_ / ".compact" /
+           katana::io::sha256_bytes(compact_identity.str());
 }
 
 } // namespace katana::codegen

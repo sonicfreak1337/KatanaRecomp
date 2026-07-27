@@ -80,14 +80,22 @@ class PlatformInterruptRouter final {
     [[nodiscard]] bool scif_pending(std::size_t source) const;
     [[nodiscard]] bool external_pending(std::size_t line) const;
     [[nodiscard]] PlatformInterruptRouterSnapshot snapshot() const noexcept;
+    // Advances only when a routed source's asserted state or priority changes. TMU, RTC and
+    // DMAC are sampled as one compact state word so MMIO read-to-clear/write-to-change
+    // transitions are observed without treating every MMIO access as an interrupt event.
+    [[nodiscard]] std::uint64_t source_epoch() const noexcept;
+    void mark_device_sources_dirty() noexcept;
 
     [[nodiscard]] std::size_t synchronize();
     [[nodiscard]] bool accept(CpuState& cpu);
+    [[nodiscard]] bool accept_cached(CpuState& cpu) noexcept;
     void reset() noexcept;
 
   private:
     static std::uint8_t clamp_level(std::uint8_t level) noexcept;
     static InterruptSource source_id(PlatformInterruptSource source) noexcept;
+    [[nodiscard]] std::uint16_t device_pending_state() const noexcept;
+    void refresh_device_source_epoch() const noexcept;
     void route(PlatformInterruptSource source, bool asserted, std::uint8_t level);
 
     InterruptController& controller_;
@@ -100,6 +108,9 @@ class PlatformInterruptRouter final {
     std::uint8_t scif_level_ = 0u;
     std::array<bool, scif_interrupt_count> scif_pending_{};
     std::array<bool, external_line_count> external_pending_{};
+    mutable std::uint64_t source_epoch_ = 0u;
+    mutable std::uint16_t device_pending_state_ = 0u;
+    mutable bool device_sources_dirty_ = false;
 };
 
 class Sh4InterruptRegisters final {

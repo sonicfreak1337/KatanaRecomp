@@ -1,10 +1,10 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Abgeschlossener interner Meilenstein: `v0.47.0`
-Aktuelle Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
+Historischer Ausgangsmeilenstein: `v0.48.0` (Produktgate nicht abgeschlossen)
+Aktuelle Phase: `v0.49.0` - statischer Produktrecompiler und Executable-First-Bring-up
 Erster oeffentlicher Release: `v0.50.0` Alpha
-Weitere interne Gates: `v0.48.0` und `v0.49.0`; danach `v0.75.0` Beta und `v1.0.0` Stable
+Weitere geplante Stufen: `v0.75.0` Beta und `v1.0.0` Stable
 
 ## Produktziel
 
@@ -18,24 +18,22 @@ bleiben getrennt. Proprietaere Spiel-, BIOS- oder Assetdaten gehoeren weder in
 das Repository noch in verteilbare Pakete.
 
 Das verbindliche Architekturmodell ist XenonRecomp-artige statische
-Rekompilierung: Der allgemeine Werkzeugpfad uebersetzt die aus der lokalen
-Nutzerdisc nachgewiesenen Programme `IP.BIN` und BootExecutable vorab aus SH-4
-in C++ beziehungsweise nativen PC-Code. Die getrennte Runtime implementiert
-nur typisierte Dreamcast-Plattformgrenzen; ein freigegebener normaler Portlauf
-darf weder SH-4-Interpreter/JIT noch einen virtuellen Discplayer oder
-Titelhacks enthalten. Der Produktport erfuellt diese Grenze jetzt: Er emittiert
-und linkt keinen Interpreter, und unbekannter oder veraenderter Code aktiviert
-nur vorab gebundene AOT-Module oder endet kontrolliert. Der begrenzte
-Interpreter bleibt ausschliesslich im expliziten `diagnostic_partial`-Profil.
-Strukturierte Disc-Ladetransaktionen und die vorab erzeugte Registry latenter
-nativer Module sind mit `KR-4848` abgeschlossen.
+Rekompilierung. Der v0.49-Entwicklungspfad extrahiert die Boot-Executable
+einmalig aus der eigenen `.gdi` und verwendet danach ein unveraenderliches
+hashgebundenes Artefakt fuer Analyse, Codegen und Warmbuild. `.gdi` bleibt
+Nutzerinstallationsquelle und Eingang des finalen NativeDiscBoot. Die getrennte
+Runtime implementiert nur typisierte Dreamcast-Plattformgrenzen; ein normaler
+Portlauf darf weder SH-4-Interpreter/JIT noch einen Emulationsfallback oder
+Titelhacks enthalten. Der begrenzte Interpreter bleibt ausschliesslich im
+expliziten `diagnostic_partial`-Profil.
 
 ## Planungsregeln
 
 1. Allgemeine Semantik vor Titelsonderfaellen.
-2. Oberstes Entwicklungs- und Testziel ist ein lauffaehiger privater
-   Sonic-Adventure-PAL-Produktport. Fortschritt im echten Spielboot ist das
-   verbindliche Freigabekriterium fuer neue Implementierung.
+2. Oberstes End-to-End-Ziel bleibt ein lauffaehiger privater
+   Sonic-Adventure-PAL-Produktport. Die Bootursachenanalyse und erneute
+   600-Millionen-Zyklen-Abnahme sind fuer den v0.49-Architekturcommit
+   ausdruecklich vertagt und werden nicht durch synthetische Erfolge ersetzt.
 3. Unbekannte Ziele, Opcodes, BIOS-Aufrufe und MMIO-Zugriffe duerfen nicht still
    erfolgreich sein.
 4. Private Retaildaten bleiben ausserhalb von Repository, CI, Paketen und
@@ -65,11 +63,49 @@ nicht mehr einzeln wiederholt.
 |---|---|
 | SH-4 Integer, Systemregister und FPU-Grundlage | umgesetzt und getestet |
 | Loader, GDI, ISO9660 und rekursive Analyse | umgesetzt |
-| Katana-IR, C++-Backend und Blockdispatch | umgesetzt |
+| Static-/Dynamic-AOT, Katana-IR und C++-Backend | umgesetzt; Function-Level-Optimierung wird konservativ erweitert |
 | Speicherbus, Exceptions, Interrupts, Scheduler und DMA | umgesetzt |
 | BIOS-HLE, System-ASIC, Maple, PVR-Minimalpfad, AICA-HLE und GD-ROM | umgesetzt, Genauigkeit noch begrenzt |
-| Windows-GUI, GDI-Workflow, Portexport und native Hostruntime | umgesetzt |
+| Executable-First, DirectBoot, GDI-Installation, Portexport und native Hostruntime | umgesetzt |
+| Externe Spielprojektschnittstelle | allgemeiner hashgebundener Vertrag umgesetzt; Titelintegration bleibt extern |
 | Private Retailanalyse | Schema 4: 142.380 Instruktionen, 1.542 Funktionen, null unbekannte SH-4-Instruktionen und null bekannte Hardwareluecken; zwei partielle Adressen und 492 unaufgeloeste Poll-/Guard-Loops halten `--strict` offen |
+
+## v0.49.0 - Statischer Produktrecompiler
+
+### Ziel
+
+KatanaRecomp, KatanaRuntime und titelbezogene Portprojekte besitzen getrennte
+Verantwortungen. Der fruehe Bring-up arbeitet executable-first; der normale
+Produkt-Hotpath fuehrt bereits validierte statische AOT-Funktionszeiger aus
+und verlaesst native Regionen nur an echten dynamischen oder
+architektonischen Grenzen.
+
+### Umgesetzt
+
+- direkter validierter Ausfuehrungsdeskriptor ohne zweites Tabellenlookup;
+- zweistufiger Static-AOT-Tier und getrennter Dynamic-AOT-Tier;
+- frueher P1-/P2-Inline-Cache sowie Modul-/Relocation-/Blockgenerationguards;
+- native Funktionslabels, direkte AOT-Calls und Host-Stackwaechter;
+- konservative Register- und Haupt-RAM-Fastpaths;
+- ereignisgetriebene IRQ-Metadaten und gebuendelte Gastzyklen;
+- reduzierte Replay-, Lifecycle-, Diagnose- und RuntimeOnly-Hotpatharbeit;
+- `runtime_core`-Paket, schmale AOT-ABI, PCH, stabile Partitionen und
+  getrennte Bring-up-/Gatebuilds;
+- `extract-boot-executable`, `port-executable`, DirectBoot und externer
+  Spielprojektvertrag.
+
+### Vertagt
+
+- erneute inhaltliche Diagnose des schwarzen privaten Bootbilds;
+- reale 600-Millionen-Zyklen-Abnahme des finalen v0.49-Stands;
+- belegte 200-MHz-Produktleistung und sichtbarer SEGA-Screen;
+- reales clang-cl/MSVC-A/B auf einem Host mit installierter clang-cl-Toolchain.
+
+Diese Punkte bleiben Produktabnahme, werden aber nicht als Voraussetzung fuer
+den gelieferten generischen Architekturumbau ausgegeben. Eine eigene feste
+POD-Crash-Capsule, ein automatisch begrenztes Triggered-Deep-Trace-Fenster und
+ein CLI-Scaffold fuer externe Spielprojekte bleiben ebenfalls offene
+Konsolidierung.
 
 ## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
 
@@ -577,7 +613,12 @@ Produktlauf. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
 - v0.48 wird nur intern freigegeben und nicht getaggt. Tags beginnen erst mit
   der Alpha
 
-## v0.49.0 - Port-, Harness-, GUI-Integration und Alpha-Candidate
+## Historischer, abgeloester v0.49-Integrationsplan
+
+Dieser Abschnitt bleibt ausschliesslich zur Nachvollziehbarkeit der
+registrierten Task-IDs erhalten. Er beschreibt nicht mehr den aktuellen
+v0.49-Lieferumfang; die aktive v0.49-Architekturphase steht oben. Offene
+Alpha-Integration wird vor einem oeffentlichen Release neu eingeplant.
 
 ### Ziel
 

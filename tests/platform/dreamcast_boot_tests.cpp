@@ -1,6 +1,8 @@
 #include "katana/platform/dreamcast.hpp"
 #include "katana/runtime/bios_abi.hpp"
+#include "katana/runtime/game_project.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +23,14 @@ template <typename E, typename F> bool throws(F&& f) {
         return true;
     }
     return false;
+}
+
+katana::runtime::GameProjectHookResult mutate_pc_and_continue(
+    katana::runtime::CpuState& cpu,
+    katana::runtime::PlatformServices*,
+    void*) noexcept {
+    cpu.pc += 2u;
+    return {};
 }
 } // namespace
 
@@ -116,6 +126,35 @@ int main() {
     require(raw_result.entry_point == 0x8C020000u &&
                 raw_cpu.memory.read_u16(0x8C020000u) == 0x0009u,
             "Raw-Homebrew erreicht den Plattformboot nicht.");
+
+    const std::array project_functions{
+        runtime::GameProjectFunctionBoundary{
+            0x8C010000u, 8u, "identity_bound_entry"}};
+    const std::array project_overrides{
+        runtime::GameProjectFunctionOverride{
+            0x8C010000u,
+            &mutate_pc_and_continue,
+            nullptr,
+            nullptr,
+            runtime::GameProjectFunctionOverrideStrength::Required}};
+    runtime::GameProjectDefinition game_project;
+    game_project.project_id = "hook-contract-regression";
+    game_project.project_version = "1";
+    game_project.identity = {
+        "synthetic-content",
+        "BOOT.BIN",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"};
+    game_project.function_boundaries = project_functions;
+    game_project.function_overrides = project_overrides;
+    const runtime::GameProjectBindings bindings(game_project);
+    runtime::CpuState hook_cpu;
+    hook_cpu.pc = 0x8C010000u;
+    const auto invalid_continue = bindings.invoke_function_override(
+        hook_cpu.pc, hook_cpu, nullptr);
+    require(invalid_continue.status ==
+                runtime::GameProjectHookDispatchStatus::Invalid,
+            "Ein Continue-Hook darf den bereits validierten Gast-PC nicht "
+            "unter dem Dispatcher veraendern.");
 
     std::cout << "BIOS-freier Dreamcast-Homebrew-Boot erfolgreich.\n";
 }

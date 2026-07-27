@@ -11,7 +11,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t native_aot_emission_profile_version = 1u;
+inline constexpr std::uint32_t native_aot_emission_profile_version = 5u;
 
 enum class NativeAotEmissionProfile : std::uint8_t { Product, ExternalConformance };
 
@@ -23,6 +23,7 @@ struct NativeAotEmissionContract {
     bool single_block_execution = true;
     bool external_dynamic_dispatch = true;
     bool guarded_local_block_chaining = true;
+    bool conservative_register_localization = true;
 };
 
 struct NativeAotBackendRequestOptions {

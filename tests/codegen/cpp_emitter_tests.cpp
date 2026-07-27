@@ -144,8 +144,9 @@ int main() {
     for (const auto origin_access : origin_guest_accesses) {
         origin_guest_access_count += count_occurrences(emitter_implementation, origin_access);
     }
-    require(origin_guest_access_count == 50u,
-            "Nicht alle 50 Gastzugriffs-Callsites tragen Instruktionsprovenienz.");
+    require(origin_guest_access_count == 52u,
+            "Nicht alle 52 Gastzugriffs- und RAM-Guard-Fallback-Callsites tragen "
+            "Instruktionsprovenienz.");
     require(emitter_implementation.find(
                 "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()") !=
                 std::string::npos &&
@@ -157,9 +158,9 @@ int main() {
                     std::string::npos,
             "Origin wird eager erzeugt oder PREF verliert seine Instruktionsprovenienz.");
 
-    require(source.find("#include \"katana/runtime/exception.hpp\"") != std::string::npos &&
-                source.find("#include \"katana/runtime/runtime.hpp\"") != std::string::npos,
-            "Der generierte Code bindet Exception-Pfad oder Runtime nicht ein.");
+    require(source.find("#include \"katana/runtime/aot_runtime_abi.hpp\"") !=
+                std::string::npos,
+            "Der generierte Code bindet den schmalen AOT-Runtimevertrag nicht ein.");
     require(source.find("using CpuState = katana::runtime::CpuState;") != std::string::npos &&
                 source.find("using Memory = katana::runtime::Memory;") != std::string::npos,
             "Der generierte Kompatibilitaets-Namespace fehlt.");
@@ -175,13 +176,15 @@ int main() {
     const auto call_owner = emitted_instruction(source, "0x8C010000");
     const auto call_delay_slot = emitted_instruction(source, "0x8C010002");
     require(call_owner.find(
-                "katana::runtime::GuestInstructionAttempt terminal_instruction_attempt(") !=
+                "katana::runtime::ExplicitGuestInstructionAttempt "
+                "terminal_instruction_attempt(") !=
                     std::string_view::npos &&
                 call_owner.find(
                     "katana::runtime::relocate_code_address(0x8C010000u), 2u);") !=
                     std::string_view::npos &&
                 call_delay_slot.find(
-                    "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+                    "katana::runtime::ExplicitGuestInstructionAttempt "
+                    "guest_instruction_attempt(") !=
                     std::string_view::npos &&
                 call_delay_slot.find(
                     "katana::runtime::relocate_code_address(0x8C010002u), 1u);") !=
@@ -267,12 +270,14 @@ int main() {
     local_chain_request.single_block_execution = true;
     local_chain_request.guarded_local_block_chaining = true;
     local_chain_request.external_dynamic_dispatch = true;
+    local_chain_request.conservative_register_localization = true;
     const katana::codegen::CppBackend local_chain_backend;
     const auto local_chain_source = local_chain_backend.emit(local_chain_request).joined_text();
     constexpr std::string_view block_note = "                note_block_entry(";
     const auto first_block_note = local_chain_source.find(block_note);
     const auto local_chain_transition =
-        local_chain_source.find("services->can_chain_executable_block(cpu.pc)) continue;");
+        local_chain_source.find("services->can_chain_executable_block(cpu.pc)) "
+                                "goto katana_block_8C010002;");
     const auto next_block_note = local_chain_source.find(block_note, first_block_note + 1u);
     require(first_block_note != std::string::npos && local_chain_transition != std::string::npos &&
                 next_block_note != std::string::npos && first_block_note < local_chain_transition &&
@@ -281,16 +286,66 @@ int main() {
                     "note_block_entry(katana::runtime::relocate_code_address(0x8C010000u));") !=
                     std::string::npos &&
                 local_chain_source.find(
-                    "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+                    "katana::runtime::ExplicitGuestInstructionAttempt "
+                    "guest_instruction_attempt(") !=
                     std::string::npos &&
                 local_chain_source.find("++cpu.retired_guest_instructions;") ==
                     std::string::npos &&
                 local_chain_source.find("services->consume_guest_cycles(") == std::string::npos &&
-                local_chain_source.find("cpu.pc = !cpu.t ? "
+                local_chain_source.find("const bool take_branch = !cpu.t;") !=
+                    std::string::npos &&
+                local_chain_source.find(
+                    "katana::runtime::NativeAotRegisterFile<0x00000001u> "
+                    "katana_registers(cpu);") != std::string::npos &&
+                local_chain_source.find(
+                    "katana_registers[0] = static_cast<std::uint32_t>(1);") !=
+                    std::string::npos &&
+                local_chain_source.find("cpu.r[0]") == std::string::npos &&
+                local_chain_source.find("cpu.pc = take_branch ? "
                                         "katana::runtime::relocate_code_address(0x8C010002u) : "
                                         "katana::runtime::relocate_code_address(0x8C010006u);") !=
                     std::string::npos,
-            "Lokales Mehrblock-Chaining besitzt Vorab-Timing oder keinen Attempt/Retire-Guard.");
+            "Lokales Mehrblock-Chaining besitzt Vorab-Timing, keinen Attempt/Retire-Guard "
+            "oder keine konservative Registerlokalisierung.");
+
+    katana::codegen::BackendRequest native_call_request{program, 0x8C010000u};
+    native_call_request.single_block_execution = true;
+    native_call_request.guarded_local_block_chaining = true;
+    native_call_request.external_dynamic_dispatch = true;
+    const auto native_call_source =
+        local_chain_backend.emit(native_call_request).joined_text();
+    const auto native_call = native_call_source.find(
+        "fn_8C010008_with_services(cpu, services);");
+    const auto native_return_guard = native_call_source.find(
+        "katana::runtime::unrelocate_code_address(cpu.pc) == 0x8C010004u",
+        native_call);
+    const auto native_return_label =
+        native_call_source.find("goto katana_block_8C010004;", native_return_guard);
+    require(native_call != std::string::npos &&
+                native_call_source.rfind(
+                    "katana::runtime::NativeAotCallDepthGuard native_call_depth;",
+                    native_call) != std::string::npos &&
+                native_call_source.rfind(
+                    "services->can_chain_executable_block(cpu.pc)", native_call) !=
+                    std::string::npos &&
+                native_return_guard != std::string::npos &&
+                native_return_label != std::string::npos,
+            "Function-Level-AOT fuehrt einen bekannten Call oder belegten Return nicht "
+            "direkt unter dem Chainingguard aus.");
+    const std::array architectural_call_boundary{0x8C010008u};
+    auto boundary_call_request = native_call_request;
+    boundary_call_request.architectural_boundary_entries =
+        architectural_call_boundary;
+    const auto boundary_call_source =
+        local_chain_backend.emit(boundary_call_request).joined_text();
+    require(boundary_call_source.find(
+                "fn_8C010008_with_services(cpu, services);") ==
+                std::string::npos &&
+                boundary_call_source.find(
+                    "cpu.pc = katana::runtime::relocate_code_address("
+                    "0x8C010008u);") != std::string::npos,
+            "Architekturgrenze wird von einem direkten nativen Function-Level-Call "
+            "umgangen.");
 
     constexpr std::array<std::uint8_t, 12> indirect_jump_bytes = {
         0x08u,
@@ -502,6 +557,51 @@ int main() {
                 runtime_only_json.find("\"dynamic_target_class\":\"runtime-only\"") !=
                     std::string::npos,
             "Runtime-only-Klasse erreicht IR-Text, JSON oder validierenden Dispatcher nicht.");
+    const std::array guarded_native_call_targets{
+        katana::codegen::GuardedNativeCallTarget{2u, 12u}};
+    katana::codegen::BackendRequest guarded_native_request{dynamic_program, 0u};
+    guarded_native_request.external_function_linkage = true;
+    guarded_native_request.single_block_execution = true;
+    guarded_native_request.external_dynamic_dispatch = true;
+    guarded_native_request.guarded_local_block_chaining = true;
+    guarded_native_request.guarded_native_call_targets =
+        guarded_native_call_targets;
+    const auto guarded_native_source =
+        katana::codegen::CppBackend{}.emit(guarded_native_request).joined_text();
+    require(
+        guarded_native_source.find(
+            "katana::runtime::unrelocate_code_address(call_target) == 0x0000000Cu") !=
+                std::string::npos &&
+            guarded_native_source.find(
+                "services->can_chain_executable_block(cpu.pc)") != std::string::npos &&
+            guarded_native_source.find(
+                "katana::runtime::NativeAotCallDepthGuard native_call_depth;") !=
+                std::string::npos &&
+            guarded_native_source.find(
+                "fn_0000000C_with_services(cpu, services);") != std::string::npos &&
+            guarded_native_source.find("goto katana_block_00000006;") !=
+                std::string::npos &&
+            guarded_native_source.find("}\n                return;") !=
+                std::string::npos,
+        "Guardierter nativer Registercall verliert Live-Zielvergleich, Runtime-/Depthguard, "
+        "direkten AOT-Call, Fortsetzung oder Dispatcher-Fallback.");
+    const std::array guarded_architectural_boundary{12u};
+    auto guarded_boundary_request = guarded_native_request;
+    guarded_boundary_request.architectural_boundary_entries =
+        guarded_architectural_boundary;
+    const auto guarded_boundary_source =
+        katana::codegen::CppBackend{}
+            .emit(guarded_boundary_request)
+            .joined_text();
+    require(
+        guarded_boundary_source.find(
+            "katana::runtime::unrelocate_code_address(call_target) == "
+            "0x0000000Cu") == std::string::npos &&
+            guarded_boundary_source.find(
+                "cpu.pc = call_target;") !=
+                std::string::npos,
+        "Architekturgrenze wird vom guardierten nativen Singleton-Call "
+        "umgangen.");
 
     auto guarded_candidate_program = indirect_call_program;
     auto* guarded_candidate_call =
@@ -599,7 +699,8 @@ int main() {
     const auto delay_load_flush =
         delay_load.find("katana::runtime::flush_pending_guest_cycles(cpu, *services)");
     const auto delay_load_attempt =
-        delay_load.find("katana::runtime::GuestInstructionAttempt guest_instruction_attempt");
+        delay_load.find(
+            "katana::runtime::ExplicitGuestInstructionAttempt guest_instruction_attempt");
     require(delay_memory_source.find("catch (const katana::runtime::MemoryAccessError& error)") !=
                     std::string::npos &&
                 delay_load.find(
@@ -705,6 +806,41 @@ int main() {
                     std::string_view::npos,
             "Unbewiesene Speicherzugriffe verlieren ihren Flush oder bewiesenes lineares RAM "
             "wird weiterhin vor jeder Instruktion geflusht.");
+
+    auto guarded_linear_program = proven_linear_pc_relative_program;
+    auto& guarded_linear_blocks = guarded_linear_program.front().blocks;
+    const auto original_linear_block = guarded_linear_blocks.front();
+    katana::ir::BasicBlock guarded_linear_first;
+    guarded_linear_first.start_address = original_linear_block.start_address;
+    guarded_linear_first.instructions = {original_linear_block.instructions.front()};
+    guarded_linear_first.successors = {
+        original_linear_block.instructions[1u].source_address};
+    katana::ir::BasicBlock guarded_linear_second;
+    guarded_linear_second.start_address =
+        original_linear_block.instructions[1u].source_address;
+    guarded_linear_second.instructions.assign(
+        original_linear_block.instructions.begin() + 1,
+        original_linear_block.instructions.end());
+    guarded_linear_blocks = {
+        std::move(guarded_linear_first), std::move(guarded_linear_second)};
+    katana::codegen::BackendRequest guarded_linear_request{
+        guarded_linear_program, 0x8C030000u};
+    guarded_linear_request.single_block_execution = true;
+    guarded_linear_request.guarded_local_block_chaining = true;
+    guarded_linear_request.external_dynamic_dispatch = true;
+    const auto guarded_linear_source =
+        katana::codegen::CppBackend{}.emit(guarded_linear_request).joined_text();
+    require(
+        guarded_linear_source.find(
+            "auto katana_direct_ram = "
+            "cpu.memory.direct_linear_memory_guard(false);") != std::string::npos &&
+            guarded_linear_source.find(
+                "services->can_chain_executable_block(cpu.pc) && "
+                "cpu.memory.direct_linear_memory_guard_current("
+                "katana_direct_ram, false)) goto katana_block_8C030002;") !=
+                std::string::npos,
+        "Der gebuendelte direkte RAM-Guard wird an einer nativen Blockgrenze nicht "
+        "neu validiert.");
 
     constexpr std::array<std::uint8_t, 6> read_modify_write_bytes = {
         0x0Fu,

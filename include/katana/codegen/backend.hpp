@@ -37,6 +37,15 @@ struct BackendRequirements {
     BackendCapabilities capabilities = capability(BackendCapability::StructuredSections);
 };
 
+// A statically discovered native AOT candidate for an indirect guest call.
+// This is deliberately separate from IR resolved_targets: the live guest
+// register remains authoritative and generated code must compare it before
+// entering the candidate, with the ordinary dynamic dispatcher as fallback.
+struct GuardedNativeCallTarget {
+    std::uint32_t callsite = 0u;
+    std::uint32_t target = 0u;
+};
+
 struct BackendRequest {
     std::span<const katana::ir::Function> functions;
     std::uint32_t entry_address = 0u;
@@ -50,6 +59,15 @@ struct BackendRequest {
     bool external_dynamic_dispatch = false;
     bool guarded_local_block_chaining = false;
     bool external_instruction_observer = false;
+    std::span<const GuardedNativeCallTarget> guarded_native_call_targets;
+    // Entries that must be observed by the architectural dispatcher (for
+    // example external game-project hooks). Native labels, direct calls and
+    // guarded singleton calls must return with cpu.pc set instead of crossing
+    // these boundaries locally.
+    std::span<const std::uint32_t> architectural_boundary_entries;
+    // Localize a conservatively selected GPR subset only when the complete
+    // emitted guest function is a pure leaf with no architectural boundary.
+    bool conservative_register_localization = false;
 };
 
 struct BackendEmission {

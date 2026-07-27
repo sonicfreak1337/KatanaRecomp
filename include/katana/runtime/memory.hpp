@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -260,12 +262,104 @@ struct GuestMemoryAccessSink {
     [[nodiscard]] explicit operator bool() const noexcept { return callback != nullptr; }
 };
 
+using MmioInterruptStateDirtyCallback = void (*)(void* context) noexcept;
+
+struct MmioInterruptStateSink {
+    void* context = nullptr;
+    MmioInterruptStateDirtyCallback mark_dirty = nullptr;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return mark_dirty != nullptr; }
+};
+
 struct MemoryPerformanceCounters {
     std::uint64_t indexed_region_hits = 0u;
     std::uint64_t reference_region_probes = 0u;
     std::uint64_t unobserved_accesses = 0u;
     std::uint64_t observed_accesses = 0u;
 };
+
+// A short-lived proof that one complete physical alias window still has a stable,
+// directly addressable linear backing. Generated code may acquire this once at a
+// native function or block boundary and reuse it until the next architectural or
+// host-service boundary. A null byte pointer means that the corresponding access
+// kind must use the general Memory path.
+//
+// The guard never owns the backing and must not outlive its Memory object.
+struct DirectLinearMemoryGuard {
+    const std::uint8_t* read_bytes = nullptr;
+    std::uint8_t* write_bytes = nullptr;
+    std::uint32_t physical_base = 0u;
+    std::uint32_t physical_span = 0u;
+    std::uint32_t backing_mask = 0u;
+    std::uint64_t generation = 0u;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return read_bytes != nullptr && physical_span != 0u;
+    }
+};
+
+[[nodiscard]] inline bool direct_linear_guard_offset(
+    const DirectLinearMemoryGuard& guard,
+    const std::uint32_t virtual_address,
+    const std::size_t width,
+    std::uint32_t& offset) noexcept {
+    if (!guard || width == 0u ||
+        (virtual_address & 0xC0000000u) != 0x80000000u ||
+        (virtual_address & static_cast<std::uint32_t>(width - 1u)) != 0u)
+        return false;
+    const auto physical_address = virtual_address & 0x1FFFFFFFu;
+    if (physical_address < guard.physical_base) return false;
+    const auto relative = physical_address - guard.physical_base;
+    if (relative >= guard.physical_span || width > guard.physical_span - relative)
+        return false;
+    offset = relative & guard.backing_mask;
+    return width <= static_cast<std::size_t>(guard.backing_mask) + 1u - offset;
+}
+
+[[nodiscard]] inline bool direct_linear_guard_read_u8(
+    const DirectLinearMemoryGuard& guard,
+    const std::uint32_t virtual_address,
+    std::uint8_t& value) noexcept {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_guard_offset(guard, virtual_address, sizeof(value), offset))
+        return false;
+    value = guard.read_bytes[offset];
+    return true;
+}
+
+[[nodiscard]] inline bool direct_linear_guard_read_u16(
+    const DirectLinearMemoryGuard& guard,
+    const std::uint32_t virtual_address,
+    std::uint16_t& value) noexcept {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_guard_offset(guard, virtual_address, sizeof(value), offset))
+        return false;
+    if constexpr (std::endian::native == std::endian::little) {
+        std::memcpy(&value, guard.read_bytes + offset, sizeof(value));
+    } else {
+        value = static_cast<std::uint16_t>(guard.read_bytes[offset]) |
+                static_cast<std::uint16_t>(guard.read_bytes[offset + 1u]) << 8u;
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool direct_linear_guard_read_u32(
+    const DirectLinearMemoryGuard& guard,
+    const std::uint32_t virtual_address,
+    std::uint32_t& value) noexcept {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_guard_offset(guard, virtual_address, sizeof(value), offset))
+        return false;
+    if constexpr (std::endian::native == std::endian::little) {
+        std::memcpy(&value, guard.read_bytes + offset, sizeof(value));
+    } else {
+        value = static_cast<std::uint32_t>(guard.read_bytes[offset]) |
+                static_cast<std::uint32_t>(guard.read_bytes[offset + 1u]) << 8u |
+                static_cast<std::uint32_t>(guard.read_bytes[offset + 2u]) << 16u |
+                static_cast<std::uint32_t>(guard.read_bytes[offset + 3u]) << 24u;
+    }
+    return true;
+}
 
 struct LinearMemoryTransactionWrite {
     std::uint32_t address = 0u;
@@ -434,6 +528,40 @@ class Memory {
         std::uint64_t accesses,
         std::uint64_t indexed_region_hits) const noexcept;
 
+    // Binds a power-of-two linear backing repeated over one already mapped physical
+    // alias window. This is deliberately a single product-RAM contract: VRAM,
+    // AICA RAM, OCRAM and MMIO retain their distinct device semantics.
+    void bind_direct_linear_alias_window(std::uint32_t physical_base,
+                                         std::uint32_t physical_span,
+                                         LinearMemoryDevice& backing);
+    void clear_direct_linear_alias_window() noexcept;
+    [[nodiscard]] DirectLinearMemoryGuard
+    direct_linear_memory_guard(bool write) const noexcept;
+    [[nodiscard]] bool
+    direct_linear_memory_guard_current(const DirectLinearMemoryGuard& guard,
+                                       bool write) const noexcept;
+    [[nodiscard]] bool
+    try_read_direct_linear_u8(std::uint32_t physical_address,
+                              std::uint8_t& value) const noexcept;
+    [[nodiscard]] bool
+    try_read_direct_linear_u16(std::uint32_t physical_address,
+                               std::uint16_t& value) const noexcept;
+    [[nodiscard]] bool
+    try_read_direct_linear_u32(std::uint32_t physical_address,
+                               std::uint32_t& value) const noexcept;
+    [[nodiscard]] bool
+    try_write_direct_linear_u8(std::uint32_t physical_address,
+                               std::uint8_t value,
+                               CodeWriteSource source = CodeWriteSource::Cpu);
+    [[nodiscard]] bool
+    try_write_direct_linear_u16(std::uint32_t physical_address,
+                                std::uint16_t value,
+                                CodeWriteSource source = CodeWriteSource::Cpu);
+    [[nodiscard]] bool
+    try_write_direct_linear_u32(std::uint32_t physical_address,
+                                std::uint32_t value,
+                                CodeWriteSource source = CodeWriteSource::Cpu);
+
     [[nodiscard]] MemoryWatchpointId add_watchpoint(std::uint32_t address,
                                                     std::size_t size,
                                                     MemoryWatchpointAccess access,
@@ -450,6 +578,15 @@ class Memory {
     [[nodiscard]] bool mmio_access_tracking_enabled() const noexcept;
     [[nodiscard]] std::optional<MemoryAccessEvent> last_mmio_access() const;
     void clear_last_mmio_access() const noexcept;
+    // Compatibility token for generated runtimes. Interrupt delivery is driven by
+    // PlatformInterruptRouter::source_epoch(); ordinary MMIO traffic must not advance this
+    // value and force a complete interrupt-router walk.
+    [[nodiscard]] std::uint64_t mmio_access_epoch() const noexcept;
+    void set_mmio_interrupt_state_sink(MmioInterruptStateSink sink) noexcept;
+    void clear_mmio_interrupt_state_sink() noexcept;
+    // Direct device paths which can change a router-polled source outside MMIO or a scheduler
+    // callback must call this after committing the state change.
+    void notify_interrupt_source_state_maybe_changed() const noexcept;
     void set_mmio_trace_handler(MemoryAccessObserver observer);
     void clear_mmio_trace_handler() noexcept;
     [[nodiscard]] bool has_mmio_trace_handler() const noexcept;
@@ -644,6 +781,10 @@ class Memory {
                                         std::size_t size) const noexcept;
     void rebuild_region_index();
     [[nodiscard]] bool access_observers_active() const noexcept;
+    void refresh_direct_linear_access_state() noexcept;
+    [[nodiscard]] bool direct_linear_offset(std::uint32_t physical_address,
+                                            std::size_t width,
+                                            std::uint32_t& offset) const noexcept;
     void require_alignment(std::uint32_t address,
                            MemoryAccessWidth width,
                            MemoryAccessOperation operation) const;
@@ -684,10 +825,19 @@ class Memory {
     GuestWriteObserverContract guest_write_observer_contract_ =
         GuestWriteObserverContract::General;
     GuestMemoryAccessSink guest_memory_access_sink_;
+    MmioInterruptStateSink mmio_interrupt_state_sink_;
     bool mmio_access_tracking_enabled_ = false;
     mutable std::optional<LastMmioAccessRecord> last_mmio_access_;
     MemoryWatchpointId next_watchpoint_id_ = 1u;
     mutable MemoryPerformanceCounters performance_counters_;
+    LinearMemoryDevice* direct_linear_backing_ = nullptr;
+    std::uint8_t* direct_linear_bytes_ = nullptr;
+    std::uint32_t direct_linear_physical_base_ = 0u;
+    std::uint32_t direct_linear_physical_span_ = 0u;
+    std::uint32_t direct_linear_backing_mask_ = 0u;
+    std::uint64_t direct_linear_generation_ = 1u;
+    bool direct_linear_reads_enabled_ = false;
+    bool direct_linear_writes_enabled_ = false;
 };
 
 } // namespace katana::runtime

@@ -78,8 +78,9 @@ build_address_source_map(const katana::io::ExecutableImage& image,
                     throw std::runtime_error("Generierter Source-Map-Marker ist ungueltig.");
                 }
                 const auto* segment = image.find_segment(address);
-                const auto byte_offset = segment == nullptr ? std::optional<std::size_t>{}
-                                                            : segment->byte_offset(address);
+                const auto byte_offset =
+                    segment == nullptr ? std::optional<std::uint64_t>{}
+                                       : segment->source_byte_offset(address);
                 if (segment == nullptr || !byte_offset.has_value()) {
                     throw std::runtime_error("Source-Map-Adresse liegt ausserhalb des Images.");
                 }

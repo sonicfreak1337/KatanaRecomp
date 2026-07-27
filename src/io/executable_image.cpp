@@ -43,6 +43,21 @@ std::optional<std::size_t> ImageSegment::byte_offset(const std::uint32_t address
     return static_cast<std::size_t>(offset);
 }
 
+std::optional<std::uint64_t>
+ImageSegment::source_byte_offset(const std::uint32_t address) const noexcept {
+    if (!contains(address)) {
+        return std::nullopt;
+    }
+    const auto offset = static_cast<std::uint64_t>(address) - virtual_address;
+    const auto source_size =
+        latent_source_size == 0u ? static_cast<std::uint64_t>(bytes.size())
+                                 : latent_source_size;
+    if (offset >= source_size) {
+        return std::nullopt;
+    }
+    return offset;
+}
+
 ExecutableImage::ExecutableImage(std::filesystem::path source_path)
     : source_path_(std::move(source_path)) {}
 
@@ -57,10 +72,20 @@ void ExecutableImage::add_segment(ImageSegment segment) {
         throw std::invalid_argument(
             "Die Speichergroesse eines Segments ist kleiner als seine Dateidaten.");
     }
+    if (segment.latent_source_size != 0u &&
+        (segment.latent_source_size < segment.bytes.size() ||
+         segment.latent_source_size > segment.memory_size)) {
+        throw std::invalid_argument(
+            "Die latente Quelldatengroesse eines Segments ist ungueltig.");
+    }
     if (segment.end_address() > kAddressSpaceSize) {
         throw std::out_of_range("Ein Image-Segment ueberschreitet den 32-Bit-Adressraum.");
     }
-    if (segment.file_offset > std::numeric_limits<std::uint64_t>::max() - segment.bytes.size()) {
+    const auto source_size =
+        segment.latent_source_size == 0u
+            ? static_cast<std::uint64_t>(segment.bytes.size())
+            : segment.latent_source_size;
+    if (segment.file_offset > std::numeric_limits<std::uint64_t>::max() - source_size) {
         throw std::out_of_range("Dateioffset und Segmentgroesse laufen ueber.");
     }
 

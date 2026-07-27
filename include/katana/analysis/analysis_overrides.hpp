@@ -22,11 +22,29 @@ struct JumpOverride {
     std::size_t line = 0u;
 };
 
+enum class JumpTableOverrideEncoding : std::uint8_t {
+    Absolute32,
+    SignedRelative16,
+    SignedRelative32
+};
+
+enum class JumpTableOverrideTransfer : std::uint8_t {
+    Inferred,
+    Jump,
+    Call
+};
+
 struct JumpTableOverride {
     std::uint32_t dispatch_address = 0u;
     std::uint32_t table_address = 0u;
     std::size_t entry_count = 0u;
     std::size_t line = 0u;
+    std::uint32_t entry_stride = sizeof(std::uint32_t);
+    std::uint32_t relative_base = 0u;
+    JumpTableOverrideEncoding encoding =
+        JumpTableOverrideEncoding::Absolute32;
+    JumpTableOverrideTransfer transfer =
+        JumpTableOverrideTransfer::Inferred;
 };
 
 struct AnalysisOverrides {

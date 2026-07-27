@@ -25,7 +25,11 @@ struct JumpTableEntry {
 
 enum class JumpTableDispatchKind { Jump, Call };
 
-enum class JumpTableEncoding { Absolute32, SignedRelative16 };
+enum class JumpTableEncoding {
+    Absolute32,
+    SignedRelative16,
+    SignedRelative32
+};
 
 struct JumpTableAnalysis {
     std::uint32_t dispatch_address = 0u;
@@ -87,6 +91,17 @@ analyze_relative_jump_table(const katana::io::ExecutableImage& image,
                             std::uint32_t target_base,
                             std::size_t entry_count,
                             JumpTableSnapshotCache* cache = nullptr);
+
+// Explicit external-project contract. Unlike pattern recognition this accepts
+// a proven stride/encoding supplied by an identity-bound game project.
+[[nodiscard]] JumpTableAnalysis
+analyze_declared_jump_table(const katana::io::ExecutableImage& image,
+                            std::uint32_t dispatch_address,
+                            std::uint32_t table_address,
+                            std::uint32_t target_base,
+                            std::size_t entry_count,
+                            std::uint32_t entry_stride,
+                            JumpTableEncoding encoding);
 
 [[nodiscard]] std::optional<JumpTableAnalysis>
 recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,

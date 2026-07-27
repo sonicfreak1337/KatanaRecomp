@@ -1766,6 +1766,8 @@ make_runtime_probe_device_snapshot(const RuntimeBlockTableSnapshot& snapshot,
                            hash.append_u32(record.size);
                            hash.append_u8(static_cast<std::uint8_t>(record.end_kind));
                            append_variant(hash, record.variant);
+                           hash.append_u8(
+                               static_cast<std::uint8_t>(record.static_variant_policy));
                            append_string(hash, record.identity);
                            append_string(hash, record.provenance);
                            hash.append_bool(record.runtime_registered);

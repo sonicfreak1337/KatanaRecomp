@@ -18,20 +18,30 @@ void InterruptController::request(const InterruptSource source,
     if (existing == pending_.end()) {
         pending_.push_back(request);
     } else {
+        if (*existing == request) return;
         *existing = request;
     }
+    ++interrupt_epoch_;
+    update_pending_metadata();
 }
 
 bool InterruptController::cancel(const InterruptSource source) noexcept {
-    const auto old_size = pending_.size();
-    std::erase_if(pending_, [source](const PendingInterrupt& interrupt) {
+    const auto existing =
+        std::find_if(pending_.begin(), pending_.end(), [source](const PendingInterrupt& interrupt) {
         return interrupt.source == source;
     });
-    return pending_.size() != old_size;
+    if (existing == pending_.end()) return false;
+    pending_.erase(existing);
+    ++interrupt_epoch_;
+    update_pending_metadata();
+    return true;
 }
 
 void InterruptController::clear() noexcept {
+    if (pending_.empty()) return;
     pending_.clear();
+    ++interrupt_epoch_;
+    update_pending_metadata();
 }
 
 bool InterruptController::pending(const InterruptSource source) const noexcept {
@@ -43,6 +53,31 @@ bool InterruptController::pending(const InterruptSource source) const noexcept {
 
 std::size_t InterruptController::pending_count() const noexcept {
     return pending_.size();
+}
+
+std::uint64_t InterruptController::interrupt_epoch() const noexcept {
+    return interrupt_epoch_;
+}
+
+std::uint8_t InterruptController::highest_pending_level() const noexcept {
+    return highest_pending_level_;
+}
+
+std::uint64_t InterruptController::pending_mask() const noexcept {
+    return pending_mask_;
+}
+
+bool InterruptController::can_accept(const CpuState& cpu) const noexcept {
+    return !cpu.interrupts_blocked() && highest_pending_level_ > cpu.interrupt_mask();
+}
+
+void InterruptController::update_pending_metadata() noexcept {
+    pending_mask_ = 0u;
+    highest_pending_level_ = 0u;
+    for (const auto& pending : pending_) {
+        pending_mask_ |= std::uint64_t{1u} << pending.level;
+        highest_pending_level_ = std::max(highest_pending_level_, pending.level);
+    }
 }
 
 std::optional<PendingInterrupt> InterruptController::highest_pending() const noexcept {
@@ -64,11 +99,7 @@ InterruptControllerSnapshot InterruptController::snapshot() const {
 }
 
 bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept {
-    if (cpu.interrupts_blocked()) {
-        return false;
-    }
-
-    const std::uint8_t mask = cpu.interrupt_mask();
+    if (!controller.can_accept(cpu)) return false;
     const auto selected =
         std::max_element(controller.pending_.begin(),
                          controller.pending_.end(),
@@ -78,12 +109,12 @@ bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) no
                              }
                              return left.source > right.source;
                          });
-    if (selected == controller.pending_.end() || selected->level <= mask) {
-        return false;
-    }
+    if (selected == controller.pending_.end()) return false;
 
     const PendingInterrupt accepted = *selected;
     controller.pending_.erase(selected);
+    ++controller.interrupt_epoch_;
+    controller.update_pending_metadata();
     enter_exception(cpu,
                     ExceptionRequest{ExceptionCause::Interrupt,
                                      accepted.event_code,

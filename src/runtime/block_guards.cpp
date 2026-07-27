@@ -308,6 +308,38 @@ BlockStateGuard RuntimeAddressSpace::guard_for(const std::uint32_t virtual_addre
             translated.physical_address / page_size * page_size};
 }
 
+std::optional<BlockStateGuard>
+RuntimeAddressSpace::direct_p1_p2_instruction_guard(const std::uint32_t address,
+                                                    const std::uint32_t fpscr,
+                                                    const bool privileged) const noexcept {
+    const auto segment = address >> 29u;
+    if (!privileged || (segment != 4u && segment != 5u)) return std::nullopt;
+    return BlockStateGuard{
+        mode_,
+        mmucr_,
+        address_space_generation_,
+        mmu_generation_,
+        watchpoint_generation_,
+        fpscr & fpscr_guard_mask,
+        canonical_physical_address(address) / page_size * page_size,
+    };
+}
+
+bool RuntimeAddressSpace::direct_p1_p2_dispatch_guard_current(
+    const std::uint32_t address,
+    const std::uint32_t fpscr,
+    const bool privileged,
+    const BlockVariantKey& expected,
+    const std::uint64_t runtime_generation) const noexcept {
+    const auto segment = address >> 29u;
+    return privileged && (segment == 4u || segment == 5u) &&
+           expected.address_space_generation == address_space_generation_ &&
+           expected.mmu_generation == mmu_generation_ &&
+           expected.watchpoint_generation == watchpoint_generation_ &&
+           expected.fpscr_mode == (fpscr & fpscr_guard_mask) &&
+           expected.runtime_generation == runtime_generation;
+}
+
 bool RuntimeAddressSpace::prove_instruction_mapping(const std::uint32_t virtual_start,
                                                     const std::uint32_t physical_start,
                                                     const std::uint32_t size,

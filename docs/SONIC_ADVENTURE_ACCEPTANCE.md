@@ -97,3 +97,26 @@ Builds, synthetische oder frei lizenzierte Regressionen, redigierte Diagnosen
 und die Abwesenheit proprietaerer Daten. Private Sonic-Probes duerfen
 zusaetzliche interne Evidenz liefern, bestimmen aber weder den oeffentlichen
 Releasevertrag noch das Layout eines spaeteren Sonic-Portprodukts.
+
+## Vertagter Direct-Scanout-Befund vom 27.07.2026
+
+Ein historischer privater Produktport praesentierte den SEGA-Lizenzbildschirm
+reproduzierbar. Frisch erzeugte Ports erreichen weiterhin denselben spaeten
+Bootzustand, dieselbe Anzahl abgeschlossener Disc-Kommandos und dieselben
+aggregierten Direct-Scanout-Zaehler, praesentieren im Clientbereich jedoch
+schwarz. Es liegt daher kein belegter Verlust der Gast-Bootdistanz vor; offen
+ist eine Bildinhalt- oder Scanout-Zeitregression.
+
+Isolierte Produkt-A/Bs schlossen Instruktionsaccounting, indirekten
+Inline-Cache, lokales AOT-Chaining und den globalen MSVC-Inliner jeweils als
+alleinige heutige Ursache aus. Das erste historische Regressionsfenster
+enthaelt eine Erweiterung eines Composite-Wait-Fastpaths, deren alleinige
+Ruecknahme den heutigen Zustand jedoch nicht mehr restauriert. Der Nutzer hat
+die weitere Ursachenanalyse ausdruecklich vertagt.
+
+Der Wiedereinstieg muss den exakten damaligen Dirty-Tree-Quellstand
+rekonstruieren und am ersten VBlank nur begrenzte, titelunabhaengige
+Frame-/VRAM-/Scheduler-Hashes vergleichen. Private Pfade, Hashidentitaeten,
+Gastadressen, Screenshots und Retailwerte bleiben im lokalen Handoff und
+ausserhalb dieses Repositorys. Bis dahin darf der Befund weder als
+Bootkorrektheitsnachweis noch als funktionaler Rueckschritt bewertet werden.

@@ -1,5 +1,17 @@
 # GDI-Quellenvertrag
 
+Seit v0.49 ist `.gdi` nicht mehr der wiederholte Standardinput fuer private
+Bring-up-Builds. Sie bleibt:
+
+- Quelle der einmaligen lokalen Boot-Executable-Extraktion;
+- verbindliche Quelle der Nutzerinstallation;
+- Eingang des finalen vollstaendigen NativeDiscBoot.
+
+Analyse, Codegen und Warmbuild koennen danach ueber das hashgebundene
+`boot.katana-executable`-Artefakt laufen. Dieser Wechsel veraendert den
+read-only GDI-, Track- und Identitaetsvertrag nicht. Siehe
+[`EXECUTABLE_FIRST_DEVELOPMENT.md`](EXECUTABLE_FIRST_DEVELOPMENT.md).
+
 KatanaRecomp behandelt `.gdi` als read-only Mehrdateiquelle. Der Descriptor
 und alle Trackdateien werden ausschliesslich lesend geoeffnet. Parser,
 Identitaetsbildung, GD-ROM-Zugriff und ISO9660 legen keine Sidecar-Dateien an

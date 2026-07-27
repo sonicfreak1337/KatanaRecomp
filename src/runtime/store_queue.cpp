@@ -189,6 +189,23 @@ void Sh4StoreQueues::set_prefetch_address_translator(StoreQueueAddressTranslator
     address_translator_ = std::move(translator);
 }
 
+void Sh4StoreQueues::bind_runtime_block_table(RuntimeBlockTable* const blocks) noexcept {
+    runtime_blocks_ = blocks;
+    shared_code_invalidation_bound_ = false;
+    shared_code_tracker_.reset();
+    shared_runtime_blocks_.reset();
+}
+
+void Sh4StoreQueues::bind_runtime_code_invalidation(
+    const std::shared_ptr<ExecutableCodeTracker>& tracker,
+    const std::shared_ptr<RuntimeBlockTable>& blocks) noexcept {
+    shared_code_tracker_ = tracker;
+    shared_runtime_blocks_ = blocks;
+    shared_code_invalidation_bound_ = true;
+    code_tracker_ = nullptr;
+    runtime_blocks_ = nullptr;
+}
+
 const std::array<std::uint8_t, 32u>& Sh4StoreQueues::queue(const std::size_t index) const {
     if (index >= queues_.size()) {
         throw std::out_of_range("Ungueltige Store Queue.");
@@ -208,6 +225,9 @@ const std::optional<StoreQueueSinkFault>& Sh4StoreQueues::last_sink_fault() cons
 }
 
 Sh4StoreQueueSnapshot Sh4StoreQueues::snapshot() const {
+    const bool code_tracker_bound =
+        shared_code_invalidation_bound_ ? !shared_code_tracker_.expired()
+                                        : code_tracker_ != nullptr;
     return {
         queues_,
         qacr_,
@@ -216,7 +236,7 @@ Sh4StoreQueueSnapshot Sh4StoreQueues::snapshot() const {
         operand_cache_ram_enabled_,
         static_cast<bool>(sink_),
         static_cast<bool>(address_translator_),
-        code_tracker_ != nullptr,
+        code_tracker_bound,
         transfer_count_,
         rejected_transfer_count_,
         last_sink_fault_,
@@ -236,17 +256,36 @@ void Sh4StoreQueues::reset() noexcept {
 CacheMaintenanceResult Sh4StoreQueues::maintain(const CacheMaintenanceOperation operation,
                                                 const std::uint32_t address,
                                                 const std::uint32_t movca_value) {
+    auto shared_tracker = shared_code_invalidation_bound_
+                              ? shared_code_tracker_.lock()
+                              : std::shared_ptr<ExecutableCodeTracker>{};
+    auto shared_blocks = shared_code_invalidation_bound_
+                             ? shared_runtime_blocks_.lock()
+                             : std::shared_ptr<RuntimeBlockTable>{};
+    auto* const code_tracker =
+        shared_code_invalidation_bound_ ? shared_tracker.get() : code_tracker_;
+    auto* const runtime_blocks =
+        shared_code_invalidation_bound_ ? shared_blocks.get() : runtime_blocks_;
     CacheMaintenanceResult result{operation, address, false, false};
     if (operation == CacheMaintenanceOperation::MovcaLong) {
-        const auto before = code_tracker_ != nullptr ? code_tracker_->invalidation_count() : 0u;
+        const auto before =
+            code_tracker != nullptr ? code_tracker->invalidation_count() : 0u;
         memory_.write_u32(address, movca_value, CodeWriteSource::StoreQueue);
         result.wrote_memory = true;
         result.invalidated_code =
-            code_tracker_ != nullptr && code_tracker_->invalidation_count() != before;
-    } else if (operation == CacheMaintenanceOperation::Icbi && code_tracker_) {
-        const auto invalidation =
-            code_tracker_->observe_write(address & ~31u, 32u, CodeWriteSource::Cpu);
-        result.invalidated_code = !invalidation.invalidated_blocks.empty();
+            code_tracker != nullptr && code_tracker->invalidation_count() != before;
+    } else if (operation == CacheMaintenanceOperation::Icbi) {
+        const auto line = address & ~31u;
+        if (code_tracker != nullptr) {
+            const auto invalidation =
+                code_tracker->observe_write(line, 32u, CodeWriteSource::Cpu);
+            result.invalidated_code = !invalidation.invalidated_blocks.empty();
+        }
+        if (runtime_blocks != nullptr) {
+            result.invalidated_code =
+                runtime_blocks->erase_overlapping_physical(line, 32u) != 0u ||
+                result.invalidated_code;
+        }
     } else if (operation == CacheMaintenanceOperation::Ocbi ||
                operation == CacheMaintenanceOperation::Ocbp ||
                operation == CacheMaintenanceOperation::Ocbwb) {

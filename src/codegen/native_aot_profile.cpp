@@ -9,7 +9,8 @@ namespace katana::codegen {
 namespace {
 
 constexpr NativeAotEmissionContract product_contract{};
-constexpr NativeAotEmissionContract external_conformance_contract{};
+constexpr NativeAotEmissionContract external_conformance_contract{
+    .conservative_register_localization = false};
 
 std::optional<std::size_t>
 memory_access_width_bytes(const katana::ir::OperandWidth width) noexcept {
@@ -101,6 +102,8 @@ make_native_aot_backend_request(const NativeAotEmissionProfile profile,
     request.external_dynamic_dispatch = contract.external_dynamic_dispatch;
     request.guarded_local_block_chaining = contract.guarded_local_block_chaining;
     request.external_instruction_observer = options.external_instruction_observer;
+    request.conservative_register_localization =
+        contract.conservative_register_localization && !options.external_instruction_observer;
     return request;
 }
 

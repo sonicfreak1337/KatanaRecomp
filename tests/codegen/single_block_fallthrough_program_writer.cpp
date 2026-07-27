@@ -85,6 +85,7 @@ int main(const int argc, char* argv[]) {
         request.single_block_execution = true;
         request.external_dynamic_dispatch = true;
         request.guarded_local_block_chaining = true;
+        request.conservative_register_localization = true;
         const auto single_block_source =
             katana::codegen::generate_program(backend, request).joined_text();
 

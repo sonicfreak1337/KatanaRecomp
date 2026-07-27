@@ -2,14 +2,17 @@
 
 #include "katana/runtime/block_abi.hpp"
 
+#include <array>
 #include <compare>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -27,6 +30,15 @@ struct BlockVariantKey {
     std::uint64_t runtime_generation = 0u;
 
     [[nodiscard]] auto operator<=>(const BlockVariantKey&) const noexcept = default;
+};
+
+enum class StaticVariantPolicy : std::uint8_t {
+    Exact,
+    // The emitted native body reads architectural runtime state and is valid
+    // for every direct P1/P2 address-space/MMU/watchpoint/FPSCR generation.
+    // Runtime-generation remains exact because it denotes a different native
+    // code universe rather than an architectural mode.
+    DirectP1P2RuntimeStateAgnostic
 };
 
 // A byte range inside a native AOT template whose previous live value is
@@ -77,6 +89,7 @@ struct RuntimeBlock {
     std::string provenance;
     bool runtime_registered = false;
     std::optional<RuntimeAotTemplateContract> aot_template;
+    StaticVariantPolicy static_variant_policy = StaticVariantPolicy::Exact;
 };
 
 struct RuntimeBlockHandle {
@@ -89,7 +102,67 @@ struct RuntimeBlockHandle {
     [[nodiscard]] auto operator<=>(const RuntimeBlockHandle&) const noexcept = default;
 };
 
+enum class BlockDispatchGenerationGuardKind : std::uint8_t {
+    None,
+    StaticAot,
+    Materializer
+};
+
+struct BlockDispatchGenerationGuard {
+    RuntimeBlockHandle block;
+    BlockDispatchGenerationGuardKind kind = BlockDispatchGenerationGuardKind::None;
+    std::uint64_t table_lifetime = 0u;
+    std::uint64_t table_generation = 0u;
+    std::uint64_t code_generation = 0u;
+    std::uint64_t module_generation = 0u;
+    std::uint64_t relocation_generation = 0u;
+    std::uint64_t validation_generation = 0u;
+    // One-based immutable index into the sealed Static-AOT entry array. The
+    // table lifetime is checked before resolving this index.
+    std::uint32_t static_entry_index = 0u;
+    bool runtime_registered = false;
+
+    [[nodiscard]] bool operator==(const BlockDispatchGenerationGuard&) const noexcept = default;
+};
+
+enum class RuntimeBlockFastpathKind : std::uint8_t {
+    None,
+    CompositeCallback,
+    MemoryFill,
+    MmioWait,
+    CountedLoop
+};
+
+struct RuntimeBlockFastpathBinding {
+    RuntimeBlockFastpathKind kind = RuntimeBlockFastpathKind::None;
+    const void* descriptor = nullptr;
+};
+
+// An indirect-dispatch result is consumed immediately by the generated caller.
+// The table owns the string/template storage referenced here. Dynamic results are
+// reusable only while their generation guard remains current; static results
+// remain valid until their sealed tier is invalidated.
+struct ValidatedBlockExecution {
+    RuntimeBlockHandle block;
+    BackendBlockFunction function = nullptr;
+    std::uint32_t virtual_start = 0u;
+    std::uint32_t physical_origin = 0u;
+    std::uint32_t size = 0u;
+    BlockVariantKey variant;
+    BlockEndKind end_kind = BlockEndKind::Fallthrough;
+    bool runtime_registered = false;
+    std::string_view provenance;
+    const RuntimeAotTemplateContract* aot_template = nullptr;
+    RuntimeBlockFastpathBinding fastpath;
+    BlockDispatchGenerationGuard generation_guard;
+    bool generation_guard_reusable = false;
+};
+
 enum class RuntimeBlockLookupMode : std::uint8_t { Direct, ReferenceTree };
+enum class StaticAotInvalidationContract : std::uint8_t {
+    Conservative,
+    Coordinated
+};
 enum class RuntimeBlockDispatchState : std::uint8_t {
     StaticCompiled,
     RuntimeMaterialized,
@@ -116,6 +189,7 @@ struct RuntimeBlockRecordSnapshot {
     std::uint32_t size = 0u;
     BlockEndKind end_kind = BlockEndKind::Fallthrough;
     BlockVariantKey variant;
+    StaticVariantPolicy static_variant_policy = StaticVariantPolicy::Exact;
     std::string identity;
     std::string provenance;
     bool runtime_registered = false;
@@ -151,9 +225,20 @@ struct RuntimeBlockTableSnapshot {
 [[nodiscard]] std::string stable_runtime_block_identity(const RuntimeBlock& block);
 [[nodiscard]] BlockExit
 execute_runtime_block(const RuntimeBlock& block, CpuState& cpu, BlockExecutionContext& context);
+[[nodiscard]] BlockExit execute_runtime_block(const ValidatedBlockExecution& block,
+                                              CpuState& cpu,
+                                              BlockExecutionContext& context);
 
+// RuntimeBlockTable is confined to its owning guest execution thread. Device
+// notifications must be delivered on that thread before dispatch resumes.
 class RuntimeBlockTable {
   public:
+    RuntimeBlockTable() noexcept;
+    RuntimeBlockTable(const RuntimeBlockTable&) = delete;
+    RuntimeBlockTable& operator=(const RuntimeBlockTable&) = delete;
+    RuntimeBlockTable(RuntimeBlockTable&&) = delete;
+    RuntimeBlockTable& operator=(RuntimeBlockTable&&) = delete;
+
     [[nodiscard]] RuntimeBlockHandle register_static(RuntimeBlock block);
     [[nodiscard]] std::optional<RuntimeBlockHandle>
     register_static_variant(std::uint32_t virtual_address,
@@ -167,13 +252,17 @@ class RuntimeBlockTable {
     // describe the same physical mapping and every dispatch start stays unique.
     [[nodiscard]] std::vector<RuntimeBlockHandle>
     register_static_contextual_bulk(std::vector<RuntimeBlock> blocks);
-    void seal_static() noexcept;
+    void seal_static();
     [[nodiscard]] RuntimeBlockHandle register_bootstrap_static(RuntimeBlock block);
     [[nodiscard]] RuntimeBlockHandle register_runtime(RuntimeBlock block);
     [[nodiscard]] std::optional<RuntimeBlockHandle>
     lookup(std::uint32_t virtual_address, const BlockVariantKey& variant) const noexcept;
     [[nodiscard]] std::optional<RuntimeBlockHandle>
     lookup_physical(std::uint32_t physical_address, const BlockVariantKey& variant) const noexcept;
+    [[nodiscard]] std::optional<ValidatedBlockExecution>
+    lookup_static_aot(std::uint32_t physical_address,
+                      std::uint32_t virtual_address,
+                      const BlockVariantKey& variant) const noexcept;
     [[nodiscard]] std::vector<RuntimeBlockHandle> aliases(std::uint32_t physical_origin) const;
     [[nodiscard]] std::optional<std::reference_wrapper<const RuntimeBlock>>
     resolve(RuntimeBlockHandle handle) const noexcept;
@@ -186,6 +275,10 @@ class RuntimeBlockTable {
     [[nodiscard]] RuntimeBlockLookupMode lookup_mode() const noexcept;
     void set_lookup_mode(RuntimeBlockLookupMode mode) noexcept;
     [[nodiscard]] const RuntimeBlockLookupCounters& lookup_counters() const noexcept;
+    [[nodiscard]] std::uint64_t dispatch_lifetime() const noexcept;
+    [[nodiscard]] std::uint64_t dispatch_generation() const noexcept;
+    [[nodiscard]] bool static_dispatch_generation_guard_current(
+        const BlockDispatchGenerationGuard& guard) const noexcept;
     [[nodiscard]] RuntimeBlockTableSnapshot snapshot() const;
     void reset_lookup_counters() const noexcept;
     [[nodiscard]] bool erase_identity(const std::string& block_identity) noexcept;
@@ -196,7 +289,10 @@ class RuntimeBlockTable {
                                                    std::size_t size) const noexcept;
     [[nodiscard]] std::size_t erase_overlapping_physical(std::uint32_t physical_address,
                                                          std::size_t size) noexcept;
-    void bind_code_tracker(const ExecutableCodeTracker* tracker) noexcept;
+    void bind_code_tracker(
+        const ExecutableCodeTracker* tracker,
+        StaticAotInvalidationContract static_aot_invalidation =
+            StaticAotInvalidationContract::Conservative) noexcept;
     void clear() noexcept;
 
   private:
@@ -230,6 +326,26 @@ class RuntimeBlockTable {
         bool active = true;
         bool static_block = false;
     };
+    static constexpr std::size_t static_aot_halfwords_per_page = 2048u;
+    static constexpr std::size_t static_aot_page_count = 1u << 17u;
+    struct StaticAotEntry {
+        const Record* record = nullptr;
+        std::uint64_t id = 0u;
+        std::uint64_t generation = 1u;
+    };
+    struct StaticAotPage {
+        // Zero is empty, UINT32_MAX is ambiguous, every other value is a
+        // one-based index into static_aot_entries_.
+        std::array<std::uint32_t, static_aot_halfwords_per_page> entries{};
+        // Dynamic/runtime entries shadow only their exact physical halfword;
+        // unrelated runtime code on the same 4-KiB page must not disable the
+        // entire immutable tier.
+        // Runtime blocks are rare. Keep the immutable empty-slot lookup cheap
+        // and allocate a shadow list only for an actually occupied halfword.
+        std::array<std::unique_ptr<std::vector<const Record*>>,
+                   static_aot_halfwords_per_page>
+            dynamic_entries{};
+    };
 
     using VirtualIndex = std::map<VariantAddressKey, std::uint64_t>;
     using DirectVirtualIndex =
@@ -244,6 +360,7 @@ class RuntimeBlockTable {
     overlapping_active_virtual(const RuntimeBlock& block,
                                std::uint64_t ignored_id = 0u) const noexcept;
     void index_active(std::uint64_t id, const Record& record);
+    void rebuild_static_aot_index();
     void deactivate(std::uint64_t id) noexcept;
     [[nodiscard]] std::optional<RuntimeBlockHandle>
     lookup_index(const VirtualIndex& index,
@@ -278,6 +395,12 @@ class RuntimeBlockTable {
     RuntimeBlockLookupMode lookup_mode_ = RuntimeBlockLookupMode::Direct;
     mutable RuntimeBlockLookupCounters lookup_counters_;
     mutable std::map<VariantAddressKey, std::uint64_t> rejected_generations_;
+    std::uint64_t dispatch_lifetime_ = 0u;
+    std::uint64_t dispatch_generation_ = 1u;
+    StaticAotInvalidationContract static_aot_invalidation_ =
+        StaticAotInvalidationContract::Conservative;
+    std::vector<std::unique_ptr<StaticAotPage>> static_aot_pages_;
+    std::vector<StaticAotEntry> static_aot_entries_;
 };
 
 } // namespace katana::runtime

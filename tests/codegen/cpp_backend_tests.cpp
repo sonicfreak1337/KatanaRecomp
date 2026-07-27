@@ -81,10 +81,8 @@ int main() {
     const auto emission = katana::codegen::generate_program(backend, {functions, entry});
 
     require(backend.name() == "cpp", "C++-Backend besitzt keine stabile Identitaet.");
-    require(emission.declarations.find("#include \"katana/runtime/runtime.hpp\"") !=
-                    std::string::npos &&
-                emission.declarations.find("#include \"katana/runtime/platform_services.hpp\"") !=
-                    std::string::npos &&
+    require(emission.declarations.find(
+                "#include \"katana/runtime/aot_runtime_abi.hpp\"") != std::string::npos &&
                 emission.declarations.find("static void fn_8C010000") != std::string::npos &&
                 emission.declarations.find("katana/platform/") == std::string::npos &&
                 emission.declarations.find("katana/runtime/pvr") == std::string::npos &&

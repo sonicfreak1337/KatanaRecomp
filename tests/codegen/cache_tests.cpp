@@ -73,6 +73,18 @@ int main() {
     }();
     require(changed_tool != key, "Werkzeugversion invalidiert den Cache nicht.");
 
+    const auto long_cache_root =
+        fixture.path /
+        "long-root-component-0123456789abcdef0123456789abcdef0123456789";
+    CodegenCache long_path_cache(long_cache_root);
+    const std::string long_artifact_name(
+        120u, 'a');
+    long_path_cache.store(key, long_artifact_name, "long-path-content\n");
+    require(
+        long_path_cache.load(key, long_artifact_name) ==
+            std::optional<std::string>("long-path-content\n"),
+        "Kompaktes physisches Cachelayout verliert lange Windows-Portpfade.");
+
     bool rejected = false;
     try {
         static_cast<void>(cache.load(key, "../unit.cpp"));

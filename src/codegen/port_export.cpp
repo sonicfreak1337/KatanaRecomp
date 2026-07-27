@@ -5,6 +5,7 @@
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/hardware_audit.hpp"
 #include "katana/codegen/backend.hpp"
+#include "katana/codegen/cache.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/naming.hpp"
@@ -39,6 +40,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -118,6 +120,369 @@ select_functions(const std::span<const katana::ir::Function> program,
         return left.entry_address < right.entry_address;
     });
     return selected;
+}
+
+std::string game_project_export_identity(
+    const katana::runtime::GameProjectDefinition& definition) {
+    std::ostringstream material;
+    material << "game-project-v" << definition.contract_version << ':'
+             << definition.project_id << ':' << definition.project_version
+             << ':' << definition.identity.content_identity << ':'
+             << definition.identity.boot_file_name << ':'
+             << definition.identity.boot_byte_identity << ';';
+    for (const auto& function : definition.function_boundaries)
+        material << "function:" << function.start << ':' << function.size << ':'
+                 << function.symbol << ';';
+    for (const auto& table : definition.jump_tables)
+        material << "jump-table:" << table.dispatch_address << ':'
+                 << table.table_address << ':' << table.entry_count << ':'
+                 << table.entry_stride << ':' << table.relative_base << ':'
+                 << static_cast<unsigned>(table.encoding) << ':'
+                 << static_cast<unsigned>(table.transfer) << ';';
+    for (const auto& table : definition.callback_tables)
+        material << "callback-table:" << table.table_address << ':'
+                 << table.entry_count << ':' << table.entry_stride << ':'
+                 << table.pointer_offset << ':'
+                 << static_cast<unsigned>(table.transfer) << ';';
+    for (const auto& native_template : definition.runtime_code_templates) {
+        material << "runtime-template:" << native_template.source_module_id
+                 << ':' << native_template.expected_source_identity << ':'
+                 << native_template.source_start << ':' << native_template.extent
+                 << ':' << native_template.destination_vbr_delta << ':'
+                 << static_cast<unsigned>(native_template.destination) << ':'
+                 << native_template.expected_runtime_content_identity << ':'
+                 << native_template.expected_runtime_byte_identity << ';';
+        for (const auto& patch : native_template.patches) {
+            material << "patch:" << patch.source_offset << ':';
+            for (const auto& target : patch.allowed_targets)
+                material << target.live_value << '>' << target.block_address
+                         << ',';
+            material << ';';
+        }
+        for (const auto& range : native_template.mutable_ranges)
+            material << "mutable:" << range.offset << ':' << range.size << ';';
+    }
+    for (const auto& function : definition.function_overrides)
+        material << "override:" << function.function_address << ':'
+                 << static_cast<unsigned>(function.strength) << ':'
+                 << (function.callback != nullptr) << ':'
+                 << (function.condition != nullptr) << ';';
+    for (const auto& hook : definition.mid_function_hooks)
+        material << "mid-hook:" << hook.instruction_address << ':'
+                 << static_cast<unsigned>(hook.strength) << ':'
+                 << (hook.callback != nullptr) << ':'
+                 << (hook.condition != nullptr) << ';';
+    for (const auto& symbol : definition.symbols)
+        material << "symbol:" << symbol.address << ':' << symbol.size << ':'
+                 << symbol.name << ':' << static_cast<unsigned>(symbol.kind)
+                 << ';';
+    for (const auto& identity : definition.code_identities)
+        material << "code-identity:" << identity.address << ':'
+                 << identity.size << ':' << identity.byte_identity << ';';
+    if (definition.boot_config.has_value()) {
+        const auto& config = *definition.boot_config;
+        material << "direct-boot:" << static_cast<unsigned>(config.firmware_mode)
+                 << ':' << static_cast<unsigned>(config.boot_path) << ':'
+                 << config.post_bios_platform_contract_version << ':'
+                 << config.post_bios_cpu_state.contract_version << ':'
+                 << config.post_bios_cpu_state.entry_point << ':'
+                 << config.post_bios_cpu_state.stack_pointer << ':'
+                 << config.post_bios_cpu_state.vector_base << ':'
+                 << config.post_bios_cpu_state.status << ':'
+                 << config.post_bios_cpu_state.fpscr << ':'
+                 << config.post_bios_cpu_state.gbr << ':'
+                 << config.post_bios_cpu_state.ssr << ':'
+                 << config.post_bios_cpu_state.spc << ':'
+                 << config.post_bios_cpu_state.sgr << ':'
+                 << config.post_bios_cpu_state.dbr << ':'
+                 << config.post_bios_cpu_state.pr << ';';
+    }
+    return "sha256:" + katana::io::sha256_bytes(material.str());
+}
+
+void add_game_project_symbol(katana::io::ExecutableImage& image,
+                             katana::io::ImageSymbol symbol) {
+    if (const auto* existing = image.find_symbol(symbol.name);
+        existing != nullptr) {
+        if (existing->address != symbol.address ||
+            existing->size != symbol.size ||
+            existing->kind != symbol.kind)
+            throw std::invalid_argument(
+                "Game-Project-Symbol kollidiert mit dem Executable-Image.");
+        return;
+    }
+    image.add_symbol(std::move(symbol));
+}
+
+void apply_game_project_symbols(
+    katana::io::ExecutableImage& image,
+    const katana::runtime::GameProjectDefinition& definition) {
+    for (const auto& function : definition.function_boundaries) {
+        if (function.symbol.empty()) continue;
+        add_game_project_symbol(
+            image,
+            {std::string(function.symbol),
+             function.start,
+             function.size,
+             katana::io::SymbolKind::Function,
+             katana::io::SymbolBinding::Weak});
+    }
+    for (const auto& symbol : definition.symbols) {
+        const auto kind = [&] {
+            switch (symbol.kind) {
+            case katana::runtime::GameProjectSymbolKind::Function:
+                return katana::io::SymbolKind::Function;
+            case katana::runtime::GameProjectSymbolKind::Object:
+                return katana::io::SymbolKind::Object;
+            case katana::runtime::GameProjectSymbolKind::Unknown:
+                return katana::io::SymbolKind::Unknown;
+            }
+            return katana::io::SymbolKind::Unknown;
+        }();
+        add_game_project_symbol(
+            image,
+            {std::string(symbol.name),
+             symbol.address,
+             symbol.size,
+             kind,
+             katana::io::SymbolBinding::Weak});
+    }
+}
+
+std::uint32_t read_game_project_pointer(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t address) {
+    const auto resolved = image.resolve_segment_address(address, 4u);
+    if (!resolved.has_value())
+        throw std::invalid_argument(
+            "Game-Project-Callbacktabelle liegt nicht im Executable-Image.");
+    return image.read_u32_le(*resolved);
+}
+
+katana::analysis::AnalysisOverrides game_project_analysis_overrides(
+    const katana::runtime::GameProjectDefinition& definition,
+    const katana::io::ExecutableImage& image) {
+    katana::analysis::AnalysisOverrides overrides;
+    overrides.mode = katana::analysis::AnalysisDirectiveMode::Override;
+    overrides.source_path = "external-game-project";
+    for (const auto& function : definition.function_boundaries)
+        overrides.functions.push_back({function.start, 0u});
+    for (const auto& hook : definition.mid_function_hooks)
+        overrides.functions.push_back({hook.instruction_address, 0u});
+    for (const auto& symbol : definition.symbols) {
+        if (symbol.kind == katana::runtime::GameProjectSymbolKind::Function)
+            overrides.functions.push_back({symbol.address, 0u});
+    }
+    for (const auto& table : definition.callback_tables) {
+        for (std::uint32_t index = 0u; index < table.entry_count; ++index) {
+            const auto address64 =
+                static_cast<std::uint64_t>(table.table_address) +
+                static_cast<std::uint64_t>(index) * table.entry_stride +
+                table.pointer_offset;
+            if (address64 > std::numeric_limits<std::uint32_t>::max())
+                throw std::invalid_argument(
+                    "Game-Project-Callbacktabelle laeuft ueber.");
+            const auto target = read_game_project_pointer(
+                image, static_cast<std::uint32_t>(address64));
+            if (target != 0u) overrides.functions.push_back({target, 0u});
+        }
+    }
+    std::sort(
+        overrides.functions.begin(),
+        overrides.functions.end(),
+        [](const auto& left, const auto& right) {
+            return left.address < right.address;
+        });
+    overrides.functions.erase(
+        std::unique(
+            overrides.functions.begin(),
+            overrides.functions.end(),
+            [](const auto& left, const auto& right) {
+                return left.address == right.address;
+            }),
+        overrides.functions.end());
+    for (const auto& table : definition.jump_tables) {
+        const auto encoding = [&] {
+            switch (table.encoding) {
+            case katana::runtime::GameProjectTableEncoding::Absolute32:
+                return katana::analysis::JumpTableOverrideEncoding::Absolute32;
+            case katana::runtime::GameProjectTableEncoding::SignedRelative16:
+                return katana::analysis::JumpTableOverrideEncoding::
+                    SignedRelative16;
+            case katana::runtime::GameProjectTableEncoding::SignedRelative32:
+                return katana::analysis::JumpTableOverrideEncoding::
+                    SignedRelative32;
+            }
+            return katana::analysis::JumpTableOverrideEncoding::Absolute32;
+        }();
+        const auto transfer =
+            table.transfer ==
+                    katana::runtime::GameProjectControlTransferKind::Call
+                ? katana::analysis::JumpTableOverrideTransfer::Call
+                : katana::analysis::JumpTableOverrideTransfer::Jump;
+        overrides.jump_tables.push_back(
+            {table.dispatch_address,
+             table.table_address,
+             table.entry_count,
+             0u,
+             table.entry_stride,
+             table.relative_base,
+             encoding,
+             transfer});
+    }
+    return overrides;
+}
+
+std::span<const std::uint8_t> game_project_image_bytes(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t address,
+    const std::size_t size) {
+    const auto resolved = image.resolve_segment_address(address, size);
+    const auto* segment =
+        resolved.has_value() ? image.find_segment(*resolved, size) : nullptr;
+    const auto offset =
+        segment != nullptr ? segment->byte_offset(*resolved) : std::nullopt;
+    if (segment == nullptr || !offset.has_value() ||
+        *offset > segment->bytes.size() ||
+        size > segment->bytes.size() - *offset)
+        throw std::invalid_argument(
+            "Game-Project-Range besitzt keine exportierbaren Imagebytes.");
+    return std::span<const std::uint8_t>(
+        segment->bytes.data() + *offset, size);
+}
+
+void validate_game_project_image_contract(
+    const katana::runtime::GameProjectDefinition& definition,
+    const katana::io::ExecutableImage& image) {
+    for (const auto& function : definition.function_boundaries) {
+        const auto resolved =
+            image.resolve_segment_address(function.start, function.size);
+        const auto* segment =
+            resolved.has_value()
+                ? image.find_segment(*resolved, function.size)
+                : nullptr;
+        if (segment == nullptr || !segment->permissions.executable)
+            throw std::invalid_argument(
+                "Game-Project-Funktionsgrenze liegt nicht vollstaendig in "
+                "ausfuehrbarem Imagecode.");
+    }
+    for (const auto& table : definition.jump_tables) {
+        const auto width =
+            table.encoding ==
+                    katana::runtime::GameProjectTableEncoding::
+                        SignedRelative16
+                ? 2u
+                : 4u;
+        const auto size =
+            static_cast<std::size_t>(table.entry_count - 1u) *
+                table.entry_stride +
+            width;
+        const auto resolved =
+            image.resolve_segment_address(table.table_address, size);
+        const auto* segment =
+            resolved.has_value()
+                ? image.find_segment(*resolved, size)
+                : nullptr;
+        if (segment == nullptr || !segment->permissions.readable ||
+            segment->permissions.writable)
+            throw std::invalid_argument(
+                "Game-Project-Jump-Table ist nicht unveraenderlich im "
+                "Executable-Image gebunden.");
+    }
+    for (const auto& table : definition.callback_tables) {
+        const auto size =
+            static_cast<std::size_t>(table.entry_count - 1u) *
+                table.entry_stride +
+            table.pointer_offset + sizeof(std::uint32_t);
+        const auto resolved =
+            image.resolve_segment_address(table.table_address, size);
+        const auto* segment =
+            resolved.has_value()
+                ? image.find_segment(*resolved, size)
+                : nullptr;
+        if (segment == nullptr || !segment->permissions.readable)
+            throw std::invalid_argument(
+                "Game-Project-Callbacktabelle liegt nicht lesbar im "
+                "Executable-Image.");
+    }
+    for (const auto& identity : definition.code_identities) {
+        const auto bytes =
+            game_project_image_bytes(image, identity.address, identity.size);
+        if (!katana::runtime::game_project_code_identity_matches(
+                identity, bytes))
+            throw std::invalid_argument(
+                "Game-Project-Codeidentitaet stimmt nicht mit dem "
+                "Executable-Image ueberein.");
+    }
+}
+
+std::string game_project_metadata(
+    const katana::runtime::GameProjectDefinition& definition) {
+    std::ostringstream output;
+    output << "{\"schema\":\"katana-game-project-v1\",\"contract_version\":"
+           << definition.contract_version << ",\"project_id\":"
+           << katana::io::quote_json(definition.project_id)
+           << ",\"project_version\":"
+           << katana::io::quote_json(definition.project_version)
+           << ",\"definition_identity\":"
+           << katana::io::quote_json(
+                  game_project_export_identity(definition))
+           << ",\"content_identity\":"
+           << katana::io::quote_json(definition.identity.content_identity)
+           << ",\"boot_file_name\":"
+           << katana::io::quote_json(definition.identity.boot_file_name)
+           << ",\"boot_byte_identity\":"
+           << katana::io::quote_json(
+                  definition.identity.boot_byte_identity)
+           << ",\"direct_boot_configured\":"
+           << (definition.boot_config.has_value() ? "true" : "false")
+           << ",\"function_boundaries\":[";
+    for (std::size_t index = 0u;
+         index < definition.function_boundaries.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        const auto& function = definition.function_boundaries[index];
+        output << "{\"start\":" << function.start << ",\"size\":"
+               << function.size << ",\"symbol\":"
+               << katana::io::quote_json(function.symbol) << '}';
+    }
+    output << "],\"jump_tables\":[";
+    for (std::size_t index = 0u; index < definition.jump_tables.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        const auto& table = definition.jump_tables[index];
+        output << "{\"dispatch\":" << table.dispatch_address
+               << ",\"table\":" << table.table_address
+               << ",\"entries\":" << table.entry_count
+               << ",\"stride\":" << table.entry_stride
+               << ",\"relative_base\":" << table.relative_base
+               << ",\"encoding\":"
+               << static_cast<unsigned>(table.encoding)
+               << ",\"transfer\":"
+               << static_cast<unsigned>(table.transfer) << '}';
+    }
+    output << "],\"callback_tables\":[";
+    for (std::size_t index = 0u;
+         index < definition.callback_tables.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        const auto& table = definition.callback_tables[index];
+        output << "{\"table\":" << table.table_address
+               << ",\"entries\":" << table.entry_count
+               << ",\"stride\":" << table.entry_stride
+               << ",\"pointer_offset\":" << table.pointer_offset
+               << ",\"transfer\":"
+               << static_cast<unsigned>(table.transfer) << '}';
+    }
+    output << "],\"runtime_code_templates\":"
+           << definition.runtime_code_templates.size()
+           << ",\"function_overrides\":"
+           << definition.function_overrides.size()
+           << ",\"mid_function_hooks\":"
+           << definition.mid_function_hooks.size() << ",\"symbols\":"
+           << definition.symbols.size() << ",\"code_identities\":"
+           << definition.code_identities.size() << "}\n";
+    return output.str();
 }
 
 bool has_proven_linear_ram_access(const katana::ir::Instruction& instruction) noexcept {
@@ -1487,6 +1852,8 @@ std::string generated_header(const std::string& entry_namespace) {
            "    std::uint32_t runtime_dispatch_first_error = 0u;\n"
            "    std::uint32_t final_pc = 0u;\n"
            "    std::uint64_t scheduler_cycle = 0u;\n"
+           "    std::uint64_t central_dispatches = 0u;\n"
+           "    bool guest_cycle_budget_reached = false;\n"
            "    std::uint32_t guest_cycle_contract = "
            "katana::runtime::guest_cycle_contract_version;\n"
            "};\n"
@@ -1618,19 +1985,19 @@ std::string generated_header(const std::string& entry_namespace) {
            "};\n"
            "bool try_product_counted_loop_batch(\n"
            "    katana::runtime::CpuState&, katana::runtime::PlatformServices&,\n"
-           "    const katana::runtime::RuntimeBlock&,\n"
+           "    const katana::runtime::ValidatedBlockExecution&,\n"
            "    const CountedLoopBatchDescriptor&);\n"
            "bool try_product_mmio_wait_loop_batch(\n"
            "    katana::runtime::CpuState&, katana::runtime::PlatformServices&,\n"
-           "    const katana::runtime::RuntimeBlock&,\n"
+           "    const katana::runtime::ValidatedBlockExecution&,\n"
            "    const MmioWaitLoopBatchDescriptor&);\n"
            "bool try_product_memory_fill_loop_batch(\n"
            "    katana::runtime::CpuState&, katana::runtime::PlatformServices&,\n"
-           "    const katana::runtime::RuntimeBlock&,\n"
+           "    const katana::runtime::ValidatedBlockExecution&,\n"
            "    const MemoryFillLoopBatchDescriptor&);\n"
            "bool try_product_composite_callback_batch(\n"
            "    katana::runtime::CpuState&, katana::runtime::PlatformServices&,\n"
-           "    const katana::runtime::RuntimeBlock&,\n"
+           "    const katana::runtime::ValidatedBlockExecution&,\n"
            "    const CompositeCallbackBatchDescriptor&);\n"
            "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept;\n"
            "void register_latent_aot_modules(\n"
@@ -1733,15 +2100,19 @@ std::string runtime_wait_loop_descriptor_contract(
 std::string handwritten_main(
     const std::string& entry_namespace,
     const bool hle_bios_abi,
+    const bool direct_boot_executable,
     const bool diagnostic_partial,
     const std::span<const katana::io::InputProvenance> inputs,
     const std::span<const katana::runtime::RuntimeWaitLoopDescriptor> wait_loop_descriptors,
     const std::string_view project_identity,
     const std::string_view expected_content_identity,
+    const std::string_view expected_boot_file_name,
     const std::string_view expected_boot_sha256,
     const std::string_view console_profile,
     const std::uint32_t boot_address,
-    const std::size_t boot_size) {
+    const std::size_t boot_size,
+    const katana::runtime::DreamcastRuntimeBootConfig*
+        game_project_boot_config) {
     std::ostringstream identity_contract;
     identity_contract
         << "struct ExpectedInput { std::string_view role; std::string_view sha256; };\n"
@@ -1758,12 +2129,70 @@ std::string handwritten_main(
                       << katana::io::quote_json(project_identity) << ";\n"
                       << "constexpr std::string_view expected_content_identity = "
                       << katana::io::quote_json(expected_content_identity) << ";\n"
+                      << "constexpr std::string_view expected_boot_file_name = "
+                      << katana::io::quote_json(expected_boot_file_name) << ";\n"
                       << "constexpr std::string_view expected_boot_sha256 = "
                       << katana::io::quote_json(expected_boot_sha256) << ";\n"
                       << "constexpr katana::runtime::GuestProgramRange "
                          "expected_guest_program_range{"
                       << boot_address << "u, " << boot_size << "u};\n"
                       << runtime_wait_loop_descriptor_contract(wait_loop_descriptors);
+    std::ostringstream boot_configuration;
+    boot_configuration
+        << "        katana::runtime::DreamcastRuntimeBootConfig "
+           "runtime_boot_config;\n";
+    if (game_project_boot_config != nullptr) {
+        const auto& config = *game_project_boot_config;
+        boot_configuration
+            << "        runtime_boot_config.firmware_mode =\n"
+               "            katana::runtime::DreamcastRuntimeFirmwareMode::"
+            << (config.firmware_mode ==
+                        katana::runtime::DreamcastRuntimeFirmwareMode::
+                            HleBiosAbi
+                    ? "HleBiosAbi"
+                    : "Direct")
+            << ";\n"
+               "        runtime_boot_config.boot_path =\n"
+               "            katana::runtime::DreamcastRuntimeBootPath::"
+            << (config.boot_path ==
+                        katana::runtime::DreamcastRuntimeBootPath::
+                            DirectBootExecutable
+                    ? "DirectBootExecutable"
+                    : "NativeDiscBoot")
+            << ";\n"
+               "        runtime_boot_config.post_bios_platform_contract_version = "
+            << config.post_bios_platform_contract_version
+            << "u;\n"
+               "        runtime_boot_config.post_bios_cpu_state = {\n"
+            << "            "
+            << config.post_bios_cpu_state.contract_version << "u,\n"
+            << "            " << config.post_bios_cpu_state.entry_point
+            << "u,\n"
+            << "            " << config.post_bios_cpu_state.stack_pointer
+            << "u,\n"
+            << "            " << config.post_bios_cpu_state.vector_base
+            << "u,\n"
+            << "            " << config.post_bios_cpu_state.status << "u,\n"
+            << "            " << config.post_bios_cpu_state.fpscr << "u,\n"
+            << "            " << config.post_bios_cpu_state.gbr << "u,\n"
+            << "            " << config.post_bios_cpu_state.ssr << "u,\n"
+            << "            " << config.post_bios_cpu_state.spc << "u,\n"
+            << "            " << config.post_bios_cpu_state.sgr << "u,\n"
+            << "            " << config.post_bios_cpu_state.dbr << "u,\n"
+            << "            " << config.post_bios_cpu_state.pr << "u};\n";
+    } else {
+        boot_configuration
+            << "        runtime_boot_config.firmware_mode =\n"
+               "            katana::runtime::DreamcastRuntimeFirmwareMode::"
+            << (hle_bios_abi ? "HleBiosAbi" : "Direct")
+            << ";\n"
+               "        runtime_boot_config.boot_path =\n"
+               "            katana::runtime::DreamcastRuntimeBootPath::"
+            << (direct_boot_executable || !hle_bios_abi
+                    ? "DirectBootExecutable"
+                    : "NativeDiscBoot")
+            << ";\n";
+    }
     return "#include \"katana_port.hpp\"\n"
            "#include \"katana/runtime/block_guards.hpp\"\n"
            "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
@@ -1784,7 +2213,7 @@ std::string handwritten_main(
            "#include <algorithm>\n#include <array>\n#include <chrono>\n#include "
            "<cstdlib>\n#include "
            "<exception>\n#include <filesystem>\n#include <functional>\n#include "
-           "<iostream>\n#include <limits>\n"
+           "<iostream>\n#include <limits>\n#include <memory>\n"
            "#include <optional>\n#include <span>\n#include <string>\n#include <string_view>\n"
            "#include <system_error>\n#include <thread>\n#include <unordered_map>\n#include "
            "<unordered_set>\n#include <vector>\n\n"
@@ -1900,7 +2329,9 @@ std::string handwritten_main(
            "        const katana::runtime::DreamcastRuntimeBootImage& boot) {\n"
            "    const std::string_view boot_bytes(\n"
            "        reinterpret_cast<const char*>(boot.boot_file.data()), boot.boot_file.size());\n"
-           "    if (katana::io::sha256_bytes(boot_bytes) != expected_boot_sha256)\n"
+           "    if ((!expected_boot_file_name.empty() &&\n"
+           "         boot.boot_file_name != expected_boot_file_name) ||\n"
+           "        katana::io::sha256_bytes(boot_bytes) != expected_boot_sha256)\n"
            "        throw std::runtime_error(\"source-identity-mismatch\");\n"
            "}\n"
            "void verify_source_identity(const std::filesystem::path& source,\n"
@@ -2356,6 +2787,7 @@ std::string handwritten_main(
            "        }\n"
            "        const auto before = state_.scheduler->current_cycle();\n"
            "        const auto result = state_.scheduler->advance_by(cycles, budget);\n"
+           "        if (result.processed_events != 0u) interrupt_sources_dirty_ = true;\n"
            "        if (replay_log_ != nullptr) {\n"
            "            const auto requested = cycles >\n"
            "                    std::numeric_limits<std::uint64_t>::max() - before\n"
@@ -2380,11 +2812,16 @@ std::string handwritten_main(
            "                throw katana::runtime::RuntimeProbeBudgetReached(result.guest_cycle);\n"
            "        }\n"
            "        if (!runtime_probe_mode_) {\n"
-           "            const auto host_now = std::chrono::steady_clock::now();\n"
            "            if (guest_frame_poll_ &&\n"
-           "                (result.processed_events != 0u || host_now >= next_frame_poll_)) {\n"
+           "                (result.guest_cycle < last_frame_poll_guest_cycle_ ||\n"
+           "                 result.guest_cycle >= next_frame_poll_guest_cycle_)) {\n"
            "                guest_frame_poll_();\n"
-           "                next_frame_poll_ = host_now + std::chrono::milliseconds(1);\n"
+           "                last_frame_poll_guest_cycle_ = result.guest_cycle;\n"
+           "                next_frame_poll_guest_cycle_ = result.guest_cycle >\n"
+           "                        std::numeric_limits<std::uint64_t>::max() -\n"
+           "                            host_poll_guest_cycle_quantum\n"
+           "                    ? std::numeric_limits<std::uint64_t>::max()\n"
+           "                    : result.guest_cycle + host_poll_guest_cycle_quantum;\n"
            "            }\n"
            "        }\n"
            "        return {result.guest_cycle, result.processed_events,\n"
@@ -2393,9 +2830,26 @@ std::string handwritten_main(
            "                result.status == "
            "katana::runtime::SchedulerAdvanceStatus::GuestCycleBudgetExhausted};\n"
            "    }\n"
+           "    void synchronize_interrupt_sources_if_needed() const {\n"
+           "        const auto mmio_epoch = cpu_.memory.mmio_access_epoch();\n"
+           "        const auto router_epoch = state_.interrupt_router->source_epoch();\n"
+           "        if (!interrupt_sources_dirty_ &&\n"
+           "            mmio_epoch == synchronized_interrupt_mmio_epoch_ &&\n"
+           "            router_epoch == synchronized_interrupt_router_epoch_) return;\n"
+           "        static_cast<void>(state_.interrupt_router->synchronize());\n"
+           "        synchronized_interrupt_mmio_epoch_ = mmio_epoch;\n"
+           "        synchronized_interrupt_router_epoch_ =\n"
+           "            state_.interrupt_router->source_epoch();\n"
+           "        interrupt_sources_dirty_ = false;\n"
+           "    }\n"
            "    std::optional<katana::runtime::PlatformInterruptRequest> poll_interrupt() override "
            "{\n"
-           "        if (!state_.interrupt_router->accept(cpu_)) return std::nullopt;\n"
+           "        synchronize_interrupt_sources_if_needed();\n"
+           "        if (!state_.interrupt_controller->can_accept(cpu_) ||\n"
+           "            !state_.interrupt_router->accept_cached(cpu_)) return std::nullopt;\n"
+           "        // Accepting removes the controller entry. A level-sensitive source\n"
+           "        // must be mirrored again after RTE/BL or IMASK permits it.\n"
+           "        interrupt_sources_dirty_ = true;\n"
            "        if (replay_log_ != nullptr)\n"
            "            record_runtime_probe_event(\n"
            "                *replay_log_, *state_.scheduler,\n"
@@ -2444,12 +2898,18 @@ std::string handwritten_main(
            "        }\n"
            "        if (!lifecycle_poll_)\n"
            "            return katana::runtime::PlatformLifecycleState::Running;\n"
-           "        const auto host_now = std::chrono::steady_clock::now();\n"
+           "        const auto guest_cycle = state_.scheduler->current_cycle();\n"
            "        if (eager_host_poll_ || cached_lifecycle_ !=\n"
            "                katana::runtime::PlatformLifecycleState::Running ||\n"
-           "            host_now >= next_lifecycle_poll_) {\n"
+           "            guest_cycle < last_lifecycle_poll_guest_cycle_ ||\n"
+           "            guest_cycle >= next_lifecycle_poll_guest_cycle_) {\n"
            "            cached_lifecycle_ = lifecycle_poll_();\n"
-           "            next_lifecycle_poll_ = host_now + std::chrono::milliseconds(1);\n"
+           "            last_lifecycle_poll_guest_cycle_ = guest_cycle;\n"
+           "            next_lifecycle_poll_guest_cycle_ = guest_cycle >\n"
+           "                    std::numeric_limits<std::uint64_t>::max() -\n"
+           "                        host_poll_guest_cycle_quantum\n"
+           "                ? std::numeric_limits<std::uint64_t>::max()\n"
+           "                : guest_cycle + host_poll_guest_cycle_quantum;\n"
            "        }\n"
            "        return cached_lifecycle_;\n"
            "    }\n"
@@ -2460,10 +2920,11 @@ std::string handwritten_main(
            "            std::uint32_t address, std::uint64_t retired_delta,\n"
            "            bool new_exception, bool exception_exit) noexcept override {\n"
            "        ++executed_blocks_;\n"
+           "        if (guest_program_progressed_) return;\n"
            "        if (!guest_program_range_matcher_.contains_instruction(\n"
            "                cpu_, address)) return;\n"
            "        guest_program_dispatched_ = true;\n"
-           "        if (guest_program_progressed_ || retired_delta == 0u || new_exception ||\n"
+           "        if (retired_delta == 0u || new_exception ||\n"
            "            exception_exit) return;\n"
            "        guest_program_progressed_ = true;\n"
            "        observe_runtime_checkpoint(\n"
@@ -2578,47 +3039,92 @@ std::string handwritten_main(
            "katana::runtime::canonical_physical_address(physical_origin),\n"
            "             size, \"generated-port\", {},\n"
            "             katana::runtime::ExecutableBlockOrigin::ImageSegment}));\n"
-           "        executable_blocks_.insert_or_assign(address, ExecutableBlockRegistration{\n"
+           "        const auto [registered, inserted] =\n"
+           "            executable_blocks_.insert_or_assign(\n"
+           "                address, ExecutableBlockRegistration{\n"
            "            std::string(identity), "
            "katana::runtime::canonical_physical_address(physical_origin),\n"
            "            size, timing_class, maximum_guest_cycles});\n"
+           "        static_cast<void>(inserted);\n"
+           "        registered->second.validated_code_generation =\n"
+           "            state_.code_tracker->invalidation_count();\n"
            "    }\n"
            "    void allow_executable_block_chaining(std::uint32_t address) override {\n"
-           "        chainable_blocks_.insert(address);\n"
+           "        const auto found = executable_blocks_.find(address);\n"
+           "        if (found == executable_blocks_.end()) return;\n"
+           "        found->second.chainable = true;\n"
+           "        const auto physical = katana::runtime::canonical_physical_address(address);\n"
+           "        if ((physical & 1u) != 0u) return;\n"
+           "        const auto page_index = physical / executable_chain_page_size;\n"
+           "        if (page_index >= executable_chain_pages_.size()) return;\n"
+           "        auto& page = executable_chain_pages_[page_index];\n"
+           "        if (!page) page = std::make_unique<ExecutableChainPage>();\n"
+           "        page->entries[(physical % executable_chain_page_size) / 2u] =\n"
+           "            &found->second;\n"
            "    }\n"
            "    void begin_executable_block(\n"
            "            std::uint32_t virtual_start, std::uint32_t physical_start,\n"
            "            std::uint32_t size,\n"
-           "            const katana::runtime::BlockVariantKey& variant) noexcept override {\n"
-           "        static_cast<void>(virtual_start);\n"
-           "        static_cast<void>(physical_start);\n"
-           "        static_cast<void>(size);\n"
+           "            const katana::runtime::BlockVariantKey& variant,\n"
+           "            bool runtime_registered) noexcept override {\n"
            "        active_block_variant_ = variant;\n"
+           "        active_block_registration_ = nullptr;\n"
+           "        active_block_scheduling_sr_ = cpu_.read_sr() &\n"
+           "            (katana::runtime::sr_interrupt_mask |\n"
+           "             katana::runtime::sr_fd_mask | katana::runtime::sr_bl_mask |\n"
+           "             katana::runtime::sr_rb_mask | katana::runtime::sr_md_mask);\n"
+           "        active_block_code_generation_ = state_.code_tracker\n"
+           "            ? state_.code_tracker->invalidation_count() : 0u;\n"
+           "        if (runtime_registered) return;\n"
+           "        const auto exact = executable_blocks_.find(virtual_start);\n"
+           "        if (exact != executable_blocks_.end() &&\n"
+           "            exact->second.physical_origin ==\n"
+           "                katana::runtime::canonical_physical_address(physical_start) &&\n"
+           "            exact->second.size == size)\n"
+           "            active_block_registration_ = &exact->second;\n"
            "    }\n"
            "    bool can_chain_executable_block(std::uint32_t address) const noexcept override {\n"
+           "        if (runtime_probe_mode_ || replay_log_ != nullptr) return false;\n"
            "        if (!local_block_chaining_enabled_ || !active_block_variant_ ||\n"
            "            !state_.address_space || !state_.scheduler ||\n"
-           "            !state_.interrupt_controller || !state_.interrupt_router)\n"
+           "            !state_.interrupt_controller || !state_.interrupt_router ||\n"
+           "            !state_.code_tracker)\n"
            "            return false;\n"
            "        const auto pending_guest_cycles = cpu_.pending_guest_cycles;\n"
            "        if (pending_guest_cycles == 0u) return false;\n"
            "        if (!guest_program_progressed_ &&\n"
            "            guest_program_range_matcher_.contains_instruction(cpu_, address))\n"
            "            return false;\n"
-           "        const auto found = executable_blocks_.find(address);\n"
-           "        if (!chainable_blocks_.contains(address) ||\n"
-           "            found == executable_blocks_.end() ||\n"
-           "            (found->second.timing_class !=\n"
+           "        const auto direct_guard =\n"
+           "            state_.address_space->direct_p1_p2_instruction_guard(\n"
+           "                address, cpu_.read_fpscr(), cpu_.privileged_mode());\n"
+           "        const ExecutableBlockRegistration* registration = nullptr;\n"
+           "        if (direct_guard) {\n"
+           "            const auto physical =\n"
+           "                katana::runtime::canonical_physical_address(address);\n"
+           "            const auto page_index = physical / executable_chain_page_size;\n"
+           "            if (page_index < executable_chain_pages_.size()) {\n"
+           "                const auto& page = executable_chain_pages_[page_index];\n"
+           "                if (page)\n"
+           "                    registration = page->entries[\n"
+           "                        (physical % executable_chain_page_size) / 2u];\n"
+           "            }\n"
+           "        } else {\n"
+           "            const auto found = executable_blocks_.find(address);\n"
+           "            if (found != executable_blocks_.end()) registration = &found->second;\n"
+           "        }\n"
+           "        if (registration == nullptr || !registration->chainable ||\n"
+           "            (registration->timing_class !=\n"
            "                 katana::runtime::ExecutableBlockTimingClass::PureCpu &&\n"
-           "             found->second.timing_class !=\n"
+           "             registration->timing_class !=\n"
            "                 katana::runtime::ExecutableBlockTimingClass::LinearRamOnly) ||\n"
-           "            found->second.maximum_guest_cycles > local_block_chain_guest_cycle_budget "
+           "            registration->maximum_guest_cycles > local_block_chain_guest_cycle_budget "
            "||\n"
            "            pending_guest_cycles > local_block_chain_guest_cycle_budget -\n"
-           "                found->second.maximum_guest_cycles) return false;\n"
+           "                registration->maximum_guest_cycles) return false;\n"
            "        const auto current_cycle = state_.scheduler->current_cycle();\n"
            "        const auto prospective_guest_cycles =\n"
-           "            pending_guest_cycles + found->second.maximum_guest_cycles;\n"
+           "            pending_guest_cycles + registration->maximum_guest_cycles;\n"
            "        if (const auto remaining = state_.scheduler->remaining_guest_cycles();\n"
            "            remaining && prospective_guest_cycles > *remaining) return false;\n"
            "        if (prospective_guest_cycles >\n"
@@ -2627,44 +3133,110 @@ std::string handwritten_main(
            "            *event <= current_cycle + prospective_guest_cycles) return false;\n"
            "        if (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u) {\n"
            "            try {\n"
-           "                static_cast<void>(state_.interrupt_router->synchronize());\n"
-           "                const auto pending =\n"
-           "                    state_.interrupt_controller->highest_pending();\n"
-           "                if (pending && pending->level > cpu_.interrupt_mask())\n"
+           "                synchronize_interrupt_sources_if_needed();\n"
+           "                if (state_.interrupt_controller->can_accept(cpu_))\n"
            "                    return false;\n"
            "            } catch (...) { return false; }\n"
            "        }\n"
-           "        try {\n"
-           "            const auto inspected = state_.address_space->inspect_translation(\n"
-           "                address, katana::runtime::TranslationAccess::Instruction,\n"
-           "                cpu_.privileged_mode());\n"
-           "            if (katana::runtime::canonical_physical_address(\n"
-           "                    inspected.physical_address) != found->second.physical_origin)\n"
+           "        if (direct_guard) {\n"
+           "            if (katana::runtime::canonical_physical_address(address) !=\n"
+           "                registration->physical_origin ||\n"
+           "                katana::runtime::block_variant_key(\n"
+           "                    *direct_guard, active_block_variant_->runtime_generation) !=\n"
+           "                    *active_block_variant_) return false;\n"
+           "        } else {\n"
+           "            try {\n"
+           "                const auto inspected = state_.address_space->inspect_translation(\n"
+           "                    address, katana::runtime::TranslationAccess::Instruction,\n"
+           "                    cpu_.privileged_mode());\n"
+           "                if (katana::runtime::canonical_physical_address(\n"
+           "                        inspected.physical_address) != registration->physical_origin)\n"
+           "                    return false;\n"
+           "                if (!state_.address_space->prove_instruction_mapping(\n"
+           "                        address, registration->physical_origin, registration->size,\n"
+           "                        cpu_.privileged_mode())) return false;\n"
+           "                const auto current = katana::runtime::block_variant_key(\n"
+           "                    state_.address_space->guard_for(\n"
+           "                        address, cpu_.read_fpscr(), cpu_.privileged_mode()),\n"
+           "                    active_block_variant_->runtime_generation);\n"
+           "                if (current != *active_block_variant_) return false;\n"
+           "                const auto fetched_physical =\n"
+           "                    katana::runtime::translate_guest_address(\n"
+           "                        cpu_, address,\n"
+           "                        katana::runtime::MemoryAccessOperation::Read,\n"
+           "                        katana::runtime::MemoryAccessWidth::Halfword, true);\n"
+           "                if (katana::runtime::canonical_physical_address(fetched_physical) !=\n"
+           "                    registration->physical_origin) return false;\n"
+           "            } catch (...) { return false; }\n"
+           "        }\n"
+           "        const auto code_generation = state_.code_tracker->invalidation_count();\n"
+           "        if (registration->validated_code_generation != code_generation) {\n"
+           "            if (!state_.code_tracker->dispatchable(registration->identity))\n"
            "                return false;\n"
-           "            if (!state_.address_space->prove_instruction_mapping(\n"
-           "                    address, found->second.physical_origin, found->second.size,\n"
-           "                    cpu_.privileged_mode())) return false;\n"
-           "            const auto current = katana::runtime::block_variant_key(\n"
-           "                state_.address_space->guard_for(\n"
-           "                    address, cpu_.read_fpscr(), cpu_.privileged_mode()),\n"
-           "                active_block_variant_->runtime_generation);\n"
-           "            if (current != *active_block_variant_) return false;\n"
-           "        } catch (...) { return false; }\n"
-           "        if (!state_.code_tracker->dispatchable(found->second.identity)) return false;\n"
-           "        try {\n"
-           "            const auto fetched_physical = katana::runtime::translate_guest_address(\n"
-           "                cpu_, address, katana::runtime::MemoryAccessOperation::Read,\n"
-           "                katana::runtime::MemoryAccessWidth::Halfword, true);\n"
-           "            if (katana::runtime::canonical_physical_address(fetched_physical) !=\n"
-           "                found->second.physical_origin) return false;\n"
-           "        } catch (...) { return false; }\n"
+           "            registration->validated_code_generation = code_generation;\n"
+           "        }\n"
            "        cpu_.active_block_virtual_start = address;\n"
-           "        cpu_.active_block_physical_start = found->second.physical_origin;\n"
-           "        cpu_.active_block_size = found->second.size;\n"
+           "        cpu_.active_block_physical_start = registration->physical_origin;\n"
+           "        cpu_.active_block_size = registration->size;\n"
+           "        return true;\n"
+           "    }\n"
+           "    bool can_defer_guest_block_completion() const noexcept override {\n"
+           "        if (!local_block_chaining_enabled_ || runtime_probe_mode_ ||\n"
+           "            replay_log_ != nullptr || active_block_registration_ == nullptr ||\n"
+           "            !active_block_variant_ || !state_.address_space ||\n"
+           "            !state_.scheduler || !state_.interrupt_controller ||\n"
+           "            !state_.interrupt_router || !state_.code_tracker)\n"
+           "            return false;\n"
+           "        const auto& block = *active_block_registration_;\n"
+           "        if (block.timing_class !=\n"
+           "                katana::runtime::ExecutableBlockTimingClass::PureCpu &&\n"
+           "            block.timing_class !=\n"
+           "                katana::runtime::ExecutableBlockTimingClass::LinearRamOnly)\n"
+           "            return false;\n"
+           "        if (cpu_.memory.watchpoint_count() != 0u ||\n"
+           "            cpu_.memory.has_trace_handler() ||\n"
+           "            cpu_.memory.has_mmio_trace_handler() ||\n"
+           "            cpu_.memory.mmio_access_tracking_enabled() ||\n"
+           "            cpu_.memory.has_guest_memory_access_sink())\n"
+           "            return false;\n"
+           "        const auto scheduling_sr = cpu_.read_sr() &\n"
+           "            (katana::runtime::sr_interrupt_mask |\n"
+           "             katana::runtime::sr_fd_mask | katana::runtime::sr_bl_mask |\n"
+           "             katana::runtime::sr_rb_mask | katana::runtime::sr_md_mask);\n"
+           "        if (scheduling_sr != active_block_scheduling_sr_ ||\n"
+           "            state_.code_tracker->invalidation_count() !=\n"
+           "                active_block_code_generation_)\n"
+           "            return false;\n"
+           "        const auto target_guard =\n"
+           "            state_.address_space->direct_p1_p2_instruction_guard(\n"
+           "                cpu_.pc, cpu_.read_fpscr(), cpu_.privileged_mode());\n"
+           "        if (!target_guard ||\n"
+           "            katana::runtime::block_variant_key(\n"
+           "                *target_guard, active_block_variant_->runtime_generation) !=\n"
+           "                *active_block_variant_)\n"
+           "            return false;\n"
+           "        const auto pending = cpu_.pending_guest_cycles;\n"
+           "        if (pending == 0u || pending >= local_block_chain_guest_cycle_budget)\n"
+           "            return false;\n"
+           "        const auto current_cycle = state_.scheduler->current_cycle();\n"
+           "        if (pending > std::numeric_limits<std::uint64_t>::max() - current_cycle)\n"
+           "            return false;\n"
+           "        if (const auto remaining = state_.scheduler->remaining_guest_cycles();\n"
+           "            remaining && pending >= *remaining)\n"
+           "            return false;\n"
+           "        if (const auto event = state_.scheduler->next_event_cycle();\n"
+           "            event && *event <= current_cycle + pending)\n"
+           "            return false;\n"
+           "        if (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u) {\n"
+           "            try {\n"
+           "                synchronize_interrupt_sources_if_needed();\n"
+           "                if (state_.interrupt_controller->can_accept(cpu_)) return false;\n"
+           "            } catch (...) { return false; }\n"
+           "        }\n"
            "        return true;\n"
            "    }\n"
            "    bool try_composite_callback_flag_poll_batch(\n"
-           "            const katana::runtime::RuntimeBlock& selected_block,\n"
+           "            const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "            const " +
            entry_namespace +
            "::CompositeCallbackBatchDescriptor& descriptor) {\n"
@@ -2740,9 +3312,8 @@ std::string handwritten_main(
            "        if (cpu_.pending_guest_cycles != 0u)\n"
            "            return reject(FlagPollBatchRejectionStage::NotAtCleanSafepoint);\n"
            "        if (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u) {\n"
-           "            static_cast<void>(state_.interrupt_router->synchronize());\n"
-           "            const auto pending = state_.interrupt_controller->highest_pending();\n"
-           "            if (pending && pending->level > cpu_.interrupt_mask())\n"
+           "            synchronize_interrupt_sources_if_needed();\n"
+           "            if (state_.interrupt_controller->can_accept(cpu_))\n"
            "                return reject(FlagPollBatchRejectionStage::InterruptPending);\n"
            "        }\n"
            "\n"
@@ -3005,7 +3576,7 @@ std::string handwritten_main(
            "        return true;\n"
            "    }\n"
            "    bool try_composite_callback_batch(\n"
-           "            const katana::runtime::RuntimeBlock& selected_block,\n"
+           "            const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "            const " +
            entry_namespace +
            "::CompositeCallbackBatchDescriptor& descriptor) {\n"
@@ -3398,7 +3969,7 @@ std::string handwritten_main(
            "        return true;\n"
            "    }\n"
            "    bool try_memory_fill_loop_batch(\n"
-           "            const katana::runtime::RuntimeBlock& selected_block,\n"
+           "            const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "            const " +
            entry_namespace +
            "::MemoryFillLoopBatchDescriptor& descriptor) {\n"
@@ -3674,7 +4245,7 @@ std::string handwritten_main(
            "        return true;\n"
            "    }\n"
            "    bool try_mmio_wait_loop_batch(\n"
-           "            const katana::runtime::RuntimeBlock& selected_block,\n"
+           "            const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "            const " +
            entry_namespace +
            "::MmioWaitLoopBatchDescriptor& descriptor) {\n"
@@ -3766,9 +4337,8 @@ std::string handwritten_main(
            "        const auto has_acceptable_pending_interrupt = [&] {\n"
            "            if (cpu_.interrupts_blocked() || cpu_.interrupt_mask() == 15u)\n"
            "                return false;\n"
-           "            static_cast<void>(state_.interrupt_router->synchronize());\n"
-           "            const auto pending = state_.interrupt_controller->highest_pending();\n"
-           "            return pending && pending->level > cpu_.interrupt_mask();\n"
+           "            synchronize_interrupt_sources_if_needed();\n"
+           "            return state_.interrupt_controller->can_accept(cpu_);\n"
            "        };\n"
            "        if (has_acceptable_pending_interrupt()) return false;\n"
            "        const auto selected_physical_origin = selected_block.physical_origin;\n"
@@ -4041,7 +4611,7 @@ std::string handwritten_main(
            "        return true;\n"
            "    }\n"
            "    bool try_counted_loop_batch(\n"
-           "            const katana::runtime::RuntimeBlock& selected_block,\n"
+           "            const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "            const " +
            entry_namespace +
            "::CountedLoopBatchDescriptor& descriptor) {\n"
@@ -4393,7 +4963,7 @@ std::string handwritten_main(
            "#endif\n"
            "        cpu_.pending_guest_cycles += staged_guest_cycles;\n"
            "        active_atomic_batch_commit_ = kind;\n"
-           "        const auto restore_unaccepted_time = [&] noexcept {\n"
+           "        const auto restore_unaccepted_time = [&]() noexcept {\n"
            "            const auto delivered = cpu_.total_guest_cycles >= total_before\n"
            "                ? cpu_.total_guest_cycles - total_before : 0u;\n"
            "            cpu_.pending_guest_cycles = delivered < pending_before\n"
@@ -4468,8 +5038,14 @@ std::string handwritten_main(
            "    katana::runtime::SystemReplayLog* replay_log_ = nullptr;\n"
            "    katana::runtime::SystemReplayObservationSession replay_observations_;\n"
            "    katana::runtime::RuntimeProbeObservationState probe_observations_;\n"
-           "    std::chrono::steady_clock::time_point next_lifecycle_poll_{};\n"
-           "    std::chrono::steady_clock::time_point next_frame_poll_{};\n"
+           "    static constexpr std::uint64_t host_poll_guest_cycle_quantum = 200'000u;\n"
+           "    std::uint64_t next_lifecycle_poll_guest_cycle_ = 0u;\n"
+           "    std::uint64_t last_lifecycle_poll_guest_cycle_ = 0u;\n"
+           "    std::uint64_t next_frame_poll_guest_cycle_ = 0u;\n"
+           "    std::uint64_t last_frame_poll_guest_cycle_ = 0u;\n"
+           "    mutable bool interrupt_sources_dirty_ = true;\n"
+           "    mutable std::uint64_t synchronized_interrupt_mmio_epoch_ = 0u;\n"
+           "    mutable std::uint64_t synchronized_interrupt_router_epoch_ = 0u;\n"
            "    katana::runtime::PlatformLifecycleState cached_lifecycle_ =\n"
            "        katana::runtime::PlatformLifecycleState::Running;\n"
            "    AtomicBatchCommitKind active_atomic_batch_commit_ =\n"
@@ -4483,6 +5059,17 @@ std::string handwritten_main(
            "        katana::runtime::ExecutableBlockTimingClass timing_class =\n"
            "            katana::runtime::ExecutableBlockTimingClass::NeverChain;\n"
            "        std::uint64_t maximum_guest_cycles = 0u;\n"
+           "        mutable std::uint64_t validated_code_generation = 0u;\n"
+           "        bool chainable = false;\n"
+           "    };\n"
+           "    static constexpr std::uint32_t executable_chain_page_size = 4'096u;\n"
+           "    static constexpr std::size_t executable_chain_halfwords_per_page =\n"
+           "        executable_chain_page_size / 2u;\n"
+           "    static constexpr std::size_t executable_chain_page_count =\n"
+           "        0x2000'0000u / executable_chain_page_size;\n"
+           "    struct ExecutableChainPage {\n"
+           "        std::array<ExecutableBlockRegistration*,\n"
+           "                   executable_chain_halfwords_per_page> entries{};\n"
            "    };\n"
            "    struct CountedLoopContract {\n"
            "        std::uint32_t counter_address = 0u;\n"
@@ -4782,8 +5369,12 @@ std::string handwritten_main(
            "    static constexpr std::uint64_t local_block_chain_guest_cycle_budget = 4'096u;\n"
            "    std::unordered_map<std::uint32_t, ExecutableBlockRegistration> "
            "executable_blocks_;\n"
-           "    std::unordered_set<std::uint32_t> chainable_blocks_;\n"
+           "    std::vector<std::unique_ptr<ExecutableChainPage>> executable_chain_pages_{\n"
+           "        executable_chain_page_count};\n"
            "    std::optional<katana::runtime::BlockVariantKey> active_block_variant_;\n"
+           "    const ExecutableBlockRegistration* active_block_registration_ = nullptr;\n"
+           "    std::uint32_t active_block_scheduling_sr_ = 0u;\n"
+           "    std::uint64_t active_block_code_generation_ = 0u;\n"
            "    FlagPollBatchCounters flag_poll_batch_counters_;\n"
            "    MmioWaitLoopBatchCounters mmio_wait_loop_batch_counters_;\n"
            "    bool guest_program_dispatched_ = false;\n"
@@ -4960,7 +5551,7 @@ std::string handwritten_main(
            "bool try_product_counted_loop_batch(\n"
            "        katana::runtime::CpuState&,\n"
            "        katana::runtime::PlatformServices& services,\n"
-           "        const katana::runtime::RuntimeBlock& selected_block,\n"
+           "        const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "        const CountedLoopBatchDescriptor& descriptor) {\n"
            "    auto* const port = dynamic_cast<PortPlatformServices*>(&services);\n"
            "    return port != nullptr &&\n"
@@ -4969,7 +5560,7 @@ std::string handwritten_main(
            "bool try_product_mmio_wait_loop_batch(\n"
            "        katana::runtime::CpuState&,\n"
            "        katana::runtime::PlatformServices& services,\n"
-           "        const katana::runtime::RuntimeBlock& selected_block,\n"
+           "        const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "        const MmioWaitLoopBatchDescriptor& descriptor) {\n"
            "    auto* const port = dynamic_cast<PortPlatformServices*>(&services);\n"
            "    return port != nullptr &&\n"
@@ -4978,7 +5569,7 @@ std::string handwritten_main(
            "bool try_product_memory_fill_loop_batch(\n"
            "        katana::runtime::CpuState&,\n"
            "        katana::runtime::PlatformServices& services,\n"
-           "        const katana::runtime::RuntimeBlock& selected_block,\n"
+           "        const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "        const MemoryFillLoopBatchDescriptor& descriptor) {\n"
            "    auto* const port = dynamic_cast<PortPlatformServices*>(&services);\n"
            "    return port != nullptr &&\n"
@@ -4987,7 +5578,7 @@ std::string handwritten_main(
            "bool try_product_composite_callback_batch(\n"
            "        katana::runtime::CpuState&,\n"
            "        katana::runtime::PlatformServices& services,\n"
-           "        const katana::runtime::RuntimeBlock& selected_block,\n"
+           "        const katana::runtime::ValidatedBlockExecution& selected_block,\n"
            "        const CompositeCallbackBatchDescriptor& descriptor) {\n"
            "    auto* const port = dynamic_cast<PortPlatformServices*>(&services);\n"
            "    return port != nullptr && port->try_composite_callback_batch(\n"
@@ -5076,10 +5667,14 @@ std::string handwritten_main(
            "        auto mutable_storage = katana::runtime::DreamcastMutableStorage::open(\n"
            "            std::move(storage_config));\n"
            "        katana::runtime::CpuState cpu;\n"
+           + boot_configuration.str() +
+           "        runtime_boot_config.executable_identity = {\n"
+           "            std::string(expected_content_identity),\n"
+           "            std::string(expected_boot_file_name),\n"
+           "            \"sha256:\" + std::string(expected_boot_sha256)};\n"
            "        const auto state = katana::runtime::initialize_dreamcast_runtime(\n"
-           "            cpu, boot, katana::runtime::DreamcastRuntimeFirmwareMode::" +
-           std::string(hle_bios_abi ? "HleBiosAbi" : "Direct") +
-           ", mutable_storage, console_profile);\n"
+           "            cpu, boot, runtime_boot_config,\n"
+           "            mutable_storage, console_profile);\n"
            "#if defined(KATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST) || \\\n"
            "    defined(KATANA_INTERNAL_COMPOSITE_CALLBACK_DIFFERENTIAL_TEST) || \\\n"
            "    defined(KATANA_INTERNAL_MEMORY_FILL_DIFFERENTIAL_TEST)\n"
@@ -5621,6 +6216,7 @@ std::string handwritten_main(
            "        " +
            entry_namespace +
            "::RuntimeRunResult result;\n"
+           "        const auto product_run_started = std::chrono::steady_clock::now();\n"
            "        try {\n"
            "            result = " +
            entry_namespace +
@@ -5638,6 +6234,10 @@ std::string handwritten_main(
            "            report_progress();\n"
            "            throw;\n"
            "        }\n"
+           "        const auto product_run_host_seconds =\n"
+           "            std::chrono::duration<double>(\n"
+           "                std::chrono::steady_clock::now() - product_run_started).count();\n"
+           "        if (result.guest_cycle_budget_reached) report_progress();\n"
            "        if (host.state() == katana::runtime::HostRuntimeState::Shutdown) {\n"
            "            if (const auto* final_progress =\n"
            "                    std::getenv(\"KATANA_PORT_FINAL_PROGRESS\");\n"
@@ -5666,6 +6266,30 @@ std::string handwritten_main(
            "            (cpu.last_exception_cause != katana::runtime::ExceptionCause::None ? 1u : "
            "0u) +\n"
            "            services.fallback_count();\n"
+           "        if (result.guest_cycle_budget_reached) {\n"
+           "            const auto& gate_materialization = " +
+           entry_namespace +
+           "::runtime_materialization_status();\n"
+           "            const auto* first_problem = gate_materialization.first_failure != 0u\n"
+           "                ? \"aot-materialization\"\n"
+           "                : result.runtime_dispatch_first_error != 0u\n"
+           "                    ? \"runtime-dispatch\"\n"
+           "                    : state.pvr_renderer->first_error().has_value()\n"
+           "                        ? \"pvr\" : \"none\";\n"
+           "            const auto* visible_screen = presented_frames == 0u\n"
+           "                ? \"none\" : \"presented-frame-unclassified\";\n"
+           "            const auto effective_guest_mhz = product_run_host_seconds > 0.0\n"
+           "                ? static_cast<double>(result.scheduler_cycle) /\n"
+           "                    product_run_host_seconds / 1'000'000.0\n"
+           "                : 0.0;\n"
+           "            std::cout << \"KATANA_PRODUCT_GATE status=guest-cycle-budget-reached\"\n"
+           "                      << \" guest_cycles=\" << result.scheduler_cycle\n"
+           "                      << \" host_seconds=\" << product_run_host_seconds\n"
+           "                      << \" effective_guest_mhz=\" << effective_guest_mhz\n"
+           "                      << \" central_dispatches=\" << result.central_dispatches\n"
+           "                      << \" visible_screen=\" << visible_screen\n"
+           "                      << \" first_problem=\" << first_problem << '\\n';\n"
+           "        }\n"
            "        if (silent_failures != 0u) {\n"
            "            throw std::runtime_error(\"Runtime-Einstieg besitzt keinen "
            "Dispatchnachweis.\");\n"
@@ -5937,7 +6561,46 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     const std::size_t boot_size,
     const std::span<const PreparedLatentAotModule> latent_modules,
     const std::span<const MmioWaitLoopBatchProof> mmio_wait_loops,
+    const katana::runtime::GameProjectDefinition* const external_game_project,
     const std::string_view expected_content_identity) {
+    const auto external_native_templates =
+        external_game_project != nullptr
+            ? external_game_project->runtime_code_templates
+            : std::span<const katana::runtime::NativeAotTemplate>{};
+    const bool external_game_project_hooks =
+        external_game_project != nullptr &&
+        (!external_game_project->function_overrides.empty() ||
+         !external_game_project->mid_function_hooks.empty());
+    const bool required_game_project_hooks =
+        external_game_project != nullptr &&
+        (std::any_of(
+             external_game_project->function_overrides.begin(),
+             external_game_project->function_overrides.end(),
+             [](const auto& function) {
+                 return function.strength ==
+                        katana::runtime::
+                            GameProjectFunctionOverrideStrength::Required;
+             }) ||
+         std::any_of(
+             external_game_project->mid_function_hooks.begin(),
+             external_game_project->mid_function_hooks.end(),
+             [](const auto& hook) {
+                 return hook.strength ==
+                        katana::runtime::GameProjectHookStrength::Required;
+             }));
+    const auto external_game_project_identity =
+        external_game_project != nullptr
+            ? katana::runtime::game_project_definition_identity(
+                  *external_game_project)
+            : std::string{};
+    std::unordered_set<std::uint32_t> external_hook_entries;
+    if (external_game_project != nullptr) {
+        for (const auto& function :
+             external_game_project->function_overrides)
+            external_hook_entries.insert(function.function_address);
+        for (const auto& hook : external_game_project->mid_function_hooks)
+            external_hook_entries.insert(hook.instruction_address);
+    }
     const auto counted_loops = counted_loop_batch_proofs(program);
     const auto memory_fill_loops = memory_fill_loop_batch_proofs(program);
     const auto composite_callback_batches = composite_callback_batch_proofs(
@@ -6258,6 +6921,23 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                     "Runtime-Codecopy-Patchziel besitzt keinen generierten AOT-Block.");
         }
     }
+    for (const auto& native_template : external_native_templates) {
+        if (!emitted_blocks.contains(native_template.source_start))
+            throw std::runtime_error(
+                "Externes Runtimecode-Template besitzt keinen generierten "
+                "AOT-Quellblock.");
+        for (const auto& patch : native_template.patches) {
+            if (std::any_of(
+                    patch.allowed_targets.begin(),
+                    patch.allowed_targets.end(),
+                    [&](const auto& target) {
+                        return !emitted_blocks.contains(target.block_address);
+                    }))
+                throw std::runtime_error(
+                    "Externes Runtimecode-Template verweist auf ein nicht "
+                    "generiertes AOT-Patchziel.");
+        }
+    }
     std::set<std::string> latent_ids;
     for (const auto& module : latent_modules) {
         if (module.id.empty() || !latent_ids.insert(module.id).second ||
@@ -6395,10 +7075,10 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                          << ", " << block.maximum_guest_cycles << "u);\n";
             if ((std::string_view(block.timing_class) == "PureCpu" ||
                  std::string_view(block.timing_class) == "LinearRamOnly") &&
-                std::string_view(block.end_kind) != "Return" &&
                 std::string_view(block.end_kind) != "ExceptionReturn" &&
                 std::string_view(block.end_kind) != "Sleep" &&
-                std::string_view(block.end_kind) != "Exception")
+                std::string_view(block.end_kind) != "Exception" &&
+                !external_hook_entries.contains(block.address))
                 shard_output << "    services.allow_executable_block_chaining(0x" << address
                              << "u);\n";
         }
@@ -6420,6 +7100,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "#include \"katana/runtime/disc_load_transaction.hpp\"\n"
            << "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
            << "#include \"katana/runtime/executable_modules.hpp\"\n"
+           << "#include \"katana/runtime/game_project.hpp\"\n"
            << "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
            << "#include \"katana/runtime/runtime_probe.hpp\"\n"
            << "#include \"katana/io/input_provenance.hpp\"\n";
@@ -6497,6 +7178,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    block.physical_origin = "
               "katana::runtime::canonical_physical_address(address);\n"
            << "    block.size = size; block.end_kind = end_kind; block.function = function;\n"
+           << "    block.static_variant_policy = katana::runtime::StaticVariantPolicy::"
+              "DirectP1P2RuntimeStateAgnostic;\n"
            << "    block.provenance = provenance;\n"
            << "    blocks.emplace_back(std::move(block));\n"
            << "}\n"
@@ -6517,6 +7200,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "active_observations = nullptr;\n"
            << "thread_local katana::runtime::DemandBlockMaterializer* active_materializer = "
               "nullptr;\n"
+           << "thread_local const katana::runtime::GameProjectBindings* "
+              "active_game_project = nullptr;\n"
            << "thread_local std::uint64_t executed_dispatch_blocks = 0u;\n"
            << "enum class DispatchChainBoundary { NestedCall, ProgramRoot };\n"
            << "void dispatch_chain(katana::runtime::CpuState&, std::uint32_t, "
@@ -6530,7 +7215,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "                 katana::runtime::DispatchDiagnosticRecorder& diagnostics,\n"
               "                 katana::runtime::IndirectDispatchMetrics& dispatch_metrics,\n"
               "                 katana::runtime::SystemReplayObservationSession& observations,\n"
-              "                 katana::runtime::DemandBlockMaterializer& materializer) {\n"
+              "                 katana::runtime::DemandBlockMaterializer& materializer,\n"
+              "                 const katana::runtime::GameProjectBindings* game_project) {\n"
            << "        if (active_services != nullptr) throw std::runtime_error(\"Runtime-Dispatch "
               "ist nicht reentrant.\");\n"
            << "        active_services = &services; active_table = &table;\n"
@@ -6538,12 +7224,13 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "        active_dispatch_metrics = &dispatch_metrics;\n"
               "        active_observations = &observations;\n"
               "        active_materializer = &materializer;\n"
+              "        active_game_project = game_project;\n"
               "        executed_dispatch_blocks = 0u;\n"
            << "    }\n"
            << "    ~ServiceScope() { active_services = nullptr; active_table = nullptr;\n"
               "        active_context = nullptr; active_diagnostics = nullptr;\n"
               "        active_dispatch_metrics = nullptr; active_observations = nullptr;\n"
-              "        active_materializer = nullptr; }\n"
+              "        active_materializer = nullptr; active_game_project = nullptr; }\n"
            << "};\n";
     if (diagnostic_interpreter)
         output << "katana::runtime::BlockExit dispatch_dynamic_interpreter(\n"
@@ -6774,6 +7461,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                    bool diagnostic, DispatchChainBoundary boundary) {\n"
            "    const auto block_budget = configured_block_budget();\n"
            "    const auto program_return_sentinel = cpu.pr;\n"
+           "    katana::runtime::BlockVariantKey dispatch_variant{};\n"
            "    std::uint32_t dispatch_callsite = cpu.pc;\n"
            "    katana::runtime::BlockAddress dispatch_source{cpu.pc,\n"
            "        katana::runtime::canonical_physical_address(cpu.pc)};\n"
@@ -6818,7 +7506,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "            if (scheduler.budget_exhausted)\n"
            "                throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
            "                if (scheduler.guest_cycle_budget_exhausted)\n"
-           "                    throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
+           "                    throw katana::runtime::GuestCycleBudgetReached(\n"
+           "                        scheduler.guest_cycle);\n"
            "                if (!active_services->poll_interrupt().has_value()) continue;\n"
            "                target = cpu.pc;\n"
            "                kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
@@ -6833,7 +7522,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "            try {\n"
            "                auto result = katana::runtime::dispatch_indirect(\n"
            "                    cpu, *active_table,\n"
-           "                    {kind, dispatch_callsite, target, cpu.pr, dispatch_source, {},\n"
+           "                    {kind, dispatch_callsite, target, cpu.pr, dispatch_source,\n"
+           "                     dispatch_variant,\n"
            "                     dispatch_origin,\n"
            "                     diagnostic ? active_diagnostics : nullptr, dispatch_class,\n"
            "                     active_dispatch_metrics, active_materializer});\n"
@@ -6846,15 +7536,143 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                throw;\n"
            "            }\n"
            "        }();\n"
-           "        const auto selected_block = active_table->resolve(selected.block);\n"
-           "        if (!selected_block || selected_block->get().function == nullptr)\n"
+           "        const auto& selected_block = selected.execution;\n"
+           "        dispatch_variant = selected_block.variant;\n"
+           "        if (selected_block.function == nullptr)\n"
            "            throw std::runtime_error(\"Runtime-Dispatchziel besitzt keinen generierten "
-           "Block.\");\n"
+           "Block.\");\n";
+    if (external_game_project_hooks) {
+        output
+            << "        if (active_game_project != nullptr) {\n"
+               "            const auto* function_hook =\n"
+               "                active_game_project->function_override(\n"
+               "                    selected_block.virtual_start);\n"
+               "            const auto* mid_hook =\n"
+               "                active_game_project->mid_function_hook(\n"
+               "                    selected_block.virtual_start);\n"
+               "            if ((function_hook != nullptr && "
+               "function_hook->callback != nullptr) ||\n"
+               "                (mid_hook != nullptr && mid_hook->callback != "
+               "nullptr)) {\n"
+               "                katana::runtime::flush_pending_guest_cycles(\n"
+               "                    cpu, *active_services);\n"
+               "                const auto apply_hook = [&](const auto& "
+               "result) {\n"
+               "                    if (result.status == "
+               "katana::runtime::GameProjectHookDispatchStatus::Invalid)\n"
+               "                        throw "
+               "katana::runtime::GameProjectHookContractError(\n"
+               "                            katana::runtime::"
+               "GameProjectHookContractFailure::InvalidResult);\n"
+               "                    if (result.status != "
+               "katana::runtime::GameProjectHookDispatchStatus::Applied)\n"
+               "                        return false;\n"
+               "                    if (result.application == "
+               "katana::runtime::GameProjectHookApplication::Abort)\n"
+               "                        throw std::runtime_error(\n"
+               "                            \"Externes Game-Project brach mit "
+               "Fehlercode \" +\n"
+               "                            std::to_string(result.error_code) "
+               "+ \".\");\n"
+               "                    if (result.application != "
+               "katana::runtime::GameProjectHookApplication::ControlTransfer)\n"
+               "                        return false;\n"
+               "                    target = cpu.pc;\n"
+               "                    dispatch_callsite = "
+               "selected_block.virtual_start;\n"
+               "                    dispatch_source = "
+               "{selected_block.virtual_start,\n"
+               "                        selected_block.physical_origin};\n"
+               "                    kind = "
+               "katana::runtime::IndirectDispatchKind::TailJump;\n"
+               "                    dispatch_class = "
+               "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
+               "                    dispatch_origin = "
+               "katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
+               "                    diagnostic = false;\n"
+               "                    return true;\n"
+               "                };\n"
+               "                bool transferred = false;\n"
+               "                if (function_hook != nullptr)\n"
+               "                    transferred = apply_hook(\n"
+               "                        active_game_project->"
+               "invoke_function_override(\n"
+               "                            selected_block.virtual_start, cpu, "
+               "active_services));\n"
+               "                if (!transferred && mid_hook != nullptr)\n"
+               "                    transferred = apply_hook(\n"
+               "                        active_game_project->"
+               "invoke_mid_function_hook(\n"
+               "                            selected_block.virtual_start, cpu, "
+               "active_services));\n"
+               "                if (!transferred) {\n"
+               "                    if (cpu.pc != "
+               "selected_block.virtual_start)\n"
+               "                        throw "
+               "katana::runtime::GameProjectHookContractError(\n"
+               "                            katana::runtime::"
+               "GameProjectHookContractFailure::"
+               "ContinueChangedProgramCounter);\n"
+               "                    bool generation_current =\n"
+               "                        "
+               "!selected_block.generation_guard_reusable;\n"
+               "                    if "
+               "(selected_block.generation_guard.kind ==\n"
+               "                        katana::runtime::"
+               "BlockDispatchGenerationGuardKind::StaticAot)\n"
+               "                        generation_current = "
+               "active_table->\n"
+               "                            "
+               "static_dispatch_generation_guard_current(\n"
+               "                                "
+               "selected_block.generation_guard);\n"
+               "                    else if "
+               "(selected_block.generation_guard.kind ==\n"
+               "                             katana::runtime::"
+               "BlockDispatchGenerationGuardKind::Materializer)\n"
+               "                        generation_current = "
+               "active_materializer->\n"
+               "                            "
+               "dispatch_generation_guard_current(\n"
+               "                                cpu, "
+               "selected_block.generation_guard);\n"
+               "                    const auto refreshed_block =\n"
+               "                        "
+               "active_table->resolve(selected_block.block);\n"
+               "                    if (!generation_current || "
+               "!refreshed_block ||\n"
+               "                        refreshed_block->get().function != "
+               "selected_block.function ||\n"
+               "                        refreshed_block->get().virtual_start != "
+               "selected_block.virtual_start ||\n"
+               "                        refreshed_block->get().physical_origin "
+               "!= selected_block.physical_origin ||\n"
+               "                        refreshed_block->get().size != "
+               "selected_block.size ||\n"
+               "                        refreshed_block->get().variant != "
+               "selected_block.variant ||\n"
+               "                        refreshed_block->get().end_kind != "
+               "selected_block.end_kind ||\n"
+               "                        "
+               "refreshed_block->get().runtime_registered !=\n"
+               "                            "
+               "selected_block.runtime_registered)\n"
+               "                        throw "
+               "katana::runtime::GameProjectHookContractError(\n"
+               "                            katana::runtime::"
+               "GameProjectHookContractFailure::StaleBlockExecution);\n"
+               "                }\n"
+               "                if (transferred) continue;\n"
+               "            }\n"
+               "        }\n";
+    }
+    output <<
            "        active_services->begin_executable_block(\n"
-           "            selected_block->get().virtual_start,\n"
-           "            selected_block->get().physical_origin,\n"
-           "            selected_block->get().size,\n"
-           "            selected_block->get().variant);\n"
+           "            selected_block.virtual_start,\n"
+           "            selected_block.physical_origin,\n"
+           "            selected_block.size,\n"
+           "            selected_block.variant,\n"
+           "            selected_block.runtime_registered);\n"
            "        const auto finalize_product_fastpath = [\n"
            "                &](const std::uint64_t fastpath_retired_before,\n"
            "                    const std::uint64_t fastpath_exception_generation_before,\n"
@@ -6904,7 +7722,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                const auto fastpath_exception_generation_before =\n"
            "                    cpu.exception_generation;\n"
            "                if (!try_product_composite_callback_batch(\n"
-           "                        cpu, *active_services, selected_block->get(), descriptor))\n"
+           "                        cpu, *active_services, selected_block, descriptor))\n"
            "                    continue;\n"
            "                composite_callback = &descriptor;\n"
            "                const auto fastpath_source = finalize_product_fastpath(\n"
@@ -6935,7 +7753,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "            const auto fastpath_exception_generation_before =\n"
            "                cpu.exception_generation;\n"
            "            if (try_product_memory_fill_loop_batch(\n"
-           "                    cpu, *active_services, selected_block->get(), "
+           "                    cpu, *active_services, selected_block, "
            "*memory_fill_loop)) {\n"
            "                const auto fastpath_source = finalize_product_fastpath(\n"
            "                    fastpath_retired_before,\n"
@@ -6964,7 +7782,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "            const auto fastpath_exception_generation_before =\n"
            "                cpu.exception_generation;\n"
            "            if (try_product_mmio_wait_loop_batch(\n"
-           "                    cpu, *active_services, selected_block->get(), "
+           "                    cpu, *active_services, selected_block, "
            "*mmio_wait_loop)) {\n"
            "                const auto fastpath_source = finalize_product_fastpath(\n"
            "                    fastpath_retired_before,\n"
@@ -6993,7 +7811,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "            const auto fastpath_exception_generation_before =\n"
            "                cpu.exception_generation;\n"
            "            if (try_product_counted_loop_batch(\n"
-           "                    cpu, *active_services, selected_block->get(), "
+           "                    cpu, *active_services, selected_block, "
            "*counted_loop)) {\n"
            "                const auto counted_fastpath_kind =\n"
            "                    cpu.active_instruction_pc ==\n"
@@ -7024,7 +7842,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "        active_exit_site_class = "
            "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
            "        auto exit = katana::runtime::execute_runtime_block(\n"
-           "            selected_block->get(), cpu, *active_context);\n"
+           "            selected_block, cpu, *active_context);\n"
            "        if (cpu.retired_guest_instructions < retired_before)\n"
            "            throw std::runtime_error(\"Gastinstruktionszaehler lief rueckwaerts.\");\n"
            "        const auto retired = cpu.retired_guest_instructions - retired_before;\n"
@@ -7042,10 +7860,23 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                std::to_string(exit.source.virtual_address) + \" expected=\" +\n"
            "                std::to_string(expected_fallthrough) + \" actual=\" +\n"
            "                std::to_string(cpu.pc));\n"
-           "        const auto completion = katana::runtime::finalize_guest_block(\n"
-           "            cpu, *active_services, active_context->scheduler_event_budget,\n"
-           "            selected.diagnostic_target, retired, new_exception,\n"
-           "            exit.kind == katana::runtime::BlockEndKind::Exception);\n"
+           "        const bool deferrable_exit =\n"
+           "            exit.kind == katana::runtime::BlockEndKind::Fallthrough ||\n"
+           "            exit.kind == katana::runtime::BlockEndKind::StaticBranch ||\n"
+           "            exit.kind == katana::runtime::BlockEndKind::ConditionalBranch ||\n"
+           "            exit.kind == katana::runtime::BlockEndKind::DynamicBranch;\n"
+           "        katana::runtime::PlatformBlockCompletion completion;\n"
+           "        if (!new_exception && deferrable_exit &&\n"
+           "            active_services->can_defer_guest_block_completion()) {\n"
+           "            active_services->observe_guest_block_completion(\n"
+           "                selected.diagnostic_target, retired, false, false);\n"
+           "            completion.scheduler.guest_cycle = active_services->scheduler_cycle();\n"
+           "        } else {\n"
+           "            completion = katana::runtime::finalize_guest_block(\n"
+           "                cpu, *active_services, active_context->scheduler_event_budget,\n"
+           "                selected.diagnostic_target, retired, new_exception,\n"
+           "                exit.kind == katana::runtime::BlockEndKind::Exception);\n"
+           "        }\n"
            "        active_context->scheduler_cycle = completion.scheduler.guest_cycle;\n"
            "        if (exit.kind == katana::runtime::BlockEndKind::Exception)\n"
            "            active_observations->observe_guest_exception(cpu.last_exception_cause);\n"
@@ -7141,7 +7972,30 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "                             katana::runtime::SystemReplayObservationSession& "
               "observations) {\n"
            << "    katana::runtime::validate_platform_services(services);\n";
-    output << "    table.bind_code_tracker(services.executable_code_tracker());\n";
+    if (external_game_project_hooks) {
+        output
+            << "    const auto* registered_game_project =\n"
+               "        katana::runtime::active_game_project_bindings();\n";
+        if (required_game_project_hooks)
+            output
+                << "    if (registered_game_project == nullptr)\n"
+                   "        throw std::runtime_error(\"Erforderliches externes "
+                   "Game-Project ist nicht registriert.\");\n";
+        output
+            << "    if (registered_game_project != nullptr &&\n"
+               "        katana::runtime::game_project_definition_identity(\n"
+               "            registered_game_project->definition()) != "
+            << katana::io::quote_json(external_game_project_identity)
+            << ")\n"
+               "        throw std::runtime_error(\"Registriertes externes "
+               "Game-Project besitzt die falsche Identitaet.\");\n";
+    } else {
+        output << "    const katana::runtime::GameProjectBindings* "
+                  "registered_game_project = nullptr;\n";
+    }
+    output << "    table.bind_code_tracker(\n"
+           << "        services.executable_code_tracker(),\n"
+           << "        katana::runtime::StaticAotInvalidationContract::Coordinated);\n";
     output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n";
     output << "    static_blocks.reserve(" << emitted_blocks.size() << "u);\n";
     for (std::size_t shard = 0u; shard < shard_count; ++shard)
@@ -7154,6 +8008,15 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     const auto entry = symbol(entry_address);
     output << "    katana::runtime::DispatchDiagnosticRecorder diagnostics;\n"
            << "    katana::runtime::IndirectDispatchMetrics dispatch_metrics;\n"
+           << "    dispatch_metrics.set_site_details_enabled(\n"
+           << "        " << (diagnostic_interpreter ? "true" : "false") << " ||\n"
+           << "        (std::getenv(\"KATANA_PORT_DIAGNOSTICS\") != nullptr &&\n"
+           << "         std::string_view(std::getenv(\"KATANA_PORT_DIAGNOSTICS\")) == \"1\") ||\n"
+           << "        (std::getenv(\"KATANA_PORT_DIAGNOSTICS_FULL\") != nullptr &&\n"
+           << "         std::string_view(std::getenv(\"KATANA_PORT_DIAGNOSTICS_FULL\")) == "
+              "\"1\") ||\n"
+           << "        (std::getenv(\"KATANA_RUNTIME_PROBE\") != nullptr &&\n"
+           << "         *std::getenv(\"KATANA_RUNTIME_PROBE\") != '\\0'));\n"
            << "    katana::runtime::BlockExecutionContext context;\n"
            << "    context.scheduler_cycle = services.scheduler_cycle();\n"
            << "    context.scheduler_event_budget = 1024u;\n"
@@ -7197,6 +8060,39 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                   "katana::runtime::NativeAotTemplateDestination::LoadedModule, "
                << katana::io::quote_json(expected_content_identity) << ", "
                << katana::io::quote_json(module.byte_identity) << "},\n";
+    }
+    for (const auto& native_template : external_native_templates) {
+        output << "        {"
+               << katana::io::quote_json(native_template.source_module_id)
+               << ", "
+               << katana::io::quote_json(
+                      native_template.expected_source_identity)
+               << ", 0x" << symbol(native_template.source_start) << "u, "
+               << native_template.extent << "u, "
+               << native_template.destination_vbr_delta << ", {";
+        for (const auto& patch : native_template.patches) {
+            output << "{" << patch.source_offset << "u,{";
+            for (const auto& target : patch.allowed_targets)
+                output << "{0x" << symbol(target.live_value) << "u,0x"
+                       << symbol(target.block_address) << "u},";
+            output << "}},";
+        }
+        output << "}, katana::runtime::NativeAotTemplateDestination::"
+               << (native_template.destination ==
+                           katana::runtime::NativeAotTemplateDestination::
+                               VbrRelative
+                       ? "VbrRelative"
+                       : "LoadedModule")
+               << ", "
+               << katana::io::quote_json(
+                      native_template.expected_runtime_content_identity)
+               << ", "
+               << katana::io::quote_json(
+                      native_template.expected_runtime_byte_identity)
+               << ", {";
+        for (const auto& range : native_template.mutable_ranges)
+            output << "{" << range.offset << "u," << range.size << "u},";
+        output << "}},\n";
     }
     output << "    };\n"
            << "    katana::runtime::NativeAotTemplateBinder native_aot_binder(\n"
@@ -7283,7 +8179,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    };\n"
            << "    ServiceScope scope(\n"
            << "        services, table, context, diagnostics, dispatch_metrics,\n"
-           << "        observations, materializer);\n"
+           << "        observations, materializer, registered_game_project);\n"
+           << "    bool guest_cycle_budget_reached = false;\n"
            << "    try {\n"
            << "        dispatch_chain(cpu, 0x" << entry
            << "u, katana::runtime::IndirectDispatchKind::TailJump,\n"
@@ -7294,6 +8191,10 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    } catch (const katana::runtime::RuntimeProbeBudgetReached&) {\n"
            << "        capture_materialization_status();\n"
            << "        throw;\n"
+           << "    } catch (const katana::runtime::GuestCycleBudgetReached& reached) {\n"
+           << "        if (reached.final_guest_cycle() != services.scheduler_cycle())\n"
+           << "            throw std::runtime_error(\"guest-cycle-budget-cycle-mismatch\");\n"
+           << "        guest_cycle_budget_reached = true;\n"
            << "    } catch (...) {\n"
            << "        capture_materialization_status();\n"
            << "        if (const auto* value = std::getenv(\"KATANA_PORT_DIAGNOSTICS\");\n"
@@ -7318,28 +8219,87 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "        dispatch_metrics.serialize_json(true),\n"
            << "        static_cast<std::uint32_t>(first_error ? first_error->error\n"
            << "            : katana::runtime::DispatchDiagnosticError::None),\n"
-           << "        cpu.pc, services.scheduler_cycle()};\n"
+           << "        cpu.pc, services.scheduler_cycle(), executed_dispatch_blocks,\n"
+           << "        guest_cycle_budget_reached};\n"
            << "}\n"
            << "} // namespace " << entry_namespace << "\n";
     result.push_back({"code/runtime-dispatch.cpp", output.str()});
     return result;
 }
 
-std::string root_cmake() {
+std::string root_cmake(const bool diagnostic_partial) {
     return "cmake_minimum_required(VERSION 3.25)\n"
            "project(KatanaPort LANGUAGES CXX)\n"
            "set(KATANA_RUNTIME_ROOT \"\" CACHE PATH \"KatanaRecomp source root\")\n"
-           "if(MSVC)\n"
-           "  add_compile_options(\"$<$<CONFIG:RelWithDebInfo>:/Ob3>\")\n"
-           "  add_link_options(\"$<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>\"\n"
-           "                   \"$<$<CONFIG:RelWithDebInfo>:/OPT:REF>\")\n"
+           "set(KATANA_PORT_DIAGNOSTIC_RUNTIME " +
+           std::string(diagnostic_partial ? "ON" : "OFF") +
+           ")\n"
+           "set(KATANA_PORT_BUILD_PROFILE \"bringup\" CACHE STRING "
+           "\"Port build profile: bringup or gate\")\n"
+           "set_property(CACHE KATANA_PORT_BUILD_PROFILE PROPERTY STRINGS bringup gate)\n"
+           "if(NOT KATANA_PORT_BUILD_PROFILE STREQUAL \"bringup\" AND\n"
+           "   NOT KATANA_PORT_BUILD_PROFILE STREQUAL \"gate\")\n"
+           "  message(FATAL_ERROR \"KATANA_PORT_BUILD_PROFILE must be bringup or gate\")\n"
            "endif()\n"
-           "if(NOT TARGET katana_runtime)\n"
-           "  if(KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
-           "    message(FATAL_ERROR \"Set KATANA_RUNTIME_ROOT to the compatible KatanaRecomp "
-           "source tree\")\n"
+           "if(KATANA_RUNTIME_ROOT STREQUAL \"\" AND NOT \"$ENV{KATANA_RUNTIME_ROOT}\" "
+              "STREQUAL \"\")\n"
+           "  file(TO_CMAKE_PATH \"$ENV{KATANA_RUNTIME_ROOT}\" KATANA_RUNTIME_ROOT)\n"
+           "endif()\n"
+           "if(NOT \"${CMAKE_LINKER_TYPE}\" STREQUAL \"\" AND "
+           "CMAKE_VERSION VERSION_LESS 3.29)\n"
+           "  message(FATAL_ERROR \"CMAKE_LINKER_TYPE requires CMake 3.29 or newer\")\n"
+           "endif()\n"
+           "if(MSVC)\n"
+           "  if(KATANA_PORT_BUILD_PROFILE STREQUAL \"bringup\")\n"
+           "    if(CMAKE_LINKER_TYPE STREQUAL \"LLD\")\n"
+           "      add_link_options(\"$<$<CONFIG:RelWithDebInfo>:/DEBUG:FULL>\")\n"
+           "    else()\n"
+           "      add_link_options(\"$<$<CONFIG:RelWithDebInfo>:/INCREMENTAL>\"\n"
+           "                       \"$<$<CONFIG:RelWithDebInfo>:/DEBUG:FASTLINK>\")\n"
+           "    endif()\n"
+           "  else()\n"
+           "    if(CMAKE_LINKER_TYPE STREQUAL \"LLD\")\n"
+           "      add_link_options(\"$<$<CONFIG:RelWithDebInfo>:/OPT:REF>\"\n"
+           "                       \"$<$<CONFIG:RelWithDebInfo>:/OPT:ICF>\")\n"
+           "    else()\n"
+           "      add_link_options(\"$<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>\"\n"
+           "                       \"$<$<CONFIG:RelWithDebInfo>:/OPT:REF>\"\n"
+           "                       \"$<$<CONFIG:RelWithDebInfo>:/OPT:ICF>\")\n"
+           "    endif()\n"
            "  endif()\n"
-           "  add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" \"${CMAKE_BINARY_DIR}/katana-runtime\")\n"
+           "endif()\n"
+           "if(KATANA_PORT_DIAGNOSTIC_RUNTIME)\n"
+           "  set(KATANA_PORT_NAMESPACED_RUNTIME_TARGET KatanaRecomp::runtime)\n"
+           "  set(KATANA_PORT_SOURCE_RUNTIME_TARGET katana_runtime)\n"
+           "else()\n"
+           "  set(KATANA_PORT_NAMESPACED_RUNTIME_TARGET KatanaRecomp::runtime_core)\n"
+           "  set(KATANA_PORT_SOURCE_RUNTIME_TARGET katana_runtime_core)\n"
+           "endif()\n"
+           "if(NOT KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
+           "  add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" "
+           "\"${CMAKE_BINARY_DIR}/katana-runtime\" EXCLUDE_FROM_ALL)\n"
+           "  if(TARGET \"${KATANA_PORT_SOURCE_RUNTIME_TARGET}\")\n"
+           "    set(KATANA_PORT_RUNTIME_TARGET \"${KATANA_PORT_SOURCE_RUNTIME_TARGET}\")\n"
+           "  elseif(TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "    set(KATANA_PORT_RUNTIME_TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "  else()\n"
+           "    message(FATAL_ERROR \"KatanaRecomp source fallback has no requested runtime "
+           "target\")\n"
+           "  endif()\n"
+           "elseif(TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "  set(KATANA_PORT_RUNTIME_TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "elseif(TARGET \"${KATANA_PORT_SOURCE_RUNTIME_TARGET}\")\n"
+           "  set(KATANA_PORT_RUNTIME_TARGET \"${KATANA_PORT_SOURCE_RUNTIME_TARGET}\")\n"
+           "else()\n"
+           "  find_package(KatanaRecomp CONFIG QUIET)\n"
+           "  if(TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "    set(KATANA_PORT_RUNTIME_TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
+           "  elseif(TARGET \"${KATANA_PORT_SOURCE_RUNTIME_TARGET}\")\n"
+           "    set(KATANA_PORT_RUNTIME_TARGET \"${KATANA_PORT_SOURCE_RUNTIME_TARGET}\")\n"
+           "  else()\n"
+           "    message(FATAL_ERROR \"Find KatanaRecomp or set KATANA_RUNTIME_ROOT to the "
+           "compatible source tree\")\n"
+           "  endif()\n"
            "endif()\n"
            "add_subdirectory(generated)\n"
            "include(\"${CMAKE_CURRENT_SOURCE_DIR}/generated/katana-port.cmake\")\n";
@@ -7383,7 +8343,20 @@ std::string port_cmake(const std::string& target_name) {
            target_name +
            " PRIVATE \"${CMAKE_CURRENT_LIST_DIR}/include\")\n"
            "target_link_libraries(" +
-           target_name + " PRIVATE katana_generated katana_runtime)\n";
+           target_name + " PRIVATE katana_generated ${KATANA_PORT_RUNTIME_TARGET})\n"
+           "if(KATANA_PORT_BUILD_PROFILE STREQUAL \"gate\")\n"
+           "  include(CheckIPOSupported)\n"
+           "  check_ipo_supported(RESULT KATANA_PORT_IPO_SUPPORTED "
+           "OUTPUT KATANA_PORT_IPO_ERROR)\n"
+           "  if(NOT KATANA_PORT_IPO_SUPPORTED)\n"
+           "    message(FATAL_ERROR \"Gate build requires IPO: ${KATANA_PORT_IPO_ERROR}\")\n"
+           "  endif()\n"
+           "  set_property(TARGET katana_generated PROPERTY "
+           "INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)\n"
+           "  set_property(TARGET " +
+           target_name +
+           " PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)\n"
+           "endif()\n";
 }
 
 std::string
@@ -7392,6 +8365,7 @@ port_metadata(const PortExportOptions& options,
               const std::span<const TranslationUnitPartition> partitions,
               const std::uint32_t entry_address,
               const std::size_t boot_size,
+              const bool direct_boot_executable,
               const std::string_view project_identity,
               const std::span<const katana::analysis::IndirectControlFlowResolution> indirect,
               const std::size_t latent_aot_module_count) {
@@ -7421,6 +8395,10 @@ port_metadata(const PortExportOptions& options,
            << ",\"dispatch_paths_without_validation\":0"
            << ",\"project_identity\":" << katana::io::quote_json(project_identity)
            << ",\"entry_address\":" << entry_address << ",\"boot_size\":" << boot_size
+           << ",\"boot_path\":"
+           << katana::io::quote_json(direct_boot_executable
+                                         ? "direct-boot-executable"
+                                         : "native-disc-boot")
            << ",\"function_count\":" << function_count
            << ",\"latent_aot_modules\":" << latent_aot_module_count << ",\"resolved_control_flow\":"
            << count(katana::analysis::ControlFlowReportStatus::Resolved)
@@ -7509,6 +8487,24 @@ struct DiscExportContext {
     std::string boot_sha256;
 };
 
+std::string prepared_boot_sha256(const PreparedPortProgram& prepared) {
+    const auto* boot_segment =
+        prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
+    if (boot_segment == nullptr)
+        throw std::runtime_error(
+            "Portvertrag kann das analysierte Bootprogramm nicht binden.");
+    const auto boot_offset =
+        boot_segment->byte_offset(prepared.boot_address);
+    if (!boot_offset || *boot_offset > boot_segment->bytes.size() ||
+        prepared.boot_size > boot_segment->bytes.size() - *boot_offset)
+        throw std::runtime_error(
+            "Portvertrag findet keine vollstaendigen Bootbytes.");
+    return katana::io::sha256_bytes(std::string_view(
+        reinterpret_cast<const char*>(
+            boot_segment->bytes.data() + *boot_offset),
+        prepared.boot_size));
+}
+
 DiscExportContext prepare_disc_export_context(
     const PreparedPortProgram& prepared,
     const std::shared_ptr<katana::runtime::GdiDiscSource>& validated_disc_source = {}) {
@@ -7533,21 +8529,21 @@ DiscExportContext prepare_disc_export_context(
         if (expected == prepared.inputs.end() || expected->sha256 != track.sha256)
             throw std::runtime_error("GDI-Track wurde vor dem Recipe-Export veraendert.");
     }
-    const auto* boot_segment =
-        prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
-    if (boot_segment == nullptr)
-        throw std::runtime_error("Portvertrag kann das analysierte Bootprogramm nicht binden.");
-    const auto boot_offset = boot_segment->byte_offset(prepared.boot_address);
-    if (!boot_offset || *boot_offset > boot_segment->bytes.size() ||
-        prepared.boot_size > boot_segment->bytes.size() - *boot_offset)
-        throw std::runtime_error("Portvertrag findet keine vollstaendigen Bootbytes.");
-    const auto boot_bytes =
-        std::string_view(reinterpret_cast<const char*>(boot_segment->bytes.data() + *boot_offset),
-                         prepared.boot_size);
-    auto boot_sha256 = katana::io::sha256_bytes(boot_bytes);
+    auto boot_sha256 = prepared_boot_sha256(prepared);
     auto recipe = katana::runtime::make_disc_install_recipe(
         *disc_source, std::string(prepared.project_identity), boot_sha256);
     return {std::move(disc_source), std::move(recipe), std::move(boot_sha256)};
+}
+
+DiscExportContext prepare_disc_export_context(
+    const PreparedPortProgram& prepared,
+    const katana::runtime::DiscInstallRecipe& validated_recipe) {
+    auto boot_sha256 = prepared_boot_sha256(prepared);
+    if (validated_recipe.job_generation != prepared.project_identity ||
+        validated_recipe.boot_sha256 != boot_sha256)
+        throw std::runtime_error(
+            "Privates Boot-Executable und Disc-Recipe besitzen keine gemeinsame Identitaet.");
+    return {{}, validated_recipe, std::move(boot_sha256)};
 }
 
 std::vector<LatentAotOccupiedRange>
@@ -7611,7 +8607,8 @@ static PortExportResult export_dreamcast_port_project_impl(
     const PreparedPortProgram& prepared,
     const std::filesystem::path& output_root,
     const PortExportOptions& options,
-    const std::shared_ptr<katana::runtime::GdiDiscSource>& validated_disc_source) {
+    const std::shared_ptr<katana::runtime::GdiDiscSource>& validated_disc_source,
+    const katana::runtime::DiscInstallRecipe* const validated_recipe = nullptr) {
     report_progress(options, "program-validation");
     if (output_root.empty() || !valid_target_name(options.target_name) ||
         options.tool_version.empty() || prepared.entry_address == 0u ||
@@ -7647,8 +8644,14 @@ static PortExportResult export_dreamcast_port_project_impl(
     }
     katana::ir::require_valid_program(prepared.program);
     std::optional<DiscExportContext> disc_context;
+    if (validated_recipe != nullptr)
+        disc_context.emplace(
+            prepare_disc_export_context(prepared, *validated_recipe));
     LatentAotDiscovery latent_aot;
     if (prepared.discover_latent_aot) {
+        if (validated_recipe != nullptr)
+            throw std::invalid_argument(
+                "Boot-Executable-Artefakt kann keine Discmodule analysieren.");
         report_progress(options, "latent-aot-source-validation");
         disc_context.emplace(
             prepare_disc_export_context(prepared, validated_disc_source));
@@ -7661,6 +8664,85 @@ static PortExportResult export_dreamcast_port_project_impl(
                                                  excluded_identities,
                                                  {},
                                                  occupied);
+    }
+    if (options.game_project != nullptr) {
+        report_progress(options, "game-project-validation");
+        const auto& game_project = *options.game_project;
+        katana::runtime::validate_game_project_definition(game_project);
+        validate_game_project_image_contract(game_project, prepared.image);
+        if (!disc_context.has_value())
+            throw std::invalid_argument(
+                "Game-Project-Export braucht eine validierte Disc- oder "
+                "Boot-Artefaktidentitaet.");
+        if (game_project.identity.content_identity !=
+            disc_context->recipe.content_identity)
+            throw std::invalid_argument(
+                "Game-Project-Contentidentitaet passt nicht zur "
+                "Installationsquelle.");
+        const auto* boot_segment =
+            prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
+        if (boot_segment == nullptr ||
+            boot_segment->local_source_name !=
+                game_project.identity.boot_file_name)
+            throw std::invalid_argument(
+                "Game-Project-Bootdateiidentitaet passt nicht zum "
+                "Executable-Image.");
+        const auto boot_bytes = game_project_image_bytes(
+            prepared.image, prepared.boot_address, prepared.boot_size);
+        const auto boot_byte_identity =
+            std::string("sha256:") +
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(boot_bytes.data()),
+                boot_bytes.size()));
+        if (boot_byte_identity !=
+            game_project.identity.boot_byte_identity)
+            throw std::invalid_argument(
+                "Game-Project-Bootbyteidentitaet passt nicht zum "
+                "Executable-Image.");
+        if (game_project.boot_config.has_value()) {
+            if (prepared.direct_boot_executable)
+                katana::runtime::validate_dreamcast_post_bios_cpu_state(
+                    game_project.boot_config->post_bios_cpu_state,
+                    prepared.boot_size);
+        }
+        const auto has_function = [&](const std::uint32_t address) {
+            return std::any_of(
+                prepared.analysis.recursive.functions.begin(),
+                prepared.analysis.recursive.functions.end(),
+                [&](const auto& candidate) {
+                    return candidate.address == address;
+                });
+        };
+        for (const auto& function : game_project.function_boundaries) {
+            if (!has_function(function.start))
+                throw std::invalid_argument(
+                    "Game-Project-Funktionsgrenze fehlt in der vorbereiteten "
+                    "Analyse.");
+        }
+        for (const auto& hook : game_project.mid_function_hooks) {
+            if (!has_function(hook.instruction_address))
+                throw std::invalid_argument(
+                    "Game-Project-Mid-Function-Hook besitzt keinen "
+                    "exportierten nativen Entry.");
+        }
+        for (const auto& table : game_project.jump_tables) {
+            const auto analyzed = std::find_if(
+                prepared.analysis.jump_tables.begin(),
+                prepared.analysis.jump_tables.end(),
+                [&](const auto& candidate) {
+                    return candidate.dispatch_address ==
+                               table.dispatch_address &&
+                           candidate.table_address ==
+                               table.table_address &&
+                           candidate.requested_entries ==
+                               table.entry_count &&
+                           candidate.resolved;
+                });
+            if (analyzed == prepared.analysis.jump_tables.end())
+                throw std::invalid_argument(
+                    "Game-Project-Jump-Table ist in der vorbereiteten Analyse "
+                    "nicht vollstaendig aufgeloest.");
+        }
     }
     std::vector<katana::ir::Function> emitted_program(prepared.program.begin(),
                                                       prepared.program.end());
@@ -7677,28 +8759,189 @@ static PortExportResult export_dreamcast_port_project_impl(
     const auto partitions = partition_translation_units(emitted_program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
 
+    std::unique_ptr<CodegenCache> partition_cache;
+    if (!options.codegen_cache_root.empty())
+        partition_cache = std::make_unique<CodegenCache>(options.codegen_cache_root);
+    std::atomic_size_t partition_cache_hits = 0u;
+    std::atomic_size_t partition_cache_misses = 0u;
+    std::unordered_set<std::uint32_t> emitted_function_entries;
+    emitted_function_entries.reserve(emitted_program.size());
+    for (const auto& function : emitted_program)
+        emitted_function_entries.insert(function.entry_address);
+    std::unordered_set<std::uint32_t> external_hook_entries;
+    if (options.game_project != nullptr) {
+        for (const auto& function :
+             options.game_project->function_overrides)
+            external_hook_entries.insert(function.function_address);
+        for (const auto& hook : options.game_project->mid_function_hooks)
+            external_hook_entries.insert(hook.instruction_address);
+    }
+
+    // Runtime-only analysis candidates are not promoted to static CFG edges:
+    // writable callback slots remain authoritative. A singleton candidate can
+    // nevertheless be entered natively after the generated callsite compares
+    // the live target and the runtime chaining guard validates the AOT entry.
+    std::unordered_map<std::uint32_t, std::uint32_t> guarded_native_call_targets;
+    std::unordered_set<std::uint32_t> ambiguous_guarded_native_callsites;
+    for (const auto& resolution : prepared.analysis.indirect_control_flow) {
+        if (resolution.kind != katana::analysis::IndirectControlFlowKind::Call)
+            continue;
+        auto candidates = resolution.analysis_candidates;
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                         candidates.end());
+        if (candidates.size() != 1u ||
+            !emitted_function_entries.contains(candidates.front()))
+            continue;
+        const auto [found, inserted] = guarded_native_call_targets.emplace(
+            resolution.instruction_address, candidates.front());
+        if (!inserted && found->second != candidates.front())
+            ambiguous_guarded_native_callsites.insert(
+                resolution.instruction_address);
+    }
+    for (const auto callsite : ambiguous_guarded_native_callsites)
+        guarded_native_call_targets.erase(callsite);
+    const auto partition_configuration_hash = katana::io::sha256_bytes(
+        std::string("cpp-port-partition-v") +
+        std::to_string(port_partition_emission_schema_version) + ':' +
+        std::string(port_namespace) + ':' +
+        std::to_string(prepared.entry_address) + ':' +
+        std::to_string(options.partition_options.maximum_functions) + ':' +
+        std::to_string(options.partition_options.maximum_instructions) + ':' +
+        std::to_string(native_aot_emission_profile_version) + ':' +
+        std::to_string(options.diagnostic_partial) + ':' + options.console_profile);
+    const auto partition_manifest_hash = katana::io::sha256_bytes(
+        options.target_name + ':' + std::to_string(port_project_contract_version));
+    const auto partition_overrides_hash =
+        options.game_project != nullptr
+            ? katana::io::sha256_bytes(
+                  game_project_export_identity(*options.game_project))
+            : katana::io::sha256_bytes(
+                  "no-external-game-project-overrides-v2");
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 9u);
     const auto emit_partition = [&](const TranslationUnitPartition& partition) {
         auto functions = select_functions(emitted_program, partition);
+        std::unordered_set<std::uint32_t> local_function_entries;
+        local_function_entries.reserve(functions.size());
+        for (const auto& function : functions)
+            local_function_entries.insert(function.entry_address);
+        std::vector<std::uint32_t> external_callees;
+        std::vector<GuardedNativeCallTarget> partition_guarded_native_calls;
+        std::vector<std::uint32_t> partition_architectural_boundaries;
+        for (const auto& function : functions) {
+            for (const auto callee : function.direct_callees) {
+                if (!local_function_entries.contains(callee) &&
+                    emitted_function_entries.contains(callee))
+                    external_callees.push_back(callee);
+            }
+            for (const auto& block : function.blocks) {
+                if (external_hook_entries.contains(block.start_address))
+                    partition_architectural_boundaries.push_back(
+                        block.start_address);
+                for (const auto& instruction : block.instructions) {
+                    if (instruction.operation != katana::ir::Operation::CallRegister)
+                        continue;
+                    const auto guarded =
+                        guarded_native_call_targets.find(instruction.source_address);
+                    if (guarded == guarded_native_call_targets.end())
+                        continue;
+                    partition_guarded_native_calls.push_back(
+                        {instruction.source_address, guarded->second});
+                    if (!local_function_entries.contains(guarded->second))
+                        external_callees.push_back(guarded->second);
+                }
+            }
+        }
+        std::sort(external_callees.begin(), external_callees.end());
+        external_callees.erase(
+            std::unique(external_callees.begin(), external_callees.end()),
+            external_callees.end());
+        for (const auto callee : external_callees) {
+            if (external_hook_entries.contains(callee))
+                partition_architectural_boundaries.push_back(callee);
+        }
+        std::sort(partition_guarded_native_calls.begin(),
+                  partition_guarded_native_calls.end(),
+                  [](const auto& left, const auto& right) {
+                      return std::tie(left.callsite, left.target) <
+                             std::tie(right.callsite, right.target);
+                  });
+        partition_guarded_native_calls.erase(
+            std::unique(partition_guarded_native_calls.begin(),
+                        partition_guarded_native_calls.end(),
+                        [](const auto& left, const auto& right) {
+                            return left.callsite == right.callsite &&
+                                   left.target == right.target;
+                        }),
+            partition_guarded_native_calls.end());
+        std::sort(partition_architectural_boundaries.begin(),
+                  partition_architectural_boundaries.end());
+        partition_architectural_boundaries.erase(
+            std::unique(partition_architectural_boundaries.begin(),
+                        partition_architectural_boundaries.end()),
+            partition_architectural_boundaries.end());
         const auto contains_program_entry =
             std::any_of(functions.begin(), functions.end(), [&prepared](const auto& function) {
                 return function.entry_address == prepared.entry_address;
             });
-        // Port units return every block transition to the runtime dispatcher. Advertising every
-        // other partition as a direct-link target would only emit the complete global declaration
-        // table into every unit, turning source generation and output size quadratic.
+        std::ostringstream partition_linkage_identity;
+        partition_linkage_identity << "entry=" << contains_program_entry << ';';
+        for (const auto callee : external_callees)
+            partition_linkage_identity << "external=" << callee << ';';
+        for (const auto& candidate : partition_guarded_native_calls)
+            partition_linkage_identity << "guarded=" << candidate.callsite << ':'
+                                       << candidate.target << ';';
+        for (const auto boundary : partition_architectural_boundaries)
+            partition_linkage_identity << "architectural-boundary="
+                                       << boundary << ';';
+        const auto partition_emission_hash = katana::io::sha256_bytes(
+            partition_configuration_hash + ':' + partition_linkage_identity.str());
+        const auto translation_unit_name =
+            deterministic_translation_unit_name(partition, emitted_program);
+        const auto relative_path =
+            std::filesystem::path("code") / translation_unit_name;
+        std::string cache_key;
+        const auto cache_artifact_name =
+            (std::filesystem::path("partition") / translation_unit_name).generic_string();
+        if (partition_cache) {
+            cache_key = make_codegen_cache_key(
+                {std::string(prepared.project_identity),
+                 partition.content_sha256,
+                 partition_emission_hash,
+                 "cpp-port",
+                 backend_interface_abi_version,
+                 katana::runtime::abi_version,
+                 partition_manifest_hash,
+                 partition_overrides_hash,
+                 2u,
+                 native_aot_emission_profile_version,
+                 options.tool_version});
+            if (auto cached = partition_cache->load(cache_key, cache_artifact_name)) {
+                partition_cache_hits.fetch_add(1u, std::memory_order_relaxed);
+                return ProjectArtifact{relative_path, std::move(*cached)};
+            }
+        }
+        // Declare only proven cross-partition callees. A complete global
+        // declaration table in every unit would make source size quadratic.
         NativeAotBackendRequestOptions request_options;
         request_options.symbol_namespace = port_namespace;
         request_options.emit_run_functions = contains_program_entry;
         request_options.metadata_entry_address = prepared.entry_address;
-        const auto request = make_native_aot_backend_request(NativeAotEmissionProfile::Product,
-                                                             functions,
-                                                             functions.front().entry_address,
-                                                             request_options);
-        return ProjectArtifact{std::filesystem::path("code") /
-                                   deterministic_translation_unit_name(partition, emitted_program),
-                               emit_cpp_port_translation_unit(request).joined_text()};
+        auto request = make_native_aot_backend_request(NativeAotEmissionProfile::Product,
+                                                       functions,
+                                                       functions.front().entry_address,
+                                                       request_options);
+        request.known_function_entries = external_callees;
+        request.guarded_native_call_targets = partition_guarded_native_calls;
+        request.architectural_boundary_entries =
+            partition_architectural_boundaries;
+        auto content = emit_cpp_port_translation_unit(request).joined_text();
+        if (partition_cache) {
+            partition_cache->store(cache_key, cache_artifact_name, content);
+            partition_cache_misses.fetch_add(1u, std::memory_order_relaxed);
+        }
+        return ProjectArtifact{relative_path, std::move(content)};
     };
     const auto codegen_jobs = port_codegen_jobs(partitions.size());
     std::vector<std::optional<ProjectArtifact>> generated(partitions.size());
@@ -7732,25 +8975,103 @@ static PortExportResult export_dreamcast_port_project_impl(
         throw std::runtime_error("Portcodegen besitzt keine Einstiegspartition.");
     }
     const auto entry_namespace = std::string(port_namespace);
-    auto source_map_image = prepared.image;
-    for (const auto& module : latent_aot.modules) {
-        katana::io::ImageSegment segment{
-            "latent-aot-module",
-            module.source_address,
-            module.disc_byte_offset,
-            module.byte_size,
-            katana::io::SegmentKind::Mixed,
-            {true, false, true},
-            // Source-map lookup needs addressable placeholder bytes, but the retail file bytes
-            // deliberately do not survive discovery or enter any generated artifact.
-            std::vector<std::uint8_t>(module.byte_size, 0u)};
-        segment.source_kind = katana::io::ImageSourceKind::DiscModule;
-        segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
-        source_map_image.add_segment(std::move(segment));
+    std::string source_map_json;
+    std::string control_flow_graph_json;
+    std::string control_flow_graph_dot;
+    std::string call_graph_json;
+    std::string call_graph_dot;
+    bool metadata_cache_hit = false;
+    std::string metadata_cache_key;
+    if (partition_cache) {
+        std::ostringstream metadata_ir_identity;
+        metadata_ir_identity << "port-metadata-v"
+                             << port_metadata_cache_schema_version << ':';
+        for (const auto& partition : partitions)
+            metadata_ir_identity << partition.content_sha256 << ';';
+        for (const auto& input : prepared.inputs)
+            metadata_ir_identity << input.role << ':' << input.size << ':'
+                                 << input.sha256 << ';';
+        for (const auto& module : latent_aot.modules)
+            metadata_ir_identity << module.id << ':' << module.byte_identity << ':'
+                                 << module.source_address << ':' << module.byte_size << ':'
+                                 << module.disc_byte_offset << ';';
+        metadata_cache_key = make_codegen_cache_key(
+            {std::string(prepared.project_identity),
+             katana::io::sha256_bytes(metadata_ir_identity.str()),
+             katana::io::sha256_bytes(
+                 options.target_name + ':' + options.console_profile + ':' +
+                 std::to_string(prepared.entry_address) + ':' +
+                 std::to_string(prepared.direct_boot_executable) + ':' +
+                 std::to_string(port_metadata_cache_schema_version)),
+             "port-metadata",
+             backend_interface_abi_version,
+             katana::runtime::abi_version,
+             partition_manifest_hash,
+             partition_overrides_hash,
+             2u,
+             native_aot_emission_profile_version,
+             options.tool_version});
+        auto cached_source_map =
+            partition_cache->load(metadata_cache_key, "source-map.json");
+        auto cached_cfg_json =
+            partition_cache->load(metadata_cache_key, "cfg.json");
+        auto cached_cfg_dot =
+            partition_cache->load(metadata_cache_key, "cfg.dot");
+        auto cached_callgraph_json =
+            partition_cache->load(metadata_cache_key, "callgraph.json");
+        auto cached_callgraph_dot =
+            partition_cache->load(metadata_cache_key, "callgraph.dot");
+        if (cached_source_map && cached_cfg_json && cached_cfg_dot &&
+            cached_callgraph_json && cached_callgraph_dot) {
+            source_map_json = std::move(*cached_source_map);
+            control_flow_graph_json = std::move(*cached_cfg_json);
+            control_flow_graph_dot = std::move(*cached_cfg_dot);
+            call_graph_json = std::move(*cached_callgraph_json);
+            call_graph_dot = std::move(*cached_callgraph_dot);
+            metadata_cache_hit = true;
+        }
     }
-    const auto source_map = build_address_source_map(source_map_image, artifacts);
-    const auto control_flow_graph = katana::analysis::build_control_flow_graph(prepared.analysis);
-    const auto call_graph = katana::analysis::build_call_graph(prepared.analysis);
+    if (!metadata_cache_hit) {
+        auto source_map_image = prepared.image;
+        if (options.game_project != nullptr)
+            apply_game_project_symbols(
+                source_map_image, *options.game_project);
+        for (const auto& module : latent_aot.modules) {
+            katana::io::ImageSegment segment{
+                "latent-aot-module",
+                module.source_address,
+                module.disc_byte_offset,
+                module.byte_size,
+                katana::io::SegmentKind::Mixed,
+                {true, false, true},
+                // The validated disc span remains addressable to the source map without
+                // retaining retail bytes or allocating a same-sized zero buffer.
+                {}};
+            segment.source_kind = katana::io::ImageSourceKind::DiscModule;
+            segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
+            segment.latent_source_size = module.byte_size;
+            source_map_image.add_segment(std::move(segment));
+        }
+        source_map_json =
+            serialize_address_source_map(build_address_source_map(source_map_image, artifacts));
+        const auto control_flow_graph =
+            katana::analysis::build_control_flow_graph(prepared.analysis);
+        const auto call_graph =
+            katana::analysis::build_call_graph(prepared.analysis);
+        control_flow_graph_json =
+            katana::analysis::serialize_analysis_graph_json(control_flow_graph);
+        control_flow_graph_dot =
+            katana::analysis::serialize_analysis_graph_dot(control_flow_graph);
+        call_graph_json = katana::analysis::serialize_analysis_graph_json(call_graph);
+        call_graph_dot = katana::analysis::serialize_analysis_graph_dot(call_graph);
+        if (partition_cache) {
+            partition_cache->store(metadata_cache_key, "source-map.json", source_map_json);
+            partition_cache->store(metadata_cache_key, "cfg.json", control_flow_graph_json);
+            partition_cache->store(metadata_cache_key, "cfg.dot", control_flow_graph_dot);
+            partition_cache->store(metadata_cache_key, "callgraph.json", call_graph_json);
+            partition_cache->store(metadata_cache_key, "callgraph.dot", call_graph_dot);
+        }
+    }
     katana::io::BuildProvenance provenance;
     provenance.tool_version = options.tool_version;
     provenance.manifest_version = port_project_contract_version;
@@ -7776,6 +9097,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         prepared.boot_size,
         latent_aot.modules,
         mmio_wait_loops,
+        options.game_project,
         disc_context ? std::string_view(disc_context->recipe.content_identity)
                      : std::string_view{});
     for (auto& artifact : dispatch_artifacts)
@@ -7787,20 +9109,21 @@ static PortExportResult export_dreamcast_port_project_impl(
                                        partitions,
                                        prepared.entry_address,
                                        prepared.boot_size,
+                                       prepared.direct_boot_executable,
                                        prepared.project_identity,
                                        prepared.analysis.indirect_control_flow,
                                        latent_aot.modules.size())});
+    if (options.game_project != nullptr)
+        artifacts.push_back(
+            {"metadata/game-project.json",
+             game_project_metadata(*options.game_project)});
     artifacts.push_back(
         {"metadata/provenance.json", katana::io::format_build_provenance_json(provenance)});
-    artifacts.push_back({"metadata/source-map.json", serialize_address_source_map(source_map)});
-    artifacts.push_back(
-        {"metadata/cfg.json", katana::analysis::serialize_analysis_graph_json(control_flow_graph)});
-    artifacts.push_back(
-        {"metadata/cfg.dot", katana::analysis::serialize_analysis_graph_dot(control_flow_graph)});
-    artifacts.push_back(
-        {"metadata/callgraph.json", katana::analysis::serialize_analysis_graph_json(call_graph)});
-    artifacts.push_back(
-        {"metadata/callgraph.dot", katana::analysis::serialize_analysis_graph_dot(call_graph)});
+    artifacts.push_back({"metadata/source-map.json", std::move(source_map_json)});
+    artifacts.push_back({"metadata/cfg.json", std::move(control_flow_graph_json)});
+    artifacts.push_back({"metadata/cfg.dot", std::move(control_flow_graph_dot)});
+    artifacts.push_back({"metadata/callgraph.json", std::move(call_graph_json)});
+    artifacts.push_back({"metadata/callgraph.dot", std::move(call_graph_dot)});
 
     const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();
     const auto resolved_root = resolve_existing_parents(absolute_root);
@@ -7842,7 +9165,8 @@ static PortExportResult export_dreamcast_port_project_impl(
     report_progress(options, "artifact-write");
     const auto write = write_codegen_project(
         canonical_root / "generated", std::move(artifacts), ProjectWriteOptions{codegen_jobs});
-    write_port_file(canonical_root, "CMakeLists.txt", root_cmake(), true);
+    write_port_file(
+        canonical_root, "CMakeLists.txt", root_cmake(options.diagnostic_partial), true);
     write_port_file(canonical_root,
                     ".gitignore",
                     "/build/\n/build-*/\n/user-data/\n/content/*.katana-disc\n*.katana-disc\n",
@@ -7858,19 +9182,34 @@ static PortExportResult export_dreamcast_port_project_impl(
         "That local cache contains complete retail data and must never be redistributed.\n"
         "The original GDI and tracks are opened read-only and are never modified or deleted.\n",
         true);
+    const auto* exported_boot_segment =
+        prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
+    if (exported_boot_segment == nullptr ||
+        (prepared.direct_boot_executable &&
+         exported_boot_segment->local_source_name.empty()))
+        throw std::runtime_error(
+            "DirectBootExecutable braucht einen gebundenen Bootdateinamen.");
     write_port_file(canonical_root,
                     "src/main.cpp",
                     handwritten_main(entry_namespace,
                                      prepared.hle_bios_abi,
+                                     prepared.direct_boot_executable,
                                      options.diagnostic_partial,
                                      prepared.inputs,
                                      wait_loop_descriptors,
                                      recipe.job_generation,
                                      recipe.content_identity,
+                                     exported_boot_segment->local_source_name,
                                      boot_sha256,
                                      options.console_profile,
                                      prepared.boot_address,
-                                     prepared.boot_size),
+                                     prepared.boot_size,
+                                     prepared.direct_boot_executable &&
+                                             options.game_project != nullptr &&
+                                             options.game_project->boot_config
+                                                 .has_value()
+                                         ? &*options.game_project->boot_config
+                                         : nullptr),
                     true);
 
     PortExportResult result;
@@ -7879,11 +9218,16 @@ static PortExportResult export_dreamcast_port_project_impl(
     result.partitions = partitions.size();
     result.generated_files = write.written_files.size();
     result.removed_files = write.removed_files.size();
+    result.codegen_cache_hits = partition_cache_hits.load(std::memory_order_relaxed);
+    result.codegen_cache_misses = partition_cache_misses.load(std::memory_order_relaxed);
+    result.metadata_cache_hit = metadata_cache_hit;
     result.disc_install_recipe = recipe_path;
     result.job_generation = recipe.job_generation;
     result.content_identity = recipe.content_identity;
     result.disc_tracks = recipe.tracks.size();
-    result.checkpoints = {"gdi-validated",
+    result.checkpoints = {validated_recipe != nullptr
+                              ? "boot-executable-artifact-validated"
+                              : "gdi-validated",
                           "disc-recipe-written",
                           "retail-content-excluded",
                           "boot-image-loaded",
@@ -7891,8 +9235,16 @@ static PortExportResult export_dreamcast_port_project_impl(
                           "ir-lowered",
                           "partitioned-codegen-complete",
                           "port-project-written"};
+    if (partition_cache)
+        result.checkpoints.push_back(result.codegen_cache_misses == 0u
+                                         ? "partition-codegen-cache-hit"
+                                         : "partition-codegen-cache-populated");
     if (!latent_aot.modules.empty())
         result.checkpoints.insert(result.checkpoints.begin() + 2u, "latent-aot-registry-written");
+    if (options.game_project != nullptr)
+        result.checkpoints.insert(
+            result.checkpoints.begin() + 2u,
+            "external-game-project-identity-validated");
     return result;
 }
 
@@ -7913,11 +9265,21 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     report_progress(options, "boot-image");
     auto image = katana::platform::make_dreamcast_disc_executable(
         disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
+    std::optional<katana::analysis::AnalysisOverrides>
+        game_project_overrides;
+    if (options.game_project != nullptr) {
+        katana::runtime::validate_game_project_definition(
+            *options.game_project);
+        validate_game_project_image_contract(*options.game_project, image);
+        apply_game_project_symbols(image, *options.game_project);
+        game_project_overrides =
+            game_project_analysis_overrides(*options.game_project, image);
+    }
     report_progress(options, "control-flow-analysis");
     const auto analysis_started = std::chrono::steady_clock::now();
     const auto analysis = katana::analysis::analyze_control_flow(
         image,
-        nullptr,
+        game_project_overrides ? &*game_project_overrides : nullptr,
         [&options,
          analysis_started](const katana::analysis::ControlFlowAnalysisProgress& progress) {
             if (options.progress_callback == nullptr) return;
@@ -7954,11 +9316,8 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
                           track.sha256,
                           track.resolved_path});
     }
-    std::ostringstream identity_material;
-    for (const auto& input : inputs) {
-        identity_material << input.role << ':' << input.size << ':' << input.sha256 << '\n';
-    }
-    const auto project_identity = katana::io::sha256_bytes(identity_material.str());
+    const auto project_identity =
+        katana::platform::dreamcast_disc_project_identity(disc);
     return export_dreamcast_port_project_impl(
         {image,
          analysis,
@@ -7975,6 +9334,118 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
         output_root,
         options,
         disc.source);
+}
+
+PortExportResult export_dreamcast_port_project_from_boot_artifact(
+    const std::filesystem::path& artifact_manifest_path,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options) {
+    if (output_root.empty())
+        throw std::invalid_argument(
+            "Boot-Executable-Portexport braucht ein Ausgabeziel.");
+    report_progress(options, "boot-artifact-load");
+    const auto artifact =
+        katana::platform::load_dreamcast_boot_executable_artifact(
+            artifact_manifest_path);
+    const auto artifact_root = artifact.manifest_path.parent_path();
+    const auto resolved_output =
+        resolve_existing_parents(
+            std::filesystem::absolute(output_root).lexically_normal());
+    if (path_is_within(resolved_output, artifact_root) ||
+        path_is_within(artifact_root, resolved_output))
+        throw std::invalid_argument(
+            "Port-Ausgabe und privates Boot-Executable-Artefakt duerfen sich nicht ueberlappen.");
+
+    report_progress(options, "boot-image");
+    auto image =
+        katana::platform::make_dreamcast_boot_executable(artifact);
+    std::optional<katana::analysis::AnalysisOverrides>
+        game_project_overrides;
+    if (options.game_project != nullptr) {
+        katana::runtime::validate_game_project_definition(
+            *options.game_project);
+        validate_game_project_image_contract(*options.game_project, image);
+        apply_game_project_symbols(image, *options.game_project);
+        game_project_overrides =
+            game_project_analysis_overrides(*options.game_project, image);
+    }
+    report_progress(options, "control-flow-analysis");
+    const auto analysis_started = std::chrono::steady_clock::now();
+    const auto analysis = katana::analysis::analyze_control_flow(
+        image,
+        game_project_overrides ? &*game_project_overrides : nullptr,
+        [&options,
+         analysis_started](
+            const katana::analysis::ControlFlowAnalysisProgress& progress) {
+            if (options.progress_callback == nullptr) return;
+            const bool sampled_iteration =
+                progress.iteration <= 16u ||
+                (progress.iteration != 0u &&
+                 (progress.iteration & (progress.iteration - 1u)) == 0u);
+            if (!sampled_iteration &&
+                progress.phase != "fixpoint-complete" &&
+                progress.phase != "complete")
+                return;
+            std::ostringstream marker;
+            marker << "control-flow-" << progress.phase << "-i"
+                   << progress.iteration << "-s" << progress.seeds << "-n"
+                   << progress.instructions << "-c" << progress.contexts
+                   << "-r" << progress.resolutions << "-ms"
+                   << std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() -
+                          analysis_started)
+                          .count();
+            const auto text = marker.str();
+            report_progress(options, text);
+        });
+    report_progress(options, "ir-lowering");
+    auto program = katana::ir::lower_program(analysis);
+    report_progress(options, "ir-optimization");
+    const auto& emission_contract =
+        native_aot_emission_contract(NativeAotEmissionProfile::Product);
+    static_cast<void>(katana::ir::optimize_program(
+        program, emission_contract.optimization_options));
+
+    report_progress(options, "input-provenance");
+    std::vector<katana::io::InputProvenance> inputs;
+    inputs.reserve(artifact.install_recipe.tracks.size() + 4u);
+    inputs.push_back({"gdi-descriptor",
+                      0u,
+                      artifact.install_recipe.descriptor_sha256,
+                      {}});
+    for (const auto& track : artifact.install_recipe.tracks)
+        inputs.push_back(
+            {"gdi-track-" + std::to_string(track.number),
+             track.file_offset +
+                 track.sector_count *
+                     static_cast<std::uint64_t>(track.sector_size),
+             track.sha256,
+             {}});
+    inputs.push_back(katana::io::capture_input_provenance(
+        "boot-executable-manifest", artifact.manifest_path));
+    inputs.push_back(katana::io::capture_input_provenance(
+        "boot-executable-private", artifact.executable_path));
+    inputs.push_back(katana::io::capture_input_provenance(
+        "disc-install-recipe", artifact.install_recipe_path));
+
+    return export_dreamcast_port_project_impl(
+        {image,
+         analysis,
+         program,
+         inputs,
+         artifact.entry_address,
+         katana::platform::dreamcast_disc_boot_address,
+         artifact.boot_file.size(),
+         artifact.project_identity,
+         true,
+         false,
+         0u,
+         0u,
+         true},
+        output_root,
+        options,
+        {},
+        &artifact.install_recipe);
 }
 
 } // namespace katana::codegen

@@ -2008,6 +2008,9 @@ DemandBlockMaterializer::capture_dispatch_generation_guard(
         return std::nullopt;
     BlockDispatchGenerationGuard guard;
     guard.block = handle;
+    guard.kind = BlockDispatchGenerationGuardKind::Materializer;
+    guard.table_lifetime = blocks_.dispatch_lifetime();
+    guard.table_generation = blocks_.dispatch_generation();
     guard.code_generation = tracker_->invalidation_count();
     guard.runtime_registered = runtime_registered;
     if (!runtime_registered) return guard;
@@ -2032,7 +2035,10 @@ DemandBlockMaterializer::capture_dispatch_generation_guard(
 bool DemandBlockMaterializer::dispatch_generation_guard_current(
     const CpuState& cpu,
     const BlockDispatchGenerationGuard& guard) const noexcept {
-    if (tracker_ == nullptr || !cpu.memory.has_guest_write_observer() ||
+    if (guard.kind != BlockDispatchGenerationGuardKind::Materializer ||
+        guard.table_lifetime != blocks_.dispatch_lifetime() ||
+        guard.table_generation != blocks_.dispatch_generation() ||
+        tracker_ == nullptr || !cpu.memory.has_guest_write_observer() ||
         !cpu.memory.guest_write_observer_allows_prevalidated_linear_writes() ||
         tracker_->invalidation_count() != guard.code_generation)
         return false;

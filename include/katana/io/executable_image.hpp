@@ -73,10 +73,16 @@ struct ImageSegment {
     ImageSourceKind source_kind = ImageSourceKind::Unknown;
     ImageLoadPhase load_phase = ImageLoadPhase::Initial;
     std::string local_source_name;
+    // Optional file-backed span when the source bytes are intentionally latent
+    // (for example a validated runtime disc module). Zero retains the ordinary
+    // committed-bytes contract.
+    std::uint64_t latent_source_size = 0u;
 
     [[nodiscard]] std::uint64_t end_address() const noexcept;
     [[nodiscard]] bool contains(std::uint32_t address, std::size_t width = 1u) const noexcept;
     [[nodiscard]] std::optional<std::size_t> byte_offset(std::uint32_t address) const noexcept;
+    [[nodiscard]] std::optional<std::uint64_t>
+    source_byte_offset(std::uint32_t address) const noexcept;
 };
 
 class ExecutableImage {

@@ -128,6 +128,20 @@ class RuntimeAddressSpace {
         if (segment == 6u && !privileged) return InstructionTranslationPath::Invalid;
         return InstructionTranslationPath::Mapped;
     }
+    // P1/P2 instruction addresses are direct, privileged mappings. This produces
+    // the same dispatch guard as guard_for() without walking or inspecting a TLB.
+    [[nodiscard]] std::optional<BlockStateGuard>
+    direct_p1_p2_instruction_guard(std::uint32_t address,
+                                   std::uint32_t fpscr,
+                                   bool privileged = true) const noexcept;
+    // Monomorphic P1/P2 cache validation without translation or construction of
+    // another BlockStateGuard/BlockVariantKey.
+    [[nodiscard]] bool direct_p1_p2_dispatch_guard_current(
+        std::uint32_t address,
+        std::uint32_t fpscr,
+        bool privileged,
+        const BlockVariantKey& expected,
+        std::uint64_t runtime_generation) const noexcept;
     [[nodiscard]] StoreQueuePrefetchTranslation
     translate_store_queue_prefetch(std::uint32_t address, bool privileged = true) const;
     [[nodiscard]] BlockStateGuard guard_for(std::uint32_t virtual_address,

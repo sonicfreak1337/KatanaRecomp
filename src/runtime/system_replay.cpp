@@ -667,6 +667,7 @@ void SystemReplayObservationSession::record(const SystemReplayEventKind kind,
 void SystemReplayObservationSession::observe_block_dispatch_hit(
     const RuntimeDispatchClass dispatch_class,
     const bool materialized) noexcept {
+    if (replay_log_ == nullptr) return;
     const auto sampled = advance_power_of_two_sample(dispatch_hit_count_);
     if (!materialized && !sampled) return;
     record(SystemReplayEventKind::BlockDispatchHit,
@@ -679,6 +680,7 @@ void SystemReplayObservationSession::observe_block_dispatch_hit(
 
 void SystemReplayObservationSession::observe_block_dispatch_miss(
     const IndirectDispatchMetrics& metrics) noexcept {
+    if (replay_log_ == nullptr) return;
     const auto& first_error = metrics.first_error();
     record(SystemReplayEventKind::BlockDispatchMiss,
            scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
@@ -689,6 +691,7 @@ void SystemReplayObservationSession::observe_block_dispatch_miss(
 }
 
 void SystemReplayObservationSession::observe_controlled_fallback() noexcept {
+    if (replay_log_ == nullptr) return;
     if (!advance_power_of_two_sample(controlled_fallback_count_)) return;
     record(SystemReplayEventKind::ControlledFallback,
            scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
@@ -700,6 +703,7 @@ void SystemReplayObservationSession::observe_controlled_fallback() noexcept {
 
 void SystemReplayObservationSession::observe_guest_exception(
     const ExceptionCause cause) noexcept {
+    if (replay_log_ == nullptr) return;
     if (cause == ExceptionCause::None) return;
     if (!advance_power_of_two_sample(guest_exception_count_)) return;
     record(SystemReplayEventKind::GuestException,
@@ -712,6 +716,7 @@ void SystemReplayObservationSession::observe_guest_exception(
 
 bool SystemReplayObservationSession::observe_guest_checkpoint(
     const SystemReplayCheckpointKind checkpoint) noexcept {
+    if (replay_log_ == nullptr) return false;
     const auto ordinal = static_cast<std::uint8_t>(checkpoint);
     if (ordinal < static_cast<std::uint8_t>(SystemReplayCheckpointKind::RuntimeStarted) ||
         ordinal >

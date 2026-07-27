@@ -638,6 +638,7 @@ MemoryLookupMode Memory::lookup_mode() const noexcept {
 
 void Memory::set_lookup_mode(const MemoryLookupMode mode) noexcept {
     lookup_mode_ = mode;
+    refresh_direct_linear_access_state();
 }
 
 const MemoryPerformanceCounters& Memory::performance_counters() const noexcept {
@@ -656,6 +657,198 @@ bool Memory::account_prevalidated_unobserved_accesses(
         return false;
     performance_counters_.unobserved_accesses += accesses;
     performance_counters_.indexed_region_hits += indexed_region_hits;
+    return true;
+}
+
+void Memory::bind_direct_linear_alias_window(const std::uint32_t physical_base,
+                                             const std::uint32_t physical_span,
+                                             LinearMemoryDevice& backing) {
+    const auto backing_size = backing.size();
+    if (backing_size == 0u || backing_size > std::numeric_limits<std::uint32_t>::max() ||
+        !std::has_single_bit(backing_size)) {
+        throw std::invalid_argument(
+            "Das direkte lineare Aliasfenster braucht ein Zweierpotenz-Backing.");
+    }
+    if (physical_span == 0u || physical_span % backing_size != 0u ||
+        static_cast<std::uint64_t>(physical_base) + physical_span > address_space_size) {
+        throw std::invalid_argument(
+            "Das direkte lineare Aliasfenster besitzt eine ungueltige Ausdehnung.");
+    }
+
+    for (std::uint64_t alias = physical_base;
+         alias < static_cast<std::uint64_t>(physical_base) + physical_span;
+         alias += backing_size) {
+        const auto alias_end = alias + backing_size;
+        const auto mapped = std::find_if(
+            regions_.begin(), regions_.end(), [&](const MappedRegion& candidate) {
+                const auto region_start =
+                    static_cast<std::uint64_t>(candidate.info.base_address);
+                const auto region_end = region_start + candidate.info.size;
+                return alias >= region_start && alias_end <= region_end;
+            });
+        if (mapped == regions_.end() || mapped->linear != &backing ||
+            mapped->info.access != MemoryRegionAccess::ReadWrite) {
+            throw std::invalid_argument(
+                "Das direkte lineare Aliasfenster ist nicht vollstaendig auf dasselbe "
+                "schreibbare Backing abgebildet.");
+        }
+    }
+
+    direct_linear_backing_ = &backing;
+    direct_linear_bytes_ = backing.writable_bytes().data();
+    direct_linear_physical_base_ = physical_base;
+    direct_linear_physical_span_ = physical_span;
+    direct_linear_backing_mask_ = static_cast<std::uint32_t>(backing_size - 1u);
+    refresh_direct_linear_access_state();
+}
+
+void Memory::clear_direct_linear_alias_window() noexcept {
+    direct_linear_backing_ = nullptr;
+    direct_linear_bytes_ = nullptr;
+    direct_linear_physical_base_ = 0u;
+    direct_linear_physical_span_ = 0u;
+    direct_linear_backing_mask_ = 0u;
+    refresh_direct_linear_access_state();
+}
+
+DirectLinearMemoryGuard
+Memory::direct_linear_memory_guard(const bool write) const noexcept {
+    if ((write && !direct_linear_writes_enabled_) ||
+        (!write && !direct_linear_reads_enabled_))
+        return {};
+    // A raw writable pointer is deliberately unavailable while code/module
+    // invalidation observes guest stores. Such stores use try_write_direct_* so
+    // the stable observer still sees the exact bytes_changed edge.
+    if (write && guest_write_observer_) return {};
+    const auto* const read_bytes = direct_linear_bytes_;
+    auto* const write_bytes = write ? direct_linear_bytes_ : nullptr;
+    return {read_bytes,
+            write_bytes,
+            direct_linear_physical_base_,
+            direct_linear_physical_span_,
+            direct_linear_backing_mask_,
+            direct_linear_generation_};
+}
+
+bool Memory::direct_linear_memory_guard_current(
+    const DirectLinearMemoryGuard& guard,
+    const bool write) const noexcept {
+    if ((write && !direct_linear_writes_enabled_) ||
+        (!write && !direct_linear_reads_enabled_))
+        return false;
+    if (guard.generation != direct_linear_generation_ ||
+        guard.read_bytes != direct_linear_bytes_ ||
+        guard.physical_base != direct_linear_physical_base_ ||
+        guard.physical_span != direct_linear_physical_span_ ||
+        guard.backing_mask != direct_linear_backing_mask_)
+        return false;
+    return !write ||
+           (guard.write_bytes != nullptr && guard.write_bytes == direct_linear_bytes_ &&
+            !guest_write_observer_);
+}
+
+bool Memory::direct_linear_offset(const std::uint32_t physical_address,
+                                  const std::size_t width,
+                                  std::uint32_t& offset) const noexcept {
+    if (direct_linear_backing_ == nullptr || direct_linear_bytes_ == nullptr || width == 0u ||
+        width > direct_linear_backing_->size() ||
+        (physical_address & static_cast<std::uint32_t>(width - 1u)) != 0u)
+        return false;
+    if (physical_address < direct_linear_physical_base_) return false;
+    const auto relative = physical_address - direct_linear_physical_base_;
+    if (relative >= direct_linear_physical_span_ ||
+        width > direct_linear_physical_span_ - relative)
+        return false;
+    offset = relative & direct_linear_backing_mask_;
+    return width <= direct_linear_backing_->size() - offset;
+}
+
+bool Memory::try_read_direct_linear_u8(const std::uint32_t physical_address,
+                                       std::uint8_t& value) const noexcept {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_reads_enabled_ ||
+        !direct_linear_offset(physical_address, sizeof(value), offset))
+        return false;
+    value = direct_linear_bytes_[offset];
+    ++performance_counters_.indexed_region_hits;
+    ++performance_counters_.unobserved_accesses;
+    return true;
+}
+
+bool Memory::try_read_direct_linear_u16(const std::uint32_t physical_address,
+                                        std::uint16_t& value) const noexcept {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_reads_enabled_ ||
+        !direct_linear_offset(physical_address, sizeof(value), offset))
+        return false;
+    std::memcpy(&value, direct_linear_bytes_ + offset, sizeof(value));
+    value = little_u16(value);
+    ++performance_counters_.indexed_region_hits;
+    ++performance_counters_.unobserved_accesses;
+    return true;
+}
+
+bool Memory::try_read_direct_linear_u32(const std::uint32_t physical_address,
+                                        std::uint32_t& value) const noexcept {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_reads_enabled_ ||
+        !direct_linear_offset(physical_address, sizeof(value), offset))
+        return false;
+    std::memcpy(&value, direct_linear_bytes_ + offset, sizeof(value));
+    value = little_u32(value);
+    ++performance_counters_.indexed_region_hits;
+    ++performance_counters_.unobserved_accesses;
+    return true;
+}
+
+bool Memory::try_write_direct_linear_u8(const std::uint32_t physical_address,
+                                        const std::uint8_t value,
+                                        const CodeWriteSource source) {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_writes_enabled_ ||
+        !direct_linear_offset(physical_address, sizeof(value), offset))
+        return false;
+    const bool changed = direct_linear_bytes_[offset] != value;
+    direct_linear_bytes_[offset] = value;
+    ++performance_counters_.indexed_region_hits;
+    ++performance_counters_.unobserved_accesses;
+    notify_guest_write({physical_address, sizeof(value), source, changed});
+    return true;
+}
+
+bool Memory::try_write_direct_linear_u16(const std::uint32_t physical_address,
+                                         const std::uint16_t value,
+                                         const CodeWriteSource source) {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_writes_enabled_ ||
+        !direct_linear_offset(physical_address, sizeof(value), offset))
+        return false;
+    std::uint16_t previous = 0u;
+    std::memcpy(&previous, direct_linear_bytes_ + offset, sizeof(previous));
+    previous = little_u16(previous);
+    const auto stored = little_u16(value);
+    std::memcpy(direct_linear_bytes_ + offset, &stored, sizeof(stored));
+    ++performance_counters_.indexed_region_hits;
+    ++performance_counters_.unobserved_accesses;
+    notify_guest_write({physical_address, sizeof(value), source, previous != value});
+    return true;
+}
+
+bool Memory::try_write_direct_linear_u32(const std::uint32_t physical_address,
+                                         const std::uint32_t value,
+                                         const CodeWriteSource source) {
+    std::uint32_t offset = 0u;
+    if (!direct_linear_writes_enabled_ ||
+        !direct_linear_offset(physical_address, sizeof(value), offset))
+        return false;
+    std::uint32_t previous = 0u;
+    std::memcpy(&previous, direct_linear_bytes_ + offset, sizeof(previous));
+    previous = little_u32(previous);
+    const auto stored = little_u32(value);
+    std::memcpy(direct_linear_bytes_ + offset, &stored, sizeof(stored));
+    ++performance_counters_.indexed_region_hits;
+    ++performance_counters_.unobserved_accesses;
+    notify_guest_write({physical_address, sizeof(value), source, previous != value});
     return true;
 }
 
@@ -679,6 +872,7 @@ MemoryWatchpointId Memory::add_watchpoint(const std::uint32_t address,
 
     const auto id = next_watchpoint_id_++;
     watchpoints_.push_back(Watchpoint{id, address, size, access, std::move(observer)});
+    refresh_direct_linear_access_state();
     return id;
 }
 
@@ -692,11 +886,13 @@ bool Memory::remove_watchpoint(const MemoryWatchpointId id) {
     }
 
     watchpoints_.erase(iterator);
+    refresh_direct_linear_access_state();
     return true;
 }
 
 void Memory::clear_watchpoints() noexcept {
     watchpoints_.clear();
+    refresh_direct_linear_access_state();
 }
 
 std::size_t Memory::watchpoint_count() const noexcept {
@@ -705,10 +901,12 @@ std::size_t Memory::watchpoint_count() const noexcept {
 
 void Memory::set_trace_handler(MemoryAccessObserver observer) {
     trace_handler_ = std::move(observer);
+    refresh_direct_linear_access_state();
 }
 
 void Memory::clear_trace_handler() noexcept {
     trace_handler_ = {};
+    refresh_direct_linear_access_state();
 }
 
 bool Memory::has_trace_handler() const noexcept {
@@ -743,6 +941,23 @@ void Memory::clear_last_mmio_access() const noexcept {
     last_mmio_access_.reset();
 }
 
+std::uint64_t Memory::mmio_access_epoch() const noexcept {
+    return 0u;
+}
+
+void Memory::set_mmio_interrupt_state_sink(const MmioInterruptStateSink sink) noexcept {
+    mmio_interrupt_state_sink_ = sink;
+}
+
+void Memory::clear_mmio_interrupt_state_sink() noexcept {
+    mmio_interrupt_state_sink_ = {};
+}
+
+void Memory::notify_interrupt_source_state_maybe_changed() const noexcept {
+    if (mmio_interrupt_state_sink_)
+        mmio_interrupt_state_sink_.mark_dirty(mmio_interrupt_state_sink_.context);
+}
+
 void Memory::set_mmio_trace_handler(MemoryAccessObserver observer) {
     mmio_trace_handler_ = std::move(observer);
 }
@@ -760,11 +975,13 @@ void Memory::set_guest_write_observer(GuestWriteObserver observer,
     guest_write_observer_ = std::move(observer);
     guest_write_observer_contract_ =
         guest_write_observer_ ? contract : GuestWriteObserverContract::General;
+    refresh_direct_linear_access_state();
 }
 
 void Memory::clear_guest_write_observer() noexcept {
     guest_write_observer_ = {};
     guest_write_observer_contract_ = GuestWriteObserverContract::General;
+    refresh_direct_linear_access_state();
 }
 
 bool Memory::has_guest_write_observer() const noexcept {
@@ -779,10 +996,12 @@ bool Memory::guest_write_observer_allows_prevalidated_linear_writes() const noex
 
 void Memory::set_guest_memory_access_sink(const GuestMemoryAccessSink sink) noexcept {
     guest_memory_access_sink_ = sink;
+    refresh_direct_linear_access_state();
 }
 
 void Memory::clear_guest_memory_access_sink() noexcept {
     guest_memory_access_sink_ = {};
+    refresh_direct_linear_access_state();
 }
 
 GuestMemoryAccessSink Memory::guest_memory_access_sink() const noexcept {
@@ -1575,6 +1794,7 @@ void Memory::commit_prepared_repeated_u32_sequence(
         target[3u] = static_cast<std::uint8_t>(prepared.final_value_ >> 24u);
     } else {
         prepared.device_write_.commit(prepared.final_value_);
+        prepared.owner_->notify_interrupt_source_state_maybe_changed();
     }
     prepared.owner_->performance_counters_.unobserved_accesses +=
         prepared.word_count_;
@@ -1724,6 +1944,8 @@ void Memory::write_bytes_at(const std::uint32_t address,
                               MemoryAccessWidth::Byte,
                               MemoryAccessOperation::Write,
                               [&] { write.mapped->device->write_u8(write.offset, bytes[index]); });
+            if (write.mapped->mmio)
+                notify_interrupt_source_state_maybe_changed();
             ++committed;
             if (access_observers_active()) {
                 ++performance_counters_.observed_accesses;
@@ -1973,6 +2195,19 @@ bool Memory::access_observers_active() const noexcept {
     return static_cast<bool>(trace_handler_) || !watchpoints_.empty();
 }
 
+void Memory::refresh_direct_linear_access_state() noexcept {
+    ++direct_linear_generation_;
+    if (direct_linear_generation_ == 0u) ++direct_linear_generation_;
+
+    const bool common =
+        direct_linear_backing_ != nullptr && direct_linear_bytes_ != nullptr &&
+        direct_linear_physical_span_ != 0u && lookup_mode_ == MemoryLookupMode::Indexed &&
+        !access_observers_active() && !guest_memory_access_sink_;
+    direct_linear_reads_enabled_ = common;
+    direct_linear_writes_enabled_ =
+        common && guest_write_observer_allows_prevalidated_linear_writes();
+}
+
 const Memory::MappedRegion& Memory::resolve_writable(const std::uint32_t address,
                                                      const MemoryAccessWidth width) const {
     const auto& mapped = resolve(address, width, MemoryAccessOperation::Write);
@@ -2026,6 +2261,7 @@ void Memory::record_mmio_access(const MappedRegion& mapped,
                                 const MemoryAccessWidth width,
                                 const std::uint32_t value) const noexcept {
     if (!mapped.mmio) return;
+    notify_interrupt_source_state_maybe_changed();
     if (mmio_access_tracking_enabled_) {
         last_mmio_access_ =
             LastMmioAccessRecord{operation, address, width, value, mapped.info.base_address};

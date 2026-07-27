@@ -64,12 +64,23 @@ int main() {
                                               "generated-port",
                                               {},
                                               ExecutableBlockOrigin::ImageSegment}));
-    blocks.bind_code_tracker(&tracker);
+    blocks.bind_code_tracker(
+        &tracker, StaticAotInvalidationContract::Coordinated);
+    blocks.seal_static();
+    const BlockVariantKey live_direct_variant{3u, 5u, 7u, 0x00040001u, 0u};
+    const auto live_sysinfo = blocks.lookup_static_aot(
+        canonical_physical_address(vectors[0].handler_address),
+        vectors[0].handler_address,
+        live_direct_variant);
     require(vectors.size() == 6u && blocks.size() == 8u &&
                 blocks.lookup(0x8C010000u, {}).has_value() &&
                 blocks.lookup(hle_bios_gdrom2_direct_alias_address, {}).has_value() &&
+                live_sysinfo.has_value() &&
+                live_sysinfo->variant == live_direct_variant &&
+                live_sysinfo->function == bootstrap_block->get().function &&
                 handoff.runtime_symbols().size() == 13u,
-            "BIOS-Bootstrap und nachfolgende statische AOT-Registry sind unvollstaendig.");
+            "BIOS-Bootstrap ist nicht als variantenagnostischer statischer "
+            "Dreamcast-Runtimedienst dispatchbar.");
     for (const auto& vector : vectors)
         require(vector.handler_address != 0x8C000100u &&
                     vector.handler_address != 0x8C000400u &&

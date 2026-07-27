@@ -32,13 +32,21 @@ class InterruptController {
     void clear() noexcept;
     [[nodiscard]] bool pending(InterruptSource source) const noexcept;
     [[nodiscard]] std::size_t pending_count() const noexcept;
+    [[nodiscard]] std::uint64_t interrupt_epoch() const noexcept;
+    [[nodiscard]] std::uint8_t highest_pending_level() const noexcept;
+    [[nodiscard]] std::uint64_t pending_mask() const noexcept;
+    [[nodiscard]] bool can_accept(const CpuState& cpu) const noexcept;
     [[nodiscard]] std::optional<PendingInterrupt> highest_pending() const noexcept;
     [[nodiscard]] InterruptControllerSnapshot snapshot() const;
 
   private:
     friend bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept;
 
+    void update_pending_metadata() noexcept;
     std::vector<PendingInterrupt> pending_;
+    std::uint64_t interrupt_epoch_ = 0u;
+    std::uint64_t pending_mask_ = 0u;
+    std::uint8_t highest_pending_level_ = 0u;
 };
 
 [[nodiscard]] bool accept_pending_interrupt(CpuState& cpu,

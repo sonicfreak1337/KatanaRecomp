@@ -337,6 +337,12 @@ std::shared_ptr<LinearMemoryDevice> map_dreamcast_main_ram(Memory& memory) {
     }
 
     map_all(memory, std::move(mappings));
+    constexpr auto physical_main_ram_base = dreamcast_main_ram_area_bases.front();
+    constexpr auto physical_main_ram_span =
+        static_cast<std::uint32_t>(dreamcast_main_ram_size *
+                                   dreamcast_main_ram_mirrors_per_area);
+    memory.bind_direct_linear_alias_window(
+        physical_main_ram_base, physical_main_ram_span, *main_ram);
     return main_ram;
 }
 

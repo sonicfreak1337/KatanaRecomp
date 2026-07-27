@@ -43,7 +43,9 @@ PlatformInterruptRouter::PlatformInterruptRouter(InterruptController& controller
                                                  Sh4Tmu& tmu,
                                                  Sh4Rtc& rtc,
                                                  Sh4Dmac& dmac) noexcept
-    : controller_(controller), tmu_(tmu), rtc_(rtc), dmac_(dmac) {}
+    : controller_(controller), tmu_(tmu), rtc_(rtc), dmac_(dmac) {
+    device_pending_state_ = device_pending_state();
+}
 
 std::uint8_t PlatformInterruptRouter::clamp_level(const std::uint8_t level) noexcept {
     return static_cast<std::uint8_t>(level > 15u ? 15u : level);
@@ -57,30 +59,46 @@ void PlatformInterruptRouter::set_tmu_level(const std::size_t channel, const std
     if (channel >= tmu_levels_.size()) {
         throw std::out_of_range("Ungueltiger TMU-Interruptkanal.");
     }
-    tmu_levels_[channel] = clamp_level(level);
+    const auto clamped = clamp_level(level);
+    if (tmu_levels_[channel] == clamped) return;
+    tmu_levels_[channel] = clamped;
+    ++source_epoch_;
 }
 
 void PlatformInterruptRouter::set_rtc_level(const std::uint8_t level) noexcept {
-    rtc_level_ = clamp_level(level);
+    const auto clamped = clamp_level(level);
+    if (rtc_level_ == clamped) return;
+    rtc_level_ = clamped;
+    ++source_epoch_;
 }
 
 void PlatformInterruptRouter::set_dma_level(const std::uint8_t level) noexcept {
-    dma_level_ = clamp_level(level);
+    const auto clamped = clamp_level(level);
+    if (dma_level_ == clamped) return;
+    dma_level_ = clamped;
+    ++source_epoch_;
 }
 void PlatformInterruptRouter::set_scif_level(const std::uint8_t level) noexcept {
-    scif_level_ = clamp_level(level);
+    const auto clamped = clamp_level(level);
+    if (scif_level_ == clamped) return;
+    scif_level_ = clamped;
+    ++source_epoch_;
 }
 void PlatformInterruptRouter::set_scif_pending(const std::size_t source, const bool pending) {
     if (source >= scif_pending_.size())
         throw std::out_of_range("Ungueltige SH-4-SCIF-Interruptquelle.");
+    if (scif_pending_[source] == pending) return;
     scif_pending_[source] = pending;
+    ++source_epoch_;
 }
 
 void PlatformInterruptRouter::set_external_pending(const std::size_t line, const bool pending) {
     if (line >= external_pending_.size()) {
         throw std::out_of_range("Ungueltige externe Interruptleitung.");
     }
+    if (external_pending_[line] == pending) return;
     external_pending_[line] = pending;
+    ++source_epoch_;
 }
 
 std::uint8_t PlatformInterruptRouter::tmu_level(const std::size_t channel) const {
@@ -123,6 +141,40 @@ PlatformInterruptRouterSnapshot PlatformInterruptRouter::snapshot() const noexce
     };
 }
 
+std::uint16_t PlatformInterruptRouter::device_pending_state() const noexcept {
+    std::uint16_t state = 0u;
+    const auto set = [&state](const std::size_t bit, const bool pending) {
+        if (pending) state |= static_cast<std::uint16_t>(1u << bit);
+    };
+    for (std::size_t channel = 0u; channel < tmu_sources.size(); ++channel)
+        set(channel, tmu_.interrupt_pending(channel));
+    set(3u, rtc_.alarm_interrupt_pending());
+    set(4u, rtc_.periodic_interrupt_pending());
+    set(5u, rtc_.carry_interrupt_pending());
+    for (std::size_t channel = 0u; channel < dma_sources.size(); ++channel)
+        set(6u + channel, dmac_.interrupt_pending(channel));
+    set(10u, dmac_.address_error());
+    return state;
+}
+
+void PlatformInterruptRouter::refresh_device_source_epoch() const noexcept {
+    if (!device_sources_dirty_) return;
+    device_sources_dirty_ = false;
+    const auto current = device_pending_state();
+    if (current == device_pending_state_) return;
+    device_pending_state_ = current;
+    ++source_epoch_;
+}
+
+std::uint64_t PlatformInterruptRouter::source_epoch() const noexcept {
+    refresh_device_source_epoch();
+    return source_epoch_;
+}
+
+void PlatformInterruptRouter::mark_device_sources_dirty() noexcept {
+    device_sources_dirty_ = true;
+}
+
 void PlatformInterruptRouter::route(const PlatformInterruptSource source,
                                     const bool asserted,
                                     const std::uint8_t level) {
@@ -135,15 +187,26 @@ void PlatformInterruptRouter::route(const PlatformInterruptSource source,
 }
 
 std::size_t PlatformInterruptRouter::synchronize() {
+    // A caller may explicitly synchronize without observing source_epoch()
+    // first, for example after advancing a device from the scheduler. Sample
+    // the compact device state once and preserve its epoch before publishing
+    // the refreshed routes.
+    device_sources_dirty_ = true;
+    refresh_device_source_epoch();
+    const auto device_pending = device_pending_state_;
+    const auto pending_at = [device_pending](const std::size_t bit) noexcept {
+        return (device_pending & static_cast<std::uint16_t>(1u << bit)) != 0u;
+    };
+
     std::size_t asserted = 0u;
     for (std::size_t channel = 0u; channel < tmu_sources.size(); ++channel) {
-        const bool pending = tmu_.interrupt_pending(channel);
+        const bool pending = pending_at(channel);
         route(tmu_sources[channel], pending, tmu_levels_[channel]);
         asserted += pending ? 1u : 0u;
     }
-    const bool rtc_alarm = rtc_.alarm_interrupt_pending();
-    const bool rtc_periodic = rtc_.periodic_interrupt_pending();
-    const bool rtc_carry = rtc_.carry_interrupt_pending();
+    const bool rtc_alarm = pending_at(3u);
+    const bool rtc_periodic = pending_at(4u);
+    const bool rtc_carry = pending_at(5u);
     route(PlatformInterruptSource::RtcAlarm, rtc_alarm, rtc_level_);
     route(PlatformInterruptSource::RtcPeriodic, rtc_periodic, rtc_level_);
     route(PlatformInterruptSource::RtcCarry, rtc_carry, rtc_level_);
@@ -152,11 +215,11 @@ std::size_t PlatformInterruptRouter::synchronize() {
     asserted += rtc_carry ? 1u : 0u;
 
     for (std::size_t channel = 0u; channel < dma_sources.size(); ++channel) {
-        const bool pending = dmac_.interrupt_pending(channel);
+        const bool pending = pending_at(6u + channel);
         route(dma_sources[channel], pending, dma_level_);
         asserted += pending ? 1u : 0u;
     }
-    const bool dma_error = dmac_.address_error();
+    const bool dma_error = pending_at(10u);
     route(PlatformInterruptSource::DmaError, dma_error, dma_level_);
     asserted += dma_error ? 1u : 0u;
 
@@ -178,6 +241,10 @@ bool PlatformInterruptRouter::accept(CpuState& cpu) {
     // full router walk at every privileged bootstrap safepoint.
     if (cpu.interrupts_blocked() || cpu.interrupt_mask() == 15u) return false;
     static_cast<void>(synchronize());
+    return accept_cached(cpu);
+}
+
+bool PlatformInterruptRouter::accept_cached(CpuState& cpu) noexcept {
     return accept_pending_interrupt(cpu, controller_);
 }
 
@@ -203,6 +270,8 @@ void PlatformInterruptRouter::reset() noexcept {
     scif_level_ = 0u;
     scif_pending_ = {};
     external_pending_ = {};
+    ++source_epoch_;
+    device_sources_dirty_ = true;
 }
 
 Sh4InterruptRegisters::Sh4InterruptRegisters(PlatformInterruptRouter& router) noexcept
@@ -318,6 +387,13 @@ map_sh4_interrupt_registers(Memory& memory, PlatformInterruptRouter& router) {
         });
     memory.map_region("sh4-intc-p4", sh4_intc_p4_base, device);
     memory.map_region("sh4-intc-area7", sh4_intc_area7_base, device);
+    memory.set_mmio_interrupt_state_sink(
+        MmioInterruptStateSink{
+            &router,
+            [](void* const context) noexcept {
+                static_cast<PlatformInterruptRouter*>(context)->mark_device_sources_dirty();
+            },
+        });
     return registers;
 }
 

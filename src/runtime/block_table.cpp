@@ -4,6 +4,7 @@
 #include "katana/runtime/code_invalidation.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -14,6 +15,21 @@ namespace katana::runtime {
 namespace {
 
 constexpr std::uint32_t physical_page_size = 4096u;
+std::atomic<std::uint64_t> next_block_table_lifetime{1u};
+
+std::uint64_t allocate_block_table_lifetime() noexcept {
+    auto lifetime =
+        next_block_table_lifetime.fetch_add(1u, std::memory_order_relaxed);
+    if (lifetime == 0u)
+        lifetime =
+            next_block_table_lifetime.fetch_add(1u, std::memory_order_relaxed);
+    return lifetime;
+}
+
+void advance_generation(std::uint64_t& generation) noexcept {
+    ++generation;
+    if (generation == 0u) ++generation;
+}
 
 class ScopedBlockExceptionGeneration final {
   public:
@@ -37,13 +53,16 @@ class ScopedBlockExceptionGeneration final {
 
 class ScopedActiveBlockProvenance final {
   public:
-    ScopedActiveBlockProvenance(CpuState& cpu, const RuntimeBlock& block) noexcept
+    ScopedActiveBlockProvenance(CpuState& cpu,
+                                const std::uint32_t virtual_start,
+                                const std::uint32_t physical_start,
+                                const std::uint32_t size) noexcept
         : cpu_(cpu), previous_virtual_start_(cpu.active_block_virtual_start),
           previous_physical_start_(cpu.active_block_physical_start),
           previous_size_(cpu.active_block_size) {
-        cpu_.active_block_virtual_start = block.virtual_start;
-        cpu_.active_block_physical_start = block.physical_origin;
-        cpu_.active_block_size = block.size;
+        cpu_.active_block_virtual_start = virtual_start;
+        cpu_.active_block_physical_start = physical_start;
+        cpu_.active_block_size = size;
     }
 
     ~ScopedActiveBlockProvenance() noexcept {
@@ -112,6 +131,9 @@ validation_mutable_ranges(const RuntimeBlock& block) noexcept {
 }
 
 } // namespace
+
+RuntimeBlockTable::RuntimeBlockTable() noexcept
+    : dispatch_lifetime_(allocate_block_table_lifetime()) {}
 
 std::size_t
 RuntimeBlockTable::VariantAddressHash::operator()(const VariantAddressKey& key) const noexcept {
@@ -193,8 +215,10 @@ std::string stable_runtime_block_identity(const RuntimeBlock& block) {
         << std::setw(8) << block.physical_origin << std::dec << "-s" << block.size << "-e"
         << static_cast<unsigned>(block.end_kind) << "-a" << block.variant.address_space_generation
         << "-m" << block.variant.mmu_generation << "-w" << block.variant.watchpoint_generation
-        << "-f" << block.variant.fpscr_mode << "-r" << block.variant.runtime_generation << "-"
-        << block.provenance;
+        << "-f" << block.variant.fpscr_mode << "-r" << block.variant.runtime_generation;
+    if (block.static_variant_policy != StaticVariantPolicy::Exact)
+        out << "-vp" << static_cast<unsigned>(block.static_variant_policy);
+    out << "-" << block.provenance;
     if (block.aot_template) {
         const auto& contract = *block.aot_template;
         out << std::hex << "-ts" << std::setw(8) << contract.mapping.source_start << "-tr"
@@ -212,8 +236,23 @@ execute_runtime_block(const RuntimeBlock& block, CpuState& cpu, BlockExecutionCo
         throw std::invalid_argument("Runtimeblock besitzt keine ausfuehrbare Backendfunktion.");
     }
     const ScopedBlockExceptionGeneration exception_generation(context, cpu.exception_generation);
-    const ScopedActiveBlockProvenance active_block(cpu, block);
+    const ScopedActiveBlockProvenance active_block(
+        cpu, block.virtual_start, block.physical_origin, block.size);
     if (!block.aot_template) return block.function(cpu, context);
+    const ScopedCodeAddressMapping mapping(block.aot_template->mapping);
+    return block.function(cpu, context);
+}
+
+BlockExit execute_runtime_block(const ValidatedBlockExecution& block,
+                                CpuState& cpu,
+                                BlockExecutionContext& context) {
+    if (block.function == nullptr) {
+        throw std::invalid_argument("Validierter Runtimeblock besitzt keine Backendfunktion.");
+    }
+    const ScopedBlockExceptionGeneration exception_generation(context, cpu.exception_generation);
+    const ScopedActiveBlockProvenance active_block(
+        cpu, block.virtual_start, block.physical_origin, block.size);
+    if (block.aot_template == nullptr) return block.function(cpu, context);
     const ScopedCodeAddressMapping mapping(block.aot_template->mapping);
     return block.function(cpu, context);
 }
@@ -258,7 +297,7 @@ RuntimeBlockTable::register_static_bulk(std::vector<RuntimeBlock> blocks) {
     handles.reserve(blocks.size());
     for (auto& block : blocks)
         handles.push_back(insert(std::move(block), false));
-    static_sealed_ = true;
+    seal_static();
     return handles;
 }
 
@@ -297,11 +336,13 @@ RuntimeBlockTable::register_static_contextual_bulk(std::vector<RuntimeBlock> blo
     contextual_virtual_overlaps_ = has_contextual_overlap;
     for (auto& block : blocks)
         handles.push_back(insert(std::move(block), false, true));
-    static_sealed_ = true;
+    seal_static();
     return handles;
 }
 
-void RuntimeBlockTable::seal_static() noexcept {
+void RuntimeBlockTable::seal_static() {
+    if (static_sealed_) return;
+    rebuild_static_aot_index();
     static_sealed_ = true;
 }
 
@@ -314,8 +355,9 @@ RuntimeBlockHandle RuntimeBlockTable::register_bootstrap_static(RuntimeBlock blo
 }
 
 RuntimeBlockHandle RuntimeBlockTable::register_runtime(RuntimeBlock block) {
+    const bool seal_after_registration = !static_sealed_;
     const auto handle = insert(std::move(block), true);
-    static_sealed_ = true;
+    if (seal_after_registration) seal_static();
     return handle;
 }
 
@@ -528,6 +570,78 @@ void RuntimeBlockTable::index_active(const std::uint64_t id, const Record& recor
         active_physical_pages_[page].insert(id);
         if (page == last_page) break;
     }
+    if (!record.static_block && (record.block.physical_origin & 1u) == 0u) {
+        const auto page = record.block.physical_origin / physical_page_size;
+        const auto halfword =
+            (record.block.physical_origin % physical_page_size) / 2u;
+        if (page < static_aot_pages_.size() && static_aot_pages_[page]) {
+            auto& static_page = *static_aot_pages_[page];
+            auto& shadow = static_page.dynamic_entries[halfword];
+            if (!shadow)
+                shadow = std::make_unique<std::vector<const Record*>>();
+            shadow->push_back(&record);
+            const auto entry = static_page.entries[halfword];
+            if (entry != 0u &&
+                entry != std::numeric_limits<std::uint32_t>::max() &&
+                entry <= static_aot_entries_.size())
+                advance_generation(static_aot_entries_[entry - 1u].generation);
+        }
+    }
+    // Every active-index mutation invalidates previously captured dispatch
+    // descriptors. In particular, a newly materialized dynamic block can take
+    // precedence over a static entry on the same page.
+    advance_generation(dispatch_generation_);
+}
+
+void RuntimeBlockTable::rebuild_static_aot_index() {
+    std::vector<std::unique_ptr<StaticAotPage>> pages(static_aot_page_count);
+    std::vector<StaticAotEntry> entries;
+    entries.reserve(records_.size());
+    for (const auto& [id, record] : records_) {
+        static_cast<void>(id);
+        if (!record.active) continue;
+        if (!record.static_block ||
+            record.block.static_variant_policy !=
+                StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic ||
+            ((record.block.virtual_start >> 29u) != 4u &&
+             (record.block.virtual_start >> 29u) != 5u) ||
+            (record.block.virtual_start & 1u) != 0u ||
+            (record.block.physical_origin & 1u) != 0u ||
+            record.block.size < 2u || (record.block.size & 1u) != 0u)
+            continue;
+        const auto page_index = record.block.physical_origin / physical_page_size;
+        if (page_index >= pages.size()) continue;
+        const auto halfword =
+            (record.block.physical_origin % physical_page_size) / 2u;
+        if (!pages[page_index]) pages[page_index] = std::make_unique<StaticAotPage>();
+        auto& page = *pages[page_index];
+        auto& slot = page.entries[halfword];
+        if (slot == std::numeric_limits<std::uint32_t>::max()) continue;
+        if (slot != 0u && entries[slot - 1u].record != &record) {
+            slot = std::numeric_limits<std::uint32_t>::max();
+            continue;
+        }
+        if (slot == 0u) {
+            entries.push_back({&record, id, 1u});
+            slot = static_cast<std::uint32_t>(entries.size());
+        }
+    }
+    for (const auto& [id, record] : records_) {
+        static_cast<void>(id);
+        if (!record.active || record.static_block ||
+            (record.block.physical_origin & 1u) != 0u)
+            continue;
+        const auto page_index = record.block.physical_origin / physical_page_size;
+        if (page_index >= pages.size() || !pages[page_index]) continue;
+        const auto halfword =
+            (record.block.physical_origin % physical_page_size) / 2u;
+        auto& shadow = pages[page_index]->dynamic_entries[halfword];
+        if (!shadow)
+            shadow = std::make_unique<std::vector<const Record*>>();
+        shadow->push_back(&record);
+    }
+    static_aot_pages_ = std::move(pages);
+    static_aot_entries_ = std::move(entries);
 }
 
 bool RuntimeBlockTable::dispatchable(const Record& record) const noexcept {
@@ -606,6 +720,77 @@ RuntimeBlockTable::lookup_physical(const std::uint32_t physical_address,
                                                                               : dynamic_block;
 }
 
+std::optional<ValidatedBlockExecution>
+RuntimeBlockTable::lookup_static_aot(const std::uint32_t physical_address,
+                                    const std::uint32_t virtual_address,
+                                    const BlockVariantKey& variant) const noexcept {
+    if (!static_sealed_ || (physical_address & 1u) != 0u ||
+        (virtual_address & 1u) != 0u ||
+        ((virtual_address >> 29u) != 4u && (virtual_address >> 29u) != 5u) ||
+        static_aot_invalidation_ != StaticAotInvalidationContract::Coordinated ||
+        static_aot_pages_.empty())
+        return std::nullopt;
+    const auto canonical = canonical_physical_address(physical_address);
+    if (canonical_physical_address(virtual_address) != canonical)
+        return std::nullopt;
+    const auto page_index = canonical / physical_page_size;
+    if (page_index >= static_aot_pages_.size() ||
+        !static_aot_pages_[page_index])
+        return std::nullopt;
+    const auto halfword = (canonical % physical_page_size) / 2u;
+    const auto& page = *static_aot_pages_[page_index];
+    if (const auto& shadow = page.dynamic_entries[halfword]; shadow) {
+        const auto matching_dynamic =
+            std::any_of(shadow->begin(), shadow->end(), [&](const Record* candidate) {
+                return candidate != nullptr && candidate->active &&
+                       !candidate->static_block &&
+                       candidate->block.variant == variant;
+            });
+        if (matching_dynamic) return std::nullopt;
+    }
+    const auto entry_index = page.entries[halfword];
+    if (entry_index == 0u ||
+        entry_index == std::numeric_limits<std::uint32_t>::max() ||
+        entry_index > static_aot_entries_.size())
+        return std::nullopt;
+    const auto& entry = static_aot_entries_[entry_index - 1u];
+    const auto* const record = entry.record;
+    if (record == nullptr || !record->active ||
+        !record->static_block || record->block.runtime_registered ||
+        ((record->block.virtual_start >> 29u) != 4u &&
+         (record->block.virtual_start >> 29u) != 5u) ||
+        record->block.function == nullptr || record->block.size < 2u ||
+        record->block.physical_origin != canonical ||
+        record->block.static_variant_policy !=
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic ||
+        record->block.variant.runtime_generation != variant.runtime_generation)
+        return std::nullopt;
+
+    ValidatedBlockExecution execution;
+    execution.block = {entry.id, record->generation};
+    execution.function = record->block.function;
+    // Native owner functions are keyed by their emitted virtual entry. P1/P2
+    // aliases select the same physical implementation, but execution must use
+    // the record entry just like the validated slow alias path.
+    execution.virtual_start = record->block.virtual_start;
+    execution.physical_origin = canonical;
+    execution.size = record->block.size;
+    execution.variant = variant;
+    execution.end_kind = record->block.end_kind;
+    execution.runtime_registered = false;
+    execution.provenance = record->block.provenance;
+    execution.generation_guard = {
+        .block = execution.block,
+        .kind = BlockDispatchGenerationGuardKind::StaticAot,
+        .table_lifetime = dispatch_lifetime_,
+        .table_generation = entry.generation,
+        .static_entry_index = entry_index,
+        .runtime_registered = false,
+    };
+    execution.generation_guard_reusable = true;
+    return execution;
+}
+
 std::vector<RuntimeBlockHandle>
 RuntimeBlockTable::aliases(const std::uint32_t physical_origin) const {
     std::vector<RuntimeBlockHandle> result;
@@ -682,6 +867,26 @@ const RuntimeBlockLookupCounters& RuntimeBlockTable::lookup_counters() const noe
     return lookup_counters_;
 }
 
+std::uint64_t RuntimeBlockTable::dispatch_lifetime() const noexcept {
+    return dispatch_lifetime_;
+}
+
+std::uint64_t RuntimeBlockTable::dispatch_generation() const noexcept {
+    return dispatch_generation_;
+}
+
+bool RuntimeBlockTable::static_dispatch_generation_guard_current(
+    const BlockDispatchGenerationGuard& guard) const noexcept {
+    return guard.kind == BlockDispatchGenerationGuardKind::StaticAot &&
+           !guard.runtime_registered &&
+           static_aot_invalidation_ == StaticAotInvalidationContract::Coordinated &&
+           guard.table_lifetime == dispatch_lifetime_ &&
+           guard.static_entry_index != 0u &&
+           guard.static_entry_index <= static_aot_entries_.size() &&
+           guard.table_generation ==
+               static_aot_entries_[guard.static_entry_index - 1u].generation;
+}
+
 RuntimeBlockTableSnapshot RuntimeBlockTable::snapshot() const {
     RuntimeBlockTableSnapshot result;
     result.records.reserve(records_.size());
@@ -693,6 +898,7 @@ RuntimeBlockTableSnapshot RuntimeBlockTable::snapshot() const {
             record.block.size,
             record.block.end_kind,
             record.block.variant,
+            record.block.static_variant_policy,
             record.identity,
             record.block.provenance,
             record.block.runtime_registered,
@@ -749,8 +955,43 @@ void RuntimeBlockTable::deactivate(const std::uint64_t id) noexcept {
         }
         if (page == last_page) break;
     }
+    if (!record.static_block && (record.block.physical_origin & 1u) == 0u) {
+        const auto page = record.block.physical_origin / physical_page_size;
+        const auto halfword =
+            (record.block.physical_origin % physical_page_size) / 2u;
+        if (page < static_aot_pages_.size() && static_aot_pages_[page]) {
+            auto& static_page = *static_aot_pages_[page];
+            auto& shadow = static_page.dynamic_entries[halfword];
+            if (shadow) {
+                std::erase(*shadow, &record);
+                if (shadow->empty()) shadow.reset();
+            }
+            const auto entry = static_page.entries[halfword];
+            if (entry != 0u &&
+                entry != std::numeric_limits<std::uint32_t>::max() &&
+                entry <= static_aot_entries_.size())
+                advance_generation(static_aot_entries_[entry - 1u].generation);
+        }
+    }
+    if (record.static_block && !static_aot_pages_.empty()) {
+        const auto page = record.block.physical_origin / physical_page_size;
+        const auto halfword =
+            (record.block.physical_origin % physical_page_size) / 2u;
+        if (page < static_aot_pages_.size() && static_aot_pages_[page]) {
+            const auto entry = static_aot_pages_[page]->entries[halfword];
+            if (entry != 0u &&
+                entry != std::numeric_limits<std::uint32_t>::max() &&
+                entry <= static_aot_entries_.size() &&
+                static_aot_entries_[entry - 1u].record == &record) {
+                advance_generation(static_aot_entries_[entry - 1u].generation);
+                static_aot_pages_[page]->entries[halfword] = 0u;
+            }
+        }
+    }
     record.active = false;
     ++record.generation;
+    if (record.generation == 0u) ++record.generation;
+    advance_generation(dispatch_generation_);
     --active_count_;
 }
 
@@ -883,8 +1124,17 @@ std::size_t RuntimeBlockTable::erase_overlapping_physical(const std::uint32_t ph
     return invalidated.size();
 }
 
-void RuntimeBlockTable::bind_code_tracker(const ExecutableCodeTracker* const tracker) noexcept {
+void RuntimeBlockTable::bind_code_tracker(
+    const ExecutableCodeTracker* const tracker,
+    const StaticAotInvalidationContract static_aot_invalidation) noexcept {
+    if (code_tracker_ == tracker &&
+        static_aot_invalidation_ == static_aot_invalidation)
+        return;
     code_tracker_ = tracker;
+    static_aot_invalidation_ = static_aot_invalidation;
+    for (auto& entry : static_aot_entries_)
+        advance_generation(entry.generation);
+    advance_generation(dispatch_generation_);
 }
 
 void RuntimeBlockTable::clear() noexcept {
@@ -900,11 +1150,16 @@ void RuntimeBlockTable::clear() noexcept {
     static_alias_index_.clear();
     dynamic_alias_index_.clear();
     active_physical_pages_.clear();
+    static_aot_pages_.clear();
+    static_aot_entries_.clear();
     active_count_ = 0u;
     static_sealed_ = false;
+    static_aot_invalidation_ = StaticAotInvalidationContract::Conservative;
     contextual_virtual_overlaps_ = false;
     lookup_counters_ = {};
     rejected_generations_.clear();
+    dispatch_lifetime_ = allocate_block_table_lifetime();
+    advance_generation(dispatch_generation_);
 }
 
 } // namespace katana::runtime

@@ -69,6 +69,79 @@ template <typename Function> bool throws_any(Function function) {
 
 int main() {
     try {
+        RuntimeBlockTable static_fast;
+        static_fast.bind_code_tracker(
+            nullptr, StaticAotInvalidationContract::Coordinated);
+        RuntimeBlock static_fast_block{0x8C001000u,
+                                       0x0C001000u,
+                                       8u,
+                                       BlockEndKind::StaticBranch,
+                                       {},
+                                       block_a,
+                                       "static-fast",
+                                       false};
+        static_fast_block.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+        static_cast<void>(static_fast.register_static(std::move(static_fast_block)));
+        static_fast.seal_static();
+        const BlockVariantKey boot_variant{0u, 0u, 0u, 1u, 0u};
+        const auto p2_fast =
+            static_fast.lookup_static_aot(0x0C001000u, 0xAC001000u, boot_variant);
+        require(p2_fast && p2_fast->function == block_a &&
+                    p2_fast->virtual_start == 0x8C001000u &&
+                    p2_fast->variant == boot_variant &&
+                    static_fast.static_dispatch_generation_guard_current(
+                        p2_fast->generation_guard),
+                "Variantneutraler Static-AOT-Tier verliert Bootvariante oder P2-Alias.");
+        require(!static_fast.lookup_static_aot(
+                    0x0C001000u, 0xAC002000u, boot_variant),
+                "Static-AOT-Tier akzeptiert ein virtuell/physisch widerspruechliches Ziel.");
+        static_cast<void>(static_fast.register_runtime(
+            {0xAC001100u,
+             0x0C001100u,
+             4u,
+             BlockEndKind::Return,
+             boot_variant,
+             block_b,
+             "dynamic-same-page-other-halfword",
+             false}));
+        require(static_fast.lookup_static_aot(
+                    0x0C001000u, 0x8C001000u, boot_variant) &&
+                    static_fast.static_dispatch_generation_guard_current(
+                        p2_fast->generation_guard),
+                "Dynamischer Nachbar sperrt oder invalidiert einen anderen "
+                "Static-AOT-Halfword-Eintrag.");
+        auto foreign_runtime_variant = boot_variant;
+        ++foreign_runtime_variant.runtime_generation;
+        static_cast<void>(static_fast.register_runtime(
+            {0xAC001000u,
+             0x0C001000u,
+             4u,
+             BlockEndKind::Return,
+             foreign_runtime_variant,
+             block_b,
+             "dynamic-same-halfword-foreign-variant",
+             false}));
+        const auto refreshed_static = static_fast.lookup_static_aot(
+            0x0C001000u, 0x8C001000u, boot_variant);
+        require(refreshed_static &&
+                    !static_fast.static_dispatch_generation_guard_current(
+                        p2_fast->generation_guard),
+                "Fremde Dynamic-Variante schattet Static-AOT oder laesst den "
+                "alten Eintragsguard bestehen.");
+        static_cast<void>(static_fast.register_runtime(
+            {0xAC001000u,
+             0x0C001000u,
+             4u,
+             BlockEndKind::Return,
+             boot_variant,
+             block_b,
+             "dynamic-same-halfword-live-variant",
+             false}));
+        require(!static_fast.lookup_static_aot(
+                    0x0C001000u, 0x8C001000u, boot_variant),
+                "Passende Dynamic-Variante wird vom Static-AOT-Tier ueberschattet.");
+
         RuntimeBlockTable table;
         const BlockVariantKey base{1u, 2u, 3u, 4u, 5u};
         static_cast<void>(table.register_static({0x8C001000u,

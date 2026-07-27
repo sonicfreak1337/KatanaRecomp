@@ -58,7 +58,65 @@ inline constexpr std::uint32_t dreamcast_bios_handoff_dmaor = 0x00008201u;
 inline constexpr std::uint32_t dreamcast_bios_handoff_pctra = 0x000A03F0u;
 inline constexpr std::uint16_t dreamcast_bios_handoff_pal_pdtra = 0x0004u;
 inline constexpr std::uint16_t dreamcast_composite_port_a_input = 0x0300u;
+// Stable external name and version for the deterministic device-side state
+// installed at the post-BIOS handoff. Version 1 covers the reset device state
+// plus the DMAOR, AICA and I/O-port handoff values initialized by
+// initialize_dreamcast_runtime().
+inline constexpr std::string_view dreamcast_post_bios_platform_contract_name =
+    "katana.dreamcast.post-bios-platform";
+inline constexpr std::uint32_t
+    dreamcast_post_bios_platform_contract_version = 1u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };
+// Firmware services and the first native guest entry are independent. In
+// particular, DirectBootExecutable may still use the shared HLE BIOS ABI.
+enum class DreamcastRuntimeBootPath : std::uint8_t {
+    NativeDiscBoot,
+    DirectBootExecutable
+};
+
+inline constexpr std::uint32_t dreamcast_post_bios_cpu_contract_version = 1u;
+
+struct DreamcastPostBiosCpuState {
+    // This is an allow-list of nonzero/selected post-BIOS CPU state. The
+    // initializer clean-room resets all other architectural and execution
+    // fields: general/banked/FPU registers, MAC/FPUL, exception state,
+    // MMU registers and TLB contents, counters and active-block bookkeeping.
+    // Address translation starts in NoMmu mode. Runtime-owned memory/service
+    // bindings are installed separately and are not part of this CPU contract.
+    std::uint32_t contract_version = dreamcast_post_bios_cpu_contract_version;
+    std::uint32_t entry_point = dreamcast_disc_boot_address;
+    std::uint32_t stack_pointer = dreamcast_direct_boot_stack;
+    std::uint32_t vector_base = dreamcast_direct_boot_vector_base;
+    std::uint32_t status = dreamcast_disc_boot_status;
+    std::uint32_t fpscr = dreamcast_disc_boot_fpscr;
+    std::uint32_t gbr = dreamcast_bios_handoff_gbr;
+    std::uint32_t ssr = dreamcast_bios_handoff_ssr;
+    std::uint32_t spc = dreamcast_bios_handoff_spc;
+    std::uint32_t sgr = dreamcast_direct_boot_stack;
+    std::uint32_t dbr = dreamcast_bios_handoff_dbr;
+    std::uint32_t pr = dreamcast_bios_handoff_pr;
+};
+
+inline constexpr DreamcastPostBiosCpuState dreamcast_post_bios_cpu_state{};
+
+struct DreamcastBootExecutableIdentity {
+    // All fields are optional for the generic runtime. A game project should
+    // bind all three so a DirectBootExecutable configuration cannot be reused
+    // with a different disc revision or boot executable.
+    std::string content_identity;
+    std::string boot_file_name;
+    std::string boot_byte_identity;
+};
+
+struct DreamcastRuntimeBootConfig {
+    DreamcastRuntimeFirmwareMode firmware_mode = DreamcastRuntimeFirmwareMode::HleBiosAbi;
+    DreamcastRuntimeBootPath boot_path = DreamcastRuntimeBootPath::DirectBootExecutable;
+    std::uint32_t post_bios_platform_contract_version =
+        dreamcast_post_bios_platform_contract_version;
+    DreamcastPostBiosCpuState post_bios_cpu_state = dreamcast_post_bios_cpu_state;
+    DreamcastBootExecutableIdentity executable_identity;
+};
+
 enum class DreamcastRegion : std::uint8_t { Japan, NorthAmerica, Europe };
 enum class DreamcastConsoleProfile : std::uint8_t {
     JapanNtsc,
@@ -174,8 +232,30 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path);
 [[nodiscard]] DreamcastRuntimeBootImage
 load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path);
 
+[[nodiscard]] std::string
+dreamcast_boot_executable_byte_identity(const DreamcastRuntimeBootImage& boot);
+void validate_dreamcast_post_bios_cpu_state(
+    const DreamcastPostBiosCpuState& state,
+    std::size_t boot_executable_size);
+void validate_dreamcast_runtime_boot_config(
+    const DreamcastRuntimeBootImage& boot,
+    const DreamcastRuntimeBootConfig& boot_config);
+
+// Applies the public default contract only. Custom post-BIOS state is accepted
+// exclusively by initialize_dreamcast_runtime(), after full validation against
+// the selected executable and platform contract.
 void reset_dreamcast_direct_boot_cpu(CpuState& cpu) noexcept;
 
+// Explicit product boot contract. This is the entry point for new ports.
+[[nodiscard]] DreamcastRuntimeState initialize_dreamcast_runtime(
+    CpuState& cpu,
+    const DreamcastRuntimeBootImage& boot,
+    const DreamcastRuntimeBootConfig& boot_config,
+    std::shared_ptr<DreamcastMutableStorage> mutable_storage = {},
+    DreamcastConsoleProfile console_profile = DreamcastConsoleProfile::JapanNtsc);
+
+// Compatibility overload: Direct retains the historical direct-executable
+// path; HleBiosAbi retains the historical native-disc-bootstrap path.
 [[nodiscard]] DreamcastRuntimeState initialize_dreamcast_runtime(
     CpuState& cpu,
     const DreamcastRuntimeBootImage& boot,

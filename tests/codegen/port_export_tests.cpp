@@ -1182,7 +1182,7 @@ int run_test(const int argc, char* argv[]) {
                       : p2_registration_end - p2_registration_begin);
     const auto unit =
         std::find_if(generated_before.begin(), generated_before.end(), [](const auto& entry) {
-            return entry.first.starts_with("code/unit-00000-") && entry.first.ends_with(".cpp");
+            return entry.first.starts_with("code/unit-") && entry.first.ends_with(".cpp");
         });
     require(first.functions == 3u && first.partitions == 3u && first.checkpoints.size() == 8u &&
                 first.checkpoints.back() == "port-project-written",
@@ -1230,6 +1230,64 @@ int run_test(const int argc, char* argv[]) {
                 read_text(first.disc_install_recipe).find(fixture.root.string()) ==
                     std::string::npos,
             "Generische Disc-Recipe verliert Bindung oder enthaelt private Quellpfade.");
+
+    const auto private_boot_root = fixture.root / "private-boot-executable";
+    const auto private_boot =
+        katana::platform::extract_dreamcast_boot_executable_artifact(
+            gdi, private_boot_root);
+    const auto reloaded_private_boot =
+        katana::platform::load_dreamcast_boot_executable_artifact(
+            private_boot.manifest_path);
+    const auto direct_boot_output = fixture.root / "direct-boot-port";
+    const auto direct_boot_result =
+        export_dreamcast_port_project_from_boot_artifact(
+            private_boot.manifest_path, direct_boot_output, options);
+    const auto direct_boot_main =
+        read_text(direct_boot_output / "src" / "main.cpp");
+    const auto direct_boot_metadata =
+        read_text(
+            direct_boot_output / "generated" / "metadata" /
+            "port-project.json");
+    const auto direct_boot_provenance =
+        read_text(
+            direct_boot_output / "generated" / "metadata" /
+            "provenance.json");
+    require(private_boot.boot_file == reloaded_private_boot.boot_file &&
+                private_boot.boot_sha256 ==
+                    reloaded_private_boot.boot_sha256 &&
+                private_boot.install_recipe.content_identity ==
+                    reloaded_private_boot.install_recipe.content_identity &&
+                direct_boot_result.checkpoints.front() ==
+                    "boot-executable-artifact-validated" &&
+                direct_boot_main.find(
+                    "DreamcastRuntimeBootPath::DirectBootExecutable") !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    "DreamcastRuntimeFirmwareMode::HleBiosAbi") !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    "runtime_boot_config.executable_identity") !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    private_boot.metadata.boot_file_name) !=
+                    std::string::npos &&
+                direct_boot_metadata.find(
+                    "\"boot_path\":\"direct-boot-executable\"") !=
+                    std::string::npos &&
+                direct_boot_provenance.find(
+                    "\"role\":\"boot-executable-private\"") !=
+                    std::string::npos &&
+                direct_boot_provenance.find(private_boot_root.string()) ==
+                    std::string::npos &&
+                read_text(direct_boot_result.disc_install_recipe) ==
+                    katana::runtime::format_disc_install_recipe(
+                        private_boot.install_recipe) &&
+                !std::filesystem::exists(
+                    direct_boot_output / "boot.bin") &&
+                !std::filesystem::exists(
+                    direct_boot_output / "content" / "boot.bin"),
+            "Privates Boot-Executable wird nicht hashgebunden und retailfrei "
+            "als DirectBoot-Port exportiert.");
 
     const auto latent_disc_directory = fixture.root / "latent-aot-disc";
     std::filesystem::create_directories(latent_disc_directory);
@@ -1378,7 +1436,7 @@ int run_test(const int argc, char* argv[]) {
         read_text(mmio_wait_output / "generated" / "include" / "katana_port.hpp");
     constexpr std::string_view mmio_wait_descriptor =
         "{0x8C010000u, 0x8C010002u, 0x8C010010u, 0xA05F6900u, "
-        "0x005F6900u, 0x8C010006u, 3u, 0u, 8u, 4u, true, 7u, 2u, "
+        "0x005F6900u, 0x8C010006u, 3u, 0u, 255u, 4u, 8u, false, true, 7u, 2u, "
         "2u, 1u, 2u, \"generated-block-8C010000\"}";
     const auto mmio_wait_call =
         mmio_wait_dispatch.find("try_product_mmio_wait_loop_batch(");
@@ -1546,7 +1604,7 @@ int run_test(const int argc, char* argv[]) {
             mmio_wait_method.find("post_flush_batch_contract") !=
                 std::string::npos &&
             mmio_wait_method.find(
-                "(mmio_value & descriptor.test_mask) == 0u") !=
+                "(mmio_value & test_mask) == 0u") !=
                 std::string::npos &&
             mmio_wait_method.find(
                 "test_result != descriptor.branch_on_true") != std::string::npos &&
@@ -2524,7 +2582,7 @@ int run_test(const int argc, char* argv[]) {
             counted_loop_method.find(
                 "const ScopedCpuActiveBlockProvenance active_block_provenance(") !=
                 std::string::npos &&
-            counted_loop_dispatch.find("selected_block->get(), *counted_loop") !=
+            counted_loop_dispatch.find("selected_block, *counted_loop") !=
                 std::string::npos &&
             counted_loop_dispatch.find("active_context->scheduler_cycle =") != std::string::npos &&
             counted_loop_call != std::string::npos && ordinary_block_execute != std::string::npos &&
@@ -2999,8 +3057,9 @@ int run_test(const int argc, char* argv[]) {
             for (auto offset = content.find(service_declaration); offset != std::string::npos;
                  offset = content.find(service_declaration, offset + service_declaration.size()))
                 ++declaration_count;
-            require(declaration_count == 1u,
-                    "Portpartition deklariert fremde Funktionen und skaliert quadratisch.");
+            require(declaration_count >= 1u && declaration_count <= 2u,
+                    "Portpartition deklariert mehr als ihren lokalen Einstieg und den "
+                    "bewiesenen direkten Callee.");
             ++entry_metadata_count;
         }
     }
@@ -3380,7 +3439,8 @@ int run_test(const int argc, char* argv[]) {
             runtime_dispatch.find(
                 "ServiceScope scope(\n"
                 "        services, table, context, diagnostics, dispatch_metrics,\n"
-                "        observations, materializer)") != std::string::npos,
+                "        observations, materializer, registered_game_project)") !=
+                std::string::npos,
         "Generierter Produktpfad verdrahtet Dispatch, Fallback, Guest-Exception, "
         "Checkpoint oder redigiertes Fehlerpaket nicht ueber eine zentrale Observation-Session.");
     require(
@@ -3452,7 +3512,9 @@ int run_test(const int argc, char* argv[]) {
     require(
         generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
                 std::string::npos &&
-            generated_before.at("katana-port.cmake").find("katana_runtime") != std::string::npos &&
+            generated_before.at("katana-port.cmake")
+                    .find("${KATANA_PORT_RUNTIME_TARGET}") !=
+                std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
@@ -3523,7 +3585,8 @@ int run_test(const int argc, char* argv[]) {
                     .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("Schedulerbudget erschoepft") !=
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp").find("Gastzyklusbudget erschoepft") !=
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("throw katana::runtime::GuestCycleBudgetReached(") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
@@ -3618,7 +3681,8 @@ int run_test(const int argc, char* argv[]) {
                     .find("can_chain_executable_block(std::uint32_t address)") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("chainable_blocks_.contains(address)") != std::string::npos &&
+                    .find("registration == nullptr || !registration->chainable") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("active_block_variant_->runtime_generation") !=
                 std::string::npos &&
@@ -3629,7 +3693,7 @@ int run_test(const int argc, char* argv[]) {
                     .find("const auto pending_guest_cycles = cpu_.pending_guest_cycles") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("inspected.physical_address) != found->second.physical_origin") !=
+                    .find("inspected.physical_address) != registration->physical_origin") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("prove_instruction_mapping(") != std::string::npos &&
@@ -3644,7 +3708,7 @@ int run_test(const int argc, char* argv[]) {
                     .find("local_block_chain_guest_cycle_budget = 4'096u") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("pending_guest_cycles + found->second.maximum_guest_cycles") !=
+                    .find("pending_guest_cycles + registration->maximum_guest_cycles") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("prospective_guest_cycles > *remaining") != std::string::npos &&
@@ -3974,49 +4038,38 @@ int run_test(const int argc, char* argv[]) {
         else if (path.starts_with("code/runtime-dispatch-shard-"))
             runtime_only_dispatch_shards += content;
     const auto block_symbol = hex_symbol(runtime_only_block->start_address);
-    const auto note_function = runtime_only_dispatch_shards.find("bool note_block_entry_shard_");
-    const auto mapping_begin =
-        runtime_only_dispatch_shards.find("case 0x" + block_symbol + "u:", note_function);
-    const auto mapping_end = runtime_only_dispatch_shards.find("return true;", mapping_begin);
-    const auto mapping = mapping_begin != std::string::npos && mapping_end != std::string::npos
-                             ? runtime_only_dispatch_shards.substr(mapping_begin,
-                                                                   mapping_end - mapping_begin)
-                             : std::string{};
     const auto site_symbol = hex_symbol(runtime_only_resolution.instruction_address);
-    const auto expected_source =
-        "active_exit_source = {katana::runtime::relocate_code_address(0x" + site_symbol +
-        "u), katana::runtime::canonical_physical_address("
-        "katana::runtime::relocate_code_address(0x" + site_symbol + "u))}";
     const auto predecessor_symbol = hex_symbol(runtime_only_predecessor->start_address);
-    const auto predecessor_case =
-        runtime_only_text.find("case 0x" + predecessor_symbol + "u: {");
-    const auto predecessor_note = runtime_only_text.find(
-        "note_block_entry(katana::runtime::relocate_code_address(0x" + predecessor_symbol +
-            "u))",
-        predecessor_case);
+    const auto predecessor_label =
+        runtime_only_text.find("katana_block_" + predecessor_symbol + ":");
     const auto local_chain = runtime_only_text.find(
-        "services->can_chain_executable_block(cpu.pc)) continue", predecessor_note);
-    const auto runtime_only_case =
-        runtime_only_text.find("case 0x" + block_symbol + "u: {", local_chain);
-    const auto runtime_only_note = runtime_only_text.find(
-        "note_block_entry(katana::runtime::relocate_code_address(0x" + block_symbol + "u))",
-        runtime_only_case);
+        "services->can_chain_executable_block(cpu.pc)) goto katana_block_" +
+            block_symbol,
+        predecessor_label);
+    const auto runtime_only_label =
+        runtime_only_text.find("katana_block_" + block_symbol + ":", local_chain);
+    const auto runtime_only_source =
+        runtime_only_text.find(
+            "katana::runtime::relocate_code_address(0x" + site_symbol + "u)",
+            runtime_only_label);
+    const auto runtime_only_class = runtime_only_text.find(
+        "DynamicDispatchSiteClass::RuntimeOnly", runtime_only_source);
     require(runtime_only_text.find("runtime_only_jump") != std::string::npos &&
-                predecessor_case != std::string::npos &&
-                predecessor_note != std::string::npos && local_chain != std::string::npos &&
-                runtime_only_case != std::string::npos &&
-                runtime_only_note != std::string::npos && predecessor_case < predecessor_note &&
-                predecessor_note < local_chain && local_chain < runtime_only_case &&
-                runtime_only_case < runtime_only_note &&
-                runtime_only_text.find(
-                    "note_block_entry(katana::runtime::relocate_code_address(0x" + block_symbol +
-                    "u))") !=
+                predecessor_label != std::string::npos &&
+                local_chain != std::string::npos &&
+                runtime_only_label != std::string::npos &&
+                runtime_only_source != std::string::npos &&
+                runtime_only_class != std::string::npos &&
+                predecessor_label < local_chain &&
+                local_chain < runtime_only_label &&
+                runtime_only_label < runtime_only_source &&
+                runtime_only_source < runtime_only_class &&
+                runtime_only_dispatch_shards.find(
+                    "katana::runtime::BlockEndKind::Call") !=
                     std::string::npos &&
-                !mapping.empty() &&
-                mapping.find("DynamicDispatchSiteClass::RuntimeOnly") != std::string::npos &&
-                mapping.find("BlockEndKind::Call") != std::string::npos &&
-                mapping.find(expected_source) != std::string::npos &&
-                runtime_only_dispatch_shards.find("kind, active_exit_source") !=
+                runtime_only_sources.at("code/runtime-dispatch.cpp")
+                        .find("make_indirect_dispatch_continuation(\n"
+                              "                exit, active_exit_site_class)") !=
                     std::string::npos &&
                 runtime_only_sources.at("metadata/port-project.json")
                         .find("\"runtime_only_control_flow\":1") != std::string::npos &&
@@ -4166,11 +4219,15 @@ int run_test(const int argc, char* argv[]) {
     const auto& shard_zero = shard_sources.at("code/runtime-dispatch-shard-00000.cpp");
     const auto& shard_one = shard_sources.at("code/runtime-dispatch-shard-00001.cpp");
     require(!shard_sources.contains("code/runtime-dispatch-shard-00002.cpp") &&
-                shard_core.find("if (source_address <= 0x8C0103FEu)") !=
+                shard_core.find(
+                    "append_static_blocks_shard_00001(static_blocks)") !=
                     std::string::npos &&
-                shard_zero.find("case 0x8C0103FEu:") != std::string::npos &&
-                shard_zero.find("case 0x8C010400u:") == std::string::npos &&
-                shard_one.find("case 0x8C010400u:") != std::string::npos &&
+                shard_zero.find("append_static_block(blocks, 0x8C0103FEu") !=
+                    std::string::npos &&
+                shard_zero.find("append_static_block(blocks, 0x8C010400u") ==
+                    std::string::npos &&
+                shard_one.find("append_static_block(blocks, 0x8C010400u") !=
+                    std::string::npos &&
                 occurrences(shard_zero, "append_static_block(blocks,") == 512u &&
                 occurrences(shard_one, "append_static_block(blocks,") == 1u &&
                 occurrences(shard_zero, "BlockExit dispatch_owner_8C010000(") == 1u &&

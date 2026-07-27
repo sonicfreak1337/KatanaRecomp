@@ -20,6 +20,45 @@ void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
 
+void static_aot_p2_alias_regression() {
+    constexpr std::uint64_t runtime_generation = 7u;
+    RuntimeBlockTable blocks;
+    blocks.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    RuntimeBlock native{0x8C001000u,
+                        0x0C001000u,
+                        4u,
+                        BlockEndKind::Return,
+                        {0u, 0u, 0u, 0u, runtime_generation},
+                        block,
+                        "static-aot-alias",
+                        false};
+    native.static_variant_policy =
+        StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+    static_cast<void>(blocks.register_static(std::move(native)));
+    blocks.seal_static();
+
+    CpuState cpu;
+    cpu.write_sr(sr_md_mask);
+    cpu.address_space = std::make_shared<RuntimeAddressSpace>();
+    const BlockAddress source{0x8C000100u, 0x0C000100u};
+    IndirectDispatchRequest request{
+        IndirectDispatchKind::TailJump,
+        0x8C000102u,
+        0xAC001000u,
+        0u,
+        source};
+    request.variant.runtime_generation = runtime_generation;
+    const auto first = dispatch_indirect(cpu, blocks, request);
+    const auto cached = dispatch_indirect(cpu, blocks, request);
+    require(first.alias_lookup && cached.alias_lookup &&
+                first.execution.virtual_start == 0x8C001000u &&
+                cached.execution.virtual_start == 0x8C001000u &&
+                cached.execution.variant.runtime_generation == runtime_generation &&
+                cpu.pc == 0x8C001000u,
+            "Static-AOT-P2-Alias oder sein Inline-Cachehit verliert den nativen Owner-PC.");
+}
+
 void materializer_lifecycle_regression() {
     CpuState cpu;
     const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
@@ -558,6 +597,7 @@ void runtime_only_hit_hotloop_regression() {
 
 int main() {
     try {
+        static_aot_p2_alias_regression();
         materializer_lifecycle_regression();
         runtime_aot_alias_lifetime_regression();
         missing_aot_dispatch_regression();

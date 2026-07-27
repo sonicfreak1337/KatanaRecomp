@@ -11,6 +11,10 @@
 
 using namespace katana::runtime;
 namespace {
+BlockExit static_icbi_block(CpuState&, BlockExecutionContext&) {
+    return {};
+}
+
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
@@ -78,9 +82,25 @@ int main() {
         memory.map_region("ram", 0x0C000000u, std::make_shared<LinearMemoryDevice>(0x20000u));
         ExecutableCodeTracker tracker;
         static_cast<void>(tracker.register_block({"ram-code", 0x0C001000u, 32u, "generated", {}}));
+        RuntimeBlockTable runtime_blocks;
+        runtime_blocks.bind_code_tracker(
+            &tracker, StaticAotInvalidationContract::Coordinated);
+        RuntimeBlock static_block{0x8C001000u,
+                                  0x0C001000u,
+                                  32u,
+                                  BlockEndKind::Fallthrough,
+                                  {},
+                                  static_icbi_block,
+                                  "generated",
+                                  false};
+        static_block.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+        static_cast<void>(runtime_blocks.register_static(std::move(static_block)));
+        runtime_blocks.seal_static();
         std::vector<StoreQueueTransfer> transfers;
         auto queues = std::make_unique<Sh4StoreQueues>(
             memory, [&](const auto& transfer) { transfers.push_back(transfer); }, &tracker);
+        queues->bind_runtime_block_table(&runtime_blocks);
         queues->write_qacr(0u, 0x0Cu);
         queues->write_qacr(1u, 0x10u);
         queues->write_p4(0xE0000000u, 0x11111111u, MemoryAccessWidth::Word);
@@ -149,7 +169,9 @@ int main() {
                 "Direktes nicht ausgerichtetes SQ-PREF mutiert Sink oder Transferzaehler.");
 
         const auto icbi = queues->maintain(CacheMaintenanceOperation::Icbi, 0xAC001000u);
-        require(icbi.invalidated_code && !tracker.valid("ram-code"),
+        require(icbi.invalidated_code && !tracker.valid("ram-code") &&
+                    !runtime_blocks.lookup_static_aot(
+                        0x0C001000u, 0x8C001000u, {}),
                 "ICBI an ausfuehrbarem RAM hinterlaesst einen stale Block.");
         for (const auto operation : {CacheMaintenanceOperation::Ocbi,
                                      CacheMaintenanceOperation::Ocbp,

@@ -1,6 +1,6 @@
 # P1-Buildgraph, Pakete und Testmatrix
 
-Stand: KR-4625
+Stand: v0.49
 
 ## Zielgraph
 
@@ -10,7 +10,7 @@ Build-Vertrag ausschliesslich `build-current/` und werden beim Wechsel von
 Compiler oder Profil frisch konfiguriert.
 
 ```text
-KatanaRecomp::runtime  (Runtime plus Provenienzgrundlage, runtime-sdk)
+KatanaRecomp::runtime_core  (interpreterfreier Produktvertrag, runtime-sdk)
           ^
           |
 KatanaRecomp::analyzer (Decoder, IO, Plattformanalyse, CFG, IR, Codegen)
@@ -19,8 +19,10 @@ KatanaRecomp::analyzer (Decoder, IO, Plattformanalyse, CFG, IR, Codegen)
      katana-recomp      (CLI-Werkzeug)
 ```
 
-Ein Port darf `find_package(KatanaRecomp CONFIG REQUIRED)` und
-`KatanaRecomp::runtime` verwenden, ohne Analyzerquellen zu kompilieren. Das
+Ein normaler Port darf `find_package(KatanaRecomp CONFIG REQUIRED)` und
+`KatanaRecomp::runtime_core` verwenden, ohne Analyzer- oder
+Diagnoseinterpreterquellen zu kompilieren. `KatanaRecomp::runtime` bleibt der
+explizite Diagnosevertrag. Das
 `runtime-sdk` enthaelt nur Runtimeheader, den generierten Buildvertrag, die
 Runtimebibliothek und das CMake-Paket. `analyzer-sdk` ergaenzt
 `KatanaRecomp::analyzer` und alle Analyseheader. Ein Out-of-Tree-Consumer wird
@@ -48,6 +50,13 @@ Packagevariablen. Inkompatible Vertraege werden damit bereits beim
 Konfigurieren, durch `static_assert` oder an der Analyzer-Linkmarke sichtbar.
 
 ## Compiler- und Profilmatrix
+
+Generierte Spielports unterscheiden `bringup` und `gate`. Bring-up verwendet
+optimiertes `RelWithDebInfo` ohne LTCG/IPO und bevorzugt schnellen Link sowie
+PCH. Gate aktiviert vollstaendige Optimierung und IPO, sofern die Toolchain
+dies unterstuetzt. Compiler, Linker, Profil und Generator erhalten getrennte
+inkrementelle Buildordner. Der Quellbaum-Fallback wird
+`EXCLUDE_FROM_ALL` eingebunden; bevorzugt wird das installierte Runtimepaket.
 
 Die Presets `msvc-*`, `gcc-*` und `clang-*` decken jeweils `Debug` und
 `RelWithDebInfo` ab. Die GitHub-Matrix baut und testet alle sechs Kombinationen

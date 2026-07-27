@@ -26,6 +26,20 @@ inline constexpr std::uint32_t platform_services_abi_version =
 inline constexpr std::uint64_t base_guest_cycles_per_instruction = 1u;
 inline constexpr std::size_t guest_cycle_flush_event_budget = 1024u;
 
+class GuestCycleBudgetReached final : public std::runtime_error {
+  public:
+    explicit GuestCycleBudgetReached(const std::uint64_t final_guest_cycle)
+        : std::runtime_error("guest-cycle-budget-reached"),
+          final_guest_cycle_(final_guest_cycle) {}
+
+    [[nodiscard]] std::uint64_t final_guest_cycle() const noexcept {
+        return final_guest_cycle_;
+    }
+
+  private:
+    std::uint64_t final_guest_cycle_ = 0u;
+};
+
 enum class ExecutableBlockTimingClass : std::uint8_t {
     PureCpu,
     LinearRamOnly,
@@ -195,7 +209,21 @@ class PlatformServices {
                                         const BlockVariantKey& variant) noexcept {
         begin_executable_block(variant);
     }
+    virtual void begin_executable_block(std::uint32_t virtual_start,
+                                        std::uint32_t physical_start,
+                                        std::uint32_t size,
+                                        const BlockVariantKey& variant,
+                                        bool) noexcept {
+        begin_executable_block(virtual_start, physical_start, size, variant);
+    }
     [[nodiscard]] virtual bool can_chain_executable_block(std::uint32_t) const noexcept {
+        return false;
+    }
+    // Product runtimes may retain pending guest cycles across a central dispatch
+    // only while the completed block is a proven pure/static region and no
+    // scheduler, interrupt, lifecycle, replay, or architectural boundary is due.
+    // The conservative default preserves the per-block commit contract.
+    [[nodiscard]] virtual bool can_defer_guest_block_completion() const noexcept {
         return false;
     }
     [[nodiscard]] virtual ExecutableCodeTracker* executable_code_tracker() noexcept {
@@ -247,7 +275,7 @@ inline void flush_pending_guest_cycles(CpuState& cpu,
     if (result.budget_exhausted)
         throw std::runtime_error("Schedulerbudget beim Gastzeit-Flush erschoepft.");
     if (result.guest_cycle_budget_exhausted)
-        throw std::runtime_error("Gastzyklusbudget beim Gastzeit-Flush erschoepft.");
+        throw GuestCycleBudgetReached(result.guest_cycle);
 }
 
 struct PlatformBlockCompletion {
@@ -268,7 +296,7 @@ finalize_guest_block(CpuState& cpu,
     if (scheduler.budget_exhausted)
         throw std::runtime_error("Schedulerbudget beim Blockabschluss erschoepft.");
     if (scheduler.guest_cycle_budget_exhausted)
-        throw std::runtime_error("Gastzyklusbudget beim Blockabschluss erschoepft.");
+        throw GuestCycleBudgetReached(scheduler.guest_cycle);
     if (observe_checkpoint)
         services.observe_guest_block_completion(checkpoint,
                                                 retired_guest_instructions,

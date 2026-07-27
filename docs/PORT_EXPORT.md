@@ -1,5 +1,52 @@
 # Port-Projektexport und Originaldisc-Installation
 
+## v0.49: Executable-First als Bring-up-Standard
+
+Der Entwicklungsworkflow trennt die einmalige private Discverarbeitung von
+wiederholter Analyse und Codegeneration:
+
+```powershell
+katana-recomp extract-boot-executable .\disc\game.gdi `
+  --output .\private\game-boot
+
+katana-recomp port-executable `
+  .\private\game-boot\boot.katana-executable `
+  --output .\private\game-port `
+  --target-name game `
+  --console-profile europe-pal
+```
+
+`boot.katana-executable` bindet Projekt-, Content- und Bootbyteidentitaet. Die
+danebenliegende `boot.bin` bleibt private Retailquelle ausserhalb des
+Repositorys. Der Export validiert sie, kopiert sie aber weder in generierte
+Quellen noch in das Portpaket. Stabile AOT-Partitionen, Metadaten und der
+Hostbuild werden im privaten Workspace gecacht; `user-data` bleibt beim
+Republishing erhalten. Bei unveraendertem, verifiziertem
+`port-executable`-Schluessel kann der Whole-Export-Cache auch Analyse,
+IR-Lowering und Emission ueberspringen. Hostconfigure, Spieltarget, Packaging
+und Publish laufen weiterhin.
+
+Dieser DirectBootExecutable-Pfad ist der schnelle Bring-up-Standard.
+NativeDiscBoot ueber die `.gdi` bleibt das finale Genauigkeits- und
+Kompatibilitaetsgate. Die Nutzerinstallation bleibt fuer beide Portarten
+unveraendert discbasiert.
+
+Buildprofil, Compiler und Linker werden ausserhalb des verteilbaren Projekts
+gewaehlt:
+
+```text
+KATANA_PORT_BUILD_PROFILE=bringup|gate
+KATANA_PORT_CXX_COMPILER=msvc|clang-cl
+KATANA_PORT_LINKER=default|msvc|lld
+KATANA_HOST_BUILD_GENERATOR=Ninja
+KATANA_HOST_BUILD_JOBS=<N>
+KATANA_PORT_CODEGEN_JOBS=<N>
+```
+
+Weitere Details stehen in
+[`EXECUTABLE_FIRST_DEVELOPMENT.md`](EXECUTABLE_FIRST_DEVELOPMENT.md) und
+[`PORT_BUILD_PROFILES.md`](PORT_BUILD_PROFILES.md).
+
 Der generische Exportpfad uebersetzt das validierte Dreamcast-Bootprogramm in
 statischen nativen AOT-Code. Ein verteilbares Portpaket enthaelt keine Raw-,
 Audio- oder sonstigen kommerziellen Discsektoren:
@@ -8,10 +55,13 @@ Audio- oder sonstigen kommerziellen Discsektoren:
 katana-recomp port .\disc\game.gdi --output .\port --target-name game --console-profile europe-pal
 ```
 
-Die GDI und alle Tracks werden read-only geoeffnet. Analyse, Katana-IR,
-Optimierung und C++-Partitionierung bleiben spielagnostisch; es gibt keine
-Titeladressen, Dateinamen oder Sonderfaelle. Die Originaldateien werden weder
-veraendert noch geloescht.
+Die GDI und alle Tracks werden read-only geoeffnet. Ohne optionales externes
+`GameProjectDefinition` bleiben Analyse, Katana-IR, Optimierung und
+C++-Partitionierung spielagnostisch. Ein externes Spielprojekt darf seine
+hashgebundenen Titeladressen, Symbole und Hooks ueber
+`PortExportOptions::game_project` einbringen; diese Daten werden dadurch nicht
+Teil des generischen Katana-Kerns. Die Originaldateien werden weder veraendert
+noch geloescht.
 
 `--console-profile` waehlt die nachgebildete Konsolenkonfiguration explizit:
 `japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`. Ohne Option gilt
@@ -74,7 +124,7 @@ Entwicklungsmodus.
 
 ## Recompilation statt Emulation
 
-Der Programmcode aus `1ST_READ.BIN` wird analysiert, in Katana-IR ueberfuehrt,
+Der Programmcode aus der validierten Bootdatei wird analysiert, in Katana-IR ueberfuehrt,
 optimiert, in native C++-Translation-Units partitioniert und als x64-Executable
 kompiliert. Dreamcast-Plattformdienste werden ueber die versionierte native
 Runtime bereitgestellt. Der lokal installierte Disc-Cache ist nur die
@@ -90,8 +140,11 @@ keinen letzten erfolgreichen Stand.
 
 Nur Katana-Artefakte unter `generated/` werden bei erneutem Codegen ersetzt.
 Unbekannte und handgeschriebene Dateien bleiben erhalten; symbolische Links in
-verwalteten Pfaden werden abgelehnt. Metadaten enthalten nur Rollen, relative
-Pfade, Format-/ABI-Daten, Groessen, Generationen und SHA-256-Werte.
+verwalteten Pfaden werden abgelehnt. Generische Provenienzmetadaten enthalten
+nur Rollen, relative Pfade, Format-/ABI-Daten, Groessen, Generationen und
+SHA-256-Werte. Ein bewusst gebundenes externes Spielprojekt erhaelt zusaetzlich
+`metadata/game-project.json` mit seinen eigenen Adressen, Symbolen und
+Identitaetsbindungen.
 
 Der Vertrag gilt fuer alle unterstuetzten Dreamcast-GDI-Titel. Private Spiele
 dienen ausschliesslich als lokale End-to-End-Fixtures; verteilbare und CI-Tests

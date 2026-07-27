@@ -693,7 +693,7 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                << ",\"encoding\":"
                << katana::io::quote_json(jump_table_encoding_name(table.encoding))
                << ",\"target_base\":";
-        if (table.encoding == JumpTableEncoding::SignedRelative16)
+        if (table.encoding != JumpTableEncoding::Absolute32)
             output << katana::io::quote_json(hex32(table.target_base));
         else
             output << "null";

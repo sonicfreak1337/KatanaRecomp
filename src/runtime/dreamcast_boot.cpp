@@ -77,6 +77,13 @@ bool project_identity_name(const std::string_view value) noexcept {
            });
 }
 
+bool direct_boot_main_ram_address(const std::uint32_t address,
+                                  const bool allow_top = false) noexcept {
+    constexpr std::uint32_t begin = 0x8C000000u;
+    constexpr std::uint32_t end = begin + static_cast<std::uint32_t>(dreamcast_main_ram_size);
+    return address >= begin && (address < end || (allow_top && address == end));
+}
+
 bool valid_channel2_main_ram_range(const std::uint32_t source,
                                    const std::uint32_t length) noexcept {
     constexpr std::uint32_t area3_begin = 0x0C000000u;
@@ -228,6 +235,21 @@ std::optional<std::filesystem::path> environment_path(const char* name) {
     if (value == nullptr || *value == '\0') return std::nullopt;
     return std::filesystem::path(value);
 #endif
+}
+
+void reset_dreamcast_direct_boot_cpu_state(
+    CpuState& cpu,
+    const DreamcastPostBiosCpuState& state) noexcept {
+    reset_cpu(
+        cpu,
+        ResetState{
+            state.entry_point, state.stack_pointer, state.vector_base, state.status, state.fpscr});
+    cpu.gbr = state.gbr;
+    cpu.ssr = state.ssr;
+    cpu.spc = state.spc;
+    cpu.sgr = state.sgr;
+    cpu.dbr = state.dbr;
+    cpu.pr = state.pr;
 }
 
 } // namespace
@@ -426,10 +448,98 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
              std::move(content_identity)};
 }
 
+std::string
+dreamcast_boot_executable_byte_identity(const DreamcastRuntimeBootImage& boot) {
+    if (boot.boot_file.empty())
+        throw std::invalid_argument("direct-boot-executable-empty");
+    return disc_load_byte_identity(boot.boot_file);
+}
+
+void validate_dreamcast_post_bios_cpu_state(
+    const DreamcastPostBiosCpuState& state,
+    const std::size_t boot_executable_size) {
+    if (state.contract_version != dreamcast_post_bios_cpu_contract_version)
+        throw std::invalid_argument("direct-boot-post-bios-contract-unsupported");
+    if (boot_executable_size == 0u ||
+        boot_executable_size >
+            dreamcast_main_ram_size -
+                static_cast<std::size_t>(
+                    dreamcast_disc_boot_address - 0x8C000000u))
+        throw std::invalid_argument("direct-boot-executable-size-invalid");
+    const auto entry_offset =
+        static_cast<std::uint64_t>(state.entry_point) -
+        static_cast<std::uint64_t>(dreamcast_disc_boot_address);
+    if ((state.entry_point & 1u) != 0u ||
+        state.entry_point < dreamcast_disc_boot_address ||
+        entry_offset >= boot_executable_size)
+        throw std::invalid_argument("direct-boot-entry-outside-executable");
+    if ((state.stack_pointer & 3u) != 0u ||
+        !direct_boot_main_ram_address(state.stack_pointer, true))
+        throw std::invalid_argument("direct-boot-stack-invalid");
+    if ((state.vector_base & 3u) != 0u ||
+        !direct_boot_main_ram_address(state.vector_base))
+        throw std::invalid_argument("direct-boot-vector-base-invalid");
+    if ((state.status & ~sr_writable_mask) != 0u ||
+        (state.status & sr_md_mask) == 0u ||
+        (state.ssr & ~sr_writable_mask) != 0u)
+        throw std::invalid_argument("direct-boot-status-invalid");
+    if ((state.fpscr & ~fpscr_writable_mask) != 0u)
+        throw std::invalid_argument("direct-boot-fpscr-invalid");
+    if ((state.spc & 1u) != 0u || (state.pr & 1u) != 0u ||
+        (state.sgr & 3u) != 0u || (state.dbr & 3u) != 0u)
+        throw std::invalid_argument("direct-boot-control-register-invalid");
+    if (!direct_boot_main_ram_address(state.gbr) ||
+        !direct_boot_main_ram_address(state.spc) ||
+        !direct_boot_main_ram_address(state.sgr, true) ||
+        !direct_boot_main_ram_address(state.dbr))
+        throw std::invalid_argument("direct-boot-register-base-invalid");
+}
+
+void validate_dreamcast_runtime_boot_config(
+    const DreamcastRuntimeBootImage& boot,
+    const DreamcastRuntimeBootConfig& boot_config) {
+    if (boot_config.post_bios_platform_contract_version !=
+        dreamcast_post_bios_platform_contract_version)
+        throw std::invalid_argument(
+            "dreamcast-post-bios-platform-contract-unsupported");
+    validate_dreamcast_post_bios_cpu_state(
+        boot_config.post_bios_cpu_state, boot.boot_file.size());
+
+    switch (boot_config.firmware_mode) {
+    case DreamcastRuntimeFirmwareMode::Direct:
+    case DreamcastRuntimeFirmwareMode::HleBiosAbi:
+        break;
+    default:
+        throw std::invalid_argument("dreamcast-firmware-mode-invalid");
+    }
+    switch (boot_config.boot_path) {
+    case DreamcastRuntimeBootPath::NativeDiscBoot:
+        if (boot_config.firmware_mode != DreamcastRuntimeFirmwareMode::HleBiosAbi)
+            throw std::invalid_argument("native-disc-boot-requires-hle-bios-abi");
+        break;
+    case DreamcastRuntimeBootPath::DirectBootExecutable:
+        break;
+    default:
+        throw std::invalid_argument("dreamcast-boot-path-invalid");
+    }
+
+    const auto& identity = boot_config.executable_identity;
+    if (!identity.content_identity.empty() &&
+        identity.content_identity != boot.content_identity)
+        throw std::invalid_argument("direct-boot-content-identity-mismatch");
+    if (!identity.boot_file_name.empty() &&
+        identity.boot_file_name != boot.boot_file_name)
+        throw std::invalid_argument("direct-boot-file-name-mismatch");
+    if (!identity.boot_byte_identity.empty() &&
+        identity.boot_byte_identity !=
+            dreamcast_boot_executable_byte_identity(boot))
+        throw std::invalid_argument("direct-boot-byte-identity-mismatch");
+}
+
 DreamcastRuntimeState
 initialize_dreamcast_runtime(CpuState& cpu,
                              const DreamcastRuntimeBootImage& boot,
-                             const DreamcastRuntimeFirmwareMode firmware_mode,
+                             const DreamcastRuntimeBootConfig& boot_config,
                              std::shared_ptr<DreamcastMutableStorage> mutable_storage,
                              const DreamcastConsoleProfile console_profile) {
     if (!boot.source || boot.content_identity.empty() ||
@@ -438,6 +548,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
         !boot.repeated_reads_match) {
         throw std::invalid_argument("Dreamcast-Runtime-Bootimage ist unvollstaendig.");
     }
+    validate_dreamcast_runtime_boot_config(boot, boot_config);
     const auto boot_region = dreamcast_region_for_console_profile(console_profile);
     cpu.memory = Memory(0u);
     DreamcastRuntimeState state;
@@ -1034,6 +1145,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
             }
         },
         state.code_tracker.get());
+    state.store_queues->bind_runtime_code_invalidation(
+        state.code_tracker, state.runtime_blocks);
     state.store_queues->set_prefetch_address_translator(
         [store_queue_cpu](const std::uint32_t address) {
             return translate_store_queue_prefetch(*store_queue_cpu, address);
@@ -1081,7 +1194,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                          0x8C000000u,
                                          0x0C000000u,
                                          static_cast<std::uint32_t>(dreamcast_main_ram_size)});
-    if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi) {
+    if (boot_config.firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi) {
         install_hle_bios_abi(cpu.memory,
                              *state.runtime_blocks,
                              *state.firmware_handoff,
@@ -1089,6 +1202,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
                              0u,
                              state.code_tracker.get());
     }
+    // DirectBootExecutable does not execute this bootstrap, but retaining the
+    // validated immutable module keeps disc identity, AOT provenance and the
+    // compatibility overload independent of the selected first guest entry.
     cpu.memory.write_bytes(
         dreamcast_system_bootstrap_address, boot.system_bootstrap, CodeWriteSource::Copy);
     state.loaded_system_bootstrap_bytes = boot.system_bootstrap.size();
@@ -1117,8 +1233,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
     publish_initial_executable(std::string(dreamcast_initial_boot_executable_module_id),
                                dreamcast_disc_boot_address,
                                boot.boot_file);
-    reset_dreamcast_direct_boot_cpu(cpu);
-    if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi)
+    reset_dreamcast_direct_boot_cpu_state(
+        cpu, boot_config.post_bios_cpu_state);
+    if (boot_config.boot_path == DreamcastRuntimeBootPath::NativeDiscBoot)
         cpu.pc = dreamcast_system_bootstrap_entry_address;
     state.dmac->write_operation(dreamcast_bios_handoff_dmaor);
     state.aica_registers->write(0x289Cu, 0x48u, MemoryAccessWidth::Halfword);
@@ -1197,18 +1314,28 @@ initialize_dreamcast_runtime(CpuState& cpu,
 }
 
 void reset_dreamcast_direct_boot_cpu(CpuState& cpu) noexcept {
-    reset_cpu(cpu,
-              ResetState{dreamcast_disc_boot_address,
-                         dreamcast_direct_boot_stack,
-                         dreamcast_direct_boot_vector_base,
-                         dreamcast_disc_boot_status,
-                         dreamcast_disc_boot_fpscr});
-    cpu.gbr = dreamcast_bios_handoff_gbr;
-    cpu.ssr = dreamcast_bios_handoff_ssr;
-    cpu.spc = dreamcast_bios_handoff_spc;
-    cpu.sgr = dreamcast_direct_boot_stack;
-    cpu.dbr = dreamcast_bios_handoff_dbr;
-    cpu.pr = dreamcast_bios_handoff_pr;
+    reset_dreamcast_direct_boot_cpu_state(
+        cpu, dreamcast_post_bios_cpu_state);
+}
+
+DreamcastRuntimeState
+initialize_dreamcast_runtime(CpuState& cpu,
+                             const DreamcastRuntimeBootImage& boot,
+                             const DreamcastRuntimeFirmwareMode firmware_mode,
+                             std::shared_ptr<DreamcastMutableStorage> mutable_storage,
+                             const DreamcastConsoleProfile console_profile) {
+    const auto boot_path =
+        firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi
+            ? DreamcastRuntimeBootPath::NativeDiscBoot
+            : DreamcastRuntimeBootPath::DirectBootExecutable;
+    DreamcastRuntimeBootConfig boot_config;
+    boot_config.firmware_mode = firmware_mode;
+    boot_config.boot_path = boot_path;
+    return initialize_dreamcast_runtime(cpu,
+                                        boot,
+                                        boot_config,
+                                        std::move(mutable_storage),
+                                        console_profile);
 }
 
 } // namespace katana::runtime
