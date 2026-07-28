@@ -40,19 +40,26 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 
 ## Verifizierter Ausgangsstand
 
-Roadmapbasis dieser Runde:
+Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
-1629268
-Validate guarded entries before inventory admission
+letzte reale Produktevidenz: 1629268 / ABI 73 / NativeDisc-v33
+aktueller Source-Head main:   cb5fb47 / ABI 74
+lokaler Arbeitsbaum:          nur Dokumentationssynchronisierung
 ```
 
-Der aktuelle Quellstand implementiert die allgemeinen Source-Vertraege fuer
-`KR-4972`, `KR-4966`, `KR-4967` und `KR-4970`. Dazu gehoeren bewachte
-AOT-Einstiege mit Exportvollstaendigkeitsinvariante, ein relatives
-Post-Entry-Gate samt strenger Exitcodewertung, ein vorbereiteter atomarer
-`CompletePlatform`-Commit sowie ein nutzersave-autoritatives
-Product-Handoff-Profil.
+`1629268` ist ausschliesslich die Basis der letzten ausgefuehrten
+Produktevidenz. `cb5fb47` ist der aktuelle eingecheckte Quellstand, aber noch
+keine Sonic-Produktabnahme.
+
+Die allgemeinen Source-Vertraege fuer `KR-4972`, `KR-4966`, `KR-4967` und
+`KR-4970` sind weitgehend vorhanden: bewachte AOT-Einstiege mit
+Exportvollstaendigkeitsinvariante, ein relatives Post-Entry-Gate, ein
+vorbereiteter atomarer `CompletePlatform`-Commit sowie ein
+nutzersave-autoritatives Product-Handoff-Profil. Der aktuelle
+Sonic-Exportversuch zeigt jedoch, dass die Guarded-Inventory-/Summarygrenze
+noch nicht konvergiert; deshalb ist der P0-Sourceblock nicht pauschal
+abgeschlossen.
 
 Der erste kalte ABI-73-Exportversuch benoetigte 419,5 Sekunden fuer die
 vollstaendige Analyse und stoppte danach vor dem Hostcompiler an einem
@@ -77,21 +84,84 @@ Der reale v33-Lauf praesentiert einen IP.BIN-Frame und erreicht Gesamtzyklus
 Post-Entry-Zyklen und 9.044.195 Post-Entry-Zentraldispatches, aber keinem
 600-Millionen-Gate und keinem gueltigen MHz-Benchmark. Der generierte
 Gatewrapper gibt fuer diese typisierte Fehlerstrecke faelschlich Exitcode 0
-zurueck und die terminale `KATANA_BRINGUP_RUN`-Zusammenfassung fehlt. Vor
-dem naechsten Produktlauf sind daher der neue allgemeine AOT-Bestand und der
-Fehler-/Exitcodepfad zu korrigieren. Die separate v33-Sichtaufnahme wurde
-wegen des angeforderten Rechnerneustarts vertagt.
+zurueck und die terminale `KATANA_BRINGUP_RUN`-Zusammenfassung fehlt. Der
+Child-Exitvertrag und terminale Fehlerzusammenfassung sind auf `cb5fb47`
+quellseitig und im vorhandenen kleinen Gatevertrag korrigiert; der reale
+Sonic-Nachweis bleibt offen. Die separate v33-Sichtaufnahme wurde wegen des
+angeforderten Rechnerneustarts vertagt.
+
+Der anschliessende kalte NativeDisc-Exportversuch auf `7ecdefb` endete nach
+`381,413 s` noch vor Hostcompiler und Portpaket:
 
 ```text
-Runtime-ABI:                    73
+function_budget_exhausted:       1
+candidate_inventory_truncated:   1
+returned_table_scan_truncated:   0
+admitted candidates:             29 / 1024
+shape_budget_exceeded:           0
+finale CFG-Iteration:            27
+Seeds / Instruktionen:           2.023 / 215.623
+kontextuelle Instruktionen:      229.443
+indirekte Resolutions:           6.749
+```
+
+Die 65.536er-Grenze zaehlt Funktionsevaluationen, nicht entdeckte
+Funktionen. Candidate-Call-Carrier waren als private Inventartransporte in
+den semantischen Summary-Fixpunkt und dessen Rueckkanten geraten. Der
+aggregierte Truncationwert kann ausserdem einen Shared-Multi-Owner-Regionwalk
+nicht von den anderen Inventarlimits unterscheiden. `cb5fb47`
+trennt Summary- und Inventarcallees, vereinigt wiederholte
+Callargumentbeobachtungen und behandelt Multi-Owner-Shared-Tails als
+begrenzte Inventarregion. Erst ein neuer Export kann diese Reparatur
+abnehmen.
+
+```text
+Runtime-ABI:                    74
 Block-ABI:                       5
-Analyzer-ABI:                    6
+Analyzer-ABI:                    8
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             62
-Native-AOT-Emissionsprofil:     11
+Portprojektvertrag:             64
+Native-AOT-Emissionsprofil:     13
 AOT-Partitionsschema:            5
 ```
+
+### Reviewstatus vor dem naechsten Produktlauf
+
+Auf `cb5fb47` sind die konkret reviewten Vertraege fuer
+Carrieridentitaet, externe bedingte und normale Inventarnachfolger,
+Codepointerwertprovenienz, Shape- und Raw-Inventarbudgets, zielbezogene
+P1/P2-Code-Revalidierung, verschachtelte Owner-Exitframes,
+Safepoint-Resume-Einstiege, Gateausfuehrung und exakte Exportartefakte
+eingecheckt.
+Registerlokalisierung ist weiterhin nur teilweise am Architekturziel:
+Liveness ist IR-basiert, die Ausdrucksumschreibung bleibt eine nun
+lexikalisch begrenzte C++-Transformation.
+
+Der Source-Commit schliesst die erst durch den
+`7ecdefb`-Sonic-Export sichtbaren Punkte:
+
+- Summary-Fixpunkt von Candidate-Carrier-Inventar trennen;
+- wiederholte Callsite-/Callee-Beobachtungen vor Worklistupdates vereinigen;
+- Shared-Multi-Owner-Tails ohne erfundene CFG-Kante inventarisieren;
+- parameterabhaengige Candidate-Returns bei Bedarf in einem separat
+  begrenzten Inventarwalk zum Caller zurueckfuehren;
+- Owner-Domain-Wechsel auch fuer Fallthrough und Call-Continuation verfolgen
+  oder explizit als unvollstaendig melden;
+- rohe Stored-Kandidaten separat begrenzen und Evidenceklassen fair
+  aufnehmen;
+- alle Inventarbudgets in Analyse, Latent-AOT und Portmetadaten fail-closed
+  transportieren;
+- Whole-Export-Hits an ein exaktes generiertes Artefaktmanifest binden;
+- typisierte Fehler in genau einer terminalen Bring-up-Zusammenfassung
+  berichten.
+
+Die direkt betroffenen Analyse-, Kontrollfluss-, Latent-AOT- und
+Portexporttests sowie der ausgefuehrte Gatewrapper-Vertrag sind gruen. Der
+manifestgebundene Whole-Export-Hit benoetigt wegen der absichtlichen
+Dirty-Source-Sperre noch den nach dieser Dokumentationssynchronisierung
+sauber neu konfigurierten CLI-Lauf. Keiner dieser Sourcepunkte ist damit
+bereits als Sonic-Produktevidenz zu verstehen.
 
 Die historische PAL-DirectBoot-Baseline ohne externes `GameEntryHandoff`
 erreichte:
@@ -342,8 +412,9 @@ es gibt weder einen Boot- noch einen Dispatchfortschritt. Der frische Export
 war ein kalter Export und ist kein gueltiger Warmbuildvergleich. An diesem
 historischen Stand war KR-4972 nur teilweise umgesetzt: Die allgemeine
 Analyseluecke war im Standalone-Lauf geschlossen, die Uebernahme durch die
-Spielprojekt-/Exportintegration fehlte noch. Der aktuelle Source-Vertrag
-schliesst diese Luecke; seine Produktwirkung ist bis zum ABI-73-Lauf offen.
+Spielprojekt-/Exportintegration fehlte noch. Die folgenden Source-Vertraege
+schliessen diese Luecke grundsaetzlich; der `7ecdefb`-Gesamtexport wird
+jedoch vorher durch den neuen Summary-/Inventarbudgetfehler blockiert.
 
 ### Historische NativeDisc-v32-Sichtabnahme fuer KR-4973
 
@@ -387,9 +458,10 @@ weiterhin ein False-Negative; die Pixel sind manuell und durch stabile Blau-/
 Nichtschwarzanteile belegt.
 
 KR-4973 ist durch diese historische Abnahme abgeschlossen. Der
-`KR-4972`-Source-Vertrag ist im aktuellen Stand implementiert; ob der
-gemeinsame Blocker damit im realen ABI-73-Produkt passiert wird, muss der
-frische Sonic-Lauf zeigen. Ein Sega-Screen ist im DirectBoot wegen
+`KR-4972`-AOT-Vertrag ist im Source vorhanden, die aktuelle Gesamtanalyse
+aber noch nicht exportfaehig. Ob der gemeinsame Blocker damit im realen
+ABI-74-Produkt passiert wird, muss der frische Sonic-Lauf zeigen. Ein
+Sega-Screen ist im DirectBoot wegen
 uebersprungener IP.BIN weiterhin kein Pflichtmeilenstein.
 
 `GameProjectArtifact` Format 1 besitzt eine Payload-SHA-256 und eine
@@ -454,9 +526,11 @@ Runtime-Frame-Daten.
 Der aktuelle `KR-4972`-Quellvertrag erhaelt bewachte Tail-/AOT-Einstiege bis
 in CFG, IR und statisches AOT, behandelt Shared Bodies explizit und bricht
 den Export ab, falls ein akzeptierter Einstieg weder emittiert noch begruendet
-abgelehnt wurde. Ob der historische Blocker im realen Produkt damit passiert
-wird, ist bis zum frischen ABI-73-Sonic-Lauf offen. Interpreter, JIT,
-Runtime-Dekodierung und Emulationsfallback bleiben verboten.
+abgelehnt wurde. Die eingecheckte Summary-/Inventarkorrektur muss diesen
+Vertrag jetzt im realen Export konvergent bestaetigen. Ob der historische Blocker im
+realen Produkt damit passiert wird, ist bis zum frischen ABI-74-Sonic-Lauf
+offen. Interpreter, JIT, Runtime-Dekodierung und Emulationsfallback bleiben
+verboten.
 
 ## CompletePlatform-Quellstand und offene Produktabnahme
 
@@ -466,7 +540,7 @@ portablen Schedulerereignisse. Der fruehere
 `game-entry-handoff-complete-platform-apply-unavailable`-Abbruch ist damit
 nicht mehr der aktuelle Stand.
 
-Die P0-Quellvertraege sind implementiert:
+Die Handoff- und Gate-P0-Quellvertraege sind implementiert:
 
 - KR-4966 verwendet ein relatives Post-Entry-Budget, berichtet die
   tatsaechliche Gastarbeit und erlaubt Exitcode 0 nur bei vollstaendigem Gate
@@ -476,9 +550,11 @@ Die P0-Quellvertraege sind implementiert:
   zuletzt publiziert.
 - KR-4970 trennt das Product-Handoff von verlustfreier Diagnose und behaelt
   installierte VMU-/Flash-Nutzerdaten als autoritative Working Copy.
-- KR-4972 bindet bewachte AOT-Einstiege und Exportvollstaendigkeit allgemein.
+- KR-4972 bindet bewachte AOT-Einstiege und Exportvollstaendigkeit allgemein;
+  seine Summary-/Inventar-Konvergenzkorrektur ist auf `cb5fb47`
+  eingecheckt.
 
-Die reale ABI-73-Produktabnahme dieser vier Source-Vertraege bleibt offen.
+Die reale ABI-74-Produktabnahme dieser vier Source-Vertraege bleibt offen.
 Davon getrennte Langzeitpunkte bleiben:
 
 - KR-4953 braucht weiterhin einen zweiten unabhaengigen Capture sowie
@@ -500,7 +576,11 @@ KR-4965 ADXT/mwSnd-Sound-Completion bis zum Writer schliessen
          Ziel herstellen [abgeschlossen; altes Ziel statisch emittiert]
          |
          +--> KR-4972 Hashgebundene Shared-Callback-/Thunk-AOT-Coverage
-                herstellen [Source implementiert, Produktproof offen]
+                herstellen [AOT-Vertrag und Analysefix eingecheckt,
+                Produktproof offen]
+                |
+                +--> Summary-/Inventar-Konvergenz, Manifestcache und
+                       terminalen Fehlerbericht [Source abgeschlossen]
                 |
                 +--> KR-4966 Post-Entry-Produktgate und erforderliche
                        Meilensteine [Source implementiert, Produktproof offen]
@@ -585,7 +665,7 @@ Das historische CompletePlatform-v24 prevalidierte vor der ersten Mutation alle 
 Geraetenutzlasten und die Ereignisbijektion und hat einen realen
 Produkt-Apply ohne `first_problem` erreicht. Im aktuellen Quellstand bereitet
 `KR-4967` alle falliblen Subsystemzustaende vor Commitbeginn vor und
-veroeffentlicht CPU-PC/PR zuletzt. Die frische ABI-73-Produktabnahme und
+veroeffentlicht CPU-PC/PR zuletzt. Die frische ABI-74-Produktabnahme und
 weitergehende normative per-Subsystem-Digests stehen noch aus.
 
 Verbindliche Reihenfolge:
@@ -610,7 +690,7 @@ Produktdaten werden getrennt:
 
 Ein Produkt-Handoff darf keine alte VMU-Working-Copy ueber aktuelle Nutzerdaten schreiben.
 Der dafuer allgemeingueltige, Save-erhaltende `KR-4970`-Quellvertrag ist
-implementiert; sein realer ABI-73-Produktnachweis steht noch aus.
+implementiert; sein realer ABI-74-Produktnachweis steht noch aus.
 
 ## Phase C - Produktgates
 
@@ -626,7 +706,7 @@ Schedulermaximum von `600.000.000`. v24 fuehrte dadurch nach dem Restore nur
 Post-Entry-Zyklen am AOT-Coveragefehler. Der aktuelle `KR-4966`-Quellvertrag
 berichtet Startzyklus, Post-Entry-Gastzyklen, Hostzeit und daraus berechnete
 effektive Gast-MHz und verweigert einem vorzeitig beendeten Budgetlauf
-Exitcode 0. Die reale ABI-73-Abnahme ist noch ausstehend.
+Exitcode 0. Die reale ABI-74-Abnahme ist noch ausstehend.
 
 Das Spielprojekt definiert einen erforderlichen Meilenstein. Ein schwarzer Lauf darf nicht mit Exitcode 0 als vollstaendiger Produkterfolg gelten.
 
@@ -645,19 +725,20 @@ Post-Entry-Gastzyklen mit `16.033.676` Zentraldispatches aus, also nur
 `11,52` Gastzyklen je Dispatch. Dieser Wert stammt aus dem alten absoluten
 Gate und belegt keinen Geschwindigkeitsgewinn.
 
-Der Quellstand `b01586a` besitzt inzwischen:
+Der eingecheckte Quellstand `cb5fb47` enthaelt weiterhin:
 
 - direkt gebundene validierte Ausfuehrungs- und Fastpathdeskriptoren;
 - direkte Owner-Einstiege ohne zweiten Owner-Switch fuer normale Entries;
 - direkte native Ausfuehrung endlicher indirekter Ziele mit validiertem
   Fallback fuer unbekannte Ziele;
-- planbasierte GPR-/Skalarregisterlokalisierung mit Release/Reload an echten
-  Architekturgrenzen;
+- IR-Liveness-basierte Auswahl fuer GPR-/Skalarregisterlokalisierung mit
+  Release/Reload an Architekturgrenzen; die Ausdrucksumschreibung erfolgt
+  noch als lexikalisch begrenzte C++-Transformation;
 - blockweise direkte Haupt-RAM-Schreibbatches mit korrekter Invalidierungs-
   und Fallbackgrenze.
 
 Die reale Wirkung auf Zentraldispatches und effektive Gast-MHz ist bis zum
-frischen ABI-73-Produktlauf unbekannt. Danach bleiben als Performancearbeit
+frischen ABI-74-Produktlauf unbekannt. Danach bleiben als Performancearbeit
 insbesondere:
 
 - verbleibende Function-AOT-Escapes anhand
@@ -723,18 +804,21 @@ Ergebnis:
 
 ### Produktlauf A4 - aktueller P0-Produktproof [ausstehend]
 
-Aus `b01586a` wird ein frischer ABI-73-MSVC-NativeDisc-Port erzeugt, mit der
-privaten Original-GDI installiert und fuer exakt 600 Millionen Gastzyklen
-ausgefuehrt. Ein separater Sichtlauf klassifiziert den hoechsten realen
-Bildschirm. Erst dieser Lauf entscheidet, ob der historische
-`0x8C11088C -> 0x8C64784E`-Blocker passiert wird, welcher neue erste Fehler
+Nach Review, fokussiertem Build und Commit `cb5fb47` der Analyse-, Inventar-,
+Terminalreport- und Cachekorrekturen wird genau ein frischer
+ABI-74-MSVC-NativeDisc-Port erzeugt, mit der privaten Original-GDI
+installiert und fuer exakt 600 Millionen Post-Entry-Gastzyklen ausgefuehrt.
+Ein separater Sichtlauf klassifiziert den hoechsten realen Bildschirm. Erst
+dieser Lauf entscheidet, ob sowohl der historische
+`0x8C11088C -> 0x8C64784E`-Blocker als auch die v33-Grenze
+`0x8C65EA06 -> 0x8C0101F2` passiert werden, welcher neue erste Fehler
 vorliegt und welche effektive Gast-MHz der neue Hotpath erreicht.
 
 ### Produktlauf B - nach KR-4967 bis KR-4970
 
 Ein realer Capture-/Apply-Lauf ist mit v24 belegt. Zur Abnahme fehlen
 weiterhin ein zweiter unabhaengiger Capture, Offline-Inspect/Verify, die
-normativen per-Subsystem-Digests und ein realer ABI-73-Nachweis des
+normativen per-Subsystem-Digests und ein realer ABI-74-Nachweis des
 implementierten Save-erhaltenden ProductHandoff.
 
 Verbindlich bleiben zwei reale Laeufe:

@@ -1,11 +1,12 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag in Quellstand `b01586a` ist Version
-`6`. Der Gesamtvertrag dieses Stands verwendet Runtime-ABI 73, Block-ABI 5,
-PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 62,
-Native-AOT-Emissionsprofil 11 und Portpartitionsschema 5. Die vereinbarten
-P0-Umbauten sind im Quellpfad abgeschlossen; der frische
-ABI-73-Sonic-NativeDisc-Produktnachweis ueber 600 Millionen
+Der aktuelle oeffentliche Analyzervertrag in Quellstand `cb5fb47` ist Version
+`8`. Der Gesamtvertrag dieses Stands verwendet Runtime-ABI 74, Block-ABI 5,
+PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 64,
+Native-AOT-Emissionsprofil 13 und Portpartitionsschema 5. Die reviewten
+Inventar-, Provenienz-, Budget- und Exportvollstaendigkeitsumbauten sind im
+Quellpfad abgeschlossen; der frische ABI-74-Sonic-NativeDisc-Produktnachweis
+ueber 600 Millionen
 Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus.
 
 Seine kanonische Quelle ist `KATANA_ANALYZER_ABI_VERSION` in
