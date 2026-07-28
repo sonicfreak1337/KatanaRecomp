@@ -594,13 +594,38 @@ SchedulerEventId DreamcastMapleController::rehydrate_scheduled_event(
 
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this](const auto restored_event_id, const auto) {
-            complete_dma(restored_event_id);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::MapleDma);
+    commit_rehydrated_scheduled_event(event_id, channel, token);
+    return event_id;
+}
+
+SchedulerCallback
+DreamcastMapleController::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != dreamcast_maple_dma_event_channel ||
+        token != dreamcast_maple_dma_event_token_v1)
+        throw std::invalid_argument(
+            "Maple-DMA-Handoff besitzt einen unbekannten Eventkanal oder "
+            "Token.");
+    return [this](const auto restored_event_id, const auto) {
+        complete_dma(restored_event_id);
+    };
+}
+
+void DreamcastMapleController::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != dreamcast_maple_dma_event_channel ||
+        token != dreamcast_maple_dma_event_token_v1 ||
+        !completion_event_rehydration_pending_ || completion_event_ ||
+        state_ != MapleDmaState::Active || active_ == 0u ||
+        enabled_ == 0u)
+        std::terminate();
     completion_event_ = event_id;
     completion_event_rehydration_pending_ = false;
-    return event_id;
 }
 
 bool DreamcastMapleController::event_rehydration_pending() const noexcept {

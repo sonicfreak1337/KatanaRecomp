@@ -606,18 +606,27 @@ void Sh4Scif::validate_state_restore(
     }
 }
 
-void Sh4Scif::restore_state_passive(const Sh4ScifSnapshot& state) {
+PreparedSh4ScifStateRestore Sh4Scif::prepare_state_restore(
+    const Sh4ScifSnapshot& state) const {
     validate_state_restore(state);
-    std::deque<std::uint8_t> restored_transmit(
+    PreparedSh4ScifStateRestore prepared;
+    prepared.owner_ = this;
+    prepared.state_ = state;
+    prepared.transmit_fifo_ = std::deque<std::uint8_t>(
         state.transmit_fifo.begin(), state.transmit_fifo.end());
-    std::deque<std::uint8_t> restored_receive(
+    prepared.receive_fifo_ = std::deque<std::uint8_t>(
         state.receive_fifo.begin(), state.receive_fifo.end());
-    auto restored_history = state.transmitted_bytes;
+    return prepared;
+}
 
+void Sh4Scif::commit_prepared_state_restore(
+    PreparedSh4ScifStateRestore prepared) noexcept {
+    if (prepared.owner_ != this) std::terminate();
+    auto& state = prepared.state_;
     cancel_transmit();
-    transmit_fifo_ = std::move(restored_transmit);
-    receive_fifo_ = std::move(restored_receive);
-    transmitted_bytes_ = std::move(restored_history);
+    transmit_fifo_.swap(prepared.transmit_fifo_);
+    receive_fifo_.swap(prepared.receive_fifo_);
+    transmitted_bytes_ = std::move(state.transmitted_bytes);
     mode_ = state.mode;
     bit_rate_ = state.bit_rate;
     control_ = state.control;
@@ -631,6 +640,11 @@ void Sh4Scif::restore_state_passive(const Sh4ScifSnapshot& state) {
     transmit_event_rehydration_pending_ =
         !transmit_fifo_.empty() && (control_ & 0x20u) != 0u &&
         (fifo_control_ & 0x04u) == 0u;
+}
+
+void Sh4Scif::restore_state_passive(const Sh4ScifSnapshot& state) {
+    auto prepared = prepare_state_restore(state);
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 SchedulerEventId Sh4Scif::rehydrate_scheduled_event(
@@ -657,14 +671,38 @@ SchedulerEventId Sh4Scif::rehydrate_scheduled_event(
 
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this](const auto restored_event_id, const auto) {
-            complete_transmit(restored_event_id);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::ScifTransmit);
-    transmit_event_ = event_id;
+    commit_rehydrated_scheduled_event(event_id, channel, token);
     transmit_event_deadline_ = guest_cycle;
-    transmit_event_rehydration_pending_ = false;
     return event_id;
+}
+
+SchedulerCallback Sh4Scif::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != sh4_scif_transmit_event_channel ||
+        token != sh4_scif_transmit_event_token_v1)
+        throw std::invalid_argument(
+            "SH-4-SCIF-Handoff besitzt einen unbekannten Eventkanal oder "
+            "Token.");
+    return [this](const auto restored_event_id, const auto) {
+        complete_transmit(restored_event_id);
+    };
+}
+
+void Sh4Scif::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != sh4_scif_transmit_event_channel ||
+        token != sh4_scif_transmit_event_token_v1 ||
+        !transmit_event_rehydration_pending_ || transmit_event_ ||
+        transmit_fifo_.empty() || (control_ & 0x20u) == 0u ||
+        (fifo_control_ & 0x04u) != 0u)
+        std::terminate();
+    transmit_event_ = event_id;
+    transmit_event_rehydration_pending_ = false;
 }
 
 bool Sh4Scif::event_rehydration_pending() const noexcept {

@@ -552,8 +552,13 @@ void DreamcastG2DmaController::validate_state_restore(
 void DreamcastG2DmaController::restore_state_passive(
     const DreamcastG2DmaSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void DreamcastG2DmaController::commit_validated_state_restore(
+    DreamcastG2DmaSnapshot state) noexcept {
     cancel_events();
-    channels_ = state.channels;
+    channels_ = std::move(state.channels);
     for (auto& channel : channels_) {
         const auto pending =
             channel.completion_event.has_value() ||
@@ -567,7 +572,7 @@ void DreamcastG2DmaController::restore_state_passive(
     modem_timeout_ = state.modem_timeout;
     modem_wait_ = state.modem_wait;
     completed_dma_count_ = state.completed_dma_count;
-    last_fault_ = state.last_fault;
+    last_fault_ = std::move(state.last_fault);
 }
 
 SchedulerEventId DreamcastG2DmaController::rehydrate_scheduled_event(
@@ -589,13 +594,38 @@ SchedulerEventId DreamcastG2DmaController::rehydrate_scheduled_event(
             "G2-DMA-Completion passt nicht zur gespeicherten Gastzeit.");
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this, channel](const auto restored_event_id, const auto) {
-            complete(channel, restored_event_id);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::HollyG2Dma);
+    commit_rehydrated_scheduled_event(event_id, channel, token);
+    return event_id;
+}
+
+SchedulerCallback
+DreamcastG2DmaController::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel >= channels_.size() ||
+        token != dreamcast_holly_dma_event_token_v1)
+        throw std::invalid_argument(
+            "G2-DMA-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    return [this, channel](const auto restored_event_id, const auto) {
+        complete(channel, restored_event_id);
+    };
+}
+
+void DreamcastG2DmaController::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel >= channels_.size() ||
+        token != dreamcast_holly_dma_event_token_v1)
+        std::terminate();
+    auto& state = channels_[channel];
+    if (!state.completion_event_rehydration_pending ||
+        state.completion_event || state.active == 0u)
+        std::terminate();
     state.completion_event = event_id;
     state.completion_event_rehydration_pending = false;
-    return event_id;
 }
 
 bool DreamcastG2DmaController::event_rehydration_pending() const noexcept {
@@ -1000,6 +1030,11 @@ void DreamcastG1BusController::validate_state_restore(
 void DreamcastG1BusController::restore_state_passive(
     const DreamcastG1DmaSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void DreamcastG1BusController::commit_validated_state_restore(
+    DreamcastG1DmaSnapshot state) noexcept {
     if (completion_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
@@ -1018,8 +1053,8 @@ void DreamcastG1BusController::restore_state_passive(
     next_chunk_cycle_ = state.channel.completion_cycle;
     fault_ = state.channel.fault;
     fault_count_ = state.channel.fault_count;
-    last_fault_ = state.last_fault;
-    last_g1_fault_ = state.last_g1_fault;
+    last_fault_ = std::move(state.last_fault);
+    last_g1_fault_ = std::move(state.last_g1_fault);
     // The absence of a local event ID while next_chunk_cycle_ is non-zero is
     // the passive rehydration marker for G1.
 }
@@ -1042,12 +1077,35 @@ SchedulerEventId DreamcastG1BusController::rehydrate_scheduled_event(
             "G1-DMA-Completion passt nicht zur gespeicherten Gastzeit.");
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this](const auto restored_event_id, const auto) {
-            complete_chunk(restored_event_id);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::HollyG1Dma);
-    completion_event_ = event_id;
+    commit_rehydrated_scheduled_event(event_id, channel, token);
     return event_id;
+}
+
+SchedulerCallback
+DreamcastG1BusController::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != 0u ||
+        token != dreamcast_holly_dma_event_token_v1)
+        throw std::invalid_argument(
+            "G1-DMA-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    return [this](const auto restored_event_id, const auto) {
+        complete_chunk(restored_event_id);
+    };
+}
+
+void DreamcastG1BusController::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != 0u ||
+        token != dreamcast_holly_dma_event_token_v1 ||
+        completion_event_ || dma_active_ == 0u ||
+        next_chunk_cycle_ == 0u)
+        std::terminate();
+    completion_event_ = event_id;
 }
 
 bool DreamcastG1BusController::event_rehydration_pending() const noexcept {
@@ -1471,6 +1529,11 @@ void DreamcastPvrDmaController::validate_state_restore(
 void DreamcastPvrDmaController::restore_state_passive(
     const DreamcastPvrDmaSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void DreamcastPvrDmaController::commit_validated_state_restore(
+    DreamcastPvrDmaSnapshot state) noexcept {
     cancel();
     const auto& channel = state.channel;
     pvr_address_ = channel.peripheral_address;
@@ -1489,7 +1552,7 @@ void DreamcastPvrDmaController::restore_state_passive(
     remaining_cycles_ = channel.remaining_cycles;
     fault_ = channel.fault;
     fault_count_ = channel.fault_count;
-    last_fault_ = state.last_fault;
+    last_fault_ = std::move(state.last_fault);
 }
 
 SchedulerEventId DreamcastPvrDmaController::rehydrate_scheduled_event(
@@ -1509,12 +1572,34 @@ SchedulerEventId DreamcastPvrDmaController::rehydrate_scheduled_event(
             "PVR-DMA-Completion passt nicht zur gespeicherten Gastzeit.");
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this](const auto restored_event_id, const auto) {
-            complete(restored_event_id);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::HollyPvrDma);
-    completion_event_ = event_id;
+    commit_rehydrated_scheduled_event(event_id, channel, token);
     return event_id;
+}
+
+SchedulerCallback
+DreamcastPvrDmaController::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != 0u ||
+        token != dreamcast_holly_dma_event_token_v1)
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    return [this](const auto restored_event_id, const auto) {
+        complete(restored_event_id);
+    };
+}
+
+void DreamcastPvrDmaController::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != 0u ||
+        token != dreamcast_holly_dma_event_token_v1 ||
+        completion_event_ || active_ == 0u || completion_cycle_ == 0u)
+        std::terminate();
+    completion_event_ = event_id;
 }
 
 bool DreamcastPvrDmaController::event_rehydration_pending() const noexcept {

@@ -103,6 +103,8 @@ class AicaRegisterFile final {
     [[nodiscard]] AicaRegisterSnapshot snapshot() const noexcept;
     void validate_state_restore(const AicaRegisterSnapshot& state) const;
     void restore_state_passive(AicaRegisterSnapshot state);
+    void commit_validated_state_restore(
+        AicaRegisterSnapshot state) noexcept;
 
   private:
     struct ChannelRuntime {
@@ -150,6 +152,7 @@ class AicaRtc final {
         const AicaRtcSnapshot& state,
         std::uint64_t expected_scheduler_cycle) const;
     void restore_state_passive(AicaRtcSnapshot state);
+    void commit_validated_state_restore(AicaRtcSnapshot state) noexcept;
 
   private:
     static void check(std::uint32_t offset, MemoryAccessWidth width);
@@ -243,6 +246,7 @@ class AicaTimer final {
     [[nodiscard]] Snapshot snapshot() const noexcept;
     void validate_state_restore(const Snapshot& state) const;
     void restore_state_passive(Snapshot state);
+    void commit_validated_state_restore(Snapshot state) noexcept;
 
   private:
     std::uint64_t remainder_ = 0u;
@@ -272,6 +276,7 @@ class AicaInterruptState final {
     void validate_state_restore(const Snapshot& state) const;
     // Direct assignment deliberately avoids the IRQ publication observer.
     void restore_state_passive(Snapshot state);
+    void commit_validated_state_restore(Snapshot state) noexcept;
 
   private:
     std::uint32_t enabled_ = 0u;
@@ -319,10 +324,19 @@ class AicaExecutionController final {
     [[nodiscard]] Snapshot snapshot() const noexcept;
     void validate_state_restore(const Snapshot& state) const;
     void restore_state_passive(Snapshot state);
+    void commit_validated_state_restore(Snapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
@@ -353,6 +367,35 @@ struct DreamcastAicaStateSnapshot {
     AicaExecutionController::Snapshot execution;
 };
 
+class PreparedDreamcastAicaStateRestore final {
+  public:
+    PreparedDreamcastAicaStateRestore(
+        const PreparedDreamcastAicaStateRestore&) = delete;
+    PreparedDreamcastAicaStateRestore& operator=(
+        const PreparedDreamcastAicaStateRestore&) = delete;
+    PreparedDreamcastAicaStateRestore(
+        PreparedDreamcastAicaStateRestore&&) noexcept = default;
+    PreparedDreamcastAicaStateRestore& operator=(
+        PreparedDreamcastAicaStateRestore&&) noexcept = default;
+
+  private:
+    PreparedDreamcastAicaStateRestore() = default;
+    friend PreparedDreamcastAicaStateRestore
+    prepare_dreamcast_aica_state_restore(
+        const AicaRegisterFile&,
+        const AicaRtc&,
+        const AicaExecutionController&,
+        DreamcastAicaStateSnapshot,
+        std::uint64_t);
+    friend void commit_dreamcast_aica_state_restore(
+        AicaRegisterFile&,
+        AicaRtc&,
+        AicaExecutionController&,
+        PreparedDreamcastAicaStateRestore) noexcept;
+
+    DreamcastAicaStateSnapshot state_;
+};
+
 [[nodiscard]] DreamcastAicaStateSnapshot snapshot_dreamcast_aica_state(
     const AicaRegisterFile& registers,
     const AicaRtc& rtc,
@@ -374,6 +417,18 @@ void validate_dreamcast_aica_state_restore(
     const AicaExecutionController& execution,
     const DreamcastAicaStateSnapshot& state,
     std::uint64_t expected_scheduler_cycle);
+[[nodiscard]] PreparedDreamcastAicaStateRestore
+prepare_dreamcast_aica_state_restore(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution,
+    DreamcastAicaStateSnapshot state,
+    std::uint64_t expected_scheduler_cycle);
+void commit_dreamcast_aica_state_restore(
+    AicaRegisterFile& registers,
+    AicaRtc& rtc,
+    AicaExecutionController& execution,
+    PreparedDreamcastAicaStateRestore prepared) noexcept;
 void restore_dreamcast_aica_state_passive(
     AicaRegisterFile& registers,
     AicaRtc& rtc,

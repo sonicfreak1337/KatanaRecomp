@@ -415,6 +415,11 @@ void PvrRegisterFile::validate_state_restore(
 
 void PvrRegisterFile::restore_state_passive(PvrRegisterSnapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void PvrRegisterFile::commit_validated_state_restore(
+    PvrRegisterSnapshot state) noexcept {
     const auto needs_vblank_in =
         state.vblank_in_event.has_value() ||
         state.vblank_in_event_rehydration_pending;
@@ -469,12 +474,10 @@ SchedulerEventId PvrRegisterFile::rehydrate_scheduled_event(
                 "PVR-Register-Handoff erwartet kein VBlank-In-Ereignis.");
         const auto event = scheduler_.schedule_at(
             guest_cycle,
-            [this](const auto id, const auto) {
-                handle_scan_event(id, true);
-            },
+            make_rehydrated_scheduled_event_callback(
+                channel, token, std::nullopt),
             SchedulerEventKind::PvrVblankIn);
-        vblank_in_event_ = event;
-        vblank_in_event_rehydration_pending_ = false;
+        commit_rehydrated_scheduled_event(event, channel, token);
         return event;
     }
     if (channel == dreamcast_pvr_vblank_out_event_channel) {
@@ -483,12 +486,10 @@ SchedulerEventId PvrRegisterFile::rehydrate_scheduled_event(
                 "PVR-Register-Handoff erwartet kein VBlank-Out-Ereignis.");
         const auto event = scheduler_.schedule_at(
             guest_cycle,
-            [this](const auto id, const auto) {
-                handle_scan_event(id, false);
-            },
+            make_rehydrated_scheduled_event_callback(
+                channel, token, std::nullopt),
             SchedulerEventKind::PvrVblankOut);
-        vblank_out_event_ = event;
-        vblank_out_event_rehydration_pending_ = false;
+        commit_rehydrated_scheduled_event(event, channel, token);
         return event;
     }
     if (channel == dreamcast_pvr_hblank_event_channel) {
@@ -499,16 +500,71 @@ SchedulerEventId PvrRegisterFile::rehydrate_scheduled_event(
         const auto line = *hblank_event_line_;
         const auto event = scheduler_.schedule_at(
             guest_cycle,
-            [this, line](const auto id, const auto) {
-                handle_hblank_event(id, line);
-            },
+            make_rehydrated_scheduled_event_callback(
+                channel, token, line),
             SchedulerEventKind::PvrHblank);
-        hblank_event_ = event;
-        hblank_event_rehydration_pending_ = false;
+        commit_rehydrated_scheduled_event(event, channel, token);
         return event;
     }
     throw std::invalid_argument(
         "PVR-Register-Handoff besitzt einen unbekannten Eventkanal.");
+}
+
+SchedulerCallback
+PvrRegisterFile::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token,
+    const std::optional<std::uint32_t> hblank_line) {
+    if (token != dreamcast_pvr_scan_event_token_v1)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt einen unbekannten Eventtoken.");
+    if (channel == dreamcast_pvr_vblank_in_event_channel)
+        return [this](const auto id, const auto) {
+            handle_scan_event(id, true);
+        };
+    if (channel == dreamcast_pvr_vblank_out_event_channel)
+        return [this](const auto id, const auto) {
+            handle_scan_event(id, false);
+        };
+    if (channel == dreamcast_pvr_hblank_event_channel &&
+        hblank_line)
+        return [this, line = *hblank_line](const auto id, const auto) {
+            handle_hblank_event(id, line);
+        };
+    throw std::invalid_argument(
+        "PVR-Register-Handoff besitzt einen unbekannten Eventkanal.");
+}
+
+void PvrRegisterFile::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (token != dreamcast_pvr_scan_event_token_v1)
+        std::terminate();
+    if (channel == dreamcast_pvr_vblank_in_event_channel) {
+        if (!vblank_in_event_rehydration_pending_ || vblank_in_event_)
+            std::terminate();
+        vblank_in_event_ = event_id;
+        vblank_in_event_rehydration_pending_ = false;
+        return;
+    }
+    if (channel == dreamcast_pvr_vblank_out_event_channel) {
+        if (!vblank_out_event_rehydration_pending_ ||
+            vblank_out_event_)
+            std::terminate();
+        vblank_out_event_ = event_id;
+        vblank_out_event_rehydration_pending_ = false;
+        return;
+    }
+    if (channel == dreamcast_pvr_hblank_event_channel) {
+        if (!hblank_event_rehydration_pending_ || hblank_event_ ||
+            !hblank_event_line_)
+            std::terminate();
+        hblank_event_ = event_id;
+        hblank_event_rehydration_pending_ = false;
+        return;
+    }
+    std::terminate();
 }
 
 bool PvrRegisterFile::event_rehydration_pending(
@@ -2072,6 +2128,11 @@ void TileAccelerator::restore_state_passive(
     TileAcceleratorSnapshot state) {
     validate_state_restore(state);
     detach_pvr_material_graphs(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void TileAccelerator::commit_validated_state_restore(
+    TileAcceleratorSnapshot state) noexcept {
     primitives_ = std::move(state.primitives);
     current_strip_ = std::move(state.current_strip);
     current_list_ = state.current_list;
@@ -2720,7 +2781,13 @@ void PvrTaFifo::validate_state_restore(
 void PvrTaFifo::restore_state_passive(PvrTaFifoSnapshot state) {
     validate_state_restore(state);
     detach_pvr_material_graphs(state);
-    accelerator_.restore_state_passive(std::move(state.accelerator));
+    commit_validated_state_restore(std::move(state));
+}
+
+void PvrTaFifo::commit_validated_state_restore(
+    PvrTaFifoSnapshot state) noexcept {
+    accelerator_.commit_validated_state_restore(
+        std::move(state.accelerator));
     active_list_ = state.active_list;
     active_textured_ = state.active_textured;
     active_uv16_ = state.active_uv16;
@@ -2963,6 +3030,11 @@ void PvrTaFifoMemoryDevice::validate_state_restore(
 
 void PvrTaFifoMemoryDevice::restore_state_passive(Snapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void PvrTaFifoMemoryDevice::commit_validated_state_restore(
+    Snapshot state) noexcept {
     packet_ = std::move(state.packet);
     packet_base_ = state.packet_base;
     written_mask_ = state.written_mask;
@@ -3172,6 +3244,11 @@ void PvrYuvConverterMemoryDevice::validate_state_restore(
 
 void PvrYuvConverterMemoryDevice::restore_state_passive(Snapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void PvrYuvConverterMemoryDevice::commit_validated_state_restore(
+    Snapshot state) noexcept {
     input_ = std::move(state.input);
     configuration_ = state.configuration;
     destination_ = state.destination;
@@ -4561,6 +4638,11 @@ void PvrSoftwareRenderer::validate_state_restore(
 void PvrSoftwareRenderer::restore_state_passive(
     PvrSoftwareRendererSnapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void PvrSoftwareRenderer::commit_validated_state_restore(
+    PvrSoftwareRendererSnapshot state) noexcept {
     metrics_ = state.metrics;
     next_render_generation_ = state.next_render_generation;
     last_render_generation_ = state.last_render_generation;
@@ -4691,6 +4773,42 @@ void validate_dreamcast_pvr_state_restore(
     renderer.validate_state_restore(state.renderer);
 }
 
+PreparedDreamcastPvrStateRestore prepare_dreamcast_pvr_state_restore(
+    const PvrRegisterFile& registers,
+    const PvrTaFifo& ta_fifo,
+    const PvrTaFifoMemoryDevice& ta_aperture,
+    const PvrYuvConverterMemoryDevice& yuv,
+    const PvrSoftwareRenderer& renderer,
+    DreamcastPvrStateSnapshot state) {
+    validate_dreamcast_pvr_state_restore(
+        registers, ta_fifo, ta_aperture, yuv, renderer, state);
+    // Shared material graphs are detached here because cloning can allocate.
+    // The later device commits only move already-owned values.
+    detach_pvr_material_graphs(state.ta_fifo);
+    PreparedDreamcastPvrStateRestore prepared;
+    prepared.state_ = std::move(state);
+    return prepared;
+}
+
+void commit_dreamcast_pvr_state_restore(
+    PvrRegisterFile& registers,
+    PvrTaFifo& ta_fifo,
+    PvrTaFifoMemoryDevice& ta_aperture,
+    PvrYuvConverterMemoryDevice& yuv,
+    PvrSoftwareRenderer& renderer,
+    PreparedDreamcastPvrStateRestore prepared) noexcept {
+    auto& state = prepared.state_;
+    ta_fifo.commit_validated_state_restore(
+        std::move(state.ta_fifo));
+    ta_aperture.commit_validated_state_restore(
+        std::move(state.ta_aperture));
+    yuv.commit_validated_state_restore(std::move(state.yuv));
+    renderer.commit_validated_state_restore(
+        std::move(state.renderer));
+    registers.commit_validated_state_restore(
+        std::move(state.registers));
+}
+
 void restore_dreamcast_pvr_state_passive(
     PvrRegisterFile& registers,
     PvrTaFifo& ta_fifo,
@@ -4698,13 +4816,20 @@ void restore_dreamcast_pvr_state_passive(
     PvrYuvConverterMemoryDevice& yuv,
     PvrSoftwareRenderer& renderer,
     DreamcastPvrStateSnapshot state) {
-    validate_dreamcast_pvr_state_restore(
-        registers, ta_fifo, ta_aperture, yuv, renderer, state);
-    ta_fifo.restore_state_passive(std::move(state.ta_fifo));
-    ta_aperture.restore_state_passive(std::move(state.ta_aperture));
-    yuv.restore_state_passive(std::move(state.yuv));
-    renderer.restore_state_passive(std::move(state.renderer));
-    registers.restore_state_passive(std::move(state.registers));
+    auto prepared = prepare_dreamcast_pvr_state_restore(
+        registers,
+        ta_fifo,
+        ta_aperture,
+        yuv,
+        renderer,
+        std::move(state));
+    commit_dreamcast_pvr_state_restore(
+        registers,
+        ta_fifo,
+        ta_aperture,
+        yuv,
+        renderer,
+        std::move(prepared));
 }
 
 namespace {

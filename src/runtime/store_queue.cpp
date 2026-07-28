@@ -270,14 +270,18 @@ void Sh4StoreQueues::validate_state_restore(
 void Sh4StoreQueues::restore_state_passive(
     const Sh4StoreQueueSnapshot& state) {
     validate_state_restore(state);
-    auto prepared_fault = state.last_sink_fault;
+    commit_validated_state_restore(state);
+}
+
+void Sh4StoreQueues::commit_validated_state_restore(
+    Sh4StoreQueueSnapshot state) noexcept {
     queues_ = state.queues;
     qacr_ = state.qacr;
     operand_cache_ram_ = state.operand_cache_ram;
     operand_cache_ram_enabled_ = state.operand_cache_ram_enabled;
     transfer_count_ = state.transfer_count;
     rejected_transfer_count_ = state.rejected_transfer_count;
-    last_sink_fault_ = std::move(prepared_fault);
+    last_sink_fault_ = std::move(state.last_sink_fault);
 }
 
 void Sh4StoreQueues::reset() noexcept {

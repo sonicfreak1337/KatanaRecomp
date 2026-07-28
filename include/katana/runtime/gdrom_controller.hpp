@@ -193,6 +193,22 @@ struct DreamcastGdRomSnapshot {
 
 class DreamcastGdRomController final {
   public:
+    class PreparedStateRestore final {
+      public:
+        PreparedStateRestore(const PreparedStateRestore&) = delete;
+        PreparedStateRestore& operator=(const PreparedStateRestore&) =
+            delete;
+        PreparedStateRestore(PreparedStateRestore&&) noexcept;
+        PreparedStateRestore& operator=(PreparedStateRestore&&) noexcept;
+        ~PreparedStateRestore();
+
+      private:
+        friend class DreamcastGdRomController;
+        struct Data;
+        PreparedStateRestore();
+        std::unique_ptr<Data> data_;
+    };
+
     // The address passed to the observer is the contiguous physical range actually committed to
     // Memory, never an untranslated guest pointer.
     using ModuleLoadObserver = std::function<void(std::uint32_t, std::span<const std::uint8_t>,
@@ -226,11 +242,23 @@ class DreamcastGdRomController final {
     void validate_state_restore(
         const DreamcastGdRomSnapshot& state,
         std::uint64_t expected_scheduler_cycle) const;
+    [[nodiscard]] PreparedStateRestore prepare_state_restore(
+        const DreamcastGdRomSnapshot& state) const;
+    void commit_prepared_state_restore(
+        PreparedStateRestore prepared) noexcept;
     void restore_state_passive(const DreamcastGdRomSnapshot& state);
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void reset() noexcept;
 

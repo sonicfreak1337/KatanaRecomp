@@ -116,8 +116,12 @@ void InterruptController::validate_state_restore(
 void InterruptController::restore_state_passive(
     const InterruptControllerSnapshot& state) {
     validate_state_restore(state);
-    auto prepared = state.pending;
-    pending_ = std::move(prepared);
+    commit_validated_state_restore(state);
+}
+
+void InterruptController::commit_validated_state_restore(
+    InterruptControllerSnapshot state) noexcept {
+    pending_ = std::move(state.pending);
     ++interrupt_epoch_;
     update_pending_metadata();
 }

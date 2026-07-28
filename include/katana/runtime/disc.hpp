@@ -147,6 +147,22 @@ struct GdRomAsyncReaderSnapshot {
 
 class GdRomAsyncReader final {
   public:
+    class PreparedStateRestore final {
+      public:
+        PreparedStateRestore(const PreparedStateRestore&) = delete;
+        PreparedStateRestore& operator=(const PreparedStateRestore&) =
+            delete;
+        PreparedStateRestore(PreparedStateRestore&&) noexcept;
+        PreparedStateRestore& operator=(PreparedStateRestore&&) noexcept;
+        ~PreparedStateRestore();
+
+      private:
+        friend class GdRomAsyncReader;
+        struct Data;
+        PreparedStateRestore();
+        std::unique_ptr<Data> data_;
+    };
+
     explicit GdRomAsyncReader(EventScheduler& scheduler,
                               GdRomDrive drive,
                               GdRomTiming timing = {},
@@ -165,11 +181,23 @@ class GdRomAsyncReader final {
     void validate_state_restore(
         const GdRomAsyncReaderSnapshot& state,
         std::uint64_t expected_scheduler_cycle) const;
+    [[nodiscard]] PreparedStateRestore prepare_state_restore(
+        const GdRomAsyncReaderSnapshot& state) const;
+    void commit_prepared_state_restore(
+        PreparedStateRestore prepared) noexcept;
     void restore_state_passive(const GdRomAsyncReaderSnapshot& state);
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:

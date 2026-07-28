@@ -181,9 +181,6 @@ class ExecutableModuleCatalog final {
     [[nodiscard]] const ExecutableModuleMetrics& metrics() const noexcept;
     [[nodiscard]] ExecutableModuleCatalogSnapshot snapshot() const;
 
-  private:
-    friend class ExecutableDiscLoadTransactionCoordinator;
-    friend class DemandBlockMaterializer;
     struct PreparedDiscLoadCatalog {
         struct ModuleUpdate {
             std::size_t module_index = 0u;
@@ -200,6 +197,10 @@ class ExecutableModuleCatalog final {
         std::span<const std::pair<std::uint32_t, std::size_t>> invalidated_ranges);
     void cancel_disc_load_catalog(PreparedDiscLoadCatalog& plan) noexcept;
     void commit_disc_load_catalog(PreparedDiscLoadCatalog plan) noexcept;
+
+  private:
+    friend class ExecutableDiscLoadTransactionCoordinator;
+    friend class DemandBlockMaterializer;
     static constexpr std::uint32_t runtime_write_page_size = 4096u;
     static constexpr std::size_t runtime_write_words_per_page = runtime_write_page_size / 64u;
     struct RuntimeWritePage {

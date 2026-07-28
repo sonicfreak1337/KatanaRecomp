@@ -219,6 +219,11 @@ void Sh4CacheControl::validate_state_restore(
 void Sh4CacheControl::restore_state_passive(
     const Sh4CacheControlSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void Sh4CacheControl::commit_validated_state_restore(
+    Sh4CacheControlSnapshot state) noexcept {
     value_ = state.value;
     instruction_invalidations_ = state.instruction_invalidations;
     instruction_addresses_ = state.instruction_addresses;

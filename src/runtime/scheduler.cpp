@@ -167,6 +167,111 @@ void EventScheduler::restore_time_passive(const std::uint64_t guest_cycle) {
     current_cycle_ = guest_cycle;
 }
 
+struct EventScheduler::PreparedPassiveRestore::Data {
+    EventScheduler* owner = nullptr;
+    std::uint64_t guest_cycle = 0u;
+    SchedulerEventId expected_next_event_id = 0u;
+    SchedulerEventId next_event_id = 0u;
+    std::optional<std::uint64_t> expected_guest_cycle_budget;
+    std::map<EventKey, ScheduledEvent> events;
+    std::unordered_map<SchedulerEventId, EventKey> event_keys;
+    std::vector<SchedulerEventId> assigned_event_ids;
+};
+
+EventScheduler::PreparedPassiveRestore::PreparedPassiveRestore()
+    : data_(std::make_unique<Data>()) {}
+
+EventScheduler::PreparedPassiveRestore::PreparedPassiveRestore(
+    PreparedPassiveRestore&&) noexcept = default;
+
+EventScheduler::PreparedPassiveRestore&
+EventScheduler::PreparedPassiveRestore::operator=(
+    PreparedPassiveRestore&&) noexcept = default;
+
+EventScheduler::PreparedPassiveRestore::~PreparedPassiveRestore() = default;
+
+std::span<const SchedulerEventId>
+EventScheduler::PreparedPassiveRestore::assigned_event_ids() const noexcept {
+    return data_ ? std::span<const SchedulerEventId>(
+                       data_->assigned_event_ids)
+                 : std::span<const SchedulerEventId>{};
+}
+
+EventScheduler::PreparedPassiveRestore
+EventScheduler::prepare_passive_restore(
+    const std::uint64_t guest_cycle,
+    const std::span<const SchedulerPreparedEvent> events) const {
+    if (advance_in_progress_)
+        throw std::logic_error(
+            "Passive Schedulerwiederherstellung ist waehrend eines "
+            "laufenden Advances nicht erlaubt.");
+    if (guest_cycle_budget_ && guest_cycle > *guest_cycle_budget_)
+        throw std::invalid_argument(
+            "Passive Schedulerwiederherstellung liegt hinter dem "
+            "Gastzyklusbudget.");
+    if (events.size() >
+        std::numeric_limits<SchedulerEventId>::max() -
+            next_event_id_)
+        throw std::overflow_error(
+            "Scheduler-Ereignis-IDs fuer passive Wiederherstellung sind "
+            "uebergelaufen.");
+
+    PreparedPassiveRestore prepared;
+    prepared.data_->owner = const_cast<EventScheduler*>(this);
+    prepared.data_->guest_cycle = guest_cycle;
+    prepared.data_->expected_next_event_id = next_event_id_;
+    prepared.data_->next_event_id = next_event_id_;
+    prepared.data_->expected_guest_cycle_budget = guest_cycle_budget_;
+    prepared.data_->event_keys.reserve(events.size());
+    prepared.data_->assigned_event_ids.reserve(events.size());
+    for (const auto& event : events) {
+        if (!event.callback)
+            throw std::invalid_argument(
+                "Passive Schedulerwiederherstellung benoetigt fuer jedes "
+                "Ereignis einen Callback.");
+        if (event.guest_cycle < guest_cycle)
+            throw std::invalid_argument(
+                "Passives Schedulerereignis darf nicht in der Vergangenheit "
+                "liegen.");
+
+        const auto event_id = prepared.data_->next_event_id++;
+        const EventKey key{event.guest_cycle, event_id};
+        const auto [entry, inserted] = prepared.data_->events.emplace(
+            key, ScheduledEvent{event.callback, event.kind});
+        if (!inserted)
+            throw std::logic_error(
+                "Passiver Schedulerereignisschluessel ist bereits aktiv.");
+        try {
+            const auto [id_entry, id_inserted] =
+                prepared.data_->event_keys.emplace(event_id, key);
+            static_cast<void>(id_entry);
+            if (!id_inserted)
+                throw std::logic_error(
+                    "Passive Schedulerereignis-ID ist bereits aktiv.");
+        } catch (...) {
+            prepared.data_->events.erase(entry);
+            throw;
+        }
+        prepared.data_->assigned_event_ids.push_back(event_id);
+    }
+    return prepared;
+}
+
+void EventScheduler::commit_prepared_passive_restore(
+    PreparedPassiveRestore prepared) noexcept {
+    if (!prepared.data_ || prepared.data_->owner != this ||
+        advance_in_progress_ ||
+        next_event_id_ != prepared.data_->expected_next_event_id ||
+        guest_cycle_budget_ !=
+            prepared.data_->expected_guest_cycle_budget)
+        std::terminate();
+
+    events_.swap(prepared.data_->events);
+    event_keys_.swap(prepared.data_->event_keys);
+    current_cycle_ = prepared.data_->guest_cycle;
+    next_event_id_ = prepared.data_->next_event_id;
+}
+
 SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycle,
                                                   const std::size_t event_budget) {
     if (advance_in_progress_) {

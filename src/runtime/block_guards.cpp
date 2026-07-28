@@ -454,11 +454,15 @@ void RuntimeAddressSpace::validate_state_restore(
 void RuntimeAddressSpace::restore_state_passive(
     const RuntimeAddressSpaceSnapshot& state) {
     validate_state_restore(state);
-    auto prepared_mappings = state.mappings;
+    commit_validated_state_restore(state);
+}
+
+void RuntimeAddressSpace::commit_validated_state_restore(
+    RuntimeAddressSpaceSnapshot state) noexcept {
     mode_ = state.mode;
     mmucr_ = state.mmucr;
     asid_ = state.asid;
-    mappings_ = std::move(prepared_mappings);
+    mappings_ = std::move(state.mappings);
     itlb_ = state.itlb;
     itlb_valid_ = state.itlb_valid;
     itlb_lru_ = state.itlb_lru;

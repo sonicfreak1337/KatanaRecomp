@@ -158,6 +158,11 @@ void PlatformInterruptRouter::validate_state_restore(
 void PlatformInterruptRouter::restore_state_passive(
     const PlatformInterruptRouterSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void PlatformInterruptRouter::commit_validated_state_restore(
+    PlatformInterruptRouterSnapshot state) noexcept {
     tmu_levels_ = state.tmu_levels;
     rtc_level_ = state.rtc_level;
     dma_level_ = state.dma_level;
@@ -362,6 +367,11 @@ void Sh4InterruptRegisters::validate_state_restore(
 void Sh4InterruptRegisters::restore_state_passive(
     const Sh4InterruptRegistersSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void Sh4InterruptRegisters::commit_validated_state_restore(
+    Sh4InterruptRegistersSnapshot state) noexcept {
     interrupt_control_ = state.interrupt_control;
     priority_a_ = state.priority_a;
     priority_b_ = state.priority_b;

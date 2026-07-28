@@ -1,7 +1,9 @@
 #include "katana/runtime/game_entry_handoff.hpp"
 
+#include "katana/io/input_provenance.hpp"
 #include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/cache_control.hpp"
+#include "katana/runtime/disc_load_transaction.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/interrupt.hpp"
@@ -700,6 +702,320 @@ InterruptControllerSnapshot expected_interrupt_controller_snapshot(
     return result;
 }
 
+std::string prepared_identity(
+    const std::string_view domain,
+    const std::vector<std::uint8_t>& payload) {
+    PlatformStateWriter writer;
+    writer.magic("KATPREP1\n");
+    writer.string(domain);
+    writer.bytes(payload);
+    const auto material = std::move(writer).finish();
+    const std::string_view view(
+        reinterpret_cast<const char*>(material.data()),
+        material.size());
+    return "sha256:" + katana::io::sha256_bytes(view);
+}
+
+std::string prepared_cpu_identity(const GameEntryCpuState& state) {
+    PlatformStateWriter writer;
+    writer.magic("KATCPU1\n");
+    writer.u32(device_payload_contract);
+    for (const auto value : state.gpr_bank0) writer.u32(value);
+    for (const auto value : state.gpr_bank1) writer.u32(value);
+    for (const auto value : state.r8_to_r15) writer.u32(value);
+    for (const auto value : state.fpr_bank0) writer.u32(value);
+    for (const auto value : state.fpr_bank1) writer.u32(value);
+    writer.u32(state.pc);
+    writer.u32(state.pr);
+    writer.u32(state.sr);
+    writer.u32(state.fpscr);
+    writer.u32(state.gbr);
+    writer.u32(state.vbr);
+    writer.u32(state.dbr);
+    writer.u32(state.ssr);
+    writer.u32(state.spc);
+    writer.u32(state.sgr);
+    writer.u32(state.mach);
+    writer.u32(state.macl);
+    writer.u32(state.fpul);
+    writer.u32(state.tra);
+    writer.u32(state.tea);
+    writer.u32(state.expevt);
+    writer.u32(state.intevt);
+    writer.u32(state.mmu.pteh);
+    writer.u32(state.mmu.ptel);
+    writer.u32(state.mmu.ptea);
+    writer.u32(state.mmu.ttb);
+    writer.u32(state.mmu.mmucr);
+    for (const auto& entry : state.mmu.utlb) {
+        writer.u32(entry.pteh);
+        writer.u32(entry.ptel);
+        writer.u32(entry.ptea);
+    }
+    writer.boolean(state.exception.trap_pending);
+    writer.enumeration(state.exception.last_cause);
+    writer.boolean(state.exception.in_delay_slot);
+    writer.u32(state.exception.last_instruction_pc);
+    writer.u32(state.exception.last_instruction_physical_pc);
+    writer.u32(state.exception.last_owner_pc);
+    writer.boolean(state.exception.sleeping);
+    return prepared_identity(
+        "katana.complete-platform.cpu",
+        std::move(writer).finish());
+}
+
+std::string prepared_memory_identity(
+    const std::span<const ValidatedGameEntryMemoryOperation> operations) {
+    PlatformStateWriter writer;
+    writer.magic("KATMEM1\n");
+    writer.u32(device_payload_contract);
+    writer.u64(static_cast<std::uint64_t>(operations.size()));
+    for (const auto& staged : operations) {
+        writer.enumeration(staged.operation.region);
+        writer.u32(staged.operation.offset);
+        writer.u32(staged.operation.size);
+        writer.enumeration(staged.operation.kind);
+        writer.u8(staged.operation.fill_value);
+        writer.boolean(staged.operation.executable);
+        writer.bytes(staged.bytes);
+    }
+    return prepared_identity(
+        "katana.complete-platform.memory-writes",
+        std::move(writer).finish());
+}
+
+std::string prepared_scheduler_identity(
+    const GameEntrySchedulerState& state) {
+    PlatformStateWriter writer;
+    writer.magic("KATSCH1\n");
+    writer.u32(device_payload_contract);
+    writer.u64(state.current_cycle);
+    writer.u64(static_cast<std::uint64_t>(
+        state.pending_events.size()));
+    for (const auto& event : state.pending_events) {
+        writer.u64(event.guest_cycle);
+        writer.enumeration(event.kind);
+        writer.enumeration(event.owner.kind);
+        writer.u32(event.owner.instance);
+        writer.u32(event.channel);
+        writer.u64(event.token);
+    }
+    return prepared_identity(
+        "katana.complete-platform.scheduler",
+        std::move(writer).finish());
+}
+
+std::string prepared_irq_identity(
+    const InterruptControllerSnapshot& controller,
+    const PlatformInterruptRouterSnapshot& router,
+    const Sh4InterruptRegistersSnapshot& registers) {
+    PlatformStateWriter writer;
+    writer.magic("KATIRQSET1\n");
+    writer.u32(device_payload_contract);
+    writer.bytes(encode_interrupt_controller(controller));
+    writer.bytes(encode_interrupt_router(router));
+    writer.bytes(encode_interrupt_registers(registers));
+    return prepared_identity(
+        "katana.complete-platform.irq",
+        std::move(writer).finish());
+}
+
+DreamcastMapleStateSnapshot expected_maple_state_after_restore(
+    const MapleBus& bus,
+    const DreamcastMapleController& controller,
+    const DreamcastMapleStateSnapshot& captured,
+    const PersistenceHandoffPolicy policy) {
+    if (policy == PersistenceHandoffPolicy::DiagnosticLossless)
+        return captured;
+    if (policy != PersistenceHandoffPolicy::ProductPreserveTarget)
+        throw std::invalid_argument(
+            "Unbekannte Persistenz-Handoff-Policy.");
+
+    auto expected =
+        snapshot_dreamcast_maple_state(bus, controller);
+    expected.controller = captured.controller;
+    for (const auto& source : captured.bus.peripherals) {
+        const auto target = std::find_if(
+            expected.bus.peripherals.begin(),
+            expected.bus.peripherals.end(),
+            [&](const auto& candidate) {
+                return candidate.port == source.port &&
+                       candidate.unit == source.unit;
+            });
+        if (target == expected.bus.peripherals.end())
+            throw std::invalid_argument(
+                "Maple-Handoff passt nicht zur Zieltopologie.");
+        if (const auto* controller_state =
+                std::get_if<MapleControllerDeviceStateSnapshot>(
+                    &source.state)) {
+            if (!std::holds_alternative<
+                    MapleControllerDeviceStateSnapshot>(
+                    target->state))
+                throw std::invalid_argument(
+                    "Maple-Handoff-Peripherietyp stimmt nicht ueberein.");
+            target->state = *controller_state;
+        } else if (!std::holds_alternative<MapleVmuStateSnapshot>(
+                       target->state)) {
+            throw std::invalid_argument(
+                "Maple-Handoff-Peripherietyp stimmt nicht ueberein.");
+        }
+    }
+    return expected;
+}
+
+template <typename Operation>
+void for_each_complete_platform_executable_backing_extent(
+    const std::uint32_t address,
+    const std::size_t size,
+    Operation&& operation) {
+    constexpr std::uint32_t area3_begin = 0x0C000000u;
+    constexpr std::uint32_t area3_end = 0x10000000u;
+    constexpr std::uint32_t backing_mask =
+        static_cast<std::uint32_t>(
+            dreamcast_main_ram_size - 1u);
+    const auto physical = canonical_physical_address(address);
+    if (size != 0u && physical >= area3_begin &&
+        physical < area3_end &&
+        size <= static_cast<std::uint64_t>(area3_end) -
+                    physical) {
+        std::size_t source_offset = 0u;
+        auto cursor = physical;
+        while (source_offset < size) {
+            const auto backing_offset =
+                (cursor - area3_begin) & backing_mask;
+            const auto extent_size = std::min<std::size_t>(
+                size - source_offset,
+                dreamcast_main_ram_size - backing_offset);
+            operation(
+                area3_begin + backing_offset,
+                source_offset,
+                extent_size,
+                true);
+            source_offset += extent_size;
+            cursor += static_cast<std::uint32_t>(
+                extent_size);
+        }
+        return;
+    }
+    operation(physical, 0u, size, false);
+}
+
+struct PreparedCompletePlatformGuestWriteEffects final {
+    ExecutableModuleCatalog* modules = nullptr;
+    ExecutableCodeTracker* tracker = nullptr;
+    RuntimeBlockTable* blocks = nullptr;
+    std::optional<
+        ExecutableModuleCatalog::PreparedDiscLoadCatalog>
+        module_plan;
+    std::vector<ExecutableCodeTracker::PreparedDiscLoadWrite>
+        tracker_plans;
+    std::vector<RuntimeBlockTable::PreparedDiscLoadInvalidation>
+        block_plans;
+    bool committed = false;
+
+    PreparedCompletePlatformGuestWriteEffects() = default;
+    PreparedCompletePlatformGuestWriteEffects(
+        const PreparedCompletePlatformGuestWriteEffects&) = delete;
+    PreparedCompletePlatformGuestWriteEffects& operator=(
+        const PreparedCompletePlatformGuestWriteEffects&) = delete;
+    PreparedCompletePlatformGuestWriteEffects(
+        PreparedCompletePlatformGuestWriteEffects&&) = delete;
+    PreparedCompletePlatformGuestWriteEffects& operator=(
+        PreparedCompletePlatformGuestWriteEffects&&) = delete;
+
+    ~PreparedCompletePlatformGuestWriteEffects() {
+        if (committed) return;
+        if (tracker != nullptr)
+            for (auto& plan : tracker_plans)
+                tracker->cancel_disc_load_write(plan);
+        if (modules != nullptr && module_plan)
+            modules->cancel_disc_load_catalog(*module_plan);
+    }
+
+    void commit() noexcept {
+        if (committed) std::terminate();
+        if (module_plan) {
+            if (modules == nullptr) std::terminate();
+            modules->commit_disc_load_catalog(
+                std::move(*module_plan));
+        }
+        if (!tracker_plans.empty() && tracker == nullptr)
+            std::terminate();
+        for (auto& plan : tracker_plans)
+            tracker->commit_disc_load_write(std::move(plan));
+        if (!block_plans.empty() && blocks == nullptr)
+            std::terminate();
+        for (auto& plan : block_plans)
+            static_cast<void>(
+                blocks->commit_disc_load_invalidation(
+                    std::move(plan)));
+        committed = true;
+    }
+};
+
+std::unique_ptr<PreparedCompletePlatformGuestWriteEffects>
+prepare_complete_platform_guest_write_effects(
+    DreamcastRuntimeState& runtime,
+    const std::span<const GuestWriteEvent> events) {
+    if (runtime.disc_load_transactions &&
+        runtime.disc_load_transactions->transaction_active())
+        throw GameEntryHandoffError(
+            GameEntryHandoffFailure::RuntimeStateInvalid);
+
+    auto prepared = std::make_unique<
+        PreparedCompletePlatformGuestWriteEffects>();
+    prepared->modules = runtime.module_catalog.get();
+    prepared->tracker = runtime.code_tracker.get();
+    prepared->blocks = runtime.runtime_blocks.get();
+    prepared->tracker_plans.reserve(events.size() * 2u);
+    prepared->block_plans.reserve(events.size() * 2u);
+    std::vector<std::pair<std::uint32_t, std::size_t>>
+        module_invalidations;
+    module_invalidations.reserve(events.size() * 2u);
+
+    for (const auto& event : events) {
+        if (event.source != CodeWriteSource::Copy)
+            throw GameEntryHandoffError(
+                GameEntryHandoffFailure::
+                    MemoryOperationInvalid);
+        for_each_complete_platform_executable_backing_extent(
+            event.address,
+            event.size,
+            [&](const std::uint32_t backing,
+                const std::size_t,
+                const std::size_t extent_size,
+                const bool main_ram) {
+                if (main_ram && event.bytes_changed &&
+                    prepared->modules != nullptr)
+                    module_invalidations.emplace_back(
+                        backing, extent_size);
+                if (prepared->tracker == nullptr ||
+                    (!main_ram &&
+                     !prepared->tracker->tracks_address(
+                         backing, extent_size)))
+                    return;
+                prepared->tracker_plans.push_back(
+                    prepared->tracker->
+                        prepare_disc_load_write(
+                            backing,
+                            extent_size,
+                            event.source,
+                            event.bytes_changed));
+                if (event.bytes_changed &&
+                    prepared->blocks != nullptr)
+                    prepared->block_plans.push_back(
+                        prepared->blocks->
+                            prepare_disc_load_invalidation(
+                                backing, extent_size));
+            });
+    }
+    if (!module_invalidations.empty())
+        prepared->module_plan.emplace(
+            prepared->modules->prepare_disc_load_catalog(
+                {}, module_invalidations));
+    return prepared;
+}
+
 void validate_core_runtime_bindings(
     const DreamcastRuntimeState& runtime) {
     if (!runtime.pvr_registers || !runtime.pvr_ta_fifo ||
@@ -1085,11 +1401,73 @@ capture_complete_game_entry_platform_state(
     return capture;
 }
 
-GameEntryCompletePlatformApplyResult
-apply_validated_game_entry_complete_platform_handoff(
+struct PreparedCompletePlatformHandoff::Data {
+    struct EventPublication {
+        SchedulerEventKind kind = SchedulerEventKind::Unknown;
+        std::uint64_t guest_cycle = 0u;
+        std::uint32_t channel = 0u;
+        std::uint64_t token = 0u;
+        SchedulerEventId event_id = 0u;
+    };
+
+    CpuState* cpu_owner = nullptr;
+    DreamcastRuntimeState* runtime_owner = nullptr;
+    std::unique_ptr<PreparedGameEntryCpuMemoryHandoff> cpu_memory;
+    std::unique_ptr<PreparedCompletePlatformGuestWriteEffects>
+        guest_write_effects;
+    std::unique_ptr<PreparedDreamcastPvrStateRestore> pvr;
+    std::unique_ptr<DreamcastGdRomController::PreparedStateRestore> gdrom;
+    DreamcastG1DmaSnapshot g1;
+    Sh4DmacSnapshot dmac;
+    std::unique_ptr<PreparedDreamcastAicaStateRestore> aica;
+    std::unique_ptr<PreparedDreamcastMapleStateRestore> maple;
+    DreamcastSystemBusSnapshot system_bus;
+    std::unique_ptr<DreamcastSystemAsic::PreparedStateRestore> system_asic;
+    InterruptControllerSnapshot interrupt_controller;
+    PlatformInterruptRouterSnapshot interrupt_router;
+    Sh4InterruptRegistersSnapshot interrupt_registers;
+    Sh4CacheControlSnapshot cache;
+    Sh4StoreQueueSnapshot store_queues;
+    Sh4IoPortSnapshot io_ports;
+    DreamcastG2DmaSnapshot g2;
+    DreamcastPvrDmaSnapshot pvr_dma;
+    Sh4TmuSnapshot tmu;
+    Sh4RtcClockDomain::Snapshot rtc_clock;
+    Sh4RtcSnapshot rtc;
+    std::unique_ptr<PreparedSh4ScifStateRestore> scif;
+    std::unique_ptr<PreparedFlashMemoryRestore> flash;
+    std::unique_ptr<EventScheduler::PreparedPassiveRestore> scheduler;
+    std::vector<EventPublication> event_publications;
+    std::size_t device_count = 0u;
+    GameEntryCompletePlatformExpectedIdentities expected_identities;
+};
+
+PreparedCompletePlatformHandoff::
+    PreparedCompletePlatformHandoff() = default;
+
+PreparedCompletePlatformHandoff::
+    PreparedCompletePlatformHandoff(
+        PreparedCompletePlatformHandoff&&) noexcept = default;
+
+PreparedCompletePlatformHandoff&
+PreparedCompletePlatformHandoff::operator=(
+    PreparedCompletePlatformHandoff&&) noexcept = default;
+
+PreparedCompletePlatformHandoff::
+    ~PreparedCompletePlatformHandoff() = default;
+
+const GameEntryCompletePlatformExpectedIdentities&
+PreparedCompletePlatformHandoff::expected_identities() const noexcept {
+    if (!data_) std::terminate();
+    return data_->expected_identities;
+}
+
+PreparedCompletePlatformHandoff
+prepare_validated_game_entry_complete_platform_handoff(
     CpuState& cpu,
     DreamcastRuntimeState& runtime,
-    const ValidatedGameEntryHandoff& handoff) {
+    const ValidatedGameEntryHandoff& handoff,
+    const GameEntryCompletePlatformRestoreProfile profile) {
     if (handoff.completeness() !=
             GameEntryHandoffCompleteness::CompletePlatform ||
         cpu.pending_guest_cycles != 0u)
@@ -1224,6 +1602,68 @@ apply_validated_game_entry_complete_platform_handoff(
         [](const auto bytes) {
             return decode_flash(bytes);
         });
+
+    ObservationRestorePolicy observation_policy{};
+    PersistenceHandoffPolicy persistence_policy{};
+    switch (profile) {
+    case GameEntryCompletePlatformRestoreProfile::DiagnosticLossless:
+        observation_policy =
+            ObservationRestorePolicy::PreserveCapturedDiagnostics;
+        persistence_policy =
+            PersistenceHandoffPolicy::DiagnosticLossless;
+        break;
+    case GameEntryCompletePlatformRestoreProfile::ProductHandoff:
+        observation_policy =
+            ObservationRestorePolicy::FreshProductEpoch;
+        persistence_policy =
+            PersistenceHandoffPolicy::ProductPreserveTarget;
+        break;
+    default:
+        throw GameEntryHandoffError(
+            GameEntryHandoffFailure::CompletenessMismatch);
+    }
+
+    auto prepared_cpu_memory =
+        prepare_validated_game_entry_cpu_memory_handoff(
+            cpu, runtime, handoff);
+
+    std::vector<std::uint8_t> final_vram;
+    if (observation_policy ==
+        ObservationRestorePolicy::FreshProductEpoch) {
+        const auto current_vram = runtime.vram->bytes();
+        final_vram.assign(
+            current_vram.begin(), current_vram.end());
+        for (const auto& staged : handoff.memory_operations()) {
+            if (staged.operation.region !=
+                GameEntryMemoryRegion::Vram)
+                continue;
+            const auto offset =
+                static_cast<std::size_t>(
+                    staged.operation.offset);
+            if (offset > final_vram.size() ||
+                staged.bytes.size() >
+                    final_vram.size() - offset)
+                throw GameEntryHandoffError(
+                    GameEntryHandoffFailure::
+                        MemoryOperationInvalid);
+            std::copy(
+                staged.bytes.begin(),
+                staged.bytes.end(),
+                final_vram.begin() +
+                    static_cast<std::ptrdiff_t>(offset));
+        }
+    }
+    try {
+        normalize_dreamcast_pvr_observations_for_restore(
+            pvr, observation_policy, final_vram);
+        normalize_dreamcast_aica_observations_for_restore(
+            aica, observation_policy);
+    } catch (const GameEntryHandoffError&) {
+        throw;
+    } catch (...) {
+        throw GameEntryHandoffError(
+            GameEntryHandoffFailure::DeviceStateInvalid);
+    }
 
     const auto source_cycle = handoff.scheduler().current_cycle;
     if ((live_scheduler.guest_cycle_budget &&
@@ -1500,7 +1940,6 @@ apply_validated_game_entry_complete_platform_handoff(
     runtime.cache_control->validate_state_restore(cache);
     runtime.store_queues->validate_state_restore(store_queues);
     runtime.io_ports->validate_state_restore(io_ports);
-    runtime.flash->validate_state_restore(flash);
     validate_dreamcast_pvr_state_restore(
         *runtime.pvr_registers,
         *runtime.pvr_ta_fifo,
@@ -1517,8 +1956,6 @@ apply_validated_game_entry_complete_platform_handoff(
         *runtime.aica,
         aica,
         source_cycle);
-    validate_dreamcast_maple_state_restore(
-        *runtime.maple, *runtime.maple_controller, maple);
     runtime.system_bus_control->validate_state_restore(system_bus);
     runtime.system_asic->validate_state_restore(system_asic);
     runtime.holly_dma.g2->validate_state_restore(g2);
@@ -1529,282 +1966,502 @@ apply_validated_game_entry_complete_platform_handoff(
     runtime.rtc->validate_state_restore(rtc, source_cycle);
     runtime.scif->validate_state_restore(scif, source_cycle);
 
-    // Build the CPU-owned UTLB translation state on a detached address-space
-    // copy. The separate MMU payload may add ITLB replacement state, but its
-    // architectural mode and UTLB mappings must already agree before RAM or
-    // CpuState is touched.
-    RuntimeAddressSpaceSnapshot prepared_cpu_mmu;
+    bind_prepared_game_entry_cpu_mmu(
+        prepared_cpu_memory, std::move(mmu));
+
+    GameEntryCompletePlatformExpectedIdentities expected_identities;
+    expected_identities.cpu =
+        prepared_cpu_identity(handoff.cpu());
+    expected_identities.memory =
+        prepared_memory_identity(handoff.memory_operations());
+    expected_identities.pvr = prepared_identity(
+        "katana.complete-platform.pvr",
+        encode_dreamcast_pvr_state(pvr));
+    expected_identities.aica = prepared_identity(
+        "katana.complete-platform.aica",
+        encode_dreamcast_aica_state(aica));
+    const auto expected_maple =
+        expected_maple_state_after_restore(
+            *runtime.maple,
+            *runtime.maple_controller,
+            maple,
+            persistence_policy);
+    expected_identities.maple = prepared_identity(
+        "katana.complete-platform.maple",
+        encode_dreamcast_maple_state(expected_maple));
+    expected_identities.scheduler =
+        prepared_scheduler_identity(handoff.scheduler());
+    expected_identities.irq = prepared_irq_identity(
+        interrupt_controller,
+        interrupt_router,
+        interrupt_registers);
+
+    const auto pvr_hblank_line =
+        pvr.registers.hblank_event_line;
+    std::vector<SchedulerPreparedEvent> prepared_events;
+    prepared_events.reserve(scheduled_events.size());
     try {
-        CpuState prepared_cpu;
-        prepared_cpu.address_space =
-            std::make_shared<RuntimeAddressSpace>(*runtime.address_space);
-        apply_game_entry_cpu_state(prepared_cpu, handoff.cpu());
-        prepared_cpu_mmu = prepared_cpu.address_space->snapshot();
-    } catch (const GameEntryHandoffError&) {
-        throw;
-    } catch (...) {
-        throw GameEntryHandoffError(
-            GameEntryHandoffFailure::DeviceStateInvalid);
-    }
-    auto prepared_mappings = prepared_cpu_mmu.mappings;
-    auto captured_mappings = mmu.mappings;
-    const auto by_slot = [](const auto& left, const auto& right) {
-        return left.slot < right.slot;
-    };
-    std::sort(
-        prepared_mappings.begin(), prepared_mappings.end(), by_slot);
-    std::sort(
-        captured_mappings.begin(), captured_mappings.end(), by_slot);
-    if (prepared_cpu_mmu.mode != mmu.mode ||
-        prepared_cpu_mmu.mmucr != mmu.mmucr ||
-        prepared_cpu_mmu.asid != mmu.asid ||
-        prepared_mappings != captured_mappings)
-        throw GameEntryHandoffError(
-            GameEntryHandoffFailure::DeviceStateInvalid);
-
-    const auto cpu_memory =
-        apply_validated_game_entry_cpu_memory_handoff(
-            cpu, runtime, handoff);
-    if (!cpu_memory.device_state_pending ||
-        cpu_memory.incomplete_handoff ||
-        cpu_memory.complete_platform_state_applied())
-        throw GameEntryHandoffError(
-            GameEntryHandoffFailure::CpuMemoryApplyFailed);
-
-    runtime.scheduler->restore_time_passive(source_cycle);
-    try {
-        runtime.rtc_clock->validate_state_restore(rtc_clock);
-        runtime.rtc_clock->restore_state_passive(rtc_clock);
-        runtime.gdrom->validate_state_restore(gdrom);
-        runtime.tmu->validate_state_restore(tmu);
-        runtime.rtc->validate_state_restore(rtc);
-        runtime.scif->validate_state_restore(scif);
-
-        // CPU apply rebuilt the architectural UTLB. The already prevalidated
-        // MMU payload now restores the exact ITLB replacement state while
-        // advancing only target-local guard generations.
-        runtime.address_space->restore_state_passive(mmu);
-
-        runtime.cache_control->restore_state_passive(cache);
-        runtime.store_queues->restore_state_passive(store_queues);
-        runtime.io_ports->restore_state_passive(io_ports);
-        runtime.flash->restore_state_passive(flash);
-        restore_dreamcast_pvr_state_passive(
-            *runtime.pvr_registers,
-            *runtime.pvr_ta_fifo,
-            *runtime.pvr_ta_aperture,
-            *runtime.pvr_yuv_converter,
-            *runtime.pvr_renderer,
-            std::move(pvr));
-        runtime.gdrom->restore_state_passive(gdrom);
-        runtime.holly_dma.g1->restore_state_passive(g1);
-        runtime.dmac->restore_state_passive(dmac);
-        restore_dreamcast_aica_state_passive(
-            *runtime.aica_registers,
-            *runtime.aica_rtc,
-            *runtime.aica,
-            std::move(aica));
-        restore_dreamcast_maple_state_passive(
-            *runtime.maple, *runtime.maple_controller, maple);
-        runtime.system_bus_control->restore_state_passive(system_bus);
-        runtime.system_asic->restore_state_passive(
-            *runtime.scheduler, system_asic);
-        runtime.holly_dma.g2->restore_state_passive(g2);
-        runtime.holly_dma.pvr->restore_state_passive(pvr_dma);
-        runtime.tmu->restore_state_passive(tmu);
-        runtime.rtc->restore_state_passive(rtc);
-        runtime.scif->restore_state_passive(scif);
-
-        runtime.interrupt_registers->restore_state_passive(
-            interrupt_registers);
-        runtime.interrupt_router->restore_state_passive(
-            interrupt_router);
-        runtime.interrupt_controller->restore_state_passive(
-            interrupt_controller);
-    } catch (const GameEntryHandoffError&) {
-        throw;
-    } catch (...) {
-        throw GameEntryHandoffError(
-            GameEntryHandoffFailure::DeviceStateApplyFailed);
-    }
-
-    std::size_t events_rehydrated = 0u;
-    try {
-        for (const auto& event : handoff.scheduler().pending_events) {
+        for (const auto& event : scheduled_events) {
+            SchedulerCallback callback;
             switch (event.kind) {
             case SchedulerEventKind::DiscRead:
             case SchedulerEventKind::GdRomPacket:
-                static_cast<void>(
-                    runtime.gdrom->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.gdrom->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::Sh4Dmac:
-                static_cast<void>(
-                    runtime.dmac->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.dmac->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::HollyG1Dma:
-                static_cast<void>(
-                    runtime.holly_dma.g1->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.holly_dma.g1->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::HollyG2Dma:
-                static_cast<void>(
-                    runtime.holly_dma.g2->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.holly_dma.g2->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::HollyPvrDma:
-                static_cast<void>(
-                    runtime.holly_dma.pvr->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.holly_dma.pvr->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::MapleDma:
-                static_cast<void>(
-                    runtime.maple_controller->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.maple_controller->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::PvrVblankIn:
             case SchedulerEventKind::PvrVblankOut:
             case SchedulerEventKind::PvrHblank:
-                static_cast<void>(
-                    runtime.pvr_registers->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.pvr_registers->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel,
+                            event.token,
+                            pvr_hblank_line);
                 break;
             case SchedulerEventKind::ScifTransmit:
-                static_cast<void>(
-                    runtime.scif->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.scif->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::SystemAsic:
-                static_cast<void>(
-                    runtime.system_asic->rehydrate_scheduled_event(
-                        *runtime.scheduler,
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.system_asic->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::Sh4Rtc:
-                static_cast<void>(
-                    runtime.rtc->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.rtc->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::Sh4Tmu0:
             case SchedulerEventKind::Sh4Tmu1:
             case SchedulerEventKind::Sh4Tmu2:
-                static_cast<void>(
-                    runtime.tmu->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.tmu->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
             case SchedulerEventKind::AicaTick:
-                static_cast<void>(
-                    runtime.aica->rehydrate_scheduled_event(
-                        event.guest_cycle,
-                        event.channel,
-                        event.token));
+                callback =
+                    runtime.aica->
+                        make_rehydrated_scheduled_event_callback(
+                            event.channel, event.token);
                 break;
-            case SchedulerEventKind::PvrRender:
+            case SchedulerEventKind::Unknown:
             case SchedulerEventKind::MediaVideo:
             case SchedulerEventKind::MediaAudio:
-            case SchedulerEventKind::Unknown:
+            case SchedulerEventKind::PvrRender:
                 throw GameEntryHandoffError(
                     GameEntryHandoffFailure::SchedulerStateInvalid);
             }
-            ++events_rehydrated;
+            prepared_events.push_back(
+                {event.guest_cycle,
+                 std::move(callback),
+                 event.kind});
         }
+    } catch (const std::bad_alloc&) {
+        throw;
     } catch (const GameEntryHandoffError&) {
         throw;
     } catch (...) {
         throw GameEntryHandoffError(
-            GameEntryHandoffFailure::SchedulerStateApplyFailed);
+            GameEntryHandoffFailure::SchedulerStateInvalid);
     }
 
-    const auto pending_device_event =
-        runtime.gdrom->event_rehydration_pending() ||
-        runtime.holly_dma.g1->event_rehydration_pending() ||
-        runtime.dmac->event_rehydration_pending() ||
-        runtime.aica->event_rehydration_pending() ||
-        runtime.maple_controller->event_rehydration_pending() ||
-        runtime.system_asic->event_rehydration_pending() ||
-        runtime.holly_dma.g2->event_rehydration_pending() ||
-        runtime.holly_dma.pvr->event_rehydration_pending() ||
-        runtime.tmu->event_rehydration_pending(0u) ||
-        runtime.tmu->event_rehydration_pending(1u) ||
-        runtime.tmu->event_rehydration_pending(2u) ||
-        runtime.rtc->event_rehydration_pending() ||
-        runtime.scif->event_rehydration_pending() ||
-        runtime.pvr_registers->event_rehydration_pending(
-            dreamcast_pvr_vblank_in_event_channel) ||
-        runtime.pvr_registers->event_rehydration_pending(
-            dreamcast_pvr_vblank_out_event_channel) ||
-        runtime.pvr_registers->event_rehydration_pending(
-            dreamcast_pvr_hblank_event_channel);
-    if (pending_device_event ||
-        runtime.scheduler->pending_event_count() !=
-            handoff.scheduler().pending_events.size())
+    EventScheduler::PreparedPassiveRestore scheduler_plan =
+        [&]() {
+            try {
+                return runtime.scheduler->prepare_passive_restore(
+                    source_cycle, prepared_events);
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (...) {
+                throw GameEntryHandoffError(
+                    GameEntryHandoffFailure::
+                        SchedulerStateInvalid);
+            }
+        }();
+    const auto assigned_event_ids =
+        scheduler_plan.assigned_event_ids();
+    if (assigned_event_ids.size() != scheduled_events.size())
         throw GameEntryHandoffError(
-            GameEntryHandoffFailure::SchedulerStateApplyFailed);
-
-    runtime.interrupt_router->mark_device_sources_dirty();
-    const auto expected_external =
-        runtime.system_asic->expected_external_lines();
-    for (std::size_t line = 0u; line < expected_external.size(); ++line) {
-        if (runtime.interrupt_router->external_pending(line) !=
-            expected_external[line])
-            throw GameEntryHandoffError(
-                GameEntryHandoffFailure::SemanticStateMismatch);
-    }
-    static_cast<void>(runtime.interrupt_router->synchronize());
-    if (runtime.interrupt_controller->snapshot() !=
-            interrupt_controller ||
-        runtime.interrupt_router->snapshot() != interrupt_router)
-        throw GameEntryHandoffError(
-            GameEntryHandoffFailure::SemanticStateMismatch);
-
-    const auto verification =
-        capture_complete_game_entry_platform_state(runtime);
-    if (verification.scheduler != handoff.scheduler() ||
-        verification.payloads.size() != handoff.devices().size() ||
-        capture_game_entry_cpu_state(cpu) != handoff.cpu())
-        throw GameEntryHandoffError(
-            GameEntryHandoffFailure::SemanticStateMismatch);
-    for (const auto& payload : verification.payloads) {
-        const auto expected = device_bytes(handoff, payload.device.kind);
-        if (payload.field_id != device_payload_field ||
-            !std::equal(
-                payload.bytes.begin(),
-                payload.bytes.end(),
-                expected.begin(),
-                expected.end()))
-            throw GameEntryHandoffError(
-                GameEntryHandoffFailure::SemanticStateMismatch);
+            GameEntryHandoffFailure::SchedulerStateInvalid);
+    std::vector<
+        PreparedCompletePlatformHandoff::Data::EventPublication>
+        event_publications;
+    event_publications.reserve(scheduled_events.size());
+    for (std::size_t index = 0u;
+         index < scheduled_events.size();
+         ++index) {
+        const auto& event = scheduled_events[index];
+        event_publications.push_back(
+            {event.kind,
+             event.guest_cycle,
+             event.channel,
+             event.token,
+             assigned_event_ids[index]});
     }
 
+    std::unique_ptr<PreparedDreamcastPvrStateRestore>
+        pvr_plan;
+    std::unique_ptr<
+        DreamcastGdRomController::PreparedStateRestore>
+        gdrom_plan;
+    std::unique_ptr<PreparedDreamcastAicaStateRestore>
+        aica_plan;
+    std::unique_ptr<PreparedDreamcastMapleStateRestore>
+        maple_plan;
+    std::unique_ptr<DreamcastSystemAsic::PreparedStateRestore>
+        system_asic_plan;
+    std::unique_ptr<PreparedSh4ScifStateRestore>
+        scif_plan;
+    std::unique_ptr<PreparedFlashMemoryRestore>
+        flash_plan;
+    try {
+        pvr_plan =
+            std::make_unique<PreparedDreamcastPvrStateRestore>(
+                prepare_dreamcast_pvr_state_restore(
+                    *runtime.pvr_registers,
+                    *runtime.pvr_ta_fifo,
+                    *runtime.pvr_ta_aperture,
+                    *runtime.pvr_yuv_converter,
+                    *runtime.pvr_renderer,
+                    std::move(pvr)));
+        gdrom_plan = std::make_unique<
+            DreamcastGdRomController::PreparedStateRestore>(
+            runtime.gdrom->prepare_state_restore(gdrom));
+        aica_plan =
+            std::make_unique<PreparedDreamcastAicaStateRestore>(
+                prepare_dreamcast_aica_state_restore(
+                    *runtime.aica_registers,
+                    *runtime.aica_rtc,
+                    *runtime.aica,
+                    std::move(aica),
+                    source_cycle));
+        maple_plan =
+            std::make_unique<PreparedDreamcastMapleStateRestore>(
+                prepare_dreamcast_maple_state_restore(
+                    *runtime.maple,
+                    *runtime.maple_controller,
+                    maple,
+                    persistence_policy));
+        system_asic_plan = std::make_unique<
+            DreamcastSystemAsic::PreparedStateRestore>(
+            runtime.system_asic->prepare_state_restore(
+                *runtime.scheduler,
+                system_asic,
+                source_cycle));
+        scif_plan =
+            std::make_unique<PreparedSh4ScifStateRestore>(
+                runtime.scif->prepare_state_restore(scif));
+        flash_plan =
+            std::make_unique<PreparedFlashMemoryRestore>(
+                runtime.flash->prepare_state_restore(
+                    flash, persistence_policy));
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const GameEntryHandoffError&) {
+        throw;
+    } catch (...) {
+        throw GameEntryHandoffError(
+            GameEntryHandoffFailure::DeviceStateInvalid);
+    }
+
+    auto guest_write_effects =
+        prepare_complete_platform_guest_write_effects(
+            runtime,
+            prepared_cpu_memory.memory_guest_write_events());
+    prepared_cpu_memory.suppress_memory_guest_write_observer();
+
+    auto data =
+        std::make_unique<PreparedCompletePlatformHandoff::Data>();
+    data->cpu_owner = &cpu;
+    data->runtime_owner = &runtime;
+    data->cpu_memory =
+        std::make_unique<PreparedGameEntryCpuMemoryHandoff>(
+            std::move(prepared_cpu_memory));
+    data->guest_write_effects =
+        std::move(guest_write_effects);
+    data->pvr = std::move(pvr_plan);
+    data->gdrom = std::move(gdrom_plan);
+    data->g1 = std::move(g1);
+    data->dmac = std::move(dmac);
+    data->aica = std::move(aica_plan);
+    data->maple = std::move(maple_plan);
+    data->system_bus = std::move(system_bus);
+    data->system_asic = std::move(system_asic_plan);
+    data->interrupt_controller =
+        std::move(interrupt_controller);
+    data->interrupt_router = std::move(interrupt_router);
+    data->interrupt_registers =
+        std::move(interrupt_registers);
+    data->cache = std::move(cache);
+    data->store_queues = std::move(store_queues);
+    data->io_ports = std::move(io_ports);
+    data->g2 = std::move(g2);
+    data->pvr_dma = std::move(pvr_dma);
+    data->tmu = std::move(tmu);
+    data->rtc_clock = std::move(rtc_clock);
+    data->rtc = std::move(rtc);
+    data->scif = std::move(scif_plan);
+    data->flash = std::move(flash_plan);
+    data->scheduler = std::make_unique<
+        EventScheduler::PreparedPassiveRestore>(
+        std::move(scheduler_plan));
+    data->event_publications =
+        std::move(event_publications);
+    data->device_count = handoff.devices().size();
+    data->expected_identities =
+        std::move(expected_identities);
+
+    PreparedCompletePlatformHandoff prepared;
+    prepared.data_ = std::move(data);
+    return prepared;
+}
+
+GameEntryCompletePlatformApplyResult
+commit_prepared_game_entry_complete_platform_handoff(
+    CpuState& cpu,
+    DreamcastRuntimeState& runtime,
+    PreparedCompletePlatformHandoff prepared) noexcept {
+    if (!prepared.data_ ||
+        prepared.data_->cpu_owner != &cpu ||
+        prepared.data_->runtime_owner != &runtime ||
+        !prepared.data_->cpu_memory ||
+        !prepared.data_->guest_write_effects ||
+        !prepared.data_->pvr ||
+        !prepared.data_->gdrom ||
+        !prepared.data_->aica ||
+        !prepared.data_->maple ||
+        !prepared.data_->system_asic ||
+        !prepared.data_->scif ||
+        !prepared.data_->flash ||
+        !prepared.data_->scheduler)
+        std::terminate();
+    auto& data = *prepared.data_;
+    const auto memory_operation_count =
+        data.cpu_memory->memory_operation_count();
+    const auto memory_byte_count =
+        data.cpu_memory->memory_byte_count();
+    const auto scheduler_event_count =
+        data.event_publications.size();
+
+    // Memory and all guest-visible device state are published before the CPU.
+    // Every operation below is a prevalidated, allocation-free noexcept
+    // commit. PR/PC are the final architectural fields published below.
+    commit_prepared_game_entry_memory_handoff(
+        cpu, *data.cpu_memory);
+    data.guest_write_effects->commit();
+    runtime.flash->commit_prepared_state_restore(
+        std::move(*data.flash));
+    runtime.cache_control->commit_validated_state_restore(
+        std::move(data.cache));
+    runtime.store_queues->commit_validated_state_restore(
+        std::move(data.store_queues));
+    runtime.io_ports->commit_validated_state_restore(
+        std::move(data.io_ports));
+    commit_dreamcast_pvr_state_restore(
+        *runtime.pvr_registers,
+        *runtime.pvr_ta_fifo,
+        *runtime.pvr_ta_aperture,
+        *runtime.pvr_yuv_converter,
+        *runtime.pvr_renderer,
+        std::move(*data.pvr));
+    runtime.gdrom->commit_prepared_state_restore(
+        std::move(*data.gdrom));
+    runtime.holly_dma.g1->commit_validated_state_restore(
+        std::move(data.g1));
+    runtime.dmac->commit_validated_state_restore(
+        std::move(data.dmac));
+    commit_dreamcast_aica_state_restore(
+        *runtime.aica_registers,
+        *runtime.aica_rtc,
+        *runtime.aica,
+        std::move(*data.aica));
+    commit_dreamcast_maple_state_restore(
+        *runtime.maple,
+        *runtime.maple_controller,
+        std::move(*data.maple));
+    runtime.system_bus_control->
+        commit_validated_state_restore(
+            std::move(data.system_bus));
+    runtime.system_asic->commit_prepared_state_restore(
+        std::move(*data.system_asic));
+    runtime.holly_dma.g2->commit_validated_state_restore(
+        std::move(data.g2));
+    runtime.holly_dma.pvr->commit_validated_state_restore(
+        std::move(data.pvr_dma));
+    runtime.rtc_clock->commit_validated_state_restore(
+        std::move(data.rtc_clock));
+    runtime.tmu->commit_validated_state_restore(
+        std::move(data.tmu));
+    runtime.rtc->commit_validated_state_restore(
+        std::move(data.rtc));
+    runtime.scif->commit_prepared_state_restore(
+        std::move(*data.scif));
+    runtime.interrupt_registers->
+        commit_validated_state_restore(
+            std::move(data.interrupt_registers));
+    runtime.interrupt_router->commit_validated_state_restore(
+        std::move(data.interrupt_router));
+    runtime.interrupt_controller->
+        commit_validated_state_restore(
+            std::move(data.interrupt_controller));
+
+    runtime.scheduler->commit_prepared_passive_restore(
+        std::move(*data.scheduler));
+    for (const auto& publication : data.event_publications) {
+        switch (publication.kind) {
+        case SchedulerEventKind::DiscRead:
+        case SchedulerEventKind::GdRomPacket:
+            runtime.gdrom->commit_rehydrated_scheduled_event(
+                publication.event_id,
+                publication.channel,
+                publication.token);
+            break;
+        case SchedulerEventKind::Sh4Dmac:
+            runtime.dmac->commit_rehydrated_scheduled_event(
+                publication.event_id,
+                publication.channel,
+                publication.token);
+            break;
+        case SchedulerEventKind::HollyG1Dma:
+            runtime.holly_dma.g1->
+                commit_rehydrated_scheduled_event(
+                    publication.event_id,
+                    publication.channel,
+                    publication.token);
+            break;
+        case SchedulerEventKind::HollyG2Dma:
+            runtime.holly_dma.g2->
+                commit_rehydrated_scheduled_event(
+                    publication.event_id,
+                    publication.channel,
+                    publication.token);
+            break;
+        case SchedulerEventKind::HollyPvrDma:
+            runtime.holly_dma.pvr->
+                commit_rehydrated_scheduled_event(
+                    publication.event_id,
+                    publication.channel,
+                    publication.token);
+            break;
+        case SchedulerEventKind::MapleDma:
+            runtime.maple_controller->
+                commit_rehydrated_scheduled_event(
+                    publication.event_id,
+                    publication.channel,
+                    publication.token);
+            break;
+        case SchedulerEventKind::PvrVblankIn:
+        case SchedulerEventKind::PvrVblankOut:
+        case SchedulerEventKind::PvrHblank:
+            runtime.pvr_registers->
+                commit_rehydrated_scheduled_event(
+                    publication.event_id,
+                    publication.channel,
+                    publication.token);
+            break;
+        case SchedulerEventKind::ScifTransmit:
+            runtime.scif->commit_rehydrated_scheduled_event(
+                publication.event_id,
+                publication.channel,
+                publication.token);
+            break;
+        case SchedulerEventKind::SystemAsic:
+            runtime.system_asic->
+                commit_rehydrated_scheduled_event(
+                    *runtime.scheduler,
+                    publication.event_id,
+                    publication.guest_cycle,
+                    publication.channel,
+                    publication.token);
+            break;
+        case SchedulerEventKind::Sh4Rtc:
+            runtime.rtc->commit_rehydrated_scheduled_event(
+                publication.event_id,
+                publication.channel,
+                publication.token);
+            break;
+        case SchedulerEventKind::Sh4Tmu0:
+        case SchedulerEventKind::Sh4Tmu1:
+        case SchedulerEventKind::Sh4Tmu2:
+            runtime.tmu->commit_rehydrated_scheduled_event(
+                publication.event_id,
+                publication.channel,
+                publication.token);
+            break;
+        case SchedulerEventKind::AicaTick:
+            runtime.aica->commit_rehydrated_scheduled_event(
+                publication.event_id,
+                publication.channel,
+                publication.token);
+            break;
+        case SchedulerEventKind::Unknown:
+        case SchedulerEventKind::MediaVideo:
+        case SchedulerEventKind::MediaAudio:
+        case SchedulerEventKind::PvrRender:
+            std::terminate();
+        }
+    }
+
+    commit_prepared_game_entry_cpu_handoff(
+        cpu, std::move(*data.cpu_memory));
     return {
-        cpu_memory.memory_operations_applied,
-        cpu_memory.memory_bytes_applied,
-        handoff.devices().size(),
-        events_rehydrated,
-    };
+        memory_operation_count,
+        memory_byte_count,
+        data.device_count,
+        scheduler_event_count,
+        std::move(data.expected_identities)};
+}
+
+GameEntryCompletePlatformApplyResult
+apply_validated_game_entry_complete_platform_handoff(
+    CpuState& cpu,
+    DreamcastRuntimeState& runtime,
+    const ValidatedGameEntryHandoff& handoff,
+    const GameEntryCompletePlatformRestoreProfile profile) {
+    auto prepared =
+        prepare_validated_game_entry_complete_platform_handoff(
+            cpu, runtime, handoff, profile);
+    return commit_prepared_game_entry_complete_platform_handoff(
+        cpu, runtime, std::move(prepared));
 }
 
 } // namespace katana::runtime

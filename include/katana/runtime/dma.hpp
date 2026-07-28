@@ -163,10 +163,20 @@ class Sh4Dmac final {
     [[nodiscard]] Sh4DmacSnapshot snapshot() const noexcept;
     void validate_state_restore(const Sh4DmacSnapshot& state) const;
     void restore_state_passive(const Sh4DmacSnapshot& state);
+    void commit_validated_state_restore(
+        Sh4DmacSnapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void reset_performance_counters() noexcept;
     void reset() noexcept;

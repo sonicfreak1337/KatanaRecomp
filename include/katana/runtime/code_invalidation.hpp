@@ -131,8 +131,6 @@ class ExecutableCodeTracker {
     [[nodiscard]] ExecutableCodeTrackerSnapshot snapshot() const;
     void reset_performance_counters() noexcept;
 
-  private:
-    friend class ExecutableDiscLoadTransactionCoordinator;
     struct PreparedDiscLoadWrite {
         std::uint32_t address = 0u;
         std::uint32_t physical_address = 0u;
@@ -140,19 +138,24 @@ class ExecutableCodeTracker {
         CodeWriteSource source = CodeWriteSource::Copy;
         std::vector<std::uint32_t> pages;
         std::vector<std::size_t> block_indices;
-        std::vector<std::uint32_t> inserted_generation_pages;
-        std::vector<std::uint32_t> inserted_hotspot_pages;
-        CodeInvalidationResult result;
+        std::vector<std::map<std::uint32_t, std::uint64_t>::node_type>
+            generation_nodes;
+        std::vector<std::map<std::uint32_t, std::uint64_t>::node_type>
+            hotspot_nodes;
+        CodeInvalidationEvent prepared_event;
         bool indexed_lookup = true;
         std::uint64_t candidate_count = 0u;
     };
     [[nodiscard]] PreparedDiscLoadWrite
     prepare_disc_load_write(std::uint32_t address,
                             std::size_t size,
-                            CodeWriteSource source);
+                            CodeWriteSource source,
+                            bool bytes_changed = true) const;
     void cancel_disc_load_write(PreparedDiscLoadWrite& plan) noexcept;
     void commit_disc_load_write(PreparedDiscLoadWrite plan) noexcept;
 
+  private:
+    friend class ExecutableDiscLoadTransactionCoordinator;
     void record_invalidation_event(std::uint32_t virtual_address,
                                    std::uint32_t physical_address,
                                    std::size_t size,

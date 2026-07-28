@@ -985,12 +985,18 @@ void Memory::set_guest_write_observer(GuestWriteObserver observer,
     guest_write_observer_ = std::move(observer);
     guest_write_observer_contract_ =
         guest_write_observer_ ? contract : GuestWriteObserverContract::General;
+    ++guest_write_observer_generation_;
+    if (guest_write_observer_generation_ == 0u)
+        ++guest_write_observer_generation_;
     refresh_direct_linear_access_state();
 }
 
 void Memory::clear_guest_write_observer() noexcept {
     guest_write_observer_ = {};
     guest_write_observer_contract_ = GuestWriteObserverContract::General;
+    ++guest_write_observer_generation_;
+    if (guest_write_observer_generation_ == 0u)
+        ++guest_write_observer_generation_;
     refresh_direct_linear_access_state();
 }
 
@@ -1383,10 +1389,8 @@ bool Memory::commit_linear_transaction_bytes(
         std::span<const LinearMemoryTransactionWrite>(&write, 1u), source);
 }
 
-bool Memory::commit_linear_transaction_batch(
-    const std::span<const LinearMemoryTransactionWrite> writes,
-    const CodeWriteSource source) noexcept {
-    struct PreparedWrite {
+struct Memory::PreparedLinearTransactionBatch::Data {
+    struct Write {
         std::uint32_t address = 0u;
         std::vector<std::uint8_t> bytes;
         std::shared_ptr<MemoryDevice> device;
@@ -1397,14 +1401,62 @@ bool Memory::commit_linear_transaction_batch(
         bool changed = false;
     };
 
+    Memory* owner = nullptr;
+    CodeWriteSource source = CodeWriteSource::Copy;
+    GuestWriteObserver observer;
+    std::uint64_t observer_generation = 0u;
+    std::vector<Write> writes;
+    std::vector<GuestWriteEvent> guest_write_events;
+};
+
+Memory::PreparedLinearTransactionBatch::PreparedLinearTransactionBatch()
+    : data_(std::make_unique<Data>()) {}
+
+Memory::PreparedLinearTransactionBatch::PreparedLinearTransactionBatch(
+    PreparedLinearTransactionBatch&&) noexcept = default;
+
+Memory::PreparedLinearTransactionBatch&
+Memory::PreparedLinearTransactionBatch::operator=(
+    PreparedLinearTransactionBatch&&) noexcept = default;
+
+Memory::PreparedLinearTransactionBatch::~PreparedLinearTransactionBatch() =
+    default;
+
+std::span<const GuestWriteEvent>
+Memory::PreparedLinearTransactionBatch::guest_write_events() const noexcept {
+    return data_ ? std::span<const GuestWriteEvent>(
+                       data_->guest_write_events)
+                 : std::span<const GuestWriteEvent>{};
+}
+
+void Memory::PreparedLinearTransactionBatch::
+    suppress_guest_write_observer() noexcept {
+    if (!data_) std::terminate();
+    data_->observer = {};
+}
+
+std::optional<Memory::PreparedLinearTransactionBatch>
+Memory::prepare_linear_transaction_batch(
+    const std::span<const LinearMemoryTransactionWrite> writes,
+    const CodeWriteSource source) noexcept {
+    if (access_observers_active() || mmio_access_tracking_enabled_ ||
+        mmio_trace_handler_ || guest_memory_access_sink_ ||
+        !guest_write_observer_allows_prevalidated_linear_writes())
+        return std::nullopt;
     try {
-        std::vector<PreparedWrite> prepared;
-        prepared.reserve(writes.size());
+        PreparedLinearTransactionBatch prepared;
+        prepared.data_->owner = this;
+        prepared.data_->source = source;
+        prepared.data_->observer = guest_write_observer_;
+        prepared.data_->observer_generation =
+            guest_write_observer_generation_;
+        prepared.data_->writes.reserve(writes.size());
+        prepared.data_->guest_write_events.reserve(writes.size());
         for (const auto& write : writes) {
             if (write.bytes.empty()) continue;
             if (write.bytes.size() >
                 address_space_size - static_cast<std::uint64_t>(write.address))
-                return false;
+                return std::nullopt;
             const auto& mapped = resolve(write.address,
                                          MemoryAccessWidth::Byte,
                                          MemoryAccessOperation::Write,
@@ -1417,15 +1469,15 @@ bool Memory::commit_linear_transaction_batch(
             if (write_end > mapped_end ||
                 mapped.info.access != MemoryRegionAccess::ReadWrite ||
                 mapped.linear == nullptr)
-                return false;
+                return std::nullopt;
             const auto offset = static_cast<std::size_t>(
                 region_offset(mapped.info, write.address));
             const auto backing = mapped.linear->bytes();
             if (offset > backing.size() ||
                 write.bytes.size() > backing.size() - offset)
-                return false;
+                return std::nullopt;
 
-            PreparedWrite item;
+            PreparedLinearTransactionBatch::Data::Write item;
             item.address = write.address;
             item.bytes.assign(write.bytes.begin(), write.bytes.end());
             item.device = mapped.device;
@@ -1436,7 +1488,7 @@ bool Memory::commit_linear_transaction_batch(
                                       backing.begin() +
                                           static_cast<std::ptrdiff_t>(
                                               offset + write.bytes.size()));
-            for (const auto& previous : prepared) {
+            for (const auto& previous : prepared.data_->writes) {
                 if (previous.linear != item.linear) continue;
                 const auto overlap_begin = std::max(item.offset, previous.offset);
                 const auto overlap_end =
@@ -1459,33 +1511,176 @@ bool Memory::commit_linear_transaction_batch(
                 item.changed = item.changed ||
                                item.changed_bytes[index] != 0u;
             }
+            prepared.data_->guest_write_events.push_back(
+                {item.address,
+                 item.bytes.size(),
+                 source,
+                 item.changed});
+            prepared.data_->writes.push_back(std::move(item));
+        }
+        return prepared;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+void Memory::commit_prepared_linear_transaction_batch(
+    PreparedLinearTransactionBatch prepared) noexcept {
+    if (!prepared.data_ || prepared.data_->owner != this ||
+        prepared.data_->observer_generation !=
+            guest_write_observer_generation_)
+        std::terminate();
+
+    // No callbacks are made before every admitted range is visible. Keeping
+    // each backing device alive also makes subsequent diagnostic callbacks
+    // free to alter the map without invalidating the remainder.
+    for (const auto& write : prepared.data_->writes) {
+        auto backing = write.linear->writable_bytes();
+        std::copy(
+            write.bytes.begin(),
+            write.bytes.end(),
+            backing.begin() +
+                static_cast<std::ptrdiff_t>(write.offset));
+    }
+
+    for (std::size_t index = 0u;
+         index < prepared.data_->writes.size();
+         ++index) {
+        const auto& write = prepared.data_->writes[index];
+        performance_counters_.unobserved_accesses +=
+            write.bytes.size();
+        if (prepared.data_->observer) {
+            try {
+                prepared.data_->observer(
+                    prepared.data_->guest_write_events[index]);
+            } catch (...) {
+                // Product provenance is part of the committed transaction.
+                // Continuing after a partial observer update is unsound.
+                std::terminate();
+            }
+        }
+    }
+}
+
+bool Memory::commit_linear_transaction_batch(
+    const std::span<const LinearMemoryTransactionWrite> writes,
+    const CodeWriteSource source) noexcept {
+    struct PreparedWrite {
+        std::uint32_t address = 0u;
+        std::vector<std::uint8_t> bytes;
+        std::shared_ptr<MemoryDevice> device;
+        LinearMemoryDevice* linear = nullptr;
+        std::size_t offset = 0u;
+        std::string region_name;
+        std::vector<std::uint8_t> changed_bytes;
+        bool changed = false;
+    };
+
+    try {
+        std::vector<PreparedWrite> prepared;
+        prepared.reserve(writes.size());
+        for (const auto& write : writes) {
+            if (write.bytes.empty()) continue;
+            if (write.bytes.size() >
+                address_space_size -
+                    static_cast<std::uint64_t>(write.address))
+                return false;
+            const auto& mapped = resolve(
+                write.address,
+                MemoryAccessWidth::Byte,
+                MemoryAccessOperation::Write,
+                false);
+            const auto mapped_end =
+                static_cast<std::uint64_t>(
+                    mapped.info.base_address) +
+                mapped.info.size;
+            const auto write_end =
+                static_cast<std::uint64_t>(write.address) +
+                write.bytes.size();
+            if (write_end > mapped_end ||
+                mapped.info.access != MemoryRegionAccess::ReadWrite ||
+                mapped.linear == nullptr)
+                return false;
+            const auto offset = static_cast<std::size_t>(
+                region_offset(mapped.info, write.address));
+            const auto backing = mapped.linear->bytes();
+            if (offset > backing.size() ||
+                write.bytes.size() > backing.size() - offset)
+                return false;
+
+            PreparedWrite item;
+            item.address = write.address;
+            item.bytes.assign(
+                write.bytes.begin(), write.bytes.end());
+            item.device = mapped.device;
+            item.linear = mapped.linear;
+            item.offset = offset;
+            item.region_name = mapped.info.name;
+            item.changed_bytes.assign(
+                backing.begin() +
+                    static_cast<std::ptrdiff_t>(offset),
+                backing.begin() +
+                    static_cast<std::ptrdiff_t>(
+                        offset + write.bytes.size()));
+            for (const auto& previous : prepared) {
+                if (previous.linear != item.linear) continue;
+                const auto overlap_begin =
+                    std::max(item.offset, previous.offset);
+                const auto overlap_end =
+                    std::min(
+                        item.offset + item.bytes.size(),
+                        previous.offset + previous.bytes.size());
+                if (overlap_begin >= overlap_end) continue;
+                std::copy(
+                    previous.bytes.begin() +
+                        static_cast<std::ptrdiff_t>(
+                            overlap_begin - previous.offset),
+                    previous.bytes.begin() +
+                        static_cast<std::ptrdiff_t>(
+                            overlap_end - previous.offset),
+                    item.changed_bytes.begin() +
+                        static_cast<std::ptrdiff_t>(
+                            overlap_begin - item.offset));
+            }
+            for (std::size_t index = 0u;
+                 index < write.bytes.size();
+                 ++index) {
+                item.changed_bytes[index] =
+                    item.changed_bytes[index] !=
+                            item.bytes[index]
+                        ? 1u
+                        : 0u;
+                item.changed =
+                    item.changed ||
+                    item.changed_bytes[index] != 0u;
+            }
             prepared.push_back(std::move(item));
         }
 
-        // No callbacks are made before every admitted range is visible. Keeping each backing
-        // device alive also makes subsequent diagnostic callbacks free to alter the map without
-        // invalidating the remainder of this transaction.
         for (const auto& write : prepared) {
             auto backing = write.linear->writable_bytes();
-            std::copy(write.bytes.begin(),
-                      write.bytes.end(),
-                      backing.begin() + static_cast<std::ptrdiff_t>(write.offset));
+            std::copy(
+                write.bytes.begin(),
+                write.bytes.end(),
+                backing.begin() +
+                    static_cast<std::ptrdiff_t>(write.offset));
         }
 
         for (const auto& write : prepared) {
             if (access_observers_active()) {
-                for (std::size_t index = 0u; index < write.bytes.size(); ++index) {
+                for (std::size_t index = 0u;
+                     index < write.bytes.size();
+                     ++index) {
                     ++performance_counters_.observed_accesses;
                     try {
                         notify_access(
                             {MemoryAccessOperation::Write,
-                             write.address + static_cast<std::uint32_t>(index),
+                             write.address +
+                                 static_cast<std::uint32_t>(index),
                              MemoryAccessWidth::Byte,
                              write.bytes[index],
                              write.region_name});
                     } catch (...) {
-                        // Diagnostics cannot turn an admitted multi-range commit into a
-                        // partially observable transaction.
                     }
                 }
             } else {
@@ -1494,15 +1689,18 @@ bool Memory::commit_linear_transaction_batch(
             }
             try {
                 notify_guest_write(
-                    {write.address, write.bytes.size(), source, write.changed});
+                    {write.address,
+                     write.bytes.size(),
+                     source,
+                     write.changed});
             } catch (...) {
-                // The complete batch is already visible.
             }
-            notify_guest_memory_write_range(write.address,
-                                            write.bytes.size(),
-                                            source,
-                                            write.changed_bytes,
-                                            nullptr);
+            notify_guest_memory_write_range(
+                write.address,
+                write.bytes.size(),
+                source,
+                write.changed_bytes,
+                nullptr);
         }
         return true;
     } catch (...) {

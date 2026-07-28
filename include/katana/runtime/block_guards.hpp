@@ -158,6 +158,8 @@ class RuntimeAddressSpace {
     // and ITLB replacement state are restored while local generations advance.
     void restore_state_passive(
         const RuntimeAddressSpaceSnapshot& state);
+    void commit_validated_state_restore(
+        RuntimeAddressSpaceSnapshot state) noexcept;
     [[nodiscard]] bool block_fits_translation_page(std::uint32_t virtual_start,
                                                    std::uint32_t size) const noexcept;
 

@@ -183,6 +183,14 @@ class DreamcastMapleController final {
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:

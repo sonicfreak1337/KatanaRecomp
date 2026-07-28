@@ -47,6 +47,8 @@ class Sh4IoPort final {
     [[nodiscard]] Sh4IoPortSnapshot snapshot() const noexcept;
     void validate_state_restore(const Sh4IoPortSnapshot& state) const;
     void restore_state_passive(const Sh4IoPortSnapshot& state);
+    void commit_validated_state_restore(
+        Sh4IoPortSnapshot state) noexcept;
     void reset() noexcept;
 
   private:

@@ -271,10 +271,21 @@ class PvrRegisterFile final {
     // render job or publishes an interrupt. Scan events remain inert until
     // their typed scheduler records are rehydrated.
     void restore_state_passive(PvrRegisterSnapshot state);
+    void commit_validated_state_restore(
+        PvrRegisterSnapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token,
+        std::optional<std::uint32_t> hblank_line);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending(
         std::uint32_t channel) const noexcept;
     void set_render_observer(std::function<void()> observer);
@@ -518,6 +529,8 @@ class TileAccelerator final {
     [[nodiscard]] TileAcceleratorSnapshot snapshot() const;
     void validate_state_restore(const TileAcceleratorSnapshot& state) const;
     void restore_state_passive(TileAcceleratorSnapshot state);
+    void commit_validated_state_restore(
+        TileAcceleratorSnapshot state) noexcept;
 
   private:
     [[nodiscard]] static std::uint8_t list_rank(PvrListType type) noexcept;
@@ -635,6 +648,8 @@ class PvrTaFifo final {
     [[nodiscard]] PvrTaFifoSnapshot snapshot() const;
     void validate_state_restore(const PvrTaFifoSnapshot& state) const;
     void restore_state_passive(PvrTaFifoSnapshot state);
+    void commit_validated_state_restore(
+        PvrTaFifoSnapshot state) noexcept;
     void continue_list();
     void reset() noexcept;
 
@@ -710,6 +725,7 @@ class PvrTaFifoMemoryDevice final : public MemoryDevice {
     [[nodiscard]] Snapshot snapshot() const noexcept;
     void validate_state_restore(const Snapshot& state) const;
     void restore_state_passive(Snapshot state);
+    void commit_validated_state_restore(Snapshot state) noexcept;
     void reset() noexcept;
 
   private:
@@ -744,6 +760,7 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
     [[nodiscard]] Snapshot snapshot() const;
     void validate_state_restore(const Snapshot& state) const;
     void restore_state_passive(Snapshot state);
+    void commit_validated_state_restore(Snapshot state) noexcept;
 
   private:
     void refresh_configuration();
@@ -872,6 +889,8 @@ class PvrSoftwareRenderer final {
     [[nodiscard]] PvrSoftwareRendererSnapshot snapshot() const;
     void validate_state_restore(const PvrSoftwareRendererSnapshot& state) const;
     void restore_state_passive(PvrSoftwareRendererSnapshot state);
+    void commit_validated_state_restore(
+        PvrSoftwareRendererSnapshot state) noexcept;
 
   private:
     PvrSoftwareRenderMetrics metrics_;
@@ -907,6 +926,38 @@ struct DreamcastPvrStateSnapshot {
     PvrSoftwareRendererSnapshot renderer;
 };
 
+class PreparedDreamcastPvrStateRestore final {
+  public:
+    PreparedDreamcastPvrStateRestore(
+        const PreparedDreamcastPvrStateRestore&) = delete;
+    PreparedDreamcastPvrStateRestore& operator=(
+        const PreparedDreamcastPvrStateRestore&) = delete;
+    PreparedDreamcastPvrStateRestore(
+        PreparedDreamcastPvrStateRestore&&) noexcept = default;
+    PreparedDreamcastPvrStateRestore& operator=(
+        PreparedDreamcastPvrStateRestore&&) noexcept = default;
+
+  private:
+    PreparedDreamcastPvrStateRestore() = default;
+    friend PreparedDreamcastPvrStateRestore
+    prepare_dreamcast_pvr_state_restore(
+        const PvrRegisterFile&,
+        const PvrTaFifo&,
+        const PvrTaFifoMemoryDevice&,
+        const PvrYuvConverterMemoryDevice&,
+        const PvrSoftwareRenderer&,
+        DreamcastPvrStateSnapshot);
+    friend void commit_dreamcast_pvr_state_restore(
+        PvrRegisterFile&,
+        PvrTaFifo&,
+        PvrTaFifoMemoryDevice&,
+        PvrYuvConverterMemoryDevice&,
+        PvrSoftwareRenderer&,
+        PreparedDreamcastPvrStateRestore) noexcept;
+
+    DreamcastPvrStateSnapshot state_;
+};
+
 [[nodiscard]] DreamcastPvrStateSnapshot snapshot_dreamcast_pvr_state(
     const PvrRegisterFile& registers,
     const PvrTaFifo& ta_fifo,
@@ -927,6 +978,21 @@ void validate_dreamcast_pvr_state_restore(
     const PvrYuvConverterMemoryDevice& yuv,
     const PvrSoftwareRenderer& renderer,
     const DreamcastPvrStateSnapshot& state);
+[[nodiscard]] PreparedDreamcastPvrStateRestore
+prepare_dreamcast_pvr_state_restore(
+    const PvrRegisterFile& registers,
+    const PvrTaFifo& ta_fifo,
+    const PvrTaFifoMemoryDevice& ta_aperture,
+    const PvrYuvConverterMemoryDevice& yuv,
+    const PvrSoftwareRenderer& renderer,
+    DreamcastPvrStateSnapshot state);
+void commit_dreamcast_pvr_state_restore(
+    PvrRegisterFile& registers,
+    PvrTaFifo& ta_fifo,
+    PvrTaFifoMemoryDevice& ta_aperture,
+    PvrYuvConverterMemoryDevice& yuv,
+    PvrSoftwareRenderer& renderer,
+    PreparedDreamcastPvrStateRestore prepared) noexcept;
 void restore_dreamcast_pvr_state_passive(
     PvrRegisterFile& registers,
     PvrTaFifo& ta_fifo,

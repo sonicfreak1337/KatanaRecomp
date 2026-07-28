@@ -50,6 +50,28 @@ encode_sh4_scif_state(const Sh4ScifSnapshot& state);
 [[nodiscard]] Sh4ScifSnapshot
 decode_sh4_scif_state(std::span<const std::uint8_t> bytes);
 
+class Sh4Scif;
+
+class PreparedSh4ScifStateRestore final {
+  public:
+    PreparedSh4ScifStateRestore(
+        const PreparedSh4ScifStateRestore&) = delete;
+    PreparedSh4ScifStateRestore& operator=(
+        const PreparedSh4ScifStateRestore&) = delete;
+    PreparedSh4ScifStateRestore(
+        PreparedSh4ScifStateRestore&&) noexcept = default;
+    PreparedSh4ScifStateRestore& operator=(
+        PreparedSh4ScifStateRestore&&) noexcept = default;
+
+  private:
+    friend class Sh4Scif;
+    PreparedSh4ScifStateRestore() = default;
+    const Sh4Scif* owner_ = nullptr;
+    Sh4ScifSnapshot state_;
+    std::deque<std::uint8_t> transmit_fifo_;
+    std::deque<std::uint8_t> receive_fifo_;
+};
+
 class Sh4Scif final {
   public:
     using InterruptObserver = std::function<void(Sh4ScifInterrupt, bool)>;
@@ -78,11 +100,23 @@ class Sh4Scif final {
         std::uint64_t expected_scheduler_cycle) const;
     // Captured SchedulerEventIds are discarded. A pending frame remains
     // inert until its typed event is rehydrated with a fresh ID.
+    [[nodiscard]] PreparedSh4ScifStateRestore prepare_state_restore(
+        const Sh4ScifSnapshot& state) const;
+    void commit_prepared_state_restore(
+        PreparedSh4ScifStateRestore prepared) noexcept;
     void restore_state_passive(const Sh4ScifSnapshot& state);
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:

@@ -435,6 +435,11 @@ void Sh4Dmac::validate_state_restore(const Sh4DmacSnapshot& state) const {
 
 void Sh4Dmac::restore_state_passive(const Sh4DmacSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void Sh4Dmac::commit_validated_state_restore(
+    Sh4DmacSnapshot state) noexcept {
     cancel_event();
     for (std::size_t index = 0u; index < channels_.size(); ++index) {
         const auto& source = state.channels[index];
@@ -454,7 +459,7 @@ void Sh4Dmac::restore_state_passive(const Sh4DmacSnapshot& state) {
     execution_mode_ = state.execution_mode;
     scheduled_channel_ = state.scheduled_channel;
     scheduled_units_ = state.scheduled_units;
-    last_fault_ = state.last_fault;
+    last_fault_ = std::move(state.last_fault);
     last_on_demand_channel_ = state.last_on_demand_channel;
     round_robin_cursor_ = state.round_robin_cursor;
     performance_counters_ = state.performance_counters;
@@ -477,16 +482,36 @@ SchedulerEventId Sh4Dmac::rehydrate_scheduled_event(
     if (guest_cycle < scheduler_.current_cycle())
         throw std::invalid_argument(
             "SH4-DMAC-Completion darf nicht in der Vergangenheit liegen.");
-    const auto restored_channel = static_cast<std::size_t>(channel);
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this, restored_channel](const auto, const auto) {
-            handle_transfer(restored_channel);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::Sh4Dmac);
+    commit_rehydrated_scheduled_event(event_id, channel, token);
+    return event_id;
+}
+
+SchedulerCallback Sh4Dmac::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (token != sh4_dmac_event_token_v1 || channel >= channel_count)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    return [this, restored_channel = static_cast<std::size_t>(channel)](
+               const auto, const auto) {
+        handle_transfer(restored_channel);
+    };
+}
+
+void Sh4Dmac::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (token != sh4_dmac_event_token_v1 || channel >= channel_count ||
+        !event_rehydration_pending_ || event_ || !scheduled_channel_ ||
+        *scheduled_channel_ != channel || scheduled_units_ == 0u)
+        std::terminate();
     event_ = event_id;
     event_rehydration_pending_ = false;
-    return event_id;
 }
 
 bool Sh4Dmac::event_rehydration_pending() const noexcept {

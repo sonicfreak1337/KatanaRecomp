@@ -153,7 +153,8 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(const std::uint32_t 
 ExecutableCodeTracker::PreparedDiscLoadWrite
 ExecutableCodeTracker::prepare_disc_load_write(const std::uint32_t address,
                                                const std::size_t size,
-                                               const CodeWriteSource source) {
+                                               const CodeWriteSource source,
+                                               const bool bytes_changed) const {
     if (size == 0u)
         throw std::invalid_argument("Disc-Codewrite-Admission braucht eine Groesse.");
     const auto canonical = canonical_physical_address(address);
@@ -167,88 +168,116 @@ ExecutableCodeTracker::prepare_disc_load_write(const std::uint32_t address,
     plan.physical_address = canonical;
     plan.size = size;
     plan.source = source;
-    plan.result.source = source;
-    const auto first_page = canonical / page_size * page_size;
-    const auto final_address = static_cast<std::uint32_t>(canonical + size - 1u);
-    const auto last_page = final_address / page_size * page_size;
-    for (auto page = first_page;; page += page_size) {
-        plan.pages.push_back(page);
-        plan.result.changed_pages.push_back(page);
-        if (page == last_page) break;
-    }
-
-    std::vector<std::size_t> candidates;
-    plan.indexed_lookup = lookup_mode_ == CodeInvalidationLookupMode::PageIndex;
-    if (plan.indexed_lookup) {
-        for (const auto page : plan.pages) {
-            if (const auto found = page_blocks_.find(page); found != page_blocks_.end())
-                candidates.insert(candidates.end(), found->second.begin(), found->second.end());
+    auto& event = plan.prepared_event;
+    event.virtual_address = address;
+    event.physical_address = canonical;
+    event.size = size;
+    event.source = source;
+    event.byte_identical = !bytes_changed;
+    if (bytes_changed) {
+        const auto first_page = canonical / page_size * page_size;
+        const auto final_address =
+            static_cast<std::uint32_t>(canonical + size - 1u);
+        const auto last_page = final_address / page_size * page_size;
+        for (auto page = first_page;; page += page_size) {
+            plan.pages.push_back(page);
+            event.pages.push_back({page, 0u});
+            if (page == last_page) break;
         }
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-    } else {
-        candidates.resize(blocks_.size());
-        for (std::size_t index = 0u; index < candidates.size(); ++index)
-            candidates[index] = index;
-    }
-    plan.candidate_count = candidates.size();
-    for (const auto index : candidates) {
-        const auto& tracked = blocks_.at(index);
-        if (!tracked.valid ||
-            !native_aot_write_overlaps_immutable(tracked.block.physical_start,
-                                                tracked.block.size,
-                                                tracked.block.mutable_ranges,
-                                                canonical,
-                                                size))
-            continue;
-        plan.block_indices.push_back(index);
-        plan.result.invalidated_blocks.push_back(tracked.block.identity);
-        plan.result.unlinked_sources.insert(plan.result.unlinked_sources.end(),
-                                            tracked.block.incoming_links.begin(),
-                                            tracked.block.incoming_links.end());
-    }
-    std::sort(plan.result.invalidated_blocks.begin(), plan.result.invalidated_blocks.end());
-    std::sort(plan.result.unlinked_sources.begin(), plan.result.unlinked_sources.end());
-    plan.result.unlinked_sources.erase(
-        std::unique(plan.result.unlinked_sources.begin(), plan.result.unlinked_sources.end()),
-        plan.result.unlinked_sources.end());
 
-    try {
+        std::vector<std::size_t> candidates;
+        plan.indexed_lookup =
+            lookup_mode_ == CodeInvalidationLookupMode::PageIndex;
+        if (plan.indexed_lookup) {
+            for (const auto page : plan.pages) {
+                if (const auto found = page_blocks_.find(page);
+                    found != page_blocks_.end())
+                    candidates.insert(
+                        candidates.end(),
+                        found->second.begin(),
+                        found->second.end());
+            }
+            std::sort(candidates.begin(), candidates.end());
+            candidates.erase(
+                std::unique(candidates.begin(), candidates.end()),
+                candidates.end());
+        } else {
+            candidates.resize(blocks_.size());
+            for (std::size_t index = 0u;
+                 index < candidates.size();
+                 ++index)
+                candidates[index] = index;
+        }
+        plan.candidate_count = candidates.size();
+        for (const auto index : candidates) {
+            const auto& tracked = blocks_.at(index);
+            if (!tracked.valid ||
+                !native_aot_write_overlaps_immutable(
+                    tracked.block.physical_start,
+                    tracked.block.size,
+                    tracked.block.mutable_ranges,
+                    canonical,
+                    size))
+                continue;
+            plan.block_indices.push_back(index);
+            event.invalidated_blocks.push_back(
+                tracked.block.identity);
+            event.unlinked_sources.insert(
+                event.unlinked_sources.end(),
+                tracked.block.incoming_links.begin(),
+                tracked.block.incoming_links.end());
+        }
+        std::sort(
+            event.invalidated_blocks.begin(),
+            event.invalidated_blocks.end());
+        std::sort(
+            event.unlinked_sources.begin(),
+            event.unlinked_sources.end());
+        event.unlinked_sources.erase(
+            std::unique(
+                event.unlinked_sources.begin(),
+                event.unlinked_sources.end()),
+            event.unlinked_sources.end());
+
+        plan.generation_nodes.reserve(plan.pages.size());
+        plan.hotspot_nodes.reserve(plan.pages.size());
         for (const auto page : plan.pages) {
             if (!generations_.contains(page)) {
-                generations_.emplace(page, 0u);
-                plan.inserted_generation_pages.push_back(page);
+                std::map<std::uint32_t, std::uint64_t> detached;
+                const auto inserted = detached.emplace(page, 0u);
+                plan.generation_nodes.push_back(
+                    detached.extract(inserted.first));
             }
             if (!hotspots_.contains(page)) {
-                hotspots_.emplace(page, 0u);
-                plan.inserted_hotspot_pages.push_back(page);
+                std::map<std::uint32_t, std::uint64_t> detached;
+                const auto inserted = detached.emplace(page, 0u);
+                plan.hotspot_nodes.push_back(
+                    detached.extract(inserted.first));
             }
         }
-    } catch (...) {
-        cancel_disc_load_write(plan);
-        throw;
     }
     return plan;
 }
 
-void ExecutableCodeTracker::cancel_disc_load_write(PreparedDiscLoadWrite& plan) noexcept {
-    for (const auto page : plan.inserted_generation_pages) {
-        const auto found = generations_.find(page);
-        if (found != generations_.end() && found->second == 0u) generations_.erase(found);
-    }
-    for (const auto page : plan.inserted_hotspot_pages) {
-        const auto found = hotspots_.find(page);
-        if (found != hotspots_.end() && found->second == 0u) hotspots_.erase(found);
-    }
-    plan.inserted_generation_pages.clear();
-    plan.inserted_hotspot_pages.clear();
+void ExecutableCodeTracker::cancel_disc_load_write(
+    PreparedDiscLoadWrite& plan) noexcept {
+    plan.generation_nodes.clear();
+    plan.hotspot_nodes.clear();
 }
 
 void ExecutableCodeTracker::commit_disc_load_write(PreparedDiscLoadWrite plan) noexcept {
+    for (auto& node : plan.generation_nodes)
+        if (node) static_cast<void>(
+            generations_.insert(std::move(node)));
+    for (auto& node : plan.hotspot_nodes)
+        if (node) static_cast<void>(
+            hotspots_.insert(std::move(node)));
     for (const auto page : plan.pages) {
         auto generation = generations_.find(page);
         auto hotspot = hotspots_.find(page);
-        if (generation == generations_.end() || hotspot == hotspots_.end()) continue;
+        if (generation == generations_.end() ||
+            hotspot == hotspots_.end())
+            std::terminate();
         ++generation->second;
         ++hotspot->second;
     }
@@ -261,8 +290,35 @@ void ExecutableCodeTracker::commit_disc_load_write(PreparedDiscLoadWrite plan) n
         performance_counters_.indexed_candidates += plan.candidate_count;
     else
         performance_counters_.reference_candidates += plan.candidate_count;
-    record_invalidation_event(
-        plan.address, plan.physical_address, plan.size, plan.result);
+
+    if (next_provenance_sequence_ ==
+        std::numeric_limits<std::uint64_t>::max()) {
+        if (dropped_provenance_events_ !=
+            std::numeric_limits<std::uint64_t>::max())
+            ++dropped_provenance_events_;
+        return;
+    }
+    auto& event = plan.prepared_event;
+    event.sequence = next_provenance_sequence_;
+    for (auto& page : event.pages)
+        page.generation = page_generation(page.physical_page);
+    if (invalidation_events_.size() == provenance_capacity_) {
+        std::swap(
+            invalidation_events_[oldest_invalidation_event_],
+            event);
+        oldest_invalidation_event_ =
+            (oldest_invalidation_event_ + 1u) %
+            provenance_capacity_;
+        if (dropped_provenance_events_ !=
+            std::numeric_limits<std::uint64_t>::max())
+            ++dropped_provenance_events_;
+    } else {
+        if (invalidation_events_.capacity() <
+            provenance_capacity_)
+            std::terminate();
+        invalidation_events_.push_back(std::move(event));
+    }
+    ++next_provenance_sequence_;
 }
 
 void ExecutableCodeTracker::record_invalidation_event(

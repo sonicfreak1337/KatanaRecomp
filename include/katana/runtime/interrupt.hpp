@@ -43,6 +43,8 @@ class InterruptController {
     // deliberately rebuilt with a fresh epoch.
     void validate_state_restore(const InterruptControllerSnapshot& state) const;
     void restore_state_passive(const InterruptControllerSnapshot& state);
+    void commit_validated_state_restore(
+        InterruptControllerSnapshot state) noexcept;
 
   private:
     friend bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept;

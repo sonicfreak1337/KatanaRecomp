@@ -431,28 +431,64 @@ void GdRomAsyncReader::validate_state_restore(
     }
 }
 
-void GdRomAsyncReader::restore_state_passive(
-    const GdRomAsyncReaderSnapshot& state) {
+struct GdRomAsyncReader::PreparedStateRestore::Data {
+    const GdRomAsyncReader* owner = nullptr;
+    std::uint64_t next_request_id = 0u;
+    std::vector<Pending> pending;
+    std::vector<GdRomAsyncCompletion> completed;
+};
+
+GdRomAsyncReader::PreparedStateRestore::PreparedStateRestore()
+    : data_(std::make_unique<Data>()) {}
+
+GdRomAsyncReader::PreparedStateRestore::PreparedStateRestore(
+    PreparedStateRestore&&) noexcept = default;
+
+GdRomAsyncReader::PreparedStateRestore&
+GdRomAsyncReader::PreparedStateRestore::operator=(
+    PreparedStateRestore&&) noexcept = default;
+
+GdRomAsyncReader::PreparedStateRestore::~PreparedStateRestore() =
+    default;
+
+GdRomAsyncReader::PreparedStateRestore
+GdRomAsyncReader::prepare_state_restore(
+    const GdRomAsyncReaderSnapshot& state) const {
     validate_state_restore(state);
 
-    std::vector<Pending> restored_pending;
-    restored_pending.reserve(state.pending.size());
+    PreparedStateRestore prepared;
+    prepared.data_->owner = this;
+    prepared.data_->next_request_id = state.next_request_id;
+    prepared.data_->pending.reserve(state.pending.size());
     for (const auto& pending : state.pending)
-        restored_pending.push_back({pending.request_id,
-                                    pending.ready_cycle,
-                                    pending.request,
-                                    0u,
-                                    true});
-    auto restored_completed = state.completed;
+        prepared.data_->pending.push_back(
+            {pending.request_id,
+             pending.ready_cycle,
+             pending.request,
+             0u,
+             true});
+    prepared.data_->completed = state.completed;
+    return prepared;
+}
 
+void GdRomAsyncReader::commit_prepared_state_restore(
+    PreparedStateRestore prepared) noexcept {
+    if (!prepared.data_ || prepared.data_->owner != this)
+        std::terminate();
     if (!scheduler_lifetime_.expired()) {
         for (const auto& pending : pending_)
             if (pending.event_id != 0u)
                 static_cast<void>(scheduler_.cancel(pending.event_id));
     }
-    pending_ = std::move(restored_pending);
-    completed_ = std::move(restored_completed);
-    next_request_id_ = state.next_request_id;
+    pending_.swap(prepared.data_->pending);
+    completed_.swap(prepared.data_->completed);
+    next_request_id_ = prepared.data_->next_request_id;
+}
+
+void GdRomAsyncReader::restore_state_passive(
+    const GdRomAsyncReaderSnapshot& state) {
+    auto prepared = prepare_state_restore(state);
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 SchedulerEventId GdRomAsyncReader::rehydrate_scheduled_event(
@@ -474,16 +510,42 @@ SchedulerEventId GdRomAsyncReader::rehydrate_scheduled_event(
         guest_cycle < scheduler_.current_cycle())
         throw std::invalid_argument(
             "GD-ROM-Reader-Completion passt nicht zur gespeicherten Gastzeit.");
-    const auto request_id = pending->request_id;
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this, request_id](const auto, const auto cycle) {
-            complete(request_id, cycle);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::DiscRead);
+    commit_rehydrated_scheduled_event(event_id, channel, token);
+    return event_id;
+}
+
+SchedulerCallback
+GdRomAsyncReader::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != gdrom_async_read_event_channel || token == 0u)
+        throw std::invalid_argument(
+            "GD-ROM-Reader-Handoff besitzt einen unbekannten Eventkanal "
+            "oder Token.");
+    return [this, request_id = token](const auto, const auto cycle) {
+        complete(request_id, cycle);
+    };
+}
+
+void GdRomAsyncReader::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != gdrom_async_read_event_channel || token == 0u)
+        std::terminate();
+    const auto pending =
+        std::find_if(pending_.begin(), pending_.end(), [token](const auto& value) {
+            return value.request_id == token;
+        });
+    if (pending == pending_.end() ||
+        !pending->event_rehydration_pending || pending->event_id != 0u)
+        std::terminate();
     pending->event_id = event_id;
     pending->event_rehydration_pending = false;
-    return event_id;
 }
 
 bool GdRomAsyncReader::event_rehydration_pending() const noexcept {

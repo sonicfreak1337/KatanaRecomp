@@ -158,10 +158,20 @@ class DreamcastG2DmaController final {
     [[nodiscard]] DreamcastG2DmaSnapshot snapshot() const;
     void validate_state_restore(const DreamcastG2DmaSnapshot& state) const;
     void restore_state_passive(const DreamcastG2DmaSnapshot& state);
+    void commit_validated_state_restore(
+        DreamcastG2DmaSnapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void set_hardware_request_probe(std::size_t channel,
                                     std::function<bool()> probe);
@@ -231,10 +241,20 @@ class DreamcastG1BusController final {
     [[nodiscard]] DreamcastG1DmaSnapshot snapshot() const noexcept;
     void validate_state_restore(const DreamcastG1DmaSnapshot& state) const;
     void restore_state_passive(const DreamcastG1DmaSnapshot& state);
+    void commit_validated_state_restore(
+        DreamcastG1DmaSnapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
@@ -295,10 +315,20 @@ class DreamcastPvrDmaController final {
     [[nodiscard]] DreamcastPvrDmaSnapshot snapshot() const noexcept;
     void validate_state_restore(const DreamcastPvrDmaSnapshot& state) const;
     void restore_state_passive(const DreamcastPvrDmaSnapshot& state);
+    void commit_validated_state_restore(
+        DreamcastPvrDmaSnapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void set_suspended(bool suspended);
     void abort() noexcept;

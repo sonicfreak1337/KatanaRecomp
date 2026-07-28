@@ -298,8 +298,6 @@ class RuntimeBlockTable {
             StaticAotInvalidationContract::Conservative) noexcept;
     void clear() noexcept;
 
-  private:
-    friend class ExecutableDiscLoadTransactionCoordinator;
     struct PreparedDiscLoadInvalidation {
         std::vector<std::uint64_t> ids;
     };
@@ -308,6 +306,8 @@ class RuntimeBlockTable {
     [[nodiscard]] std::size_t
     commit_disc_load_invalidation(PreparedDiscLoadInvalidation plan) noexcept;
 
+  private:
+    friend class ExecutableDiscLoadTransactionCoordinator;
     struct VariantAddressKey {
         BlockVariantKey variant;
         std::uint32_t address = 0u;

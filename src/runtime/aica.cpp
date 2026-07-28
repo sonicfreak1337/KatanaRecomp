@@ -147,6 +147,11 @@ void AicaRtc::validate_state_restore(
 
 void AicaRtc::restore_state_passive(AicaRtcSnapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void AicaRtc::commit_validated_state_restore(
+    AicaRtcSnapshot state) noexcept {
     base_cycle_ = state.base_cycle;
     base_seconds_ = state.base_seconds;
     write_latch_ = state.write_latch;
@@ -581,6 +586,11 @@ void AicaRegisterFile::validate_state_restore(
 
 void AicaRegisterFile::restore_state_passive(AicaRegisterSnapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void AicaRegisterFile::commit_validated_state_restore(
+    AicaRegisterSnapshot state) noexcept {
     registers_ = std::move(state.registers);
     for (std::size_t index = 0u; index < channels_.size(); ++index) {
         const auto& source = state.channels[index];
@@ -780,6 +790,11 @@ void AicaTimer::validate_state_restore(const Snapshot& state) const {
 
 void AicaTimer::restore_state_passive(Snapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void AicaTimer::commit_validated_state_restore(
+    Snapshot state) noexcept {
     remainder_ = state.remainder;
     divisor_ = state.divisor;
     counter_ = state.counter;
@@ -885,6 +900,11 @@ void AicaInterruptState::validate_state_restore(const Snapshot& state) const {
 
 void AicaInterruptState::restore_state_passive(Snapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void AicaInterruptState::commit_validated_state_restore(
+    Snapshot state) noexcept {
     enabled_ = state.enabled;
     pending_ = state.pending;
 }
@@ -1035,6 +1055,11 @@ void AicaExecutionController::validate_state_restore(
 
 void AicaExecutionController::restore_state_passive(Snapshot state) {
     validate_state_restore(state);
+    commit_validated_state_restore(std::move(state));
+}
+
+void AicaExecutionController::commit_validated_state_restore(
+    Snapshot state) noexcept {
     const auto needs_tick_rehydration =
         state.tick_event.has_value() ||
         state.tick_event_rehydration_pending;
@@ -1045,9 +1070,10 @@ void AicaExecutionController::restore_state_passive(Snapshot state) {
     mode_ = state.mode;
     arm7_reset_asserted_ = state.arm7_reset_asserted;
     for (std::size_t index = 0u; index < timers_.size(); ++index)
-        timers_[index].restore_state_passive(
+        timers_[index].commit_validated_state_restore(
             std::move(state.timers[index]));
-    interrupts_.restore_state_passive(std::move(state.interrupts));
+    interrupts_.commit_validated_state_restore(
+        std::move(state.interrupts));
     error_ = state.error;
     tick_event_rehydration_pending_ = needs_tick_rehydration;
 }
@@ -1069,14 +1095,40 @@ SchedulerEventId AicaExecutionController::rehydrate_scheduled_event(
     if (guest_cycle < scheduler_->current_cycle())
         throw std::invalid_argument(
             "AICA-Tickevent darf nicht in der Vergangenheit liegen.");
-    tick_event_ = scheduler_->schedule_at(
+    const auto event_id = scheduler_->schedule_at(
         guest_cycle,
-        [this](const auto event_id, const auto) {
-            handle_tick(event_id);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::AicaTick);
+    commit_rehydrated_scheduled_event(event_id, channel, token);
+    return event_id;
+}
+
+SchedulerCallback
+AicaExecutionController::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != dreamcast_aica_tick_event_channel ||
+        token != dreamcast_aica_tick_event_token_v1)
+        throw std::invalid_argument(
+            "AICA-Execution-Handoff besitzt einen unbekannten Eventkanal "
+            "oder Token.");
+    return [this](const auto event_id, const auto) {
+        handle_tick(event_id);
+    };
+}
+
+void AicaExecutionController::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != dreamcast_aica_tick_event_channel ||
+        token != dreamcast_aica_tick_event_token_v1 ||
+        scheduler_ == nullptr || scheduler_lifetime_.expired() ||
+        !tick_event_rehydration_pending_ || tick_event_ ||
+        error_ != AicaExecutionError::None)
+        std::terminate();
+    tick_event_ = event_id;
     tick_event_rehydration_pending_ = false;
-    return *tick_event_;
 }
 
 bool AicaExecutionController::event_rehydration_pending() const noexcept {
@@ -1156,16 +1208,51 @@ void validate_dreamcast_aica_state_restore(
             "AICA-Handoff besitzt inkonsistenten ARM7-Resetzustand.");
 }
 
+PreparedDreamcastAicaStateRestore
+prepare_dreamcast_aica_state_restore(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution,
+    DreamcastAicaStateSnapshot state,
+    const std::uint64_t expected_scheduler_cycle) {
+    validate_dreamcast_aica_state_restore(
+        registers,
+        rtc,
+        execution,
+        state,
+        expected_scheduler_cycle);
+    PreparedDreamcastAicaStateRestore prepared;
+    prepared.state_ = std::move(state);
+    return prepared;
+}
+
+void commit_dreamcast_aica_state_restore(
+    AicaRegisterFile& registers,
+    AicaRtc& rtc,
+    AicaExecutionController& execution,
+    PreparedDreamcastAicaStateRestore prepared) noexcept {
+    auto& state = prepared.state_;
+    execution.commit_validated_state_restore(
+        std::move(state.execution));
+    registers.commit_validated_state_restore(
+        std::move(state.registers));
+    rtc.commit_validated_state_restore(std::move(state.rtc));
+}
+
 void restore_dreamcast_aica_state_passive(
     AicaRegisterFile& registers,
     AicaRtc& rtc,
     AicaExecutionController& execution,
     DreamcastAicaStateSnapshot state) {
-    validate_dreamcast_aica_state_restore(
-        registers, rtc, execution, state);
-    execution.restore_state_passive(std::move(state.execution));
-    registers.restore_state_passive(std::move(state.registers));
-    rtc.restore_state_passive(std::move(state.rtc));
+    const auto expected_scheduler_cycle = state.rtc.scheduler_cycle;
+    auto prepared = prepare_dreamcast_aica_state_restore(
+        registers,
+        rtc,
+        execution,
+        std::move(state),
+        expected_scheduler_cycle);
+    commit_dreamcast_aica_state_restore(
+        registers, rtc, execution, std::move(prepared));
 }
 
 namespace {

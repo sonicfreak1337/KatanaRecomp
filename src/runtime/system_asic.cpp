@@ -275,6 +275,11 @@ void DreamcastSystemBusControl::validate_state_restore(
 void DreamcastSystemBusControl::restore_state_passive(
     const DreamcastSystemBusSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void DreamcastSystemBusControl::commit_validated_state_restore(
+    DreamcastSystemBusSnapshot state) noexcept {
     registers_ = state.registers;
     system_reset_requests_ = state.system_reset_requests;
 }
@@ -535,25 +540,58 @@ void DreamcastSystemAsic::validate_state_restore(
     }
 }
 
-void DreamcastSystemAsic::restore_state_passive(
+struct DreamcastSystemAsic::PreparedStateRestore::Data {
+    const DreamcastSystemAsic* owner = nullptr;
+    DreamcastSystemAsicSnapshot state;
+    std::deque<SystemAsicEventRecord> events;
+    std::vector<ScheduledEvent> scheduled_events;
+};
+
+DreamcastSystemAsic::PreparedStateRestore::PreparedStateRestore()
+    : data_(std::make_unique<Data>()) {}
+
+DreamcastSystemAsic::PreparedStateRestore::PreparedStateRestore(
+    PreparedStateRestore&&) noexcept = default;
+
+DreamcastSystemAsic::PreparedStateRestore&
+DreamcastSystemAsic::PreparedStateRestore::operator=(
+    PreparedStateRestore&&) noexcept = default;
+
+DreamcastSystemAsic::PreparedStateRestore::~PreparedStateRestore() =
+    default;
+
+DreamcastSystemAsic::PreparedStateRestore
+DreamcastSystemAsic::prepare_state_restore(
     EventScheduler& scheduler,
-    const DreamcastSystemAsicSnapshot& state) {
+    const DreamcastSystemAsicSnapshot& state,
+    const std::uint64_t expected_scheduler_cycle) const {
     validate_state_restore(state);
     for (const auto& scheduled : state.scheduled_events)
-        if (scheduled.guest_cycle < scheduler.current_cycle())
+        if (scheduled.guest_cycle < expected_scheduler_cycle)
             throw std::invalid_argument(
                 "System-ASIC-Handoff plant ein Ereignis in der Vergangenheit.");
-    std::vector<ScheduledEvent> restored_events;
-    restored_events.reserve(state.scheduled_events.size());
+    PreparedStateRestore prepared;
+    prepared.data_->owner = this;
+    prepared.data_->state = state;
+    prepared.data_->events = state.events;
+    prepared.data_->scheduled_events.reserve(
+        state.scheduled_events.size());
     for (const auto& scheduled : state.scheduled_events)
-        restored_events.push_back({&scheduler,
-                                   scheduler.lifetime_token(),
-                                   scheduled.guest_cycle,
-                                   scheduled.event,
-                                   std::nullopt,
-                                   true});
-    auto restored_history = state.events;
+        prepared.data_->scheduled_events.push_back(
+            {&scheduler,
+             scheduler.lifetime_token(),
+             scheduled.guest_cycle,
+             scheduled.event,
+             std::nullopt,
+             true});
+    return prepared;
+}
 
+void DreamcastSystemAsic::commit_prepared_state_restore(
+    PreparedStateRestore prepared) noexcept {
+    if (!prepared.data_ || prepared.data_->owner != this)
+        std::terminate();
+    auto& state = prepared.data_->state;
     for (const auto& scheduled : scheduled_events_)
         if (scheduled.event_id && scheduled.scheduler &&
             !scheduled.scheduler_lifetime.expired())
@@ -562,13 +600,21 @@ void DreamcastSystemAsic::restore_state_passive(
     pending_ = state.pending;
     masks_ = state.masks;
     dma_trigger_masks_ = state.dma_trigger_masks;
-    events_ = std::move(restored_history);
+    events_.swap(prepared.data_->events);
     last_event_ = state.last_event;
     next_sequence_ = state.next_sequence;
     last_guest_cycle_ = state.last_guest_cycle;
     total_events_ = state.total_events;
     dropped_events_ = state.dropped_events;
-    scheduled_events_ = std::move(restored_events);
+    scheduled_events_.swap(prepared.data_->scheduled_events);
+}
+
+void DreamcastSystemAsic::restore_state_passive(
+    EventScheduler& scheduler,
+    const DreamcastSystemAsicSnapshot& state) {
+    auto prepared = prepare_state_restore(
+        scheduler, state, scheduler.current_cycle());
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 SchedulerEventId DreamcastSystemAsic::rehydrate_scheduled_event(
@@ -599,23 +645,63 @@ SchedulerEventId DreamcastSystemAsic::rehydrate_scheduled_event(
             "System-ASIC-Ereignis darf nicht in der Vergangenheit liegen.");
     const auto event_id = scheduler.schedule_at(
         guest_cycle,
-        [this, event](const auto restored_event_id, const auto cycle) {
-            scheduled_events_.erase(
-                std::remove_if(
-                    scheduled_events_.begin(),
-                    scheduled_events_.end(),
-                    [restored_event_id](const auto& candidate) {
-                        return candidate.event_id == restored_event_id;
-                    }),
-                scheduled_events_.end());
-            raise(event, cycle);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::SystemAsic);
+    commit_rehydrated_scheduled_event(
+        scheduler, event_id, guest_cycle, channel, token);
+    return event_id;
+}
+
+SchedulerCallback
+DreamcastSystemAsic::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != dreamcast_system_asic_event_channel ||
+        token > std::numeric_limits<std::uint16_t>::max())
+        throw std::invalid_argument(
+            "System-ASIC-Handoff besitzt einen unbekannten Eventkanal oder "
+            "Token.");
+    const auto event =
+        static_cast<SystemAsicEvent>(static_cast<std::uint16_t>(token));
+    static_cast<void>(event_bit(event));
+    return [this, event](const auto restored_event_id, const auto cycle) {
+        scheduled_events_.erase(
+            std::remove_if(
+                scheduled_events_.begin(),
+                scheduled_events_.end(),
+                [restored_event_id](const auto& candidate) {
+                    return candidate.event_id == restored_event_id;
+                }),
+            scheduled_events_.end());
+        raise(event, cycle);
+    };
+}
+
+void DreamcastSystemAsic::commit_rehydrated_scheduled_event(
+    EventScheduler& scheduler,
+    const SchedulerEventId event_id,
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != dreamcast_system_asic_event_channel ||
+        token > std::numeric_limits<std::uint16_t>::max())
+        std::terminate();
+    const auto event =
+        static_cast<SystemAsicEvent>(static_cast<std::uint16_t>(token));
+    const auto pending = std::find_if(
+        scheduled_events_.begin(),
+        scheduled_events_.end(),
+        [&](const auto& candidate) {
+            return candidate.event_rehydration_pending &&
+                   candidate.guest_cycle == guest_cycle &&
+                   candidate.event == event;
+        });
+    if (pending == scheduled_events_.end() || pending->event_id)
+        std::terminate();
     pending->scheduler = &scheduler;
     pending->scheduler_lifetime = scheduler.lifetime_token();
     pending->event_id = event_id;
     pending->event_rehydration_pending = false;
-    return event_id;
 }
 
 bool DreamcastSystemAsic::event_rehydration_pending() const noexcept {

@@ -204,6 +204,11 @@ void Sh4RtcClockDomain::validate_state_restore(const Snapshot& state) const {
 
 void Sh4RtcClockDomain::restore_state_passive(const Snapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void Sh4RtcClockDomain::commit_validated_state_restore(
+    Snapshot state) noexcept {
     // next_observer_id and observer_ids identify callbacks in the source
     // process. The destination bindings deliberately remain untouched.
     epoch_cycle_ = state.epoch_cycle;
@@ -634,6 +639,11 @@ void Sh4Tmu::validate_state_restore(
 
 void Sh4Tmu::restore_state_passive(const Sh4TmuSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void Sh4Tmu::commit_validated_state_restore(
+    Sh4TmuSnapshot state) noexcept {
     for (auto& destination : channels_) {
         cancel_event(destination);
     }
@@ -673,16 +683,40 @@ SchedulerEventId Sh4Tmu::rehydrate_scheduled_event(
 
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this, channel_index](const auto, const auto) {
-            handle_underflow(channel_index);
-        },
+        make_rehydrated_scheduled_event_callback(channel_index, token),
         static_cast<SchedulerEventKind>(
             static_cast<std::uint32_t>(SchedulerEventKind::Sh4Tmu0) +
             channel_index));
-    value.event = event_id;
+    commit_rehydrated_scheduled_event(event_id, channel_index, token);
     value.event_deadline = guest_cycle;
-    value.event_rehydration_pending = false;
     return event_id;
+}
+
+SchedulerCallback Sh4Tmu::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel_index,
+    const std::uint64_t token) {
+    if (channel_index >= channels_.size() ||
+        token != sh4_tmu_event_token_v1)
+        throw std::invalid_argument(
+            "TMU-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    return [this, channel_index](const auto, const auto) {
+        handle_underflow(channel_index);
+    };
+}
+
+void Sh4Tmu::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel_index,
+    const std::uint64_t token) noexcept {
+    if (channel_index >= channels_.size() ||
+        token != sh4_tmu_event_token_v1)
+        std::terminate();
+    auto& value = channels_[channel_index];
+    if (!value.running || value.event ||
+        !value.event_rehydration_pending)
+        std::terminate();
+    value.event = event_id;
+    value.event_rehydration_pending = false;
 }
 
 bool Sh4Tmu::event_rehydration_pending(const std::size_t channel_index) const {
@@ -992,8 +1026,13 @@ void Sh4Rtc::validate_state_restore(
 
 void Sh4Rtc::restore_state_passive(const Sh4RtcSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void Sh4Rtc::commit_validated_state_restore(
+    Sh4RtcSnapshot state) noexcept {
     cancel_event();
-    clock_->restore_state_passive(state.clock);
+    clock_->commit_validated_state_restore(std::move(state.clock));
     date_time_ = state.date_time;
     event_.reset();
     event_deadline_ = state.event_deadline;
@@ -1033,12 +1072,33 @@ SchedulerEventId Sh4Rtc::rehydrate_scheduled_event(
 
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this](const auto, const auto) { tick(); },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::Sh4Rtc);
-    event_ = event_id;
+    commit_rehydrated_scheduled_event(event_id, channel, token);
     event_deadline_ = guest_cycle;
-    event_rehydration_pending_ = false;
     return event_id;
+}
+
+SchedulerCallback Sh4Rtc::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != sh4_rtc_event_channel ||
+        token != sh4_rtc_event_token_v1)
+        throw std::invalid_argument(
+            "RTC-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    return [this](const auto, const auto) { tick(); };
+}
+
+void Sh4Rtc::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel != sh4_rtc_event_channel ||
+        token != sh4_rtc_event_token_v1 || !rtc_enabled_ ||
+        event_ || !event_rehydration_pending_)
+        std::terminate();
+    event_ = event_id;
+    event_rehydration_pending_ = false;
 }
 
 bool Sh4Rtc::event_rehydration_pending() const noexcept {

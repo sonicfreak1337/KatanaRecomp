@@ -2181,11 +2181,37 @@ void DreamcastGdRomController::validate_state_restore(
                 "GD-ROM-Handoff besitzt einen ungueltigen Gastcallback.");
 }
 
-void DreamcastGdRomController::restore_state_passive(
-    const DreamcastGdRomSnapshot& state) {
+struct DreamcastGdRomController::PreparedStateRestore::Data {
+    const DreamcastGdRomController* owner = nullptr;
+    DreamcastGdRomSnapshot state;
+    std::unique_ptr<GdRomAsyncReader::PreparedStateRestore> reader;
+    std::map<std::uint64_t, BiosRequest> bios_requests;
+};
+
+DreamcastGdRomController::PreparedStateRestore::PreparedStateRestore()
+    : data_(std::make_unique<Data>()) {}
+
+DreamcastGdRomController::PreparedStateRestore::PreparedStateRestore(
+    PreparedStateRestore&&) noexcept = default;
+
+DreamcastGdRomController::PreparedStateRestore&
+DreamcastGdRomController::PreparedStateRestore::operator=(
+    PreparedStateRestore&&) noexcept = default;
+
+DreamcastGdRomController::PreparedStateRestore::~PreparedStateRestore() =
+    default;
+
+DreamcastGdRomController::PreparedStateRestore
+DreamcastGdRomController::prepare_state_restore(
+    const DreamcastGdRomSnapshot& state) const {
     validate_state_restore(state);
 
-    std::map<std::uint64_t, BiosRequest> restored_requests;
+    PreparedStateRestore prepared;
+    prepared.data_->owner = this;
+    prepared.data_->state = state;
+    prepared.data_->reader =
+        std::make_unique<GdRomAsyncReader::PreparedStateRestore>(
+            reader_.prepare_state_restore(state.reader));
     for (const auto& source : state.bios_requests) {
         BiosRequest request;
         request.id = source.id;
@@ -2221,19 +2247,25 @@ void DreamcastGdRomController::restore_state_passive(
             }
             request.guest_binding = std::move(binding);
         }
-        restored_requests.emplace(request.id, std::move(request));
+        prepared.data_->bios_requests.emplace(
+            request.id, std::move(request));
     }
-    auto restored_packet = state.packet;
-    auto restored_data = state.data;
-    auto restored_bios_call_events = state.bios_call_events;
-    auto restored_callbacks = state.pending_guest_callbacks;
+    return prepared;
+}
 
-    reader_.restore_state_passive(state.reader);
+void DreamcastGdRomController::commit_prepared_state_restore(
+    PreparedStateRestore prepared) noexcept {
+    if (!prepared.data_ || prepared.data_->owner != this ||
+        !prepared.data_->reader)
+        std::terminate();
+    auto& state = prepared.data_->state;
+    reader_.commit_prepared_state_restore(
+        std::move(*prepared.data_->reader));
     if (packet_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*packet_event_));
     packet_event_.reset();
-    packet_ = std::move(restored_packet);
-    data_ = std::move(restored_data);
+    packet_ = std::move(state.packet);
+    data_ = std::move(state.data);
     data_cursor_ = state.data_cursor;
     taskfile_data_source_range_ =
         state.taskfile_data_source_range;
@@ -2261,10 +2293,10 @@ void DreamcastGdRomController::restore_state_passive(
     byte_count_ = state.byte_count;
     current_fad_ = state.current_fad;
     expecting_packet_ = state.expecting_packet;
-    bios_requests_ = std::move(restored_requests);
+    bios_requests_.swap(prepared.data_->bios_requests);
     next_bios_request_ = state.next_bios_request;
-    last_bios_request_ = state.last_bios_request;
-    bios_call_events_ = std::move(restored_bios_call_events);
+    last_bios_request_ = std::move(state.last_bios_request);
+    bios_call_events_ = std::move(state.bios_call_events);
     next_bios_call_sequence_ = state.next_bios_call_sequence;
     dropped_bios_call_events_ = state.dropped_bios_call_events;
     completed_commands_ = state.completed_commands;
@@ -2282,12 +2314,19 @@ void DreamcastGdRomController::restore_state_passive(
     pio_completion_pending_ = state.pio_completion_pending;
     dma_completion_request_ = state.dma_completion_request;
     pio_completion_request_ = state.pio_completion_request;
-    pending_guest_callbacks_ = std::move(restored_callbacks);
+    pending_guest_callbacks_ =
+        std::move(state.pending_guest_callbacks);
     coalesced_guest_callbacks_ = state.coalesced_guest_callbacks;
     dropped_guest_callbacks_ = state.dropped_guest_callbacks;
     packet_event_rehydration_pending_ =
         state.packet_event.has_value() ||
         state.packet_event_rehydration_pending;
+}
+
+void DreamcastGdRomController::restore_state_passive(
+    const DreamcastGdRomSnapshot& state) {
+    auto prepared = prepare_state_restore(state);
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 SchedulerEventId DreamcastGdRomController::rehydrate_scheduled_event(
@@ -2296,9 +2335,7 @@ SchedulerEventId DreamcastGdRomController::rehydrate_scheduled_event(
     const std::uint64_t token) {
     if (channel == dreamcast_gdrom_async_read_event_channel)
         return reader_.rehydrate_scheduled_event(
-            guest_cycle,
-            gdrom_async_read_event_channel,
-            token);
+            guest_cycle, gdrom_async_read_event_channel, token);
     if (channel != dreamcast_gdrom_packet_event_channel ||
         token != dreamcast_gdrom_packet_event_token_v1)
         throw std::invalid_argument(
@@ -2312,13 +2349,44 @@ SchedulerEventId DreamcastGdRomController::rehydrate_scheduled_event(
             "GD-ROM-Paketcompletion darf nicht in der Vergangenheit liegen.");
     const auto event_id = scheduler_.schedule_at(
         guest_cycle,
-        [this](const auto restored_event_id, const auto cycle) {
-            complete_packet(restored_event_id, cycle);
-        },
+        make_rehydrated_scheduled_event_callback(channel, token),
         SchedulerEventKind::GdRomPacket);
+    commit_rehydrated_scheduled_event(event_id, channel, token);
+    return event_id;
+}
+
+SchedulerCallback
+DreamcastGdRomController::make_rehydrated_scheduled_event_callback(
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel == dreamcast_gdrom_async_read_event_channel)
+        return reader_.make_rehydrated_scheduled_event_callback(
+            gdrom_async_read_event_channel, token);
+    if (channel != dreamcast_gdrom_packet_event_channel ||
+        token != dreamcast_gdrom_packet_event_token_v1)
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    return [this](const auto restored_event_id, const auto cycle) {
+        complete_packet(restored_event_id, cycle);
+    };
+}
+
+void DreamcastGdRomController::commit_rehydrated_scheduled_event(
+    const SchedulerEventId event_id,
+    const std::uint32_t channel,
+    const std::uint64_t token) noexcept {
+    if (channel == dreamcast_gdrom_async_read_event_channel) {
+        reader_.commit_rehydrated_scheduled_event(
+            event_id, gdrom_async_read_event_channel, token);
+        return;
+    }
+    if (channel != dreamcast_gdrom_packet_event_channel ||
+        token != dreamcast_gdrom_packet_event_token_v1 ||
+        !packet_event_rehydration_pending_ || packet_event_ ||
+        taskfile_phase_ != TaskfilePhase::Executing)
+        std::terminate();
     packet_event_ = event_id;
     packet_event_rehydration_pending_ = false;
-    return event_id;
 }
 
 bool DreamcastGdRomController::event_rehydration_pending() const noexcept {

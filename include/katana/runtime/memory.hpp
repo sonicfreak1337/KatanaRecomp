@@ -369,6 +369,35 @@ struct LinearMemoryTransactionWrite {
 
 class Memory {
   public:
+    class PreparedLinearTransactionBatch final {
+      public:
+        PreparedLinearTransactionBatch(
+            const PreparedLinearTransactionBatch&) = delete;
+        PreparedLinearTransactionBatch& operator=(
+            const PreparedLinearTransactionBatch&) = delete;
+        PreparedLinearTransactionBatch(
+            PreparedLinearTransactionBatch&&) noexcept;
+        PreparedLinearTransactionBatch& operator=(
+            PreparedLinearTransactionBatch&&) noexcept;
+        ~PreparedLinearTransactionBatch();
+
+        // The events exactly mirror the stable observer notifications that
+        // commit would emit after making every byte visible.
+        [[nodiscard]] std::span<const GuestWriteEvent>
+        guest_write_events() const noexcept;
+        // Transfers responsibility for those notifications to an already
+        // admitted external, allocation-free commit plan. This must only be
+        // called after that plan has been built successfully.
+        void suppress_guest_write_observer() noexcept;
+
+      private:
+        friend class Memory;
+        struct Data;
+
+        PreparedLinearTransactionBatch();
+        std::unique_ptr<Data> data_;
+    };
+
     class PreparedLinearFill final {
       public:
         PreparedLinearFill(const PreparedLinearFill&) = delete;
@@ -656,6 +685,18 @@ class Memory {
     [[nodiscard]] bool commit_linear_transaction_batch(
         std::span<const LinearMemoryTransactionWrite> writes,
         CodeWriteSource source = CodeWriteSource::Copy) noexcept;
+    // Resolves, copies and admits the complete batch without changing guest
+    // memory. The returned move-only plan owns every source byte and backing
+    // lifetime needed by commit. No guest execution, mapping change or host
+    // observer mutation may occur between prepare and commit.
+    [[nodiscard]] std::optional<PreparedLinearTransactionBatch>
+    prepare_linear_transaction_batch(
+        std::span<const LinearMemoryTransactionWrite> writes,
+        CodeWriteSource source = CodeWriteSource::Copy) noexcept;
+    // Allocation-free and non-rejecting. All backing bytes become visible
+    // before best-effort diagnostics and invalidation callbacks are emitted.
+    void commit_prepared_linear_transaction_batch(
+        PreparedLinearTransactionBatch prepared) noexcept;
     // The two-phase forms below must be used whenever guest time is accepted between admission
     // and the RAM write. Prepare resolves and retains the linear backing, snapshots the stable
     // observer, computes every changed flag, and performs every allocation. A missing plan leaves
@@ -827,6 +868,7 @@ class Memory {
     GuestWriteObserver guest_write_observer_;
     GuestWriteObserverContract guest_write_observer_contract_ =
         GuestWriteObserverContract::General;
+    std::uint64_t guest_write_observer_generation_ = 1u;
     GuestMemoryAccessSink guest_memory_access_sink_;
     MmioInterruptStateSink mmio_interrupt_state_sink_;
     CrashCapsule* crash_capsule_ = nullptr;

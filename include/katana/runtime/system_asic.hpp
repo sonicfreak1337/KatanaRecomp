@@ -91,6 +91,8 @@ class DreamcastSystemBusControl final {
     [[nodiscard]] DreamcastSystemBusSnapshot snapshot() const noexcept;
     void validate_state_restore(const DreamcastSystemBusSnapshot& state) const;
     void restore_state_passive(const DreamcastSystemBusSnapshot& state);
+    void commit_validated_state_restore(
+        DreamcastSystemBusSnapshot state) noexcept;
     void complete_channel2() noexcept;
     [[nodiscard]] bool trigger_channel2();
     void set_system_reset_observer(SystemResetObserver observer);
@@ -184,6 +186,22 @@ dreamcast_system_asic_expected_external_lines(
 
 class DreamcastSystemAsic final {
   public:
+    class PreparedStateRestore final {
+      public:
+        PreparedStateRestore(const PreparedStateRestore&) = delete;
+        PreparedStateRestore& operator=(const PreparedStateRestore&) =
+            delete;
+        PreparedStateRestore(PreparedStateRestore&&) noexcept;
+        PreparedStateRestore& operator=(PreparedStateRestore&&) noexcept;
+        ~PreparedStateRestore();
+
+      private:
+        friend class DreamcastSystemAsic;
+        struct Data;
+        PreparedStateRestore();
+        std::unique_ptr<Data> data_;
+    };
+
     using DmaTriggerObserver = std::function<void(SystemAsicEvent)>;
     static constexpr std::size_t product_event_capacity = 64u;
     explicit DreamcastSystemAsic(
@@ -203,6 +221,12 @@ class DreamcastSystemAsic final {
     void validate_state_restore(const DreamcastSystemAsicSnapshot& state) const;
     // Router lines are restored by the separate interrupt-router contract.
     // Passive restore never publishes DMA triggers or synchronizes IRQ lines.
+    [[nodiscard]] PreparedStateRestore prepare_state_restore(
+        EventScheduler& scheduler,
+        const DreamcastSystemAsicSnapshot& state,
+        std::uint64_t expected_scheduler_cycle) const;
+    void commit_prepared_state_restore(
+        PreparedStateRestore prepared) noexcept;
     void restore_state_passive(EventScheduler& scheduler,
                                const DreamcastSystemAsicSnapshot& state);
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
@@ -210,6 +234,16 @@ class DreamcastSystemAsic final {
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        EventScheduler& scheduler,
+        SchedulerEventId event_id,
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
     [[nodiscard]] std::array<bool, 3u> expected_external_lines() const noexcept;
     void set_dma_trigger_observers(DmaTriggerObserver pvr, DmaTriggerObserver g2);

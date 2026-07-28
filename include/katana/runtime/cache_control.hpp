@@ -58,6 +58,8 @@ class Sh4CacheControl final {
     void validate_state_restore(const Sh4CacheControlSnapshot& state) const;
     // Preserves the already mapped host MemoryDevice binding.
     void restore_state_passive(const Sh4CacheControlSnapshot& state);
+    void commit_validated_state_restore(
+        Sh4CacheControlSnapshot state) noexcept;
     void reset() noexcept;
 
   private:

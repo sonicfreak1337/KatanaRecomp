@@ -796,8 +796,6 @@ void commit_cpu_application(
     cpu.xf = fpu_bank_one ? prepared.state.fpr_bank0
                           : prepared.state.fpr_bank1;
 
-    cpu.pc = prepared.state.pc;
-    cpu.pr = prepared.state.pr;
     cpu.gbr = prepared.state.gbr;
     cpu.vbr = prepared.state.vbr;
     cpu.dbr = prepared.state.dbr;
@@ -853,6 +851,11 @@ void commit_cpu_application(
     cpu.active_block_virtual_start = 0u;
     cpu.active_block_physical_start = 0u;
     cpu.active_block_size = 0u;
+
+    // Publish the architectural control transfer only after every other CPU
+    // field and address-space guard is complete.
+    cpu.pr = prepared.state.pr;
+    cpu.pc = prepared.state.pc;
 }
 
 const LinearMemoryDevice& memory_region_device(
@@ -929,6 +932,111 @@ void validate_runtime_memory_bindings(
 }
 
 } // namespace
+
+struct PreparedGameEntryCpuRestore::Data {
+    PreparedGameEntryCpuApplication prepared;
+};
+
+struct PreparedGameEntryCpuMemoryHandoff::Data {
+    PreparedGameEntryCpuApplication cpu;
+    std::optional<Memory::PreparedLinearTransactionBatch> memory;
+    std::size_t memory_operation_count = 0u;
+    std::uint64_t memory_byte_count = 0u;
+    bool memory_committed = false;
+};
+
+PreparedGameEntryCpuRestore::PreparedGameEntryCpuRestore() = default;
+
+PreparedGameEntryCpuRestore::PreparedGameEntryCpuRestore(
+    PreparedGameEntryCpuRestore&&) noexcept = default;
+
+PreparedGameEntryCpuRestore&
+PreparedGameEntryCpuRestore::operator=(
+    PreparedGameEntryCpuRestore&&) noexcept = default;
+
+PreparedGameEntryCpuRestore::~PreparedGameEntryCpuRestore() = default;
+
+PreparedGameEntryCpuMemoryHandoff::
+    PreparedGameEntryCpuMemoryHandoff() = default;
+
+PreparedGameEntryCpuMemoryHandoff::
+    PreparedGameEntryCpuMemoryHandoff(
+        PreparedGameEntryCpuMemoryHandoff&&) noexcept = default;
+
+PreparedGameEntryCpuMemoryHandoff&
+PreparedGameEntryCpuMemoryHandoff::operator=(
+    PreparedGameEntryCpuMemoryHandoff&&) noexcept = default;
+
+PreparedGameEntryCpuMemoryHandoff::
+    ~PreparedGameEntryCpuMemoryHandoff() = default;
+
+std::size_t
+PreparedGameEntryCpuMemoryHandoff::memory_operation_count() const noexcept {
+    return data_ ? data_->memory_operation_count : 0u;
+}
+
+std::uint64_t
+PreparedGameEntryCpuMemoryHandoff::memory_byte_count() const noexcept {
+    return data_ ? data_->memory_byte_count : 0u;
+}
+
+std::span<const GuestWriteEvent>
+PreparedGameEntryCpuMemoryHandoff::
+    memory_guest_write_events() const noexcept {
+    return data_ && data_->memory
+               ? data_->memory->guest_write_events()
+               : std::span<const GuestWriteEvent>{};
+}
+
+void PreparedGameEntryCpuMemoryHandoff::
+    suppress_memory_guest_write_observer() noexcept {
+    if (!data_ || !data_->memory || data_->memory_committed)
+        std::terminate();
+    data_->memory->suppress_guest_write_observer();
+}
+
+PreparedGameEntryCpuRestore prepare_game_entry_cpu_restore(
+    const CpuState& cpu,
+    const GameEntryCpuState& state,
+    std::shared_ptr<RuntimeAddressSpace> target_address_space) {
+    PreparedGameEntryCpuRestore result;
+    result.data_ = std::make_unique<PreparedGameEntryCpuRestore::Data>(
+        PreparedGameEntryCpuRestore::Data{
+            prepare_cpu_application(
+                cpu, state, std::move(target_address_space))});
+    return result;
+}
+
+void validate_prepared_game_entry_cpu_mmu(
+    const PreparedGameEntryCpuRestore& prepared,
+    const RuntimeAddressSpaceSnapshot& expected) {
+    if (!prepared.data_)
+        fail(GameEntryHandoffFailure::CpuStateInvalid);
+    auto prepared_snapshot =
+        prepared.data_->prepared.address_space.snapshot();
+    auto prepared_mappings = std::move(prepared_snapshot.mappings);
+    auto captured_mappings = expected.mappings;
+    const auto by_slot = [](const auto& left, const auto& right) {
+        return left.slot < right.slot;
+    };
+    std::sort(
+        prepared_mappings.begin(), prepared_mappings.end(), by_slot);
+    std::sort(
+        captured_mappings.begin(), captured_mappings.end(), by_slot);
+    if (prepared_snapshot.mode != expected.mode ||
+        prepared_snapshot.mmucr != expected.mmucr ||
+        prepared_snapshot.asid != expected.asid ||
+        prepared_mappings != captured_mappings)
+        fail(GameEntryHandoffFailure::DeviceStateInvalid);
+}
+
+void commit_prepared_game_entry_cpu_restore(
+    CpuState& cpu,
+    PreparedGameEntryCpuRestore prepared) noexcept {
+    if (!prepared.data_) std::terminate();
+    commit_cpu_application(
+        cpu, std::move(prepared.data_->prepared));
+}
 
 GameEntryCpuState capture_game_entry_cpu_state(const CpuState& cpu) {
     GameEntryCpuState captured;
@@ -1439,8 +1547,8 @@ ValidatedGameEntryHandoff validate_and_stage_game_entry_handoff(
     return validated;
 }
 
-GameEntryCpuMemoryApplyResult
-apply_validated_game_entry_cpu_memory_handoff(
+PreparedGameEntryCpuMemoryHandoff
+prepare_validated_game_entry_cpu_memory_handoff(
     CpuState& cpu,
     DreamcastRuntimeState& runtime,
     const ValidatedGameEntryHandoff& handoff) {
@@ -1550,16 +1658,84 @@ apply_validated_game_entry_cpu_memory_handoff(
              staged.bytes});
     }
 
-    if (!cpu.memory.commit_linear_transaction_batch(
-            writes, CodeWriteSource::Copy))
+    auto prepared_memory =
+        cpu.memory.prepare_linear_transaction_batch(
+            writes, CodeWriteSource::Copy);
+    if (!prepared_memory)
         fail(GameEntryHandoffFailure::CpuMemoryApplyFailed);
 
-    commit_cpu_application(cpu, std::move(prepared_cpu));
-    // The transfer is intentionally repeated at the final boundary so the
-    // caller-visible contract is exact even if the CPU representation grows
-    // non-control fields later.
-    cpu.pc = transfer.entry_pc;
-    cpu.pr = transfer.exact_pr;
+    PreparedGameEntryCpuMemoryHandoff prepared;
+    prepared.data_ =
+        std::make_unique<PreparedGameEntryCpuMemoryHandoff::Data>(
+            PreparedGameEntryCpuMemoryHandoff::Data{
+                std::move(prepared_cpu),
+                std::move(prepared_memory),
+                handoff.memory_operations().size(),
+                total_bytes,
+                false});
+    return prepared;
+}
+
+void commit_prepared_game_entry_memory_handoff(
+    CpuState& cpu,
+    PreparedGameEntryCpuMemoryHandoff& prepared) noexcept {
+    if (!prepared.data_ || !prepared.data_->memory ||
+        prepared.data_->memory_committed)
+        std::terminate();
+    cpu.memory.commit_prepared_linear_transaction_batch(
+        std::move(*prepared.data_->memory));
+    prepared.data_->memory.reset();
+    prepared.data_->memory_committed = true;
+}
+
+void bind_prepared_game_entry_cpu_mmu(
+    PreparedGameEntryCpuMemoryHandoff& prepared,
+    RuntimeAddressSpaceSnapshot expected) {
+    if (!prepared.data_ || prepared.data_->memory_committed)
+        fail(GameEntryHandoffFailure::CpuStateInvalid);
+    auto actual =
+        prepared.data_->cpu.address_space.snapshot();
+    auto actual_mappings = actual.mappings;
+    auto expected_mappings = expected.mappings;
+    const auto by_slot = [](const auto& left, const auto& right) {
+        return left.slot < right.slot;
+    };
+    std::sort(
+        actual_mappings.begin(), actual_mappings.end(), by_slot);
+    std::sort(
+        expected_mappings.begin(), expected_mappings.end(), by_slot);
+    if (actual.mode != expected.mode ||
+        actual.mmucr != expected.mmucr ||
+        actual.asid != expected.asid ||
+        actual_mappings != expected_mappings)
+        fail(GameEntryHandoffFailure::DeviceStateInvalid);
+    prepared.data_->cpu.address_space.commit_validated_state_restore(
+        std::move(expected));
+}
+
+void commit_prepared_game_entry_cpu_handoff(
+    CpuState& cpu,
+    PreparedGameEntryCpuMemoryHandoff prepared) noexcept {
+    if (!prepared.data_ || !prepared.data_->memory_committed ||
+        prepared.data_->memory)
+        std::terminate();
+    commit_cpu_application(
+        cpu, std::move(prepared.data_->cpu));
+}
+
+GameEntryCpuMemoryApplyResult
+apply_validated_game_entry_cpu_memory_handoff(
+    CpuState& cpu,
+    DreamcastRuntimeState& runtime,
+    const ValidatedGameEntryHandoff& handoff) {
+    auto prepared =
+        prepare_validated_game_entry_cpu_memory_handoff(
+            cpu, runtime, handoff);
+    const auto memory_operation_count =
+        prepared.memory_operation_count();
+    const auto memory_byte_count = prepared.memory_byte_count();
+    commit_prepared_game_entry_memory_handoff(cpu, prepared);
+    commit_prepared_game_entry_cpu_handoff(cpu, std::move(prepared));
 
     const bool device_state_pending = !handoff.devices().empty();
     const bool scheduler_state_pending =
@@ -1576,8 +1752,8 @@ apply_validated_game_entry_cpu_memory_handoff(
             : GameEntryCpuMemoryApplyStatus::
                   CpuMemoryAndControlTransferApplied;
     return {status,
-            handoff.memory_operations().size(),
-            total_bytes,
+            memory_operation_count,
+            memory_byte_count,
             device_state_pending,
             scheduler_state_pending,
             incomplete_handoff};

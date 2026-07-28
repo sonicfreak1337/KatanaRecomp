@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -83,8 +84,35 @@ struct SchedulerAdvanceResult {
     std::uint64_t guest_cycle = 0u;
 };
 
+struct SchedulerPreparedEvent {
+    std::uint64_t guest_cycle = 0u;
+    SchedulerCallback callback;
+    SchedulerEventKind kind = SchedulerEventKind::Unknown;
+};
+
 class EventScheduler {
   public:
+    class PreparedPassiveRestore final {
+      public:
+        PreparedPassiveRestore(const PreparedPassiveRestore&) = delete;
+        PreparedPassiveRestore& operator=(const PreparedPassiveRestore&) =
+            delete;
+        PreparedPassiveRestore(PreparedPassiveRestore&&) noexcept;
+        PreparedPassiveRestore& operator=(
+            PreparedPassiveRestore&&) noexcept;
+        ~PreparedPassiveRestore();
+
+        [[nodiscard]] std::span<const SchedulerEventId>
+        assigned_event_ids() const noexcept;
+
+      private:
+        friend class EventScheduler;
+        struct Data;
+
+        PreparedPassiveRestore();
+        std::unique_ptr<Data> data_;
+    };
+
     explicit EventScheduler(SystemReplayLog* replay_log = nullptr);
     ~EventScheduler();
     [[nodiscard]] SchedulerEventId schedule_at(std::uint64_t guest_cycle,
@@ -109,6 +137,16 @@ class EventScheduler {
     // cycle without notifying reset observers. Device state must be restored
     // afterwards and every typed pending event must receive a fresh ID.
     void restore_time_passive(std::uint64_t guest_cycle);
+    // Builds the full typed callback timeline and allocates all map nodes
+    // before any live scheduler or device state changes. Input order is
+    // preserved by assigned_event_ids().
+    [[nodiscard]] PreparedPassiveRestore prepare_passive_restore(
+        std::uint64_t guest_cycle,
+        std::span<const SchedulerPreparedEvent> events) const;
+    // Replaces time and pending callbacks by swapping preallocated maps.
+    // The scheduler must remain quiescent between prepare and commit.
+    void commit_prepared_passive_restore(
+        PreparedPassiveRestore prepared) noexcept;
 
     [[nodiscard]] SchedulerAdvanceResult advance_to(std::uint64_t guest_cycle,
                                                     std::size_t event_budget);

@@ -58,6 +58,7 @@ class Sh4RtcClockDomain final {
     // Observer identities are process-local and remain bound to the
     // destination clock. Passive restore only installs the portable epoch.
     void restore_state_passive(const Snapshot& state);
+    void commit_validated_state_restore(Snapshot state) noexcept;
 
   private:
     [[nodiscard]] std::uint64_t ticks_at(std::uint64_t guest_cycle) const;
@@ -136,10 +137,20 @@ class Sh4Tmu final {
     // Captured SchedulerEventIds are discarded. Each running channel remains
     // inert until its typed event is rehydrated with a fresh ID.
     void restore_state_passive(const Sh4TmuSnapshot& state);
+    void commit_validated_state_restore(
+        Sh4TmuSnapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending(std::size_t channel) const;
     void reset() noexcept;
 
@@ -277,10 +288,20 @@ class Sh4Rtc final {
     // Captured SchedulerEventIds are discarded. An enabled clock remains
     // inert until its typed event is rehydrated with a fresh ID.
     void restore_state_passive(const Sh4RtcSnapshot& state);
+    void commit_validated_state_restore(
+        Sh4RtcSnapshot state) noexcept;
     [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
         std::uint64_t guest_cycle,
         std::uint32_t channel,
         std::uint64_t token);
+    [[nodiscard]] SchedulerCallback
+    make_rehydrated_scheduled_event_callback(
+        std::uint32_t channel,
+        std::uint64_t token);
+    void commit_rehydrated_scheduled_event(
+        SchedulerEventId event_id,
+        std::uint32_t channel,
+        std::uint64_t token) noexcept;
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:

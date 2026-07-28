@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -16,6 +17,8 @@ namespace katana::runtime {
 
 enum class DreamcastConsoleProfile : std::uint8_t;
 struct DreamcastRuntimeState;
+struct RuntimeAddressSpaceSnapshot;
+class ValidatedGameEntryHandoff;
 
 inline constexpr std::uint32_t game_entry_handoff_schema_version = 3u;
 inline constexpr std::uint32_t game_entry_platform_state_contract_version = 2u;
@@ -125,6 +128,100 @@ struct GameEntryCpuState {
 capture_game_entry_cpu_state(const CpuState& cpu);
 void apply_game_entry_cpu_state(CpuState& cpu,
                                 const GameEntryCpuState& state);
+
+class PreparedGameEntryCpuRestore final {
+  public:
+    PreparedGameEntryCpuRestore(
+        const PreparedGameEntryCpuRestore&) = delete;
+    PreparedGameEntryCpuRestore& operator=(
+        const PreparedGameEntryCpuRestore&) = delete;
+    PreparedGameEntryCpuRestore(
+        PreparedGameEntryCpuRestore&&) noexcept;
+    PreparedGameEntryCpuRestore& operator=(
+        PreparedGameEntryCpuRestore&&) noexcept;
+    ~PreparedGameEntryCpuRestore();
+
+  private:
+    friend PreparedGameEntryCpuRestore
+    prepare_game_entry_cpu_restore(
+        const CpuState&,
+        const GameEntryCpuState&,
+        std::shared_ptr<RuntimeAddressSpace>);
+    friend void validate_prepared_game_entry_cpu_mmu(
+        const PreparedGameEntryCpuRestore&,
+        const RuntimeAddressSpaceSnapshot&);
+    friend void commit_prepared_game_entry_cpu_restore(
+        CpuState&,
+        PreparedGameEntryCpuRestore) noexcept;
+    struct Data;
+    PreparedGameEntryCpuRestore();
+    std::unique_ptr<Data> data_;
+};
+
+[[nodiscard]] PreparedGameEntryCpuRestore
+prepare_game_entry_cpu_restore(
+    const CpuState& cpu,
+    const GameEntryCpuState& state,
+    std::shared_ptr<RuntimeAddressSpace> target_address_space);
+void validate_prepared_game_entry_cpu_mmu(
+    const PreparedGameEntryCpuRestore& prepared,
+    const RuntimeAddressSpaceSnapshot& expected);
+void commit_prepared_game_entry_cpu_restore(
+    CpuState& cpu,
+    PreparedGameEntryCpuRestore prepared) noexcept;
+
+class PreparedGameEntryCpuMemoryHandoff final {
+  public:
+    PreparedGameEntryCpuMemoryHandoff(
+        const PreparedGameEntryCpuMemoryHandoff&) = delete;
+    PreparedGameEntryCpuMemoryHandoff& operator=(
+        const PreparedGameEntryCpuMemoryHandoff&) = delete;
+    PreparedGameEntryCpuMemoryHandoff(
+        PreparedGameEntryCpuMemoryHandoff&&) noexcept;
+    PreparedGameEntryCpuMemoryHandoff& operator=(
+        PreparedGameEntryCpuMemoryHandoff&&) noexcept;
+    ~PreparedGameEntryCpuMemoryHandoff();
+
+    [[nodiscard]] std::size_t memory_operation_count() const noexcept;
+    [[nodiscard]] std::uint64_t memory_byte_count() const noexcept;
+    [[nodiscard]] std::span<const GuestWriteEvent>
+    memory_guest_write_events() const noexcept;
+    void suppress_memory_guest_write_observer() noexcept;
+
+  private:
+    friend PreparedGameEntryCpuMemoryHandoff
+    prepare_validated_game_entry_cpu_memory_handoff(
+        CpuState&,
+        DreamcastRuntimeState&,
+        const ValidatedGameEntryHandoff&);
+    friend void commit_prepared_game_entry_memory_handoff(
+        CpuState&,
+        PreparedGameEntryCpuMemoryHandoff&) noexcept;
+    friend void bind_prepared_game_entry_cpu_mmu(
+        PreparedGameEntryCpuMemoryHandoff&,
+        RuntimeAddressSpaceSnapshot);
+    friend void commit_prepared_game_entry_cpu_handoff(
+        CpuState&,
+        PreparedGameEntryCpuMemoryHandoff) noexcept;
+    struct Data;
+    PreparedGameEntryCpuMemoryHandoff();
+    std::unique_ptr<Data> data_;
+};
+
+[[nodiscard]] PreparedGameEntryCpuMemoryHandoff
+prepare_validated_game_entry_cpu_memory_handoff(
+    CpuState& cpu,
+    DreamcastRuntimeState& runtime,
+    const ValidatedGameEntryHandoff& handoff);
+void commit_prepared_game_entry_memory_handoff(
+    CpuState& cpu,
+    PreparedGameEntryCpuMemoryHandoff& prepared) noexcept;
+void bind_prepared_game_entry_cpu_mmu(
+    PreparedGameEntryCpuMemoryHandoff& prepared,
+    RuntimeAddressSpaceSnapshot expected);
+void commit_prepared_game_entry_cpu_handoff(
+    CpuState& cpu,
+    PreparedGameEntryCpuMemoryHandoff prepared) noexcept;
 
 struct GameEntryCodeRange {
     std::uint32_t start = 0u;
@@ -529,20 +626,92 @@ apply_validated_game_entry_cpu_memory_handoff(
     DreamcastRuntimeState& runtime,
     const ValidatedGameEntryHandoff& handoff);
 
+// Stable, domain-separated identities of the normative state represented by
+// one prepared complete-platform commit. These are computed before the live
+// runtime is mutated. Memory identifies the complete set of target spans and
+// bytes written by the handoff; the other fields identify the resulting
+// subsystem state (with the selected observation/persistence profile applied).
+struct GameEntryCompletePlatformExpectedIdentities {
+    std::string cpu;
+    std::string memory;
+    std::string pvr;
+    std::string aica;
+    std::string maple;
+    std::string scheduler;
+    std::string irq;
+
+    [[nodiscard]] bool operator==(
+        const GameEntryCompletePlatformExpectedIdentities&) const = default;
+};
+
 struct GameEntryCompletePlatformApplyResult {
     std::size_t memory_operations_applied = 0u;
     std::uint64_t memory_bytes_applied = 0u;
     std::size_t devices_applied = 0u;
     std::size_t scheduler_events_rehydrated = 0u;
+    GameEntryCompletePlatformExpectedIdentities expected_identities;
+};
+
+enum class GameEntryCompletePlatformRestoreProfile : std::uint8_t {
+    DiagnosticLossless,
+    ProductHandoff,
+};
+
+class PreparedCompletePlatformHandoff final {
+  public:
+    PreparedCompletePlatformHandoff(
+        const PreparedCompletePlatformHandoff&) = delete;
+    PreparedCompletePlatformHandoff& operator=(
+        const PreparedCompletePlatformHandoff&) = delete;
+    PreparedCompletePlatformHandoff(
+        PreparedCompletePlatformHandoff&&) noexcept;
+    PreparedCompletePlatformHandoff& operator=(
+        PreparedCompletePlatformHandoff&&) noexcept;
+    ~PreparedCompletePlatformHandoff();
+
+    [[nodiscard]] const GameEntryCompletePlatformExpectedIdentities&
+    expected_identities() const noexcept;
+
+  private:
+    friend PreparedCompletePlatformHandoff
+    prepare_validated_game_entry_complete_platform_handoff(
+        CpuState&,
+        DreamcastRuntimeState&,
+        const ValidatedGameEntryHandoff&,
+        GameEntryCompletePlatformRestoreProfile);
+    friend GameEntryCompletePlatformApplyResult
+    commit_prepared_game_entry_complete_platform_handoff(
+        CpuState&,
+        DreamcastRuntimeState&,
+        PreparedCompletePlatformHandoff) noexcept;
+    struct Data;
+    PreparedCompletePlatformHandoff();
+    std::unique_ptr<Data> data_;
 };
 
 // Decodes and validates all 22 device contracts and their exact typed-event
 // bijection before committing. The target runtime must already be fully
-// constructed and quiescent. Any incompatibility fails before guest code.
+// constructed and quiescent. Any incompatibility and every allocation fails
+// before the first live mutation. ProductHandoff resets host observations and
+// preserves target-owned persistent storage; DiagnosticLossless reproduces
+// captured diagnostics and persistence bytes.
+[[nodiscard]] PreparedCompletePlatformHandoff
+prepare_validated_game_entry_complete_platform_handoff(
+    CpuState& cpu,
+    DreamcastRuntimeState& runtime,
+    const ValidatedGameEntryHandoff& handoff,
+    GameEntryCompletePlatformRestoreProfile profile);
+[[nodiscard]] GameEntryCompletePlatformApplyResult
+commit_prepared_game_entry_complete_platform_handoff(
+    CpuState& cpu,
+    DreamcastRuntimeState& runtime,
+    PreparedCompletePlatformHandoff prepared) noexcept;
 [[nodiscard]] GameEntryCompletePlatformApplyResult
 apply_validated_game_entry_complete_platform_handoff(
     CpuState& cpu,
     DreamcastRuntimeState& runtime,
-    const ValidatedGameEntryHandoff& handoff);
+    const ValidatedGameEntryHandoff& handoff,
+    GameEntryCompletePlatformRestoreProfile profile =
+        GameEntryCompletePlatformRestoreProfile::DiagnosticLossless);
 
 } // namespace katana::runtime

@@ -113,6 +113,11 @@ void Sh4IoPort::validate_state_restore(
 void Sh4IoPort::restore_state_passive(
     const Sh4IoPortSnapshot& state) {
     validate_state_restore(state);
+    commit_validated_state_restore(state);
+}
+
+void Sh4IoPort::commit_validated_state_restore(
+    Sh4IoPortSnapshot state) noexcept {
     inputs_ = state.inputs;
     control_a_ = state.control_a;
     data_a_latch_ = state.data_a_latch;

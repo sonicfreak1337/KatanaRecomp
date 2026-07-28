@@ -150,6 +150,8 @@ class Sh4StoreQueues {
     // Restores only guest-visible state and counters; host sinks, address
     // translators and code-invalidation ownership remain bound in place.
     void restore_state_passive(const Sh4StoreQueueSnapshot& state);
+    void commit_validated_state_restore(
+        Sh4StoreQueueSnapshot state) noexcept;
     void reset() noexcept;
     [[nodiscard]] CacheMaintenanceResult maintain(CacheMaintenanceOperation operation,
                                                   std::uint32_t address,

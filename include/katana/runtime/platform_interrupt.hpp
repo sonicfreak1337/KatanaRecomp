@@ -86,6 +86,8 @@ class PlatformInterruptRouter final {
     // all source devices first and performs one explicit synchronize().
     void restore_state_passive(
         const PlatformInterruptRouterSnapshot& state);
+    void commit_validated_state_restore(
+        PlatformInterruptRouterSnapshot state) noexcept;
     // Advances only when a routed source's asserted state or priority changes. TMU, RTC and
     // DMAC are sampled as one compact state word so MMIO read-to-clear/write-to-change
     // transitions are observed without treating every MMIO access as an interrupt event.
@@ -138,6 +140,8 @@ class Sh4InterruptRegisters final {
         const Sh4InterruptRegistersSnapshot& state) const;
     void restore_state_passive(
         const Sh4InterruptRegistersSnapshot& state);
+    void commit_validated_state_restore(
+        Sh4InterruptRegistersSnapshot state) noexcept;
     void reset() noexcept;
 
   private:
