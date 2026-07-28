@@ -224,6 +224,38 @@ int main() {
                     BlockRegistrationResult::Reactivated &&
                 repeated.valid("fallback-op"),
             "Explizit beendeter Runtimeblock kann nicht identitaetsstabil reaktiviert werden.");
+
+        ExecutableCodeTracker chain_targets;
+        require(
+            chain_targets.register_block(
+                {"chain-a", 0x0C00A000u, 4u, "static-chain", {"entry"}}) ==
+                    BlockRegistrationResult::Inserted &&
+                chain_targets.register_block(
+                    {"chain-t", 0x0C00B000u, 4u, "static-chain", {"chain-a"}}) ==
+                    BlockRegistrationResult::Inserted,
+            "Statische Chain-Regressionsbloecke wurden nicht registriert.");
+        auto validated_a_generation = chain_targets.invalidation_count();
+        auto validated_t_generation = chain_targets.invalidation_count();
+        static_cast<void>(
+            chain_targets.observe_write(0x8C00B000u, 2u, CodeWriteSource::Cpu));
+        require(
+            chain_targets.revalidate_dispatchable(
+                "chain-a", validated_a_generation) &&
+                validated_a_generation == chain_targets.invalidation_count() &&
+                !chain_targets.revalidate_dispatchable(
+                    "chain-t", validated_t_generation) &&
+                validated_t_generation != chain_targets.invalidation_count(),
+            "Eine neue Rootgeneration laesst ein separat invalidiertes Chain-Ziel "
+            "wieder dispatchen.");
+        require(
+            chain_targets.register_block(
+                {"chain-t", 0x0C00B000u, 4u, "static-chain", {"chain-a"}}) ==
+                    BlockRegistrationResult::Reactivated &&
+                chain_targets.revalidate_dispatchable(
+                    "chain-t", validated_t_generation) &&
+                validated_t_generation == chain_targets.invalidation_count(),
+            "Ein explizit reaktiviertes Chain-Ziel kann nicht neu validiert werden.");
+
         require(throws<std::invalid_argument>([&] {
                     static_cast<void>(repeated.register_block(
                         {"fallback-op", 0x0C009000u, 4u, "runtime-op", {}}));

@@ -114,6 +114,12 @@ class ExecutableCodeTracker {
                                                        bool bytes_changed = true);
     [[nodiscard]] bool valid(const std::string& identity) const;
     [[nodiscard]] bool dispatchable(const std::string& identity) const noexcept;
+    // A cached target is reusable across unrelated global invalidations only
+    // after its own tracker identity has been revalidated. On rejection the
+    // caller's generation remains unchanged.
+    [[nodiscard]] bool revalidate_dispatchable(
+        const std::string& identity,
+        std::uint64_t& validated_invalidation_count) const noexcept;
     [[nodiscard]] bool tracks_address(std::uint32_t address,
                                       std::size_t size = 1u) const noexcept;
     [[nodiscard]] std::uint64_t page_generation(std::uint32_t address) const noexcept;

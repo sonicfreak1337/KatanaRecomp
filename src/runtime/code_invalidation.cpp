@@ -378,6 +378,15 @@ bool ExecutableCodeTracker::dispatchable(const std::string& identity) const noex
     return found == identity_index_.end() || blocks_[found->second].valid;
 }
 
+bool ExecutableCodeTracker::revalidate_dispatchable(
+    const std::string& identity,
+    std::uint64_t& validated_invalidation_count) const noexcept {
+    if (validated_invalidation_count == invalidation_count_) return true;
+    if (!dispatchable(identity)) return false;
+    validated_invalidation_count = invalidation_count_;
+    return true;
+}
+
 bool ExecutableCodeTracker::tracks_address(const std::uint32_t address,
                                            const std::size_t size) const noexcept {
     if (size == 0u) return false;

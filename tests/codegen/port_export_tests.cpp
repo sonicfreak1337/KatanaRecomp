@@ -4158,11 +4158,24 @@ int run_test(const int argc, char* argv[]) {
         prepare_guard_begin, prepare_guard_end - prepare_guard_begin);
     const auto direct_defer = std::string_view(generated_main).substr(
         defer_direct_begin, defer_method_end - defer_direct_begin);
+    const auto direct_target_generation =
+        direct_chain.find("registration->validated_code_generation !=");
+    const auto direct_target_revalidation =
+        direct_chain.find("revalidate_dispatchable(");
+    const auto direct_target_rejection =
+        direct_chain.find("return reject(Rejection::CodeGeneration);");
     require(
         direct_chain.find("executable_chain_pages_") != std::string_view::npos &&
             direct_chain.find("static_aot_chain_guard_rejection(address)") !=
                 std::string_view::npos &&
+            direct_target_generation != std::string_view::npos &&
+            direct_target_revalidation != std::string_view::npos &&
+            direct_target_rejection != std::string_view::npos &&
+            direct_target_generation < direct_target_revalidation &&
+            direct_target_revalidation < direct_target_rejection &&
             direct_chain.find("guard.chain_pending_cycle_limit") !=
+                std::string_view::npos &&
+            direct_chain.find("executable_blocks_.find(address)") ==
                 std::string_view::npos &&
             direct_chain.find("direct_p1_p2_instruction_guard") ==
                 std::string_view::npos &&
@@ -4172,12 +4185,12 @@ int run_test(const int argc, char* argv[]) {
             direct_chain.find("next_event_cycle()") == std::string_view::npos &&
             direct_chain.find("synchronize_interrupt_sources_if_needed") ==
                 std::string_view::npos &&
-            direct_chain.find("dispatchable(") == std::string_view::npos &&
             slow_chain.find("inspect_translation(") != std::string_view::npos &&
             slow_chain.find("prove_instruction_mapping(") != std::string_view::npos &&
             slow_chain.find("translate_guest_address(") != std::string_view::npos,
-        "Direkter P1/P2-Chainpfad wiederholt Translation, Variantenermittlung, "
-        "Scheduler-/Routerarbeit oder verliert den konservativen MMU-Slowpath.");
+        "Direkter P1/P2-Chainpfad revalidiert das konkrete Ziel nicht oder "
+        "wiederholt Translation, Tabellenlookup, Variantenermittlung bzw. "
+        "Scheduler-/Routerarbeit.");
     require(
         prepared_guard.find("remaining_guest_cycles()") != std::string_view::npos &&
             prepared_guard.find("next_event_cycle()") != std::string_view::npos &&
