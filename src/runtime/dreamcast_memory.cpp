@@ -1,6 +1,7 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -335,6 +336,13 @@ FlashMemorySnapshot FlashMemoryDevice::snapshot() const {
 
 void FlashMemoryDevice::validate_state_restore(
     const FlashMemorySnapshot& state) const {
+    static_cast<void>(prepare_state_restore(
+        state, PersistenceHandoffPolicy::DiagnosticLossless));
+}
+
+PreparedFlashMemoryRestore FlashMemoryDevice::prepare_state_restore(
+    const FlashMemorySnapshot& state,
+    const PersistenceHandoffPolicy policy) const {
     const auto valid_command_state =
         state.command_state == FlashCommandState::ReadArray ||
         state.command_state == FlashCommandState::Unlock2 ||
@@ -347,40 +355,68 @@ void FlashMemoryDevice::validate_state_restore(
         state.size != dreamcast_flash_size ||
         state.source_bytes.size() != state.size ||
         state.working_bytes.size() != state.size ||
-        state.persistent_working_copy != persistent_working_copy() ||
         (!state.persistent_working_copy && state.working_copy_dirty))
         throw std::invalid_argument(
             "Flash-Handoff besitzt einen inkompatiblen Zustandsvertrag.");
 
+    PreparedFlashMemoryRestore prepared;
+    prepared.owner_ = this;
+    prepared.command_state_ = state.command_state;
+    switch (policy) {
+    case PersistenceHandoffPolicy::DiagnosticLossless:
+        if (state.persistent_working_copy != persistent_working_copy())
+            throw std::invalid_argument(
+                "Flash-Handoff und Runtime besitzen unterschiedliche Persistenzvertraege.");
+        prepared.write_protected_ = state.write_protected;
+        prepared.replace_write_protection_ = true;
+        prepared.replace_working_copy_ = true;
+        break;
+    case PersistenceHandoffPolicy::ProductPreserveTarget:
+        // Installed bytes, dirty bookkeeping and host write protection remain
+        // authoritative. Only guest-visible command progress is transferred.
+        break;
+    default:
+        throw std::invalid_argument("Unbekannte Persistenz-Handoff-Policy.");
+    }
+
     if (persistent_image_) {
-        persistent_image_->validate_working_copy_restore(
-            state.source_bytes,
-            state.working_bytes,
-            state.working_copy_dirty);
+        prepared.persistent_.emplace(
+            persistent_image_->prepare_working_copy_restore(
+                state.source_bytes,
+                state.working_bytes,
+                state.working_copy_dirty,
+                policy));
     } else if (!std::equal(
                    state.source_bytes.begin(),
                    state.source_bytes.end(),
                    source_.begin())) {
         throw std::invalid_argument(
             "Flash-Handoff passt nicht zur installierten Quellidentitaet.");
+    } else if (prepared.replace_working_copy_) {
+        prepared.working_ = state.working_bytes;
     }
+    return prepared;
+}
+
+void FlashMemoryDevice::commit_prepared_state_restore(
+    PreparedFlashMemoryRestore prepared) noexcept {
+    assert(prepared.owner_ == this);
+    if (prepared.persistent_) {
+        persistent_image_->commit_prepared_working_copy_restore(
+            std::move(*prepared.persistent_));
+    } else if (prepared.replace_working_copy_) {
+        working_.swap(prepared.working_);
+    }
+    state_ = prepared.command_state_;
+    if (prepared.replace_write_protection_)
+        write_protected_ = prepared.write_protected_;
 }
 
 void FlashMemoryDevice::restore_state_passive(
     const FlashMemorySnapshot& state) {
-    validate_state_restore(state);
-    std::vector<std::uint8_t> prepared;
-    if (!persistent_image_) prepared = state.working_bytes;
-    if (persistent_image_) {
-        persistent_image_->restore_working_copy_passive(
-            state.source_bytes,
-            state.working_bytes,
-            state.working_copy_dirty);
-    } else {
-        working_ = std::move(prepared);
-    }
-    state_ = state.command_state;
-    write_protected_ = state.write_protected;
+    auto prepared = prepare_state_restore(
+        state, PersistenceHandoffPolicy::DiagnosticLossless);
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 std::shared_ptr<LinearMemoryDevice> map_dreamcast_main_ram(Memory& memory) {

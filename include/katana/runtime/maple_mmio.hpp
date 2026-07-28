@@ -113,6 +113,27 @@ struct DreamcastMapleControllerSnapshot {
         const DreamcastMapleControllerSnapshot&) const = default;
 };
 
+class DreamcastMapleController;
+
+class PreparedDreamcastMapleControllerRestore final {
+  public:
+    PreparedDreamcastMapleControllerRestore(
+        const PreparedDreamcastMapleControllerRestore&) = delete;
+    PreparedDreamcastMapleControllerRestore&
+    operator=(const PreparedDreamcastMapleControllerRestore&) = delete;
+    PreparedDreamcastMapleControllerRestore(
+        PreparedDreamcastMapleControllerRestore&&) noexcept = default;
+    PreparedDreamcastMapleControllerRestore&
+    operator=(PreparedDreamcastMapleControllerRestore&&) noexcept = default;
+
+  private:
+    friend class DreamcastMapleController;
+    PreparedDreamcastMapleControllerRestore() = default;
+
+    const DreamcastMapleController* owner_ = nullptr;
+    DreamcastMapleControllerSnapshot state_;
+};
+
 struct DreamcastMapleStateSnapshot {
     MapleBusStateSnapshot bus;
     DreamcastMapleControllerSnapshot controller;
@@ -149,6 +170,10 @@ class DreamcastMapleController final {
     [[nodiscard]] DreamcastMapleControllerSnapshot snapshot() const;
     void validate_state_restore(
         const DreamcastMapleControllerSnapshot& state) const;
+    [[nodiscard]] PreparedDreamcastMapleControllerRestore
+    prepare_state_restore(const DreamcastMapleControllerSnapshot& state) const;
+    void commit_prepared_state_restore(
+        PreparedDreamcastMapleControllerRestore prepared) noexcept;
     // Passive restore deliberately discards captured SchedulerEventIds.
     // A restored active transfer cannot execute until its typed event has
     // been rehydrated with rehydrate_scheduled_event().
@@ -161,10 +186,7 @@ class DreamcastMapleController final {
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
-    struct PendingResponse {
-        std::uint32_t destination = 0u;
-        std::vector<std::uint32_t> words;
-    };
+    using PendingResponse = DreamcastMaplePendingResponseSnapshot;
 
     void start_dma();
     void complete_dma(SchedulerEventId event_id) noexcept;
@@ -214,10 +236,58 @@ class DreamcastMapleController final {
 [[nodiscard]] DreamcastMapleStateSnapshot
 snapshot_dreamcast_maple_state(const MapleBus& bus,
                                const DreamcastMapleController& controller);
+
+class PreparedDreamcastMapleStateRestore final {
+  public:
+    PreparedDreamcastMapleStateRestore(
+        const PreparedDreamcastMapleStateRestore&) = delete;
+    PreparedDreamcastMapleStateRestore&
+    operator=(const PreparedDreamcastMapleStateRestore&) = delete;
+    PreparedDreamcastMapleStateRestore(
+        PreparedDreamcastMapleStateRestore&&) noexcept = default;
+    PreparedDreamcastMapleStateRestore&
+    operator=(PreparedDreamcastMapleStateRestore&&) noexcept = default;
+
+  private:
+    friend PreparedDreamcastMapleStateRestore
+    prepare_dreamcast_maple_state_restore(
+        const MapleBus&,
+        const DreamcastMapleController&,
+        const DreamcastMapleStateSnapshot&,
+        PersistenceHandoffPolicy);
+    friend void commit_dreamcast_maple_state_restore(
+        MapleBus&,
+        DreamcastMapleController&,
+        PreparedDreamcastMapleStateRestore) noexcept;
+
+    PreparedDreamcastMapleStateRestore(
+        PreparedMapleBusStateRestore bus,
+        PreparedDreamcastMapleControllerRestore controller) noexcept
+        : bus_(std::move(bus)), controller_(std::move(controller)) {}
+
+    PreparedMapleBusStateRestore bus_;
+    PreparedDreamcastMapleControllerRestore controller_;
+};
+
+[[nodiscard]] PreparedDreamcastMapleStateRestore
+prepare_dreamcast_maple_state_restore(
+    const MapleBus& bus,
+    const DreamcastMapleController& controller,
+    const DreamcastMapleStateSnapshot& state,
+    PersistenceHandoffPolicy policy);
+void commit_dreamcast_maple_state_restore(
+    MapleBus& bus,
+    DreamcastMapleController& controller,
+    PreparedDreamcastMapleStateRestore prepared) noexcept;
 void validate_dreamcast_maple_state_restore(
     const MapleBus& bus,
     const DreamcastMapleController& controller,
     const DreamcastMapleStateSnapshot& state);
+void validate_dreamcast_maple_state_restore(
+    const MapleBus& bus,
+    const DreamcastMapleController& controller,
+    const DreamcastMapleStateSnapshot& state,
+    PersistenceHandoffPolicy policy);
 void restore_dreamcast_maple_state_passive(
     MapleBus& bus,
     DreamcastMapleController& controller,

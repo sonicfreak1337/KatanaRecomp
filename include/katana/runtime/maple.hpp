@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <variant>
 #include <vector>
@@ -136,6 +137,28 @@ struct MapleVmuStateSnapshot {
     [[nodiscard]] bool operator==(const MapleVmuStateSnapshot&) const = default;
 };
 
+class MapleVmuDevice;
+
+class PreparedMapleVmuStateRestore final {
+  public:
+    PreparedMapleVmuStateRestore(const PreparedMapleVmuStateRestore&) = delete;
+    PreparedMapleVmuStateRestore& operator=(const PreparedMapleVmuStateRestore&) = delete;
+    PreparedMapleVmuStateRestore(PreparedMapleVmuStateRestore&&) noexcept = default;
+    PreparedMapleVmuStateRestore&
+    operator=(PreparedMapleVmuStateRestore&&) noexcept = default;
+
+  private:
+    friend class MapleVmuDevice;
+    PreparedMapleVmuStateRestore() = default;
+
+    const MapleVmuDevice* owner_ = nullptr;
+    bool write_protected_ = false;
+    bool replace_working_copy_ = false;
+    bool replace_write_protection_ = false;
+    std::vector<std::uint8_t> working_;
+    std::optional<PreparedPersistentImageRestore> persistent_;
+};
+
 class MapleVmuDevice final : public MapleDevice {
   public:
     explicit MapleVmuDevice(std::span<const std::uint8_t> image = {});
@@ -151,6 +174,10 @@ class MapleVmuDevice final : public MapleDevice {
     [[nodiscard]] MapleVmuSnapshot snapshot() const noexcept;
     [[nodiscard]] MapleVmuStateSnapshot state_snapshot() const;
     void validate_state_restore(const MapleVmuStateSnapshot& state) const;
+    [[nodiscard]] PreparedMapleVmuStateRestore prepare_state_restore(
+        const MapleVmuStateSnapshot& state,
+        PersistenceHandoffPolicy policy) const;
+    void commit_prepared_state_restore(PreparedMapleVmuStateRestore prepared) noexcept;
     void restore_state(const MapleVmuStateSnapshot& state);
 
   private:
@@ -210,6 +237,37 @@ struct MapleBusStateSnapshot {
     [[nodiscard]] bool operator==(const MapleBusStateSnapshot&) const = default;
 };
 
+class MapleBus;
+
+class PreparedMapleBusStateRestore final {
+  public:
+    PreparedMapleBusStateRestore(const PreparedMapleBusStateRestore&) = delete;
+    PreparedMapleBusStateRestore& operator=(const PreparedMapleBusStateRestore&) = delete;
+    PreparedMapleBusStateRestore(PreparedMapleBusStateRestore&&) noexcept = default;
+    PreparedMapleBusStateRestore&
+    operator=(PreparedMapleBusStateRestore&&) noexcept = default;
+
+  private:
+    friend class MapleBus;
+    PreparedMapleBusStateRestore() = default;
+
+    struct ControllerRestore {
+        MapleControllerDevice* target = nullptr;
+        std::uint64_t next_frame = 0u;
+    };
+    struct VmuRestore {
+        MapleVmuDevice* target = nullptr;
+        PreparedMapleVmuStateRestore prepared;
+    };
+
+    const MapleBus* owner_ = nullptr;
+    std::vector<ControllerRestore> controllers_;
+    std::vector<VmuRestore> vmus_;
+    std::vector<MapleTransactionRecord> history_;
+    std::uint64_t next_sequence_ = 1u;
+    bool replace_diagnostic_history_ = false;
+};
+
 class MapleBus final {
   public:
     explicit MapleBus(std::function<void()> completion_observer = {});
@@ -231,6 +289,10 @@ class MapleBus final {
     [[nodiscard]] MapleBusSnapshot snapshot() const;
     [[nodiscard]] MapleBusStateSnapshot state_snapshot() const;
     void validate_state_restore(const MapleBusStateSnapshot& state) const;
+    [[nodiscard]] PreparedMapleBusStateRestore prepare_state_restore(
+        const MapleBusStateSnapshot& state,
+        PersistenceHandoffPolicy policy) const;
+    void commit_prepared_state_restore(PreparedMapleBusStateRestore prepared) noexcept;
     void restore_state(const MapleBusStateSnapshot& state);
 
   private:

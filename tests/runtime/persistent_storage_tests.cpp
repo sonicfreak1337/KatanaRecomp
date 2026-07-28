@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -154,6 +155,20 @@ int main() {
         {"dreamcast-flash", std::nullopt, flash_working, dreamcast_flash_size, 0xFFu});
     require(flash_reload->read_byte(0x20u) == 0x7Fu,
             "Persistentes Command-Flash wird nach Save nicht wieder geladen.");
+    auto captured_flash = flash->snapshot();
+    captured_flash.command_state = FlashCommandState::Unlock2;
+    captured_flash.write_protected = false;
+    captured_flash.working_bytes[0x21u] = 0x3Fu;
+    flash_image->write_byte(0x21u, 0x7Eu);
+    flash->set_write_protected(true);
+    auto prepared_flash = flash->prepare_state_restore(
+        captured_flash, PersistenceHandoffPolicy::ProductPreserveTarget);
+    flash->commit_prepared_state_restore(std::move(prepared_flash));
+    const auto product_flash = flash->snapshot();
+    require(product_flash.command_state == FlashCommandState::Unlock2 &&
+                flash->read_u8(0x21u) == 0x7Eu &&
+                flash->working_copy_dirty() && flash->write_protected(),
+            "Produkt-Handoff ersetzt neuere Flashbytes, Dirty-Zustand oder Hostschutz.");
 
     DreamcastMutableStorageConfig pal_config;
     pal_config.project_identity = std::string(64u, 'a');
@@ -196,6 +211,17 @@ int main() {
         {"dreamcast-vmu", std::nullopt, vmu_working, vmu_storage_size, 0xFFu});
     require(vmu_reload->read_byte(vmu_block_size) == 0xA5u,
             "Persistente VMU wird nach Save nicht wieder geladen.");
+    auto captured_vmu = vmu.state_snapshot();
+    captured_vmu.write_protected = false;
+    captured_vmu.working_image[vmu_block_size * 2u] = 0x77u;
+    vmu_image->write_byte(vmu_block_size * 2u, 0x3Cu);
+    vmu.set_write_protected(true);
+    auto prepared_vmu = vmu.prepare_state_restore(
+        captured_vmu, PersistenceHandoffPolicy::ProductPreserveTarget);
+    vmu.commit_prepared_state_restore(std::move(prepared_vmu));
+    require(vmu.read_byte(vmu_block_size * 2u) == 0x3Cu &&
+                vmu.working_copy_dirty() && vmu.write_protected(),
+            "Produkt-Handoff ersetzt neuere VMU-Savebytes, Dirty-Zustand oder Hostschutz.");
 
     const auto status = image->serialize_status_json();
     require(status.find("katana-persistent-image-v1") != std::string::npos &&

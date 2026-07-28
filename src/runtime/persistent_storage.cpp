@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cerrno>
 #include <cstdio>
 #include <fstream>
@@ -288,23 +289,62 @@ void PersistentImage::write(const std::size_t offset, const std::span<const std:
 void PersistentImage::validate_working_copy_restore(
     const std::span<const std::uint8_t> expected_source,
     const std::span<const std::uint8_t> working,
-    const bool) const {
+    const bool dirty) const {
+    static_cast<void>(prepare_working_copy_restore(
+        expected_source,
+        working,
+        dirty,
+        PersistenceHandoffPolicy::DiagnosticLossless));
+}
+
+PreparedPersistentImageRestore
+PersistentImage::prepare_working_copy_restore(
+    const std::span<const std::uint8_t> expected_source,
+    const std::span<const std::uint8_t> working,
+    const bool dirty,
+    const PersistenceHandoffPolicy policy) const {
     if (expected_source.size() != source_.size() ||
         working.size() != working_.size() ||
         !std::equal(
             expected_source.begin(), expected_source.end(), source_.begin()))
         throw std::invalid_argument(
             "Persistenter Handoff passt nicht zur installierten Quellidentitaet.");
+
+    PreparedPersistentImageRestore prepared;
+    prepared.owner_ = this;
+    switch (policy) {
+    case PersistenceHandoffPolicy::DiagnosticLossless:
+        prepared.working_.assign(working.begin(), working.end());
+        prepared.dirty_ = dirty;
+        prepared.replace_working_copy_ = true;
+        break;
+    case PersistenceHandoffPolicy::ProductPreserveTarget:
+        // The target's installed working copy and dirty state are authoritative.
+        break;
+    default:
+        throw std::invalid_argument("Unbekannte Persistenz-Handoff-Policy.");
+    }
+    return prepared;
+}
+
+void PersistentImage::commit_prepared_working_copy_restore(
+    PreparedPersistentImageRestore prepared) noexcept {
+    assert(prepared.owner_ == this);
+    if (!prepared.replace_working_copy_) return;
+    working_.swap(prepared.working_);
+    dirty_ = prepared.dirty_;
 }
 
 void PersistentImage::restore_working_copy_passive(
     const std::span<const std::uint8_t> expected_source,
     const std::span<const std::uint8_t> working,
     const bool dirty) {
-    validate_working_copy_restore(expected_source, working, dirty);
-    std::vector<std::uint8_t> prepared(working.begin(), working.end());
-    working_ = std::move(prepared);
-    dirty_ = dirty;
+    auto prepared = prepare_working_copy_restore(
+        expected_source,
+        working,
+        dirty,
+        PersistenceHandoffPolicy::DiagnosticLossless);
+    commit_prepared_working_copy_restore(std::move(prepared));
 }
 
 void PersistentImage::verify_source_unchanged() const {

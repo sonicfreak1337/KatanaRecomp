@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -47,6 +48,28 @@ struct FlashMemorySnapshot {
     [[nodiscard]] bool operator==(const FlashMemorySnapshot&) const = default;
 };
 
+class FlashMemoryDevice;
+
+class PreparedFlashMemoryRestore final {
+  public:
+    PreparedFlashMemoryRestore(const PreparedFlashMemoryRestore&) = delete;
+    PreparedFlashMemoryRestore& operator=(const PreparedFlashMemoryRestore&) = delete;
+    PreparedFlashMemoryRestore(PreparedFlashMemoryRestore&&) noexcept = default;
+    PreparedFlashMemoryRestore& operator=(PreparedFlashMemoryRestore&&) noexcept = default;
+
+  private:
+    friend class FlashMemoryDevice;
+    PreparedFlashMemoryRestore() = default;
+
+    const FlashMemoryDevice* owner_ = nullptr;
+    FlashCommandState command_state_ = FlashCommandState::ReadArray;
+    bool write_protected_ = false;
+    bool replace_working_copy_ = false;
+    bool replace_write_protection_ = false;
+    std::vector<std::uint8_t> working_;
+    std::optional<PreparedPersistentImageRestore> persistent_;
+};
+
 class FlashMemoryDevice final : public MemoryDevice {
   public:
     explicit FlashMemoryDevice(std::span<const std::uint8_t> image = {});
@@ -63,6 +86,10 @@ class FlashMemoryDevice final : public MemoryDevice {
     [[nodiscard]] bool persistent_working_copy() const noexcept;
     [[nodiscard]] FlashMemorySnapshot snapshot() const;
     void validate_state_restore(const FlashMemorySnapshot& state) const;
+    [[nodiscard]] PreparedFlashMemoryRestore prepare_state_restore(
+        const FlashMemorySnapshot& state,
+        PersistenceHandoffPolicy policy) const;
+    void commit_prepared_state_restore(PreparedFlashMemoryRestore prepared) noexcept;
     void restore_state_passive(const FlashMemorySnapshot& state);
 
   private:

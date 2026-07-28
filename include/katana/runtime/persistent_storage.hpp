@@ -19,12 +19,38 @@ enum class PersistentImageRecovery : std::uint8_t {
     RestoredRecovery
 };
 
+enum class PersistenceHandoffPolicy : std::uint8_t {
+    DiagnosticLossless,
+    ProductPreserveTarget
+};
+
 struct PersistentImageConfig {
     std::string kind;
     std::optional<std::filesystem::path> source_path;
     std::filesystem::path working_path;
     std::size_t expected_size = 0u;
     std::uint8_t erased_value = 0xFFu;
+};
+
+class PersistentImage;
+
+class PreparedPersistentImageRestore final {
+  public:
+    PreparedPersistentImageRestore(const PreparedPersistentImageRestore&) = delete;
+    PreparedPersistentImageRestore&
+    operator=(const PreparedPersistentImageRestore&) = delete;
+    PreparedPersistentImageRestore(PreparedPersistentImageRestore&&) noexcept = default;
+    PreparedPersistentImageRestore&
+    operator=(PreparedPersistentImageRestore&&) noexcept = default;
+
+  private:
+    friend class PersistentImage;
+    PreparedPersistentImageRestore() = default;
+
+    const PersistentImage* owner_ = nullptr;
+    std::vector<std::uint8_t> working_;
+    bool dirty_ = false;
+    bool replace_working_copy_ = false;
 };
 
 class PersistentImage final {
@@ -45,6 +71,18 @@ class PersistentImage final {
         std::span<const std::uint8_t> expected_source,
         std::span<const std::uint8_t> working,
         bool dirty) const;
+    // Product handoffs bind the installed source but preserve the target
+    // process' current working bytes and dirty bookkeeping. DiagnosticLossless
+    // remains available for exact same-session capture/restore.
+    [[nodiscard]] PreparedPersistentImageRestore prepare_working_copy_restore(
+        std::span<const std::uint8_t> expected_source,
+        std::span<const std::uint8_t> working,
+        bool dirty,
+        PersistenceHandoffPolicy policy) const;
+    // All validation and allocation happens in prepare_working_copy_restore().
+    // The owning image must remain live and unchanged until this noexcept swap.
+    void commit_prepared_working_copy_restore(
+        PreparedPersistentImageRestore prepared) noexcept;
     void restore_working_copy_passive(
         std::span<const std::uint8_t> expected_source,
         std::span<const std::uint8_t> working,

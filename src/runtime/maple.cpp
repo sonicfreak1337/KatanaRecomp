@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -242,54 +243,84 @@ MapleVmuStateSnapshot MapleVmuDevice::state_snapshot() const {
 
 void MapleVmuDevice::validate_state_restore(
     const MapleVmuStateSnapshot& state) const {
+    static_cast<void>(prepare_state_restore(
+        state, PersistenceHandoffPolicy::DiagnosticLossless));
+}
+
+PreparedMapleVmuStateRestore MapleVmuDevice::prepare_state_restore(
+    const MapleVmuStateSnapshot& state,
+    const PersistenceHandoffPolicy policy) const {
     if (state.source_image.size() != vmu_storage_size ||
         state.working_image.size() != vmu_storage_size)
         throw std::invalid_argument(
             "VMU-Handoff braucht exakt 128 KiB Quell- und Arbeitsabbild.");
-    if (state.persistent_working_copy != persistent_working_copy())
-        throw std::invalid_argument(
-            "VMU-Handoff und Runtime besitzen unterschiedliche Persistenzvertraege.");
     if (!state.persistent_working_copy && state.working_copy_dirty)
         throw std::invalid_argument(
             "Nichtpersistente VMU darf keinen persistenten Dirty-Zustand tragen.");
 
-    for (std::size_t offset = 0u; offset < vmu_storage_size; ++offset) {
-        if (source_byte(offset) != state.source_image[offset])
+    PreparedMapleVmuStateRestore prepared;
+    prepared.owner_ = this;
+    switch (policy) {
+    case PersistenceHandoffPolicy::DiagnosticLossless:
+        if (state.persistent_working_copy != persistent_working_copy())
             throw std::invalid_argument(
-                "VMU-Handoff passt nicht zum gebundenen Quellabbild.");
+                "VMU-Handoff und Runtime besitzen unterschiedliche Persistenzvertraege.");
+        prepared.write_protected_ = state.write_protected;
+        prepared.replace_write_protection_ = true;
+        prepared.replace_working_copy_ = true;
+        break;
+    case PersistenceHandoffPolicy::ProductPreserveTarget:
+        // VMU bytes, dirty state and host write protection belong to the
+        // installed target, not to the bootstrap capture.
+        break;
+    default:
+        throw std::invalid_argument("Unbekannte Persistenz-Handoff-Policy.");
     }
 
-    if (!persistent_image_) return;
-    const auto current = persistent_image_->bytes();
-    const auto bytes_match =
-        std::equal(current.begin(), current.end(), state.working_image.begin());
-    if (!state.working_copy_dirty &&
-        (persistent_image_->dirty() || !bytes_match))
-        throw std::invalid_argument(
-            "Ein sauberer VMU-Handoff darf keine andere oder bereits dirty "
-            "Arbeitskopie ohne Hostdatei-Commit ersetzen.");
+    if (persistent_image_) {
+        if (policy == PersistenceHandoffPolicy::DiagnosticLossless &&
+            !state.working_copy_dirty) {
+            const auto current = persistent_image_->bytes();
+            if (persistent_image_->dirty() ||
+                !std::equal(
+                    current.begin(), current.end(), state.working_image.begin()))
+                throw std::invalid_argument(
+                    "Ein sauberer VMU-Handoff darf keine andere oder bereits "
+                    "dirty Arbeitskopie ohne Hostdatei-Commit ersetzen.");
+        }
+        prepared.persistent_.emplace(
+            persistent_image_->prepare_working_copy_restore(
+                state.source_image,
+                state.working_image,
+                state.working_copy_dirty,
+                policy));
+    } else {
+        if (!std::equal(
+                state.source_image.begin(), state.source_image.end(), source_.begin()))
+            throw std::invalid_argument(
+                "VMU-Handoff passt nicht zum gebundenen Quellabbild.");
+        if (prepared.replace_working_copy_) prepared.working_ = state.working_image;
+    }
+    return prepared;
+}
+
+void MapleVmuDevice::commit_prepared_state_restore(
+    PreparedMapleVmuStateRestore prepared) noexcept {
+    assert(prepared.owner_ == this);
+    if (prepared.persistent_) {
+        persistent_image_->commit_prepared_working_copy_restore(
+            std::move(*prepared.persistent_));
+    } else if (prepared.replace_working_copy_) {
+        working_.swap(prepared.working_);
+    }
+    if (prepared.replace_write_protection_)
+        write_protected_ = prepared.write_protected_;
 }
 
 void MapleVmuDevice::restore_state(const MapleVmuStateSnapshot& state) {
-    validate_state_restore(state);
-
-    if (!persistent_image_) {
-        auto restored = state.working_image;
-        working_ = std::move(restored);
-        write_protected_ = state.write_protected;
-        return;
-    }
-
-    persistent_image_->write(0u, state.working_image);
-    if (state.working_copy_dirty && !persistent_image_->dirty()) {
-        // Dirty is host-persistence bookkeeping, but it is part of a lossless
-        // state transfer. Force it without changing the final guest bytes.
-        const auto original = state.working_image.front();
-        persistent_image_->write_byte(
-            0u, static_cast<std::uint8_t>(original ^ 1u));
-        persistent_image_->write_byte(0u, original);
-    }
-    write_protected_ = state.write_protected;
+    auto prepared = prepare_state_restore(
+        state, PersistenceHandoffPolicy::DiagnosticLossless);
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {
@@ -407,10 +438,21 @@ MapleBusStateSnapshot MapleBus::state_snapshot() const {
 
 void MapleBus::validate_state_restore(
     const MapleBusStateSnapshot& state) const {
+    static_cast<void>(prepare_state_restore(
+        state, PersistenceHandoffPolicy::DiagnosticLossless));
+}
+
+PreparedMapleBusStateRestore MapleBus::prepare_state_restore(
+    const MapleBusStateSnapshot& state,
+    const PersistenceHandoffPolicy policy) const {
     std::array<bool, maple_port_count * maple_units_per_port>
         described{};
     std::size_t previous_slot = 0u;
     bool have_previous = false;
+    PreparedMapleBusStateRestore prepared;
+    prepared.owner_ = this;
+    prepared.controllers_.reserve(state.peripherals.size());
+    prepared.vmus_.reserve(state.peripherals.size());
 
     for (std::size_t index = 0u; index < devices_.size(); ++index) {
         if (state.attached[index] != static_cast<bool>(devices_[index]))
@@ -439,6 +481,9 @@ void MapleBus::validate_state_restore(
                     devices_[index]))
                 throw std::invalid_argument(
                     "Maple-Handoff-Controller passt nicht zum Runtimegeraet.");
+            prepared.controllers_.push_back(
+                {static_cast<MapleControllerDevice*>(devices_[index].get()),
+                 controller->next_frame});
         } else if (const auto* vmu =
                        std::get_if<MapleVmuStateSnapshot>(
                            &peripheral.state)) {
@@ -448,7 +493,8 @@ void MapleBus::validate_state_restore(
             if (!target)
                 throw std::invalid_argument(
                     "Maple-Handoff-VMU passt nicht zum Runtimegeraet.");
-            target->validate_state_restore(*vmu);
+            prepared.vmus_.push_back(
+                {target.get(), target->prepare_state_restore(*vmu, policy)});
         } else {
             throw std::invalid_argument(
                 "Maple-Handoff besitzt einen unbekannten Peripheriezustand.");
@@ -475,25 +521,39 @@ void MapleBus::validate_state_restore(
                 "Maple-Handoff besitzt eine ungueltige Transaktionshistorie.");
         previous_sequence = record.sequence;
     }
+    switch (policy) {
+    case PersistenceHandoffPolicy::DiagnosticLossless:
+        prepared.history_ = state.history;
+        prepared.next_sequence_ = state.next_sequence;
+        prepared.replace_diagnostic_history_ = true;
+        break;
+    case PersistenceHandoffPolicy::ProductPreserveTarget:
+        // Transaction history and its sequence are host diagnostics. Product
+        // handoff restores only guest-affecting peripheral progress.
+        break;
+    default:
+        throw std::invalid_argument("Unbekannte Persistenz-Handoff-Policy.");
+    }
+    return prepared;
+}
+
+void MapleBus::commit_prepared_state_restore(
+    PreparedMapleBusStateRestore prepared) noexcept {
+    assert(prepared.owner_ == this);
+    for (const auto& controller : prepared.controllers_)
+        controller.target->restore_sampled_frames(controller.next_frame);
+    for (auto& vmu : prepared.vmus_)
+        vmu.target->commit_prepared_state_restore(std::move(vmu.prepared));
+    if (prepared.replace_diagnostic_history_) {
+        history_.swap(prepared.history_);
+        next_sequence_ = prepared.next_sequence_;
+    }
 }
 
 void MapleBus::restore_state(const MapleBusStateSnapshot& state) {
-    validate_state_restore(state);
-
-    for (const auto& peripheral : state.peripherals) {
-        auto& target = devices_[slot(peripheral.port, peripheral.unit)];
-        if (const auto* controller =
-                std::get_if<MapleControllerDeviceStateSnapshot>(
-                    &peripheral.state)) {
-            std::dynamic_pointer_cast<MapleControllerDevice>(target)
-                ->restore_sampled_frames(controller->next_frame);
-        } else {
-            std::dynamic_pointer_cast<MapleVmuDevice>(target)->restore_state(
-                std::get<MapleVmuStateSnapshot>(peripheral.state));
-        }
-    }
-    history_ = state.history;
-    next_sequence_ = state.next_sequence;
+    auto prepared = prepare_state_restore(
+        state, PersistenceHandoffPolicy::DiagnosticLossless);
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 } // namespace katana::runtime

@@ -482,5 +482,28 @@ int main() {
             "Naechste Maple-DMA-Transaktion sieht nicht den letzten gastzeitgebundenen Zustand.");
     }
 
+    maple->attach(0u, 1u, std::make_shared<MapleVmuDevice>());
+    auto persistence_bound = snapshot_dreamcast_maple_state(*maple, *controller);
+    persistence_bound.controller.completion_event.reset();
+    persistence_bound.controller.completion_event_rehydration_pending = false;
+    persistence_bound.controller.pending_responses = {
+        {response, {0x01200008u, 0x02000000u, 0xA5A5A5A5u}}};
+    persistence_bound.controller.enabled = 1u;
+    persistence_bound.controller.active = 1u;
+    persistence_bound.controller.state = MapleDmaState::Active;
+    persistence_bound.controller.error = MapleDmaError::None;
+    persistence_bound.controller.error_address.reset();
+    persistence_bound.controller.address_protect = 0x4040u;
+    require(
+        throws([&] {
+            static_cast<void>(prepare_dreamcast_maple_state_restore(
+                *maple,
+                *controller,
+                persistence_bound,
+                PersistenceHandoffPolicy::ProductPreserveTarget));
+        }),
+        "Produkt-Handoff akzeptiert eine ausstehende Maple-Antwort, deren "
+        "Abhaengigkeit von Capture-VMU-Bytes nicht rekonstruierbar ist.");
+
     std::cout << "Dreamcast-Maple-MMIO und echter DMA-Responsepfad erfolgreich.\n";
 }

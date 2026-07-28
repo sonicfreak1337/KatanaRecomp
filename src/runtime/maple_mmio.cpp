@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -522,20 +523,26 @@ void DreamcastMapleController::validate_state_restore(
     }
 }
 
-void DreamcastMapleController::restore_state_passive(
-    const DreamcastMapleControllerSnapshot& state) {
+PreparedDreamcastMapleControllerRestore
+DreamcastMapleController::prepare_state_restore(
+    const DreamcastMapleControllerSnapshot& state) const {
     validate_state_restore(state);
+    PreparedDreamcastMapleControllerRestore prepared;
+    prepared.owner_ = this;
+    prepared.state_ = state;
+    // Captured IDs are process-local and are never published by commit.
+    prepared.state_.completion_event.reset();
+    return prepared;
+}
 
-    std::vector<PendingResponse> restored_responses;
-    restored_responses.reserve(state.pending_responses.size());
-    for (const auto& response : state.pending_responses)
-        restored_responses.push_back(
-            {response.destination, response.words});
-
+void DreamcastMapleController::commit_prepared_state_restore(
+    PreparedDreamcastMapleControllerRestore prepared) noexcept {
+    assert(prepared.owner_ == this);
+    auto& state = prepared.state_;
     if (completion_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
-    pending_responses_ = std::move(restored_responses);
+    pending_responses_.swap(state.pending_responses);
     command_table_ = state.command_table;
     trigger_select_ = state.trigger_select;
     enabled_ = state.enabled;
@@ -559,6 +566,12 @@ void DreamcastMapleController::restore_state_passive(
     hard_trigger_failed_ = state.hard_trigger_failed;
     completion_event_rehydration_pending_ =
         state_ == MapleDmaState::Active;
+}
+
+void DreamcastMapleController::restore_state_passive(
+    const DreamcastMapleControllerSnapshot& state) {
+    auto prepared = prepare_state_restore(state);
+    commit_prepared_state_restore(std::move(prepared));
 }
 
 SchedulerEventId DreamcastMapleController::rehydrate_scheduled_event(
@@ -913,19 +926,74 @@ void validate_dreamcast_maple_state_restore(
     const MapleBus& bus,
     const DreamcastMapleController& controller,
     const DreamcastMapleStateSnapshot& state) {
+    validate_dreamcast_maple_state_restore(
+        bus,
+        controller,
+        state,
+        PersistenceHandoffPolicy::DiagnosticLossless);
+}
+
+void validate_dreamcast_maple_state_restore(
+    const MapleBus& bus,
+    const DreamcastMapleController& controller,
+    const DreamcastMapleStateSnapshot& state,
+    const PersistenceHandoffPolicy policy) {
+    static_cast<void>(prepare_dreamcast_maple_state_restore(
+        bus, controller, state, policy));
+}
+
+PreparedDreamcastMapleStateRestore
+prepare_dreamcast_maple_state_restore(
+    const MapleBus& bus,
+    const DreamcastMapleController& controller,
+    const DreamcastMapleStateSnapshot& state,
+    const PersistenceHandoffPolicy policy) {
     validate_bus_snapshot_shape(state.bus);
     validate_controller_snapshot_shape(state.controller, false);
-    bus.validate_state_restore(state.bus);
-    controller.validate_state_restore(state.controller);
+    if (policy == PersistenceHandoffPolicy::ProductPreserveTarget &&
+        !state.controller.pending_responses.empty()) {
+        const auto has_vmu = std::any_of(
+            state.bus.peripherals.begin(),
+            state.bus.peripherals.end(),
+            [](const auto& peripheral) {
+                return std::holds_alternative<MapleVmuStateSnapshot>(
+                    peripheral.state);
+            });
+        if (has_vmu)
+            throw std::invalid_argument(
+                "Produkt-Handoff lehnt ausstehende Maple-Antworten bei "
+                "angeschlossener VMU ab: die Antwortprovenienz bindet "
+                "Capture-Savebytes nicht sicher aus.");
+    }
+    auto prepared_bus = bus.prepare_state_restore(state.bus, policy);
+    auto prepared_controller =
+        controller.prepare_state_restore(state.controller);
+    return {
+        std::move(prepared_bus),
+        std::move(prepared_controller),
+    };
+}
+
+void commit_dreamcast_maple_state_restore(
+    MapleBus& bus,
+    DreamcastMapleController& controller,
+    PreparedDreamcastMapleStateRestore prepared) noexcept {
+    bus.commit_prepared_state_restore(std::move(prepared.bus_));
+    controller.commit_prepared_state_restore(
+        std::move(prepared.controller_));
 }
 
 void restore_dreamcast_maple_state_passive(
     MapleBus& bus,
     DreamcastMapleController& controller,
     const DreamcastMapleStateSnapshot& state) {
-    validate_dreamcast_maple_state_restore(bus, controller, state);
-    bus.restore_state(state.bus);
-    controller.restore_state_passive(state.controller);
+    auto prepared = prepare_dreamcast_maple_state_restore(
+        bus,
+        controller,
+        state,
+        PersistenceHandoffPolicy::DiagnosticLossless);
+    commit_dreamcast_maple_state_restore(
+        bus, controller, std::move(prepared));
 }
 
 namespace {
