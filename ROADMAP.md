@@ -43,23 +43,39 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
-letzte reale Produktevidenz: 1629268 / ABI 73 / NativeDisc-v33
-aktueller Source-Head main:   cb5fb47 / ABI 74
-lokaler Arbeitsbaum:          nur Dokumentationssynchronisierung
+letzte reale Produktevidenz: 1b25f1d / ABI 74 / NativeDisc-v33
+aktueller Source-Head main:   24d6132 / Analyzer-ABI 9 / Portvertrag 65
+lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
 ```
 
-`1629268` ist ausschliesslich die Basis der letzten ausgefuehrten
-Produktevidenz. `cb5fb47` ist der aktuelle eingecheckte Quellstand, aber noch
-keine Sonic-Produktabnahme.
+Der reale ABI-74-NativeDisc-v33-Lauf praesentiert den PAL-Sega-Screen und
+stoppt danach fail-closed bei Gesamtzyklus `553.990.562` am noch fehlenden
+AOT-Einstieg `0x8C11088C -> 0x8C64784E`. Er fuehrt `138.757.292`
+Post-Entry-Zyklen in `4,73991 s` beziehungsweise vorlaeufig `29,2742 MHz`
+mit `13.612.189` zentralen Dispatches aus. Das ist kein vollstaendiges
+600-Millionen-Gate, belegt aber den NativeDisc-/IP.BIN-Bildpfad.
+
+`24d6132` schliesst vor dem naechsten Produktlauf die offenen
+Reviewvertraege allgemein: Candidate-Calls nehmen am getrennten
+Inventar-Rueckwaertsgraph teil, Codepointerprovenienz folgt nur dem
+tatsaechlich uebergebenen Wert, und endliche bewachte Stackframe-Deltas
+bleiben ausschliesslich im Inventarwalk erhalten. Die echte statische
+PAL-Analyse nimmt dadurch `0x8C64784E` genau einmal als
+`stored-code-address` auf und bindet ihn an den gemeinsamen Body
+`0x8C6478C2`; `2.221` Guarded-AOT-Einstiege stehen `0` typisierten
+Rejections gegenueber. Ein bekannter Inventarkandidat kann nicht mehr still
+zwischen Analyse und Export verschwinden: jede Ablehnung besitzt einen
+typisierten Grund, und der Produkt-Export bricht vor Codegen/Hostcompiler
+fail-closed ab.
 
 Die allgemeinen Source-Vertraege fuer `KR-4972`, `KR-4966`, `KR-4967` und
 `KR-4970` sind weitgehend vorhanden: bewachte AOT-Einstiege mit
 Exportvollstaendigkeitsinvariante, ein relatives Post-Entry-Gate, ein
 vorbereiteter atomarer `CompletePlatform`-Commit sowie ein
-nutzersave-autoritatives Product-Handoff-Profil. Der aktuelle
-Sonic-Exportversuch zeigt jedoch, dass die Guarded-Inventory-/Summarygrenze
-noch nicht konvergiert; deshalb ist der P0-Sourceblock nicht pauschal
-abgeschlossen.
+nutzersave-autoritatives Product-Handoff-Profil. Die statische
+`24d6132`-PAL-Analyse konvergiert ohne Budgetverlust und schliesst den
+bekannten Guarded-Inventory-/Summaryblocker quellseitig. Produkt-Export,
+Hostbuild und realer Lauf aus diesem Stand bleiben die noch offene Abnahme.
 
 Der erste kalte ABI-73-Exportversuch benoetigte 419,5 Sekunden fuer die
 vollstaendige Analyse und stoppte danach vor dem Hostcompiler an einem
@@ -118,22 +134,28 @@ abnehmen.
 ```text
 Runtime-ABI:                    74
 Block-ABI:                       5
-Analyzer-ABI:                    8
+Analyzer-ABI:                    9
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             64
+Portprojektvertrag:             65
 Native-AOT-Emissionsprofil:     13
 AOT-Partitionsschema:            5
 ```
 
 ### Reviewstatus vor dem naechsten Produktlauf
 
-Auf `cb5fb47` sind die konkret reviewten Vertraege fuer
+Auf `24d6132` sind die konkret reviewten Vertraege fuer
 Carrieridentitaet, externe bedingte und normale Inventarnachfolger,
 Codepointerwertprovenienz, Shape- und Raw-Inventarbudgets, zielbezogene
 P1/P2-Code-Revalidierung, verschachtelte Owner-Exitframes,
 Safepoint-Resume-Einstiege, Gateausfuehrung und exakte Exportartefakte
 eingecheckt.
+Zusaetzlich sind Guarded-AOT-Materialisierungsablehnungen nun ein
+expliziter Analyse-/Exportvertrag und der konkrete Callbackpfad ueber
+Candidate-Call, Candidate-Tail, bewachten Runtime-Stackframe und
+Runtime-Objektstore ist allgemein inventarisierbar. Die fokussierten
+Funktionswert-, Kontrollfluss- und Portexportvertraege sind gruen; der neue
+Sonic-Produktproof aus diesem Stand ist der naechste Schritt.
 Registerlokalisierung ist weiterhin nur teilweise am Architekturziel:
 Liveness ist IR-basiert, die Ausdrucksumschreibung bleibt eine nun
 lexikalisch begrenzte C++-Transformation.

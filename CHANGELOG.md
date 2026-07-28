@@ -4,6 +4,20 @@
 
 ### Geaendert
 
+- `24d6132` schliesst die vor dem naechsten Sonic-Lauf offenen
+  Guarded-AOT-Reviews. Candidate-Calls erreichen einen separaten
+  Inventar-Rueckwaertsgraph, echte Codepointerprovenienz folgt ueber
+  Candidate-Tails und bewachte Runtime-Stackframes bis zum Objektstore, und
+  normale Objektadressprovenienz bleibt davon getrennt. Ein endlicher
+  runtime-autoritiver Stackframe-Delta darf dabei nur den bewachten
+  Inventarwalk verbinden und erzeugt keine feste CFG-Kante. Jeder bekannte,
+  aber nicht materialisierbare Guarded-AOT-Einstieg wird nun mit typisiertem
+  Grund und Provenienz berichtet; der Produkt-Export stoppt vor
+  Codegen/Hostcompiler. Analyzer-ABI 9 und Portprojektvertrag 65 versionieren
+  die Aenderung. Die echte statische PAL-Analyse bindet den zuvor fehlenden
+  Einstieg `0x8C64784E` an den gemeinsamen Body `0x8C6478C2`, mit `2.221`
+  Guarded-AOT-Einstiegen, `0` Rejections und ohne Inventartruncation. Der
+  neue Produktlauf steht noch aus.
 - Der aus `1629268` erzeugte ABI-73-Sonic-PAL-NativeDisc-v33-Port passiert
   den vorherigen falschen Datentabellen-AOT-Einstieg und baut mit MSVC
   erfolgreich 2.519 Funktionen in 63 Partitionen. Der kalte Gesamtexport

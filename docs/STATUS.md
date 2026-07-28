@@ -5,17 +5,41 @@ Aktuelle interne Version: `v0.49.0`
 ## Evidenztrennung
 
 ```text
-letzte reale Produktevidenz: 1629268 / ABI 73 / NativeDisc-v33
-aktueller Source-Head main:   cb5fb47 / ABI 74
-lokaler Arbeitsbaum:          nur Dokumentationssynchronisierung
-offene Produktabnahme:        kein Sonic-Port aus cb5fb47
+letzte reale Produktevidenz: 1b25f1d / ABI 74 / NativeDisc-v33
+aktueller Source-Head main:   24d6132 / Analyzer-ABI 9 / Portvertrag 65
+lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
+offene Produktabnahme:        kein Sonic-Port aus 24d6132
 ```
 
-`1629268` ist nicht mehr der aktuelle Quellstand. Es bleibt die
-reproduzierbare Basis der letzten ausgefuehrten Produkt-EXE. `7ecdefb` ist
-die Basis des letzten fehlgeschlagenen Kaltexportversuchs. `cb5fb47` ist der
-aktuelle eingecheckte Source-Head mit Runtime-ABI 74, Analyzer-ABI 8,
-Portprojektvertrag 64 und Native-AOT-Profil 13.
+Der letzte reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
+PAL-Sega-Screen. Er stoppt danach fail-closed bei Gesamtzyklus `553.990.562`
+beziehungsweise `138.757.292` Post-Entry-Zyklen am fehlenden statischen Ziel
+`0x8C11088C -> 0x8C64784E`. Bis dorthin vergehen `4,73991 s`, entsprechend
+vorlaeufig `29,2742 MHz`, bei `13.612.189` zentralen Dispatches. Das
+600-Millionen-Gate ist nicht vollstaendig und diese Rate daher nur eine
+Abbruchmessung.
+
+`24d6132` schliesst die dazugehoerige allgemeine Analyseluecke: Der
+Inventargraph transportiert Candidate-Calls getrennt vom semantischen CFG,
+der Codepointermarker folgt nur dem uebergebenen Wert, und ein endlicher
+bewachter Runtime-Stackframe-Delta darf ausschliesslich im Guarded-Inventory
+Spill/Reload verbinden. Die echte PAL-Analyse liefert danach:
+
+```text
+Guarded-AOT-Einstiege:       2.221
+typisierte Rejections:           0
+rohe Stored-Kandidaten:        242 / 4.096
+aufgenommene Kandidaten:       200 / 1.024
+Inventory-Truncation:         false
+Ziel 0x8C64784E:              aufgenommen
+gemeinsamer Body:             0x8C6478C2
+```
+
+Akzeptierte Kandidaten koennen nicht mehr still aus der
+Materialisierung verschwinden. Analyse und JSON berichten jede Ablehnung
+mit Typ und Provenienz; der normale Produkt-Export stoppt damit vor
+Codegen/Hostcompiler. Runtime-ABI bleibt 74, Analyzer-ABI ist 9,
+Portprojektvertrag 65 und Native-AOT-Profil 13.
 
 Der erste kalte ABI-73-Exportversuch lief 419,5 Sekunden und brach noch vor
 dem Hostcompiler in der IR-Validierung ab. Die allgemeine Ursache war ein
@@ -111,7 +135,7 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository. Das konkrete Spielp
 
 ## Reviewstatus
 
-Eingecheckt bis `cb5fb47`, Sonic-Produktproof offen:
+Eingecheckt bis `24d6132`, neuer Sonic-Produktproof offen:
 
 - reale CFG-Kanten bleiben trotz Candidate-Carrier mit gleicher Callsite und
   gleichem Ziel erhalten;
@@ -140,6 +164,12 @@ Eingecheckt bis `cb5fb47`, Sonic-Produktproof offen:
 - terminale Bring-up-Zusammenfassung fuer typisierte Fehler;
 - ausfuehrender Gatewrapper-Vertrag fuer 0/1/3/124, Leerzeichenpfad,
   Budgetisolation, vorzeitiges Gateende und typisierte Fehler.
+- Candidate-Call-Carrier nehmen nur am separaten Inventar-Rueckwaertsgraph
+  teil; `requires_code_pointer`-Tails bleiben echte Inventarsenken;
+- endliche, aber runtime-autoritative Stackframe-Deltas verbinden im
+  Guarded-Inventory Spill/Reload, ohne eine feste CFG-Kante zu erzeugen;
+- jeder nicht materialisierbare Guarded-AOT-Einstieg besitzt einen
+  typisierten Grund und blockiert den Produkt-Export fail-closed.
 
 Architektonisch weiter offen bleiben strukturierte Registeroperandemission,
 die gemeinsame reale Lokalisierungs-/RAM-Batch-/Invalidierungskette,
