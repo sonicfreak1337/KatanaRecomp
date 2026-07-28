@@ -3,9 +3,9 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 52, Block-ABI 5,
-Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11 und
-Portprojektvertrag 37.
+Der aktuelle Quellstand `b01586a` verwendet Runtime-ABI 73, Block-ABI 5,
+Analyzer-ABI 6, Backend-Interface-ABI 12, PlatformServices-ABI 13,
+Portprojektvertrag 62, Native-AOT-Profil 11 und Partitionsschema 5.
 
 ## Vertrag
 
@@ -156,11 +156,29 @@ Metriken `dropped_render_evidence_generations`,
 Budgetende sichtbar. Scanouts ueber 2048 x 2048 Pixel beziehungsweise
 4.194.304 Pixel insgesamt werden vor Frameallokation abgewiesen.
 
-`pump_guest_frame_proof` meldet den eingefrorenen Proof mit Quelle,
-Rendergeneration und bei Direct-FB mit erster/letzter Schreibgeneration des
-Epochenintervalls hostunabhaengig und reicht exakt dessen `PvrFrame` optional
-an `NativeVideoOutput` weiter. Ein Direct-FB-Marker ohne konsistentes
-Generationsintervall wird nicht akzeptiert. Der titelunabhaengige
+Seit Runtime-ABI 64 sind Presentation und Evidenz getrennte Verträge.
+`PvrSoftwareRenderer` haelt neben dem ersten noch nicht konsumierten Proof
+eine auf genau einen Frame begrenzte latest-wins Scanoutqueue. Jeder
+gueltige, ungeblankte VBlank kann damit die aktuellen PVR-Register- und
+VRAM-Pixel an `NativeVideoOutput` liefern, auch wenn seit dem letzten
+Proof kein Pixel erneut geschrieben wurde oder ein frueherer Proof bereits
+konsumiert ist. Die Queue ist transiente Hostgrenzeninformation: Ein
+CompletePlatform-Restore baut sie beim naechsten VBlank aus den restaurierten
+Registern und VRAM neu auf, statt alte Diagnosehistorie als Hardwarezustand
+zu serialisieren. Der aktuelle Product-Handoff-Vertrag setzt zusaetzlich
+Frameproofqueue, kumulative Renderer-/Pixelmetriken, Direct-VRAM-Schatten und
+Hostfehler auf eine neue Post-Entry-Baseline. Produktberichte verwenden
+Deltas ab Game Entry; ein aus NativeDisc uebernommener IP.BIN-Frame kann
+dadurch weder als DirectBoot-Spielbild noch als neuer Hostpresent zaehlen.
+
+`pump_guest_frame_proof` konsumiert Scanout und Proof unabhaengig.
+`frame_presented` bezeichnet ausschliesslich einen bestaetigten Host-Present;
+`guest_frame_proven`, Quelle, Rendergeneration und Direct-FB-
+Schreibgenerationen stammen weiterhin ausschliesslich aus dem Proof. Falls
+derselbe VBlank einen neuen Proof erzeugt, kann dessen eingefrorener Frame
+ohne zweite grosse Kopie praesentiert werden. Ein Direct-FB-Marker ohne
+konsistentes Generationsintervall wird nicht akzeptiert. Der
+titelunabhaengige
 `GuestFrameEvidenceTracker` trennt `KR_FIRST_GUEST_SCANOUT` (Direct-FB oder
 TA), `KR_FIRST_TA_FRAME` und `KR_FIRST_POST_BOOTSTRAP_TA_FRAME`. Direct-FB
 bleibt damit echte Gastevidenz, wird aber nicht als TA bezeichnet. Der
@@ -171,6 +189,24 @@ noch kein Gameplay. Der kompatible
 Gastscanout; `KR_FIRST_PRESENTED_FRAME` entsteht getrennt erst nach
 nachweislich erfolgreichem Present. Das relocatierte Runtime-SDK linkt die
 notwendigen Windows-Systembibliotheken selbst.
+
+Der historische Sonic-PAL-NativeDisc-v32-Nachweis praesentiert mit diesem
+Vertrag 127 Hostframes und zeigt ab 2,032 Sekunden den Sega-Lizenzscreen.
+Derselbe Gastpfad endet nach 6,701 Sekunden bei Zyklus 553.990.562,
+11.080.283 Zentraldispatches und provisorisch 82,67 MHz an der
+Missing-AOT-Kante `0x8C11088C -> 0x8C64784E` wie DirectBoot-v30; dessen alter
+ABI-63-Build blieb mit null Hostframes schwarz. Die v32-Produkt-EXE war
+53.677.056 Bytes gross. Das belegt die allgemeine Presentationluecke, ist
+aber noch kein sichtbarer DirectBoot-Spielbildnachweis und keine aktuelle
+Performanceabnahme.
+
+Die quellseitige Guarded-AOT-/Exportluecke und die P0-Hotpath-/Handoff-
+Vertraege sind inzwischen fuer Runtime-ABI 73 implementiert. Ihre Wirkung auf
+Sonic und den Hostvideopfad ist noch nicht produktbelegt. Die naechste
+Abnahme ist ein frisch exportierter ABI-73-NativeDisc-Port mit realer
+Discinstallation, 600 Millionen Post-Entry-Gastzyklen und separater
+Fensteraufnahme. Ein spaeterer DirectBoot-Sichtlauf benoetigt einen frisch
+erfassten ABI-73-CompletePlatform-Handoff; NativeDisc benoetigt keinen.
 
 Der erste private Produktnachweis dieser kombinierten Kette stammt aus einem
 Sonic-Adventure-PAL-AOT-Lauf in der v0.48-Entwicklung. Der recompilierte

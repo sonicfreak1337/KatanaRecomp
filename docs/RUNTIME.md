@@ -6,8 +6,12 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `52`. Die typisierte Block-ABI ist
-Version `5`; die Backend-Interface-ABI ist Version `4`.
+Quellstand `b01586a` verwendet Runtime-ABI `73`, Block-ABI `5`, Analyzer-ABI
+`6`, PlatformServices-ABI `13`, Backend-Interface-ABI `12`,
+Portprojektvertrag `62`, Native-AOT-Emissionsprofil `11` und
+Portpartitionsschema `5`. Die vereinbarten P0-Umbauten sind im Quellpfad
+abgeschlossen. Der frische ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen
+Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -692,10 +696,12 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 52, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portvertrag 37 und
-Host-Video-Vertrag 2; die Beobachtungsgrenze steht auf Systemreplay-Schema 8,
-Runtime-Probe-Schema 5 und Device-Schema 5.
+umgebenden Wrappers. Der aktuelle Quellstand verwendet Runtime-ABI 73,
+Block-ABI 5, Analyzer-ABI 6, Backend-Interface-ABI 12,
+PlatformServices-ABI 13, Portvertrag 62, Native-AOT-Emissionsprofil 11 und
+Portpartitionsschema 5. Der Host-Video-Vertrag steht auf Version 2; die
+Beobachtungsgrenze steht auf Systemreplay-Schema 8, Runtime-Probe-Schema 5
+und Device-Schema 5.
 
 Der Produktfortschritt unterscheidet `GuestProgramDispatched` von
 `GuestProgramProgressed`. Progression verlangt mindestens eine retired
@@ -715,8 +721,8 @@ damit ein verkleinerter Port keinen stale Code mitbaut.
 
 Die Grenzregression erzeugt 513 Bloecke, erwartet genau zwei Shards und prueft
 das anschliessende stale Cleanup. Ein vollstaendiges synthetisches
-Ninja-/MSVC-Projekt kompiliert und linkt damit in 15 Sekunden. Beim aktuellen
-privaten PAL-Nachweis bestehen die sechs fokussierten Regressionstargets 6/6.
+Ninja-/MSVC-Projekt kompiliert und linkt damit in 15 Sekunden. Beim damaligen
+privaten PAL-Nachweis bestanden die sechs fokussierten Regressionstargets 6/6.
 Die Registry dieses PAL-Ports umfasst 43 Shards; die zentrale
 `runtime-dispatch.cpp` misst 34.879 Byte und 607 Zeilen statt zuvor 36.703.886
 Byte und 525.996 Zeilen. Der groesste Shard misst 393.454 Byte. Diese
@@ -725,7 +731,7 @@ Fortsetzungssemantik; sie ist ausschliesslich ein Buildzeit- und
 Uebersetzungseinheitenvertrag.
 
 Die kompilierte Fallthroughregression deckt Einzelblock, lokales Chaining und
-normalen Backendpfad ab. Das aktuelle fokussierte Kern-Gate besteht 11/11. Der
+normalen Backendpfad ab. Das damalige fokussierte Kern-Gate bestand 11/11. Der
 x64-Debug-Kern-/Runtime-Build der Desktop-GUI-off-Konfiguration mit ASan,
 konfiguriertem MSVC-Coverage-Backend und `/analyze /WX` ist mit zwoelf
 parallelen Jobs gruen; das anschliessende vollstaendige CTest-Zwischengate

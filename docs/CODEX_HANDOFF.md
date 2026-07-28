@@ -399,15 +399,112 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-v0.48 P0 - die im aktuellen Produktlauf vor dem Sega-Bild sichtbare
-Counted-Loop-Commitregression allgemein schliessen und danach KR-4851 erneut
-bis zum PAL-50-/60-Hz-Menue nachweisen
+P0-Produktproof - aus b01586a einen frischen ABI-73-MSVC-NativeDisc-Port
+exportieren, mit der privaten PAL-Original-GDI installieren, exakt
+600 Millionen Gastzyklen ausfuehren, separat sichtbar aufnehmen und danach
+Metriken, ersten Blocker und Roadmap dokumentieren
 ```
+
+### Aktueller P0-Quell-Handoff
+
+Der aktuelle committed Stand auf `main` ist `b01586a`. Die P0-Source-
+Vertraege sind implementiert; die Produktabnahme steht noch aus.
+
+```text
+Runtime-ABI:                    73
+Block-ABI:                       5
+Analyzer-ABI:                    6
+PlatformServices-ABI:           13
+Backend-Interface-ABI:          12
+Portprojektvertrag:             62
+Native-AOT-Emissionsprofil:     11
+AOT-Partitionsschema:            5
+```
+
+Die aktuelle Runde schliesst im Quellvertrag mehrere allgemeine
+Produktpfadluecken:
+
+- `KR-4972`: Bewachte Tail-/AOT-Einstiege bleiben durch Funktionsanalyse,
+  CFG, IR, Source-Map und statisches AOT erhalten. Shared Bodies und
+  Carrierkanten bleiben getrennt; der Export erzwingt fuer jeden akzeptierten
+  Einstieg Emission, natives Template oder typisierte Ablehnung.
+- `KR-4966`: Das Budget ist relativ zum restaurierten Game Entry. Exitcode 0
+  erfordert vollstaendige Post-Entry-Arbeit, Pflichtmeilenstein und ein echtes
+  `KATANA_PRODUCT_GATE`.
+- `KR-4967`: CPU, Speicher, Scheduler, IRQ und Geraete werden vor Commitbeginn
+  vorbereitet; der Commit ist atomar und CPU-PC/PR werden zuletzt publiziert.
+- `KR-4970`: Product-Handoff und verlustfreie Diagnose sind getrennt;
+  installierte VMU-/Flash-Working-Copies bleiben autoritativ.
+- Der statische Hotpath bindet Ausfuehrungs-/Fastpathdeskriptoren und
+  Owner-Entries direkt, fuehrt endliche indirekte Ziele nativ aus, lokalisiert
+  GPRs sowie T/PR/GBR/MACH/MACL/FPUL planbasiert und batcht bewiesene
+  Haupt-RAM-Writes. FPU-Registerarrays bleiben ausserhalb der Lokalisierung.
+
+Diese Aussagen betreffen Source-Vertraege. Sie behaupten weder, dass der
+historische Sonic-Blocker bereits passiert wird, noch einen sichtbaren neuen
+Frame, ein vollstaendiges 600-Millionen-Gate oder 200 MHz.
+
+### Historische v24-/v28-/v30-/v32-Produktevidenz
+
+v24, v28, v30 und v32 sind explizit historische Vergleichsports mit aelteren
+ABIs. Sie duerfen nicht als aktueller Produktnachweis fuer `b01586a`
+ausgegeben werden. v24 belegt den damaligen CompletePlatform-Apply, v28 und
+v30 die DirectBoot-Grenze, und v32 bleibt die kanonische sichtbare
+NativeDisc-Baseline.
+
+Der damalige finale NativeDisc-Produktport
+`Sonic Adventure PAL native-disc-v32` wurde mit demselben externen
+Spielprojekt wie DirectBoot erzeugt, installiert und real ausgefuehrt. Seine
+ausfuehrbare Datei ist 53.677.056 Byte gross und besitzt SHA-256
+`888028348CC6CAA5510C2CF4DFA5CE5055D63FA8E8927B86C3815F5A75F520BF`.
+Der warme reine Produkttarget-Build dauerte 0,2515584 Sekunden.
+
+Der Produktlauf erreichte:
+
+- 553.990.562 Gastzyklen;
+- 11.080.283 zentrale Dispatches;
+- 127 praesentierte Hostframes;
+- 6,701 Sekunden Produktlaufzeit und vorlaeufig 82,67 effektive Gast-MHz;
+- einen sichtbar belegten Sega-Screen bei 2,032 Sekunden;
+- danach die einheitliche PVR-Borderfarbe bei 4,024 und 6,019 Sekunden;
+- als erstes Problem den typisierten Missing-AOT
+  `0x8C11088C -> 0x8C64784E`.
+
+NativeDisc-v32 erreicht damit exakt dieselbe Gastzyklusgrenze und denselben
+Callsite-/Target-Blocker wie DirectBoot-v30. Das ist dieselbe naechste
+statische AOT-Luecke, aber nicht derselbe Boot- oder Bildpfad: NativeDisc
+rekompiliert `IP.BIN`, zeigt den Sega-Screen und endet anschliessend in der
+uniformen Borderfarbe. DirectBoot ueberspringt `IP.BIN`; sein alter
+Runtime-ABI-63-Port blieb schwarz und ist deshalb kein aktueller
+ABI-73-Bildvergleich. Die Klassifikation muss diese unterschiedlichen
+Bootpfade und sichtbaren Ergebnisse getrennt ausweisen.
+
+Die damals fokussierten Hostvideo- und Portexporttests waren gruen. Der fokussierte
+PVR-Render-Test trifft weiterhin einen unabhaengig auf sauberem `194a179`
+reproduzierten, bereits vorhandenen Baselinefehler; `KR-4973` hat ihn nicht
+eingefuehrt. Eine breite Testsuite lief bewusst nicht.
+
+Die lokale Bereinigung entfernte 14.912.142.577 Byte alte Export-, Port-,
+Scratch- und Worktree-Artefakte. Als relevante Vergleichsports bleiben nur
+DirectBoot-v30 und NativeDisc-v32 erhalten. Original-GDI, aktuelle
+Installationsdaten und Produktcaptures blieben unangetastet.
+
+Der allgemeine `KR-4972`-Source-Vertrag ist inzwischen implementiert.
+DirectBoot-v30 bleibt wegen Runtime-ABI 63 historische Schwarzbildevidenz und
+darf weder als Ergebnis des ABI-73-Source-Stands noch als aktueller
+Scanoutnachweis ausgegeben werden. Der naechste Schritt ist ausschliesslich
+der oben beschriebene frische NativeDisc-P0-Produktproof.
+
+## Historischer v0.48-Kontext
+
+Die folgenden Abschnitte bleiben als historische v0.48-Evidenz erhalten. Ihre
+damaligen ABI-Staende, Taskempfehlungen und Produktgrenzen beschreiben nicht
+den aktuellen P0-Stand auf `b01586a`.
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
 `KR-4911`, `KR-4912`, `KR-4913`, `KR-4915`, `KR-4850` und `KR-4814`. Der
-aktuelle Runtimevertrag steht auf Runtime-ABI 52, Block-ABI 5,
+damals aktuelle Runtimevertrag stand auf Runtime-ABI 52, Block-ABI 5,
 Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11, BIOS-ABI 9,
 Portprojektvertrag 37, Systemreplay-Schema 8, Runtime-Probe-Schema 5,
 Device-Schema 5 und Host-Video-Vertrag 2.

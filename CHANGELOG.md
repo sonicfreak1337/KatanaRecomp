@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- Quellstand `b01586a` schliesst die vereinbarten P0-Umbauten im Quellpfad ab:
+  Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6, PlatformServices-ABI 13,
+  Backend-Interface-ABI 12, Portprojektvertrag 62,
+  Native-AOT-Emissionsprofil 11 und Portpartitionsschema 5 versionieren den
+  neuen statischen Produktvertrag. Der frische ABI-73-Sonic-NativeDisc-Lauf
+  ueber 600 Millionen Post-Entry-Gastzyklen und der getrennte Sichtnachweis
+  stehen noch aus; dieser Eintrag behauptet deshalb noch keinen
+  Produktfortschritt.
 - KR-4972 verfolgt Callbackwerte jetzt allgemein auch ueber streng begrenzte
   Tail-Jump-Inventarregionen und ueber bewiesene Runtime-Stackframes.
   Nicht-identitaetserhaltende Arithmetik verwirft die Codepointer-Provenienz;
@@ -21,7 +29,9 @@
   Zentraldispatches und `0x8C11088C -> 0x8C64784E` mit
   `aot-template-mismatch`. Zwei technische Direct-Frames und `302.287`
   geaenderte Pixel bleiben erhalten; 15 reale Fensteraufnahmen bleiben
-  schwarz. KR-4972 ist damit teilweise umgesetzt, aber produktseitig offen.
+  schwarz. Dieser damalige v30-Stand war damit teilweise umgesetzt und
+  produktseitig offen; der Quellabschluss ist im vorangehenden Eintrag
+  dokumentiert und wartet auf den neuen Produktnachweis.
 - KR-4971 fuehrt ein besitzendes, hashgebundenes `GameProjectArtifact`
   Format 1 samt `write()`/`load()` und
   `port-executable --game-project` ein. Das Artefakt serialisiert nur
@@ -90,7 +100,7 @@
   PC `0x8C666D42`, mit jeweils 72 GD-ROM-Kommandos sowie 180
   beziehungsweise 179 Audiopuffern. Damit sind
   CompletePlatform-Capture und -Verwendung bewiesen; die normative
-  Digestparitaet ist jedoch noch nicht belegt. Der aktuelle Koordinator
+  Digestparitaet war jedoch noch nicht belegt. Der damalige Koordinator
   validiert den Gesamtzustand vorab und prueft ihn durch semantischen
   Recapture, besitzt aber noch keinen durchgehend unfehlbaren globalen
   Commit und kein allgemein save-erhaltendes ProductHandoff-Profil.

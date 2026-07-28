@@ -15,6 +15,25 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 - Kein Interpreter, JIT oder Emulationsfallback im normalen Produktpfad.
 - Dokumentation und Taskstatus werden erst nach realer Produktevidenz als abgeschlossen markiert.
 
+## Aktueller Quellstand und offene Produktabnahme
+
+Stand `b01586a` verwendet Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6,
+PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 62,
+Native-AOT-Profil 11 und Partitionsschema 5.
+
+Die P0-Vertraege fuer Guarded-AOT-/Exportvollstaendigkeit,
+Carrier-/Inventar-/Codepointer-Provenienz, atomaren und Save-erhaltenden
+CompletePlatform-Handoff, relative Produktbudgets, Static-AOT-Fast-Tier,
+P1/P2-Cache und SMC-Revalidierung, direkte Owner-/Call-/endliche
+Indirect-Einstiege, architektonische Safepoints, IR-Registerlokalisierung und
+gebatchte direkte Haupt-RAM-Writes sind quellseitig implementiert.
+
+Das ist noch keine Produktabnahme. Der frische Sonic-PAL-NativeDisc-Port mit
+ABI 73, realer Discinstallation, exakt 600 Millionen Post-Entry-Gastzyklen
+und separatem Sichtnachweis steht aus. DirectBoot wird erst spaeter mit einem
+frisch fuer ABI 73 erfassten CompletePlatform-Handoff geprueft; NativeDisc
+benoetigt keinen Handoff.
+
 ## Aktueller Produktstand
 
 Historische v24-Vergleichsbasis:
@@ -39,10 +58,11 @@ letzter PC:                        0x8C666D42
 
 Die alte Anzeige teilte den absoluten Zaehlerstand von 600 Millionen durch
 die Hostzeit, obwohl 415.233.270 Zyklen restauriert und nicht ausgefuehrt
-wurden. Sie ist kein gueltiger Geschwindigkeitswert. `KR-4966` muss das Gate
-auf ein relatives Post-Entry-Budget umstellen.
+wurden. Sie ist kein gueltiger Geschwindigkeitswert. Der aktuelle
+`KR-4966`-Quellvertrag verwendet deshalb ein relatives Post-Entry-Budget;
+seine frische Produktabnahme ist offen.
 
-Aktueller v28-Funktionslauf:
+Historischer v28-Funktionslauf:
 
 ```text
 Main-Basis vor Implementierung:    8e5ab3145fb5fcafc056fd87025baf3497085342
@@ -83,7 +103,7 @@ provisorischer Vergleich gegen `23,9578 MHz` bei v26 (`+9,78 %`) bis zum
 funktionalen Fehler bei identischem Restore; sie ersetzen kein relatives
 600-Millionen-Gate. Sechzehn reale Fensteraufnahmen blieben schwarz.
 
-## Aktueller erster Blocker
+## Historischer erster Blocker und aktueller Prüfpunkt
 
 Der fruehere Waitvertrag lag im ADXT-/mwSnd-Soundpfad:
 
@@ -118,7 +138,7 @@ die im v26-Lauf beobachtete exakte Grenze `0x8C010F22 + 0x18` hashgebunden
 in Analyzer, CFG, IR und AOT. v28 passiert das alte Ziel; keine Sonic-Adresse
 wurde in generischen Code aufgenommen.
 
-Der erste aktive Blocker ist jetzt KR-4972:
+Der erste historisch im Produkt beobachtete Blocker war KR-4972:
 
 ```text
 Dispatchlabel: aot-template-mismatch
@@ -128,32 +148,36 @@ Ziel:          0x8C64784E
 Gastzyklus:    553.990.562
 ```
 
-Das Ziel liegt unveraendert im initialen Boot-Executable und beginnt mit
-einem `BRA` zum gemeinsamen Zielpfad `0x8C6478C2`. Das ist ein Hinweis auf
-einen Callback-/Shared-Tail-/Thunk-Vertrag, aber noch kein Beweis fuer die
-exakte Funktionsgrenze oder endgueltige Modellierung. Ein Interpreter-, JIT-,
+Das Ziel liegt im initialen Boot-Executable und beginnt mit einem `BRA` zum
+gemeinsamen Zielpfad `0x8C6478C2`. Der aktuelle Analyzer- und Exportvertrag
+erhaelt diesen Guarded-AOT-Einstieg jetzt bis CFG, IR, Source-Map und
+statischer AOT-Ausgabe. Kuenstliche Candidate-Carrier entfernen keine realen
+Jump-Kanten mehr, externe bedingte Inventarnachfolger werden verfolgt oder
+als unvollstaendig markiert und Objektadressprovenienz wird nicht als
+Codepointerprovenienz des geladenen Werts weitergegeben. Der Export verlangt
+fuer jeden akzeptierten Guarded-AOT-Einstieg einen emittierten statischen
+Block, ein natives Template oder eine explizite Ablehnung.
+
+Ob `0x8C64784E` im realen Produkt jetzt passiert wird und welcher Blocker
+danach folgt, ist bis zum ABI-73-Sonic-Lauf offen. Ein Interpreter-, JIT-,
 Runtime-Decoder- oder Emulationsfallback bleibt verboten.
 
 ## Verbindliche Reihenfolge
 
 ```text
-KR-4965 Sound-Completion [abgeschlossen ueber engeren Blocker]
-  +--> KR-4971 RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel
-         [abgeschlossen]
-         +--> KR-4972 Hashgebundene Shared-Callback-/Thunk-AOT-Coverage
-                herstellen [zuerst]
-                +--> KR-4966 relatives Produktgate
-  +--> KR-4967 CompletePlatform-Koordinator
-         +--> KR-4968 Sound-/DMA-/IRQ-Handoff
-         +--> KR-4969 PVR-/Frame-Handoff
-         +--> KR-4970 produkt-sicherer Maple-/VMU-Handoff
-                    -> KR-4952 und KR-4953 abschliessen
-                    -> KR-4962 Game-Entry-Paritaet und Produktboot
-
-Danach Performance:
-KR-4955 -> KR-4956 -> KR-4957 -> KR-4958
-                                -> KR-4959
-                                -> KR-4960
+P0-Quellumbau [b01586a implementiert, Produktabnahme offen]
+  +--> KR-4972 Guarded-AOT-/Exportvollstaendigkeit
+  +--> KR-4966 relatives Produktgate
+  +--> KR-4967 bis KR-4970 atomarer, evidenz- und Save-sicherer Handoff
+  +--> KR-4956 Static-AOT-Fast-Tier und Revalidierung
+  +--> KR-4957 direkte Owner-/Call-/endliche Indirect-Einstiege
+  +--> KR-4958 IR-Lokalisierung und RAM-Batching/SMC
+  +--> KR-4959 Architektur-/Scheduler-/IRQ-Safepoints
+         |
+         +--> frischer ABI-73-NativeDisc-Sonic-Lauf
+                +--> naechsten realen Blocker bestimmen
+                +--> KR-4960 200-MHz-Produktgate weiterfuehren
+                +--> DirectBoot spaeter mit frischem ABI-73-Handoff
 
 Spielprojekt:
 KR-4954 -> KR-4961
@@ -171,7 +195,9 @@ KR-4960 + KR-4961 + KR-4962 + KR-4963 -> KR-4964
 
 Prioritaet: P0
 
-Status: Baseline umgesetzt. Das Folgeproblem der absoluten statt relativen Schedulergrenze und der fehlenden Pflichtmeilensteinwertung wird in `KR-4966` geschlossen.
+Status: Baseline umgesetzt. Der Folgefehler der absoluten statt relativen
+Schedulergrenze und der fehlenden Pflichtmeilensteinwertung ist in
+`KR-4966` quellseitig geschlossen; die ABI-73-Produktabnahme bleibt offen.
 
 ### Bereits umgesetzt
 
@@ -180,11 +206,11 @@ Status: Baseline umgesetzt. Das Folgeproblem der absoluten statt relativen Sched
 - Host-Watchdog nur gegen Hanger
 - Bericht fuer Hostzeit, MHz, Dispatches und sichtbaren Meilenstein
 
-### Offene Folgerisiken
+### Historisch beobachtete Folgerisiken, quellseitig geschlossen
 
 - der reale v24-Schedulerrestore lief nur bis zum absoluten Maximum
   `600.000.000` statt fuer diese Laufdauer ab Game-Entry
-- `visible_screen=none` kann noch mit Exitcode 0 und `first_problem=none` enden
+- `visible_screen=none` konnte mit Exitcode 0 und `first_problem=none` enden
 
 ---
 
@@ -194,10 +220,12 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967, KR-4968, KR-4969, KR-4970
 
-Status: Aktiv. Reales `CompletePlatform`-Capture und produktives Apply sind
-belegt. Offen bleiben der strikt globale atomare/`noexcept`-Commitvertrag aus
-`KR-4967`, das allgemeine Save-erhaltende Produktprofil aus `KR-4970` und die
-normativen Subsystemdigests.
+Status: Quellseitig implementiert, Produktabnahme offen. Reales historisches
+`CompletePlatform`-Capture und produktives Apply sind belegt. Der strikt
+globale vorbereitete Commitvertrag aus `KR-4967`, die Trennung von
+Gastzustand und Hostevidenz sowie das Save-erhaltende Produktprofil aus
+`KR-4970` sind im ABI-73-Quellpfad vorhanden. Offen bleiben ein frischer
+ABI-73-DirectBoot-Handoff und normative NativeDisc-/DirectBoot-Digests.
 
 ### Bereits belegt
 
@@ -207,10 +235,10 @@ normativen Subsystemdigests.
 - der reale Produktlauf erreichte `GameCodeProgressed` ohne neuen
   terminalen Runtimefehler
 
-### Offen
+### Offene Produktabnahme
 
-- nach Commitbeginn darf global kein fallibler Schritt mehr existieren
-- aktuelle Nutzersaves muessen fuer jedes Produktartefakt bewahrt werden
+- den neuen vorbereiteten Commitvertrag mit frischem ABI-73-Handoff ausfuehren
+- Save-Autoritaet und Post-Entry-Evidenzbaseline im Produktbericht belegen
 - NativeDisc und DirectBoot muessen am Entry pro Subsystem normativ
   uebereinstimmen
 
@@ -237,10 +265,13 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967, KR-4968, KR-4969, KR-4970
 
-Status: Aktiv. Das reale CompletePlatform-Artefakt mit 22 Geraeten und 5
-Schedulerereignissen wurde erfasst und vom DirectBoot-Produktport verwendet.
-Offen bleiben der byteidentische Doppel-Capture, eigene Inspect-/Verify-
-Operationen und der allgemeine Schutz aktueller Saves.
+Status: Quellseitig implementiert, Produktabnahme offen. Das historische
+CompletePlatform-Artefakt mit 22 Geraeten und 5 Schedulerereignissen wurde
+erfasst und vom DirectBoot-Produktport verwendet. Der aktuelle Vertrag
+bewahrt autoritative VMU-/Flashdaten und trennt Product- von
+Diagnostic-Evidenz. Vor dem naechsten DirectBoot-Lauf muss ein neues
+ABI-73-Artefakt erfasst werden; byteidentischer Doppel-Capture und eigene
+Inspect-/Verify-Operationen bleiben offen.
 
 ### Umfang
 
@@ -297,14 +328,16 @@ Prioritaet: P0 nach stabilem DirectBoot
 
 Abhaengigkeiten: KR-4962
 
-Status: Teilweise umgesetzt. `GameProjectFunctionBoundary::size` wird jetzt
+Status: Quellseitig implementiert, Produktabnahme offen.
+`GameProjectFunctionBoundary::size` wird
 als exakte Grenze durch AnalysisOverride/-Seed, Funktionskandidaten, CFG, IR
-und AOT transportiert. Analyzer-ABI 3 versioniert diese Layoutaenderung. Der
+und AOT transportiert. Analyzer-ABI 6 versioniert den aktuellen Vertrag. Der
 v28-Produktport belegt die exakte externe Grenze fuer das zuvor fehlende
 statische Ziel. Ungerade oder ungueltige Groessen, widerspruechliche
 Grenzdefinitionen, Ueberlappungen und Delay-Slot-Splits werden fail-closed
-abgewiesen. Jump-/Callbacktabellen, Konflikte mit automatisch erkannten
-inneren Grenzen und die breitere Produktabnahme bleiben offen.
+abgewiesen. Guarded-AOT-Einstiege, Shared-Tails, Candidate-Carrier und
+Codepointerprovenienz besitzen jetzt einen expliziten Exportvertrag mit
+Vollstaendigkeitsinvariante. Die breitere Produktabnahme bleibt offen.
 
 ### Umfang
 
@@ -328,7 +361,13 @@ Prioritaet: P0 Performance
 
 Abhaengigkeiten: KR-4955
 
-Status: Zaehler und `KATANA_STATIC_AOT_ESCAPE_STATS` existieren; reale Top-Ursachen muessen aus dem Produktlauf in den Status uebernommen werden.
+Status: Quellseitig implementiert, Produktabnahme offen. Der statische
+zweistufige Page-/Halfword-Fast-Tier liefert direkt gebundene
+Ausfuehrungsdeskriptoren und Fastpaths ohne zweites Resolve. P1/P2-
+Inline-Caches liegen vor der erneuten Zieluebersetzung. Nach
+Codeinvalidierung wird jeder statische Zieltreffer zusaetzlich gegen seine
+eigene Tracker-/Blockgeneration revalidiert. Reale Escape- und
+Zentraldispatchzahlen muessen aus dem ABI-73-Produktlauf folgen.
 
 ### Umfang
 
@@ -350,6 +389,12 @@ Status: Zaehler und `KATANA_STATIC_AOT_ESCAPE_STATS` existieren; reale Top-Ursac
 Prioritaet: P0 Performance
 
 Abhaengigkeiten: KR-4956
+
+Status: Quellseitig implementiert, Produktabnahme offen. Statische Bloecke
+springen direkt in ihren nativen Owner-Einstieg; bekannte direkte Calls und
+endliche, live verglichene indirekte Ziele koennen unter Timing-, Tiefen-,
+Code- und Architekturguards direkt ausgefuehrt werden. Unbekannte Ziele
+bleiben an der allgemeinen validierenden Dispatchgrenze.
 
 ### Umfang
 
@@ -373,6 +418,13 @@ Prioritaet: P1 Performance
 
 Abhaengigkeiten: KR-4957
 
+Status: Quellseitig implementiert, Produktabnahme offen. Der Emitter verwendet
+IR-Use/Def und Liveness fuer GPR sowie T, PR, GBR, MACH, MACL und FPUL und
+gibt lokalen Zustand an echten Architekturgrenzen ab. Bewiesene
+P1/P2-Haupt-RAM-Stores koennen in einem festen `DirectLinearWriteBatch`
+gesammelt werden; Flush, Guardmiss und SMC-/Modul-/Blockinvalidierung bleiben
+korrekt und werden fuer die Schreibregion dedupliziert.
+
 ### Umfang
 
 - C++-Textsuche und `replace_all_text()` aus der Lokalisierung entfernen
@@ -394,6 +446,13 @@ Abhaengigkeiten: KR-4957
 Prioritaet: P1 Performance und Korrektheit
 
 Abhaengigkeiten: KR-4968, KR-4956
+
+Status: Quellseitig implementiert, Produktabnahme offen. Chain- und
+Safepointguards verwenden ereignisgetriebene IRQ-/Architekturepochen;
+Gastzyklen und lokalisierter Zustand werden an MMIO-, Exception-, Call-,
+SR-/Bankwechsel-, Scheduler- und Quantumgrenzen committed. Die reale
+IRQ-/Schedulerarbeitsreduktion und Soundsemantik muessen im ABI-73-Port
+gemessen werden.
 
 ### Umfang
 
@@ -472,13 +531,14 @@ Prioritaet: P0 Boot-Gate
 
 Abhaengigkeiten: KR-4952, KR-4953, KR-4967, KR-4968, KR-4969, KR-4970
 
-Status: Aktiv. Der alte gemeinsame End-PC `0x8C666D42` ist durch v26/v28
-ueberholt: DirectBoot beendet die konkrete G2-DMA und erzeugt zwei technische
-Direct-Frames. v28 passiert zusaetzlich das alte KR-4971-Ziel, endet aber am
-Shared-Callback-/Thunk-AOT-Fehler aus KR-4972. Das ist funktionaler
-Fortschritt, jedoch kein normativer Digestnachweis. Sichtbarer
-Spielframe, unabhaengiger NativeDisc-Vergleich und ein echter Lauf ueber
-600 Millionen Post-Entry-Zyklen bleiben offen.
+Status: Quellseitige P0-Vertraege implementiert, Produktabnahme offen. Der
+alte gemeinsame End-PC `0x8C666D42` ist durch v26/v28 ueberholt. Die danach
+historisch beobachtete KR-4972-AOT-Luecke ist im aktuellen Analyzer-/Exportpfad
+geschlossen; atomarer Handoff, Save-Autoritaet und Post-Entry-
+Evidenzbaseline sind ebenfalls vorhanden. Zuerst folgt der frische
+ABI-73-NativeDisc-Lauf ohne Handoff. DirectBoot-Paritaet, normativer
+Digestvergleich und sichtbarer Spielframe folgen spaeter mit neu erfasstem
+ABI-73-CompletePlatform-Handoff.
 
 ### Umfang
 
@@ -671,12 +731,15 @@ Prioritaet: P0 - zuerst
 
 Abhaengigkeiten: KR-4971
 
-Status: Teilweise umgesetzt, weiterhin erster Produktblocker. Die generische
+Status: Quellseitig implementiert, Produktabnahme offen. Die generische
 Analyse gewinnt das Ziel aus Candidate-Tail-Jumps und einem bewiesenen
-Runtime-Stackframe zurueck. Der vollstaendige Export mit dem externen
-Spielprojekt uebernimmt den gewonnenen Seed aber noch nicht in CFG,
-Source-Map und AOT. Der reale v30-DirectBoot endet deshalb weiterhin am
-indirekten Call auf das unveraenderte Ziel des initialen Boot-Executables.
+Runtime-Stackframe. Ein eigener Guarded-AOT-Entry-Vertrag erhaelt den
+Laufzeiteinstieg jetzt bis CFG, IR, Source-Map und statischer AOT-Ausgabe,
+ohne eine feste vollstaendige Dispatchkante zu erfinden. Der Export bricht ab,
+wenn ein akzeptierter Einstieg weder als statischer Block noch als natives
+Template emittiert oder explizit begruendet abgelehnt wurde. Der v30-Befund
+unten bleibt historische Evidenz; der frische ABI-73-Lauf muss zeigen, ob die
+Kante real passiert wird.
 
 ### Produktbefund
 
@@ -706,8 +769,15 @@ fuer das Ziel und reproduziert die v28-Grenze exakt.
   ueber konkrete Codepointer-Provenienz bestimmen
 - [x] Runtime-Frame-Spill, Reload und Objektstore mit engen Guards
   modellieren
-- [ ] den generisch gewonnenen Seed durch die externe
+- [x] den generisch gewonnenen Seed durch die externe
   Spielprojekt-/Exportkonfiguration bis in CFG, IR und AOT erhalten
+- [x] kuenstliche Candidate-Carrier anhand ihrer vollen Identitaet entfernen,
+  ohne reale Jump-Kanten mit gleicher Callsite und gleichem Ziel zu loeschen
+- [x] externe bedingte Inventarnachfolger weiterverfolgen oder den Walk
+  ausdruecklich als unvollstaendig markieren
+- [x] Objektadress- und Codepointerwertprovenienz getrennt halten
+- [x] Exportvollstaendigkeit fuer jeden akzeptierten Guarded-AOT-Einstieg
+  erzwingen
 - [ ] nur falls danach noch erforderlich: bewiesene Metadaten hashgebunden
   im externen Spielprojekt ablegen
 - keine Titeladresse als Sonderfall in KatanaRecomp oder KatanaRuntime
@@ -721,8 +791,75 @@ fuer das Ziel und reproduziert die v28-Grenze exakt.
 - reale Discinstallation und sichtbare Aufnahme werden erneut ausgefuehrt
 - vorzeitiger Fehler wird nicht als 600-Millionen-Performancewert ausgegeben
 
-Der v30-Lauf erfuellt die erneute Discinstallation und Sichtpruefung, aber
-nicht die erste Abnahmebedingung. KR-4972 bleibt deshalb offen.
+Der historische v30-Lauf erfuellt die erneute Discinstallation und
+Sichtpruefung, aber nicht die erste Abnahmebedingung. Der aktuelle
+Quellvertrag ist implementiert; KR-4972 bleibt bis zur ABI-73-Produktabnahme
+offen.
+
+---
+
+## [x] KR-4973 - NativeDisc-Sichtregression und proof-unabhaengige PVR-Ausgabe
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4969, KR-4972
+
+Status: Abgeschlossen durch den realen v32-NativeDisc-Produktlauf.
+
+### Ursache und allgemeine Reparatur
+
+- Der exakte saubere Kontrollstand `906f185` reproduzierte den sichtbaren
+  Sega-Screen erneut. Die erste schwarze Folge trat nach dem mit `f550747`
+  freigeschalteten Flag-Poll-Batching unter aktiver MMU auf.
+- `try_composite_callback_flag_poll_batch` akzeptiert deshalb wieder nur
+  `AddressTranslationMode::NoMmu`. AT=1 faellt vor jeder Zustandsmutation auf
+  die echten statischen AOT-Bloecke zurueck; CountedLoop- und MMIO-Tiers
+  bleiben unveraendert.
+- Ein gueltiger VBlank-Scanout besitzt nun eine eigene bounded latest-wins
+  Hostqueue. Ein bereits konsumierter oder noch wartender
+  `PvrGuestFrameProof` kann reale VRAM-/Registerpixel nicht mehr von der
+  Presentation abhalten. Proofmarker und Erfolgsmetriken bleiben weiterhin
+  streng beweisgebunden.
+- `port <gdi> --game-project <artifact>` bindet jetzt dieselben
+  hashgebundenen externen Metadaten wie `port-executable`. Erst dadurch ist
+  NativeDisc gegen DirectBoot an derselben AOT-Grenze vergleichbar.
+
+### Reale Produktabnahme
+
+```text
+Produkt:                         Sonic Adventure PAL NativeDisc-v32
+Runtime-ABI:                     64
+Discinstallation:                3 Tracks / 521.461 Sektoren
+Retailsektoren im Paket/Repo:    0 / 0
+Gastzyklus am Fehler:            553.990.562
+externe Produktzeit:             6,701 s
+provisorische Rate bis Fehler:   82,67 MHz
+zentrale Dispatches:             11.080.283
+Hostframes:                      127
+PVR Gast-/Direct-Frames:         2 / 2
+PVR Softwareframes:              1
+hoechster sichtbarer Screen:     Sega-Lizenzscreen ab 2,032 s
+Callsite / Ziel:                 0x8C11088C / 0x8C64784E
+DirectBoot-v30-Vergleich:        gleicher Zyklus und gleiches Ziel, 0 Hostframes
+MSVC-Export:                     2.051 Funktionen / 46 Partitionen
+Produkt-EXE:                     53.677.056 Bytes
+Produkt-EXE SHA-256:             2ebc3a2c451aa307b20e2c1242c353a58eea652498681eaa55bba852f54affab
+unveraenderter Ninja-Warmbuild:  0,203137 s
+```
+
+Die reale 640x480-Aufnahme ab `2,032` Sekunden zeigt den Sega-Screen.
+`sega_seen=false` im privaten Wrapper
+ist ein Klassifikator-False-Negative: Der PAL-Screen verwendet einen grauen
+statt weissen Hintergrund, waehrend `blue_ratio=0,0609375` und
+`non_black_ratio=0,9830208` stabil sind.
+
+Der Lauf endet vor 600 Millionen Gastzyklen am bereits bekannten KR-4972-
+Coveragefehler und ist deshalb kein Performancegate. Er belegt aber den
+geforderten sichtbaren Bootfortschritt und den identischen funktionalen
+Grenzpunkt beider Bootpfade. Diese Werte sind historische ABI-64-Evidenz,
+nicht der aktuelle ABI-73-Produktstand. Der unbrauchbare v31-Zwischenport, v28/v29 und
+ihre Workspaces sowie die 906-/Baseline-Scratchkopien wurden nach
+Pfadpruefung entfernt; insgesamt waren `14.912.142.577` Bytes regenerierbar.
 
 ---
 
@@ -732,7 +869,11 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4951
 
-Status: Aktiv. Der konkrete v24-Produktlauf belegt den absoluten Budgetfehler.
+Status: Quellseitig implementiert, Produktabnahme offen. Der konkrete
+v24-Produktlauf belegt den historischen absoluten Budgetfehler. Der aktuelle
+Vertrag berechnet das Ziel relativ ab Game Entry, berichtet die ausgefuehrte
+Post-Entry-Arbeit getrennt und erlaubt bei angefordertem Budget Exitcode 0
+nur nach vollstaendigem Budget und erreichtem Pflichtmeilenstein.
 
 ### Produktbefund
 
@@ -745,9 +886,10 @@ gueltige effektive Gast-MHz:     36,8425
 ungueltig berichteter Wert:      119,64 MHz
 ```
 
-Die 119,64 MHz verwenden den restaurierten absoluten Zaehlerstand als
-ausgefuehrte Arbeit. NativeDisc und DirectBoot haben damit noch keine gleiche
-Post-Entry-Arbeit erhalten.
+Die historischen 119,64 MHz verwenden den restaurierten absoluten
+Zaehlerstand als ausgefuehrte Arbeit. NativeDisc und DirectBoot hatten damit
+noch keine gleiche Post-Entry-Arbeit erhalten. Der Quellfehler ist behoben;
+der ABI-73-Produktlauf muss den neuen Bericht und Exitvertrag abnehmen.
 
 ### Umfang
 
@@ -774,18 +916,22 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4966
 
-Status: Aktiv, teilweise umgesetzt. Vollstaendige Vorvalidierung, passive
-Restoreplaene, semantischer Recapture und ein reales produktives
-CompletePlatform-Apply sind belegt. Offen bleiben ein strikt globaler
-`noexcept`-Commit nach der ersten Mutation und normative Digests pro
-Subsystem.
+Status: Quellseitig implementiert, Produktabnahme offen. Vollstaendige
+Vorvalidierung, vorbereitete Speicher-/Geraete-/Scheduler-/IRQ-/CPU-
+Commitplaene, CPU-PC/PR als letzte Veroeffentlichung und semantischer
+Recapture bilden den atomaren Vertrag. Ein reales historisches
+CompletePlatform-Apply ist belegt; ein frischer ABI-73-Handoff und normative
+Digests pro Subsystem bleiben als Produktabnahme offen.
 
-### Umgesetzter Zwischenstand
+### Umgesetzter Quellstand
 
 - alle 22 Geraetepayloads und 5 typisierten Schedulerereignisse werden vor
   dem Apply validiert
 - Geraete besitzen passive Restore-/Game-Entry-Adapter
 - der angewendete Zustand kann semantisch erneut erfasst werden
+- alle falliblen Vorbereitungen erfolgen vor Commitbeginn
+- Speicher, Geraete und Scheduler werden aus vorbereiteten Plaenen committed;
+  CPU-PC und PR zuletzt
 - der DirectBoot-v24-Produktlauf hat den Koordinator real verwendet
 
 ### Umfang
@@ -812,12 +958,13 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4965, KR-4967
 
-Status: Aktiv mit belegtem Produktfortschritt. Die erforderlichen
-Game-Entry-Adapter sind implementiert und im CompletePlatform-Artefakt
-transportiert. v26 und v28 beenden die nach dem Entry armierte AICA-G2-DMA mit
-`active=0`, `remaining=0`. Exakte NativeDisc-/DirectBoot-Paritaet und der
-Abgleich eines bereits restaurierten aktiven Hardware-Request-Kanals ohne
-Completionevent bleiben offen.
+Status: Quellseitig implementiert, Produktabnahme offen. Die erforderlichen
+Game-Entry-Adapter, Event-/IRQ-Vertraege und vorbereiteten Restoreplaene sind
+implementiert. v26 und v28 beenden historisch die nach dem Entry armierte
+AICA-G2-DMA mit `active=0`, `remaining=0`. Exakte ABI-73-
+NativeDisc-/DirectBoot-Paritaet und der Abgleich eines bereits restaurierten
+aktiven Hardware-Request-Kanals ohne Completionevent bleiben als
+Produktabnahme offen.
 
 ### Umfang
 
@@ -843,11 +990,14 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967
 
-Status: Aktiv mit technischem Framefortschritt. Die PVR-/SPG-/ASIC-
-Game-Entry-Adapter sind implementiert und wurden im realen Produkt-Apply
-verwendet. v28 meldet weiterhin zwei Gast-/Direct-Frames mit `302.287`
-veraenderten Pixeln. Sechzehn reale Fensteraufnahmen bleiben schwarz; sichtbare
-Hostpraesentation und normative NativeDisc-/DirectBoot-Paritaet sind offen.
+Status: Quellseitig implementiert, Produktabnahme offen. Die
+PVR-/SPG-/ASIC-Game-Entry-Adapter und vorbereiteten Restoreplaene sind
+implementiert. Product-Handoff uebernimmt nur gastseitig sichtbaren Zustand
+und setzt Frameproofqueue, Renderer-/Pixelmetriken, Direct-VRAM-Schatten und
+Hostfehler am Game Entry auf eine neue Baseline. Die zwei historischen
+v28-Gast-/Direct-Frames mit `302.287` Pixeln sind deshalb kein Nachweis fuer
+neue DirectBoot-Spielbilder. Sichtbare ABI-73-Hostpraesentation und normative
+NativeDisc-/DirectBoot-Paritaet bleiben offen.
 
 ### Umfang
 
@@ -872,10 +1022,13 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967
 
-Status: Aktiv. Game-Entry-Adapter und Produktlauf sind belegt; identische
-migrierte Saves wurden in einem realen Fall nachgewiesen. Ein allgemeines
-Product-Handoff-Profil mit garantiertem Schutz vor Save-Rollback bleibt
-offen.
+Status: Quellseitig implementiert, Produktabnahme offen. Game-Entry-Adapter
+und historischer Produktlauf sind belegt. Das aktuelle Product-Handoff-Profil
+uebernimmt Maple-Topologie, MMIO-/DMA-/Controller- und Eventzustand, laesst
+aber installierte VMU- und Flash-Working-Copies autoritativ. Diagnosehistorie
+und Hostmetriken werden nicht als gastseitiger Zustand restauriert. Die
+Save-Rollback-Sperre und Eventparitaet muessen noch im frischen ABI-73-
+Produktpfad abgenommen werden.
 
 ### Umfang
 
@@ -923,17 +1076,21 @@ offen.
   Zentraldispatches
 - 15 reale Fensteraufnahmen schwarz
 
-### Lauf A4 - nach KR-4972-Exportintegration
+### Lauf A4 - aktueller P0-Produktlauf [ausstehend]
 
-- gewonnenen generischen Seed bis in produktive CFG, IR und AOT erhalten
-- denselben gewoehnlichen DirectBoot erneut installieren und ausfuehren
-- Ziel ueber validiertes statisches AOT passieren oder einen engeren
-  typisierten Blocker belegen
+- frischen ABI-73-NativeDisc-Port aus sauberem `b01586a`-Nachfolger erzeugen
+- Originaldisc real installieren
+- exakt 600 Millionen Post-Entry-Zyklen mit relativem Gate ausfuehren
+- separaten sichtbaren Fensterlauf aufnehmen
+- historischen Missing-AOT-Punkt ueber validiertes statisches AOT passieren
+  oder einen engeren typisierten Blocker belegen
+- Zentraldispatches, Hostzeit, Gast-MHz, PVR/Hostframes und hoechsten
+  sichtbaren Screen gegen v32 dokumentieren
 
-### Lauf B - nach KR-4967 bis KR-4970
+### Lauf B - DirectBoot nach NativeDisc-Abnahme
 
-- NativeDisc Capture am Entry
-- DirectBoot Apply bis vor ersten Spielblock
+- frischen ABI-73-CompletePlatform-Zustand am Game Entry erfassen
+- DirectBoot Apply bis vor ersten Spielblock; kein Sega-Screen erwartet
 - Subsystemdigests vergleichen
 
 ### Lauf C - nach KR-4962

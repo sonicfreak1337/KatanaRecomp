@@ -4,6 +4,14 @@ Dieser KR-4704-Vertrag trennt den Inhalt geladener Bytes von ihren
 Laufzeitberechtigungen und von der Frage, wann ein Block kompiliert sein muss.
 Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
+Quellstand `b01586a` verwendet Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6,
+PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 62,
+Native-AOT-Emissionsprofil 11 und Portpartitionsschema 5. Die vereinbarten
+P0-Umbauten sind im Quellpfad abgeschlossen. Der frische
+ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Gastzyklen und der
+getrennte Sichtnachweis stehen noch aus; der Quellstatus ist kein
+Produkt-Erfolgsnachweis.
+
 ## Byteinventar
 
 Jedes committed Byte eines ausfuehrbaren Segments gehoert disjunkt zu genau
@@ -270,9 +278,10 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
-abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 52,
-Block-ABI 5, Analyzer-ABI 1, Backend-Interface-ABI 4,
-PlatformServices-ABI 11 und Portprojektvertrag 37. Systemreplay-Schema 8
+abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 73,
+Block-ABI 5, Analyzer-ABI 6, Backend-Interface-ABI 12,
+PlatformServices-ABI 13, Portprojektvertrag 62, Native-AOT-Emissionsprofil 11
+und Portpartitionsschema 5. Systemreplay-Schema 8
 und Runtime-Probe-Schema 5
 skalieren die Produktbeobachtung, ohne den interpreterfreien
 Materialisierungsvertrag zu aendern.
@@ -337,9 +346,9 @@ enthaelt Callsite und Ziele und bleibt private Diagnoseevidenz. Eine spaetere
 Spezialisierung ist nur aufgrund wiederholbarer Profile zulaessig; das Profil
 selbst ist kein statischer Vollstaendigkeitsbeweis.
 
-## Aktueller privater Messstand
+## Historischer privater Runtime-ABI-51-Messstand
 
-Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
+Der damalige Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
 fokussierte Tests. Der anschliessend genau einmal frisch exportierte
 Produktport umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger
 normaler sichtbarer Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor

@@ -2,6 +2,23 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
+Aktueller P0-Quellstand: `b01586a`. Die allgemeinen Quellvertraege fuer
+`KR-4972`, `KR-4966`, `KR-4967` und `KR-4970` sind implementiert. Eine
+frische Sonic-PAL-Produktabnahme dieses Stands steht noch aus; insbesondere
+sind weder ein erfolgreicher 600-Millionen-Post-Entry-Lauf noch ein neuer
+sichtbarer Meilenstein oder ein Performancegewinn behauptet.
+
+```text
+Runtime-ABI:                    73
+Block-ABI:                       5
+Analyzer-ABI:                    6
+PlatformServices-ABI:           13
+Backend-Interface-ABI:          12
+Portprojektvertrag:             62
+Native-AOT-Emissionsprofil:     11
+AOT-Partitionsschema:            5
+```
+
 KatanaRecomp ist ein unabhaengiges C++20-Framework fuer die statische
 Rekompilierung von Dreamcast-SH-4-Programmen:
 
@@ -57,10 +74,13 @@ Generationguards.
 Function-Level-AOT fasst analysierte Gastfunktionen zu nativen Funktionen mit
 internen Labels zusammen. Bewiesene Calls koennen direkt zwischen AOT-Funktionen
 wechseln; ein Host-Stackwaechter wickelt tiefe Gastrekursion sicher zum
-statischen Dispatcher ab. Die aktuelle Registerlokalisierung ist bewusst auf
-ausgewaehlte GPRs reiner Leaf-Funktionen begrenzt. Direkte Haupt-RAM-Zugriffe
-und lokalisierte Register bleiben konservativ an Watchpoint-, Trace-, MMIO-,
-Exception-, Interrupt-, SR-/Bank- und Invalidierungsgrenzen gebunden.
+statischen Dispatcher ab. Die planbasierte Registerlokalisierung haelt
+ausgewaehlte GPRs sowie T, PR, GBR, MACH, MACL und FPUL ueber native
+Funktionsregionen lokal und gibt sie an Architekturgrenzen explizit frei
+beziehungsweise laedt sie danach neu. FPU-Registerarrays bleiben bewusst
+ausserhalb dieses Vertrags. Direkte Haupt-RAM-Zugriffe und lokalisierte
+Register bleiben konservativ an Watchpoint-, Trace-, MMIO-, Exception-,
+Interrupt-, SR-/Bank- und Invalidierungsgrenzen gebunden.
 
 ## Executable-First-Entwicklung
 
@@ -110,11 +130,11 @@ Der vollstaendige Discpfad bleibt erhalten:
 bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Vertrag verwendet Handoff-Schema 3,
-Artefaktformat 2, Runtime-ABI 63, Portprojektvertrag 53 und
+Artefaktformat 2, Runtime-ABI 73, Portprojektvertrag 62 und
 Plattformzustandsvertrag 2. `CompletePlatform` erfasst und restauriert den
 kanonischen Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die
 exakte typisierte Scheduler-Timeline. Capture und Apply sind im realen
-Produktport belegt.
+historischen Produktport belegt; der ABI-73-Nachweis steht noch aus.
 
 `GameProjectArtifact` Format 1 transportiert die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
@@ -183,8 +203,9 @@ Profile und Toolchainauswahl:
 ## Produkt-Gate
 
 Bootkorrektheit und Performance sind getrennte Ergebnisse. Ein Produktlauf
-wird nicht mehr anhand eines festen Drei-Sekunden-Hostlimits bewertet. Der
-aktuelle Schalter setzt noch ein absolutes Schedulermaximum:
+wird nicht mehr anhand eines festen Drei-Sekunden-Hostlimits bewertet. Das
+Budget bezeichnet im aktuellen Quellvertrag die ab Game-Entry auszufuehrende
+Gastarbeit:
 
 ```powershell
 $env:KATANA_GUEST_CYCLE_BUDGET = '600000000'
@@ -193,16 +214,18 @@ $env:KATANA_GAME_ENTRY_HANDOFF_PRODUCT = 'D:\private\game-boot\game-entry.katana
 .\GameDirect.exe
 ```
 
-Ohne restaurierten Scheduler ist das ein 600-Millionen-Gastzyklus-Gate. Nach
-einem Game-Entry-Handoff muss `KR-4966` daraus noch eine Laufdauer relativ zum
-restaurierten Entry-Zyklus machen. Bis dahin darf die terminal aus dem
-absoluten Zaehler berechnete MHz-Zahl eines Handoff-Laufs nicht mit einem
-Lauf ab Zyklus null verglichen werden. Die Zusammenfassung nennt Gastzyklen,
-Hostzeit, Dispatches, technische Framemarker und das erste neue AOT-,
-Runtime- oder Geraeteproblem; ein sichtbarer Bildschirm wird separat anhand
-einer realen Ausgabeaufnahme klassifiziert.
+`KR-4966` berechnet daraus
+`target_cycle = restored_game_entry_cycle + requested_post_entry_cycles` und
+berichtet Restore-, Final- und ausgefuehrte Post-Entry-Zyklen getrennt. Bei
+angefordertem Produktbudget ist Exitcode 0 nur mit vollstaendiger Gastarbeit,
+erreichtem Pflichtmeilenstein und echtem `KATANA_PRODUCT_GATE` zulaessig. Die
+Zusammenfassung nennt Gastzyklen, Hostzeit, Dispatches, technische
+Framemarker und das erste neue AOT-, Runtime- oder Geraeteproblem; ein
+sichtbarer Bildschirm wird separat anhand einer realen Ausgabeaufnahme
+klassifiziert. Dieser Vertrag ist im Quellstand `b01586a` implementiert, aber
+noch nicht mit dem frischen ABI-73-Sonic-Port abgenommen.
 
-Die v24-`CompletePlatform`-Vergleichsbasis endete in beiden Pfaden bei
+Die **historische v24-`CompletePlatform`-Vergleichsbasis** endete in beiden Pfaden bei
 Schedulerzyklus 600.000.000 ohne erstes neues AOT-, Runtime- oder
 Geraeteproblem:
 
@@ -214,30 +237,30 @@ Geraeteproblem:
   noch kein sichtbarer Frame.
 
 Der Direct-Port meldete aus dem absoluten Zaehler 119,64 MHz; dieser Wert ist
-bis `KR-4966` kein gueltiger Performancevergleich. Seine 16.033.676
+kein gueltiger Performancevergleich. Seine 16.033.676
 Dispatches entsprechen 11,52 Post-Entry-Gastzyklen pro Zentraldispatch und
 belegen noch keinen Hotpathgewinn.
 
-Der aktuelle v30-DirectBoot verwendet weiterhin das externe,
+Der **historische v30-DirectBoot** verwendet weiterhin das externe,
 hashgebundene `GameProjectArtifact`. Die darin privat beschriebene exakte
 Funktionsgrenze wird durch Analyzer, CFG, IR und AOT transportiert; dadurch
 passiert der Produktlauf den bisherigen Blocker aus KR-4971. Der echte Lauf
 endet bei Gastzyklus `553.990.562`, also nach `138.757.292`
 Post-Entry-Zyklen und `10.079.932` Zentraldispatches. Gegen v26 sind das
-`+1.086.915` Gastzyklen. Der fruehere v28-Fehler-zu-Fehler-Vergleich mass
+`+1.086.915` Gastzyklen. Der historische v28-Fehler-zu-Fehler-Vergleich mass
 dieselben `138.757.292` Post-Entry-Zyklen in 5,275792 Sekunden, also
 26,3008 MHz gegen 23,9578 MHz bei v26 und provisorisch `+9,78 %`. Der
 v30-Sichtlauf ist kein kontrollierter Performancebenchmark; wegen des
 vorzeitigen Fehlers gibt es weiterhin keine 600-Millionen-Abnahme.
 
-Der erste Blocker KR-4972 bleibt
+Sein erster Blocker war KR-4972:
 `0x8C11088C -> 0x8C64784E`. Das unveraenderte Ziel beginnt mit einem Sprung
 auf einen gemeinsamen Codepfad. Die generische Analyse verfolgt den
 Callback jetzt ueber begrenzte Tail-Jump- und Runtime-Frame-Pfade, erkennt
 `0x8C64784E` als Funktion und erreicht `0x8C6478C2` als gemeinsamen Body.
-Der vollstaendige Export mit dem externen Spielprojekt uebernimmt diesen
-Seed aber noch nicht in CFG, Source-Map oder AOT; diese Integrationsluecke
-bleibt zu schliessen, ohne eine Grenze zu raten.
+Der aktuelle Quellstand transportiert solche bewachten AOT-Einstiege durch
+CFG, Source-Map und AOT und erzwingt ihre Exportvollstaendigkeit. Der frische
+ABI-73-Sonic-Nachweis dafuer steht noch aus.
 Die terminale Diagnose unterscheidet diesen Fall jetzt korrekt als
 `aot-template-mismatch` von echten Byteidentitaetsfehlern.
 
@@ -250,6 +273,23 @@ v30-Gateexport erzeugt 1.959 Funktionen in 42 Partitionen und eine
 frueheren warmen v28-Export von 4,209083 Sekunden vergleichbar. Das
 200-MHz-Ziel, das relative Gate und ein sichtbarer
 DirectBoot-Spielbildnachweis bleiben offen.
+
+Der **historische Runtime-ABI-64-/NativeDisc-v32-Pfad** behebt zwei allgemeine
+Sichtluecken: Flag-Poll-Batching ist unter aktiver MMU wieder fail-closed,
+und ein gueltiger PVR-VBlank-Scanout wird unabhaengig von einem einmaligen
+Diagnoseproof praesentiert. `port <gdi>` akzeptiert nun ausserdem dieselbe
+hashgebundene Option `--game-project` wie `port-executable`.
+
+Der kanonische, frisch exportierte und ueber die private Original-GDI
+installierte v32-MSVC-Port zeigt ab 2,032 Sekunden den Sega-Lizenzscreen und
+praesentiert 127 Hostframes. Er endet bei
+Gastzyklus 553.990.562 und damit exakt wie DirectBoot-v30 an
+`0x8C11088C -> 0x8C64784E`; NativeDisc ist sichtbar, DirectBoot-v30 blieb am
+gleichen Punkt schwarz. Der Lauf dauerte 6,701 Sekunden, fuehrte
+11.080.283 Zentraldispatches aus, erreichte 82,67 MHz bis zum Fehler und
+erzeugte eine 53.677.056 Byte grosse EXE. Er erreichte wegen KR-4972 nicht
+das 600-Millionen-Performancegate. Diese v32-Zahlen bleiben historische
+Vergleichsevidenz und sind kein Nachweis fuer den aktuellen ABI-73-Stand.
 
 ## Diagnose
 

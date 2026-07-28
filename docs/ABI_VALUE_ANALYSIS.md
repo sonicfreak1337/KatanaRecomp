@@ -1,9 +1,16 @@
 # ABI-Wertanalyse fuer Callbacks, Parameter und Stack
 
-Stand: KR-4716
+Historischer Einfuehrungsstand: KR-4716
+
+Aktueller Quellstand: `b01586a` mit Runtime-ABI 73, Block-ABI 5,
+Analyzer-ABI 6, PlatformServices-ABI 13, Backend-Interface-ABI 12,
+Portprojektvertrag 62, Native-AOT-Emissionsprofil 11 und
+Portpartitionsschema 5. Die vereinbarten P0-Umbauten sind im Quellpfad
+abgeschlossen; der frische ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen
+Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus.
 
 Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter
-[Analyzer-ABI 1](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
+[Analyzer-ABI 6](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
 Truncation- oder Inventarfelder sind damit vom Runtimevertrag getrennt
 versioniert und koennen nicht mehr unbemerkt mit einem anders gebauten
 Analyzerarchiv gelinkt werden.

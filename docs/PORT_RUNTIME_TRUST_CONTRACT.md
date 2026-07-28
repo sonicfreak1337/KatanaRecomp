@@ -2,9 +2,12 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 37, Runtime-ABI 52,
-Analyzer-ABI 1, PlatformServices-ABI 11, Block-ABI 5 und
-Backend-Interface-ABI 4. Keine der
+aktuelle Quellstand `b01586a` verwendet Portprojektvertrag 62, Runtime-ABI 73,
+Analyzer-ABI 6, PlatformServices-ABI 13, Block-ABI 5,
+Backend-Interface-ABI 12, Native-AOT-Emissionsprofil 11 und
+Portpartitionsschema 5. Die vereinbarten P0-Umbauten sind im Quellpfad
+abgeschlossen; der frische ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen
+Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
 
@@ -40,7 +43,7 @@ Erfolgsmeldungen ausbleiben.
 
 PlatformServices-ABI 4 fuehrte diese Bindung an die vorhandenen
 Dreamcast-Runtimekomponenten ein; der aktuelle kumulative Vertrag steht auf
-PlatformServices-ABI 11:
+PlatformServices-ABI 13:
 
 - Interrupts werden ueber den Interrupt-Router angenommen.
 - DMA wird ueber den SH-4-DMAC geplant und bleibt bis zur Schedulerausfuehrung
@@ -307,7 +310,7 @@ instruktionsgenaue Displacement-/Indexadressen, das korrelierte
 schliessen die bekannten False-Negative-Raender, ohne eine statische
 Dispatchkante zu erfinden.
 
-Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
+Der historische Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
 fokussierte Tests. Der anschliessend genau einmal frisch exportierte
 Produktport umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger
 normaler sichtbarer Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor

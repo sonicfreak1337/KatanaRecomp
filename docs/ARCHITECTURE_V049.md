@@ -18,6 +18,16 @@ Code endet an einer typisierten Runtimegrenze. Der begrenzte
 Diagnoseinterpreter ist nur Bestandteil eines ausdruecklich als
 `diagnostic_partial` erzeugten Diagnoseports.
 
+Der aktuelle Quellstand `b01586a` versioniert diesen Produktvertrag mit
+Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6, PlatformServices-ABI 13,
+Backend-Interface-ABI 12, Portprojektvertrag 62, Native-AOT-Profil 11 und
+Partitionsschema 5. Die nachfolgend als implementiert bezeichneten
+P0-Vertraege sind damit im generischen Quellpfad vorhanden. Ihre
+Produktabnahme ist bewusst noch offen: Erst der frische Sonic-PAL-
+NativeDisc-Port mit ABI 73, real installierter Disc, 600 Millionen
+Post-Entry-Gastzyklen und separatem Sichtnachweis darf Boot- oder
+Performanceerfolg belegen.
+
 ## Drei Ebenen
 
 ### KatanaRecomp
@@ -91,13 +101,16 @@ den architektonischen CPU-Zustand einschliesslich physischer GPR-/FPU-Baenke,
 MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
 Geraetezustaende und ausstehende Schedulerereignisse.
 
-Der aktuelle Gesamtvertrag besteht aus Artefaktformat 2, Runtime-ABI 63,
-Portprojektvertrag 53 und Plattformzustandsvertrag 2. Private titelgebundene
-Payloads werden durch den externen Spielprojektprovider geliefert. Jede Slice
-ist an Offset, Groesse und SHA-256 gebunden, wird vor der Freigabe
-vollstaendig validiert und anschliessend aus eigenem unveraenderlichem
-Speicher gelesen. Lokale Pfade oder Payloadbytes werden nicht Teil des
-generischen Spielprojektvertrags oder des erzeugten Portpakets.
+Der aktuelle Quellvertrag besteht aus Artefaktformat 2, Runtime-ABI 73,
+Portprojektvertrag 62 und Plattformzustandsvertrag 2. Vorhandene private
+CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
+Evidenz und muessen vor einem weiteren DirectBoot-Produktlauf fuer ABI 73 neu
+erfasst werden. NativeDisc benoetigt keinen Game-Entry-Handoff. Private
+titelgebundene Payloads werden durch den externen Spielprojektprovider
+geliefert. Jede Slice ist an Offset, Groesse und SHA-256 gebunden, wird vor
+der Freigabe vollstaendig validiert und anschliessend aus eigenem
+unveraenderlichem Speicher gelesen. Lokale Pfade oder Payloadbytes werden
+nicht Teil des generischen Spielprojektvertrags oder des erzeugten Portpakets.
 
 `CompletePlatform` verlangt exakt 22 Geraeteinstanzen: PVR, GD-ROM, G1,
 SH-4-DMAC, AICA, Maple, System Bus, System ASIC, Interruptcontroller,
@@ -120,12 +133,17 @@ ist kein Produkt- oder Bootnachweis.
 
 Der aktuelle Koordinator validiert alle Payloads, Schedulerbeziehungen,
 IRQ-/DMA-Quervertraege und eine abgetrennte CPU/MMU-Sicht vor der Mutation.
-Nach dem Restore prueft ein vollstaendiger semantischer Recapture den Zustand.
-Das ist noch nicht der abschliessende `KR-4967`-Vertrag: CPU/RAM werden vor
-der passiven Geraetesequenz committed, und die einzelnen Restore- und
-Event-Rehydrationsschritte bilden noch keinen formal durchgehend
-`noexcept`-globalen Commit. Normative Subsystemdigests sowie das allgemein
-save-erhaltende `ProductHandoff` aus `KR-4970` bleiben offen.
+Alle falliblen Vorbereitungen werden vor dem globalen Commit abgeschlossen;
+Speicher, Geraete und vorbereitete Schedulerdaten werden danach ohne
+nachtraegliche Teilvalidierung veroeffentlicht, CPU-PC und PR zuletzt. Ein
+vollstaendiger semantischer Recapture prueft den Zustand nach dem Restore.
+Das produktive Handoffprofil trennt gastseitigen Geraetezustand von
+Hostdiagnostik und setzt PVR-/Audio-/Produktevidenz am Game Entry auf eine
+neue Baseline. Installierte VMU- und Flash-Nutzerdaten bleiben autoritativ und
+werden nicht aus einem alten Capture zurueckgerollt. Diese P0-Vertraege aus
+`KR-4967` und `KR-4970` sind im Quellpfad implementiert; normative
+NativeDisc-/DirectBoot-Digests und die frische ABI-73-Produktabnahme bleiben
+offen.
 
 ### Belegter Produktstand
 
@@ -138,11 +156,14 @@ Runtimeproblem jeweils bei Schedulerzyklus 600.000.000:
   184.766.730 Post-Entry-Zyklen in 5,01505 Sekunden beziehungsweise
   36,8425 MHz, 16.033.676 zentrale Dispatches und noch kein sichtbarer Frame.
 
-Der vom Direct-Port gemeldete Wert 119,64 MHz verwendet faelschlich den
-absoluten Schedulerstand als ausgefuehrte Arbeit. `KR-4966` muss das Gate auf
-eine relative Laufdauer ab Entry umstellen. 16.033.676 Dispatches entsprechen
-11,52 Zyklen pro Post-Entry-Dispatch und belegen noch keinen
-Performancegewinn.
+Der vom historischen Direct-Port gemeldete Wert 119,64 MHz verwendet
+faelschlich den absoluten Schedulerstand als ausgefuehrte Arbeit. Der aktuelle
+`KR-4966`-Quellvertrag berechnet das Ziel relativ ab Game Entry, berichtet
+Restore-, End- und ausgefuehrte Post-Entry-Zyklen getrennt und liefert bei
+unvollstaendigem Budget trotz bereits erreichtem Meilenstein keinen
+erfolgreichen Produktgate-Exit. Die 16.033.676 Dispatches der historischen
+Runde entsprechen 11,52 Zyklen pro Post-Entry-Dispatch und belegen noch
+keinen Performancegewinn.
 
 v26 korrigiert anschliessend `SB_G2APRO` und das reale AICA-Request-Level fuer
 `ADTSEL=5`. v28 fuehrt die danach beobachtete exakte, hashgebundene
@@ -154,19 +175,46 @@ tatsaechliche Post-Entry-Arbeit ergibt in 5,275792 Sekunden 26,3008 MHz
 gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`, aber noch kein
 600-Millionen-Gate.
 
-Der erste Blocker KR-4972 bleibt
+Der historische v28-/v30-Blocker KR-4972 war
 `0x8C11088C -> 0x8C64784E`. Das Ziel beginnt mit einem `BRA` auf den
-gemeinsamen Pfad `0x8C6478C2`. Die generische Analyse gewinnt Ziel und Body
-jetzt aus konkreter Codepointer-Provenienz ueber einen begrenzten
-Tail-Jump-/Runtime-Frame-Pfad. Der vollstaendige Export mit dem externen
-Spielprojekt erhaelt diesen Seed aber noch nicht in CFG, Source-Map und AOT.
-Die terminale Diagnose meldet den Materializergrund
-`AotTemplateMismatch` (14) nun korrekt als `aot-template-mismatch`.
+gemeinsamen Pfad `0x8C6478C2`. Die damalige generische Analyse gewann Ziel und
+Body aus konkreter Codepointer-Provenienz ueber einen begrenzten
+Tail-Jump-/Runtime-Frame-Pfad. Der damalige vollstaendige Export mit dem
+externen Spielprojekt erhielt diesen Seed aber noch nicht in CFG, Source-Map
+und AOT. Die terminale Diagnose meldete den Materializergrund
+`AotTemplateMismatch` (14) bereits korrekt als `aot-template-mismatch`.
 Der reale v30-Port endet deshalb mit denselben `553.990.562` Gastzyklen und
 `10.079.932` Zentraldispatches wie v28. Sound-/G2- und technische
 PVR-Evidenz bleiben erhalten, aber 15 neue reale Fensteraufnahmen bleiben
 schwarz. Die frueheren warmen v28-Buildwerte bleiben der aktuelle
 Warmbuildnachweis; der frische v30-Export war kalt.
+
+KR-4973 trennt seit Runtime-ABI 64 den aktuellen VBlank-Scanout von der
+Diagnoseproofqueue und sperrt das Flag-Poll-Batching unter aktiver MMU wieder
+vor jeder Mutation. `port <gdi>` akzeptiert dieselbe externe
+`--game-project`-Bindung wie DirectBoot. Der reale NativeDisc-v32-Lauf zeigt
+dadurch in allen Aufnahmen den Sega-Lizenzscreen, praesentiert 127 Hostframes
+und endet nach 6,701 Sekunden bei exakt demselben Zyklus `553.990.562` sowie
+11.080.283 Zentraldispatches, provisorisch 82,67 MHz und derselben
+KR-4972-Kante `0x8C11088C -> 0x8C64784E` wie DirectBoot-v30. Der sichtbare
+Unterschied ist damit kein abweichender Gastfortschritt. DirectBoot selbst
+braucht fuer den aktuellen Vertrag einen frischen ABI-73-Handoff; IP.BIN und
+damit der Sega-Screen bleiben dort absichtlich uebersprungen. Diese
+ABI-64-v32-Daten sind ausschliesslich historische Evidenz, einschliesslich der
+53.677.056 Byte grossen Produkt-EXE und des sichtbaren Sega-Screens ab 2,032
+Sekunden.
+
+Seit diesem historischen Lauf ist die damalige KR-4972-Luecke im Quellpfad
+geschlossen: Guarded-AOT-Einstiege bleiben als eigener, evidenzgebundener
+Exportvertrag bis CFG, IR, Source-Map und statischer AOT-Ausgabe erhalten.
+Kuenstliche Candidate-Carrier koennen reale Jump-Kanten nicht mehr anhand
+bloss gleicher Callsite/Ziel-Paare entfernen, externe bedingte
+Inventarnachfolger werden nicht mehr still als vollstaendig behandelt und
+Adressprovenienz eines geladenen Objekts wird nicht als
+Codepointerprovenienz des Inhalts vererbt. Der Export verlangt fuer jeden
+akzeptierten Guarded-AOT-Einstieg einen statischen Block, ein natives Template
+oder eine explizite Ablehnung. Ob der reale Sonic-Lauf damit
+`0x8C64784E` passiert, ist bis zur frischen ABI-73-Abnahme offen.
 
 ## Statischer und dynamischer AOT-Dispatch
 
@@ -186,7 +234,10 @@ Generationen.
 Direkt abgebildete P1-/P2-Ziele pruefen zuerst den callsitegebundenen
 Inline-Cache. Nur P0-/P3-/MMU-gemappte Ziele benoetigen immer die vollstaendige
 Uebersetzung. Ein Cachetreffer bleibt an Adressraum-, MMU-, Runtime-, FPU-,
-Code-, Modul-, Relocation- und Blockgeneration gebunden.
+Code-, Modul-, Relocation- und Blockgeneration gebunden. Auch ein Treffer aus
+der statischen Seitentabelle revalidiert nach globaler Codeinvalidierung die
+zielbezogene Dispatchbarkeit; invalidierter statischer Code kann nicht allein
+aufgrund eines neu aufgenommenen globalen Chain-Guards weiterlaufen.
 
 ## Function-Level-AOT
 
@@ -194,7 +245,13 @@ Der Produkt-Emitter gruppiert analysierte Gastfunktionen in native
 C++-Funktionen. Interne Basic Blocks werden Labels, interne Kanten native
 `goto`- beziehungsweise strukturierte Kontrollfluesse. Bewiesene direkte Calls
 und eindeutige, live verglichene Callbackziele koennen andere AOT-Funktionen
-direkt aufrufen.
+direkt aufrufen. Ein statischer RuntimeBlock zeigt direkt auf den nativen
+Owner-Einstieg des konkreten Blocks; der fruehere zusaetzliche
+`dispatch_owner`-Wrapper entfaellt. Endliche indirekte Call-/Jump-Zielmengen
+werden gegen das live geladene, unrelocatierte Gastziel verglichen und unter
+denselben Timing-, Tiefen-, Code- und Architekturgenerationguards direkt
+ausgefuehrt. Nur ein unbekanntes Ziel verlaesst diesen Pfad zum allgemeinen
+validierenden Dispatcher.
 
 Direkte Gastcalls verwenden einen threadlokalen Tiefenwaechter. Wird das
 konservative Limit erreicht, bleibt `cpu.pc` auf dem bereits vorbereiteten
@@ -202,12 +259,18 @@ Gastziel und der Hoststack wickelt zum statischen Zentraldispatcher ab. Das ist
 weder Interpretation noch Laufzeitdekodierung.
 
 Registerlokalisierung und direkte RAM-Zugriffe sind konservative
-Beweisoptimierungen. Die aktuelle Lokalisierung umfasst ausgewaehlte mehrfach
-verwendete `r0` bis `r15` ausschliesslich in reinen Leaf-Funktionen ohne
-Speicher-, FPU-, Spezialregister-, privilegierte oder architektonische
-Grenzoperation. Direkte RAM-Zugriffe brauchen einen statisch bewiesenen
-P1-/P2-Haupt-RAM-Zugriff und einen aktuellen Laufzeitguard. Ein Guardmiss
-verwendet den allgemeinen korrekten Speicher- oder Dispatchpfad.
+Beweisoptimierungen. Der aktuelle Emitter verwendet IR-Use/Def und Liveness
+fuer `r0` bis `r15` sowie T, PR, GBR, MACH, MACL und FPUL. Lokaler Zustand
+wird an echten MMIO-, FPU-, Call-, Exception-, Hook-, SR-/Bankwechsel-,
+Dispatch- und Safepointgrenzen abgegeben und nach einer weiterlaufenden
+Grenze kontrolliert neu geladen; rohe C++-Fragmente werden nur
+tokenbegrenzt umgeschrieben. Direkte P1-/P2-Haupt-RAM-Stores koennen in einem
+fest begrenzten `DirectLinearWriteBatch` gesammelt werden. Vor Reads,
+Terminals oder Architekturgrenzen wird der Batch abgeschlossen; bei
+Guardmiss oder voller Batchkapazitaet faellt genau die betroffene Operation
+auf den allgemeinen korrekten Speicherpfad zurueck. Codeinvalidierung,
+Modul-/Blockinvalidierung und SMC-Beobachtung werden fuer die gesamte
+beobachtete Schreibregion dedupliziert, nicht uebersprungen.
 
 ## Gastzeit und Diagnose
 
