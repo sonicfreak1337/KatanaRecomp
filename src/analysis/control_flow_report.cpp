@@ -371,6 +371,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << analysis.static_return_continuations.size()
            << ",\"guarded_aot_entries\":"
            << analysis.guarded_aot_entries.size()
+           << ",\"guarded_aot_entry_rejections\":"
+           << analysis.guarded_aot_entry_rejections.size()
            << ",\"function_value_summaries\":" << analysis.function_value_summaries.size()
            << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
            << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations
@@ -472,6 +474,55 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             if (object != 0u) output << ',';
             output << katana::io::quote_json(
                 hex32(entry.source_objects[object]));
+        }
+        output << "]}";
+    }
+    output << ']';
+
+    output << ",\"guarded_aot_entry_rejections\":[";
+    for (std::size_t index = 0u;
+         index < analysis.guarded_aot_entry_rejections.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        const auto& rejection =
+            analysis.guarded_aot_entry_rejections[index];
+        output << "{\"guest_address\":"
+               << katana::io::quote_json(
+                      hex32(rejection.guest_address))
+               << ",\"resolved_address\":"
+               << katana::io::quote_json(
+                      hex32(rejection.resolved_address))
+               << ",\"reason\":"
+               << katana::io::quote_json(
+                      guarded_aot_entry_rejection_reason_name(
+                          rejection.reason))
+               << ",\"evidence\":"
+               << katana::io::quote_json(
+                      control_flow_evidence_name(rejection.evidence))
+               << ",\"origins\":[";
+        for (std::size_t origin = 0u;
+             origin < rejection.origins.size();
+             ++origin) {
+            if (origin != 0u) output << ',';
+            output << katana::io::quote_json(
+                guarded_aot_entry_origin_name(
+                    rejection.origins[origin]));
+        }
+        output << "],\"source_sites\":[";
+        for (std::size_t site = 0u;
+             site < rejection.source_sites.size();
+             ++site) {
+            if (site != 0u) output << ',';
+            output << katana::io::quote_json(
+                hex32(rejection.source_sites[site]));
+        }
+        output << "],\"source_objects\":[";
+        for (std::size_t object = 0u;
+             object < rejection.source_objects.size();
+             ++object) {
+            if (object != 0u) output << ',';
+            output << katana::io::quote_json(
+                hex32(rejection.source_objects[object]));
         }
         output << "]}";
     }

@@ -1134,7 +1134,13 @@ void apply_transfer(AbstractState& state,
             !state.stack_offsets[instruction.source_register].has_value() &&
             !state.stack_may_alias[instruction.source_register] &&
             !state.inventory_stack_may_alias[instruction.source_register] &&
-            source.known && source.complete && source.values.size() == 1u) {
+            source.known && source.values.size() == 1u) {
+            // This branch is exclusive to the guarded inventory walk.  A
+            // writable literal is runtime-authoritative and therefore
+            // incomplete, but its captured finite delta is still useful for
+            // following a guarded stack spill/reload.  Any resulting code
+            // address remains a candidate; this never creates a fixed CFG
+            // edge or a runtime fallback.
             auto delta = static_cast<std::int64_t>(source.values.front());
             if (delta > std::numeric_limits<std::int32_t>::max())
                 delta -= (std::int64_t{1} << 32u);
@@ -2201,7 +2207,14 @@ FunctionEvaluation evaluate_function(
     if (!collect_resolutions)
         evaluation.call_arguments.reserve(function.direct_callees.size() +
                                           function.tail_jump_targets.size());
-    auto* const call_arguments = collect_resolutions ? nullptr : &evaluation.call_arguments;
+    // Final resolution still needs inventory-only ABI observations when a
+    // collector is active.  Without them, a locally computed code pointer
+    // passed through a candidate-only call cannot enter the bounded forwarded
+    // store walk, even though no semantic call edge is being asserted.
+    auto* const call_arguments =
+        collect_resolutions && guarded_inventory_collector == nullptr
+            ? nullptr
+            : &evaluation.call_arguments;
     auto* const inventory_transfers =
         guarded_inventory_collector == nullptr ? nullptr : &evaluation.inventory_transfers;
     std::unordered_set<std::uint32_t> members;
@@ -2783,7 +2796,7 @@ bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage
         const auto& observed = observation[index];
         if (!observed.known || observed.values.empty() ||
             observed.values.size() > maximum_summary_values ||
-            observed.call_sites.empty())
+            !observed.inventory_code_pointer)
             continue;
         const auto& merged = merged_input[index];
         for (const auto value : observed.values) {
@@ -3341,7 +3354,6 @@ detail::analyze_function_values_with_guarded_entry_cache(
     }
     std::unordered_set<std::uint32_t> functions_with_inventory_tail;
     for (const auto& [transfer_site, ingress] : tail_ingresses) {
-        if (ingress.requires_code_pointer) continue;
         const auto owners = function_owners_by_control.find(transfer_site);
         if (owners == function_owners_by_control.end())
             continue;
@@ -3369,6 +3381,24 @@ detail::analyze_function_values_with_guarded_entry_cache(
         static_cast<void>(callee);
         normalize(callers);
     }
+    // Candidate call carriers are private inventory transport, not semantic
+    // call-graph edges.  They still have to participate in the inventory-only
+    // backwards reachability walk or a wrapper which merely forwards a
+    // code-pointer to a guarded tail registrar is never evaluated.
+    auto inventory_callers_by_callee = callers_by_callee;
+    for (const auto& carrier : candidate_call_carriers) {
+        const auto owners =
+            function_owners_by_control.find(carrier.call_site);
+        if (owners == function_owners_by_control.end()) continue;
+        auto& callers = inventory_callers_by_callee[carrier.target];
+        callers.insert(callers.end(),
+                       owners->second.begin(),
+                       owners->second.end());
+    }
+    for (auto& [callee, callers] : inventory_callers_by_callee) {
+        static_cast<void>(callee);
+        normalize(callers);
+    }
     std::unordered_set<std::uint32_t> functions_reaching_guarded_inventory_sink;
     functions_reaching_guarded_inventory_sink.reserve(functions.size());
     std::deque<std::uint32_t> pending_inventory_reachability;
@@ -3385,8 +3415,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
     while (!pending_inventory_reachability.empty()) {
         const auto callee = pending_inventory_reachability.front();
         pending_inventory_reachability.pop_front();
-        const auto callers = callers_by_callee.find(callee);
-        if (callers == callers_by_callee.end()) continue;
+        const auto callers = inventory_callers_by_callee.find(callee);
+        if (callers == inventory_callers_by_callee.end()) continue;
         for (const auto caller : callers->second) {
             add_inventory_sink(caller);
         }

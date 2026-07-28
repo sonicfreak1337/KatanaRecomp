@@ -675,6 +675,74 @@ object_field_tail_values(const bool overwrite_callback_from_object) {
         image, lines, boundaries, edges);
 }
 
+katana::analysis::FunctionValueAnalysisResult
+candidate_call_stack_tail_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0xE470u); // mov #0x70,r4 (callback argument)
+    put_u16(0x02u, 0x410Bu); // jsr @r1 (candidate-only wrapper)
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x08u, 0x0009u);
+
+    put_u16(0x20u, 0x7FFCu); // add #-4,r15
+    put_u16(0x22u, 0x2F42u); // mov.l r4,@r15
+    put_u16(0x24u, 0x65F2u); // mov.l @r15,r5
+    put_u16(0x26u, 0x422Bu); // jmp @r2 (candidate-only registrar)
+    put_u16(0x28u, 0x7F04u); // add #4,r15 (delay)
+
+    put_u16(0x40u, 0x900Eu); // mov.w @(0x60,pc),r0 (guarded frame delta)
+    put_u16(0x42u, 0x3F0Cu); // add r0,r15
+    put_u16(0x44u, 0x1F51u); // mov.l r5,@(4,r15)
+    put_u16(0x46u, 0x53F1u); // mov.l @(4,r15),r3
+    put_u16(0x48u, 0x2732u); // mov.l r3,@r7 (unknown object)
+    put_u16(0x4Au, 0x7F08u); // add #8,r15
+    put_u16(0x4Cu, 0x000Bu);
+    put_u16(0x4Eu, 0x0009u);
+    put_u16(0x60u, 0xFFF8u); // writable captured stack-frame size -8
+
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".candidate-call-stack-tail",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x0Au},
+        {0x20u, 0x0Au},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u> edges{{
+        {0x02u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x26u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
 } // namespace
 
 int main() {
@@ -802,6 +870,14 @@ int main() {
                     !has_stored_code_address(loaded_field, 0x70u),
                 "Objektadress-Provenienz wurde weiterhin als Provenienz "
                 "des geladenen Feldinhalts behandelt.");
+    }
+
+    {
+        const auto forwarded = candidate_call_stack_tail_values();
+        require(has_stored_code_address(forwarded, 0x70u),
+                "Candidate-only Call -> guarded Frame-Delta -> "
+                "Stackspill/Reload -> Candidate-Tail verlor einen explizit "
+                "uebergebenen Codepointer.");
     }
 
     std::vector<std::uint8_t> guarded_callee_bytes(0x26u, 0x09u);

@@ -73,6 +73,32 @@ struct GuardedAotEntry {
     std::string entry_byte_identity;
 };
 
+enum class GuardedAotEntryRejectionReason : std::uint8_t {
+    OddAddress,
+    OutsideSegments,
+    NotCodeSegment,
+    NotExecutableSegment,
+    OutsideCommittedData,
+    InstructionNotAnalyzed,
+    DelaySlotEntry,
+    UnknownInstruction,
+    EntryExtentUnavailable,
+    SourceByteOffsetUnavailable,
+    SegmentByteOffsetUnavailable,
+    EntryBytesUnavailable
+};
+
+struct GuardedAotEntryRejection {
+    std::uint32_t guest_address = 0u;
+    std::uint32_t resolved_address = 0u;
+    GuardedAotEntryRejectionReason reason =
+        GuardedAotEntryRejectionReason::InstructionNotAnalyzed;
+    ControlFlowEvidence evidence = ControlFlowEvidence::GuardedPartial;
+    std::vector<GuardedAotEntryOrigin> origins;
+    std::vector<std::uint32_t> source_sites;
+    std::vector<std::uint32_t> source_objects;
+};
+
 struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
     RuntimeCodeCopyAnalysis runtime_code_copies;
@@ -85,6 +111,10 @@ struct ControlFlowAnalysisResult {
     // Every accepted entry remains runtime-guarded, but code generation must
     // still provide a native entry block or a byte-bound native template.
     std::vector<GuardedAotEntry> guarded_aot_entries;
+    // An accepted inventory candidate may only fail entry materialization
+    // through this typed, provenance-preserving contract. Product export is
+    // fail-closed while diagnostic-partial export may report the rejection.
+    std::vector<GuardedAotEntryRejection> guarded_aot_entry_rejections;
     std::shared_ptr<const InstructionArena> instruction_arena;
     std::vector<InstructionSpan> block_spans;
     EvidenceInterner evidence_ids;
@@ -116,7 +146,8 @@ guarded_aot_inventory_complete(
            !analysis.raw_stored_code_inventory_truncated &&
            !analysis.candidate_inventory_truncated &&
            !analysis.returned_table_scan_truncated &&
-           analysis.guarded_code_shape_budget_exceeded_candidates == 0u;
+           analysis.guarded_code_shape_budget_exceeded_candidates == 0u &&
+           analysis.guarded_aot_entry_rejections.empty();
 }
 
 struct ControlFlowAnalysisProgress {
@@ -135,6 +166,9 @@ using ControlFlowAnalysisProgressCallback =
 analysis_directive_diagnostic_status_name(AnalysisDirectiveDiagnosticStatus status) noexcept;
 [[nodiscard]] const char*
 guarded_aot_entry_origin_name(GuardedAotEntryOrigin origin) noexcept;
+[[nodiscard]] const char*
+guarded_aot_entry_rejection_reason_name(
+    GuardedAotEntryRejectionReason reason) noexcept;
 
 [[nodiscard]] ControlFlowAnalysisResult
 analyze_control_flow(const katana::io::ExecutableImage& image,

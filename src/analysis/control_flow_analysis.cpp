@@ -610,33 +610,118 @@ collect_function_value_edges(
     return edges;
 }
 
-std::vector<GuardedAotEntry>
+struct GuardedAotEntryCollection {
+    std::vector<GuardedAotEntry> entries;
+    std::vector<GuardedAotEntryRejection> rejections;
+};
+
+GuardedAotEntryRejectionReason
+guarded_aot_code_address_rejection_reason(
+    const CodeAddressStatus status) noexcept {
+    switch (status) {
+    case CodeAddressStatus::OddAddress:
+        return GuardedAotEntryRejectionReason::OddAddress;
+    case CodeAddressStatus::OutsideSegments:
+        return GuardedAotEntryRejectionReason::OutsideSegments;
+    case CodeAddressStatus::NotCodeSegment:
+        return GuardedAotEntryRejectionReason::NotCodeSegment;
+    case CodeAddressStatus::NotExecutableSegment:
+        return GuardedAotEntryRejectionReason::NotExecutableSegment;
+    case CodeAddressStatus::OutsideCommittedData:
+        return GuardedAotEntryRejectionReason::OutsideCommittedData;
+    case CodeAddressStatus::Valid:
+        break;
+    }
+    return GuardedAotEntryRejectionReason::OutsideSegments;
+}
+
+GuardedAotEntryCollection
 collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
                             const ControlFlowAnalysisResult& analysis,
                             const GuardedCodeInventory& guarded_code_inventory) {
     std::map<std::uint32_t, GuardedAotEntry> entries;
+    std::map<std::pair<std::uint32_t, GuardedAotEntryRejectionReason>,
+             GuardedAotEntryRejection>
+        rejections;
     std::map<const katana::io::ImageSegment*, std::string> source_identities;
     const auto add_entry =
         [&](const std::uint32_t address,
             const GuardedAotEntryOrigin origin,
             const std::span<const std::uint32_t> source_sites,
             const std::span<const std::uint32_t> source_objects = {}) {
+            const auto reject =
+                [&](const std::uint32_t resolved_address,
+                    const GuardedAotEntryRejectionReason reason) {
+                    auto& rejection = rejections[{address, reason}];
+                    rejection.guest_address = address;
+                    rejection.resolved_address = resolved_address;
+                    rejection.reason = reason;
+                    rejection.evidence =
+                        ControlFlowEvidence::GuardedPartial;
+                    rejection.origins.push_back(origin);
+                    rejection.source_sites.insert(rejection.source_sites.end(),
+                                                  source_sites.begin(),
+                                                  source_sites.end());
+                    rejection.source_objects.insert(
+                        rejection.source_objects.end(),
+                        source_objects.begin(),
+                        source_objects.end());
+                };
             const auto validation = validate_committed_code_address(image, address);
-            if (!validation.valid()) return;
+            if (!validation.valid()) {
+                reject(validation.resolved_address,
+                       guarded_aot_code_address_rejection_reason(
+                           validation.status));
+                return;
+            }
             const auto resolved = validation.resolved_address;
             const auto* line = find_instruction(analysis.recursive, resolved);
-            const auto entry_extent =
-                line != nullptr && line->instruction.has_delay_slot ? 4u : 2u;
-            const auto* segment = image.find_segment(resolved, entry_extent);
-            if (line == nullptr || line->is_delay_slot ||
-                !line->instruction.is_known() || segment == nullptr)
+            if (line == nullptr) {
+                reject(resolved,
+                       GuardedAotEntryRejectionReason::
+                           InstructionNotAnalyzed);
                 return;
+            }
+            if (line->is_delay_slot) {
+                reject(resolved,
+                       GuardedAotEntryRejectionReason::DelaySlotEntry);
+                return;
+            }
+            if (!line->instruction.is_known()) {
+                reject(resolved,
+                       GuardedAotEntryRejectionReason::UnknownInstruction);
+                return;
+            }
+            const auto entry_extent =
+                line->instruction.has_delay_slot ? 4u : 2u;
+            const auto* segment = image.find_segment(resolved, entry_extent);
+            if (segment == nullptr) {
+                reject(resolved,
+                       GuardedAotEntryRejectionReason::
+                           EntryExtentUnavailable);
+                return;
+            }
             const auto source_offset = segment->source_byte_offset(resolved);
             const auto byte_offset = segment->byte_offset(resolved);
-            if (!source_offset.has_value() || !byte_offset.has_value() ||
-                *byte_offset > segment->bytes.size() ||
-                entry_extent > segment->bytes.size() - *byte_offset)
+            if (!source_offset.has_value()) {
+                reject(resolved,
+                       GuardedAotEntryRejectionReason::
+                           SourceByteOffsetUnavailable);
                 return;
+            }
+            if (!byte_offset.has_value()) {
+                reject(resolved,
+                       GuardedAotEntryRejectionReason::
+                           SegmentByteOffsetUnavailable);
+                return;
+            }
+            if (*byte_offset > segment->bytes.size() ||
+                entry_extent > segment->bytes.size() - *byte_offset) {
+                reject(resolved,
+                       GuardedAotEntryRejectionReason::
+                           EntryBytesUnavailable);
+                return;
+            }
             auto& entry = entries[resolved];
             if (entry.source_identity.empty()) {
                 auto& identity = source_identities[segment];
@@ -742,8 +827,8 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
                       source_sites,
                       source_objects);
     }
-    std::vector<GuardedAotEntry> result;
-    result.reserve(entries.size());
+    GuardedAotEntryCollection result;
+    result.entries.reserve(entries.size());
     for (auto& [address, entry] : entries) {
         static_cast<void>(address);
         std::sort(entry.origins.begin(), entry.origins.end());
@@ -758,7 +843,28 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
         entry.source_objects.erase(
             std::unique(entry.source_objects.begin(), entry.source_objects.end()),
             entry.source_objects.end());
-        result.push_back(std::move(entry));
+        result.entries.push_back(std::move(entry));
+    }
+    result.rejections.reserve(rejections.size());
+    for (auto& [key, rejection] : rejections) {
+        static_cast<void>(key);
+        std::sort(rejection.origins.begin(), rejection.origins.end());
+        rejection.origins.erase(
+            std::unique(rejection.origins.begin(), rejection.origins.end()),
+            rejection.origins.end());
+        std::sort(rejection.source_sites.begin(),
+                  rejection.source_sites.end());
+        rejection.source_sites.erase(
+            std::unique(rejection.source_sites.begin(),
+                        rejection.source_sites.end()),
+            rejection.source_sites.end());
+        std::sort(rejection.source_objects.begin(),
+                  rejection.source_objects.end());
+        rejection.source_objects.erase(
+            std::unique(rejection.source_objects.begin(),
+                        rejection.source_objects.end()),
+            rejection.source_objects.end());
+        result.rejections.push_back(std::move(rejection));
     }
     return result;
 }
@@ -1407,9 +1513,12 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
     classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
     bind_partial_runtime_contracts(analysis.indirect_control_flow);
+    auto guarded_aot_entries = collect_guarded_aot_entries(
+        image, analysis, final_guarded_code_inventory);
     analysis.guarded_aot_entries =
-        collect_guarded_aot_entries(
-            image, analysis, final_guarded_code_inventory);
+        std::move(guarded_aot_entries.entries);
+    analysis.guarded_aot_entry_rejections =
+        std::move(guarded_aot_entries.rejections);
     analysis.resolved_edges =
         collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
     analysis.sites.reserve(analysis.indirect_control_flow.size());
@@ -1451,6 +1560,15 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             entry.source_sites.begin(), entry.source_sites.end());
         symbolic_candidates.insert(
             entry.source_objects.begin(), entry.source_objects.end());
+    }
+    for (const auto& rejection :
+         analysis.guarded_aot_entry_rejections) {
+        symbolic_candidates.insert(rejection.guest_address);
+        symbolic_candidates.insert(rejection.resolved_address);
+        symbolic_candidates.insert(rejection.source_sites.begin(),
+                                   rejection.source_sites.end());
+        symbolic_candidates.insert(rejection.source_objects.begin(),
+                                   rejection.source_objects.end());
     }
     for (const auto& resolution : analysis.indirect_control_flow) {
         symbolic_candidates.insert(resolution.instruction_address);
@@ -1536,6 +1654,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         evidence_strings.push_back(resolution.reason);
     for (const auto& continuation : analysis.static_return_continuations)
         evidence_strings.push_back(continuation.reason);
+    for (const auto& rejection :
+         analysis.guarded_aot_entry_rejections)
+        evidence_strings.push_back(
+            guarded_aot_entry_rejection_reason_name(rejection.reason));
     for (const auto& table : analysis.jump_tables) {
         evidence_strings.push_back(table.reason);
         for (const auto& entry : table.entries)
@@ -1588,6 +1710,38 @@ guarded_aot_entry_origin_name(const GuardedAotEntryOrigin origin) noexcept {
         return "stored-code-address";
     case GuardedAotEntryOrigin::ReturnedCodeAddressTable:
         return "returned-code-address-table";
+    }
+    return "unknown";
+}
+
+const char*
+guarded_aot_entry_rejection_reason_name(
+    const GuardedAotEntryRejectionReason reason) noexcept {
+    switch (reason) {
+    case GuardedAotEntryRejectionReason::OddAddress:
+        return "odd-address";
+    case GuardedAotEntryRejectionReason::OutsideSegments:
+        return "outside-segments";
+    case GuardedAotEntryRejectionReason::NotCodeSegment:
+        return "not-code-segment";
+    case GuardedAotEntryRejectionReason::NotExecutableSegment:
+        return "not-executable-segment";
+    case GuardedAotEntryRejectionReason::OutsideCommittedData:
+        return "outside-committed-data";
+    case GuardedAotEntryRejectionReason::InstructionNotAnalyzed:
+        return "instruction-not-analyzed";
+    case GuardedAotEntryRejectionReason::DelaySlotEntry:
+        return "delay-slot-entry";
+    case GuardedAotEntryRejectionReason::UnknownInstruction:
+        return "unknown-instruction";
+    case GuardedAotEntryRejectionReason::EntryExtentUnavailable:
+        return "entry-extent-unavailable";
+    case GuardedAotEntryRejectionReason::SourceByteOffsetUnavailable:
+        return "source-byte-offset-unavailable";
+    case GuardedAotEntryRejectionReason::SegmentByteOffsetUnavailable:
+        return "segment-byte-offset-unavailable";
+    case GuardedAotEntryRejectionReason::EntryBytesUnavailable:
+        return "entry-bytes-unavailable";
     }
     return "unknown";
 }

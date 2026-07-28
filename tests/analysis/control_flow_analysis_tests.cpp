@@ -51,6 +51,21 @@ find_guarded_aot_entry(
                                                            : &*iterator;
 }
 
+const katana::analysis::GuardedAotEntryRejection*
+find_guarded_aot_entry_rejection(
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::uint32_t address) {
+    const auto iterator =
+        std::find_if(analysis.guarded_aot_entry_rejections.begin(),
+                     analysis.guarded_aot_entry_rejections.end(),
+                     [address](const auto& rejection) {
+                         return rejection.guest_address == address;
+                     });
+    return iterator == analysis.guarded_aot_entry_rejections.end()
+               ? nullptr
+               : &*iterator;
+}
+
 bool has_ir_block(const std::span<const katana::ir::Function> program,
                   const std::uint32_t address) {
     return std::any_of(
@@ -242,6 +257,21 @@ int main() {
         require(!katana::analysis::guarded_aot_inventory_complete(
                     completeness_contract),
                 "Direkter Shape-Budgetverlust blieb exportfaehig.");
+        completeness_contract
+            .guarded_code_shape_budget_exceeded_candidates = 0u;
+        completeness_contract.guarded_aot_entry_rejections.push_back(
+            {0x100u,
+             0x100u,
+             katana::analysis::GuardedAotEntryRejectionReason::
+                 InstructionNotAnalyzed,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::GuardedAotEntryOrigin::TailIngress},
+             {0x20u},
+             {}});
+        require(!katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Typisiert abgelehnter Guarded-AOT-Einstieg blieb "
+                "exportfaehig.");
     }
 
     auto jump_image = code_image(
@@ -303,6 +333,56 @@ int main() {
                 hint_json.find("\"status\":\"stale\"") != std::string::npos &&
                 hint_json.find("\"line\":4") != std::string::npos,
             "Analyse-JSON serialisiert Hintstatus, Zeile oder Grund nicht vollstaendig.");
+
+    {
+        std::vector<std::uint8_t> bytes(0x12u, 0x09u);
+        bytes[0x00u] = 0x2Bu;
+        bytes[0x01u] = 0x41u; // jmp @r1
+        bytes[0x10u] = 0x0Bu;
+        bytes[0x11u] = 0x00u; // rts without committed delay-slot bytes
+        auto rejected_entry_image = code_image(std::move(bytes));
+        katana::analysis::AnalysisOverrides rejected_entry_hint;
+        rejected_entry_hint.mode =
+            katana::analysis::AnalysisDirectiveMode::Hint;
+        rejected_entry_hint.source_path =
+            "guarded-entry-rejection-hint.txt";
+        rejected_entry_hint.jumps.push_back({0u, 0x10u, 1u});
+        const auto rejected_entry =
+            katana::analysis::analyze_control_flow(
+                rejected_entry_image, &rejected_entry_hint);
+        const auto* rejection =
+            find_guarded_aot_entry_rejection(rejected_entry, 0x10u);
+        const auto rejection_json =
+            katana::analysis::format_control_flow_analysis_json(
+                rejected_entry);
+        require(
+            find_guarded_aot_entry(rejected_entry, 0x10u) == nullptr &&
+                rejection != nullptr &&
+                rejection->resolved_address == 0x10u &&
+                rejection->reason ==
+                    katana::analysis::
+                        GuardedAotEntryRejectionReason::
+                            EntryExtentUnavailable &&
+                rejection->origins ==
+                    std::vector{
+                        katana::analysis::GuardedAotEntryOrigin::
+                            TailIngress} &&
+                rejection->source_sites ==
+                    std::vector<std::uint32_t>{0u} &&
+                !katana::analysis::guarded_aot_inventory_complete(
+                    rejected_entry) &&
+                rejection_json.find(
+                    "\"guarded_aot_entry_rejections\":1") !=
+                    std::string::npos &&
+                rejection_json.find(
+                    "\"guest_address\":\"0x00000010\","
+                    "\"resolved_address\":\"0x00000010\","
+                    "\"reason\":\"entry-extent-unavailable\"") !=
+                    std::string::npos,
+            "Akzeptierter, aber nicht materialisierbarer Guarded-AOT-"
+            "Kandidat verlor typisierten Grund, Herkunft oder "
+            "Fail-closed-Vertrag.");
+    }
 
     auto call_image = code_image({0x0Cu,
                                   0xE1u,

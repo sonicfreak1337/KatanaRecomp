@@ -10738,6 +10738,34 @@ static PortExportResult export_dreamcast_port_project_impl(
     if (!options.diagnostic_partial && blocking_diagnostics != 0u) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
     }
+    if (!options.diagnostic_partial &&
+        !prepared.analysis.guarded_aot_entry_rejections.empty()) {
+        std::ostringstream reason;
+        reason << "Portanalyse kann akzeptierte Guarded-AOT-Einstiege "
+                  "nicht nativ materialisieren:";
+        constexpr std::size_t reported_rejections = 8u;
+        const auto count = std::min(
+            reported_rejections,
+            prepared.analysis.guarded_aot_entry_rejections.size());
+        for (std::size_t index = 0u; index < count; ++index) {
+            const auto& rejection =
+                prepared.analysis.guarded_aot_entry_rejections[index];
+            reason << (index == 0u ? " " : ", ")
+                   << guarded_aot_address(rejection.guest_address)
+                   << " ("
+                   << katana::analysis::
+                          guarded_aot_entry_rejection_reason_name(
+                              rejection.reason)
+                   << ')';
+        }
+        if (count <
+            prepared.analysis.guarded_aot_entry_rejections.size()) {
+            reason << ", ... ("
+                   << prepared.analysis.guarded_aot_entry_rejections.size()
+                   << " insgesamt)";
+        }
+        throw std::runtime_error(reason.str());
+    }
     const auto incomplete = std::count_if(
         prepared.analysis.indirect_control_flow.begin(),
         prepared.analysis.indirect_control_flow.end(),
@@ -10772,7 +10800,9 @@ static PortExportResult export_dreamcast_port_project_impl(
                << '/' << prepared.analysis.guarded_code_inventory_budget
                << " shape_budget_exceeded="
                << prepared.analysis
-                      .guarded_code_shape_budget_exceeded_candidates;
+                      .guarded_code_shape_budget_exceeded_candidates
+               << " entry_rejections="
+               << prepared.analysis.guarded_aot_entry_rejections.size();
         throw std::runtime_error(reason.str());
     }
     katana::ir::require_valid_program(prepared.program);
