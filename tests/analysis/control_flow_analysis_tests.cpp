@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <span>
 #include <string>
 #include <tuple>
 
@@ -34,6 +35,33 @@ find_function(const katana::analysis::ControlFlowAnalysisResult& analysis,
                      analysis.recursive.functions.end(),
                      [address](const auto& function) { return function.address == address; });
     return iterator == analysis.recursive.functions.end() ? nullptr : &*iterator;
+}
+
+const katana::analysis::GuardedAotEntry*
+find_guarded_aot_entry(
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::uint32_t address) {
+    const auto iterator =
+        std::find_if(analysis.guarded_aot_entries.begin(),
+                     analysis.guarded_aot_entries.end(),
+                     [address](const auto& entry) {
+                         return entry.guest_address == address;
+                     });
+    return iterator == analysis.guarded_aot_entries.end() ? nullptr
+                                                           : &*iterator;
+}
+
+bool has_ir_block(const std::span<const katana::ir::Function> program,
+                  const std::uint32_t address) {
+    return std::any_of(
+        program.begin(), program.end(), [address](const auto& function) {
+            return std::any_of(
+                function.blocks.begin(),
+                function.blocks.end(),
+                [address](const auto& block) {
+                    return block.start_address == address;
+                });
+        });
 }
 
 katana::io::ExecutableImage code_image(std::vector<std::uint8_t> bytes) {
@@ -397,6 +425,44 @@ int main() {
                                         edge.target_address == 0x70u;
                              }),
             "Tail-Jump-Inventar fror den Live-Transfer als statische Kante ein.");
+    const auto* tail_ingress =
+        find_guarded_aot_entry(tail_registered_callback, 0x40u);
+    const auto* stored_tail_entry =
+        find_guarded_aot_entry(tail_registered_callback, 0x70u);
+    require(
+        tail_ingress != nullptr &&
+            tail_ingress->origins ==
+                std::vector{
+                    katana::analysis::GuardedAotEntryOrigin::TailIngress} &&
+            tail_ingress->source_sites ==
+                std::vector<std::uint32_t>{0x24u} &&
+            tail_ingress->shared_body_address == 0x40u &&
+            tail_ingress->entry_byte_extent == 2u,
+        "Bewachter Tail-Ingress verlor Herkunft oder eigenstaendigen "
+        "AOT-Entryvertrag.");
+    require(
+        stored_tail_entry != nullptr &&
+            stored_tail_entry->origins ==
+                std::vector{
+                    katana::analysis::GuardedAotEntryOrigin::
+                        StoredCodeAddress} &&
+            std::binary_search(stored_tail_entry->source_sites.begin(),
+                               stored_tail_entry->source_sites.end(),
+                               0x4Cu) &&
+            stored_tail_entry->shared_body_address == 0x80u &&
+            stored_tail_entry->entry_byte_extent == 4u &&
+            stored_tail_entry->source_identity.starts_with("sha256:") &&
+            stored_tail_entry->entry_byte_identity.starts_with("sha256:"),
+        "Bewachter BRA-Entry verlor Storeprovenienz, Delay-Slot-Bytes oder "
+        "Shared-Body-Hinweis.");
+    const auto tail_registered_ir =
+        katana::ir::lower_program(tail_registered_callback);
+    require(has_ir_block(tail_registered_ir, 0x40u) &&
+                has_ir_block(tail_registered_ir, 0x70u) &&
+                has_ir_block(tail_registered_ir, 0x80u) &&
+                katana::ir::verify_program(tail_registered_ir).empty(),
+            "Bewachte Entries und Shared Body wurden nicht als getrennte "
+            "native IR-Blockstarts erhalten.");
 
     katana::analysis::AnalysisOverrides stored_callback_override;
     stored_callback_override.source_path = "stored-callback-override.txt";

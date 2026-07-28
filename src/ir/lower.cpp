@@ -1182,6 +1182,8 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
                                  resolution.analysis_candidates.begin(),
                                  resolution.analysis_candidates.end());
     }
+    for (const auto& entry : analysis.guarded_aot_entries)
+        candidate_leaders.push_back(entry.guest_address);
     std::sort(seeds.begin(), seeds.end());
     seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
     std::sort(candidate_leaders.begin(), candidate_leaders.end());

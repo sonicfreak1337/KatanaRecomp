@@ -517,6 +517,62 @@ bool equivalent_ir_block(const katana::ir::BasicBlock& left,
                       equivalent_ir_instruction);
 }
 
+std::string guarded_aot_address(const std::uint32_t address) {
+    std::ostringstream output;
+    output << "0x" << std::uppercase << std::hex << std::setw(8)
+           << std::setfill('0') << address;
+    return output.str();
+}
+
+void require_guarded_aot_program_entries(
+    const std::span<const katana::ir::Function> program,
+    const std::span<const katana::analysis::GuardedAotEntry> entries,
+    const std::string_view phase) {
+    std::unordered_map<std::uint32_t, const katana::ir::BasicBlock*>
+        canonical_blocks;
+    std::unordered_set<std::uint32_t> divergent_blocks;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            const auto [existing, inserted] =
+                canonical_blocks.emplace(block.start_address, &block);
+            if (!inserted &&
+                !equivalent_ir_block(*existing->second, block))
+                divergent_blocks.insert(block.start_address);
+        }
+    }
+
+    std::unordered_set<std::uint32_t> seen_entries;
+    seen_entries.reserve(entries.size());
+    for (const auto& entry : entries) {
+        if (!seen_entries.insert(entry.guest_address).second)
+            throw std::runtime_error(
+                "Guarded-AOT-Vertrag enthaelt einen doppelten Einstieg bei " +
+                guarded_aot_address(entry.guest_address) + " (" +
+                std::string(phase) + ").");
+        const auto found = canonical_blocks.find(entry.guest_address);
+        if (found == canonical_blocks.end())
+            throw std::runtime_error(
+                "Guarded-AOT-Einstieg besitzt keinen eigenstaendigen "
+                "IR-Blockstart bei " +
+                guarded_aot_address(entry.guest_address) + " (" +
+                std::string(phase) + ").");
+        if (divergent_blocks.contains(entry.guest_address))
+            throw std::runtime_error(
+                "IR-Basic-Block besitzt abweichende Funktionsbesitzer.");
+        if (entry.shared_body_address == entry.guest_address) continue;
+        if (!canonical_blocks.contains(entry.shared_body_address))
+            throw std::runtime_error(
+                "Guarded-AOT-Einstieg verlor seinen emittierbaren Shared "
+                "Body bei " +
+                guarded_aot_address(entry.guest_address) + " -> " +
+                guarded_aot_address(entry.shared_body_address) + " (" +
+                std::string(phase) + ").");
+        if (divergent_blocks.contains(entry.shared_body_address))
+            throw std::runtime_error(
+                "IR-Basic-Block besitzt abweichende Funktionsbesitzer.");
+    }
+}
+
 struct CountedLoopBatchProof {
     struct Descriptor {
         std::uint32_t guard_address = 0u;
@@ -7386,6 +7442,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     const std::span<const katana::analysis::IndirectControlFlowResolution>
         indirect_control_flow,
     const std::span<const katana::analysis::FunctionCandidate> function_candidates,
+    const std::span<const katana::analysis::GuardedAotEntry>
+        guarded_aot_entries,
     const katana::io::ExecutableImage& image,
     const std::uint32_t boot_address,
     const std::size_t boot_size,
@@ -7759,6 +7817,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               [](const auto& left, const auto& right) { return left.address < right.address; });
     if (dispatch_blocks.empty())
         throw std::runtime_error("Runtime-Dispatch besitzt keine generierten Bloecke.");
+    require_guarded_aot_program_entries(
+        program, guarded_aot_entries, "runtime-static-registry");
     for (const auto& native_template : native_templates) {
         if (!emitted_blocks.contains(native_template.source_start))
             throw std::runtime_error("Runtime-Codecopy besitzt keinen generierten AOT-Quellblock.");
@@ -7787,6 +7847,92 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                     "Externes Runtimecode-Template verweist auf ein nicht "
                     "generiertes AOT-Patchziel.");
         }
+    }
+    std::unordered_map<const katana::io::ImageSegment*, std::string>
+        guarded_entry_source_identities;
+    for (const auto& entry : guarded_aot_entries) {
+        if (entry.evidence !=
+                katana::analysis::ControlFlowEvidence::GuardedPartial ||
+            entry.origins.empty() ||
+            (entry.entry_byte_extent != 2u &&
+             entry.entry_byte_extent != 4u) ||
+            entry.source_sites.empty() ||
+            entry.source_identity.size() != 71u ||
+            !entry.source_identity.starts_with("sha256:") ||
+            entry.entry_byte_identity.size() != 71u ||
+            !entry.entry_byte_identity.starts_with("sha256:"))
+            throw std::runtime_error(
+                "Guarded-AOT-Einstieg besitzt keinen vollstaendigen "
+                "Analysevertrag bei 0x" +
+                symbol(entry.guest_address) + ".");
+        const auto* segment =
+            image.find_segment(entry.guest_address, entry.entry_byte_extent);
+        const auto byte_offset =
+            segment != nullptr
+                ? segment->byte_offset(entry.guest_address)
+                : std::optional<std::size_t>{};
+        const auto source_offset =
+            segment != nullptr
+                ? segment->source_byte_offset(entry.guest_address)
+                : std::optional<std::uint64_t>{};
+        if (segment == nullptr || !byte_offset.has_value() ||
+            !source_offset.has_value() ||
+            *byte_offset > segment->bytes.size() ||
+            entry.entry_byte_extent >
+                segment->bytes.size() - *byte_offset)
+            throw std::runtime_error(
+                "Guarded-AOT-Einstieg verlor seine gebundenen Quellbytes bei 0x" +
+                symbol(entry.guest_address) + ".");
+        auto& source_identity = guarded_entry_source_identities[segment];
+        if (source_identity.empty()) {
+            source_identity =
+                "sha256:" +
+                katana::io::sha256_bytes(std::string_view(
+                    reinterpret_cast<const char*>(segment->bytes.data()),
+                    segment->bytes.size()));
+        }
+        const auto entry_identity =
+            "sha256:" +
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(
+                    segment->bytes.data() + *byte_offset),
+                entry.entry_byte_extent));
+        if (source_identity != entry.source_identity ||
+            *source_offset != entry.source_byte_offset ||
+            entry_identity != entry.entry_byte_identity)
+            throw std::runtime_error(
+                "Guarded-AOT-Einstieg stimmt nicht mit seiner Byte-/"
+                "Modulidentitaet ueberein bei 0x" +
+                symbol(entry.guest_address) + ".");
+        const bool native_template_entry =
+            std::any_of(
+                native_templates.begin(),
+                native_templates.end(),
+                [&](const auto& candidate) {
+                    return candidate.source_start == entry.guest_address;
+                }) ||
+            std::any_of(
+                external_native_templates.begin(),
+                external_native_templates.end(),
+                [&](const auto& candidate) {
+                    return candidate.source_start == entry.guest_address;
+                });
+        if (!emitted_blocks.contains(entry.guest_address) &&
+            !native_template_entry)
+            throw std::runtime_error(
+                "Guarded-AOT-Einstieg besitzt weder statischen Block noch "
+                "natives Template bei 0x" +
+                symbol(entry.guest_address) + ".");
+        // A shared-body hint never aliases the entry. The entry block executes
+        // first (including its delay slot) and may only then enter the shared
+        // body.
+        if (entry.shared_body_address != entry.guest_address &&
+            !emitted_blocks.contains(entry.shared_body_address))
+            throw std::runtime_error(
+                "Guarded-AOT-Einstieg besitzt keinen emittierten Shared Body "
+                "bei 0x" +
+                symbol(entry.guest_address) + " -> 0x" +
+                symbol(entry.shared_body_address) + ".");
     }
     std::set<std::string> latent_ids;
     for (const auto& module : latent_modules) {
@@ -9828,6 +9974,10 @@ static PortExportResult export_dreamcast_port_project_impl(
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
     katana::ir::require_valid_program(prepared.program);
+    require_guarded_aot_program_entries(
+        prepared.program,
+        prepared.analysis.guarded_aot_entries,
+        "prepared-ir");
     std::optional<DiscExportContext> disc_context;
     if (validated_recipe != nullptr)
         disc_context.emplace(
@@ -9950,6 +10100,10 @@ static PortExportResult export_dreamcast_port_project_impl(
         emitted_program.insert(emitted_program.end(), module.program.begin(), module.program.end());
     annotate_proven_linear_ram_accesses(emitted_program);
     katana::ir::require_valid_program(emitted_program);
+    require_guarded_aot_program_entries(
+        emitted_program,
+        prepared.analysis.guarded_aot_entries,
+        "final-emitted-ir");
     const auto hardware_audit =
         katana::analysis::audit_dreamcast_hardware(prepared.image, prepared.analysis);
     const auto wait_loop_descriptors = runtime_wait_loop_descriptors(hardware_audit);
@@ -10291,6 +10445,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         prepared.analysis.runtime_code_copies.copies,
         prepared.analysis.indirect_control_flow,
         prepared.analysis.recursive.functions,
+        prepared.analysis.guarded_aot_entries,
         prepared.image,
         prepared.boot_address,
         prepared.boot_size,

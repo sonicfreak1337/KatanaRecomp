@@ -1,6 +1,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 
 #include "katana/analysis/code_address.hpp"
+#include "katana/io/input_provenance.hpp"
 #include "katana/sh4/instruction.hpp"
 
 #include <algorithm>
@@ -608,6 +609,159 @@ collect_function_value_edges(
     return edges;
 }
 
+std::vector<GuardedAotEntry>
+collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
+                            const ControlFlowAnalysisResult& analysis,
+                            const GuardedCodeInventory& guarded_code_inventory) {
+    std::map<std::uint32_t, GuardedAotEntry> entries;
+    std::map<const katana::io::ImageSegment*, std::string> source_identities;
+    const auto add_entry =
+        [&](const std::uint32_t address,
+            const GuardedAotEntryOrigin origin,
+            const std::span<const std::uint32_t> source_sites,
+            const std::span<const std::uint32_t> source_objects = {}) {
+            const auto validation = validate_committed_code_address(image, address);
+            if (!validation.valid()) return;
+            const auto resolved = validation.resolved_address;
+            const auto* line = find_instruction(analysis.recursive, resolved);
+            const auto entry_extent =
+                line != nullptr && line->instruction.has_delay_slot ? 4u : 2u;
+            const auto* segment = image.find_segment(resolved, entry_extent);
+            if (line == nullptr || line->is_delay_slot ||
+                !line->instruction.is_known() || segment == nullptr)
+                return;
+            const auto source_offset = segment->source_byte_offset(resolved);
+            const auto byte_offset = segment->byte_offset(resolved);
+            if (!source_offset.has_value() || !byte_offset.has_value() ||
+                *byte_offset > segment->bytes.size() ||
+                entry_extent > segment->bytes.size() - *byte_offset)
+                return;
+            auto& entry = entries[resolved];
+            if (entry.source_identity.empty()) {
+                auto& identity = source_identities[segment];
+                if (identity.empty()) {
+                    identity =
+                        "sha256:" +
+                        katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(segment->bytes.data()),
+                            segment->bytes.size()));
+                }
+                entry.guest_address = resolved;
+                entry.shared_body_address = resolved;
+                entry.evidence = ControlFlowEvidence::GuardedPartial;
+                entry.source_identity = identity;
+                entry.source_byte_offset = *source_offset;
+                entry.entry_byte_extent = entry_extent;
+                entry.entry_byte_identity =
+                    "sha256:" +
+                    katana::io::sha256_bytes(std::string_view(
+                        reinterpret_cast<const char*>(
+                            segment->bytes.data() + *byte_offset),
+                        entry_extent));
+                if (line->instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::UnconditionalBranch &&
+                    line->target_address.has_value() &&
+                    find_instruction(analysis.recursive,
+                                     *line->target_address) != nullptr)
+                    entry.shared_body_address = *line->target_address;
+            }
+            entry.origins.push_back(origin);
+            entry.source_sites.insert(
+                entry.source_sites.end(), source_sites.begin(), source_sites.end());
+            entry.source_objects.insert(
+                entry.source_objects.end(),
+                source_objects.begin(),
+                source_objects.end());
+        };
+
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        auto targets = resolution.analysis_candidates;
+        if (!control_flow_evidence_proven(resolution.evidence)) {
+            if (resolution.target.has_value())
+                targets.push_back(*resolution.target);
+            targets.insert(
+                targets.end(), resolution.targets.begin(), resolution.targets.end());
+        }
+        std::sort(targets.begin(), targets.end());
+        targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+        const auto origin =
+            resolution.kind == IndirectControlFlowKind::Call
+                ? GuardedAotEntryOrigin::IndirectCall
+                : GuardedAotEntryOrigin::TailIngress;
+        const std::array source_sites{resolution.instruction_address};
+        for (const auto target : targets)
+            add_entry(target, origin, source_sites);
+    }
+    for (const auto& continuation : analysis.static_return_continuations) {
+        if (!control_flow_evidence_proven(continuation.evidence)) {
+            const std::array source_sites{continuation.instruction_address};
+            add_entry(continuation.target_address,
+                      GuardedAotEntryOrigin::StaticReturn,
+                      source_sites);
+        }
+    }
+    for (const auto& table : analysis.jump_tables) {
+        if (table.dispatch_kind != JumpTableDispatchKind::Jump ||
+            (control_flow_evidence_proven(table.evidence) &&
+             !table.aot_candidates_only))
+            continue;
+        for (const auto& entry : table.entries) {
+            if (entry.accepted) {
+                const std::array source_sites{table.dispatch_address};
+                const std::array source_objects{table.table_address};
+                add_entry(entry.target,
+                          GuardedAotEntryOrigin::JumpTableTail,
+                          source_sites,
+                          source_objects);
+            }
+        }
+    }
+    for (const auto& candidate :
+         guarded_code_inventory.stored_code_addresses) {
+        auto source_sites = candidate.store_instruction_addresses;
+        source_sites.insert(source_sites.end(),
+                            candidate.evidence_call_sites.begin(),
+                            candidate.evidence_call_sites.end());
+        add_entry(candidate.target_address,
+                  GuardedAotEntryOrigin::StoredCodeAddress,
+                  source_sites,
+                  candidate.evidence_callees);
+    }
+    for (const auto& table :
+         guarded_code_inventory.returned_code_address_tables) {
+        auto source_sites = table.load_instruction_addresses;
+        source_sites.insert(source_sites.end(),
+                            table.evidence_call_sites.begin(),
+                            table.evidence_call_sites.end());
+        auto source_objects = table.evidence_callees;
+        source_objects.push_back(table.table_address);
+        for (const auto target : table.target_addresses)
+            add_entry(target,
+                      GuardedAotEntryOrigin::ReturnedCodeAddressTable,
+                      source_sites,
+                      source_objects);
+    }
+    std::vector<GuardedAotEntry> result;
+    result.reserve(entries.size());
+    for (auto& [address, entry] : entries) {
+        static_cast<void>(address);
+        std::sort(entry.origins.begin(), entry.origins.end());
+        entry.origins.erase(
+            std::unique(entry.origins.begin(), entry.origins.end()),
+            entry.origins.end());
+        std::sort(entry.source_sites.begin(), entry.source_sites.end());
+        entry.source_sites.erase(
+            std::unique(entry.source_sites.begin(), entry.source_sites.end()),
+            entry.source_sites.end());
+        std::sort(entry.source_objects.begin(), entry.source_objects.end());
+        entry.source_objects.erase(
+            std::unique(entry.source_objects.begin(), entry.source_objects.end()),
+            entry.source_objects.end());
+        result.push_back(std::move(entry));
+    }
+    return result;
+}
+
 } // namespace
 
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
@@ -669,6 +823,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
 
     ControlFlowAnalysisResult analysis;
+    GuardedCodeInventory final_guarded_code_inventory;
     JumpTableSnapshotCache jump_table_cache;
     const auto report_progress = [&](const std::string_view phase) {
         if (!progress_callback) return;
@@ -1080,6 +1235,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             function_values.guarded_code_inventory.candidate_inventory_truncated;
         analysis.returned_table_scan_truncated =
             function_values.guarded_code_inventory.table_scan_truncated;
+        final_guarded_code_inventory =
+            function_values.guarded_code_inventory;
         analysis.function_value_summaries = std::move(function_values.summaries);
         report_progress("function-values-complete");
         for (const auto& candidate :
@@ -1226,6 +1383,9 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
     classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
     bind_partial_runtime_contracts(analysis.indirect_control_flow);
+    analysis.guarded_aot_entries =
+        collect_guarded_aot_entries(
+            image, analysis, final_guarded_code_inventory);
     analysis.resolved_edges =
         collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
     analysis.sites.reserve(analysis.indirect_control_flow.size());
@@ -1259,6 +1419,14 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     std::set<std::uint32_t> symbolic_candidates;
     for (const auto& function : analysis.recursive.functions) {
         symbolic_candidates.insert(function.address);
+    }
+    for (const auto& entry : analysis.guarded_aot_entries) {
+        symbolic_candidates.insert(entry.guest_address);
+        symbolic_candidates.insert(entry.shared_body_address);
+        symbolic_candidates.insert(
+            entry.source_sites.begin(), entry.source_sites.end());
+        symbolic_candidates.insert(
+            entry.source_objects.begin(), entry.source_objects.end());
     }
     for (const auto& resolution : analysis.indirect_control_flow) {
         symbolic_candidates.insert(resolution.instruction_address);
@@ -1312,7 +1480,9 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             {function.address, function.size});
     }
     std::vector<std::uint32_t> final_block_leaders;
-    final_block_leaders.reserve(final_function_boundaries.size() * 2u);
+    final_block_leaders.reserve(
+        final_function_boundaries.size() * 2u +
+        analysis.guarded_aot_entries.size());
     for (const auto& boundary : final_function_boundaries) {
         final_block_leaders.push_back(boundary.entry_address);
         if (boundary.size != 0u) {
@@ -1324,6 +1494,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     static_cast<std::uint32_t>(end));
         }
     }
+    for (const auto& entry : analysis.guarded_aot_entries)
+        final_block_leaders.push_back(entry.guest_address);
     const auto final_blocks = build_basic_blocks(
         analysis.recursive.instructions,
         analysis.resolved_edges,
@@ -1373,6 +1545,25 @@ analysis_directive_diagnostic_status_name(const AnalysisDirectiveDiagnosticStatu
         return "rejected";
     case AnalysisDirectiveDiagnosticStatus::Stale:
         return "stale";
+    }
+    return "unknown";
+}
+
+const char*
+guarded_aot_entry_origin_name(const GuardedAotEntryOrigin origin) noexcept {
+    switch (origin) {
+    case GuardedAotEntryOrigin::IndirectCall:
+        return "indirect-call";
+    case GuardedAotEntryOrigin::TailIngress:
+        return "tail-ingress";
+    case GuardedAotEntryOrigin::JumpTableTail:
+        return "jump-table-tail";
+    case GuardedAotEntryOrigin::StaticReturn:
+        return "static-return";
+    case GuardedAotEntryOrigin::StoredCodeAddress:
+        return "stored-code-address";
+    case GuardedAotEntryOrigin::ReturnedCodeAddressTable:
+        return "returned-code-address-table";
     }
     return "unknown";
 }

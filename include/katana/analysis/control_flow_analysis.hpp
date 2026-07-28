@@ -12,6 +12,7 @@
 #include "katana/io/executable_image.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
@@ -46,6 +47,32 @@ struct ControlFlowSite {
     std::vector<std::uint32_t> evidence_callees;
 };
 
+enum class GuardedAotEntryOrigin : std::uint8_t {
+    IndirectCall,
+    TailIngress,
+    JumpTableTail,
+    StaticReturn,
+    StoredCodeAddress,
+    ReturnedCodeAddressTable
+};
+
+struct GuardedAotEntry {
+    std::uint32_t guest_address = 0u;
+    // Diagnostic ownership hint only. The guest entry remains independently
+    // dispatchable so its branch and delay-slot side effects are never skipped.
+    std::uint32_t shared_body_address = 0u;
+    ControlFlowEvidence evidence = ControlFlowEvidence::GuardedPartial;
+    std::vector<GuardedAotEntryOrigin> origins;
+    // Instruction/call sites that produced this guarded inventory entry.
+    std::vector<std::uint32_t> source_sites;
+    // Owning functions, backing tables or other non-instruction provenance.
+    std::vector<std::uint32_t> source_objects;
+    std::string source_identity;
+    std::uint64_t source_byte_offset = 0u;
+    std::uint32_t entry_byte_extent = 0u;
+    std::string entry_byte_identity;
+};
+
 struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
     RuntimeCodeCopyAnalysis runtime_code_copies;
@@ -55,6 +82,9 @@ struct ControlFlowAnalysisResult {
     std::vector<FunctionValueSummary> function_value_summaries;
     std::vector<ResolvedControlFlowEdge> resolved_edges;
     std::vector<ControlFlowSite> sites;
+    // Every accepted entry remains runtime-guarded, but code generation must
+    // still provide a native entry block or a byte-bound native template.
+    std::vector<GuardedAotEntry> guarded_aot_entries;
     std::shared_ptr<const InstructionArena> instruction_arena;
     std::vector<InstructionSpan> block_spans;
     EvidenceInterner evidence_ids;
@@ -87,6 +117,8 @@ using ControlFlowAnalysisProgressCallback =
 
 [[nodiscard]] const char*
 analysis_directive_diagnostic_status_name(AnalysisDirectiveDiagnosticStatus status) noexcept;
+[[nodiscard]] const char*
+guarded_aot_entry_origin_name(GuardedAotEntryOrigin origin) noexcept;
 
 [[nodiscard]] ControlFlowAnalysisResult
 analyze_control_flow(const katana::io::ExecutableImage& image,

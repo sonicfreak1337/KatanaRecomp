@@ -352,7 +352,7 @@ std::string format_indirect_control_flow_report(
 std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& analysis) {
     std::ostringstream output;
     const auto summary = summarize_control_flow_analysis(analysis);
-    katana::io::write_json_report_header(output, "katana-control-flow-v3", "control-flow");
+    katana::io::write_json_report_header(output, "katana-control-flow-v4", "control-flow");
     output << ",\"privacy\":\"local-detailed\""
            << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
            << ",\"instruction_contexts\":" << analysis.recursive.contextual_instructions.size()
@@ -369,6 +369,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"jump_tables\":" << analysis.jump_tables.size()
            << ",\"static_return_continuations\":"
            << analysis.static_return_continuations.size()
+           << ",\"guarded_aot_entries\":"
+           << analysis.guarded_aot_entries.size()
            << ",\"function_value_summaries\":" << analysis.function_value_summaries.size()
            << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
            << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations
@@ -412,6 +414,51 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         for (std::size_t origin = 0u; origin < origins.size(); ++origin) {
             if (origin != 0u) output << ',';
             output << katana::io::quote_json(function_origin_name(origins[origin]));
+        }
+        output << "]}";
+    }
+    output << ']';
+
+    output << ",\"guarded_aot_entries\":[";
+    for (std::size_t index = 0u;
+         index < analysis.guarded_aot_entries.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        const auto& entry = analysis.guarded_aot_entries[index];
+        output << "{\"guest_address\":"
+               << katana::io::quote_json(hex32(entry.guest_address))
+               << ",\"shared_body_address\":"
+               << katana::io::quote_json(hex32(entry.shared_body_address))
+               << ",\"evidence\":"
+               << katana::io::quote_json(
+                      control_flow_evidence_name(entry.evidence))
+               << ",\"source_identity\":"
+               << katana::io::quote_json(entry.source_identity)
+               << ",\"source_byte_offset\":" << entry.source_byte_offset
+               << ",\"entry_byte_extent\":" << entry.entry_byte_extent
+               << ",\"entry_byte_identity\":"
+               << katana::io::quote_json(entry.entry_byte_identity)
+               << ",\"origins\":[";
+        for (std::size_t origin = 0u; origin < entry.origins.size();
+             ++origin) {
+            if (origin != 0u) output << ',';
+            output << katana::io::quote_json(
+                guarded_aot_entry_origin_name(entry.origins[origin]));
+        }
+        output << "],\"source_sites\":[";
+        for (std::size_t site = 0u; site < entry.source_sites.size();
+             ++site) {
+            if (site != 0u) output << ',';
+            output << katana::io::quote_json(
+                hex32(entry.source_sites[site]));
+        }
+        output << "],\"source_objects\":[";
+        for (std::size_t object = 0u;
+             object < entry.source_objects.size();
+             ++object) {
+            if (object != 0u) output << ',';
+            output << katana::io::quote_json(
+                hex32(entry.source_objects[object]));
         }
         output << "]}";
     }
