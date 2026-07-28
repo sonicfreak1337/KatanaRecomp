@@ -1122,22 +1122,19 @@ int run_test(const int argc, char* argv[]) {
                                 diagnostic.reason == "unknown-opcode";
                      });
     require(
-        stored_unknown_function != stored_unknown_analysis.recursive.functions.end() &&
-            std::find(stored_unknown_function->origins.begin(),
-                      stored_unknown_function->origins.end(),
-                      katana::analysis::FunctionOrigin::StoredCodeAddress) !=
-                stored_unknown_function->origins.end() &&
-            stored_unknown_function->evidence ==
-                katana::analysis::ControlFlowEvidence::GuardedPartial &&
-            std::binary_search(
+        stored_unknown_function ==
+                stored_unknown_analysis.recursive.functions.end() &&
+            !std::binary_search(
                 stored_unknown_analysis.recursive.guarded_candidate_instruction_addresses.begin(),
                 stored_unknown_analysis.recursive.guarded_candidate_instruction_addresses.end(),
                 stored_unknown_candidate) &&
-            stored_unknown_diagnostic != stored_unknown_analysis.recursive.diagnostics.end() &&
-            stored_unknown_diagnostic->evidence ==
-                katana::analysis::ControlFlowEvidence::GuardedPartial &&
-            !katana::analysis::analysis_diagnostic_blocks_codegen(*stored_unknown_diagnostic),
-        "Gespeicherter BOOT.BIN-Codekandidat verlor Guarded-Partial-Diagnoseevidenz.");
+            stored_unknown_diagnostic ==
+                stored_unknown_analysis.recursive.diagnostics.end() &&
+            stored_unknown_analysis.guarded_code_inventory_candidates == 0u &&
+            !stored_unknown_analysis.candidate_inventory_truncated,
+        "Strukturell ungueltiger gespeicherter BOOT.BIN-Codekandidat "
+        "erreichte trotz Shape-Admission die rekursive Analyse oder wurde "
+        "als Budgetabbruch fehlklassifiziert.");
     const auto stored_unknown_program = katana::ir::lower_program(stored_unknown_analysis);
     require(std::none_of(
                 stored_unknown_program.begin(),
