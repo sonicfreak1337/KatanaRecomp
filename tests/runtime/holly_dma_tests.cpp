@@ -89,6 +89,7 @@ int main() {
             "G2-DMA-Snapshot verliert private Timeout-/Protectregister oder Eventbindung.");
 
     memory.write_u32(0xA05F78BCu, 0x4659404Fu);
+    controllers.g2->set_hardware_request_probe(0u, [] { return true; });
     for (std::uint32_t index = 0u; index < 32u; ++index)
         memory.write_u8(0x0C001000u + index, static_cast<std::uint8_t>(index + 1u));
     memory.write_u32(0x005F7800u, 0x00801000u);
@@ -96,9 +97,10 @@ int main() {
     memory.write_u32(0x005F7808u, 0x80000020u);
     memory.write_u32(0x005F7814u, 1u);
     memory.write_u32(0x005F7818u, 1u);
-    require(memory.read_u32(0x005F7818u) == 1u && memory.read_u8(0x0080101Fu) == 0u,
-            "Hardwaregetriggerte AICA-G2-DMA startet vor dem AICA-Request.");
-    controllers.g2->hardware_trigger(0u);
+    require(memory.read_u32(0x005F7818u) == 1u &&
+                controllers.g2->channel_state(0u).completion_event &&
+                memory.read_u8(0x0080101Fu) == 0u,
+            "Hardwaregetriggerte AICA-G2-DMA plant nicht sofort oder committed vor Gastzeit.");
     memory.write_u32(0x005F781Cu, 1u);
     static_cast<void>(scheduler.advance_by(128u, 1u));
     require(memory.read_u8(0x0080101Fu) == 0u && (memory.read_u32(0x005F781Cu) & 0x10u) != 0u,

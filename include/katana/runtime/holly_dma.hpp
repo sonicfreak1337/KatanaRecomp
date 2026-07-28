@@ -163,6 +163,8 @@ class DreamcastG2DmaController final {
         std::uint32_t channel,
         std::uint64_t token);
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
+    void set_hardware_request_probe(std::size_t channel,
+                                    std::function<bool()> probe);
     void hardware_trigger(std::size_t channel);
     void interrupt_trigger(SystemAsicEvent event);
 
@@ -186,6 +188,7 @@ class DreamcastG2DmaController final {
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
     std::array<HollyDmaChannelState, 4u> channels_{};
+    std::array<std::function<bool()>, 4u> hardware_request_probes_{};
     std::uint32_t address_protect_ = 0x00007F00u;
     std::uint32_t ds_timeout_ = 0u;
     std::uint32_t tr_timeout_ = 0u;

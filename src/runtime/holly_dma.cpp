@@ -254,6 +254,10 @@ void DreamcastG2DmaController::arm(const std::size_t channel) {
         start(channel);
         return;
     case 1u:
+        if (hardware_request_probes_[channel] &&
+            hardware_request_probes_[channel]())
+            start(channel);
+        return;
     case 2u:
         return;
     default:
@@ -405,6 +409,14 @@ void DreamcastG2DmaController::fail(const std::size_t channel,
         } catch (...) {
         }
     }
+}
+
+void DreamcastG2DmaController::set_hardware_request_probe(
+    const std::size_t channel,
+    std::function<bool()> probe) {
+    if (channel >= hardware_request_probes_.size())
+        throw std::out_of_range("Ungueltiger G2-DMA-Hardwaretriggerkanal.");
+    hardware_request_probes_[channel] = std::move(probe);
 }
 
 void DreamcastG2DmaController::hardware_trigger(const std::size_t channel) {

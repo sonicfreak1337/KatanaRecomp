@@ -1038,6 +1038,14 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.holly_dma.pvr->bind_sh4_dmac(state.dmac, 0u);
     const auto g2_dma = std::weak_ptr<DreamcastG2DmaController>(state.holly_dma.g2);
     const auto pvr_dma = std::weak_ptr<DreamcastPvrDmaController>(state.holly_dma.pvr);
+    const auto g2_fifo_status =
+        std::weak_ptr<DreamcastSystemBusControl>(state.system_bus_control);
+    state.holly_dma.g2->set_hardware_request_probe(0u, [g2_fifo_status] {
+        const auto controller = g2_fifo_status.lock();
+        if (!controller)
+            throw std::runtime_error("AICA-G2-DMA-Pufferstatus fehlt.");
+        return controller->aica_write_buffer_empty();
+    });
     state.system_asic->set_dma_trigger_observers(
         [pvr_dma](const SystemAsicEvent) {
             if (const auto controller = pvr_dma.lock()) controller->hardware_trigger();

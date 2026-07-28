@@ -100,7 +100,8 @@ int main() {
                 channel2_starts == starts_before_snapshot,
             "Strukturierter Systembus-Snapshot verliert Zustand oder startet Channel 2.");
     require(bus.read_u32(0x005F6860u) == 0u && bus.read_u32(0x005F6880u) == 8u &&
-                bus.read_u32(0x005F688Cu) == 0u && bus.read_u32(0x005F689Cu) == 0xBu,
+                bus.read_u32(0x005F688Cu) == 0u && system_bus->aica_write_buffer_empty() &&
+                bus.read_u32(0x005F689Cu) == 0xBu,
             "Read-only-Systembusstatus besitzt falsche Resetwerte.");
     require(throws([&] { bus.write_u32(0x005F6860u, 1u); }) &&
                 throws([&] { bus.write_u32(0x005F6880u, 1u); }) &&

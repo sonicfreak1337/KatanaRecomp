@@ -182,6 +182,10 @@ std::uint64_t DreamcastSystemBusControl::system_reset_requests() const noexcept 
     return system_reset_requests_;
 }
 
+bool DreamcastSystemBusControl::aica_write_buffer_empty() const noexcept {
+    return (registers_[FifoStatus / 4u] & 1u) == 0u;
+}
+
 DreamcastSystemBusSnapshot DreamcastSystemBusControl::snapshot() const noexcept {
     DreamcastSystemBusSnapshot result;
     result.registers = registers_;
