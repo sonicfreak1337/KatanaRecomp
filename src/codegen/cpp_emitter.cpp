@@ -2639,6 +2639,8 @@ void emit_terminal(std::ostringstream& output,
                    const std::unordered_set<std::uint32_t>& known_functions,
                    const std::unordered_map<std::uint32_t, std::uint32_t>&
                        guarded_native_call_targets,
+                   const std::unordered_map<std::uint32_t, std::uint32_t>&
+                       native_block_owner_entries,
                    const std::unordered_set<std::uint32_t>& current_blocks,
                    const int indent,
                    const bool single_block,
@@ -2887,8 +2889,59 @@ void emit_terminal(std::ostringstream& output,
             output << "cpu.pc = jump_target;\n";
             if (defer_delay_slot_safepoint)
                 emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
+            if (instruction.resolved_targets.empty()) {
+                emit_indent(output, indent);
+                output << "return;\n";
+                return;
+            }
+
             emit_indent(output, indent);
+            output << "switch (" << unrelocated_code_address("jump_target") << ") {\n";
+            for (const auto target : instruction.resolved_targets) {
+                emit_indent(output, indent + 1);
+                output << "case " << hex32(target) << ": {\n";
+                if (current_blocks.contains(target)) {
+                    emit_block_transition(output,
+                                          indent + 2,
+                                          single_block,
+                                          guarded_local_block_chaining,
+                                          target,
+                                          native_internal_block_labels,
+                                          uses_proven_linear_ram);
+                } else if (const auto owner = native_block_owner_entries.find(target);
+                           owner != native_block_owner_entries.end()) {
+                    emit_indent(output, indent + 2);
+                    output << "if (services != nullptr && "
+                              "services->can_chain_executable_block(cpu.pc)) {\n";
+                    emit_indent(output, indent + 3);
+                    output << "katana::runtime::NativeAotCallDepthGuard "
+                              "native_call_depth;\n";
+                    emit_indent(output, indent + 3);
+                    output << "if (native_call_depth) ";
+                    if (table_compatible_function_entries)
+                        output << "static_cast<void>("
+                               << cpp_runtime_block_function_name(owner->second)
+                               << "(cpu, context));\n";
+                    else
+                        output << cpp_service_function_name(owner->second)
+                               << "(cpu, services);\n";
+                    emit_indent(output, indent + 2);
+                    output << "}\n";
+                    emit_indent(output, indent + 2);
+                    output << "return;\n";
+                } else {
+                    emit_indent(output, indent + 2);
+                    output << "return;\n";
+                }
+                emit_indent(output, indent + 1);
+                output << "}\n";
+            }
+            emit_indent(output, indent + 1);
+            output << "default:\n";
+            emit_indent(output, indent + 2);
             output << "return;\n";
+            emit_indent(output, indent);
+            output << "}\n";
             return;
         }
 
@@ -2987,6 +3040,75 @@ void emit_terminal(std::ostringstream& output,
             if (defer_delay_slot_safepoint)
                 emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
             const auto return_address = instruction.source_address + 4u;
+            if (!instruction.resolved_targets.empty()) {
+                emit_indent(output, indent);
+                output << "switch (" << unrelocated_code_address("call_target") << ") {\n";
+                for (const auto target : instruction.resolved_targets) {
+                    std::optional<std::uint32_t> owner_entry;
+                    if (const auto owner = native_block_owner_entries.find(target);
+                        owner != native_block_owner_entries.end())
+                        owner_entry = owner->second;
+                    else if (known_functions.contains(target))
+                        owner_entry = target;
+
+                    emit_indent(output, indent + 1);
+                    output << "case " << hex32(target) << ": {\n";
+                    if (owner_entry.has_value()) {
+                        emit_indent(output, indent + 2);
+                        output << "if (services != nullptr && "
+                                  "services->can_chain_executable_block(cpu.pc)) {\n";
+                        emit_indent(output, indent + 3);
+                        output << "katana::runtime::NativeAotCallDepthGuard "
+                                  "native_call_depth;\n";
+                        emit_indent(output, indent + 3);
+                        output << "if (native_call_depth) {\n";
+                        emit_indent(output, indent + 4);
+                        output << "const auto exception_generation_before_native_call = "
+                                  "cpu.exception_generation;\n";
+                        emit_indent(output, indent + 4);
+                        if (table_compatible_function_entries)
+                            output << "static_cast<void>("
+                                   << cpp_runtime_block_function_name(*owner_entry)
+                                   << "(cpu, context));\n";
+                        else
+                            output << cpp_service_function_name(*owner_entry)
+                                   << "(cpu, services);\n";
+                        emit_indent(output, indent + 4);
+                        output << "if (cpu.exception_generation != "
+                                  "exception_generation_before_native_call) return;\n";
+                        if (native_internal_block_labels &&
+                            current_blocks.contains(return_address)) {
+                            emit_indent(output, indent + 4);
+                            output << "if (" << unrelocated_code_address("cpu.pc")
+                                   << " == " << hex32(return_address)
+                                   << " && services->can_chain_executable_block(cpu.pc)";
+                            if (uses_proven_linear_ram)
+                                output << " && "
+                                          "cpu.memory.direct_linear_memory_guard_current("
+                                          "katana_direct_ram, false)";
+                            output << ")\n";
+                            emit_indent(output, indent + 5);
+                            output << "goto " << cpp_block_label(return_address) << ";\n";
+                        }
+                        emit_indent(output, indent + 3);
+                        output << "}\n";
+                        emit_indent(output, indent + 2);
+                        output << "}\n";
+                    }
+                    emit_indent(output, indent + 2);
+                    output << "return;\n";
+                    emit_indent(output, indent + 1);
+                    output << "}\n";
+                }
+                emit_indent(output, indent + 1);
+                output << "default:\n";
+                emit_indent(output, indent + 2);
+                output << "return;\n";
+                emit_indent(output, indent);
+                output << "}\n";
+                return;
+            }
+
             const auto guarded_native_target =
                 guarded_native_call_targets.find(instruction.source_address);
             if (native_internal_block_labels &&
@@ -3586,6 +3708,8 @@ void emit_block(std::ostringstream& output,
                 const std::unordered_set<std::uint32_t>& known_functions,
                 const std::unordered_map<std::uint32_t, std::uint32_t>&
                     guarded_native_call_targets,
+                const std::unordered_map<std::uint32_t, std::uint32_t>&
+                    native_block_owner_entries,
                 const std::unordered_set<std::uint32_t>& current_blocks,
                 const bool single_block,
                 const bool guarded_local_block_chaining,
@@ -3685,6 +3809,7 @@ void emit_block(std::ostringstream& output,
                       *control_index,
                       known_functions,
                       guarded_native_call_targets,
+                      native_block_owner_entries,
                       current_blocks,
                       4,
                       single_block,
@@ -3834,6 +3959,9 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
     std::unordered_map<std::uint32_t, std::uint32_t> native_block_owner_entries;
     native_block_owner_entries.reserve(request.native_block_owner_entries.size());
     for (const auto& entry : request.native_block_owner_entries) {
+        if (architectural_boundary_entries.contains(entry.block_address) ||
+            architectural_boundary_entries.contains(entry.owner_entry))
+            continue;
         if (!known_functions.contains(entry.owner_entry)) {
             throw std::invalid_argument(
                 "Native Blockownership verweist auf keinen bekannten Funktionsentry.");
@@ -4085,6 +4213,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        block,
                        known_functions,
                        guarded_native_call_targets,
+                       native_block_owner_entries,
                        current_blocks,
                        request.single_block_execution,
                        request.guarded_local_block_chaining,

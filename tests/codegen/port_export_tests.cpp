@@ -1252,6 +1252,20 @@ int run_test(const int argc, char* argv[]) {
     require(first.functions == 3u && first.partitions == 3u && first.checkpoints.size() == 8u &&
                 first.checkpoints.back() == "port-project-written",
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
+    require(
+        generated_units.find(
+            "switch (katana::runtime::unrelocate_code_address(call_target))") !=
+                std::string::npos &&
+            generated_units.find("case 0x8C010012u:") != std::string::npos &&
+            generated_units.find(
+                "static_cast<void>(fn_8C010012_runtime_entry(cpu, context));") !=
+                std::string::npos &&
+            generated_units.find("goto katana_block_8C01000A;") !=
+                std::string::npos &&
+            generated_units.find("resolved_call(cpu, call_target)") ==
+                std::string::npos,
+        "Endlicher BSRF-Zielvertrag verlaesst den nativen Owner-Entry oder "
+        "seine lokale Rueckkehrfortsetzung.");
     const std::vector<std::string> expected_progress = {"disc-load",
                                                         "boot-image",
                                                         "control-flow-analysis",

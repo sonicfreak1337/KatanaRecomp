@@ -10663,8 +10663,13 @@ static PortExportResult export_dreamcast_port_project_impl(
     std::atomic_size_t partition_cache_misses = 0u;
     std::unordered_set<std::uint32_t> emitted_function_entries;
     emitted_function_entries.reserve(emitted_program.size());
-    for (const auto& function : emitted_program)
+    std::unordered_map<std::uint32_t, std::uint32_t> emitted_block_owners;
+    for (const auto& function : emitted_program) {
         emitted_function_entries.insert(function.entry_address);
+        for (const auto& block : function.blocks)
+            emitted_block_owners.emplace(block.start_address,
+                                         function.entry_address);
+    }
     std::unordered_set<std::uint32_t> external_hook_entries;
     if (options.game_project != nullptr) {
         for (const auto& function :
@@ -10725,6 +10730,7 @@ static PortExportResult export_dreamcast_port_project_impl(
             local_function_entries.insert(function.entry_address);
         std::vector<std::uint32_t> external_callees;
         std::vector<GuardedNativeCallTarget> partition_guarded_native_calls;
+        std::vector<NativeAotBlockOwnerEntry> partition_native_block_owners;
         std::vector<std::uint32_t> partition_architectural_boundaries;
         for (const auto& function : functions) {
             for (const auto callee : function.direct_callees) {
@@ -10737,6 +10743,15 @@ static PortExportResult export_dreamcast_port_project_impl(
                     partition_architectural_boundaries.push_back(
                         block.start_address);
                 for (const auto& instruction : block.instructions) {
+                    for (const auto target : instruction.resolved_targets) {
+                        const auto owner = emitted_block_owners.find(target);
+                        if (owner == emitted_block_owners.end())
+                            continue;
+                        partition_native_block_owners.push_back(
+                            {target, owner->second});
+                        if (!local_function_entries.contains(owner->second))
+                            external_callees.push_back(owner->second);
+                    }
                     if (instruction.operation != katana::ir::Operation::CallRegister)
                         continue;
                     const auto guarded =
@@ -10772,6 +10787,20 @@ static PortExportResult export_dreamcast_port_project_impl(
                                    left.target == right.target;
                         }),
             partition_guarded_native_calls.end());
+        std::sort(partition_native_block_owners.begin(),
+                  partition_native_block_owners.end(),
+                  [](const auto& left, const auto& right) {
+                      return std::tie(left.block_address, left.owner_entry) <
+                             std::tie(right.block_address, right.owner_entry);
+                  });
+        partition_native_block_owners.erase(
+            std::unique(partition_native_block_owners.begin(),
+                        partition_native_block_owners.end(),
+                        [](const auto& left, const auto& right) {
+                            return left.block_address == right.block_address &&
+                                   left.owner_entry == right.owner_entry;
+                        }),
+            partition_native_block_owners.end());
         std::sort(partition_architectural_boundaries.begin(),
                   partition_architectural_boundaries.end());
         partition_architectural_boundaries.erase(
@@ -10789,6 +10818,10 @@ static PortExportResult export_dreamcast_port_project_impl(
         for (const auto& candidate : partition_guarded_native_calls)
             partition_linkage_identity << "guarded=" << candidate.callsite << ':'
                                        << candidate.target << ';';
+        for (const auto& owner : partition_native_block_owners)
+            partition_linkage_identity << "native-owner="
+                                       << owner.block_address << ':'
+                                       << owner.owner_entry << ';';
         for (const auto boundary : partition_architectural_boundaries)
             partition_linkage_identity << "architectural-boundary="
                                        << boundary << ';';
@@ -10831,6 +10864,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                                                        request_options);
         request.known_function_entries = external_callees;
         request.guarded_native_call_targets = partition_guarded_native_calls;
+        request.native_block_owner_entries =
+            partition_native_block_owners;
         request.architectural_boundary_entries =
             partition_architectural_boundaries;
         auto content = emit_cpp_port_translation_unit(request).joined_text();
