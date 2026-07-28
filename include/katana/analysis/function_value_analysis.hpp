@@ -99,6 +99,9 @@ struct GuardedCodeInventory {
     std::vector<ReturnedCodeAddressTableCandidate> returned_code_address_tables;
     std::size_t candidate_budget = 0u;
     std::size_t candidate_count = 0u;
+    std::size_t shape_validation_work = 0u;
+    std::size_t shape_validation_work_budget = 0u;
+    std::size_t shape_budget_exceeded_candidates = 0u;
     bool candidate_inventory_truncated = false;
     bool table_scan_truncated = false;
 };

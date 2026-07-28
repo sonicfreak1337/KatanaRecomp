@@ -304,8 +304,7 @@ class GuardedCodeInventoryCollector {
             // scans compete for the shared bounded candidate budget.
             std::erase_if(candidate.target_addresses,
                           [&](const auto target) {
-                              return (shape_cache_ != nullptr &&
-                                      !shape_cache_->valid(target)) ||
+                              return !admissible_shape(target) ||
                                      !admit(target);
                           });
             if (candidate.target_addresses.empty()) continue;
@@ -319,15 +318,32 @@ class GuardedCodeInventoryCollector {
         inventory.candidate_count = admitted_targets_.size();
         inventory.candidate_inventory_truncated =
             candidate_inventory_truncated_;
+        if (shape_cache_ != nullptr) {
+            const auto& shape = shape_cache_->statistics();
+            inventory.shape_validation_work = shape.work;
+            inventory.shape_validation_work_budget = shape.work_budget;
+            inventory.shape_budget_exceeded_candidates =
+                shape.shape_budget_exceeded;
+            inventory.candidate_inventory_truncated =
+                inventory.candidate_inventory_truncated ||
+                shape.shape_budget_exceeded != 0u;
+        }
         inventory.table_scan_truncated = table_scan_truncated_;
         return inventory;
     }
 
   private:
+    bool admissible_shape(const std::uint32_t target) {
+        if (shape_cache_ == nullptr) return true;
+        const auto status = shape_cache_->classify(target);
+        if (status ==
+            detail::GuardedNativeEntryShapeStatus::ShapeBudgetExceeded)
+            candidate_inventory_truncated_ = true;
+        return status == detail::GuardedNativeEntryShapeStatus::Valid;
+    }
+
     void collect_stored_candidate(StoredCodeAddressCandidate candidate) {
-        if (shape_cache_ != nullptr &&
-            !shape_cache_->valid(candidate.target_address))
-            return;
+        if (!admissible_shape(candidate.target_address)) return;
         if (!admit(candidate.target_address)) return;
         candidate.guarded = true;
         const auto [stored, inserted] =

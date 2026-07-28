@@ -97,6 +97,9 @@ struct ControlFlowAnalysisResult {
     bool function_budget_exhausted = false;
     std::size_t guarded_code_inventory_candidates = 0u;
     std::size_t guarded_code_inventory_budget = 0u;
+    std::size_t guarded_code_shape_validation_work = 0u;
+    std::size_t guarded_code_shape_validation_work_budget = 0u;
+    std::size_t guarded_code_shape_budget_exceeded_candidates = 0u;
     bool candidate_inventory_truncated = false;
     bool returned_table_scan_truncated = false;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;

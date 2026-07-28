@@ -133,14 +133,85 @@ int main() {
             katana::analysis::analyze_control_flow(image);
         require(!has_instruction(rejected_data_entry, 0x70u) &&
                     find_guarded_aot_entry(rejected_data_entry, 0x70u) == nullptr &&
-                    rejected_data_entry.guarded_code_inventory_candidates == 0u,
+                    rejected_data_entry.guarded_code_inventory_candidates == 0u &&
+                    !rejected_data_entry.candidate_inventory_truncated &&
+                    rejected_data_entry
+                            .guarded_code_shape_budget_exceeded_candidates ==
+                        0u,
                 "Strukturell ungueltige Mixed-Segment-Daten wurden als "
-                "Guarded-AOT-Einstieg akzeptiert.");
+                "Guarded-AOT-Einstieg akzeptiert oder als Budgetabbruch "
+                "fehlklassifiziert.");
         const auto rejected_data_ir =
             katana::ir::lower_program(rejected_data_entry);
         require(katana::ir::verify_program(rejected_data_ir).empty(),
                 "Abgelehnter Guarded-Dateneinstieg hinterliess ungueltige "
                 "Callee-Metadaten im IR.");
+    }
+    {
+        constexpr std::uint32_t candidate_address = 0x100u;
+        constexpr std::size_t shape_instruction_budget = 4'096u;
+        std::vector<std::uint8_t> bytes(
+            candidate_address + (shape_instruction_budget + 1u) * 2u,
+            0x00u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+        put_u16(0x00u, 0xD403u); // mov.l @(0x10,pc),r4
+        put_u16(0x02u, 0xE560u); // mov #0x60,r5 (non-stack object)
+        put_u16(0x04u, 0xB00Cu); // bsr 0x20
+        put_u16(0x06u, 0x0009u); // nop (delay)
+        put_u16(0x08u, 0x000Bu); // rts
+        put_u16(0x0Au, 0x0009u); // nop (delay)
+        put_u32(0x10u, candidate_address);
+        put_u16(0x20u, 0x2542u); // mov.l r4,@r5
+        put_u16(0x22u, 0x000Bu); // rts
+        put_u16(0x24u, 0x0009u); // nop (delay)
+        for (std::size_t index = 0u;
+             index <= shape_instruction_budget;
+             ++index)
+            put_u16(candidate_address + index * 2u, 0x0009u);
+
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.add_segment({".shape-budget",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes)});
+        image.add_entry_point(0u);
+        const auto truncated = katana::analysis::analyze_control_flow(image);
+        const auto report =
+            katana::analysis::format_control_flow_analysis_json(truncated);
+        require(!has_instruction(truncated, candidate_address) &&
+                    find_guarded_aot_entry(truncated, candidate_address) ==
+                        nullptr &&
+                    truncated.guarded_code_inventory_candidates == 0u &&
+                    truncated.candidate_inventory_truncated &&
+                    truncated.guarded_code_shape_validation_work ==
+                        shape_instruction_budget &&
+                    truncated.guarded_code_shape_validation_work_budget >=
+                        truncated.guarded_code_shape_validation_work &&
+                    truncated
+                            .guarded_code_shape_budget_exceeded_candidates ==
+                        1u &&
+                    report.find(
+                        "\"guarded_code_shape_budget_exceeded_candidates\":1,"
+                        "\"candidate_inventory_truncated\":true") !=
+                        std::string::npos,
+                "Shape-Budgetabbruch wurde als strukturell ungueltiger "
+                "vollstaendiger Inventarlauf verschluckt oder belegte das "
+                "Ergebnisbudget.");
     }
 
     auto jump_image = code_image(

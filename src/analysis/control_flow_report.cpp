@@ -386,6 +386,12 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << analysis.guarded_code_inventory_candidates
            << ",\"guarded_code_inventory_budget\":"
            << analysis.guarded_code_inventory_budget
+           << ",\"guarded_code_shape_validation_work\":"
+           << analysis.guarded_code_shape_validation_work
+           << ",\"guarded_code_shape_validation_work_budget\":"
+           << analysis.guarded_code_shape_validation_work_budget
+           << ",\"guarded_code_shape_budget_exceeded_candidates\":"
+           << analysis.guarded_code_shape_budget_exceeded_candidates
            << ",\"candidate_inventory_truncated\":"
            << (analysis.candidate_inventory_truncated ? "true" : "false")
            << ",\"returned_table_scan_truncated\":"
