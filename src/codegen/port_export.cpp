@@ -577,6 +577,55 @@ void require_guarded_aot_program_entries(
     }
 }
 
+bool requires_architectural_safepoint_entry(
+    const katana::ir::Instruction& instruction) noexcept {
+    using Operation = katana::ir::Operation;
+    using Register = katana::ir::SpecialRegister;
+
+    if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot)
+        return false;
+    if ((instruction.operation == Operation::LoadSpecialRegister ||
+         instruction.operation == Operation::LoadSpecialRegisterPostIncrement) &&
+        (instruction.special_register == Register::Sr ||
+         instruction.special_register == Register::Fpscr))
+        return true;
+
+    return instruction.operation == Operation::LoadTlb ||
+           instruction.operation == Operation::Frchg ||
+           instruction.operation == Operation::Fschg;
+}
+
+void require_architectural_safepoint_program_entries(
+    const std::span<const katana::ir::Function> program,
+    const std::string_view phase) {
+    std::unordered_set<std::uint32_t> block_entries;
+    for (const auto& function : program)
+        for (const auto& block : function.blocks)
+            block_entries.insert(block.start_address);
+
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (!requires_architectural_safepoint_entry(instruction))
+                    continue;
+                if (instruction.source_address >
+                    std::numeric_limits<std::uint32_t>::max() - 2u)
+                    throw std::runtime_error(
+                        "Architektonische Safepoint-Fortsetzung laeuft "
+                        "ueber.");
+                const auto continuation = instruction.source_address + 2u;
+                if (!block_entries.contains(continuation))
+                    throw std::runtime_error(
+                        "Architektonische Safepoint-Fortsetzung besitzt "
+                        "keinen eigenstaendigen emittierten IR-Blockstart: " +
+                        guarded_aot_address(instruction.source_address) +
+                        " -> " + guarded_aot_address(continuation) + " (" +
+                        std::string(phase) + ").");
+            }
+        }
+    }
+}
+
 struct CountedLoopBatchProof {
     struct Descriptor {
         std::uint32_t guard_address = 0u;
@@ -10651,6 +10700,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         emitted_program,
         prepared.analysis.guarded_aot_entries,
         "final-emitted-ir");
+    require_architectural_safepoint_program_entries(
+        emitted_program, "final-emitted-ir");
     const auto hardware_audit =
         katana::analysis::audit_dreamcast_hardware(prepared.image, prepared.analysis);
     const auto wait_loop_descriptors = runtime_wait_loop_descriptors(hardware_audit);
@@ -11239,7 +11290,10 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
             report_progress(options, text);
         });
     report_progress(options, "ir-lowering");
-    auto program = katana::ir::lower_program(analysis);
+    const auto architectural_safepoints =
+        katana::ir::architectural_safepoint_block_leaders(analysis);
+    auto program =
+        katana::ir::lower_program(analysis, architectural_safepoints);
     report_progress(options, "ir-optimization");
     const auto& emission_contract = native_aot_emission_contract(NativeAotEmissionProfile::Product);
     static_cast<void>(
@@ -11338,7 +11392,10 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
             report_progress(options, text);
         });
     report_progress(options, "ir-lowering");
-    auto program = katana::ir::lower_program(analysis);
+    const auto architectural_safepoints =
+        katana::ir::architectural_safepoint_block_leaders(analysis);
+    auto program =
+        katana::ir::lower_program(analysis, architectural_safepoints);
     report_progress(options, "ir-optimization");
     const auto& emission_contract =
         native_aot_emission_contract(NativeAotEmissionProfile::Product);

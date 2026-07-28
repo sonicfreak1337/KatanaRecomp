@@ -20,6 +20,23 @@
 namespace katana::ir {
 namespace {
 
+bool requires_architectural_safepoint(
+    const katana::sh4::DisassemblyLine& line) noexcept {
+    using Kind = katana::sh4::InstructionKind;
+    using Register = katana::sh4::SpecialRegister;
+
+    if (line.is_delay_slot) return false;
+    if ((line.instruction.kind == Kind::LoadSpecialRegister ||
+         line.instruction.kind == Kind::LoadSpecialRegisterPostIncrement) &&
+        (line.instruction.special_register == Register::Sr ||
+         line.instruction.special_register == Register::Fpscr))
+        return true;
+
+    return line.instruction.kind == Kind::LoadTlb ||
+           line.instruction.kind == Kind::Frchg ||
+           line.instruction.kind == Kind::Fschg;
+}
+
 SpecialRegister lower_special_register(const katana::sh4::SpecialRegister source) {
     using Source = katana::sh4::SpecialRegister;
     switch (source) {
@@ -1163,6 +1180,21 @@ lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
     const auto source_blocks =
         katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
     return lower_program(LoweringContext(source_blocks, resolved_edges), functions);
+}
+
+std::vector<std::uint32_t> architectural_safepoint_block_leaders(
+    const katana::analysis::ControlFlowAnalysisResult& analysis) {
+    std::vector<std::uint32_t> leaders;
+    for (const auto& line : analysis.recursive.instructions) {
+        if (!requires_architectural_safepoint(line)) continue;
+        if (line.address > std::numeric_limits<std::uint32_t>::max() - 2u)
+            throw std::invalid_argument(
+                "Architektonische Safepoint-Fortsetzung laeuft ueber.");
+        leaders.push_back(line.address + 2u);
+    }
+    std::sort(leaders.begin(), leaders.end());
+    leaders.erase(std::unique(leaders.begin(), leaders.end()), leaders.end());
+    return leaders;
 }
 
 std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis,

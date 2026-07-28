@@ -24,6 +24,14 @@ lower_program(std::span<const katana::sh4::DisassemblyLine> lines,
               std::span<const katana::analysis::FunctionInfo> functions,
               std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges = {});
 
+// Native product code may leave its owner immediately after an architectural
+// state change to accept an interrupt. These continuations are execution
+// entries only: they split IR blocks without becoming function evidence or
+// manufactured CFG edges.
+[[nodiscard]] std::vector<std::uint32_t>
+architectural_safepoint_block_leaders(
+    const katana::analysis::ControlFlowAnalysisResult& analysis);
+
 // Additional leaders split existing functions without becoming discovery
 // seeds. Callers must not place one at an instruction marked only as a delay
 // slot; an owner/slot pair is an atomic basic-block terminator.

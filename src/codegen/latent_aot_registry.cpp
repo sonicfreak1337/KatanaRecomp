@@ -253,7 +253,10 @@ analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& 
                     throw AnalysisBudgetExceeded();
             });
         if (!complete_native_graph(analysis)) return std::nullopt;
-        auto program = katana::ir::lower_program(analysis);
+        const auto architectural_safepoints =
+            katana::ir::architectural_safepoint_block_leaders(analysis);
+        auto program =
+            katana::ir::lower_program(analysis, architectural_safepoints);
         if (program.empty() || program.size() > options.maximum_functions_per_module)
             return std::nullopt;
         static_cast<void>(katana::ir::optimize_program(program));

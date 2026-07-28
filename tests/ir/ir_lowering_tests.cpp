@@ -260,6 +260,42 @@ int main() {
                     katana::ir::DelaySlotRole::Slot,
             "Zusaetzlicher Block-Leader erzeugt eine Funktion oder trennt Owner und Delay Slot.");
 
+    constexpr std::uint32_t safepoint_base = 0x8C030000u;
+    constexpr std::array<std::uint8_t, 8> safepoint_bytes = {
+        0x0Eu, 0x41u, // LDC R1,SR
+        0x13u, 0x62u, // MOV R1,R2
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP (Delay Slot)
+    };
+    katana::analysis::ControlFlowAnalysisResult safepoint_analysis;
+    safepoint_analysis.recursive.instructions =
+        katana::sh4::disassemble(safepoint_bytes, safepoint_base);
+    safepoint_analysis.recursive.functions.push_back(
+        {safepoint_base,
+         katana::analysis::AnalysisConfidence::Certain,
+         katana::analysis::ControlFlowEvidence::ProvenComplete,
+         {katana::analysis::FunctionOrigin::EntryPoint}});
+    safepoint_analysis.recursive.proven_instruction_addresses = {
+        safepoint_base,
+        safepoint_base + 2u,
+        safepoint_base + 4u,
+        safepoint_base + 6u};
+    const auto safepoint_leaders =
+        katana::ir::architectural_safepoint_block_leaders(
+            safepoint_analysis);
+    const auto safepoint_program =
+        katana::ir::lower_program(safepoint_analysis, safepoint_leaders);
+    const auto& safepoint_function = safepoint_program.front();
+    require(safepoint_leaders == std::vector<std::uint32_t>{safepoint_base + 2u} &&
+                safepoint_function.blocks.size() == 2u &&
+                safepoint_function.blocks[0].start_address == safepoint_base &&
+                safepoint_function.blocks[0].instructions.size() == 1u &&
+                safepoint_function.blocks[1].start_address == safepoint_base + 2u &&
+                safepoint_function.blocks[1].instructions.front().source_address ==
+                    safepoint_base + 2u,
+            "LDC SR besitzt keinen eigenstaendigen nativen "
+            "Safepoint-Fortsetzungseinstieg.");
+
     constexpr std::size_t scaling_function_count = 4096u;
     constexpr std::uint32_t scaling_base = 0x8C100000u;
     std::vector<std::uint8_t> scaling_bytes;
