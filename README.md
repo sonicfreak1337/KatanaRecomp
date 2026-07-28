@@ -192,7 +192,7 @@ Hostzeit, Dispatches, technische Framemarker und das erste neue AOT-,
 Runtime- oder Geraeteproblem; ein sichtbarer Bildschirm wird separat anhand
 einer realen Ausgabeaufnahme klassifiziert.
 
-Der aktuelle `CompletePlatform`-Nachweis endete in beiden Pfaden bei
+Die v24-`CompletePlatform`-Vergleichsbasis endete in beiden Pfaden bei
 Schedulerzyklus 600.000.000 ohne erstes neues AOT-, Runtime- oder
 Geraeteproblem:
 
@@ -206,11 +206,24 @@ Geraeteproblem:
 Der Direct-Port meldete aus dem absoluten Zaehler 119,64 MHz; dieser Wert ist
 bis `KR-4966` kein gueltiger Performancevergleich. Seine 16.033.676
 Dispatches entsprechen 11,52 Post-Entry-Gastzyklen pro Zentraldispatch und
-belegen noch keinen Hotpathgewinn. Beide Laeufe endeten am PC `0x8C666D42`.
-Ein warmer Direct-Export mit unveraenderter Analyse dauerte 5,3 Sekunden. Die
-unmittelbare funktionale Grenze ist der ADXT-/mwSnd-Wartepfad bei
-`0x8C65A624` mit Callback `0x8C666D42`. Das 200-MHz-Ziel, das relative Gate
-und ein sichtbarer DirectBoot-Spielbildnachweis bleiben offen.
+belegen noch keinen Hotpathgewinn. Ein warmer Direct-Export mit
+unveraenderter Analyse dauerte 5,3 Sekunden.
+
+Der aktuelle v26-DirectBoot behebt die zwei allgemeinen G2-Ursachen des
+frueheren ADXT-/mwSnd-Waits: korrekte `SB_G2APRO`-Grenzen und das
+AICA-Request-Level fuer `ADTSEL=5`. G2-Kanal 0 endet mit `active=0`,
+`remaining=0`, und der Gast verlaesst `0x8C666D42`. Danach erreicht er bei
+Gastzyklus `552.903.647` den indirekten Call
+`0x8C602B0A -> 0x8C010F22`. Fuer dieses unveraenderte Ziel im initialen
+Boot-Executable fehlt ein statischer AOT-Eintrag; der interne
+Materializergrund ist `AotTemplateMismatch` (14), auch wenn die derzeitige
+terminale Diagnose ihn irrefuehrend als `byte-identity-mismatch` formatiert.
+
+v26 erzeugt zwei technische PVR-Direct-Frames mit 302.287 geaenderten
+Pixeln. Sechzehn reale Fensteraufnahmen bleiben jedoch schwarz. KR-4971
+schliesst deshalb zuerst die statische AOT-Coverage ueber hashgebundene
+Spielprojektmetadaten. Das 200-MHz-Ziel, das relative Gate und ein sichtbarer
+DirectBoot-Spielbildnachweis bleiben offen.
 
 ## Diagnose
 

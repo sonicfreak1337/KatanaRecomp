@@ -40,7 +40,7 @@ Mutation und prueft das Ergebnis durch semantischen Recapture. Noch offen sind
 der streng globale `noexcept`-Commit ohne falliblen Schritt nach Commitbeginn
 und normativ vergleichbare Digests pro Subsystem; das bleibt `KR-4967`.
 
-Die aktuellen realen Laeufe:
+Die historischen v24-Vergleichslaeufe:
 
 | Metrik | NativeDisc | DirectBoot-Artefakt |
 |---|---:|---:|
@@ -65,13 +65,37 @@ Tatsaechlich wurden nur 184.766.730 Zyklen ausgefuehrt. Die vergleichbare Rate
 betraegt 36,8425 MHz und belegt keinen Performancegewinn. Das relative
 Post-Entry-Budget und die Pflichtmeilensteinwertung bleiben in `KR-4966` offen.
 
-Beide Pfade enden am selben ADXT-/mwSnd-Wait. Der funktionierende
-CompletePlatform-Apply hat den ersten Produktblocker daher nicht verschoben:
-`KR-4965` bleibt zuerst.
+Der aktuelle v26-Funktionslauf wurde aus
+`4cbab1e9c11320955fa8e18f66ae4b0e7e1cd0cb` erzeugt und ueber den echten
+Produktinstaller mit der privaten PAL-Disc installiert:
 
-## Aktueller erster Blocker: ADXT-/mwSnd-Sound-Completion
+| Metrik | DirectBoot-v26 |
+|---|---:|
+| Entry-/Restore-Zyklus | 415.233.270 |
+| CompletePlatform-Apply | 22 Geraete, 5 Events |
+| Endzyklus am typisierten Fehler | 552.903.647 |
+| Post-Entry-Zyklen | 137.670.377 |
+| externe Walltime bis Fehler | 5,746371 s |
+| warmer unveraenderter Build | 0,239825 s (`ninja: no work to do`) |
+| Zentraldispatches | 9.956.434 |
+| Post-Entry-Zyklen pro Dispatch | 13,83 |
+| G2-Kanal 0 | `active=0`, `remaining=0` |
+| GD-ROM-Kommandos | 72 |
+| AICA-Audiopuffer | 165 |
+| PVR-Gast-/Direct-Frames | 2 / 2 |
+| veraenderte Direct-Pixel | 302.287 |
+| Hostframe / sichtbarer Screen | 0 / keiner |
+| terminales Dispatchlabel | `byte-identity-mismatch` (irrefuehrend) |
+| interner Materializergrund | `AotTemplateMismatch` (14) |
+| Callsite / Ziel | `0x8C602B0A` / `0x8C010F22` |
 
-Der konkrete produktive Waitvertrag ist jetzt eingegrenzt:
+Die Walltime endet vor dem vorgesehenen Budget und ist kein
+600-Millionen-Performancebenchmark. Sechzehn reale Fensteraufnahmen bis
+`5,323 s` blieben schwarz.
+
+## Abgeschlossener Soundblocker und aktueller erster Blocker
+
+Der fruehere produktive Waitvertrag war:
 
 ```text
 Objekt:               0x8C8D3908
@@ -80,26 +104,49 @@ Poll-Callback:        0x8C666D42
 Completion-Writer:    0x8C65A458
 ```
 
-Der Waitpfad setzt `[object+24]` zunaechst auf `0` und prueft danach fortlaufend auf `1`. Der Poll-Callback besteht nur aus `RTS; NOP`. Der erwartete Completion-Pfad schreibt tatsaechlich `1` nach `[object+24]`. Alle sechs statisch aufgeloesten Caller dieses Waitvertrags liegen in ADXT-/mwSnd-Soundpfaden.
+Der Waitpfad setzt `[object+24]` zunaechst auf `0` und prueft danach
+fortlaufend auf `1`. Der Poll-Callback besteht nur aus `RTS; NOP`. Der
+erwartete Completion-Pfad schreibt `1` nach `[object+24]`. Alle sechs
+statisch aufgeloesten Caller dieses Waitvertrags liegen in
+ADXT-/mwSnd-Soundpfaden.
 
-Die wahrscheinlichste Fehlerzone ist:
+Die erste verlorene Kante bestand aus zwei allgemeinen Holly-G2-Fehlern:
 
 ```text
-ADXT/mwSnd-Worker
-  -> G2/AICA/DMAC
-  -> Scheduler/IRQ
-  -> Completion-Writer
+SB_G2APRO 0x4659404F
+  -> Start- und Endbyte waren vertauscht
+  -> Haupt-RAM wurde faelschlich als Overrun abgewiesen
+
+ADTSEL 5 + ADST 1
+  -> CPU-initiierter Transfer mit externem AICA-Request-Level
+  -> SB_FFST.bit0=0 wurde beim Armieren nicht als request-ready ausgewertet
 ```
 
-Noch nicht bewiesen ist:
+Beide Ursachen sind generisch repariert. v26 beendet G2-Kanal 0 und
+verlaesst `0x8C666D42`, ohne einen Hostpatch am Completion-Flag oder eine
+Titeladresse im Kern. Der Writer `0x8C65A458` beziehungsweise der konkrete
+Flagwechsel wurde nicht separat instrumentiert. KR-4965 ist gemaess seiner
+Alternativabnahme abgeschlossen, weil ein neuer, engerer allgemeiner
+Blocker belegt ist.
 
-- ob AICA selbst falschen Zustand liefert,
-- ob ein G2-/DMAC-Transfer nicht abschliesst,
-- ob der Gastworker nicht geplant oder fortgesetzt wird,
-- ob ein IRQ fehlt oder falsch quittiert wird,
-- ob der Scheduler eine Completion nicht zustellt.
+Der erste aktive Produktblocker ist KR-4971:
 
-Maple/VMU ist fuer diesen konkreten Poll nicht belegt und nicht der erste Reparaturfokus.
+```text
+indirekter Call:       0x8C602B0A
+statisches Spielziel:  0x8C010F22
+Dispatchlabel:         byte-identity-mismatch (irrefuehrend)
+Materializergrund:     AotTemplateMismatch (14)
+Materializer:          2 Anfragen, 1 Erfolg, 1 Miss
+RuntimeOnly-Anteil:    282.818 ppm
+```
+
+Fuer das unveraenderte Ziel im initialen Boot-Executable fehlt ein
+generierter Block beziehungsweise passendes Runtime-AOT-Template. Die
+terminale Diagnose kollabiert `AotTemplateMismatch` derzeit falsch zu einem
+Byteidentitaetsfehler; ein Gastbytewechsel ist nicht belegt. Die Reparatur
+seedet das Ziel ueber hash-/bytegebundene Metadaten des externen
+Spielprojekts statisch in Analyse und AOT. Interpreter, JIT, Runtime-Decoder
+und Emulationsfallback sind keine zulaessige Reparatur.
 
 ## GameEntryHandoff-Stand
 
@@ -143,9 +190,12 @@ IP.BIN hinterlaesst jedoch relevante:
 - ASIC-/IRQ-Masken
 - Schedulerereignisse
 
-Der aktuelle DirectBoot appliziert den erfassten PVR-/SPG-/ASIC-Zustand,
-erreicht aber weiterhin keinen Frame. Capture und Apply allein beweisen daher
-noch keine normative Frameparitaet und keinen sichtbaren Spielboot.
+Der aktuelle DirectBoot appliziert den erfassten PVR-/SPG-/ASIC-Zustand.
+v26 erzeugt erstmals nach dem Game Entry zwei gastbelegte Direct-Frames mit
+`302.287` veraenderten Pixeln. Der Host-Presenter meldet weiterhin null
+Frames, und alle 16 Fensteraufnahmen bleiben schwarz. Der technische
+Framebufferfortschritt beweist daher noch keine normative Frameparitaet und
+keinen sichtbaren Spielboot.
 
 Der naechste visuelle DirectBoot-Meilenstein ist:
 
@@ -162,6 +212,12 @@ Das aktuelle Gate verwendet weiterhin 600 Millionen als absoluten finalen
 Schedulerzyklus. Nach Restore bei `415.233.270` blieben dem DirectBoot deshalb
 nur `184.766.730` Post-Entry-Zyklen. NativeDisc und DirectBoot erhalten damit
 nicht dieselbe Gastarbeit.
+
+v26 erreicht selbst dieses falsche absolute Maximum nicht: Der typisierte
+RuntimeOnly-AOT-Fehler beendet den Lauf bei `552.903.647`, also nach
+`137.670.377` Post-Entry-Zyklen. Der aktuelle Wrapper gibt trotz terminalem
+Produktfehler Exitcode 0 weiter; auch diese falsche Gatewertung gehoert zum
+KR-4966-Vertrag.
 
 `KR-4966` muss eine Laufdauer ab Entry verwenden:
 
@@ -192,6 +248,11 @@ ausgefuehrten `184.766.730` Post-Entry-Zyklen gelten:
 ```
 
 Der aktuelle Handoff belegt damit keinen Performancegewinn.
+
+v26 fuehrt bis zum funktionalen Fehler `9.956.434` Zentraldispatches aus,
+entsprechend `13,83` Post-Entry-Zyklen je Dispatch. Die extern gemessenen
+`5,746371 s` bis zum vorzeitigen Fehler ergeben keinen vergleichbaren
+600-Millionen-Benchmark und ersetzen die v24-Baseline nicht.
 
 Das Ziel ist:
 
@@ -245,7 +306,11 @@ Offen bleiben:
 ## Aktiver kritischer Pfad
 
 ```text
-KR-4965 ADXT-/mwSnd-Sound-Completion (zuerst)
+KR-4965 ADXT-/mwSnd-Sound-Completion
+  [abgeschlossen ueber engeren allgemeinen Blocker]
+
+KR-4971 RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel
+  (zuerst)
 
 Parallel offen:
 KR-4966 korrektes relatives Post-Entry-Gate
@@ -262,13 +327,22 @@ KR-4964
 
 ## Geplante reale Produktlaeufe
 
-### Lauf A - nach KR-4965
+### Lauf A - nach KR-4965 [ausgefuehrt]
 
-Gewoehnlicher DirectBoot mit gleicher post-entry Gastarbeit.
+Der v26-DirectBoot wurde mit dem real installierten PAL-Disc-Cache und
+CompletePlatform-Handoff ausgefuehrt.
 
-Erwartung:
+Ergebnis:
 
-- Completion-Writer erreicht oder engerer Blocker belegt.
+- G2-Kanal 0 abgeschlossen und alter Sound-Poll verlassen
+- engerer RuntimeOnly-AOT-Blocker bei `0x8C010F22`
+- zwei technische Direct-Frames, aber kein sichtbarer Hostframe
+
+### Lauf A2 - nach KR-4971
+
+- derselbe DirectBoot-Produktpfad
+- hash-/bytegebundenes statisches AOT fuer das identifizierte Ziel
+- bis zum naechsten typisierten Produktresultat fortschreiten
 
 ### Lauf B - nach KR-4966 und KR-4967
 
@@ -300,6 +374,9 @@ Der aktuelle Stand behauptet nicht:
 - dass der Sega-Screen im DirectBoot erwartet wird
 - dass Maple der aktuelle Soundblocker ist
 - dass AICA allein die Ursache ist
+- dass der Completion-Writer oder der Flagwechsel direkt beobachtet wurde
+- dass die zwei technischen Direct-Frames bereits sichtbar praesentiert wurden
+- dass die RuntimeOnly-AOT-Coverageluecke repariert ist
 - dass die gemeldeten 119,64 MHz einen Performancegewinn darstellen
 - dass 36,8425 MHz spielbar oder echtzeitfaehig sind
 - dass ein schwarzer Lauf mit Exitcode 0 ein erfolgreiches Produktgate ist

@@ -69,19 +69,21 @@
 | KR-4959 | Ereignisgetriebene Scheduler-/IRQ-Safepoints | geplant P1 Performance und Korrektheit |
 | KR-4960 | 200-MHz-Produkt-Hotpath | geplant P0 Performance-Gate |
 | KR-4961 | Externes SonicAdventureRecomp-Bring-up-Projekt | geplant P1 |
-| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | aktiv P0; gleicher letzter PC und gleiche GD-ROM-Zaehler, nahezu gleiche AICA-Zaehler, normative Digests, Sound, Frame und relatives 600-Millionen-Gate offen |
+| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | aktiv P0; v26 beendet die konkrete G2-DMA und erzeugt zwei technische Direct-Frames, normative Digests, sichtbarer Frame, NativeDisc-Vergleich und relatives 600-Millionen-Gate offen |
 | KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | aktiv P1; warmer Direct-v24-Build 5,3 s, erster frischer Build 169,3 s, Runtime-/Hook-Schleifen und aktuelles Compiler-A/B offen |
 | KR-4964 | v0.49 Produktabnahme bis sichtbarem Spielbild | Gate |
-| KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | aktiv P0, erster Produktblocker; gleicher Waitvertrag in NativeDisc und DirectBoot |
+| KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | abgeschlossen ueber Alternativabnahme; allgemeine G2-Ursache repariert, alter Poll verlassen und engerer Blocker belegt |
 | KR-4966 | Post-Entry-Produktgate und erforderliche Meilensteine | aktiv P0; absolutes 600-Millionen-Limit laesst nach Restore nur 184.766.730 Post-Entry-Zyklen |
 | KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | aktiv P0, teilweise umgesetzt; Vorvalidierung, passive Restoreplaene, semantischer Recapture und Produkt-Apply belegt, globaler noexcept-Commit und Subsystemdigests offen |
-| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | aktiv P0; Adapter umgesetzt, Sound-Completion und exakte Paritaet offen |
-| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | aktiv P0; Adapter umgesetzt, erster Frame und exakte Paritaet offen |
+| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | aktiv P0; Adapter und konkrete DirectBoot-G2-Completion belegt, aktive Restore-Reconciliation und exakte Paritaet offen |
+| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | aktiv P0; zwei technische Direct-Frames mit 302.287 geaenderten Pixeln belegt, sichtbarer Hostframe und exakte Paritaet offen |
 | KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | aktiv P0; Game-Entry-Adapter, Produktlauf und einmal identische migrierte Saves belegt, allgemeines No-Rollback-Profil offen |
+| KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | aktiv P0, erster Produktblocker; v26 fehlt bei `0x8C602B0A -> 0x8C010F22` ein AOT-Eintrag, interner Fehler `AotTemplateMismatch` (14) |
 
 ## Aktuelle Meilensteinzuordnung
 
-- `KR-4965` ist der erste aktive Produktblocker.
+- `KR-4965` ist ueber den belegten engeren allgemeinen Blocker abgeschlossen.
+- `KR-4971` ist der erste aktive Produktblocker.
 - `KR-4966` korrigiert den im realen v24-Schedulerrestore belegten absoluten Mess- und Meilensteinfehler.
 - `KR-4967` bis `KR-4970` vervollstaendigen den strikt atomaren, digestgeprueften und Save-erhaltenden Vertrag aus `KR-4952` und `KR-4953`.
 - `KR-4962` liefert die normative Game-Entry-Paritaet sowie den Sound-/Frame-Nachweis mit relativem 600-Millionen-Budget.

@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- KR-4965 schliesst die erste reale ADXT-/mwSnd-Soundkante ohne Titelpatch:
+  `SB_G2APRO=0x4659404F` wird mit dem hohen Start- und niedrigen Endbyte
+  dekodiert, und ein mit `ADTSEL=5` armierter AICA-G2-Transfer wertet das
+  echte Request-Level `SB_FFST.bit0=0` aus. Periodische Audio-Ticks erfinden
+  keinen Request. Der aus `4cbab1e` erzeugte und mit der privaten PAL-Disc
+  installierte v26-Port beendet G2-Kanal 0, verlaesst den alten Poll
+  `0x8C666D42` und erzeugt zwei technische Direct-Frames mit 302.287
+  geaenderten Pixeln. Sechzehn reale Fensteraufnahmen bleiben schwarz.
+  Der neue erste Blocker ist KR-4971 bei
+  `0x8C602B0A -> 0x8C010F22`: Der interne Materializerfehler
+  `AotTemplateMismatch` (14) belegt einen fehlenden statischen AOT-Eintrag,
+  keinen Bytewechsel. Die terminale Dispatchdiagnose bezeichnet diesen Fall
+  derzeit noch irrefuehrend als `byte-identity-mismatch`. Nach dem
+  verifizierten v26-Nachfolger wurden v23 bis v25 und ihre drei alten
+  Exportworkspaces entfernt; das gab weitere 10.668.506.093 Bytes frei,
+  ohne v26, Disc-Cache oder private Originalquelle anzutasten.
 - Der produktive `CompletePlatform`-Pfad ist erstmals real ausgefuehrt.
   `GameEntryHandoff` Schema 3,
   Artefaktformat 2, Runtime-ABI 63, Portprojektvertrag 53 und
@@ -37,9 +53,10 @@
   `KR-4967` und `KR-4970` bleiben deshalb aktiv. `KR-4953` bleibt fuer den
   deterministischen Doppel-Capture sowie die Inspect-/Verify-CLI,
   `KR-4966` fuer das relative Post-Entry-Gate und `KR-4962` fuer den
-  normativen Paritaetsnachweis aktiv. `KR-4965` bleibt der erste
-  Produktblocker: NativeDisc und DirectBoot landen beide im
-  ADXT-/mwSnd-Completion-Wait. Ein Warmexport dauert 5,3 Sekunden. Beim
+  normativen Paritaetsnachweis aktiv. Dieser v24-Stand landete noch in
+  beiden Pfaden im ADXT-/mwSnd-Completion-Wait; der aktuelle v26-Fortschritt
+  und KR-4971 sind im vorangehenden Eintrag dokumentiert. Ein Warmexport
+  dauert 5,3 Sekunden. Beim
   anschliessenden Workspace-Cleanup wurden
   16.467.100.969 Bytes eindeutig regenerierbarer Build-, Publish- und
   Testartefakte entfernt; Retailquellen, aktuelle Referenzen und Nutzerdaten

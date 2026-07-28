@@ -17,6 +17,8 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 
 ## Aktueller Produktstand
 
+Historische v24-Vergleichsbasis:
+
 ```text
 Roadmap-Basis:                     origin/main 3714e26e117c609980b2b9be6ea0b85c2484c2dd
 Produktartefakt:                   DirectBoot-v24 / CompletePlatform
@@ -40,9 +42,35 @@ die Hostzeit, obwohl 415.233.270 Zyklen restauriert und nicht ausgefuehrt
 wurden. Sie ist kein gueltiger Geschwindigkeitswert. `KR-4966` muss das Gate
 auf ein relatives Post-Entry-Budget umstellen.
 
+Aktueller v26-Funktionslauf:
+
+```text
+Produktcode:                       4cbab1e9c11320955fa8e18f66ae4b0e7e1cd0cb
+Produktartefakt:                   DirectBoot-v26 / CompletePlatform
+Discinstallation:                  3 Tracks, 521.461 Sektoren
+restaurierter Game-Entry-Zyklus:   415.233.270
+CompletePlatform-Apply:            22 Geraete, 5 Events
+Endzyklus am typisierten Fehler:   552.903.647
+Post-Entry-Zyklen:                 137.670.377
+externe Walltime bis Fehler:       5,746371 s
+warmer unveraenderter Build:       0,239825 s (Ninja no work)
+Zentraldispatches:                 9.956.434
+G2-Kanal 0:                        active=0, remaining=0
+PVR-Gast-/Direct-Frames:           2 / 2
+veraenderte Direct-Pixel:          302.287
+sichtbarer Screen:                 keiner
+terminales Dispatchlabel:          byte-identity-mismatch (irrefuehrend)
+Materializergrund:                 AotTemplateMismatch (14)
+Callsite / Ziel:                   0x8C602B0A / 0x8C010F22
+```
+
+Der Lauf ist keine 600-Millionen-Performanceabnahme: Er endet
+`47.096.353` Zyklen vor dem weiterhin falsch absoluten Maximum. Sechzehn
+reale Fensteraufnahmen bis `5,323 s` blieben schwarz.
+
 ## Aktueller erster Blocker
 
-Der konkrete Waitvertrag liegt im ADXT-/mwSnd-Soundpfad:
+Der fruehere Waitvertrag lag im ADXT-/mwSnd-Soundpfad:
 
 ```text
 Objekt:               0x8C8D3908
@@ -53,26 +81,46 @@ Completion-Writer:    0x8C65A458
 
 Der Waitpfad setzt `[object+24]` auf `0` und pollt danach auf `1`. Der Writer setzt dasselbe Feld auf `1`. Alle sechs statisch aufgeloesten Caller liegen in ADXT-/mwSnd-Soundpfaden.
 
-NativeDisc-v24 und DirectBoot-v24 enden am selben Waitvertrag, mit demselben
-letzten PC und jeweils 72 GD-ROM-Kommandos. Der CompletePlatform-Handoff allein
-schliesst die Sound-Completion daher nicht.
-
-Wahrscheinliche Fehlerzone:
+Die erste verlorene Kante bestand aus zwei allgemeinen Holly-G2-Fehlern:
 
 ```text
-ADXT/mwSnd-Worker
-  -> G2/AICA/DMAC
-  -> Scheduler/IRQ
-  -> Completion-Writer
+SB_G2APRO 0x4659404F
+  -> Start-/Endbyte waren vertauscht
+
+ADTSEL 5 + ADST 1
+  -> CPU-Start mit AICA-Request-Level
+  -> SB_FFST.bit0=0 wurde beim Armieren nicht ausgewertet
 ```
 
-Maple/VMU ist fuer diesen konkreten Poll nicht belegt.
+Beides ist generisch repariert. v26 schliesst G2-Kanal 0 ab und verlaesst
+`0x8C666D42`, ohne das Flag vom Host zu setzen und ohne eine Titeladresse in
+den Kern einzubauen. Der Writer beziehungsweise der Flagwechsel wurde nicht
+separat beobachtet; KR-4965 ist durch den nachgewiesenen engeren allgemeinen
+Blocker abgenommen.
+
+Der erste aktive Blocker ist jetzt KR-4971:
+
+```text
+Dispatchlabel: byte-identity-mismatch (irrefuehrend)
+Materializer:  AotTemplateMismatch (14)
+Callsite:      0x8C602B0A
+Ziel:          0x8C010F22
+Gastzyklus:    552.903.647
+```
+
+Fuer das unveraenderte Ziel im initialen Boot-Executable fehlt ein
+generierter Block beziehungsweise passendes Runtime-AOT-Template. Ein
+Bytewechsel ist nicht belegt; die Dispatchdiagnose fasst den
+Template-Mismatch derzeit falsch als Byteidentitaetsfehler zusammen. Ein
+Interpreter-, JIT-, Runtime-Decoder- oder Emulationsfallback bleibt verboten.
 
 ## Verbindliche Reihenfolge
 
 ```text
-KR-4965 Sound-Completion
-  +--> KR-4966 relatives Produktgate
+KR-4965 Sound-Completion [abgeschlossen ueber engeren Blocker]
+  +--> KR-4971 RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel
+         [zuerst]
+         +--> KR-4966 relatives Produktgate
   +--> KR-4967 CompletePlatform-Koordinator
          +--> KR-4968 Sound-/DMA-/IRQ-Handoff
          +--> KR-4969 PVR-/Frame-Handoff
@@ -383,11 +431,12 @@ Prioritaet: P0 Boot-Gate
 
 Abhaengigkeiten: KR-4952, KR-4953, KR-4967, KR-4968, KR-4969, KR-4970
 
-Status: Aktiv. NativeDisc-v24 und DirectBoot-v24 enden am selben PC
-`0x8C666D42`, mit jeweils 72 GD-ROM-Kommandos und nahezu gleichen
-AICA-Pufferzaehlern (180 beziehungsweise 179). Das ist operative Evidenz,
-aber kein normativer Digestnachweis. Sound-Completion, erster Spielframe und
-ein echter Lauf ueber 600 Millionen Post-Entry-Zyklen bleiben offen.
+Status: Aktiv. Der alte gemeinsame End-PC `0x8C666D42` ist durch v26
+ueberholt: DirectBoot beendet die konkrete G2-DMA und erzeugt zwei technische
+Direct-Frames, endet aber am RuntimeOnly-AOT-Fehler aus KR-4971. Das ist
+funktionaler Fortschritt, jedoch kein normativer Digestnachweis. Sichtbarer
+Spielframe, unabhaengiger NativeDisc-Vergleich und ein echter Lauf ueber
+600 Millionen Post-Entry-Zyklen bleiben offen.
 
 ### Umfang
 
@@ -467,15 +516,16 @@ Abhaengigkeiten: KR-4960, KR-4961, KR-4962, KR-4963
 
 ---
 
-## [ ] KR-4965 - ADXT/mwSnd-Sound-Completion bis zum Writer schliessen
+## [x] KR-4965 - ADXT/mwSnd-Sound-Completion bis zum Writer schliessen
 
 Prioritaet: P0 - zuerst
 
 Abhaengigkeiten: keine
 
-Status: Aktiv und weiterhin erster P0-Produktblocker. NativeDisc-v24 und
-DirectBoot-v24 erreichen denselben ADXT-/mwSnd-Waitvertrag; der
-CompletePlatform-Handoff hat den Completion-Writer noch nicht freigegeben.
+Status: Abgeschlossen ueber die ausdrueckliche Alternativabnahme
+"engerer allgemeiner Blocker". v26 beendet den konkreten G2-Transfer und
+verlaesst den ADXT-/mwSnd-Waitvertrag. Der Writer-/Flagwechsel wurde nicht
+separat instrumentiert.
 
 ### Produktbefund
 
@@ -484,6 +534,9 @@ CompletePlatform-Handoff hat den Completion-Writer noch nicht freigegeben.
 - Poll-Callback `0x8C666D42`
 - Completion-Writer `0x8C65A458`
 - sechs statische Caller in ADXT-/mwSnd-Soundpfaden
+- `SB_G2APRO=0x4659404F` wurde byteverkehrt dekodiert
+- `ADTSEL=5` benoetigt beim Armieren das reale AICA-Request-Level aus
+  `SB_FFST`
 
 ### Umfang
 
@@ -496,14 +549,67 @@ CompletePlatform-Handoff hat den Completion-Writer noch nicht freigegeben.
 
 ### Produktabnahme
 
-Erst nach der zusammenhaengenden Implementierung ein normaler DirectBoot mit derselben post-entry Gastarbeit wie die Baseline.
+Der reale v26-DirectBoot wurde nach der zusammenhaengenden Implementierung
+ausgefuehrt.
 
 Erfolg:
 
 - Gast erreicht den echten Completion-Writer und Flag wird `1`, oder
 - ein engerer allgemeiner Blocker ist belegt.
 
-Keine neue breite Soundtestmatrix.
+Ergebnis: G2-Kanal 0 endet mit `active=0`, `remaining=0`; der alte Poll-PC
+wird verlassen. Bei Gastzyklus `552.903.647` folgt der engere allgemeine
+RuntimeOnly-AOT-Blocker aus KR-4971. Keine neue breite Soundtestmatrix.
+
+---
+
+## [ ] KR-4971 - RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen
+
+Prioritaet: P0 - zuerst
+
+Abhaengigkeiten: KR-4965
+
+Status: Aktiv und erster Produktblocker. Der v26-DirectBoot erreicht nach
+abgeschlossener Sound-DMA einen indirekten Call auf ein unveraendertes Ziel
+des initialen Boot-Executables, fuer das weder ein generierter Block noch
+ein passendes Runtime-AOT-Template existiert.
+
+### Produktbefund
+
+```text
+Gastzyklus:                   552.903.647
+Post-Entry-Zyklen:            137.670.377
+Callsite:                     0x8C602B0A
+RuntimeCode-Ziel:             0x8C010F22
+terminales Dispatchlabel:     byte-identity-mismatch (irrefuehrend)
+interner Materializerfehler:  AotTemplateMismatch (14)
+Materializer-Anfragen:        2
+Materialisierungen:           1
+Materializer-Misses:          1
+RuntimeOnly-Dispatchanteil:   282.818 ppm
+```
+
+### Umfang
+
+- statisch identifizierbare Ziele ueber externe, hash-/bytegebundene
+  Spielprojekt-Funktionsgrenzen in Analyse und AOT seeden
+- `GameProjectFunctionBoundary::size` bis zur Analyse transportieren
+- externes GameProject und GameEntryHandoff im Export gemeinsam verwenden
+- fuer das beobachtete Ziel eine statisch erzeugte, bei Laufzeit
+  identitaetsgepruefte AOT-Variante bereitstellen
+- Code-, Modul-, Relocation- und Blockgenerationen korrekt invalidieren
+- `AotTemplateMismatch`, echten `ByteIdentityMismatch` und fehlendes AOT
+  terminal getrennt diagnostizieren
+- keinen Interpreter, JIT, Runtime-Decoder oder Emulationsfallback einfuehren
+- keine Titeladresse als generischen Sonderfall einbauen
+
+### Produktabnahme
+
+- derselbe echte DirectBoot-Port fuehrt `0x8C010F22` ueber validiertes
+  statisches AOT aus oder belegt einen noch engeren allgemeinen Blocker
+- kein `AotTemplateMismatch` und keine irrefuehrende Dispatchklassifikation
+- die zwei technischen PVR-Direct-Frames und der abgeschlossene G2-Transfer
+  bleiben erhalten
 
 ---
 
@@ -593,10 +699,12 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4965, KR-4967
 
-Status: Aktiv. Die erforderlichen Game-Entry-Adapter sind implementiert und
-im CompletePlatform-Artefakt transportiert. Die echte Sound-Completion und
-die exakte NativeDisc-/DirectBoot-Paritaet dieses Subsystemverbunds bleiben
-offen.
+Status: Aktiv mit belegtem Produktfortschritt. Die erforderlichen
+Game-Entry-Adapter sind implementiert und im CompletePlatform-Artefakt
+transportiert. v26 beendet die nach dem Entry armierte AICA-G2-DMA mit
+`active=0`, `remaining=0`. Exakte NativeDisc-/DirectBoot-Paritaet und der
+Abgleich eines bereits restaurierten aktiven Hardware-Request-Kanals ohne
+Completionevent bleiben offen.
 
 ### Umfang
 
@@ -622,9 +730,11 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967
 
-Status: Aktiv. Die PVR-/SPG-/ASIC-Game-Entry-Adapter sind implementiert und
-wurden im realen Produkt-Apply verwendet. Ein erster Spielframe und die
-normative NativeDisc-/DirectBoot-Paritaet bleiben offen.
+Status: Aktiv mit technischem Framefortschritt. Die PVR-/SPG-/ASIC-
+Game-Entry-Adapter sind implementiert und wurden im realen Produkt-Apply
+verwendet. v26 meldet zwei Gast-/Direct-Frames mit `302.287` veraenderten
+Pixeln. Sechzehn reale Fensteraufnahmen bleiben schwarz; sichtbare
+Hostpraesentation und normative NativeDisc-/DirectBoot-Paritaet sind offen.
 
 ### Umfang
 
@@ -674,11 +784,18 @@ offen.
 
 ## Geplante Produktlaeufe
 
-### Lauf A - nach KR-4965
+### Lauf A - nach KR-4965 [ausgefuehrt]
 
-- gewoehnlicher DirectBoot
-- gleiche post-entry Gastarbeit wie Baseline
-- Sound-Completionwriter oder engerer Blocker
+- v26-DirectBoot mit real installiertem PAL-Disc-Cache
+- G2-Kanal 0 abgeschlossen, alter Sound-Poll verlassen
+- engerer RuntimeOnly-AOT-Blocker bei `0x8C010F22`
+- zwei technische Direct-Frames, aber kein sichtbarer Hostframe
+
+### Lauf A2 - nach KR-4971
+
+- derselbe gewoehnliche DirectBoot
+- RuntimeCode-Ziel ueber byteidentische statische AOT-Variante ausfuehren
+- mindestens bis zum naechsten typisierten Ergebnis fortschreiten
 
 ### Lauf B - nach KR-4967 bis KR-4970
 

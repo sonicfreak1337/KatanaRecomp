@@ -201,7 +201,7 @@ dahin ist die terminal aus dem absoluten Zaehler berechnete MHz-Zahl eines
 Handoff-Laufs kein gueltiger Performancevergleich. Eine inhaltliche
 Bildschirmklassifikation erfordert weiterhin eine reale visuelle Aufnahme.
 
-Der aktuelle `CompletePlatform`-Produktnachweis ergab:
+Die v24-`CompletePlatform`-Vergleichsbasis ergab:
 
 - `NativeDiscBoot`: exakt 600.000.000 Gastzyklen in 6,3161 Sekunden,
   94,9954 effektive Gast-MHz, 17.080.114 zentrale Dispatches und ein
@@ -213,7 +213,15 @@ Der aktuelle `CompletePlatform`-Produktnachweis ergab:
 
 Der terminal gemeldete Direct-Wert von 119,64 MHz verwendet den absoluten
 Schedulerstand und ist nicht vergleichbar. Die 16.033.676 Dispatches ergeben
-11,52 Zyklen je ausgefuehrtem Post-Entry-Dispatch. Beide Laeufe endeten am PC
-`0x8C666D42` und meldeten kein erstes neues AOT-, Runtime- oder
-Geraeteproblem. Die unmittelbare Bring-up-Grenze ist der
-ADXT-/mwSnd-Wartepfad bei `0x8C65A624` mit Callback `0x8C666D42`.
+11,52 Zyklen je ausgefuehrtem Post-Entry-Dispatch.
+
+Der aktuelle v26-DirectBoot installiert weiterhin die private Originaldisc
+ueber den Produktinstaller, startet danach aber executable-first mit dem
+CompletePlatform-Handoff. Die korrigierten G2-Vertraege schliessen Kanal 0
+ab und verlassen den alten ADXT-/mwSnd-Poll. Bei Gastzyklus `552.903.647`
+folgt die neue statische AOT-Coverageluecke
+`0x8C602B0A -> 0x8C010F22`: interner Materializergrund
+`AotTemplateMismatch` (14), kein belegter Bytewechsel. Das Ziel muss
+hashgebunden aus dem externen Spielprojekt in Analyse und AOT gelangen.
+Zwei technische Direct-Frames sind vorhanden, die reale Fensteraufnahme
+bleibt jedoch schwarz.

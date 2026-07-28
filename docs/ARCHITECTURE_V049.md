@@ -120,7 +120,7 @@ save-erhaltende `ProductHandoff` aus `KR-4970` bleiben offen.
 
 ### Belegter Produktstand
 
-Die aktuellen Gates endeten ohne erstes neues Geraete-, AOT- oder
+Die v24-Vergleichsgates endeten ohne erstes neues Geraete-, AOT- oder
 Runtimeproblem jeweils bei Schedulerzyklus 600.000.000:
 
 - `NativeDiscBoot`: 6,3161 Sekunden, 94,9954 effektive Gast-MHz,
@@ -133,10 +133,17 @@ Der vom Direct-Port gemeldete Wert 119,64 MHz verwendet faelschlich den
 absoluten Schedulerstand als ausgefuehrte Arbeit. `KR-4966` muss das Gate auf
 eine relative Laufdauer ab Entry umstellen. 16.033.676 Dispatches entsprechen
 11,52 Zyklen pro Post-Entry-Dispatch und belegen noch keinen
-Performancegewinn. Beide Pfade erreichten PC `0x8C666D42`. Der unmittelbare
-Bring-up-Blocker ist der ADXT-/mwSnd-Wartepfad bei `0x8C65A624` mit Callback
-`0x8C666D42`; er tritt in beiden Pfaden auf. Ein warmer Direct-Export bei
-unveraenderter Analyse dauerte 5,3 Sekunden.
+Performancegewinn. Ein warmer Direct-Export bei unveraenderter Analyse
+dauerte 5,3 Sekunden.
+
+Der v26-DirectBoot korrigiert anschliessend `SB_G2APRO` und das reale
+AICA-Request-Level fuer `ADTSEL=5`. G2-Kanal 0 wird abgeschlossen, der alte
+Poll bei `0x8C666D42` verlassen und zwei technische PVR-Direct-Frames werden
+erzeugt. Die neue Grenze bei `0x8C602B0A -> 0x8C010F22` ist keine belegte
+Byteaenderung: Der Materializer meldet `AotTemplateMismatch` (14), weil fuer
+das unveraenderte statische Spielziel kein generierter AOT-Block oder
+Runtime-AOT-Template existiert. KR-4971 fuehrt solche hashgebundenen
+Funktionsgrenzen aus dem externen Spielprojekt bis in Analyse und AOT.
 
 ## Statischer und dynamischer AOT-Dispatch
 

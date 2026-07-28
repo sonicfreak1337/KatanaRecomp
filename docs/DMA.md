@@ -46,6 +46,34 @@ sichtbar. Die G2-Timeoutregister sind weiterhin gespeichert und im Snapshot
 enthalten; eine davon unabhaengige elektrische Timeoutmaschine ist nicht
 modelliert.
 
+## G2-Adressschutz und AICA-Request-Level
+
+`SB_G2APRO` verwendet den Dreamcast-Vertrag `0x4659XXYY`. `XX` ist die
+untere, `YY` die obere zulaessige physische 1-MiB-Seite:
+
+```text
+0x4659404F -> 0x0C000000 bis 0x0CFFFFFF zulaessig
+0x46597F00 -> leeres zulaessiges Intervall, alle Ziele geschuetzt
+```
+
+Start- und Endbyte duerfen nicht vertauscht werden. Ein Ziel ausserhalb des
+zulaessigen Bereichs bleibt ein typisierter G2-Adressfehler; innerhalb des
+Bereichs darf kein erfundener `Overrun` entstehen.
+
+Fuer einen AICA-G2-Kanal mit `(ADTSEL & 3) == 1` armiert `ADST=1` den
+CPU-initiierten Transfer mit externer Request-Pin-Steuerung. Beim Armieren
+wird das reale Systembus-Level ausgewertet: `SB_FFST.bit0 == 0` bedeutet,
+dass der AICA-Schreibpuffer leer und der Request bereit ist. Der Controller
+plant dann den normalen gastzeitlich terminierten Transfer; vor dem
+faelligen Schedulerereignis werden keine Gastbytes kopiert.
+
+Ein spaeterer echter Request-Levelwechsel kann weiterhin ueber den
+expliziten Hardwaretrigger zugestellt werden. Periodische Audio-Ticks
+erfinden dagegen keinen G2-Request. Ein passiv restaurierter, bereits aktiver
+Hardware-Request-Kanal ohne rehydriertes Completionevent muss nach dem
+CompletePlatform-Commit explizit abgeglichen werden; Restore selbst bleibt
+passiv.
+
 Der angebundene SH-4-DMAC schreitet bei PVR-DMA ebenfalls pro Chunk fort:
 `SAR` und `DMATCR` werden live aktualisiert, waehrend `CHCR.TE` erst nach dem
 letzten erfolgreich kopierten Chunk gesetzt wird. Ein Handshakebruch bleibt
