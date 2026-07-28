@@ -5,19 +5,15 @@ Aktuelle interne Version: `v0.49.0`
 Main-Ausgangsbasis dieser Implementierungs- und Produktrunde:
 
 ```text
-b01586a
-P0 source contracts complete; product acceptance pending
+1629268
+Validate guarded entries before inventory admission
 ```
 
-Der Quellstand `b01586a` implementiert die allgemeinen Source-Vertraege fuer
+Der Quellstand `1629268` implementiert die allgemeinen Source-Vertraege fuer
 `KR-4972`, `KR-4966`, `KR-4967` und `KR-4970`: bewachte AOT-Einstiege samt
 Exportvollstaendigkeitsinvariante, ein relatives Post-Entry-Gate mit strenger
 Exitcodewertung, einen vorbereiteten atomaren `CompletePlatform`-Commit und
-ein nutzersave-autoritatives Product-Handoff-Profil. Der frische
-ABI-73-Sonic-PAL-NativeDisc-Export, die Installation, der echte
-600-Millionen-Post-Entry-Lauf und die separate Sichtaufnahme stehen noch aus.
-Bis dahin wird kein neuer Boot-, Bild- oder Geschwindigkeitsfortschritt
-behauptet.
+ein nutzersave-autoritatives Product-Handoff-Profil.
 
 Der erste kalte ABI-73-Exportversuch lief 419,5 Sekunden und brach noch vor
 dem Hostcompiler in der IR-Validierung ab. Die allgemeine Ursache war ein
@@ -34,8 +30,37 @@ abgelehnte Dateneintraege das Budget nicht belegen und spaetere gueltige
 Einstiege nicht verdraengen koennen. Sein Ergebnis-Cache lebt ueber den
 gesamten aeusseren Kontrollflussfixpunkt und dekodiert identische Kandidaten
 nicht in jeder Iteration erneut.
-Fokussierter Build und realer Produktnachweis folgen nach dem fuer die
-Source-Identity erforderlichen Commit.
+Der reale ABI-73-Sonic-PAL-NativeDisc-v33-Export auf `1629268` war
+erfolgreich:
+
+```text
+kalter Gesamtexport:              711,2 s
+Funktionen / Partitionen:         2.519 / 63
+Analyse-/IR-/Codegencache:        Miss / Miss / 0 Hits
+Produkt-EXE:                      109.217.792 Bytes
+Produkt-EXE SHA-256:              428A36CF3BDB1640B8C6225B771A7AE9B7E8E9EDB08E7C0851F464458145DBC7
+unveraenderter Ninja-Warmbuild:   0,200236 s
+Originaldisc-Installation:        3 Tracks / 521.461 Sektoren
+Retailsektoren im Portpaket:      0
+```
+
+Ein zweiter identischer Voll-Export traf den aeusseren Analysecache nicht
+und wurde nach 124 Sekunden beendet. Der direkte Host-Warmbuild ist schnell,
+der persistente Voll-Exportcache bleibt jedoch defekt.
+
+Der echte NativeDisc-Produktlauf praesentierte acht Hostframes und meldete
+`KR_FIRST_IP_BIN_VISIBLE_FRAME`. Er stoppte fail-closed bei Gesamtzyklus
+`487.233.787`, also 72.000.517 Zyklen nach dem bekannten Game Entry
+`415.233.270`, bei `0x8C65EA06 -> 0x8C0101F2` mit
+`missing-aot / guarded-fallback`. Nach Entry wurden 9.044.195 zentrale
+Dispatches und 22 AICA-Puffer ausgefuehrt; es gab keine
+Interpreter-Materialisierung. Das 600-Millionen-Post-Entry-Gate wurde nicht
+erreicht, daher wird keine Gast-MHz-Zahl abgeleitet.
+
+Der erzeugte Gatewrapper liefert auf dieser typisierten Fehlerstrecke
+faelschlich Exitcode 0 und die normale `KATANA_BRINGUP_RUN`-Zusammenfassung
+fehlt. Beide Punkte sowie die separate v33-Sichtaufnahme bleiben wegen des
+angeforderten Rechnerneustarts offen.
 
 ## Zielarchitektur
 

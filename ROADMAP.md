@@ -43,8 +43,8 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Roadmapbasis dieser Runde:
 
 ```text
-b01586a
-P0 source contracts complete; product acceptance pending
+1629268
+Validate guarded entries before inventory admission
 ```
 
 Der aktuelle Quellstand implementiert die allgemeinen Source-Vertraege fuer
@@ -52,11 +52,7 @@ Der aktuelle Quellstand implementiert die allgemeinen Source-Vertraege fuer
 AOT-Einstiege mit Exportvollstaendigkeitsinvariante, ein relatives
 Post-Entry-Gate samt strenger Exitcodewertung, ein vorbereiteter atomarer
 `CompletePlatform`-Commit sowie ein nutzersave-autoritatives
-Product-Handoff-Profil. Der naechste und einzige Abnahmeschritt dieser
-P0-Runde ist ein frischer ABI-73-Sonic-PAL-NativeDisc-Export mit
-600 Millionen Gastzyklen und separater sichtbarer Aufnahme. Bis zu diesem
-Lauf sind weder Bootfortschritt noch 200 MHz oder ein neuer sichtbarer
-Meilenstein belegt.
+Product-Handoff-Profil.
 
 Der erste kalte ABI-73-Exportversuch benoetigte 419,5 Sekunden fuer die
 vollstaendige Analyse und stoppte danach vor dem Hostcompiler an einem
@@ -68,10 +64,23 @@ Die Strukturpruefung erfolgt vor der begrenzten globalen Inventaraufnahme;
 ungueltige Kandidaten koennen das 1.024er-Budget daher nicht mehr
 vergiften oder spaetere gueltige Ziele verdraengen. Der zugehoerige Cache
 bleibt ueber den gesamten aeusseren Kontrollflussfixpunkt erhalten.
-Der verpflichtende Sonic-Lauf bleibt bis zum fokussierten Build und einem
-erneuten Export offen. Die 419,5 Sekunden sind eine kalte Vollanalyse, kein
-Warmbuildwert; der noch fehlende persistente Analysecache bleibt daher ein
-eigener Buildpipeline-Punkt.
+Der reale ABI-73-Sonic-PAL-NativeDisc-v33-Port wurde erzeugt und mit der
+privaten Originaldisc installiert. Der kalte Export dauerte 711,2 Sekunden,
+erzeugte 2.519 Funktionen und 63 Partitionen und traf keinen Analyse-/IR-
+oder Codegencache. Der direkte unveraenderte Ninja-Warmbuild dauert
+0,200236 Sekunden; ein identischer Voll-Warmexport traf den aeusseren Cache
+jedoch erneut nicht und wurde nach 124 Sekunden beendet.
+
+Der reale v33-Lauf praesentiert einen IP.BIN-Frame und erreicht Gesamtzyklus
+`487.233.787`. Danach stoppt er korrekt ohne Interpreter an
+`0x8C65EA06 -> 0x8C0101F2` mit `missing-aot`. Das entspricht 72.000.517
+Post-Entry-Zyklen und 9.044.195 Post-Entry-Zentraldispatches, aber keinem
+600-Millionen-Gate und keinem gueltigen MHz-Benchmark. Der generierte
+Gatewrapper gibt fuer diese typisierte Fehlerstrecke faelschlich Exitcode 0
+zurueck und die terminale `KATANA_BRINGUP_RUN`-Zusammenfassung fehlt. Vor
+dem naechsten Produktlauf sind daher der neue allgemeine AOT-Bestand und der
+Fehler-/Exitcodepfad zu korrigieren. Die separate v33-Sichtaufnahme wurde
+wegen des angeforderten Rechnerneustarts vertagt.
 
 ```text
 Runtime-ABI:                    73

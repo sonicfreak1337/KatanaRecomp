@@ -4,6 +4,20 @@
 
 ### Geaendert
 
+- Der aus `1629268` erzeugte ABI-73-Sonic-PAL-NativeDisc-v33-Port passiert
+  den vorherigen falschen Datentabellen-AOT-Einstieg und baut mit MSVC
+  erfolgreich 2.519 Funktionen in 63 Partitionen. Der kalte Gesamtexport
+  dauert 711,2 Sekunden; der direkte Ninja-no-work-Warmbuild 0,200236
+  Sekunden. Ein identischer Voll-Warmexport trifft den aeusseren Cache
+  weiterhin nicht und wurde nach 124 Sekunden beendet. Die private
+  Originaldisc wurde mit 3 Tracks und 521.461 Sektoren installiert; das
+  Portpaket enthaelt keine Retailsektoren. Der echte NativeDisc-Lauf
+  praesentiert einen IP.BIN-Frame und stoppt fail-closed bei Gesamtzyklus
+  487.233.787 beziehungsweise 72.000.517 Post-Entry-Zyklen am neuen
+  `missing-aot`-Ziel `0x8C65EA06 -> 0x8C0101F2`, ohne
+  Interpreter-Materialisierung. Das 600-Millionen-Gate ist nicht erreicht.
+  Der generierte Gatewrapper meldet auf dieser typisierten Fehlerstrecke
+  faelschlich Exitcode 0; eine separate v33-Sichtaufnahme steht noch aus.
 - Der erste kalte ABI-73-Produkt-export legte einen allgemeinen
   Analysefehler offen: Endliche Werte aus `Mixed`-Datentabellen konnten
   allein wegen zufaellig dekodierbarer Bytes als bewachte native
