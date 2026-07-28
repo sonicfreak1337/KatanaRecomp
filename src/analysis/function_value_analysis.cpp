@@ -6,6 +6,7 @@
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/binary_reader.hpp"
 #include "katana/sh4/instruction.hpp"
+#include "guarded_native_entry_shape.hpp"
 #include "snapshot_pointer_candidates.hpp"
 
 #include <algorithm>
@@ -206,8 +207,11 @@ void normalize(std::vector<std::uint32_t>& values) {
 
 class GuardedCodeInventoryCollector {
   public:
-    explicit GuardedCodeInventoryCollector(const bool defer_stored_admission = false)
-        : defer_stored_admission_(defer_stored_admission) {}
+    explicit GuardedCodeInventoryCollector(
+        const bool defer_stored_admission = false,
+        detail::GuardedNativeEntryShapeCache* const shape_cache = nullptr)
+        : shape_cache_(shape_cache),
+          defer_stored_admission_(defer_stored_admission) {}
 
     const std::optional<JumpTableAnalysis>& stored_snapshot_table(
         const katana::io::ExecutableImage& image,
@@ -299,7 +303,11 @@ class GuardedCodeInventoryCollector {
             // provenance, so admit all of them before broad returned-table
             // scans compete for the shared bounded candidate budget.
             std::erase_if(candidate.target_addresses,
-                          [&](const auto target) { return !admit(target); });
+                          [&](const auto target) {
+                              return (shape_cache_ != nullptr &&
+                                      !shape_cache_->valid(target)) ||
+                                     !admit(target);
+                          });
             if (candidate.target_addresses.empty()) continue;
             normalize(candidate.load_instruction_addresses);
             normalize(candidate.evidence_call_sites);
@@ -317,6 +325,9 @@ class GuardedCodeInventoryCollector {
 
   private:
     void collect_stored_candidate(StoredCodeAddressCandidate candidate) {
+        if (shape_cache_ != nullptr &&
+            !shape_cache_->valid(candidate.target_address))
+            return;
         if (!admit(candidate.target_address)) return;
         candidate.guarded = true;
         const auto [stored, inserted] =
@@ -378,6 +389,7 @@ class GuardedCodeInventoryCollector {
     std::unordered_map<std::uint32_t, std::optional<JumpTableAnalysis>>
         stored_snapshot_tables_;
     std::vector<StoredCodeAddressCandidate> deferred_stored_candidates_;
+    detail::GuardedNativeEntryShapeCache* shape_cache_ = nullptr;
     bool defer_stored_admission_ = false;
     bool candidate_inventory_truncated_ = false;
     bool table_scan_truncated_ = false;
@@ -2636,6 +2648,24 @@ analyze_function_values(
     const std::span<const FunctionBoundary> function_boundaries,
     const std::span<const ResolvedControlFlowEdge> resolved_edges,
     const FunctionValueAnalysisProgressCallback& progress_callback) {
+    detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
+    return detail::analyze_function_values_with_guarded_entry_cache(
+        image,
+        lines,
+        function_boundaries,
+        resolved_edges,
+        progress_callback,
+        guarded_native_entry_shapes);
+}
+
+FunctionValueAnalysisResult
+detail::analyze_function_values_with_guarded_entry_cache(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const FunctionBoundary> function_boundaries,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges,
+    const FunctionValueAnalysisProgressCallback& progress_callback,
+    detail::GuardedNativeEntryShapeCache& guarded_native_entry_shapes) {
     FunctionValueAnalysisResult result;
     result.iteration_budget = maximum_fixpoint_iterations;
     std::size_t completed_functions = 0u;
@@ -3205,7 +3235,8 @@ analyze_function_values(
     for (const auto& [address, summary] : summaries)
         result.summaries.push_back(summary);
     report_progress("resolution-start");
-    GuardedCodeInventoryCollector guarded_inventory_collector;
+    GuardedCodeInventoryCollector guarded_inventory_collector{
+        false, &guarded_native_entry_shapes};
     std::vector<const FunctionInfo*> resolution_functions;
     resolution_functions.reserve(functions.size());
     for (const auto& function : functions)

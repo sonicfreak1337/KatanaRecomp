@@ -29,6 +29,11 @@ Ausfuehrungskontext eines Delay Slots vor den Rohopcode-Eigenschaften und
 baut direkte Callee-Metadaten ausschliesslich aus den finalen
 Blockterminatoren neu auf. Das ist ein generischer Analyse- und
 IR-Vertrag; es wurden keine Sonic-Adressen oder Retailbytes eingetragen.
+Der Strukturcheck liegt vor der globalen 1.024er-Inventaraufnahme, damit
+abgelehnte Dateneintraege das Budget nicht belegen und spaetere gueltige
+Einstiege nicht verdraengen koennen. Sein Ergebnis-Cache lebt ueber den
+gesamten aeusseren Kontrollflussfixpunkt und dekodiert identische Kandidaten
+nicht in jeder Iteration erneut.
 Fokussierter Build und realer Produktnachweis folgen nach dem fuer die
 Source-Identity erforderlichen Commit.
 

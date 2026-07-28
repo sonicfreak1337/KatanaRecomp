@@ -64,6 +64,10 @@ faelschlich aus Datentabellen abgeleiteten bewachten AOT-Einstieg. Die
 allgemeine Korrektur prueft `Stored`-/`Returned`-Inventarkandidaten nun mit
 einem begrenzten lokalen CFG-Strukturvertrag, priorisiert echten
 Delay-Slot-Kontext und erzeugt Callee-Metadaten aus dem finalen IR-CFG neu.
+Die Strukturpruefung erfolgt vor der begrenzten globalen Inventaraufnahme;
+ungueltige Kandidaten koennen das 1.024er-Budget daher nicht mehr
+vergiften oder spaetere gueltige Ziele verdraengen. Der zugehoerige Cache
+bleibt ueber den gesamten aeusseren Kontrollflussfixpunkt erhalten.
 Der verpflichtende Sonic-Lauf bleibt bis zum fokussierten Build und einem
 erneuten Export offen. Die 419,5 Sekunden sind eine kalte Vollanalyse, kein
 Warmbuildwert; der noch fehlende persistente Analysecache bleibt daher ein

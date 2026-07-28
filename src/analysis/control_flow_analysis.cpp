@@ -1,10 +1,9 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 
 #include "katana/analysis/code_address.hpp"
-#include "katana/io/binary_reader.hpp"
 #include "katana/io/input_provenance.hpp"
-#include "katana/sh4/decoder.hpp"
 #include "katana/sh4/instruction.hpp"
+#include "guarded_native_entry_shape.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,140 +21,10 @@
 namespace katana::analysis {
 namespace {
 
-constexpr std::size_t maximum_guarded_native_entry_shape_instructions = 4'096u;
-
 std::string hex_address(const std::uint32_t address) {
     std::ostringstream output;
     output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
     return output.str();
-}
-
-class GuardedNativeEntryShapeCache {
-  public:
-    explicit GuardedNativeEntryShapeCache(const katana::io::ExecutableImage& image)
-        : image_(image) {}
-
-    [[nodiscard]] bool valid(const std::uint32_t address) {
-        const auto validation = validate_decode_candidate(image_, address);
-        if (!validation.valid()) {
-            results_.insert_or_assign(address, false);
-            return false;
-        }
-        const auto canonical_address = validation.resolved_address;
-        if (const auto cached = results_.find(canonical_address); cached != results_.end()) {
-            results_.insert_or_assign(address, cached->second);
-            return cached->second;
-        }
-        const auto result = validate(canonical_address);
-        results_.insert_or_assign(canonical_address, result);
-        results_.insert_or_assign(address, result);
-        return result;
-    }
-
-  private:
-    [[nodiscard]] std::optional<katana::sh4::DecodedInstruction>
-    decode_at(const std::uint32_t address) const {
-        const auto validation = validate_decode_candidate(image_, address);
-        if (!validation.valid() || validation.segment == nullptr) return std::nullopt;
-        const auto offset = validation.segment->byte_offset(validation.resolved_address);
-        if (!offset.has_value() || *offset > validation.segment->bytes.size() ||
-            validation.segment->bytes.size() - *offset < 2u)
-            return std::nullopt;
-        const auto instruction = katana::sh4::decode(
-            katana::io::read_u16_le(validation.segment->bytes, *offset));
-        return instruction.is_known()
-                   ? std::optional<katana::sh4::DecodedInstruction>{instruction}
-                   : std::nullopt;
-    }
-
-    [[nodiscard]] bool validate(const std::uint32_t entry_address) const {
-        std::deque<std::uint32_t> pending{entry_address};
-        std::unordered_set<std::uint32_t> visited;
-        visited.reserve(maximum_guarded_native_entry_shape_instructions);
-        const auto enqueue_fallthrough =
-            [&pending](const std::uint32_t address, const bool has_delay_slot) {
-                const auto distance = has_delay_slot ? 4u : 2u;
-                if (address > std::numeric_limits<std::uint32_t>::max() - distance)
-                    return false;
-                pending.push_back(address + distance);
-                return true;
-            };
-
-        while (!pending.empty()) {
-            const auto address = pending.front();
-            pending.pop_front();
-            if (!visited.insert(address).second) continue;
-            if (visited.size() > maximum_guarded_native_entry_shape_instructions) return false;
-
-            const auto instruction = decode_at(address);
-            if (!instruction.has_value()) return false;
-            if (instruction->has_delay_slot) {
-                if (address > std::numeric_limits<std::uint32_t>::max() - 2u)
-                    return false;
-                const auto delay = decode_at(address + 2u);
-                if (!delay.has_value() || delay->changes_control_flow()) return false;
-            }
-
-            switch (instruction->control_flow) {
-            case katana::sh4::ControlFlowKind::None:
-                if (!enqueue_fallthrough(address, instruction->has_delay_slot)) return false;
-                break;
-            case katana::sh4::ControlFlowKind::ConditionalBranch: {
-                const auto target =
-                    katana::sh4::calculate_direct_branch_target(*instruction, address);
-                if (!target.has_value() ||
-                    !enqueue_fallthrough(address, instruction->has_delay_slot))
-                    return false;
-                pending.push_back(*target);
-                break;
-            }
-            case katana::sh4::ControlFlowKind::Call:
-            case katana::sh4::ControlFlowKind::IndirectCall:
-                // A candidate entry owns its local continuation, not the
-                // independently validated native entry of a callee.
-                if (!enqueue_fallthrough(address, instruction->has_delay_slot)) return false;
-                break;
-            case katana::sh4::ControlFlowKind::UnconditionalBranch: {
-                const auto target =
-                    katana::sh4::calculate_direct_branch_target(*instruction, address);
-                if (!target.has_value()) return false;
-                pending.push_back(*target);
-                break;
-            }
-            case katana::sh4::ControlFlowKind::Return:
-            case katana::sh4::ControlFlowKind::IndirectBranch:
-            case katana::sh4::ControlFlowKind::Trap:
-            case katana::sh4::ControlFlowKind::ExceptionReturn:
-            case katana::sh4::ControlFlowKind::Halt:
-                break;
-            }
-        }
-        return true;
-    }
-
-    const katana::io::ExecutableImage& image_;
-    std::unordered_map<std::uint32_t, bool> results_;
-};
-
-void filter_guarded_code_inventory(
-    GuardedCodeInventory& inventory,
-    GuardedNativeEntryShapeCache& shape_cache) {
-    std::erase_if(inventory.stored_code_addresses, [&](const auto& candidate) {
-        return !shape_cache.valid(candidate.target_address);
-    });
-    std::erase_if(inventory.returned_code_address_tables, [&](auto& table) {
-        std::erase_if(table.target_addresses, [&](const auto target) {
-            return !shape_cache.valid(target);
-        });
-        return table.target_addresses.empty();
-    });
-
-    std::set<std::uint32_t> accepted_targets;
-    for (const auto& candidate : inventory.stored_code_addresses)
-        accepted_targets.insert(candidate.target_address);
-    for (const auto& table : inventory.returned_code_address_tables)
-        accepted_targets.insert(table.target_addresses.begin(), table.target_addresses.end());
-    inventory.candidate_count = accepted_targets.size();
 }
 
 [[noreturn]] void override_error(const AnalysisOverrides& overrides,
@@ -956,7 +825,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
 
     ControlFlowAnalysisResult analysis;
     GuardedCodeInventory final_guarded_code_inventory;
-    GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
+    detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
     JumpTableSnapshotCache jump_table_cache;
     const auto report_progress = [&](const std::string_view phase) {
         if (!progress_callback) return;
@@ -1339,7 +1208,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         const auto provisional_edges =
             collect_function_value_edges(analysis.indirect_control_flow, analysis.jump_tables);
         report_progress("function-values-start");
-        auto function_values = analyze_function_values(
+        auto function_values = detail::analyze_function_values_with_guarded_entry_cache(
             image,
             analysis.recursive.instructions,
             function_boundaries,
@@ -1354,7 +1223,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 phase += "-p" + std::to_string(progress.pending);
                 phase += "-r" + std::to_string(progress.resolutions);
                 report_progress(phase);
-            });
+            },
+            guarded_native_entry_shapes);
         analysis.function_summary_iterations = function_values.fixpoint_iterations;
         analysis.function_scc_count = function_values.strongly_connected_components;
         analysis.unchanged_ingress_skips = function_values.unchanged_ingress_skips;
@@ -1362,8 +1232,6 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.function_budget_exhausted = function_values.budget_exhausted;
         auto guarded_code_inventory =
             std::move(function_values.guarded_code_inventory);
-        filter_guarded_code_inventory(
-            guarded_code_inventory, guarded_native_entry_shapes);
         analysis.guarded_code_inventory_candidates =
             guarded_code_inventory.candidate_count;
         analysis.guarded_code_inventory_budget =

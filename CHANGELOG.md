@@ -10,7 +10,12 @@
   `Stored`-/`Returned`-Einstiege gelten. Solche Kandidaten durchlaufen nun
   einen gecachten, begrenzten lokalen CFG-Strukturcheck, der unbekannte
   Instruktionen, fehlende Delay Slots und Kontrollfluss im Delay Slot
-  fail-closed ablehnt. Die IR-Absenkung behandelt den tatsaechlichen
+  fail-closed ablehnt. Die Pruefung erfolgt vor der globalen
+  1.024er-Inventaraufnahme, sodass abgelehnte Eintraege weder das Budget
+  verbrauchen noch spaetere gueltige Ziele verdraengen. Der Strukturcache
+  bleibt ueber den gesamten aeusseren Kontrollflussfixpunkt erhalten. Die
+  IR-Absenkung
+  behandelt den tatsaechlichen
   Delay-Slot-Kontext vor den Eigenschaften des Rohopcodes und baut direkte
   Callee-Metadaten nur aus finalen Blockterminatoren neu auf. Der nach
   419,5 Sekunden noch vor dem Hostcompiler beendete Lauf ist kein
