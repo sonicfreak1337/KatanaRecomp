@@ -513,6 +513,7 @@ void Memory::map_region(std::string name,
             return left.info.base_address < right.info.base_address;
         });
     rebuild_region_index();
+    refresh_direct_linear_access_state();
 }
 
 std::size_t Memory::size() const noexcept {
@@ -724,12 +725,16 @@ Memory::direct_linear_memory_guard(const bool write) const noexcept {
     if (write && guest_write_observer_) return {};
     const auto* const read_bytes = direct_linear_bytes_;
     auto* const write_bytes = write ? direct_linear_bytes_ : nullptr;
-    return {read_bytes,
-            write_bytes,
-            direct_linear_physical_base_,
-            direct_linear_physical_span_,
-            direct_linear_backing_mask_,
-            direct_linear_generation_};
+    DirectLinearMemoryGuard guard;
+    guard.read_bytes = read_bytes;
+    guard.write_bytes = write_bytes;
+    guard.physical_base = direct_linear_physical_base_;
+    guard.physical_span = direct_linear_physical_span_;
+    guard.backing_mask = direct_linear_backing_mask_;
+    guard.generation = direct_linear_generation_;
+    guard.generation_source_ = &direct_linear_generation_;
+    guard.performance_counters_ = &performance_counters_;
+    return guard;
 }
 
 bool Memory::direct_linear_memory_guard_current(
@@ -738,7 +743,9 @@ bool Memory::direct_linear_memory_guard_current(
     if ((write && !direct_linear_writes_enabled_) ||
         (!write && !direct_linear_reads_enabled_))
         return false;
-    if (guard.generation != direct_linear_generation_ ||
+    if (guard.generation_source_ != &direct_linear_generation_ ||
+        guard.performance_counters_ != &performance_counters_ ||
+        guard.generation != direct_linear_generation_ ||
         guard.read_bytes != direct_linear_bytes_ ||
         guard.physical_base != direct_linear_physical_base_ ||
         guard.physical_span != direct_linear_physical_span_ ||

@@ -283,7 +283,10 @@ struct MemoryPerformanceCounters {
 // directly addressable linear backing. Generated code may acquire this once at a
 // native function or block boundary and reuse it until the next architectural or
 // host-service boundary. A null byte pointer means that the corresponding access
-// kind must use the general Memory path.
+// kind must use the general Memory path. The stable generation source makes a
+// cached proof reject itself immediately when Memory changes the direct-access
+// contract; successful raw reads still account the same product metrics as the
+// indexed Memory path.
 //
 // The guard never owns the backing and must not outlive its Memory object.
 struct DirectLinearMemoryGuard {
@@ -295,8 +298,34 @@ struct DirectLinearMemoryGuard {
     std::uint64_t generation = 0u;
 
     [[nodiscard]] explicit operator bool() const noexcept {
-        return read_bytes != nullptr && physical_span != 0u;
+        return read_bytes != nullptr && physical_span != 0u &&
+               generation_source_ != nullptr &&
+               *generation_source_ == generation &&
+               performance_counters_ != nullptr;
     }
+
+  private:
+    const std::uint64_t* generation_source_ = nullptr;
+    MemoryPerformanceCounters* performance_counters_ = nullptr;
+
+    void account_successful_read() const noexcept {
+        ++performance_counters_->indexed_region_hits;
+        ++performance_counters_->unobserved_accesses;
+    }
+
+    friend class Memory;
+    friend bool direct_linear_guard_read_u8(
+        const DirectLinearMemoryGuard& guard,
+        std::uint32_t virtual_address,
+        std::uint8_t& value) noexcept;
+    friend bool direct_linear_guard_read_u16(
+        const DirectLinearMemoryGuard& guard,
+        std::uint32_t virtual_address,
+        std::uint16_t& value) noexcept;
+    friend bool direct_linear_guard_read_u32(
+        const DirectLinearMemoryGuard& guard,
+        std::uint32_t virtual_address,
+        std::uint32_t& value) noexcept;
 };
 
 [[nodiscard]] inline bool direct_linear_guard_offset(
@@ -325,6 +354,7 @@ struct DirectLinearMemoryGuard {
     if (!direct_linear_guard_offset(guard, virtual_address, sizeof(value), offset))
         return false;
     value = guard.read_bytes[offset];
+    guard.account_successful_read();
     return true;
 }
 
@@ -341,6 +371,7 @@ struct DirectLinearMemoryGuard {
         value = static_cast<std::uint16_t>(guard.read_bytes[offset]) |
                 static_cast<std::uint16_t>(guard.read_bytes[offset + 1u]) << 8u;
     }
+    guard.account_successful_read();
     return true;
 }
 
@@ -359,6 +390,7 @@ struct DirectLinearMemoryGuard {
                 static_cast<std::uint32_t>(guard.read_bytes[offset + 2u]) << 16u |
                 static_cast<std::uint32_t>(guard.read_bytes[offset + 3u]) << 24u;
     }
+    guard.account_successful_read();
     return true;
 }
 

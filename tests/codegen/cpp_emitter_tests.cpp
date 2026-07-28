@@ -126,27 +126,21 @@ int main() {
                 "Der C++-Emitter besitzt noch einen Gastzugriff ohne Instruktionsprovenienz: " +
                     std::string{legacy_access});
     }
-    constexpr std::array<std::string_view, 12u> origin_guest_accesses = {
-        "guest_read_u8_at(cpu",
-        "guest_read_s8_at(cpu",
-        "guest_read_u16_at(cpu",
-        "guest_read_s16_at(cpu",
-        "guest_read_u32_at(cpu",
-        "guest_read_s32_at(cpu",
-        "guest_write_u8_at(cpu",
-        "guest_write_s8_at(cpu",
-        "guest_write_u16_at(cpu",
-        "guest_write_s16_at(cpu",
-        "guest_write_u32_at(cpu",
-        "guest_write_s32_at(cpu",
-    };
-    std::size_t origin_guest_access_count = 0u;
-    for (const auto origin_access : origin_guest_accesses) {
-        origin_guest_access_count += count_occurrences(emitter_implementation, origin_access);
-    }
-    require(origin_guest_access_count == 52u,
-            "Nicht alle 52 Gastzugriffs- und RAM-Guard-Fallback-Callsites tragen "
-            "Instruktionsprovenienz.");
+    require(
+        emitter_implementation.find(
+                "\"(cpu, guest_origin, \" + address + \")\"") !=
+                std::string::npos &&
+            emitter_implementation.find(
+                "\"(cpu, katana_origin, katana_ram_address));\\n\"") !=
+                std::string::npos &&
+            emitter_implementation.find(
+                "\"(cpu, guest_origin, \" + address + \", \" + value") !=
+                std::string::npos &&
+            emitter_implementation.find(
+                "\"(cpu, katana_origin, katana_ram_address,\\n\"") !=
+                std::string::npos,
+        "Zentrale RAM-Read-/Write-Callsites oder ihre Guard-Fallbacks verlieren "
+        "ihre Instruktionsprovenienz.");
     require(emitter_implementation.find(
                 "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()") !=
                 std::string::npos &&
@@ -279,7 +273,20 @@ int main() {
         local_chain_source.find("services->can_chain_executable_block(cpu.pc)) "
                                 "goto katana_block_8C010002;");
     const auto next_block_note = local_chain_source.find(block_note, first_block_note + 1u);
-    require(first_block_note != std::string::npos && local_chain_transition != std::string::npos &&
+    const auto function_entry_fastpath = local_chain_source.find(
+        "if (katana::runtime::unrelocate_code_address(cpu.pc) == 0x8C010000u)\n"
+        "        goto katana_block_8C010000;");
+    const auto conservative_resume_dispatch = local_chain_source.find(
+        "switch (katana::runtime::unrelocate_code_address(cpu.pc))");
+    const auto native_entry_label =
+        local_chain_source.find("katana_block_8C010000:", conservative_resume_dispatch);
+    require(function_entry_fastpath != std::string::npos &&
+                conservative_resume_dispatch != std::string::npos &&
+                native_entry_label != std::string::npos &&
+                function_entry_fastpath < conservative_resume_dispatch &&
+                conservative_resume_dispatch < native_entry_label &&
+                first_block_note != std::string::npos &&
+                local_chain_transition != std::string::npos &&
                 next_block_note != std::string::npos && first_block_note < local_chain_transition &&
                 local_chain_transition < next_block_note &&
                 local_chain_source.find(
@@ -305,8 +312,9 @@ int main() {
                                         "katana::runtime::relocate_code_address(0x8C010002u) : "
                                         "katana::runtime::relocate_code_address(0x8C010006u);") !=
                     std::string::npos,
-            "Lokales Mehrblock-Chaining besitzt Vorab-Timing, keinen Attempt/Retire-Guard "
-            "oder keine konservative Registerlokalisierung.");
+            "Function-Level-AOT besitzt keinen direkten Funktionseinstieg, kein lokales "
+            "Mehrblock-Chaining, keinen Attempt/Retire-Guard oder keine konservative "
+            "Registerlokalisierung.");
 
     katana::codegen::BackendRequest native_call_request{program, 0x8C010000u};
     native_call_request.single_block_execution = true;
@@ -722,6 +730,45 @@ int main() {
             "BRA oder Load im Delay Slot verlieren eigene Provenienz, relokiertes Ziel, "
             "Fehler-PC oder Owner-PC.");
 
+    auto proven_delay_memory_program = delay_memory_program;
+    for (auto& function : proven_delay_memory_program) {
+        for (auto& block : function.blocks) {
+            for (auto& instruction : block.instructions) {
+                if (instruction.source_address == 0x8C020002u)
+                    instruction.memory_effects.region =
+                        katana::ir::MemoryRegionKind::NormalRam;
+            }
+        }
+    }
+    const auto proven_delay_memory_source =
+        katana::codegen::emit_cpp_program(proven_delay_memory_program, 0x8C020000u);
+    const auto proven_delay_load =
+        emitted_instruction(proven_delay_memory_source, "0x8C020002");
+    require(
+        proven_delay_memory_source.find(
+            "auto katana_direct_ram = "
+            "cpu.memory.direct_linear_memory_guard(false);") != std::string::npos &&
+            proven_delay_memory_source.find(
+                "const auto katana_direct_ram_read_u32 =") !=
+                std::string::npos &&
+            proven_delay_memory_source.find(
+                "if (cpu.privileged_mode() && "
+                "katana::runtime::direct_linear_guard_read_u32("
+                "katana_direct_ram, katana_ram_address, katana_ram_value)") !=
+                std::string::npos &&
+            proven_delay_memory_source.find(
+                "katana::runtime::guest_read_u32_at("
+                "cpu, katana_origin, katana_ram_address)") != std::string::npos &&
+            proven_delay_load.find(
+                "katana_direct_ram_read_u32(guest_origin, cpu.r[1])") !=
+                std::string_view::npos &&
+            proven_delay_load.find(
+                "katana::runtime::flush_pending_guest_cycles(cpu, *services)") ==
+                std::string_view::npos &&
+            delay_load.find("direct_linear_guard_read_u32") == std::string_view::npos,
+        "Ein allgemeiner als NormalRam bewiesener Register-Load nutzt nicht den "
+        "funktionsweiten direkten RAM-Guard mit korrektem Fallback.");
+
     constexpr std::array<std::uint8_t, 10> pc_relative_bytes = {
         0x00u,
         0x91u, // MOV.W @(0,PC),R1 -> 0x8C030004
@@ -872,6 +919,40 @@ int main() {
                     read_modify_write, "guest_write_u8_at(cpu, guest_origin, address") == 1u &&
                 count_occurrences(read_modify_write, "GuestInstructionOrigin{0x") == 1u,
             "AND.B Read-Modify-Write verwendet nicht fuer Read und Write denselben Origin.");
+
+    auto proven_read_modify_write_program = read_modify_write_program;
+    proven_read_modify_write_program.front()
+        .blocks.front()
+        .instructions.front()
+        .memory_effects.region = katana::ir::MemoryRegionKind::NormalRam;
+    const auto proven_read_modify_write_source = katana::codegen::emit_cpp_program(
+        proven_read_modify_write_program, 0x8C050000u);
+    const auto proven_read_modify_write =
+        emitted_instruction(proven_read_modify_write_source, "0x8C050000");
+    require(
+        proven_read_modify_write_source.find(
+            "auto katana_direct_ram = "
+            "cpu.memory.direct_linear_memory_guard(false);") != std::string::npos &&
+            proven_read_modify_write_source.find(
+                "const auto katana_direct_ram_write_u8 =") !=
+                std::string::npos &&
+            proven_read_modify_write_source.find(
+                "if (cpu.privileged_mode() &&") != std::string::npos &&
+            proven_read_modify_write_source.find(
+                "cpu.memory.try_write_direct_linear_u8("
+                "katana::runtime::canonical_physical_address(katana_ram_address),") !=
+                std::string::npos &&
+            proven_read_modify_write_source.find(
+                "guest_write_u8_at(cpu, katana_origin, katana_ram_address,") !=
+                std::string::npos &&
+            proven_read_modify_write.find(
+                "katana_direct_ram_read_u8(guest_origin, address)") !=
+                std::string_view::npos &&
+            proven_read_modify_write.find(
+                "katana_direct_ram_write_u8(guest_origin, address,") !=
+                std::string_view::npos,
+        "Ein bewiesener RAM-Read-Modify-Write nutzt keinen invalidierungs- und "
+        "watchpointsicheren direkten Read-/Write-Vertrag mit allgemeinem Fallback.");
 
     constexpr std::array<std::uint8_t, 8> fmov_memory_bytes = {
         0x28u,

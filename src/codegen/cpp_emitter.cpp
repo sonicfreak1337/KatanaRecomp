@@ -128,6 +128,278 @@ bool has_proven_linear_ram_access(const katana::ir::Instruction& instruction) no
            instruction.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam;
 }
 
+bool has_proven_linear_ram_read(const katana::ir::Instruction& instruction) noexcept {
+    if (instruction.memory_effects.region != katana::ir::MemoryRegionKind::NormalRam)
+        return false;
+    if (instruction.memory_effects.access == katana::ir::MemoryAccessKind::Read)
+        return true;
+    switch (instruction.operation) {
+    case katana::ir::Operation::AndByteImmediate:
+    case katana::ir::Operation::XorByteImmediate:
+    case katana::ir::Operation::OrByteImmediate:
+    case katana::ir::Operation::TestAndSetByte:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool has_proven_linear_ram_write(const katana::ir::Instruction& instruction) noexcept {
+    return instruction.memory_effects.access == katana::ir::MemoryAccessKind::Write &&
+           instruction.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam;
+}
+
+enum class DirectRamReadKind : std::uint8_t { U8, S8, U16, S16, U32 };
+enum class DirectRamWriteKind : std::uint8_t { U8, U16, U32 };
+
+constexpr std::uint8_t direct_ram_read_kind_mask(const DirectRamReadKind kind) noexcept {
+    return static_cast<std::uint8_t>(1u << static_cast<std::uint8_t>(kind));
+}
+
+std::uint8_t required_direct_ram_read_kinds(
+    const katana::ir::Instruction& instruction) noexcept {
+    if (!has_proven_linear_ram_read(instruction)) return 0u;
+
+    using katana::ir::OperandWidth;
+    switch (instruction.memory_effects.width) {
+    case OperandWidth::Bits8:
+        switch (instruction.operation) {
+        case katana::ir::Operation::TestByteImmediate:
+        case katana::ir::Operation::AndByteImmediate:
+        case katana::ir::Operation::XorByteImmediate:
+        case katana::ir::Operation::OrByteImmediate:
+        case katana::ir::Operation::TestAndSetByte:
+            return direct_ram_read_kind_mask(DirectRamReadKind::U8);
+        default:
+            return direct_ram_read_kind_mask(DirectRamReadKind::S8);
+        }
+    case OperandWidth::Bits16:
+        return direct_ram_read_kind_mask(
+            instruction.operation == katana::ir::Operation::MultiplyAccumulateWord
+                ? DirectRamReadKind::U16
+                : DirectRamReadKind::S16);
+    case OperandWidth::Bits32:
+    case OperandWidth::Bits64:
+        return direct_ram_read_kind_mask(DirectRamReadKind::U32);
+    case OperandWidth::None:
+    case OperandWidth::Bit1:
+    case OperandWidth::Bits4:
+    case OperandWidth::Bits12:
+        return 0u;
+    }
+    return 0u;
+}
+
+constexpr std::uint8_t direct_ram_write_kind_mask(const DirectRamWriteKind kind) noexcept {
+    return static_cast<std::uint8_t>(1u << static_cast<std::uint8_t>(kind));
+}
+
+std::uint8_t required_direct_ram_write_kinds(
+    const katana::ir::Instruction& instruction) noexcept {
+    if (!has_proven_linear_ram_write(instruction)) return 0u;
+
+    using katana::ir::OperandWidth;
+    switch (instruction.memory_effects.width) {
+    case OperandWidth::Bits8:
+        return direct_ram_write_kind_mask(DirectRamWriteKind::U8);
+    case OperandWidth::Bits16:
+        return direct_ram_write_kind_mask(DirectRamWriteKind::U16);
+    case OperandWidth::Bits32:
+    case OperandWidth::Bits64:
+        return direct_ram_write_kind_mask(DirectRamWriteKind::U32);
+    case OperandWidth::None:
+    case OperandWidth::Bit1:
+    case OperandWidth::Bits4:
+    case OperandWidth::Bits12:
+        return 0u;
+    }
+    return 0u;
+}
+
+const char* direct_ram_read_suffix(const DirectRamReadKind kind) noexcept {
+    switch (kind) {
+    case DirectRamReadKind::U8:
+        return "u8";
+    case DirectRamReadKind::S8:
+        return "s8";
+    case DirectRamReadKind::U16:
+        return "u16";
+    case DirectRamReadKind::S16:
+        return "s16";
+    case DirectRamReadKind::U32:
+        return "u32";
+    }
+    return "invalid";
+}
+
+const char* direct_ram_write_suffix(const DirectRamWriteKind kind) noexcept {
+    switch (kind) {
+    case DirectRamWriteKind::U8:
+        return "u8";
+    case DirectRamWriteKind::U16:
+        return "u16";
+    case DirectRamWriteKind::U32:
+        return "u32";
+    }
+    return "invalid";
+}
+
+std::string direct_ram_read_expression(const katana::ir::Instruction& instruction,
+                                       std::string address,
+                                       const DirectRamReadKind kind) {
+    const char* guest_read = nullptr;
+    switch (kind) {
+    case DirectRamReadKind::U8:
+        guest_read = "guest_read_u8_at";
+        break;
+    case DirectRamReadKind::S8:
+        guest_read = "guest_read_s8_at";
+        break;
+    case DirectRamReadKind::U16:
+        guest_read = "guest_read_u16_at";
+        break;
+    case DirectRamReadKind::S16:
+        guest_read = "guest_read_s16_at";
+        break;
+    case DirectRamReadKind::U32:
+        guest_read = "guest_read_u32_at";
+        break;
+    }
+
+    const auto fallback = std::string{"katana::runtime::"} + guest_read +
+                          "(cpu, guest_origin, " + address + ")";
+    if (!has_proven_linear_ram_read(instruction)) return fallback;
+
+    return std::string{"katana_direct_ram_read_"} + direct_ram_read_suffix(kind) +
+           "(guest_origin, " + address + ")";
+}
+
+void emit_direct_ram_read_helper(std::ostringstream& output,
+                                 const DirectRamReadKind kind) {
+    const char* guest_read = nullptr;
+    const char* direct_read = nullptr;
+    const char* raw_type = nullptr;
+    switch (kind) {
+    case DirectRamReadKind::U8:
+        guest_read = "guest_read_u8_at";
+        direct_read = "direct_linear_guard_read_u8";
+        raw_type = "std::uint8_t";
+        break;
+    case DirectRamReadKind::S8:
+        guest_read = "guest_read_s8_at";
+        direct_read = "direct_linear_guard_read_u8";
+        raw_type = "std::uint8_t";
+        break;
+    case DirectRamReadKind::U16:
+        guest_read = "guest_read_u16_at";
+        direct_read = "direct_linear_guard_read_u16";
+        raw_type = "std::uint16_t";
+        break;
+    case DirectRamReadKind::S16:
+        guest_read = "guest_read_s16_at";
+        direct_read = "direct_linear_guard_read_u16";
+        raw_type = "std::uint16_t";
+        break;
+    case DirectRamReadKind::U32:
+        guest_read = "guest_read_u32_at";
+        direct_read = "direct_linear_guard_read_u32";
+        raw_type = "std::uint32_t";
+        break;
+    }
+
+    output << "    const auto katana_direct_ram_read_" << direct_ram_read_suffix(kind)
+           << " =\n"
+           << "        [&](const katana::runtime::GuestInstructionOrigin& katana_origin,\n"
+           << "            const std::uint32_t katana_ram_address) -> std::uint32_t {\n"
+           << "        " << raw_type << " katana_ram_value = 0u;\n"
+           << "        if (cpu.privileged_mode() && katana::runtime::" << direct_read
+           << "(katana_direct_ram, katana_ram_address, katana_ram_value)) {\n";
+    if (kind == DirectRamReadKind::S8) {
+        output << "            return (katana_ram_value & 0x80u) != 0u\n"
+               << "                ? 0xFFFFFF00u | static_cast<std::uint32_t>(katana_ram_value)\n"
+               << "                : static_cast<std::uint32_t>(katana_ram_value);\n";
+    } else if (kind == DirectRamReadKind::S16) {
+        output << "            return (katana_ram_value & 0x8000u) != 0u\n"
+               << "                ? 0xFFFF0000u | static_cast<std::uint32_t>(katana_ram_value)\n"
+               << "                : static_cast<std::uint32_t>(katana_ram_value);\n";
+    } else {
+        output << "            return static_cast<std::uint32_t>(katana_ram_value);\n";
+    }
+    output << "        }\n"
+           << "        return static_cast<std::uint32_t>(katana::runtime::" << guest_read
+           << "(cpu, katana_origin, katana_ram_address));\n"
+           << "    };\n";
+}
+
+std::string direct_ram_write_statement(const katana::ir::Instruction& instruction,
+                                       std::string address,
+                                       std::string value,
+                                       const DirectRamWriteKind kind,
+                                       std::string source =
+                                           "katana::runtime::CodeWriteSource::Cpu") {
+    const char* guest_write = nullptr;
+    switch (kind) {
+    case DirectRamWriteKind::U8:
+        guest_write = "guest_write_u8_at";
+        break;
+    case DirectRamWriteKind::U16:
+        guest_write = "guest_write_u16_at";
+        break;
+    case DirectRamWriteKind::U32:
+        guest_write = "guest_write_u32_at";
+        break;
+    }
+
+    if (!has_proven_linear_ram_write(instruction)) {
+        return std::string{"katana::runtime::"} + guest_write +
+               "(cpu, guest_origin, " + address + ", " + value + ", " + source + ")";
+    }
+    return std::string{"katana_direct_ram_write_"} + direct_ram_write_suffix(kind) +
+           "(guest_origin, " + address + ", " + value + ", " + source + ")";
+}
+
+void emit_direct_ram_write_helper(std::ostringstream& output,
+                                  const DirectRamWriteKind kind) {
+    const char* guest_write = nullptr;
+    const char* direct_write = nullptr;
+    const char* raw_type = nullptr;
+    switch (kind) {
+    case DirectRamWriteKind::U8:
+        guest_write = "guest_write_u8_at";
+        direct_write = "try_write_direct_linear_u8";
+        raw_type = "std::uint8_t";
+        break;
+    case DirectRamWriteKind::U16:
+        guest_write = "guest_write_u16_at";
+        direct_write = "try_write_direct_linear_u16";
+        raw_type = "std::uint16_t";
+        break;
+    case DirectRamWriteKind::U32:
+        guest_write = "guest_write_u32_at";
+        direct_write = "try_write_direct_linear_u32";
+        raw_type = "std::uint32_t";
+        break;
+    }
+
+    output << "    const auto katana_direct_ram_write_" << direct_ram_write_suffix(kind)
+           << " =\n"
+           << "        [&](const katana::runtime::GuestInstructionOrigin& katana_origin,\n"
+           << "            const std::uint32_t katana_ram_address,\n"
+           << "            const " << raw_type << " katana_ram_value,\n"
+           << "            const katana::runtime::CodeWriteSource katana_source) {\n"
+           << "        if (cpu.privileged_mode() &&\n"
+           << "            (katana_ram_address & 0xC0000000u) == 0x80000000u &&\n"
+           << "            cpu.memory." << direct_write
+           << "(katana::runtime::canonical_physical_address(katana_ram_address),\n"
+           << "                                                katana_ram_value,\n"
+           << "                                                katana_source))\n"
+           << "            return;\n"
+           << "        katana::runtime::" << guest_write
+           << "(cpu, katana_origin, katana_ram_address,\n"
+           << "                                     katana_ram_value, katana_source);\n"
+           << "    };\n";
+}
+
 std::string special_register_read_expression(const katana::ir::SpecialRegister special_register) {
     using Register = katana::ir::SpecialRegister;
     switch (special_register) {
@@ -526,15 +798,18 @@ void emit_simple_instruction(std::ostringstream& output,
         }
         output << "cpu.r[" << source << "];\n"
                << "if (cpu.fpu_transfer_pair()) {\n"
-               << "    const std::uint32_t low = katana::runtime::guest_read_u32_at(cpu, "
-                  "guest_origin, address);\n"
-               << "    const std::uint32_t high = katana::runtime::guest_read_u32_at(cpu, "
-                  "guest_origin, address + 4u);\n"
+               << "    const std::uint32_t low = "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::U32)
+               << ";\n"
+               << "    const std::uint32_t high = "
+               << direct_ram_read_expression(instruction, "address + 4u", DirectRamReadKind::U32)
+               << ";\n"
                << "    katana::runtime::write_fpu_pair_bits(cpu, " << destination
                << "u, (static_cast<std::uint64_t>(high) << 32u) | low);\n"
                << "} else {\n"
-               << "    cpu.fr[" << destination
-               << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
+               << "    cpu.fr[" << destination << "] = "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::U32)
+               << ";\n"
                << "}\n";
         if (instruction.operation == Operation::FmovLoadPostIncrement) {
             output << "cpu.r[" << source << "] = address + (cpu.fpu_transfer_pair() ? 8u : 4u);\n";
@@ -562,16 +837,30 @@ void emit_simple_instruction(std::ostringstream& output,
         output << ";\n"
                << "if (cpu.fpu_transfer_pair()) {\n"
                << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, "
-               << source << "u);\n"
-               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, "
-                  "static_cast<std::uint32_t>(bits), "
-                  "katana::runtime::CodeWriteSource::Fpu);\n"
-               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address + 4u, "
-                  "static_cast<std::uint32_t>(bits >> 32u), "
-                  "katana::runtime::CodeWriteSource::Fpu);\n"
+               << source << "u);\n    "
+               << direct_ram_write_statement(
+                      instruction,
+                      "address",
+                      "static_cast<std::uint32_t>(bits)",
+                      DirectRamWriteKind::U32,
+                      "katana::runtime::CodeWriteSource::Fpu")
+               << ";\n    "
+               << direct_ram_write_statement(
+                      instruction,
+                      "address + 4u",
+                      "static_cast<std::uint32_t>(bits >> 32u)",
+                      DirectRamWriteKind::U32,
+                      "katana::runtime::CodeWriteSource::Fpu")
+               << ";\n"
                << "} else {\n"
-               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, cpu.fr["
-               << source << "], katana::runtime::CodeWriteSource::Fpu);\n"
+               << "    "
+               << direct_ram_write_statement(
+                      instruction,
+                      "address",
+                      "cpu.fr[" + std::to_string(source) + "]",
+                      DirectRamWriteKind::U32,
+                      "katana::runtime::CodeWriteSource::Fpu")
+               << ";\n"
                << "}\n";
         if (instruction.operation == Operation::FmovStorePreDecrement) {
             output << "cpu.r[" << destination << "] = address;\n";
@@ -707,9 +996,13 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
         return;
     case Operation::MovcaLong:
-        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register)
-               << "], cpu.r[0], katana::runtime::CodeWriteSource::StoreQueue);\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.destination_register) + "]",
+                      "cpu.r[0]",
+                      DirectRamWriteKind::U32,
+                      "katana::runtime::CodeWriteSource::StoreQueue")
+               << ";\n";
         return;
     case Operation::ClearMac:
         output << "cpu.mach = 0u;\n";
@@ -1143,10 +1436,13 @@ void emit_simple_instruction(std::ostringstream& output,
             << "const std::uint32_t source_address = cpu.r["
             << static_cast<unsigned>(instruction.source_register)
             << "] + (same_register ? 2u : 0u);\n"
-            << "const std::uint32_t destination_raw =\n"
-            << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, destination_address);\n"
-            << "const std::uint32_t source_raw =\n"
-            << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, source_address);\n"
+            << "const std::uint32_t destination_raw =\n    "
+            << direct_ram_read_expression(
+                   instruction, "destination_address", DirectRamReadKind::U16)
+            << ";\n"
+            << "const std::uint32_t source_raw =\n    "
+            << direct_ram_read_expression(instruction, "source_address", DirectRamReadKind::U16)
+            << ";\n"
             << "const std::int64_t destination =\n"
             << "    (destination_raw & 0x00008000u) != 0u\n"
             << "    ? static_cast<std::int64_t>(destination_raw) - 0x00010000ll\n"
@@ -1193,10 +1489,13 @@ void emit_simple_instruction(std::ostringstream& output,
             << "const std::uint32_t source_address = cpu.r["
             << static_cast<unsigned>(instruction.source_register)
             << "] + (same_register ? 4u : 0u);\n"
-            << "const std::uint32_t destination_raw =\n"
-            << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, destination_address);\n"
-            << "const std::uint32_t source_raw =\n"
-            << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, source_address);\n"
+            << "const std::uint32_t destination_raw =\n    "
+            << direct_ram_read_expression(
+                   instruction, "destination_address", DirectRamReadKind::U32)
+            << ";\n"
+            << "const std::uint32_t source_raw =\n    "
+            << direct_ram_read_expression(instruction, "source_address", DirectRamReadKind::U32)
+            << ";\n"
             << "const std::int64_t destination =\n"
             << "    (destination_raw & 0x80000000u) != 0u\n"
             << "    ? static_cast<std::int64_t>(destination_raw) - 0x100000000ll\n"
@@ -1414,8 +1713,9 @@ void emit_simple_instruction(std::ostringstream& output,
         emit_indent(output, indent + 1);
         output << "const std::uint32_t address = cpu.gbr + cpu.r[0];\n";
         emit_indent(output, indent + 1);
-        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, "
-                  "address);\n";
+        output << "const std::uint8_t value = "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::U8)
+               << ";\n";
         emit_indent(output, indent + 1);
         if (instruction.operation == Operation::TestByteImmediate) {
             output << "cpu.t = (value & static_cast<std::uint8_t>(" << instruction.immediate
@@ -1424,10 +1724,14 @@ void emit_simple_instruction(std::ostringstream& output,
             const char* operation = instruction.operation == Operation::AndByteImmediate   ? "&"
                                     : instruction.operation == Operation::XorByteImmediate ? "^"
                                                                                            : "|";
-            output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, "
-                      "static_cast<std::uint8_t>(value "
-                   << operation << " static_cast<std::uint8_t>(" << instruction.immediate
-                   << ")));\n";
+            output << direct_ram_write_statement(
+                          instruction,
+                          "address",
+                          "static_cast<std::uint8_t>(value " + std::string{operation} +
+                              " static_cast<std::uint8_t>(" +
+                              std::to_string(instruction.immediate) + "))",
+                          DirectRamWriteKind::U8)
+                   << ";\n";
         }
         emit_indent(output, indent);
         output << "}\n";
@@ -1439,11 +1743,15 @@ void emit_simple_instruction(std::ostringstream& output,
         output << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n";
         emit_indent(output, indent + 1);
-        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, "
-                  "address);\n";
+        output << "const std::uint8_t value = "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::U8)
+               << ";\n";
         emit_indent(output, indent + 1);
-        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, "
-                  "static_cast<std::uint8_t>(value | 0x80u));\n";
+        output << direct_ram_write_statement(instruction,
+                                             "address",
+                                             "static_cast<std::uint8_t>(value | 0x80u)",
+                                             DirectRamWriteKind::U8)
+               << ";\n";
         emit_indent(output, indent + 1);
         output << "cpu.t = value == 0u;\n";
         emit_indent(output, indent);
@@ -1451,14 +1759,22 @@ void emit_simple_instruction(std::ostringstream& output,
         return;
     case Operation::LoadByteSigned:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamReadKind::S8)
+               << ";\n";
         return;
 
     case Operation::LoadWordSigned:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamReadKind::S16)
+               << ";\n";
         return;
 
     case Operation::LoadLong:
@@ -1467,203 +1783,278 @@ void emit_simple_instruction(std::ostringstream& output,
                 << "{\n"
                 << "const std::uint32_t forwarded_value = cpu.r["
                 << static_cast<unsigned>(*instruction.forwarded_value_register) << "];\n"
-                << "static_cast<void>(katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
-                << static_cast<unsigned>(instruction.source_register) << "]));\n"
+                << "static_cast<void>("
+                << direct_ram_read_expression(
+                       instruction,
+                       "cpu.r[" + std::to_string(instruction.source_register) + "]",
+                       DirectRamReadKind::U32)
+                << ");\n"
                 << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                 << "] = forwarded_value;\n"
                 << "}\n";
         } else {
             output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
-                   << static_cast<unsigned>(instruction.source_register) << "]);\n";
+                   << "] = "
+                   << direct_ram_read_expression(
+                          instruction,
+                          "cpu.r[" + std::to_string(instruction.source_register) + "]",
+                          DirectRamReadKind::U32)
+                   << ";\n";
         }
         return;
 
     case Operation::StoreByte:
-        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register)
-               << "], static_cast<std::uint8_t>(cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.destination_register) + "]",
+                      "static_cast<std::uint8_t>(cpu.r[" +
+                          std::to_string(instruction.source_register) + "])",
+                      DirectRamWriteKind::U8)
+               << ";\n";
         return;
 
     case Operation::StoreWord:
-        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register)
-               << "], static_cast<std::uint16_t>(cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.destination_register) + "]",
+                      "static_cast<std::uint16_t>(cpu.r[" +
+                          std::to_string(instruction.source_register) + "])",
+                      DirectRamWriteKind::U16)
+               << ";\n";
         return;
 
     case Operation::StoreLong:
-        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "], cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.destination_register) + "]",
+                      "cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamWriteKind::U32)
+               << ";\n";
         return;
 
     case Operation::StoreByteDisplacement:
-        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "] + "
-               << static_cast<std::uint32_t>(instruction.displacement)
-               << "u, static_cast<std::uint8_t>(cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.destination_register) + "] + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      "static_cast<std::uint8_t>(cpu.r[" +
+                          std::to_string(instruction.source_register) + "])",
+                      DirectRamWriteKind::U8)
+               << ";\n";
         return;
 
     case Operation::StoreWordDisplacement:
-        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "] + "
-               << static_cast<std::uint32_t>(instruction.displacement)
-               << "u, static_cast<std::uint16_t>(cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.destination_register) + "] + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      "static_cast<std::uint16_t>(cpu.r[" +
+                          std::to_string(instruction.source_register) + "])",
+                      DirectRamWriteKind::U16)
+               << ";\n";
         return;
 
     case Operation::StoreLongDisplacement:
-        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "] + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u, cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.destination_register) + "] + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      "cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamWriteKind::U32)
+               << ";\n";
         return;
 
     case Operation::LoadByteSignedDisplacement:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "] + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.source_register) + "] + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      DirectRamReadKind::S8)
+               << ";\n";
         return;
 
     case Operation::LoadWordSignedDisplacement:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "] + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.source_register) + "] + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      DirectRamReadKind::S16)
+               << ";\n";
         return;
 
     case Operation::LoadLongDisplacement:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "] + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[" + std::to_string(instruction.source_register) + "] + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      DirectRamReadKind::U32)
+               << ";\n";
         return;
 
     case Operation::StoreByteR0Indexed:
-        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.r[0] + cpu.r["
-               << static_cast<unsigned>(instruction.destination_register)
-               << "], static_cast<std::uint8_t>(cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[0] + cpu.r[" +
+                          std::to_string(instruction.destination_register) + "]",
+                      "static_cast<std::uint8_t>(cpu.r[" +
+                          std::to_string(instruction.source_register) + "])",
+                      DirectRamWriteKind::U8)
+               << ";\n";
         return;
 
     case Operation::StoreWordR0Indexed:
-        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.r[0] + cpu.r["
-               << static_cast<unsigned>(instruction.destination_register)
-               << "], static_cast<std::uint16_t>(cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[0] + cpu.r[" +
+                          std::to_string(instruction.destination_register) + "]",
+                      "static_cast<std::uint16_t>(cpu.r[" +
+                          std::to_string(instruction.source_register) + "])",
+                      DirectRamWriteKind::U16)
+               << ";\n";
         return;
 
     case Operation::StoreLongR0Indexed:
-        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r[0] + cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "], cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.r[0] + cpu.r[" +
+                          std::to_string(instruction.destination_register) + "]",
+                      "cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamWriteKind::U32)
+               << ";\n";
         return;
 
     case Operation::LoadByteSignedR0Indexed:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.r[0] + cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[0] + cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamReadKind::S8)
+               << ";\n";
         return;
 
     case Operation::LoadWordSignedR0Indexed:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.r[0] + cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[0] + cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamReadKind::S16)
+               << ";\n";
         return;
 
     case Operation::LoadLongR0Indexed:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r[0] + cpu.r["
-               << static_cast<unsigned>(instruction.source_register) << "]);\n";
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.r[0] + cpu.r[" + std::to_string(instruction.source_register) + "]",
+                      DirectRamReadKind::U32)
+               << ";\n";
         return;
 
     case Operation::StoreByteGbrDisplacement:
-        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.gbr + "
-               << static_cast<std::uint32_t>(instruction.displacement)
-               << "u, static_cast<std::uint8_t>(cpu.r[0]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.gbr + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      "static_cast<std::uint8_t>(cpu.r[0])",
+                      DirectRamWriteKind::U8)
+               << ";\n";
         return;
 
     case Operation::StoreWordGbrDisplacement:
-        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.gbr + "
-               << static_cast<std::uint32_t>(instruction.displacement)
-               << "u, static_cast<std::uint16_t>(cpu.r[0]));\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.gbr + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      "static_cast<std::uint16_t>(cpu.r[0])",
+                      DirectRamWriteKind::U16)
+               << ";\n";
         return;
 
     case Operation::StoreLongGbrDisplacement:
-        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.gbr + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u, cpu.r[0]);\n";
+        output << direct_ram_write_statement(
+                      instruction,
+                      "cpu.gbr + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      "cpu.r[0]",
+                      DirectRamWriteKind::U32)
+               << ";\n";
         return;
 
     case Operation::LoadByteSignedGbrDisplacement:
-        output << "cpu.r[0] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.gbr + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
+        output << "cpu.r[0] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.gbr + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      DirectRamReadKind::S8)
+               << ";\n";
         return;
 
     case Operation::LoadWordSignedGbrDisplacement:
-        output << "cpu.r[0] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.gbr + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
+        output << "cpu.r[0] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.gbr + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      DirectRamReadKind::S16)
+               << ";\n";
         return;
 
     case Operation::LoadLongGbrDisplacement:
-        output << "cpu.r[0] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.gbr + "
-               << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
+        output << "cpu.r[0] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      "cpu.gbr + " +
+                          std::to_string(static_cast<std::uint32_t>(instruction.displacement)) +
+                          "u",
+                      DirectRamReadKind::U32)
+               << ";\n";
         return;
 
     case Operation::LoadWordSignedPcRelative:
         if (!instruction.effective_address.has_value()) {
             throw std::runtime_error("PC-relativem Word-Load fehlt die effektive Adresse.");
         }
-        if (has_proven_linear_ram_access(instruction)) {
-            output << "{\n"
-                   << "std::uint16_t direct_value = 0u;\n"
-                   << "if (katana::runtime::direct_linear_guard_read_u16(\n"
-                   << "        katana_direct_ram, "
-                   << relocated_code_address(*instruction.effective_address)
-                   << ", direct_value)) {\n"
-                   << "    cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = (direct_value & 0x8000u) != 0u\n"
-                   << "        ? 0xFFFF0000u | direct_value : direct_value;\n"
-                   << "} else {\n"
-                   << "    cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, "
-                   << relocated_code_address(*instruction.effective_address) << ");\n"
-                   << "}\n"
-                   << "}\n";
-        } else {
-            output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, "
-                   << relocated_code_address(*instruction.effective_address) << ");\n";
-        }
+        output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      relocated_code_address(*instruction.effective_address),
+                      DirectRamReadKind::S16)
+               << ";\n";
         return;
 
     case Operation::LoadLongPcRelative:
         if (!instruction.effective_address.has_value()) {
             throw std::runtime_error("PC-relativem Long-Load fehlt die effektive Adresse.");
         }
-        if (has_proven_linear_ram_access(instruction)) {
-            output << "{\n"
-                   << "std::uint32_t direct_value = 0u;\n"
-                   << "if (katana::runtime::direct_linear_guard_read_u32(\n"
-                   << "        katana_direct_ram, "
-                   << relocated_code_address(*instruction.effective_address)
-                   << ", direct_value)) {\n"
-                   << "    cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = direct_value;\n"
-                   << "} else {\n"
-                   << "    cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, "
-                   << relocated_code_address(*instruction.effective_address) << ");\n"
-                   << "}\n"
-                   << "}\n";
-        } else {
-            output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, "
-                   << relocated_code_address(*instruction.effective_address) << ");\n";
-        }
+        output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
+               << "] = "
+               << direct_ram_read_expression(
+                      instruction,
+                      relocated_code_address(*instruction.effective_address),
+                      DirectRamReadKind::U32)
+               << ";\n";
         return;
 
     case Operation::MoveAddressPcRelative:
@@ -1684,7 +2075,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << special_register_read_expression(instruction.special_register) << ";\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 4u;\n"
-               << "katana::runtime::guest_write_u32_at(cpu, guest_origin, address, value);\n"
+               << direct_ram_write_statement(
+                      instruction, "address", "value", DirectRamWriteKind::U32)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = address;\n"
                << "}\n";
@@ -1703,8 +2096,9 @@ void emit_simple_instruction(std::ostringstream& output,
         output << "{\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
-               << "const std::uint32_t value = katana::runtime::guest_read_u32_at(cpu, "
-                  "guest_origin, address);\n"
+               << "const std::uint32_t value = "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::U32)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.source_register)
                << "] = address + 4u;\n";
         emit_special_register_write(output, instruction.special_register, "value");
@@ -1718,10 +2112,11 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 1u;\n"
-               << "katana::runtime::guest_write_u8_at(cpu, guest_origin, \n"
-               << "    address,\n"
-               << "    static_cast<std::uint8_t>(value)\n"
-               << ");\n"
+               << direct_ram_write_statement(instruction,
+                                             "address",
+                                             "static_cast<std::uint8_t>(value)",
+                                             DirectRamWriteKind::U8)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = address;\n"
                << "}\n";
@@ -1733,10 +2128,11 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 2u;\n"
-               << "katana::runtime::guest_write_u16_at(cpu, guest_origin, \n"
-               << "    address,\n"
-               << "    static_cast<std::uint16_t>(value)\n"
-               << ");\n"
+               << direct_ram_write_statement(instruction,
+                                             "address",
+                                             "static_cast<std::uint16_t>(value)",
+                                             DirectRamWriteKind::U16)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = address;\n"
                << "}\n";
@@ -1748,7 +2144,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 4u;\n"
-               << "katana::runtime::guest_write_u32_at(cpu, guest_origin, address, value);\n"
+               << direct_ram_write_statement(
+                      instruction, "address", "value", DirectRamWriteKind::U32)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = address;\n"
                << "}\n";
@@ -1762,8 +2160,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << ";\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
-               << "const std::uint32_t value =\n"
-               << "    katana::runtime::guest_read_s8_at(cpu, guest_origin, address);\n"
+               << "const std::uint32_t value =\n    "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::S8)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = value;\n"
                << "if (!same_register) {\n"
@@ -1781,8 +2180,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << ";\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
-               << "const std::uint32_t value =\n"
-               << "    katana::runtime::guest_read_s16_at(cpu, guest_origin, address);\n"
+               << "const std::uint32_t value =\n    "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::S16)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = value;\n"
                << "if (!same_register) {\n"
@@ -1800,8 +2200,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << ";\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
-               << "const std::uint32_t value =\n"
-               << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
+               << "const std::uint32_t value =\n    "
+               << direct_ram_read_expression(instruction, "address", DirectRamReadKind::U32)
+               << ";\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = value;\n"
                << "if (!same_register) {\n"
@@ -3324,15 +3725,15 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         std::ostringstream emitted_function;
         const bool native_internal_block_labels =
             request.single_block_execution && request.guarded_local_block_chaining;
-        const bool uses_proven_linear_ram =
-            std::any_of(function.blocks.begin(),
-                        function.blocks.end(),
-                        [](const katana::ir::BasicBlock& block) {
-                            return std::any_of(
-                                block.instructions.begin(),
-                                block.instructions.end(),
-                                has_proven_linear_ram_access);
-                        });
+        std::uint8_t direct_ram_read_kinds = 0u;
+        std::uint8_t direct_ram_write_kinds = 0u;
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                direct_ram_read_kinds |= required_direct_ram_read_kinds(instruction);
+                direct_ram_write_kinds |= required_direct_ram_write_kinds(instruction);
+            }
+        }
+        const bool uses_proven_linear_ram = direct_ram_read_kinds != 0u;
         emitted_function << (request.external_function_linkage ? "void " : "static void ")
                          << cpp_service_function_name(function.entry_address)
                          << "(CpuState& cpu, PlatformServices* services) {\n"
@@ -3341,6 +3742,29 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             emitted_function
                 << "    auto katana_direct_ram = "
                    "cpu.memory.direct_linear_memory_guard(false);\n";
+        for (const auto kind : {DirectRamReadKind::U8,
+                               DirectRamReadKind::S8,
+                               DirectRamReadKind::U16,
+                               DirectRamReadKind::S16,
+                               DirectRamReadKind::U32}) {
+            if ((direct_ram_read_kinds & direct_ram_read_kind_mask(kind)) != 0u)
+                emit_direct_ram_read_helper(emitted_function, kind);
+        }
+        for (const auto kind : {DirectRamWriteKind::U8,
+                               DirectRamWriteKind::U16,
+                               DirectRamWriteKind::U32}) {
+            if ((direct_ram_write_kinds & direct_ram_write_kind_mask(kind)) != 0u)
+                emit_direct_ram_write_helper(emitted_function, kind);
+        }
+        if (native_internal_block_labels) {
+            // The overwhelmingly common function-level AOT entry is already selected by
+            // the caller. Enter its native label directly; retain the PC switch only for
+            // dispatcher resumes, shared bodies and deliberate mid-function entries.
+            emitted_function
+                << "    if (" << unrelocated_code_address("cpu.pc") << " == "
+                << hex32(function.entry_address) << ")\n"
+                << "        goto " << cpp_block_label(function.entry_address) << ";\n";
+        }
         emitted_function
             << "    for (;;) {\n"
             << "        switch (katana::runtime::unrelocate_code_address(cpu.pc)) {\n";

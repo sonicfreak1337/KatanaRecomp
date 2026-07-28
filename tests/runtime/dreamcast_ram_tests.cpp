@@ -99,6 +99,43 @@ int main() {
     require(bus.read_u8(0xCC000000u) == 0x11u && bus.read_u8(0x8FFFFFFFu) == 0x22u,
             "Erstes oder letztes Byte des RAM-Backings wird nicht gespiegelt.");
 
+    bus.reset_performance_counters();
+    std::uint32_t direct_value = 0u;
+    require(katana::runtime::direct_linear_guard_read_u32(
+                direct_read_guard, 0x8E000100u, direct_value) &&
+                direct_value == 0x89ABCDEFu,
+            "Der gecachte Direktguard liest die gespiegelten Haupt-RAM-Bytes nicht.");
+    const auto direct_read_counters = bus.performance_counters();
+    require(direct_read_counters.indexed_region_hits == 1u &&
+                direct_read_counters.unobserved_accesses == 1u &&
+                direct_read_counters.reference_region_probes == 0u &&
+                direct_read_counters.observed_accesses == 0u,
+            "Ein erfolgreicher Guard-Read zaehlt nicht exakt einen unbeobachteten "
+            "Indexed-Zugriff.");
+
+    bus.map_region(
+        "guard-generation-probe", 0x01000000u, std::make_shared<LinearMemoryDevice>(16u));
+    const auto mapping_counters_before = bus.performance_counters();
+    std::uint32_t stale_mapping_value = 0xDEADBEEFu;
+    require(!direct_read_guard &&
+                !katana::runtime::direct_linear_guard_read_u32(
+                    direct_read_guard, 0x8E000100u, stale_mapping_value) &&
+                stale_mapping_value == 0xDEADBEEFu &&
+                bus.performance_counters().indexed_region_hits ==
+                    mapping_counters_before.indexed_region_hits &&
+                bus.performance_counters().reference_region_probes ==
+                    mapping_counters_before.reference_region_probes &&
+                bus.performance_counters().unobserved_accesses ==
+                    mapping_counters_before.unobserved_accesses &&
+                bus.performance_counters().observed_accesses ==
+                    mapping_counters_before.observed_accesses,
+            "Eine Mappingaenderung laesst einen alten Direktguard lesen oder zaehlen.");
+    const auto refreshed_read_guard = bus.direct_linear_memory_guard(false);
+    require(refreshed_read_guard &&
+                bus.direct_linear_memory_guard_current(refreshed_read_guard, false),
+            "Der direkte RAM-Guard kann nach einer sicheren Mappingaenderung nicht "
+            "erneuert werden.");
+
     katana::runtime::CpuState cpu;
     cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(cpu.memory));
@@ -124,7 +161,21 @@ int main() {
     bus.set_trace_handler([&traced](const katana::runtime::MemoryAccessEvent&) {
         traced = true;
     });
-    require(!bus.direct_linear_memory_guard_current(direct_read_guard, false),
+    const auto trace_counters_before = bus.performance_counters();
+    std::uint8_t stale_trace_value = 0xA5u;
+    require(!refreshed_read_guard &&
+                !bus.direct_linear_memory_guard_current(refreshed_read_guard, false) &&
+                !katana::runtime::direct_linear_guard_read_u8(
+                    refreshed_read_guard, 0x8C000000u, stale_trace_value) &&
+                stale_trace_value == 0xA5u &&
+                bus.performance_counters().indexed_region_hits ==
+                    trace_counters_before.indexed_region_hits &&
+                bus.performance_counters().reference_region_probes ==
+                    trace_counters_before.reference_region_probes &&
+                bus.performance_counters().unobserved_accesses ==
+                    trace_counters_before.unobserved_accesses &&
+                bus.performance_counters().observed_accesses ==
+                    trace_counters_before.observed_accesses,
             "Ein Diagnoseobserver invalidiert den direkten RAM-Guard nicht.");
     static_cast<void>(bus.read_u8(0x0C000000u));
     require(traced, "Der RAM-Fallback verliert den Diagnoseobserver.");
