@@ -299,10 +299,12 @@ int main() {
                 local_chain_source.find("++cpu.retired_guest_instructions;") ==
                     std::string::npos &&
                 local_chain_source.find("services->consume_guest_cycles(") == std::string::npos &&
-                local_chain_source.find("const bool take_branch = !cpu.t;") !=
+                local_chain_source.find(
+                    "const bool take_branch = !katana_registers.t();") !=
                     std::string::npos &&
                 local_chain_source.find(
-                    "katana::runtime::NativeAotRegisterFile<0x00000001u> "
+                    "katana::runtime::NativeAotRegisterFile<"
+                    "0x00000001u, 0x00000001u> "
                     "katana_registers(cpu);") != std::string::npos &&
                 local_chain_source.find(
                     "katana_registers[0] = static_cast<std::uint32_t>(1);") !=
@@ -1002,10 +1004,16 @@ int main() {
                 "const auto katana_direct_ram_write_u8 =") !=
                 std::string::npos &&
             proven_read_modify_write_source.find(
-                "if (cpu.privileged_mode() &&") != std::string::npos &&
+                "Memory::DirectLinearWriteBatch* const "
+                "katana_direct_ram_writes = nullptr;") != std::string::npos &&
             proven_read_modify_write_source.find(
-                "cpu.memory.try_write_direct_linear_u8("
-                "katana::runtime::canonical_physical_address(katana_ram_address),") !=
+                "native_aot_code_tracker_tracks_address(") !=
+                std::string::npos &&
+            proven_read_modify_write_source.find(
+                "katana_batch->try_stage_u8(") !=
+                std::string::npos &&
+            proven_read_modify_write_source.find(
+                "cpu.memory.try_write_direct_linear_u8(") !=
                 std::string::npos &&
             proven_read_modify_write_source.find(
                 "guest_write_u8_at(cpu, katana_origin, katana_ram_address,") !=
@@ -1014,10 +1022,140 @@ int main() {
                 "katana_direct_ram_read_u8(guest_origin, address)") !=
                 std::string_view::npos &&
             proven_read_modify_write.find(
-                "katana_direct_ram_write_u8(guest_origin, address,") !=
+                "katana_direct_ram_write_u8(katana_direct_ram_writes, "
+                "guest_origin, address,") !=
                 std::string_view::npos,
         "Ein bewiesener RAM-Read-Modify-Write nutzt keinen invalidierungs- und "
         "watchpointsicheren direkten Read-/Write-Vertrag mit allgemeinem Fallback.");
+
+    constexpr std::array<std::uint8_t, 8> direct_store_batch_bytes = {
+        0x12u,
+        0x22u, // MOV.L R1,@R2
+        0x12u,
+        0x24u, // MOV.L R1,@R4
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto direct_store_batch_lines =
+        katana::sh4::disassemble(direct_store_batch_bytes, 0x8C051000u);
+    constexpr std::array<std::uint32_t, 1> direct_store_batch_seeds = {
+        0x8C051000u};
+    const auto direct_store_batch_functions =
+        katana::analysis::discover_functions(
+            direct_store_batch_lines, direct_store_batch_seeds);
+    auto direct_store_batch_program = katana::ir::lower_program(
+        direct_store_batch_lines, direct_store_batch_functions);
+    auto& direct_store_batch_blocks =
+        direct_store_batch_program.front().blocks;
+    const auto direct_store_original = direct_store_batch_blocks.front();
+    katana::ir::BasicBlock direct_store_prefix;
+    direct_store_prefix.start_address = 0x8C051000u;
+    direct_store_prefix.instructions.assign(
+        direct_store_original.instructions.begin(),
+        direct_store_original.instructions.begin() + 2);
+    for (auto& instruction : direct_store_prefix.instructions)
+        instruction.memory_effects.region =
+            katana::ir::MemoryRegionKind::NormalRam;
+    direct_store_prefix.successors = {0x8C051004u};
+    katana::ir::BasicBlock direct_store_return;
+    direct_store_return.start_address = 0x8C051004u;
+    direct_store_return.instructions.assign(
+        direct_store_original.instructions.begin() + 2,
+        direct_store_original.instructions.end());
+    direct_store_batch_blocks = {
+        std::move(direct_store_prefix), std::move(direct_store_return)};
+    katana::codegen::BackendRequest direct_store_batch_request{
+        direct_store_batch_program, 0x8C051000u};
+    direct_store_batch_request.single_block_execution = true;
+    direct_store_batch_request.guarded_local_block_chaining = true;
+    direct_store_batch_request.external_dynamic_dispatch = true;
+    direct_store_batch_request.conservative_register_localization = true;
+    const auto direct_store_batch_source =
+        katana::codegen::CppBackend{}
+            .emit(direct_store_batch_request)
+            .joined_text();
+    const auto direct_store_batch_begin =
+        direct_store_batch_source.find(
+            "cpu.memory.begin_direct_linear_write_batch();");
+    const auto direct_store_batch_stage =
+        direct_store_batch_source.find(
+            "katana_batch->try_stage_u32(");
+    const auto direct_store_batch_flush =
+        direct_store_batch_source.find(
+            "katana_direct_ram_writes->flush();",
+            direct_store_batch_begin);
+    const auto direct_store_batch_successor =
+        direct_store_batch_source.find(
+            "cpu.pc = katana::runtime::relocate_code_address("
+            "0x8C051004u);",
+            direct_store_batch_flush);
+    const auto direct_store_batch_exit =
+        direct_store_batch_source.find(
+            "if (katana_direct_ram_write_exit_requested) {",
+            direct_store_batch_successor);
+    const auto direct_store_batch_chain =
+        direct_store_batch_source.find(
+            "services->can_chain_executable_block(cpu.pc)",
+            direct_store_batch_exit);
+    require(
+        direct_store_batch_begin != std::string::npos &&
+            direct_store_batch_stage != std::string::npos &&
+            count_occurrences(
+                direct_store_batch_source,
+                "katana_direct_ram_write_u32("
+                "katana_direct_ram_writes, guest_origin,") == 2u &&
+            direct_store_batch_flush != std::string::npos &&
+            direct_store_batch_successor != std::string::npos &&
+            direct_store_batch_exit != std::string::npos &&
+            direct_store_batch_chain != std::string::npos &&
+            direct_store_batch_flush < direct_store_batch_successor &&
+            direct_store_batch_successor < direct_store_batch_exit &&
+            direct_store_batch_exit < direct_store_batch_chain &&
+            direct_store_batch_source.find(
+                "katana_direct_ram_code_tracker != nullptr &&") !=
+                std::string::npos &&
+            direct_store_batch_source.find(
+                "katana_direct_ram_code_tracker == nullptr ||") !=
+                std::string::npos,
+        "Direkte RAM-Store-Region verliert Tracker-Fail-Closed, geordnetes "
+        "Batchflush oder den Exit vor dem naechsten nativen Block.");
+
+    auto direct_store_port_request = direct_store_batch_request;
+    direct_store_port_request.emit_run_functions = false;
+    const auto direct_store_port_source =
+        katana::codegen::emit_cpp_port_translation_unit(
+            direct_store_port_request)
+            .joined_text();
+    const auto direct_store_instruction =
+        emitted_instruction(direct_store_port_source, "0x8C051000");
+    const auto direct_store_smc_exit =
+        direct_store_instruction.find(
+            "if (katana_direct_ram_write_exit_requested) {");
+    const auto direct_store_exit_source =
+        direct_store_instruction.find(
+            "runtime_dispatch_detail::active_exit_source = {",
+            direct_store_smc_exit);
+    const auto direct_store_exit_kind =
+        direct_store_instruction.find(
+            "katana::runtime::BlockEndKind::Fallthrough;",
+            direct_store_exit_source);
+    const auto direct_store_exit_pc =
+        direct_store_instruction.find(
+            "cpu.pc = katana::runtime::relocate_code_address("
+            "0x8C051002u);",
+            direct_store_exit_kind);
+    require(
+        direct_store_smc_exit != std::string_view::npos &&
+            direct_store_exit_source != std::string_view::npos &&
+            direct_store_exit_kind != std::string_view::npos &&
+            direct_store_exit_pc != std::string_view::npos &&
+            direct_store_smc_exit < direct_store_exit_source &&
+            direct_store_exit_source < direct_store_exit_kind &&
+            direct_store_exit_kind < direct_store_exit_pc,
+        "Skalarer SMC-Exit verliert Store-PC, Fallthrough-Kante oder "
+        "Direct-Blockmetadaten.");
 
     constexpr std::array<std::uint8_t, 8> fmov_memory_bytes = {
         0x28u,
@@ -1150,8 +1288,8 @@ int main() {
     constexpr std::array<std::uint8_t, 8> sr_boundary_bytes = {
         0x0Eu,
         0x41u, // LDC R1,SR
-        0x09u,
-        0x00u, // NOP
+        0x13u,
+        0x62u, // MOV R1,R2
         0x0Bu,
         0x00u, // RTS
         0x09u,
@@ -1164,8 +1302,16 @@ int main() {
         katana::analysis::discover_functions(sr_boundary_lines, sr_boundary_seeds);
     const auto sr_boundary_program =
         katana::ir::lower_program(sr_boundary_lines, sr_boundary_functions);
+    katana::codegen::BackendRequest sr_boundary_request{
+        sr_boundary_program, 0x8C060000u};
+    sr_boundary_request.single_block_execution = true;
+    sr_boundary_request.guarded_local_block_chaining = true;
+    sr_boundary_request.external_dynamic_dispatch = true;
+    sr_boundary_request.conservative_register_localization = true;
     const auto sr_boundary_source =
-        katana::codegen::emit_cpp_program(sr_boundary_program, 0x8C060000u);
+        katana::codegen::CppBackend{}
+            .emit(sr_boundary_request)
+            .joined_text();
     const auto sr_instruction =
         emitted_instruction(sr_boundary_source, "0x8C060000");
     const auto sr_write = sr_instruction.find("cpu.write_sr(value);");
@@ -1176,15 +1322,122 @@ int main() {
         sr_retirement);
     const auto sr_finalize = sr_instruction.find(
         "katana_commit_post_instruction_safepoint(", sr_continuation);
+    const auto sr_flush =
+        sr_instruction.find("katana_registers.flush_release();");
+    const auto sr_reload =
+        sr_instruction.find("katana_registers.reload_acquire();", sr_finalize);
+    const auto sr_next_instruction =
+        emitted_instruction(sr_boundary_source, "0x8C060002");
     require(
         sr_write != std::string_view::npos &&
             sr_retirement != std::string_view::npos &&
             sr_continuation != std::string_view::npos &&
             sr_finalize != std::string_view::npos &&
+            sr_flush != std::string_view::npos &&
+            sr_reload != std::string_view::npos &&
             sr_write < sr_retirement && sr_retirement < sr_continuation &&
-            sr_continuation < sr_finalize,
+            sr_continuation < sr_finalize &&
+            sr_flush < sr_write && sr_finalize < sr_reload &&
+            sr_next_instruction.find(
+                "cpu.r[2] = katana_registers[1];") !=
+                std::string_view::npos,
         "LDC SR laesst nach IMASK/BL/RB/MD-Aenderung weitere native "
-        "Gastinstruktionen vor dem Runtime-Safepoint laufen.");
+        "Gastinstruktionen vor dem Runtime-Safepoint laufen oder bindet die "
+        "neue Registerbank nicht erneut.");
+
+    constexpr std::array<std::uint8_t, 10> token_boundary_bytes = {
+        0x18u,
+        0x00u, // SETT
+        0xFDu,
+        0xFBu, // FRCHG
+        0x29u,
+        0x00u, // MOVT R0
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto token_boundary_lines =
+        katana::sh4::disassemble(token_boundary_bytes, 0x8C060100u);
+    constexpr std::array<std::uint32_t, 1> token_boundary_seeds = {
+        0x8C060100u};
+    const auto token_boundary_functions =
+        katana::analysis::discover_functions(
+            token_boundary_lines, token_boundary_seeds);
+    const auto token_boundary_program = katana::ir::lower_program(
+        token_boundary_lines, token_boundary_functions);
+    katana::codegen::BackendRequest token_boundary_request{
+        token_boundary_program, 0x8C060100u};
+    token_boundary_request.single_block_execution = true;
+    token_boundary_request.guarded_local_block_chaining = true;
+    token_boundary_request.external_dynamic_dispatch = true;
+    token_boundary_request.conservative_register_localization = true;
+    const auto token_boundary_source =
+        katana::codegen::CppBackend{}
+            .emit(token_boundary_request)
+            .joined_text();
+    require(
+        token_boundary_source.find("katana_registers.t() = true;") !=
+                std::string::npos &&
+            token_boundary_source.find(
+                "cpu.toggle_fpu_register_bank();") !=
+                std::string::npos &&
+            token_boundary_source.find(
+                "katana_registers.t()oggle_fpu_register_bank") ==
+                std::string::npos,
+        "T-Lokalisierung ersetzt ein laengeres CpuState-Accessor-Praefix.");
+
+    constexpr std::array<std::uint8_t, 8> privileged_token_bytes = {
+        0x2Au,
+        0x00u, // STS PR,R0
+        0x2Au,
+        0x01u, // STS PR,R1
+        0x2Bu,
+        0x00u, // RTE
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto privileged_token_lines =
+        katana::sh4::disassemble(privileged_token_bytes, 0x8C060200u);
+    constexpr std::array<std::uint32_t, 1> privileged_token_seeds = {
+        0x8C060200u};
+    const auto privileged_token_functions =
+        katana::analysis::discover_functions(
+            privileged_token_lines, privileged_token_seeds);
+    const auto privileged_token_program = katana::ir::lower_program(
+        privileged_token_lines, privileged_token_functions);
+    katana::codegen::BackendRequest privileged_token_request{
+        privileged_token_program, 0x8C060200u};
+    privileged_token_request.single_block_execution = true;
+    privileged_token_request.guarded_local_block_chaining = true;
+    privileged_token_request.external_dynamic_dispatch = true;
+    privileged_token_request.conservative_register_localization = true;
+    const auto privileged_token_source =
+        katana::codegen::CppBackend{}
+            .emit(privileged_token_request)
+            .joined_text();
+    const auto rte_release = privileged_token_source.find(
+        "katana_registers.flush_release();");
+    const auto rte_privilege =
+        privileged_token_source.find("cpu.privileged_mode()", rte_release);
+    const auto rte_apply =
+        privileged_token_source.find("return_from_exception(cpu);", rte_privilege);
+    const auto rte_reload = privileged_token_source.find(
+        "katana_registers.reload_acquire();", rte_apply);
+    require(
+        privileged_token_source.find("katana_registers.pr()") !=
+                std::string::npos &&
+            rte_release != std::string::npos &&
+            rte_privilege != std::string::npos &&
+            rte_apply != std::string::npos &&
+            rte_reload != std::string::npos &&
+            rte_release < rte_privilege && rte_privilege < rte_apply &&
+            rte_apply < rte_reload &&
+            privileged_token_source.find(
+                "katana_registers.pr()ivileged_mode") ==
+                std::string::npos,
+        "PR-Lokalisierung korrumpiert den Privilegguard oder haelt die alte "
+        "Registerbank ueber RTE.");
 
     constexpr std::array<std::uint8_t, 8> ldtlb_boundary_bytes = {
         0x38u,

@@ -7,6 +7,20 @@
 #include <type_traits>
 
 namespace katana::runtime {
+
+std::uint64_t native_aot_code_tracker_generation(
+    const ExecutableCodeTracker* const tracker) noexcept {
+    return tracker != nullptr ? tracker->invalidation_count() : 0u;
+}
+
+bool native_aot_code_tracker_tracks_address(
+    const ExecutableCodeTracker* const tracker,
+    const std::uint32_t physical_address,
+    const std::size_t size) noexcept {
+    return tracker != nullptr &&
+           tracker->tracks_address(physical_address, size);
+}
+
 namespace {
 
 [[nodiscard]] bool direct_write_batch_range(

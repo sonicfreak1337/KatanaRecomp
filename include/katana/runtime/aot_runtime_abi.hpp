@@ -17,6 +17,18 @@
 
 namespace katana::runtime {
 
+// Narrow generated-code view of the executable tracker. The tracker remains
+// opaque to AOT translation units; a missing tracker is deliberately not a
+// proof that a store cannot alias executable guest bytes.
+[[nodiscard]] std::uint64_t
+native_aot_code_tracker_generation(
+    const ExecutableCodeTracker* tracker) noexcept;
+[[nodiscard]] bool
+native_aot_code_tracker_tracks_address(
+    const ExecutableCodeTracker* tracker,
+    std::uint32_t physical_address,
+    std::size_t size) noexcept;
+
 // Native guest calls deliberately use the host stack, but an arbitrary guest
 // call graph must never be allowed to exhaust it. Reaching this limit is not a
 // guest-visible failure: generated code leaves cpu.pc at the already prepared
