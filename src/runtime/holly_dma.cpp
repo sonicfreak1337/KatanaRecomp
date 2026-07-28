@@ -45,8 +45,8 @@ bool protected_range(const std::uint32_t protection,
                      const std::uint32_t address,
                      const std::size_t size) noexcept {
     if (size == 0u) return false;
-    const auto bottom = ((protection & 0x7Fu) << 20u) | 0x08000000u;
-    const auto top = (((protection >> 8u) & 0x7Fu) << 20u) | 0x080FFFFFu;
+    const auto bottom = (((protection >> 8u) & 0x7Fu) << 20u) | 0x08000000u;
+    const auto top = ((protection & 0x7Fu) << 20u) | 0x080FFFFFu;
     const auto physical = address & 0x1FFFFFFFu;
     if (size - 1u > std::numeric_limits<std::uint32_t>::max() - physical) return false;
     return physical >= bottom && physical + static_cast<std::uint32_t>(size - 1u) <= top;

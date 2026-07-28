@@ -88,6 +88,7 @@ int main() {
                 g2_snapshot.reset_observer != 0u && g2_snapshot.completion_observer_bound,
             "G2-DMA-Snapshot verliert private Timeout-/Protectregister oder Eventbindung.");
 
+    memory.write_u32(0xA05F78BCu, 0x4659404Fu);
     for (std::uint32_t index = 0u; index < 32u; ++index)
         memory.write_u8(0x0C001000u + index, static_cast<std::uint8_t>(index + 1u));
     memory.write_u32(0x005F7800u, 0x00801000u);
@@ -179,6 +180,7 @@ int main() {
         g2_fault_scheduler,
         HollyDmaTiming{4u},
         [&](const auto event) { g2_fault_events.push_back(event); });
+    g2_fault.write(0xBCu, 0x4659404Fu);
     g2_fault.write(0x00u, 0x00820000u);
     g2_fault.write(0x04u, 0x0C100000u);
     g2_fault.write(0x08u, 64u);
@@ -201,6 +203,7 @@ int main() {
                     std::vector<SystemAsicEvent>{SystemAsicEvent::AicaDmaIllegalAddress},
             "G2-DMA-Teilbatchfehler verliert den committed Prefix oder seine Livezaehler.");
 
+    memory.write_u32(0xA05F7C80u, 0x4659404Fu);
     for (std::uint32_t index = 0u; index < 32u; ++index)
         memory.write_u8(0x0C002000u + index, static_cast<std::uint8_t>(0x80u + index));
     memory.write_u32(0xA05F7C00u, 0x0400101Fu);
@@ -296,6 +299,7 @@ int main() {
         pvr_fault_scheduler,
         HollyDmaTiming{4u},
         [&](const auto event) { pvr_fault_events.push_back(event); });
+    pvr_fault.write(0x80u, 0x4659404Fu);
     pvr_fault.write(0x00u, 0x10000000u);
     pvr_fault.write(0x04u, 0x0C100000u);
     pvr_fault.write(0x08u, 64u);
@@ -620,6 +624,7 @@ int main() {
         [&](const SystemAsicEvent event) {
             scheduler_failure_g2_events.push_back(event);
         });
+    scheduler_failure_g2.write(0xBCu, 0x4659404Fu);
     scheduler_failure_g2.write(0x00u, 0x00800000u);
     scheduler_failure_g2.write(0x04u, 0x0C000000u);
     scheduler_failure_g2.write(0x08u, 32u);
@@ -645,6 +650,7 @@ int main() {
         [&](const SystemAsicEvent event) {
             scheduler_failure_pvr_events.push_back(event);
         });
+    scheduler_failure_pvr.write(0x80u, 0x4659404Fu);
     scheduler_failure_pvr.write(0x00u, 0x04000000u);
     scheduler_failure_pvr.write(0x04u, 0x0C000000u);
     scheduler_failure_pvr.write(0x08u, 32u);
@@ -684,6 +690,7 @@ int main() {
         HollyDmaTiming{4u},
         [&](const SystemAsicEvent event) { contract_events.push_back(event); });
     contract_pvr.bind_sh4_dmac(contract_dmac, 0u);
+    contract_pvr.write(0x80u, 0x4659404Fu);
     const auto bound_pvr_snapshot = contract_pvr.snapshot();
     require(bound_pvr_snapshot.dmac_bound &&
                 bound_pvr_snapshot.dmac_contract_required &&
@@ -707,6 +714,7 @@ int main() {
 
     contract_dmac->reset();
     contract_pvr.reset();
+    contract_pvr.write(0x80u, 0x4659404Fu);
     contract_events.clear();
     for (std::uint32_t index = 0u; index < 64u; ++index)
         memory.write_u8(0x0C004000u + index, static_cast<std::uint8_t>(0x20u + index));
@@ -728,6 +736,7 @@ int main() {
 
     contract_dmac->reset();
     contract_pvr.reset();
+    contract_pvr.write(0x80u, 0x4659404Fu);
     contract_events.clear();
     for (std::uint32_t index = 0u; index < 4096u; ++index)
         memory.write_u8(0x0C008000u + index, static_cast<std::uint8_t>(index));
@@ -771,6 +780,7 @@ int main() {
 
     contract_dmac->reset();
     contract_pvr.reset();
+    contract_pvr.write(0x80u, 0x4659404Fu);
     contract_events.clear();
     for (std::uint32_t index = 0u; index < 4096u; ++index)
         memory.write_u8(0x0C00A000u + index, static_cast<std::uint8_t>(0x40u + index));
