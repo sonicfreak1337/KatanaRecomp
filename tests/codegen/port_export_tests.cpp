@@ -1391,6 +1391,10 @@ int run_test(const int argc, char* argv[]) {
                     direct_boot_export_identity) !=
                     std::string::npos &&
                 direct_boot_main.find(
+                    "GameEntryCompletePlatformRestoreProfile::\n"
+                    "                            ProductHandoff") !=
+                    std::string::npos &&
+                direct_boot_main.find(
                     "local_game_project_registration.emplace") !=
                     std::string::npos &&
                 direct_boot_main.find(
@@ -3165,6 +3169,7 @@ int run_test(const int argc, char* argv[]) {
             "Portexport besitzt keine deterministische Translation Unit.");
     std::size_t entry_metadata_count = 0u;
     bool p2_pc_relative_literal = false;
+    bool p2_pc_relative_literal_has_direct_helper = false;
     bool p2_pc_relative_literal_avoids_cycle_flush = false;
     for (const auto& [path, content] : generated_before) {
         if (path.starts_with("code/unit-") && path.ends_with(".cpp")) {
@@ -3172,6 +3177,15 @@ int run_test(const int argc, char* argv[]) {
                     "Portpartition besitzt einen abweichenden globalen Programmeinstieg.");
             p2_pc_relative_literal =
                 p2_pc_relative_literal || content.find("0xAC008308u") != std::string::npos;
+            p2_pc_relative_literal_has_direct_helper =
+                p2_pc_relative_literal_has_direct_helper ||
+                (content.find("const auto katana_direct_ram_read_u32") !=
+                     std::string::npos &&
+                 content.find("direct_linear_guard_read_u32(") !=
+                     std::string::npos &&
+                 content.find(
+                     "guest_read_u32_at(cpu, katana_origin, katana_ram_address)") !=
+                     std::string::npos);
             const auto literal_instruction =
                 content.find("// katana-guest 0xAC008300u");
             if (literal_instruction != std::string::npos) {
@@ -3183,7 +3197,7 @@ int run_test(const int argc, char* argv[]) {
                         ? std::string::npos
                         : next_instruction - literal_instruction);
                 p2_pc_relative_literal_avoids_cycle_flush =
-                    emitted_literal.find("guest_read_u32_at(cpu, guest_origin") !=
+                    emitted_literal.find("katana_direct_ram_read_u32(guest_origin") !=
                         std::string::npos &&
                     emitted_literal.find(
                         "katana::runtime::flush_pending_guest_cycles(cpu, *services)") ==
@@ -3202,6 +3216,7 @@ int run_test(const int argc, char* argv[]) {
         }
     }
     require(entry_metadata_count == 3u && p2_pc_relative_literal &&
+                p2_pc_relative_literal_has_direct_helper &&
                 p2_pc_relative_literal_avoids_cycle_flush,
             "Mehrteiliger Portexport verliert P2-Einstieg, PC-relativen P2-Literalzugriff oder "
             "dessen linearen RAM-Beweis.");
@@ -4035,6 +4050,78 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "run-product-gate.ps1")
                     .find("status=host-watchdog-hang") != std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    const auto product_entry_boundary =
+        generated_main.find("void note_guest_program_entry() noexcept");
+    const auto product_entry_evidence_callback =
+        generated_main.find("product_entry_evidence_callback_();",
+                            product_entry_boundary);
+    const auto product_entry_budget =
+        generated_main.find("try_set_guest_cycle_budget_after_current_cycle",
+                            product_entry_evidence_callback);
+    require(
+        product_entry_boundary != std::string::npos &&
+            product_entry_evidence_callback != std::string::npos &&
+            product_entry_budget != std::string::npos &&
+            generated_main.find(
+                "state.pvr_renderer->reset_guest_frame_evidence(\n"
+                "                state.vram->bytes())") != std::string::npos &&
+            generated_main.find("guest_frame_evidence = {};") !=
+                std::string::npos &&
+            generated_main.find("product_entry_evidence_failed_ = true") !=
+                std::string::npos &&
+            generated_main.find(
+                "game_code_progressed =\n"
+                "                product_entry_evidence_ready") !=
+                std::string::npos &&
+            generated_main.find("saturating_counter_delta") !=
+                std::string::npos &&
+            generated_main.find("post_entry_central_dispatches=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_executed_blocks=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_render_requests=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_render_completions=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_renderer_frames=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_proven_guest_frames=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_direct_scanout_frames=") !=
+                std::string::npos &&
+            generated_main.find(
+                "post_entry_pvr_direct_scanout_changed_pixels=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_changed_pixels=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_ta_packets=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_ta_vertices=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_pvr_yuv_macroblocks=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_aica_rendered_buffers=") !=
+                std::string::npos &&
+            generated_main.find("post_entry_host_presented_frames=") !=
+                std::string::npos &&
+            generated_main.find(
+                "post_entry_host_audio_submitted_buffers=") !=
+                std::string::npos &&
+            generated_main.find(
+                "post_entry_host_audio_submitted_frames=") !=
+                std::string::npos &&
+            generated_main.find(
+                "GameEntryCompletePlatformRestoreProfile::\n"
+                "                                    DiagnosticLossless") !=
+                std::string::npos &&
+            generated_before.at("include/katana_port.hpp")
+                    .find("runtime_central_dispatch_count() noexcept") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "std::uint64_t runtime_central_dispatch_count() noexcept") !=
+                std::string::npos,
+        "Produktevidenz wird nicht atomar am Spielentry neu gebaselined, "
+        "saturierend berichtet oder vom Bootstrap getrennt.");
     const auto chain_method_begin = generated_main.find(
         "bool can_chain_executable_block(std::uint32_t address)");
     const auto chain_direct_begin =
