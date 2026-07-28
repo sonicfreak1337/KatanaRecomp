@@ -1102,6 +1102,26 @@ DreamcastAicaStateSnapshot snapshot_dreamcast_aica_state(
     return state;
 }
 
+void normalize_dreamcast_aica_observations_for_restore(
+    DreamcastAicaStateSnapshot& state,
+    const ObservationRestorePolicy policy) {
+    switch (policy) {
+    case ObservationRestorePolicy::PreserveCapturedDiagnostics:
+        return;
+    case ObservationRestorePolicy::FreshProductEpoch:
+        break;
+    default:
+        throw std::invalid_argument(
+            "AICA-Handoff besitzt eine unbekannte Beobachtungsrichtlinie.");
+    }
+
+    state.registers.writes = 0u;
+    state.registers.rendered_buffers = 0u;
+    state.registers.rendered_frames = 0u;
+    state.registers.voice_errors = 0u;
+    state.registers.first_voice_error.reset();
+}
+
 void validate_dreamcast_aica_state_restore(
     const AicaRegisterFile& registers,
     const AicaRtc& rtc,

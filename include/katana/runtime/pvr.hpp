@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/memory.hpp"
+#include "katana/runtime/observation_restore_policy.hpp"
 #include "katana/runtime/scheduler.hpp"
 
 #include <array>
@@ -912,6 +913,13 @@ struct DreamcastPvrStateSnapshot {
     const PvrTaFifoMemoryDevice& ta_aperture,
     const PvrYuvConverterMemoryDevice& yuv,
     const PvrSoftwareRenderer& renderer);
+// Normalizes only run-local host observations in a detached capture. A fresh
+// product epoch uses the final target VRAM as its direct-write baseline so
+// restored pixels cannot become new frame evidence after the live commit.
+void normalize_dreamcast_pvr_observations_for_restore(
+    DreamcastPvrStateSnapshot& state,
+    ObservationRestorePolicy policy,
+    std::span<const std::uint8_t> final_vram = {});
 void validate_dreamcast_pvr_state_restore(
     const PvrRegisterFile& registers,
     const PvrTaFifo& ta_fifo,

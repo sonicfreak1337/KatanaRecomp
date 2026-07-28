@@ -81,5 +81,47 @@ int main() {
     require(rtc->counter() == initial && !rtc->write_enabled(),
             "AICA-RTC-Schedulerreset ist nicht deterministisch.");
 
+    DreamcastAicaStateSnapshot policy_snapshot;
+    policy_snapshot.registers.registers[0x24u] = 0x5Au;
+    policy_snapshot.registers.channels[3u].phase = 0x1234u;
+    policy_snapshot.registers.channels[3u].active = true;
+    policy_snapshot.registers.writes = 11u;
+    policy_snapshot.registers.rendered_buffers = 12u;
+    policy_snapshot.registers.rendered_frames = 13u;
+    policy_snapshot.registers.voice_errors = 1u;
+    policy_snapshot.registers.first_voice_error =
+        AicaVoiceFirstError{AicaVoiceError::Pcm8OutOfRange,
+                            AicaSampleFormat::Pcm8,
+                            3u,
+                            0x40u,
+                            12u};
+    policy_snapshot.rtc.counter = 0x10203040u;
+    policy_snapshot.execution.arm7_reset_asserted = true;
+
+    const auto preserved_registers = policy_snapshot.registers;
+    const auto preserved_rtc = policy_snapshot.rtc;
+    const auto preserved_execution = policy_snapshot.execution;
+    normalize_dreamcast_aica_observations_for_restore(
+        policy_snapshot,
+        ObservationRestorePolicy::PreserveCapturedDiagnostics);
+    require(policy_snapshot.registers == preserved_registers &&
+                policy_snapshot.rtc == preserved_rtc &&
+                policy_snapshot.execution == preserved_execution,
+            "AICA-Diagnoserestore veraendert den Capture-Snapshot.");
+
+    normalize_dreamcast_aica_observations_for_restore(
+        policy_snapshot,
+        ObservationRestorePolicy::FreshProductEpoch);
+    require(policy_snapshot.registers.writes == 0u &&
+                policy_snapshot.registers.rendered_buffers == 0u &&
+                policy_snapshot.registers.rendered_frames == 0u &&
+                policy_snapshot.registers.voice_errors == 0u &&
+                !policy_snapshot.registers.first_voice_error &&
+                policy_snapshot.registers.registers == preserved_registers.registers &&
+                policy_snapshot.registers.channels == preserved_registers.channels &&
+                policy_snapshot.rtc == preserved_rtc &&
+                policy_snapshot.execution == preserved_execution,
+            "Frischer AICA-Produktepoch entfernt Fortsetzungszustand oder behaelt Laufmetriken.");
+
     std::cout << "KR-2901 AICA-Register und RTC erfolgreich.\n";
 }

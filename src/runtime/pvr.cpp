@@ -2673,6 +2673,17 @@ PvrTaFifoSnapshot PvrTaFifo::snapshot() const {
 void PvrTaFifo::validate_state_restore(
     const PvrTaFifoSnapshot& state) const {
     accelerator_.validate_state_restore(state.accelerator);
+    const auto metrics_are_fresh =
+        state.metrics.packets == 0u &&
+        std::all_of(state.metrics.normalized_packets.begin(),
+                    state.metrics.normalized_packets.end(),
+                    [](const auto value) { return value == 0u; }) &&
+        state.metrics.polygon_headers == 0u &&
+        state.metrics.vertices == 0u &&
+        state.metrics.list_completions == 0u &&
+        state.metrics.frames == 0u &&
+        state.metrics.continuations == 0u &&
+        state.metrics.rejected_packets == 0u;
     if (!valid_pvr_list_type(state.active_list) ||
         state.active_color_type > 3u ||
         state.user_clip_start_x > 1023u ||
@@ -2680,7 +2691,8 @@ void PvrTaFifo::validate_state_restore(
         state.user_clip_start_y > 1023u ||
         state.user_clip_end_y > 1023u ||
         state.frame_packets > pvr_ta_maximum_frame_packets ||
-        state.metrics.packets < state.frame_packets)
+        (!metrics_are_fresh &&
+         state.metrics.packets < state.frame_packets))
         throw std::invalid_argument(
             "PVR-TA-FIFO-Handoff besitzt ungueltige Parserdaten.");
     validate_pvr_material(state.active_material);
@@ -4604,6 +4616,62 @@ DreamcastPvrStateSnapshot snapshot_dreamcast_pvr_state(
     validate_dreamcast_pvr_state_restore(
         registers, ta_fifo, ta_aperture, yuv, renderer, state);
     return state;
+}
+
+void normalize_dreamcast_pvr_observations_for_restore(
+    DreamcastPvrStateSnapshot& state,
+    const ObservationRestorePolicy policy,
+    const std::span<const std::uint8_t> final_vram) {
+    switch (policy) {
+    case ObservationRestorePolicy::PreserveCapturedDiagnostics:
+        return;
+    case ObservationRestorePolicy::FreshProductEpoch:
+        break;
+    default:
+        throw std::invalid_argument(
+            "PVR-Handoff besitzt eine unbekannte Beobachtungsrichtlinie.");
+    }
+    if (final_vram.size() != dreamcast_vram_size)
+        throw std::invalid_argument(
+            "Ein frischer PVR-Produktepoch braucht das vollstaendige finale VRAM-Abbild.");
+
+    // Allocate the replacement shadow before touching the detached capture.
+    // The caller can therefore complete all fallible preparation before any
+    // live runtime state is mutated.
+    std::vector<std::uint8_t> direct_vram_baseline(
+        final_vram.begin(), final_vram.end());
+
+    state.registers.render_requests = 0u;
+    state.registers.render_completions = 0u;
+    state.registers.render_failures = 0u;
+    state.registers.render_overruns = 0u;
+    state.registers.vblank_in = 0u;
+    state.registers.vblank_out = 0u;
+    state.registers.hblank = 0u;
+    state.registers.resets = 0u;
+    state.registers.last_render_start_error.reset();
+    state.registers.last_render_failure.reset();
+
+    // frame_packets is active TA parser continuation, not a metric baseline.
+    state.ta_fifo.metrics = {};
+    state.ta_fifo.first_input_error.reset();
+    state.yuv.converted_macroblocks = 0u;
+
+    auto& renderer = state.renderer;
+    renderer.metrics = {};
+    renderer.pending_render_evidence.clear();
+    renderer.pending_render_evidence_bytes = 0u;
+    renderer.next_evidence_scan_generation = 0u;
+    renderer.next_direct_write_generation = 1u;
+    renderer.pending_direct_write_generation = 0u;
+    renderer.pending_direct_first_write_generation = 0u;
+    renderer.pending_direct_last_write_generation = 0u;
+    renderer.direct_dirty_words.clear();
+    renderer.direct_dirty_byte_count = 0u;
+    renderer.direct_vram_shadow = std::move(direct_vram_baseline);
+    renderer.direct_vram_shadow_valid = true;
+    renderer.queued_guest_frame_proof.reset();
+    renderer.first_error.reset();
 }
 
 void validate_dreamcast_pvr_state_restore(

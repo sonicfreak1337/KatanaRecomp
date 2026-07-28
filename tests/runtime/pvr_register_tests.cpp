@@ -591,5 +591,91 @@ int main() {
             }),
             "Unbekannter Dreamcast-Videomodus wird still akzeptiert.");
 
+    DreamcastPvrStateSnapshot policy_snapshot;
+    policy_snapshot.registers.scan_epoch_cycle = 99u;
+    policy_snapshot.registers.next_render_generation = 43u;
+    policy_snapshot.registers.render_requests = 9u;
+    policy_snapshot.registers.render_completions = 7u;
+    policy_snapshot.registers.render_failures = 2u;
+    policy_snapshot.registers.vblank_in = 4u;
+    policy_snapshot.registers.last_render_start_error =
+        PvrRenderStartError::CaptureFailed;
+    policy_snapshot.ta_fifo.frame_packets = 5u;
+    policy_snapshot.ta_fifo.pending_intensity_header = true;
+    policy_snapshot.ta_fifo.metrics.packets = 17u;
+    policy_snapshot.ta_fifo.metrics.frames = 3u;
+    policy_snapshot.ta_fifo.metrics.rejected_packets = 1u;
+    policy_snapshot.ta_fifo.first_input_error =
+        PvrTaInputError{PvrTaInputErrorReason::InvalidPacket, 17u, "captured"};
+    policy_snapshot.yuv.input = {1u, 2u, 3u};
+    policy_snapshot.yuv.frame_macroblock = 4u;
+    policy_snapshot.yuv.converted_macroblocks = 21u;
+    policy_snapshot.renderer.metrics.frames = 6u;
+    policy_snapshot.renderer.metrics.proven_guest_frames = 2u;
+    policy_snapshot.renderer.next_render_generation = 43u;
+    policy_snapshot.renderer.last_render_generation = 42u;
+    policy_snapshot.renderer.pending_render_evidence.emplace_back();
+    policy_snapshot.renderer.pending_render_evidence_bytes = 12u;
+    policy_snapshot.renderer.next_evidence_scan_generation = 42u;
+    policy_snapshot.renderer.next_direct_write_generation = 10u;
+    policy_snapshot.renderer.pending_direct_write_generation = 9u;
+    policy_snapshot.renderer.pending_direct_first_write_generation = 8u;
+    policy_snapshot.renderer.pending_direct_last_write_generation = 9u;
+    policy_snapshot.renderer.direct_dirty_words = {1u};
+    policy_snapshot.renderer.direct_dirty_byte_count = 1u;
+    policy_snapshot.renderer.direct_vram_shadow = {0xFFu};
+    policy_snapshot.renderer.direct_vram_shadow_valid = true;
+    policy_snapshot.renderer.queued_guest_frame_proof.emplace();
+    policy_snapshot.renderer.first_error =
+        PvrRenderFirstError{PvrRenderError::MemoryRange, 9u, "captured"};
+
+    normalize_dreamcast_pvr_observations_for_restore(
+        policy_snapshot,
+        ObservationRestorePolicy::PreserveCapturedDiagnostics);
+    require(policy_snapshot.registers.render_requests == 9u &&
+                policy_snapshot.ta_fifo.metrics.packets == 17u &&
+                policy_snapshot.yuv.converted_macroblocks == 21u &&
+                policy_snapshot.renderer.metrics.frames == 6u &&
+                policy_snapshot.renderer.queued_guest_frame_proof,
+            "PVR-Diagnoserestore veraendert den Capture-Snapshot.");
+
+    const std::vector<std::uint8_t> final_vram(8u << 20u, 0x5Au);
+    normalize_dreamcast_pvr_observations_for_restore(
+        policy_snapshot,
+        ObservationRestorePolicy::FreshProductEpoch,
+        final_vram);
+    require(policy_snapshot.registers.render_requests == 0u &&
+                policy_snapshot.registers.render_completions == 0u &&
+                policy_snapshot.registers.render_failures == 0u &&
+                policy_snapshot.registers.vblank_in == 0u &&
+                !policy_snapshot.registers.last_render_start_error &&
+                policy_snapshot.ta_fifo.metrics.packets == 0u &&
+                policy_snapshot.ta_fifo.metrics.frames == 0u &&
+                policy_snapshot.ta_fifo.metrics.rejected_packets == 0u &&
+                !policy_snapshot.ta_fifo.first_input_error &&
+                policy_snapshot.yuv.converted_macroblocks == 0u &&
+                policy_snapshot.renderer.metrics.frames == 0u &&
+                policy_snapshot.renderer.metrics.proven_guest_frames == 0u &&
+                policy_snapshot.renderer.pending_render_evidence.empty() &&
+                policy_snapshot.renderer.next_evidence_scan_generation == 0u &&
+                policy_snapshot.renderer.next_direct_write_generation == 1u &&
+                policy_snapshot.renderer.pending_direct_write_generation == 0u &&
+                policy_snapshot.renderer.pending_direct_first_write_generation == 0u &&
+                policy_snapshot.renderer.pending_direct_last_write_generation == 0u &&
+                policy_snapshot.renderer.direct_dirty_words.empty() &&
+                policy_snapshot.renderer.direct_dirty_byte_count == 0u &&
+                policy_snapshot.renderer.direct_vram_shadow == final_vram &&
+                !policy_snapshot.renderer.queued_guest_frame_proof &&
+                !policy_snapshot.renderer.first_error &&
+                policy_snapshot.registers.scan_epoch_cycle == 99u &&
+                policy_snapshot.registers.next_render_generation == 43u &&
+                policy_snapshot.ta_fifo.frame_packets == 5u &&
+                policy_snapshot.ta_fifo.pending_intensity_header &&
+                policy_snapshot.yuv.input == std::vector<std::uint8_t>({1u, 2u, 3u}) &&
+                policy_snapshot.yuv.frame_macroblock == 4u &&
+                policy_snapshot.renderer.next_render_generation == 43u &&
+                policy_snapshot.renderer.last_render_generation == 42u,
+            "Frischer PVR-Produktepoch entfernt Geraetefortsetzung oder behaelt Evidence.");
+
     std::cout << "KR-2801 PVR-Registerminimum erfolgreich.\n";
 }

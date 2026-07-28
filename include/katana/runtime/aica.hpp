@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/memory.hpp"
+#include "katana/runtime/observation_restore_policy.hpp"
 #include "katana/runtime/scheduler.hpp"
 
 #include <array>
@@ -356,6 +357,12 @@ struct DreamcastAicaStateSnapshot {
     const AicaRegisterFile& registers,
     const AicaRtc& rtc,
     const AicaExecutionController& execution);
+// Normalizes only run-local host observations in a detached capture. Guest
+// registers, decoder phase, RTC, timers, interrupts and execution continuation
+// remain untouched.
+void normalize_dreamcast_aica_observations_for_restore(
+    DreamcastAicaStateSnapshot& state,
+    ObservationRestorePolicy policy);
 void validate_dreamcast_aica_state_restore(
     const AicaRegisterFile& registers,
     const AicaRtc& rtc,
