@@ -4006,6 +4006,26 @@ int run_test(const int argc, char* argv[]) {
                     .find("guest-cycle-budget-reached-milestone-missed") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("const bool product_budget_requested =") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("const bool requested_budget_complete =") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("const bool successful_product_run =") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("requested_budget_complete &&\n"
+                          "                  comparable_product_gate") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("? 1 : successful_product_run\n"
+                          "                    ? 0") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("early-exit-before-requested-budget") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("KATANA_BRINGUP_RUN") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("KATANA_STATIC_AOT_ESCAPE_STATS") !=
