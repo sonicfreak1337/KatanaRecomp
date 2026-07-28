@@ -319,14 +319,26 @@ int main() {
         bytes[0x27u] = 0x65u; // mov.l @r15+,r5 (delay)
         put_u32(0x30u, 0x40u);
 
-        bytes[0x40u] = 0x5Cu;
-        bytes[0x41u] = 0xE2u; // mov #0x5c,r2 (proven non-stack destination)
-        bytes[0x42u] = 0x52u;
-        bytes[0x43u] = 0x22u; // mov.l r5,@r2
-        bytes[0x44u] = 0x0Bu;
-        bytes[0x45u] = 0x00u; // rts
-        bytes[0x46u] = 0x09u;
-        bytes[0x47u] = 0x00u; // nop (delay)
+        bytes[0x40u] = 0xF0u;
+        bytes[0x41u] = 0xE0u; // mov #-16,r0 (runtime frame size)
+        bytes[0x42u] = 0x0Cu;
+        bytes[0x43u] = 0x3Fu; // add r0,r15
+        bytes[0x44u] = 0x51u;
+        bytes[0x45u] = 0x1Fu; // mov.l r5,@(4,r15)
+        bytes[0x46u] = 0x00u;
+        bytes[0x47u] = 0xE5u; // mov #0,r5
+        bytes[0x48u] = 0xF1u;
+        bytes[0x49u] = 0x53u; // mov.l @(4,r15),r3
+        bytes[0x4Au] = 0x62u;
+        bytes[0x4Bu] = 0x62u; // mov.l @r6,r2 (runtime object)
+        bytes[0x4Cu] = 0x32u;
+        bytes[0x4Du] = 0x22u; // mov.l r3,@r2
+        bytes[0x4Eu] = 0x10u;
+        bytes[0x4Fu] = 0x7Fu; // add #16,r15
+        bytes[0x50u] = 0x0Bu;
+        bytes[0x51u] = 0x00u; // rts
+        bytes[0x52u] = 0x09u;
+        bytes[0x53u] = 0x00u; // nop (delay)
 
         bytes[0x70u] = 0x06u;
         bytes[0x71u] = 0xA0u; // bra 0x80
