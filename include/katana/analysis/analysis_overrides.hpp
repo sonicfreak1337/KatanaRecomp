@@ -14,6 +14,9 @@ enum class AnalysisDirectiveMode : std::uint8_t { Override, Hint };
 struct FunctionOverride {
     std::uint32_t address = 0u;
     std::size_t line = 0u;
+    // Zero preserves the historical entry-only directive. A non-zero even
+    // size is an exact, committed function interval beginning at address.
+    std::uint32_t size = 0u;
 };
 
 struct JumpOverride {

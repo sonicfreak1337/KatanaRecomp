@@ -13,7 +13,9 @@ katana-recomp port-executable `
   .\private\game-boot\boot.katana-executable `
   --output .\private\game-port `
   --target-name game `
-  --console-profile europe-pal
+  --console-profile europe-pal `
+  --game-project .\private\game-project.katana-game-project `
+  --game-entry-handoff .\private\game-boot\game-entry.katana-handoff
 ```
 
 `boot.katana-executable` bindet Projekt-, Content- und Bootbyteidentitaet. Die
@@ -64,6 +66,17 @@ hashgebundenen Titeladressen, Symbole und Hooks ueber
 `PortExportOptions::game_project` einbringen; diese Daten werden dadurch nicht
 Teil des generischen Katana-Kerns. Die Originaldateien werden weder veraendert
 noch geloescht.
+
+Fuer den executable-first CLI-Pfad transportiert
+`--game-project <datei.katana-game-project>` ein `GameProjectArtifact`
+Format 1. Es bindet Identitaet, exakte Funktionsgrenzen, Jump- und
+Callbacktabellen, Runtime-AOT-Templates, Symbole, Codeidentitaeten und
+optionale Bootkonfiguration durch Payload- und Gesamtartefakt-SHA-256. Native
+Hooks und private Handoffprovider werden nicht serialisiert. Die
+vollstaendige Definition steuert Analyse und AOT; ohne native Hooks bindet der
+generierte Produktport nur eine reduzierte Runtimeidentitaet samt
+Bootkonfiguration und optionalem `--game-entry-handoff`. Beide
+Artefaktidentitaeten sind Teil des Whole-Export-Schluessels.
 
 `--console-profile` waehlt die nachgebildete Konsolenkonfiguration explizit:
 `japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`. Ohne Option gilt

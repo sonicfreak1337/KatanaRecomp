@@ -1744,6 +1744,63 @@ int main() {
     }
     require(table_call_issues.empty(), "Call-Tabellen-IR ist laut Verifier inkonsistent.");
 
+    auto exact_function_image = code_image(
+        {0x0Bu, 0x00u, // root rts
+         0x09u, 0x00u, // root delay slot
+         0x09u, 0x00u, // unreachable padding
+         0x09u, 0x00u, // unreachable padding
+         0x09u, 0x00u, // exact external function
+         0x09u, 0x00u, // exact external function
+         0x0Bu, 0x00u, // adjacent bytes must not be absorbed
+         0x09u, 0x00u});
+    katana::analysis::AnalysisOverrides exact_function_override;
+    exact_function_override.source_path = "exact-function.txt";
+    exact_function_override.functions.push_back({8u, 21u, 4u});
+    const auto exact_function = katana::analysis::analyze_control_flow(
+        exact_function_image, &exact_function_override);
+    const auto* exact_candidate = find_function(exact_function, 8u);
+    const auto exact_program = katana::ir::lower_program(exact_function);
+    const auto exact_ir =
+        std::find_if(exact_program.begin(),
+                     exact_program.end(),
+                     [](const auto& function) {
+                         return function.entry_address == 8u;
+                     });
+    require(exact_candidate != nullptr &&
+                exact_candidate->size == 4u &&
+                has_instruction(exact_function, 8u) &&
+                has_instruction(exact_function, 10u) &&
+                !has_instruction(exact_function, 12u) &&
+                exact_ir != exact_program.end() &&
+                exact_ir->blocks.size() == 1u &&
+                exact_ir->blocks.front().instructions.size() == 2u &&
+                exact_ir->blocks.front().instructions.front().source_address ==
+                    8u &&
+                exact_ir->blocks.front().instructions.back().source_address ==
+                    10u &&
+                katana::ir::verify_program(exact_program).empty() &&
+                katana::analysis::format_control_flow_analysis_json(
+                    exact_function)
+                        .find("\"address\":\"0x00000008\","
+                              "\"confidence\":\"certain\","
+                              "\"evidence\":\"forced-override\","
+                              "\"size\":4") != std::string::npos,
+            "Explizite Funktionsgroesse erreicht Analyzer, CFG und natives "
+            "AOT-Seeding nicht exakt.");
+
+    katana::analysis::AnalysisOverrides exact_delay_slot_override;
+    exact_delay_slot_override.source_path = "exact-delay-slot.txt";
+    exact_delay_slot_override.functions.push_back({2u, 22u, 2u});
+    const auto exact_delay_slot_error = failure([&] {
+        static_cast<void>(katana::analysis::analyze_control_flow(
+            exact_function_image, &exact_delay_slot_override));
+    });
+    require(exact_delay_slot_error.find(
+                "Explizite Funktionsgrenze beginnt in einem Delay Slot.") !=
+                std::string::npos,
+            "Explizite Funktionsgrenze auf einem Delay Slot wurde nicht "
+            "fail-closed abgewiesen.");
+
     katana::analysis::AnalysisOverrides bad_dispatch;
     bad_dispatch.source_path = "bad-overrides.txt";
     bad_dispatch.jump_tables.push_back({4u, 0x100u, 1u, 11u});
@@ -1774,7 +1831,7 @@ int main() {
     zero_fill.add_entry_point(0u);
     katana::analysis::AnalysisOverrides zero_override;
     zero_override.source_path = "zero-overrides.txt";
-    zero_override.functions.push_back({8u, 4u});
+    zero_override.functions.push_back({0u, 4u, 8u});
     error = failure([&] {
         static_cast<void>(katana::analysis::analyze_control_flow(zero_fill, &zero_override));
     });

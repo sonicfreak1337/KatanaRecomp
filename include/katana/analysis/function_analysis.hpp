@@ -9,9 +9,16 @@
 
 namespace katana::analysis {
 
+struct FunctionBoundary {
+    std::uint32_t entry_address = 0u;
+    // Zero denotes an inferred entry with no authoritative upper bound.
+    std::uint32_t size = 0u;
+};
+
 struct FunctionInfo {
     std::size_t id = 0;
     std::uint32_t entry_address = 0;
+    std::uint32_t size = 0u;
 
     std::vector<std::uint32_t> block_addresses;
     std::vector<std::uint32_t> direct_callees;
@@ -27,8 +34,18 @@ discover_functions(std::span<const katana::sh4::DisassemblyLine> lines,
                    std::span<const ResolvedControlFlowEdge> resolved_edges = {});
 
 [[nodiscard]] std::vector<FunctionInfo>
+discover_functions(std::span<const katana::sh4::DisassemblyLine> lines,
+                   std::span<const FunctionBoundary> seed_boundaries,
+                   std::span<const ResolvedControlFlowEdge> resolved_edges = {});
+
+[[nodiscard]] std::vector<FunctionInfo>
 discover_functions_from_blocks(std::span<const BasicBlock> blocks,
                                std::span<const std::uint32_t> seed_entries,
+                               std::span<const ResolvedControlFlowEdge> resolved_edges = {});
+
+[[nodiscard]] std::vector<FunctionInfo>
+discover_functions_from_blocks(std::span<const BasicBlock> blocks,
+                               std::span<const FunctionBoundary> seed_boundaries,
                                std::span<const ResolvedControlFlowEdge> resolved_edges = {});
 
 } // namespace katana::analysis

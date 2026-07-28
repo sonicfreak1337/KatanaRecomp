@@ -41,6 +41,7 @@ katana-recomp port-executable `
   --output .\private\ports\game-direct `
   --target-name GameDirect `
   --console-profile europe-pal `
+  --game-project .\private\game-project.katana-game-project `
   --game-entry-handoff .\private\boot-artifact\game-entry.katana-handoff
 ```
 
@@ -61,8 +62,9 @@ identitaetsgebundenen Whole-Export-Cache. Bei einem verifizierten Treffer
 werden Kontrollflussanalyse, IR-Lowering, Partitionsemission und
 Metadatenerzeugung uebersprungen; Configure, reales Spieltarget, Packaging und
 Publish laufen weiterhin. Der Schluessel bindet Artefakt, Zielname,
-Diagnosemodus, Konsolenprofil, Spielprojektdefinition,
-Game-Entry-Artefaktidentitaet sowie Tool-, Runtime-, Backend-, Port-,
+Diagnosemodus, Konsolenprofil, Spielprojektdefinition und exakte
+Spielprojekt-Artefaktidentitaet, Game-Entry-Artefaktidentitaet sowie Tool-,
+Runtime-, Backend-, Port-,
 Partitions-, Metadaten- und AOT-Profilversionen. Vor Wiederverwendung werden
 der erzeugte Quellbaum und die Installationsrecipe erneut geprueft.
 
@@ -77,8 +79,10 @@ Schluessel und invalidiert damit aeltere
 Whole-Export-Treffer, statt sie mit einer inkompatiblen Runtimegrenze
 wiederzuverwenden.
 
-Der aktuell gemessene warme Direct-Export mit unveraenderter Analyse dauerte
-5,3 Sekunden.
+Der aktuell gemessene v28-Gesamtexport mit unveraenderter Analyse dauerte
+4,209083 Sekunden; Analyse/IR, Metadaten und alle 42 AOT-Partitionen trafen
+den Cache. Der anschliessende unveraenderte Hostbuild dauerte 0,219272
+Sekunden.
 
 ## Zwei Produktpfade
 
@@ -121,10 +125,21 @@ save-erhaltende `ProductHandoff` aus `KR-4970` sind noch nicht abgeschlossen.
 
 ### Privates Handoff binden
 
-Das lokale Handoff-Artefakt wird nicht in das Portprojekt kopiert. Der Export
-bindet es mit `--game-entry-handoff` an die Boot-Executable und nimmt seine
-Identitaet in den Whole-Export-Cache auf. Zum Lauf erhaelt der erzeugte
-artifact-only Produktport den lokalen Pfad explizit:
+Das externe `GameProjectArtifact` Format 1 besitzt alle Strings und Arrays
+seiner rein deklarativen Definition. Es serialisiert exakte Funktionsgrenzen,
+Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole, Codeidentitaeten und
+Bootkonfiguration mit Payload- und Gesamtartefakt-SHA-256. Native Overrides,
+Mid-Function-Hooks und private Handoffprovider enthalten Prozesszeiger oder
+separat besessene Daten und werden deshalb fail-closed nicht serialisiert.
+
+Der Export bindet `--game-project` und `--game-entry-handoff` gemeinsam an
+die Boot-Executable und nimmt beide exakten Artefaktidentitaeten in den
+Whole-Export-Cache auf. Die vollstaendige Spielprojektdefinition steuert
+Analyse, CFG, IR und AOT. Wenn keine nativen Hooks eine externe
+Runtime-Registrierung erfordern, registriert der erzeugte Port lokal nur die
+reduzierte Identitaets-, Boot- und Handoffdefinition. Die privaten Artefakte
+werden nicht in das Portprojekt kopiert. Zum Lauf erhaelt der Produktport den
+Handoffpfad explizit:
 
 ```powershell
 $env:KATANA_GAME_ENTRY_HANDOFF_PRODUCT = `
@@ -215,13 +230,20 @@ Der terminal gemeldete Direct-Wert von 119,64 MHz verwendet den absoluten
 Schedulerstand und ist nicht vergleichbar. Die 16.033.676 Dispatches ergeben
 11,52 Zyklen je ausgefuehrtem Post-Entry-Dispatch.
 
-Der aktuelle v26-DirectBoot installiert weiterhin die private Originaldisc
+Der aktuelle v28-DirectBoot installiert weiterhin die private Originaldisc
 ueber den Produktinstaller, startet danach aber executable-first mit dem
-CompletePlatform-Handoff. Die korrigierten G2-Vertraege schliessen Kanal 0
-ab und verlassen den alten ADXT-/mwSnd-Poll. Bei Gastzyklus `552.903.647`
-folgt die neue statische AOT-Coverageluecke
-`0x8C602B0A -> 0x8C010F22`: interner Materializergrund
-`AotTemplateMismatch` (14), kein belegter Bytewechsel. Das Ziel muss
-hashgebunden aus dem externen Spielprojekt in Analyse und AOT gelangen.
-Zwei technische Direct-Frames sind vorhanden, die reale Fensteraufnahme
-bleibt jedoch schwarz.
+CompletePlatform-Handoff und dem externen Spielprojektartefakt. Die exakte
+hashgebundene Funktionsgrenze gelangt durch Analyzer, CFG, IR und AOT; der
+Produktlauf passiert damit den bisherigen KR-4971-Blocker. Er endet bei
+Gastzyklus `553.990.562`, nach `138.757.292` Post-Entry-Zyklen und
+`10.079.932` Zentraldispatches. Das sind `+1.086.915` Gastzyklen gegen v26.
+Die tatsaechliche Post-Entry-Arbeit ergibt in 5,275792 Sekunden 26,3008 MHz
+bis zum Fehler gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`,
+nicht aber ein 600-Millionen-Gate.
+
+Der neue erste Blocker KR-4972 ist
+`0x8C11088C -> 0x8C64784E`. Das unveraenderte Ziel springt in einen
+gemeinsamen Codepfad; die richtige Callback-/Shared-Tail-/Thunk-Modellierung
+und exakte Grenze muessen bewiesen werden. Der Fehler wird korrekt als
+`aot-template-mismatch` klassifiziert. Zwei technische Direct-Frames sind
+vorhanden, die sechzehn realen Fensteraufnahmen bleiben jedoch schwarz.

@@ -43,8 +43,8 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Roadmapbasis dieser Runde:
 
 ```text
-3714e26e117c609980b2b9be6ea0b85c2484c2dd
-Refocus v0.49 plan on sound completion and product handoff
+8e5ab3145fb5fcafc056fd87025baf3497085342
+Distinguish AOT template mismatches
 ```
 
 Die historische PAL-DirectBoot-Baseline ohne externes `GameEntryHandoff`
@@ -168,7 +168,92 @@ weitere `10.668.506.093` Bytes freigegeben; v26, sein installierter
 Disc-Cache, der aktuelle Workspace und die private Originalquelle blieben
 erhalten.
 
-## KR-4965-Ergebnis und neuer erster Produktblocker
+### DirectBoot-v27-/v28-Produktevidenz
+
+Der v27-MSVC-Gateport verwendet erstmals ein externes, serialisiertes
+`GameProjectArtifact` Format 1 gemeinsam mit dem privaten
+`GameEntryHandoff`. Das private, vollstaendig hashgebundene Sonic-Artefakt
+traegt die Artefaktidentitaet
+`sha256:9d4edff0270275f0b4931b733b2bd03ef330893f79d4728d6580adaf1107249f`
+und seedet ausschliesslich die im v26-Produktlauf beobachtete exakte
+Funktionsgrenze `0x8C010F22 + 0x18`. Diese Adresse liegt nur im externen
+privaten Spielprojekt, nicht im generischen Katana-Kern.
+
+Der Export erzeugte `1.946` Funktionen in `42` Partitionen. Der echte
+Produktinstaller validierte erneut die private PAL-GDI (`3` Tracks,
+`521.461` Sektoren); Repository und Portpaket enthalten weiterhin
+`0` Retailsektoren. Nach zwei Reviewkorrekturen akzeptiert v28 sowohl die
+reduzierte als auch die exakt passende vollstaendige externe
+Runtime-Definition; eine exakte Funktionsgrenze auf einem Delay Slot wird
+fail-closed abgewiesen. Der finale reale v28-CompletePlatform-Lauf ergab:
+
+```text
+Restore-Zyklus:                    415.233.270
+CompletePlatform-Apply:            22 Geraete, 5 Events
+Endzyklus am typisierten Fehler:   553.990.562
+Post-Entry-Zyklen:                 138.757.292
+Fortschritt gegen v26:             +1.086.915 Zyklen
+externe Walltime bis Fehler:       5,275792 s
+Post-Entry-Rate bis Fehler:         26,3008 MHz
+zentrale Dispatches:               10.079.932
+Dispatches gegen v26:              +123.498
+G2-Kanaele:                        alle inaktiv
+GD-ROM-Kommandos:                  72
+AICA-Audiopuffer:                  165
+PVR-Gastframes / Direct-Frames:    2 / 2
+veraenderte Direct-Pixel:          302.287
+Hostframes / sichtbarer Screen:    0 / keiner
+terminales Dispatchlabel:          aot-template-mismatch
+Materializergrund:                 AotTemplateMismatch (14)
+Callsite / Ziel:                   0x8C11088C / 0x8C64784E
+```
+
+Das alte Ziel `0x8C010F22` wird damit statisch ausgefuehrt; KR-4971 ist
+abgeschlossen. Der Lauf endet an einem neuen, engeren AOT-Coverageblocker und
+erreicht deshalb weder 600 Millionen Gesamt- noch 600 Millionen
+Post-Entry-Zyklen. Die tatsaechliche Post-Entry-Arbeit ergibt bis zum Fehler
+`26,3008 MHz` gegen `23,9578 MHz` bei v26 und damit provisorisch `+9,78 %`
+bei identischem Restore. Dieser Fehler-zu-Fehler-Vergleich ist keine
+600-Millionen-Performanceabnahme.
+Sechzehn reale v28-Fensteraufnahmen blieben schwarz; die technische PVR-Evidenz
+blieb erhalten, ein sichtbarer Hostframe ist nicht belegt.
+
+Der unveraenderte warme v28-Direct-Hostbuild dauerte `0,219272 s` gegen
+`0,239825 s` bei v26. Der v27-Warmexport dauerte `4,263838 s`, v28 bestaetigt
+`4,209083 s`; Analyse/IR und Metadaten trafen den Cache,
+ebenso alle `42` AOT-Partitionen. Die v28-EXE ist `52.446.208` Bytes gross
+gegen `52.406.784` Bytes bei v26 und besitzt SHA-256
+`bdb20c5e8738cf4e5a2a21ed6f667384d44f87e3411506da27c0487f0f2cd7d8`.
+Diese Buildwerte sind belastbar; wegen des vorzeitigen funktionalen Fehlers
+sind sie kein aktueller MSVC-/clang-cl-Performancevergleich.
+
+Nach dem nutzbaren v27-Nachfolger wurden v26 samt Workdir, die alten
+v22-/v24-Referenzports und zwei zugehoerige Workdirs entfernt: sechs Targets,
+exakt `10.166.434.310` Bytes. v27, sein
+`.katana-port-work-b9a041bd0a2a`, Bootartefakt, Handoff, private GDI und
+installierter Disc-Cache blieben erhalten. Die fruehere Aussage, v26 sei beim
+v23-bis-v25-Cleanup bewahrt worden, beschreibt damit nur noch den damaligen
+historischen Zwischenstand.
+
+Nach der finalen v28-Abnahme wurden auch der ersetzte v27-Port und sein
+Workspace gezielt entfernt. Das gab weitere `3.249.852.517` Bytes frei.
+Erhalten bleiben ausschliesslich v28,
+`.katana-port-work-e0e2126c4352`, Bootartefakt, Handoff, private GDI und
+installierter Disc-Cache; die Entfernung ist nicht rueckgaengig.
+
+`GameProjectArtifact` Format 1 besitzt eine Payload-SHA-256 und eine
+Artefakt-SHA-256, kann durch die Runtime-API geschrieben und geladen werden
+und bindet die vollstaendige deklarative Definition an den Export.
+Native Callback-/Hookzeiger und der private Handoff-Provider werden bewusst
+nicht serialisiert. Der Export konsumiert Funktions-, Tabellen-, Symbol-,
+Template- und Codeidentitaetsmetadaten vollstaendig; der erzeugte Port bindet
+zur Laufzeit nur den reduzierten Identitaets-, Boot- und Handoffvertrag, wenn
+keine nativen Hooks eine vollstaendige externe Runtime-Registrierung
+erfordern. `GameProjectFunctionBoundary::size` erreicht jetzt als exakte
+Grenze Analyzer, CFG, IR und AOT; der Analyzer-ABI-Vertrag steigt deshalb von
+2 auf 3.
+
+## KR-4965-/KR-4971-Ergebnis und neuer erster Produktblocker
 
 Der fruehere ADXT-/mwSnd-Sound-Completion-Poll war:
 
@@ -201,18 +286,24 @@ Flagwechsel auf `1` wurde nicht separat instrumentiert; KR-4965 ist gemaess
 seiner ausdruecklichen Alternativabnahme abgeschlossen, weil ein neuer,
 engerer allgemeiner Blocker belegt ist.
 
-Der **erste aktive Produktblocker** ist jetzt KR-4971: Ein indirekter Call
-bei `0x8C602B0A` erreicht das statische Spielziel `0x8C010F22`. Der
-Materializer meldet intern `AotTemplateMismatch` (Fehler 14), weil weder ein
-generierter Block noch ein passendes Runtime-AOT-Template existiert. Die
-terminale Dispatchdiagnose kollabiert diesen Fall derzeit irrefuehrend zu
-`byte-identity-mismatch`. Die Zielbytes liegen unveraendert im initialen
-Boot-Executable; ein Bytewechsel ist nicht belegt.
+KR-4971 fuehrt das v26-Ziel ueber die exakte, hashgebundene externe
+Funktionsgrenze statisch in Analyse und AOT. Die getrennte terminale Diagnose
+meldet `AotTemplateMismatch` nun korrekt als `aot-template-mismatch`, statt
+ihn mit einem echten Byteidentitaetsfehler zusammenzufassen. Der v28-Lauf
+passiert das alte Ziel und belegt einen neuen, engeren allgemeinen Blocker.
 
-Die Reparatur muss das Ziel ueber hash-/bytegebundene Metadaten des externen
-Spielprojekts statisch in Analyse und AOT seeden und die Diagnoseklassen
-trennen. Interpreter, JIT, Runtime-Dekodierung und Emulationsfallback bleiben
-verboten.
+Der **erste aktive Produktblocker** ist jetzt KR-4972: Ein indirekter Call
+bei `0x8C11088C` erreicht das unveraenderte Boot-Executable-Ziel
+`0x8C64784E`, fuer das weiterhin kein passendes statisches AOT vorliegt. Der
+Zielcode beginnt mit einem `BRA` auf den gemeinsamen Zielpfad
+`0x8C6478C2`; das spricht fuer einen Callback-/Shared-Tail-/Thunk-Vertrag.
+Die exakte finale Funktionsgrenze und die richtige allgemeine Modellierung
+sind noch nicht bewiesen und duerfen nicht geraten werden.
+
+KR-4972 muss den gemeinsamen Zielvertrag aus dem unveraenderten Executable
+analysieren und ueber hashgebundene Metadaten des externen Spielprojekts
+statisch abdecken. Interpreter, JIT, Runtime-Dekodierung und
+Emulationsfallback bleiben verboten.
 
 ## Verbleibende CompletePlatform-Luecken
 
@@ -238,9 +329,12 @@ Die Produktabnahme bleibt dennoch offen:
 - KR-4968 muss ausserdem einen bereits restaurierten aktiven
   Hardware-Request-G2-Kanal ohne rehydriertes Completionevent explizit
   nach dem passiven Apply abgleichen; die aktuelle Sonic-DMA wird erst nach
-  dem Entry armiert und ist durch v26 abgedeckt.
+  dem Entry armiert und ist durch v26/v28 abgedeckt.
 - KR-4962 bleibt bis zur belegten NativeDisc-/DirectBoot-Paritaet und einem
   ersten DirectBoot-Frame offen.
+- KR-4972 muss den neuen hashgebundenen Shared-Callback-/Thunk-AOT-
+  Coverageblocker schliessen, bevor ein relatives Langzeitgate aussagekraeftig
+  laufen kann.
 
 ## Verbindlicher v0.49-Kritischer Pfad
 
@@ -249,10 +343,13 @@ KR-4965 ADXT/mwSnd-Sound-Completion bis zum Writer schliessen
   [abgeschlossen ueber engeren allgemeinen Blocker]
   |
   +--> KR-4971 RuntimeOnly-AOT-Coverage fuer statisch identifizierbares
-         Ziel herstellen [FIRST, offen]
+         Ziel herstellen [abgeschlossen; altes Ziel statisch emittiert]
          |
-         +--> KR-4966 Post-Entry-Produktgate und erforderliche
-                Meilensteine [offen]
+         +--> KR-4972 Hashgebundene Shared-Callback-/Thunk-AOT-Coverage
+                herstellen [FIRST, offen]
+                |
+                +--> KR-4966 Post-Entry-Produktgate und erforderliche
+                       Meilensteine [offen]
   |
   +--> KR-4967 Atomarer CompletePlatform-Capture-/Apply-Koordinator
          [teilweise: Produkt-Apply belegt; noexcept-Commit/Digests offen]
@@ -309,9 +406,10 @@ Akzeptanz:
 - Kein Hostpatch schreibt das Flag direkt.
 - Keine private Adresse wird in generischen Produktcode eingebaut.
 
-v26 belegt den Abschluss der G2-DMA und verlaesst den alten Poll. Der Lauf
-endet danach reproduzierbar an der engeren allgemeinen RuntimeOnly-AOT-
-Coverageluecke aus KR-4971. Ein direkter Writer-/Flagbeweis bleibt
+v26 und v28 belegen den Abschluss der G2-DMA und verlassen den alten Poll.
+v28 passiert zusaetzlich die alte RuntimeOnly-AOT-Coverageluecke aus KR-4971
+und endet am engeren Shared-Callback-/Thunk-Blocker aus KR-4972. Ein direkter
+Writer-/Flagbeweis bleibt
 eine diagnostische Zusatzinformation, ist aber nicht mehr der erste
 Produktblocker.
 
@@ -369,9 +467,9 @@ target_cycle = restored_game_entry_cycle + requested_elapsed_guest_cycles
 
 Der generierte DirectBoot-Gatepfad verwendet weiterhin ein absolutes
 Schedulermaximum von `600.000.000`. v24 fuehrte dadurch nach dem Restore nur
-`184.766.730` Gastzyklen aus. v26 erreicht dieses falsche Maximum wegen des
-neuen typisierten RuntimeOnly-Fehlers bereits nicht und endet nach
-`137.670.377` Post-Entry-Zyklen. KR-4966 muss mindestens Startzyklus,
+`184.766.730` Gastzyklen aus. v28 erreicht dieses falsche Maximum wegen des
+neuen typisierten AOT-Coveragefehlers bereits nicht und endet nach
+`138.757.292` Post-Entry-Zyklen. KR-4966 muss mindestens Startzyklus,
 post-entry Gastzyklen, Hostzeit und daraus berechnete effektive Gast-MHz
 berichten; ein vorzeitiger typisierter Fehler darf nicht als Gateerfolg
 erscheinen.
@@ -399,7 +497,8 @@ Die Performancearbeit erfolgt erst nach einem stabilen Bootmeilenstein und verwe
 
 Schwerpunkte:
 
-- explizite Funktionsgroessen wirklich an den Analyzer weitergeben
+- die jetzt end-to-end transportierten expliziten Funktionsgroessen auf
+  weitere bewiesene externe Grenzen anwenden
 - `NativeEntrySafe`, `DirectCallEligible`, `CompletionDeferrable` und `RequiresSafepointBeforeEntry` trennen
 - bekannte Calls und Returns innerhalb nativer Funktionsregionen halten
 - IR-/Liveness-basierte Registerlokalisierung statt C++-Stringersetzung
@@ -425,6 +524,24 @@ Ergebnis:
 - engerer allgemeiner RuntimeOnly-AOT-Coverageblocker belegt
 - zwei technische Direct-Frames, aber kein sichtbarer Hostframe
 - keine Aussage ueber vollstaendigen Handoff oder Performancegate
+
+### Produktlauf A2 - nach KR-4971 [ausgefuehrt]
+
+Der finale v28-MSVC-Gateport wurde aus dem Boot-Executable-Artefakt, dem privaten
+`GameProjectArtifact` und dem CompletePlatform-Handoff erzeugt, ueber den
+echten Installer mit der PAL-GDI installiert und bis zum naechsten typisierten
+Ergebnis ausgefuehrt.
+
+Ergebnis:
+
+- das alte statische Ziel `0x8C010F22` ist AOT-abgedeckt und wird passiert
+- `+1.086.915` Gastzyklen Fortschritt gegen v26
+- `5,275792 s` und `26,3008 MHz` Post-Entry-Rate bis zum Fehler gegen
+  `5,746371 s` und `23,9578 MHz` bei v26 (`+9,78 %`)
+- Sound-/G2- und technische PVR-Evidenz bleiben erhalten
+- neuer erster Blocker `0x8C11088C -> 0x8C64784E` aus KR-4972
+- 16 reale Fensteraufnahmen bleiben schwarz
+- kein 600-Millionen-Performanceergebnis
 
 ### Produktlauf B - nach KR-4967 bis KR-4970
 

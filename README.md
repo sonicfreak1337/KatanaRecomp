@@ -88,6 +88,7 @@ $env:KATANA_PORT_CODEGEN_JOBS = '8'
   --output D:\private\ports\game-direct `
   --target-name GameDirect `
   --console-profile europe-pal `
+  --game-project D:\private\game-project.katana-game-project `
   --game-entry-handoff D:\private\game-boot\game-entry.katana-handoff
 ```
 
@@ -115,10 +116,19 @@ kanonischen Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die
 exakte typisierte Scheduler-Timeline. Capture und Apply sind im realen
 Produktport belegt.
 
+`GameProjectArtifact` Format 1 transportiert die deklarativen,
+hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
+Funktionsgrenzen, Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole,
+Codeidentitaeten und Direct-Boot-Konfiguration. Native Hookzeiger und private
+Handoff-Payloads werden nicht serialisiert. Die vollstaendige Definition
+steuert Analyse und AOT; ohne native Hooks bindet der erzeugte Port zur
+Laufzeit nur Identitaet, Bootkonfiguration und Handoff.
+
 Fuer den schmalen artifact-only Entwicklungsweg bindet
-`port-executable --game-entry-handoff` das private Artefakt bereits beim
-Export an Executable-, Konsolen- und Descriptoridentitaet. Das Artefakt wird
-nicht in den Port kopiert. Der erzeugte Produktport laedt es lokal ueber
+`port-executable --game-project ... --game-entry-handoff ...` beide privaten
+Artefakte bereits beim Export an Executable-, Konsolen-, Projekt- und
+Descriptoridentitaet. Die Artefakte werden nicht in den Port kopiert. Der
+erzeugte Produktport laedt das Handoff lokal ueber
 `KATANA_GAME_ENTRY_HANDOFF_PRODUCT`, prueft dieselbe Bindung erneut und wendet
 den vollstaendigen Plattformzustand vor dem ersten Spielblock an.
 `NativeDiscBoot` kompiliert weiterhin den disc-eigenen Bootstrap und bleibt
@@ -206,24 +216,32 @@ Geraeteproblem:
 Der Direct-Port meldete aus dem absoluten Zaehler 119,64 MHz; dieser Wert ist
 bis `KR-4966` kein gueltiger Performancevergleich. Seine 16.033.676
 Dispatches entsprechen 11,52 Post-Entry-Gastzyklen pro Zentraldispatch und
-belegen noch keinen Hotpathgewinn. Ein warmer Direct-Export mit
-unveraenderter Analyse dauerte 5,3 Sekunden.
+belegen noch keinen Hotpathgewinn.
 
-Der aktuelle v26-DirectBoot behebt die zwei allgemeinen G2-Ursachen des
-frueheren ADXT-/mwSnd-Waits: korrekte `SB_G2APRO`-Grenzen und das
-AICA-Request-Level fuer `ADTSEL=5`. G2-Kanal 0 endet mit `active=0`,
-`remaining=0`, und der Gast verlaesst `0x8C666D42`. Danach erreicht er bei
-Gastzyklus `552.903.647` den indirekten Call
-`0x8C602B0A -> 0x8C010F22`. Fuer dieses unveraenderte Ziel im initialen
-Boot-Executable fehlt ein statischer AOT-Eintrag; der interne
-Materializergrund ist `AotTemplateMismatch` (14), auch wenn die derzeitige
-terminale Diagnose ihn irrefuehrend als `byte-identity-mismatch` formatiert.
+Der aktuelle v28-DirectBoot verwendet ein externes,
+hashgebundenes `GameProjectArtifact`. Die darin privat beschriebene exakte
+Funktionsgrenze wird durch Analyzer, CFG, IR und AOT transportiert; dadurch
+passiert der Produktlauf den bisherigen Blocker aus KR-4971. Der echte Lauf
+endet bei Gastzyklus `553.990.562`, also nach `138.757.292`
+Post-Entry-Zyklen und `10.079.932` Zentraldispatches. Gegen v26 sind das
+`+1.086.915` Gastzyklen. Die `138.757.292` tatsaechlichen
+Post-Entry-Zyklen in 5,275792 Sekunden ergeben 26,3008 MHz gegen 23,9578 MHz
+bei v26, also provisorisch `+9,78 %`; das ist wegen des vorzeitigen Fehlers
+keine 600-Millionen-Performanceabnahme.
 
-v26 erzeugt zwei technische PVR-Direct-Frames mit 302.287 geaenderten
-Pixeln. Sechzehn reale Fensteraufnahmen bleiben jedoch schwarz. KR-4971
-schliesst deshalb zuerst die statische AOT-Coverage ueber hashgebundene
-Spielprojektmetadaten. Das 200-MHz-Ziel, das relative Gate und ein sichtbarer
-DirectBoot-Spielbildnachweis bleiben offen.
+Der neue erste Blocker KR-4972 ist
+`0x8C11088C -> 0x8C64784E`. Das unveraenderte Ziel beginnt mit einem Sprung
+auf einen gemeinsamen Codepfad und benoetigt eine bewiesene
+Callback-/Shared-Tail-/Thunk-Modellierung; seine Grenze wird nicht geraten.
+Die terminale Diagnose unterscheidet diesen Fall jetzt korrekt als
+`aot-template-mismatch` von echten Byteidentitaetsfehlern.
+
+Sound-/G2- und technische PVR-Evidenz bleiben erhalten: alle G2-Kanaele sind
+inaktiv, zwei Direct-Frames enthalten 302.287 geaenderte Pixel. Sechzehn
+reale Fensteraufnahmen bleiben schwarz und der Host-Presenter meldet null
+Frames. Der warme Gesamtexport dauerte 4,209083 Sekunden, der unveraenderte
+Hostbuild 0,219272 Sekunden. Das 200-MHz-Ziel, das relative Gate und ein
+sichtbarer DirectBoot-Spielbildnachweis bleiben offen.
 
 ## Diagnose
 

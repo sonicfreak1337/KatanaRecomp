@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <vector>
@@ -404,7 +405,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                << ",\"confidence\":"
                << katana::io::quote_json(analysis_confidence_name(functions[index].confidence))
                << ",\"evidence\":"
-               << katana::io::quote_json(control_flow_evidence_name(functions[index].evidence));
+               << katana::io::quote_json(control_flow_evidence_name(functions[index].evidence))
+               << ",\"size\":" << functions[index].size;
         append_symbol_json(output, "symbol", analysis.symbolic_addresses, functions[index].address);
         output << ",\"origins\":[";
         for (std::size_t origin = 0u; origin < origins.size(); ++origin) {
@@ -422,16 +424,44 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         }
         return left.kind < right.kind;
     });
-    std::vector<std::uint32_t> function_entries;
-    function_entries.reserve(analysis.recursive.functions.size());
+    std::vector<FunctionBoundary> function_boundaries;
+    function_boundaries.reserve(analysis.recursive.functions.size());
+    std::vector<std::uint32_t> block_leaders;
+    block_leaders.reserve(analysis.recursive.functions.size() * 2u);
     for (const auto& function : analysis.recursive.functions)
-        function_entries.push_back(function.address);
-    std::sort(function_entries.begin(), function_entries.end());
-    function_entries.erase(std::unique(function_entries.begin(), function_entries.end()),
-                           function_entries.end());
+        function_boundaries.push_back(
+            {function.address, function.size});
+    std::sort(function_boundaries.begin(),
+              function_boundaries.end(),
+              [](const auto& left, const auto& right) {
+                  return left.entry_address < right.entry_address;
+              });
+    function_boundaries.erase(
+        std::unique(function_boundaries.begin(),
+                    function_boundaries.end(),
+                    [](const auto& left, const auto& right) {
+                        return left.entry_address == right.entry_address;
+                    }),
+        function_boundaries.end());
+    for (const auto& boundary : function_boundaries) {
+        block_leaders.push_back(boundary.entry_address);
+        if (boundary.size != 0u) {
+            const auto end =
+                static_cast<std::uint64_t>(boundary.entry_address) +
+                boundary.size;
+            if (end <= std::numeric_limits<std::uint32_t>::max())
+                block_leaders.push_back(
+                    static_cast<std::uint32_t>(end));
+        }
+    }
     const auto discovered_functions = discover_functions(
-        analysis.recursive.instructions, function_entries, analysis.resolved_edges);
-    const auto basic_blocks = build_basic_blocks(analysis.recursive.instructions);
+        analysis.recursive.instructions,
+        function_boundaries,
+        analysis.resolved_edges);
+    const auto basic_blocks = build_basic_blocks(
+        analysis.recursive.instructions,
+        analysis.resolved_edges,
+        block_leaders);
     output << ",\"indirect_control_flow\":[";
     for (std::size_t index = 0u; index < indirect.size(); ++index) {
         if (index != 0u) output << ',';

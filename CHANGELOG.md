@@ -4,6 +4,32 @@
 
 ### Geaendert
 
+- KR-4971 fuehrt ein besitzendes, hashgebundenes `GameProjectArtifact`
+  Format 1 samt `write()`/`load()` und
+  `port-executable --game-project` ein. Das Artefakt serialisiert nur
+  deklarative externe Spielprojektdaten; native Hooks und private
+  Handoffprovider bleiben ausserhalb. Exakte
+  `GameProjectFunctionBoundary::size`-Werte erreichen jetzt Analyzer, CFG,
+  IR und AOT, weshalb Analyzer-ABI 3 den geaenderten Vertrag versioniert.
+  Export und Laufzeit sind getrennt: Die vollstaendige Definition steuert
+  statische Analyse und Codegen, waehrend ein hookfreier Produktport nur die
+  reduzierte Identitaets-, Boot- und Handoffdefinition registriert. Der
+  reale, mit der privaten PAL-Disc installierte v28-MSVC-Port passiert dadurch
+  das alte Ziel `0x8C010F22` und erreicht Gastzyklus `553.990.562`,
+  `10.079.932` Zentraldispatches und damit `+1.086.915` Gastzyklen gegen v26.
+  138.757.292 Post-Entry-Zyklen in 5,275792 Sekunden entsprechen 26,3008
+  MHz gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`, aber noch
+  keinem 600-Millionen-Gate. Der neue erste Blocker KR-4972 ist
+  `0x8C11088C -> 0x8C64784E`; die getrennte Diagnose meldet den fehlenden
+  statischen Eintrag korrekt als `aot-template-mismatch`. Zwei technische
+  Direct-Frames bleiben erhalten, sechzehn reale Aufnahmen bleiben schwarz.
+  Der warme Gesamtexport dauerte 4,209083 Sekunden, der unveraenderte
+  Hostbuild 0,219272 Sekunden. Nach den nutzbaren Nachfolgern wurden zuerst
+  sechs obsolete Port-/Worktargets mit exakt 10.166.434.310 Bytes und nach
+  der finalen v28-Abnahme v27 samt Workspace mit weiteren 3.249.852.517 Bytes
+  entfernt. v28 akzeptiert neben seiner reduzierten lokalen Runtimebindung
+  auch die exakt passende vollstaendige externe Definition; exakte
+  Funktionsgrenzen auf Delay Slots scheitern fail-closed.
 - KR-4965 schliesst die erste reale ADXT-/mwSnd-Soundkante ohne Titelpatch:
   `SB_G2APRO=0x4659404F` wird mit dem hohen Start- und niedrigen Endbyte
   dekodiert, und ein mit `ADTSEL=5` armierter AICA-G2-Transfer wertet das
@@ -12,11 +38,11 @@
   installierte v26-Port beendet G2-Kanal 0, verlaesst den alten Poll
   `0x8C666D42` und erzeugt zwei technische Direct-Frames mit 302.287
   geaenderten Pixeln. Sechzehn reale Fensteraufnahmen bleiben schwarz.
-  Der neue erste Blocker ist KR-4971 bei
+  Der damalige erste Blocker war KR-4971 bei
   `0x8C602B0A -> 0x8C010F22`: Der interne Materializerfehler
   `AotTemplateMismatch` (14) belegt einen fehlenden statischen AOT-Eintrag,
-  keinen Bytewechsel. Die terminale Dispatchdiagnose bezeichnet diesen Fall
-  derzeit noch irrefuehrend als `byte-identity-mismatch`. Nach dem
+  keinen Bytewechsel. Die terminale Dispatchdiagnose bezeichnete diesen Fall
+  damals noch irrefuehrend als `byte-identity-mismatch`. Nach dem
   verifizierten v26-Nachfolger wurden v23 bis v25 und ihre drei alten
   Exportworkspaces entfernt; das gab weitere 10.668.506.093 Bytes frei,
   ohne v26, Disc-Cache oder private Originalquelle anzutasten.
@@ -34,7 +60,7 @@
   Host-Medienereignisse werden aus dem Capture gefiltert, AICA validiert die
   RTC-Quellzyklen vor der Uebernahme und Codec-Ereignisse werden mit frischen
   Scheduler-IDs rehydriert.
-  Der aktuelle NativeDiscBoot-Lauf erreicht Schedulerzyklus 600.000.000 in
+  Der damalige v24-NativeDiscBoot-Lauf erreicht Schedulerzyklus 600.000.000 in
   6,3161 Sekunden beziehungsweise 94,9954 MHz mit 17.080.114 zentralen
   Dispatches und dem IP.BIN-Frame. Der DirectBoot-Artefaktlauf erreicht
   nach Restore bei 415.233.270 das absolute Maximum 600.000.000. Er fuehrt
@@ -54,9 +80,9 @@
   deterministischen Doppel-Capture sowie die Inspect-/Verify-CLI,
   `KR-4966` fuer das relative Post-Entry-Gate und `KR-4962` fuer den
   normativen Paritaetsnachweis aktiv. Dieser v24-Stand landete noch in
-  beiden Pfaden im ADXT-/mwSnd-Completion-Wait; der aktuelle v26-Fortschritt
-  und KR-4971 sind im vorangehenden Eintrag dokumentiert. Ein Warmexport
-  dauert 5,3 Sekunden. Beim
+  beiden Pfaden im ADXT-/mwSnd-Completion-Wait; der darauf folgende
+  v26-Fortschritt und KR-4971 sind in den vorangehenden Eintraegen
+  dokumentiert. Der v24-Warmexport dauerte 5,3 Sekunden. Beim
   anschliessenden Workspace-Cleanup wurden
   16.467.100.969 Bytes eindeutig regenerierbarer Build-, Publish- und
   Testartefakte entfernt; Retailquellen, aktuelle Referenzen und Nutzerdaten

@@ -2290,7 +2290,26 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         const std::span<const katana::sh4::DisassemblyLine> lines,
                         const std::span<const std::uint32_t> function_entries,
                         const std::span<const ResolvedControlFlowEdge> resolved_edges) {
-    return analyze_function_values(image, lines, function_entries, resolved_edges, {});
+    return analyze_function_values(
+        image,
+        lines,
+        function_entries,
+        resolved_edges,
+        FunctionValueAnalysisProgressCallback{});
+}
+
+FunctionValueAnalysisResult
+analyze_function_values(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const FunctionBoundary> function_boundaries,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges) {
+    return analyze_function_values(
+        image,
+        lines,
+        function_boundaries,
+        resolved_edges,
+        FunctionValueAnalysisProgressCallback{});
 }
 
 FunctionValueAnalysisResult
@@ -2299,6 +2318,21 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         const std::span<const std::uint32_t> function_entries,
                         const std::span<const ResolvedControlFlowEdge> resolved_edges,
                         const FunctionValueAnalysisProgressCallback& progress_callback) {
+    std::vector<FunctionBoundary> boundaries;
+    boundaries.reserve(function_entries.size());
+    for (const auto entry : function_entries)
+        boundaries.push_back({entry, 0u});
+    return analyze_function_values(
+        image, lines, boundaries, resolved_edges, progress_callback);
+}
+
+FunctionValueAnalysisResult
+analyze_function_values(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const FunctionBoundary> function_boundaries,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges,
+    const FunctionValueAnalysisProgressCallback& progress_callback) {
     FunctionValueAnalysisResult result;
     result.iteration_budget = maximum_fixpoint_iterations;
     std::size_t completed_functions = 0u;
@@ -2316,17 +2350,31 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                            pending_count,
                            resolution_count});
     };
-    if (lines.empty() || function_entries.empty() ||
+    if (lines.empty() || function_boundaries.empty() ||
         image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC)
         return result;
-    const auto blocks = build_basic_blocks(lines, resolved_edges, function_entries);
+    std::vector<std::uint32_t> block_leaders;
+    block_leaders.reserve(function_boundaries.size() * 2u);
+    for (const auto& boundary : function_boundaries) {
+        block_leaders.push_back(boundary.entry_address);
+        if (boundary.size != 0u) {
+            const auto end =
+                static_cast<std::uint64_t>(boundary.entry_address) +
+                boundary.size;
+            if (end <= std::numeric_limits<std::uint32_t>::max())
+                block_leaders.push_back(static_cast<std::uint32_t>(end));
+        }
+    }
+    const auto blocks =
+        build_basic_blocks(lines, resolved_edges, block_leaders);
     block_count = blocks.size();
     report_progress("blocks-complete");
     std::unordered_map<std::uint32_t, const BasicBlock*> block_index;
     block_index.reserve(blocks.size());
     for (const auto& block : blocks)
         block_index.emplace(block.start_address, &block);
-    const auto functions = discover_functions_from_blocks(blocks, function_entries, resolved_edges);
+    const auto functions = discover_functions_from_blocks(
+        blocks, function_boundaries, resolved_edges);
     const auto components = strong_components(functions);
     function_count = functions.size();
     result.strongly_connected_components = components.size();

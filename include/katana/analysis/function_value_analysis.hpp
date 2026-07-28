@@ -1,7 +1,7 @@
 #pragma once
 
 #include "katana/analysis/abi.hpp"
-#include "katana/analysis/basic_blocks.hpp"
+#include "katana/analysis/function_analysis.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
@@ -136,7 +136,20 @@ analyze_function_values(const katana::io::ExecutableImage& image,
 [[nodiscard]] FunctionValueAnalysisResult
 analyze_function_values(const katana::io::ExecutableImage& image,
                         std::span<const katana::sh4::DisassemblyLine> lines,
+                        std::span<const FunctionBoundary> function_boundaries,
+                        std::span<const ResolvedControlFlowEdge> resolved_edges = {});
+
+[[nodiscard]] FunctionValueAnalysisResult
+analyze_function_values(const katana::io::ExecutableImage& image,
+                        std::span<const katana::sh4::DisassemblyLine> lines,
                         std::span<const std::uint32_t> function_entries,
+                        std::span<const ResolvedControlFlowEdge> resolved_edges,
+                        const FunctionValueAnalysisProgressCallback& progress_callback);
+
+[[nodiscard]] FunctionValueAnalysisResult
+analyze_function_values(const katana::io::ExecutableImage& image,
+                        std::span<const katana::sh4::DisassemblyLine> lines,
+                        std::span<const FunctionBoundary> function_boundaries,
                         std::span<const ResolvedControlFlowEdge> resolved_edges,
                         const FunctionValueAnalysisProgressCallback& progress_callback);
 

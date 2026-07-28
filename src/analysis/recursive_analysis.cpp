@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -42,6 +43,29 @@ struct PendingAddressHash {
     }
 };
 
+struct ExactFunctionRange {
+    std::uint32_t start = 0u;
+    std::uint64_t end = 0u;
+};
+
+const ExactFunctionRange*
+containing_function_range(
+    const std::span<const ExactFunctionRange> ranges,
+    const std::uint32_t address) noexcept {
+    const auto after = std::upper_bound(
+        ranges.begin(),
+        ranges.end(),
+        address,
+        [](const std::uint32_t candidate,
+           const ExactFunctionRange& range) {
+            return candidate < range.start;
+        });
+    if (after == ranges.begin()) return nullptr;
+    const auto& range = *std::prev(after);
+    return static_cast<std::uint64_t>(address) < range.end ? &range
+                                                           : nullptr;
+}
+
 void enqueue(std::deque<PendingAddress>& pending,
              std::unordered_set<PendingAddress, PendingAddressHash>& scheduled,
              const std::uint32_t address,
@@ -56,9 +80,21 @@ void enqueue_next(std::deque<PendingAddress>& pending,
                   std::unordered_set<PendingAddress, PendingAddressHash>& scheduled,
                   const std::uint32_t address,
                   const std::uint32_t distance,
-                  const ControlFlowEvidence evidence) {
+                  const ControlFlowEvidence evidence,
+                  const std::span<const ExactFunctionRange>
+                      exact_function_ranges) {
     if (address <= std::numeric_limits<std::uint32_t>::max() - distance) {
-        enqueue(pending, scheduled, address + distance, address, std::nullopt, evidence);
+        const auto next = address + distance;
+        const auto* range =
+            containing_function_range(exact_function_ranges, address);
+        if (range == nullptr ||
+            static_cast<std::uint64_t>(next) < range->end)
+            enqueue(pending,
+                    scheduled,
+                    next,
+                    address,
+                    std::nullopt,
+                    evidence);
     }
 }
 
@@ -124,9 +160,16 @@ void add_function_evidence(std::unordered_map<std::uint32_t, FunctionCandidate>&
                            const std::uint32_t address,
                            const FunctionOrigin origin,
                            const AnalysisConfidence confidence,
-                           const ControlFlowEvidence evidence) {
+                           const ControlFlowEvidence evidence,
+                           const std::uint32_t size = 0u) {
     auto& candidate = candidates[address];
     candidate.address = address;
+    if (size != 0u) {
+        if (candidate.size != 0u && candidate.size != size)
+            throw std::invalid_argument(
+                "Explizite Funktionsgrenzen widersprechen sich.");
+        candidate.size = size;
+    }
     if (static_cast<int>(confidence) > static_cast<int>(candidate.confidence)) {
         candidate.confidence = confidence;
     }
@@ -165,6 +208,51 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     std::size_t reused_contexts = 0u;
     std::size_t processed_work_items = 0u;
     scheduled.reserve(baseline_context_count + 4096u);
+    std::vector<ExactFunctionRange> exact_function_ranges;
+    exact_function_ranges.reserve(options.additional_seeds.size());
+    for (const auto& seed : options.additional_seeds) {
+        if (seed.function_size == 0u) continue;
+        if ((seed.function_size & 1u) != 0u)
+            throw std::invalid_argument(
+                "Explizite Funktionsgrenze besitzt eine ungerade Groesse.");
+        const auto validation = validate_committed_code_address(
+            image, seed.address, seed.function_size);
+        if (!validation.valid())
+            throw std::invalid_argument(
+                "Explizite Funktionsgrenze ist nicht vollstaendig "
+                "dekodierbar: " +
+                std::string(
+                    code_address_status_name(validation.status)) +
+                ".");
+        exact_function_ranges.push_back(
+            {validation.resolved_address,
+             static_cast<std::uint64_t>(
+                 validation.resolved_address) +
+                 seed.function_size});
+    }
+    std::sort(
+        exact_function_ranges.begin(),
+        exact_function_ranges.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.start, left.end) <
+                   std::tie(right.start, right.end);
+        });
+    exact_function_ranges.erase(
+        std::unique(
+            exact_function_ranges.begin(),
+            exact_function_ranges.end(),
+            [](const auto& left, const auto& right) {
+                return left.start == right.start && left.end == right.end;
+            }),
+        exact_function_ranges.end());
+    for (std::size_t index = 1u;
+         index < exact_function_ranges.size();
+         ++index) {
+        if (exact_function_ranges[index].start <
+            exact_function_ranges[index - 1u].end)
+            throw std::invalid_argument(
+                "Explizite Funktionsgrenzen ueberlappen.");
+    }
     if (options.baseline != nullptr) {
         diagnostics = options.baseline->diagnostics;
         result_contexts = options.baseline->contextual_instructions;
@@ -234,6 +322,15 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                 ? ControlFlowEvidence::GuardedPartial
                 : seed.evidence;
         enqueue(pending, scheduled, resolved_address, resolved_address, std::nullopt, evidence);
+        if (seed.function_size != 0u) {
+            auto& candidate = function_candidates[resolved_address];
+            candidate.address = resolved_address;
+            if (candidate.size != 0u &&
+                candidate.size != seed.function_size)
+                throw std::invalid_argument(
+                    "Explizite Funktionsgrenzen widersprechen sich.");
+            candidate.size = seed.function_size;
+        }
         for (const auto origin : seed.function_origins) {
             const auto confidence =
                 origin == FunctionOrigin::UserOverride ? AnalysisConfidence::Certain
@@ -243,7 +340,12 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                     ? AnalysisConfidence::Medium
                     : AnalysisConfidence::High;
             add_function_evidence(
-                function_candidates, resolved_address, origin, confidence, evidence);
+                function_candidates,
+                resolved_address,
+                origin,
+                confidence,
+                evidence,
+                seed.function_size);
         }
     }
 
@@ -302,6 +404,13 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         if (line.instruction.has_delay_slot) {
             if (address <= std::numeric_limits<std::uint32_t>::max() - 2u) {
                 const auto delay_address = address + 2u;
+                if (const auto* range = containing_function_range(
+                        exact_function_ranges, address);
+                    range != nullptr &&
+                    static_cast<std::uint64_t>(delay_address) >=
+                        range->end)
+                    throw std::invalid_argument(
+                        "Explizite Funktionsgrenze trennt einen Delay Slot.");
                 enqueue(pending, scheduled, delay_address, address, address, evidence);
                 const auto delay_validation = validate_committed_code_address(image, delay_address);
                 if (!delay_validation.valid()) {
@@ -328,13 +437,23 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
 
         switch (line.instruction.control_flow) {
         case katana::sh4::ControlFlowKind::None:
-            enqueue_next(pending, scheduled, address, 2u, evidence);
+            enqueue_next(pending,
+                         scheduled,
+                         address,
+                         2u,
+                         evidence,
+                         exact_function_ranges);
             break;
         case katana::sh4::ControlFlowKind::ConditionalBranch:
             if (line.target_address.has_value()) {
                 enqueue(pending, scheduled, *line.target_address, address, std::nullopt, evidence);
             }
-            enqueue_next(pending, scheduled, address, fallthrough_distance, evidence);
+            enqueue_next(pending,
+                         scheduled,
+                         address,
+                         fallthrough_distance,
+                         evidence,
+                         exact_function_ranges);
             break;
         case katana::sh4::ControlFlowKind::Call:
             if (line.target_address.has_value()) {
@@ -348,10 +467,20 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                                           evidence);
                 }
             }
-            enqueue_next(pending, scheduled, address, fallthrough_distance, evidence);
+            enqueue_next(pending,
+                         scheduled,
+                         address,
+                         fallthrough_distance,
+                         evidence,
+                         exact_function_ranges);
             break;
         case katana::sh4::ControlFlowKind::IndirectCall:
-            enqueue_next(pending, scheduled, address, fallthrough_distance, evidence);
+            enqueue_next(pending,
+                         scheduled,
+                         address,
+                         fallthrough_distance,
+                         evidence,
+                         exact_function_ranges);
             break;
         case katana::sh4::ControlFlowKind::UnconditionalBranch:
             if (line.target_address.has_value()) {
@@ -450,6 +579,9 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         if (delay_slots.contains(address)) {
             result.conflicts.push_back(
                 {address, 2u, AnalysisConflictKind::FunctionEntryInDelaySlot});
+            if (candidate.size != 0u)
+                throw std::invalid_argument(
+                    "Explizite Funktionsgrenze beginnt in einem Delay Slot.");
         }
         result.functions.push_back(std::move(candidate));
     }

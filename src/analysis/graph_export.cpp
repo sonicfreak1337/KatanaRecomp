@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -77,9 +78,16 @@ std::string dot_escape(const std::string_view value) {
 
 AnalysisGraph build_control_flow_graph(const ControlFlowAnalysisResult& analysis) {
     std::vector<std::uint32_t> leaders;
-    leaders.reserve(analysis.recursive.functions.size());
-    for (const auto& function : analysis.recursive.functions)
+    leaders.reserve(analysis.recursive.functions.size() * 2u);
+    for (const auto& function : analysis.recursive.functions) {
         leaders.push_back(function.address);
+        if (function.size != 0u) {
+            const auto end = static_cast<std::uint64_t>(function.address) +
+                             function.size;
+            if (end <= std::numeric_limits<std::uint32_t>::max())
+                leaders.push_back(static_cast<std::uint32_t>(end));
+        }
+    }
     const auto blocks =
         build_basic_blocks(analysis.recursive.instructions, analysis.resolved_edges, leaders);
     AnalysisGraph graph{AnalysisGraphKind::ControlFlow};
@@ -125,13 +133,17 @@ AnalysisGraph build_control_flow_graph(const ControlFlowAnalysisResult& analysis
 }
 
 AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis) {
-    std::vector<std::uint32_t> entries;
-    entries.reserve(analysis.recursive.functions.size());
+    std::vector<FunctionBoundary> boundaries;
+    boundaries.reserve(analysis.recursive.functions.size());
     for (const auto& function : analysis.recursive.functions) {
-        if (control_flow_evidence_proven(function.evidence)) entries.push_back(function.address);
+        if (control_flow_evidence_proven(function.evidence) ||
+            function.size != 0u)
+            boundaries.push_back({function.address, function.size});
     }
     const auto functions =
-        discover_functions(analysis.recursive.instructions, entries, analysis.resolved_edges);
+        discover_functions(analysis.recursive.instructions,
+                           boundaries,
+                           analysis.resolved_edges);
     AnalysisGraph graph{AnalysisGraphKind::CallGraph};
     graph.nodes.reserve(functions.size());
     std::set<std::uint32_t> known_entries;

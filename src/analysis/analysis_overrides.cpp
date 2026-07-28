@@ -111,9 +111,21 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
                 fail(path, line_number, "mode muss override oder hint sein.");
             }
             saw_mode = true;
-        } else if (key == "function" && fields.size() == 1u) {
+        } else if (key == "function" &&
+                   (fields.size() == 1u || fields.size() == 2u)) {
+            const auto size =
+                fields.size() == 2u
+                    ? parse_number(fields[1], 16, path, line_number,
+                                   "function-size")
+                    : 0u;
+            if (fields.size() == 2u && (size == 0u || (size & 1u) != 0u))
+                fail(path,
+                     line_number,
+                     "function-size muss eine positive gerade Bytegroesse sein.");
             overrides.functions.push_back(
-                {parse_number(fields[0], 16, path, line_number, "function"), line_number});
+                {parse_number(fields[0], 16, path, line_number, "function"),
+                 line_number,
+                 size});
         } else if (key == "jump" && fields.size() == 2u) {
             overrides.jumps.push_back(
                 {parse_number(fields[0], 16, path, line_number, "jump-address"),

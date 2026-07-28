@@ -67,10 +67,19 @@ Der oeffentliche C++-Vertrag liegt in
 `katana/runtime/game_project.hpp`; der Export nimmt ihn ueber
 `PortExportOptions::game_project` entgegen. Vollstaendige externe
 Spielprojekte integrieren Definition, Callbackcode und Registrierung weiter
-selbst in ihr Portbinary. Fuer einen reinen, privaten Game-Entry-Vertrag gibt
-es zusaetzlich den schmalen artifact-only CLI-Pfad
-`port-executable --game-entry-handoff`; er erzeugt keine Titeladressen oder
-Payloadbytes im generischen Kern.
+selbst in ihr Portbinary.
+
+`GameProjectArtifact` Format 1 ist der besitzende, binaere Transport fuer
+rein deklarative Definitionen. Payload und Gesamtartefakt sind jeweils an
+SHA-256 gebunden. Exakte Funktionsgrenzen, Jump-/Callbacktabellen,
+Runtime-AOT-Templates, Symbole, Codeidentitaeten und Bootkonfiguration werden
+serialisiert; native Overrides, Mid-Function-Hooks und private
+Handoffprovider werden fail-closed abgewiesen. `port-executable
+--game-project` kann mit `--game-entry-handoff` kombiniert werden. Die
+vollstaendige Definition steuert Analyse und Export. Wenn keine nativen Hooks
+eine externe Registrierung erfordern, traegt der erzeugte Port zur Laufzeit
+nur die reduzierte Identitaets-, Boot- und Handoffdefinition. Dadurch
+gelangen weder Titeladressen noch Payloadbytes in den generischen Kern.
 
 ## Game-Entry-Handoff
 
@@ -133,17 +142,27 @@ Der vom Direct-Port gemeldete Wert 119,64 MHz verwendet faelschlich den
 absoluten Schedulerstand als ausgefuehrte Arbeit. `KR-4966` muss das Gate auf
 eine relative Laufdauer ab Entry umstellen. 16.033.676 Dispatches entsprechen
 11,52 Zyklen pro Post-Entry-Dispatch und belegen noch keinen
-Performancegewinn. Ein warmer Direct-Export bei unveraenderter Analyse
-dauerte 5,3 Sekunden.
+Performancegewinn.
 
-Der v26-DirectBoot korrigiert anschliessend `SB_G2APRO` und das reale
-AICA-Request-Level fuer `ADTSEL=5`. G2-Kanal 0 wird abgeschlossen, der alte
-Poll bei `0x8C666D42` verlassen und zwei technische PVR-Direct-Frames werden
-erzeugt. Die neue Grenze bei `0x8C602B0A -> 0x8C010F22` ist keine belegte
-Byteaenderung: Der Materializer meldet `AotTemplateMismatch` (14), weil fuer
-das unveraenderte statische Spielziel kein generierter AOT-Block oder
-Runtime-AOT-Template existiert. KR-4971 fuehrt solche hashgebundenen
-Funktionsgrenzen aus dem externen Spielprojekt bis in Analyse und AOT.
+v26 korrigiert anschliessend `SB_G2APRO` und das reale AICA-Request-Level fuer
+`ADTSEL=5`. v28 fuehrt die danach beobachtete exakte, hashgebundene
+Funktionsgrenze aus dem externen Spielprojekt bis in Analyzer, CFG, IR und
+AOT und passiert so den bisherigen KR-4971-Blocker. Der reale Lauf erreicht
+Gastzyklus `553.990.562`, `138.757.292` Post-Entry-Zyklen und `10.079.932`
+Zentraldispatches. Das sind `+1.086.915` Gastzyklen gegen v26. Die
+tatsaechliche Post-Entry-Arbeit ergibt in 5,275792 Sekunden 26,3008 MHz
+gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`, aber noch kein
+600-Millionen-Gate.
+
+Der neue erste Blocker KR-4972 ist
+`0x8C11088C -> 0x8C64784E`. Das Ziel beginnt mit einem `BRA` auf den
+gemeinsamen Pfad `0x8C6478C2`; die Callback-/Shared-Tail-/Thunk-Modellierung
+und exakte Grenze muessen aus dem unveraenderten Executable bewiesen werden.
+Die terminale Diagnose meldet den Materializergrund
+`AotTemplateMismatch` (14) nun korrekt als `aot-template-mismatch`.
+Sound-/G2- und technische PVR-Evidenz bleiben erhalten, aber sechzehn reale
+Fensteraufnahmen bleiben schwarz. Der warme Gesamtexport dauerte 4,209083
+Sekunden, der unveraenderte Hostbuild 0,219272 Sekunden.
 
 ## Statischer und dynamischer AOT-Dispatch
 

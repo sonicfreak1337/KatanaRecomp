@@ -1309,11 +1309,24 @@ std::vector<HardwareNaturalLoop>
 find_natural_hardware_loops(const io::ExecutableImage& image,
                             const ControlFlowAnalysisResult& analysis) {
     std::vector<std::uint32_t> function_entries;
+    std::vector<std::uint32_t> block_leaders;
     function_entries.reserve(analysis.recursive.functions.size());
-    for (const auto& function : analysis.recursive.functions)
+    block_leaders.reserve(analysis.recursive.functions.size() * 2u);
+    for (const auto& function : analysis.recursive.functions) {
         function_entries.push_back(function.address);
+        block_leaders.push_back(function.address);
+        if (function.size != 0u) {
+            const auto end = static_cast<std::uint64_t>(function.address) +
+                             function.size;
+            if (end <= std::numeric_limits<std::uint32_t>::max())
+                block_leaders.push_back(
+                    static_cast<std::uint32_t>(end));
+        }
+    }
     auto blocks = build_basic_blocks(
-        analysis.recursive.instructions, analysis.resolved_edges, function_entries);
+        analysis.recursive.instructions,
+        analysis.resolved_edges,
+        block_leaders);
     if (blocks.empty()) return {};
     repair_contextual_delay_slot_edges(blocks, analysis);
 

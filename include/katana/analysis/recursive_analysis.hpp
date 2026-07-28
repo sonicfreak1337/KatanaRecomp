@@ -42,6 +42,9 @@ struct FunctionCandidate {
     AnalysisConfidence confidence = AnalysisConfidence::Low;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::vector<FunctionOrigin> origins;
+    // Non-zero only for an explicit exact function boundary. Inferred
+    // candidates remain entry-only and therefore keep size zero.
+    std::uint32_t size = 0u;
 };
 
 enum class AnalysisConflictKind { FunctionEntryInDelaySlot };
@@ -85,6 +88,7 @@ struct AnalysisSeed {
     std::vector<FunctionOrigin> function_origins;
     bool guarded_candidate = false;
     ControlFlowEvidence evidence = ControlFlowEvidence::ProvenComplete;
+    std::uint32_t function_size = 0u;
 };
 
 struct ContextualInstruction {

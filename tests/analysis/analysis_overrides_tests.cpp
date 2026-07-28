@@ -47,11 +47,13 @@ int main() {
          "schema = katana-analysis-directives\n"
          "version = 2\n"
          "mode = hint\n"
-         "function = 0x1000\n");
+         "function = 0x1000 0x18\n");
     const auto hints = katana::analysis::parse_analysis_overrides(path);
     require(hints.version == 2u && hints.mode == katana::analysis::AnalysisDirectiveMode::Hint &&
-                hints.functions.size() == 1u,
-            "Version-2-Hintdatei wurde nicht gemaess Schema und Modus gelesen.");
+                hints.functions.size() == 1u &&
+                hints.functions.front().size == 0x18u,
+            "Version-2-Hintdatei wurde nicht samt Funktionsgroesse gemaess Schema und Modus "
+            "gelesen.");
 
     save(path, "schema = katana-analysis-directives\nversion = 3\nmode = hint\n");
     try {

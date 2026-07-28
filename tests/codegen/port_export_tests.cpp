@@ -1034,6 +1034,61 @@ int run_test(const int argc, char* argv[]) {
                                     "japan-ntsc",
                                     observe_progress};
 
+    const auto external_boundary_disc =
+        katana::platform::load_dreamcast_gdi_boot(gdi);
+    const auto external_boundary_content_identity =
+        katana::runtime::packed_disc_content_identity(
+            *external_boundary_disc.source);
+    const auto external_boundary_boot_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                external_boundary_disc.boot_file.data()),
+            external_boundary_disc.boot_file.size()));
+    constexpr std::array external_boundaries{
+        katana::runtime::GameProjectFunctionBoundary{
+            katana::platform::dreamcast_disc_boot_address + 0x10u,
+            2u,
+            "external_exact_padding"}};
+    katana::runtime::GameProjectDefinition external_boundary_project;
+    external_boundary_project.project_id =
+        "katana.test.external-function-boundary";
+    external_boundary_project.project_version = "1";
+    external_boundary_project.identity = {
+        external_boundary_content_identity,
+        external_boundary_disc.metadata.boot_file_name,
+        external_boundary_boot_identity};
+    external_boundary_project.function_boundaries =
+        external_boundaries;
+    auto external_boundary_options = options;
+    external_boundary_options.game_project =
+        &external_boundary_project;
+    const auto external_boundary_output =
+        fixture.root / "external-boundary-port";
+    const auto external_boundary_export =
+        export_dreamcast_port_project(gdi,
+                                      external_boundary_output,
+                                      external_boundary_options);
+    const auto external_boundary_sources =
+        snapshot(external_boundary_output / "generated");
+    std::string external_boundary_units;
+    for (const auto& [path, content] : external_boundary_sources)
+        if (path.starts_with("code/unit-"))
+            external_boundary_units += content;
+    require(
+        external_boundary_export.functions != 0u &&
+            external_boundary_units.find(
+                "fn_8C010010_with_services") != std::string::npos &&
+            external_boundary_sources.at("metadata/game-project.json")
+                    .find("\"start\":2348875792,\"size\":2") !=
+                std::string::npos &&
+            std::find(external_boundary_export.checkpoints.begin(),
+                      external_boundary_export.checkpoints.end(),
+                      "external-game-project-identity-validated") !=
+                external_boundary_export.checkpoints.end(),
+        "GameProjectFunctionBoundary verliert Groesse oder nativen AOT-Seed "
+        "im echten Portexportvertrag.");
+
     const auto stored_unknown_disc_root = fixture.root / "stored-unknown-disc";
     write_stored_unknown_candidate_fixture(stored_unknown_disc_root);
     const auto stored_unknown_gdi = stored_unknown_disc_root / "disc.gdi";
@@ -1238,12 +1293,53 @@ int run_test(const int argc, char* argv[]) {
     const auto reloaded_private_boot =
         katana::platform::load_dreamcast_boot_executable_artifact(
             private_boot.manifest_path);
+    const auto direct_boot_byte_identity =
+        std::string("sha256:") + private_boot.boot_sha256;
+    const auto direct_boot_descriptor_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes("synthetic-complete-platform-handoff");
+    katana::runtime::GameProjectDefinition direct_boot_project;
+    direct_boot_project.project_id =
+        "katana.test.direct-boot-declarative-project";
+    direct_boot_project.project_version = "1";
+    direct_boot_project.identity = {
+        private_boot.install_recipe.content_identity,
+        private_boot.metadata.boot_file_name,
+        direct_boot_byte_identity};
+    direct_boot_project.function_boundaries = external_boundaries;
+    direct_boot_project.boot_config.emplace();
+    katana::runtime::GameEntryHandoffBinding direct_boot_handoff;
+    direct_boot_handoff.executable = {
+        private_boot.install_recipe.content_identity,
+        private_boot.metadata.boot_file_name,
+        direct_boot_byte_identity};
+    direct_boot_handoff.console_profile =
+        katana::runtime::DreamcastConsoleProfile::JapanNtsc;
+    direct_boot_handoff.descriptor_identity =
+        direct_boot_descriptor_identity;
+    direct_boot_project.game_entry_handoff =
+        std::move(direct_boot_handoff);
+    auto direct_boot_runtime_project = direct_boot_project;
+    direct_boot_runtime_project.function_boundaries = {};
+    const auto direct_boot_export_identity =
+        katana::runtime::game_project_definition_identity(
+            direct_boot_project);
+    const auto direct_boot_runtime_identity =
+        katana::runtime::game_project_definition_identity(
+            direct_boot_runtime_project);
+    auto direct_boot_options = options;
+    direct_boot_options.game_project = &direct_boot_project;
     const auto direct_boot_output = fixture.root / "direct-boot-port";
     const auto direct_boot_result =
         export_dreamcast_port_project_from_boot_artifact(
-            private_boot.manifest_path, direct_boot_output, options);
+            private_boot.manifest_path,
+            direct_boot_output,
+            direct_boot_options);
     const auto direct_boot_main =
         read_text(direct_boot_output / "src" / "main.cpp");
+    const auto direct_boot_dispatch =
+        read_text(direct_boot_output / "generated" / "code" /
+                  "runtime-dispatch.cpp");
     const auto direct_boot_metadata =
         read_text(
             direct_boot_output / "generated" / "metadata" /
@@ -1271,6 +1367,26 @@ int run_test(const int argc, char* argv[]) {
                 direct_boot_main.find(
                     private_boot.metadata.boot_file_name) !=
                     std::string::npos &&
+                direct_boot_export_identity !=
+                    direct_boot_runtime_identity &&
+                direct_boot_main.find(
+                    direct_boot_runtime_identity) !=
+                    std::string::npos &&
+                direct_boot_dispatch.find(
+                    direct_boot_runtime_identity) !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    direct_boot_export_identity) !=
+                    std::string::npos &&
+                direct_boot_dispatch.find(
+                    direct_boot_export_identity) !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    "local_game_project_registration.emplace") !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    "game-entry-handoff-game-project-not-registered") ==
+                    std::string::npos &&
                 direct_boot_metadata.find(
                     "\"boot_path\":\"direct-boot-executable\"") !=
                     std::string::npos &&
@@ -1286,8 +1402,9 @@ int run_test(const int argc, char* argv[]) {
                     direct_boot_output / "boot.bin") &&
                 !std::filesystem::exists(
                     direct_boot_output / "content" / "boot.bin"),
-            "Privates Boot-Executable wird nicht hashgebunden und retailfrei "
-            "als DirectBoot-Port exportiert.");
+            "Privates Boot-Executable und deklarative GameProject-Daten werden "
+            "nicht hashgebunden, runtime-reduziert und retailfrei als "
+            "DirectBoot-Port exportiert.");
 
     const auto latent_disc_directory = fixture.root / "latent-aot-disc";
     std::filesystem::create_directories(latent_disc_directory);

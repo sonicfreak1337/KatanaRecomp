@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -1097,8 +1099,17 @@ lower_function(const std::span<const katana::sh4::DisassemblyLine> lines,
                const katana::analysis::FunctionInfo& function,
                const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges,
                const std::span<const std::uint32_t> function_entries) {
-    const auto source_blocks =
-        katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
+    std::vector<std::uint32_t> block_leaders(function_entries.begin(),
+                                             function_entries.end());
+    if (function.size != 0u) {
+        const auto end =
+            static_cast<std::uint64_t>(function.entry_address) +
+            function.size;
+        if (end <= std::numeric_limits<std::uint32_t>::max())
+            block_leaders.push_back(static_cast<std::uint32_t>(end));
+    }
+    const auto source_blocks = katana::analysis::build_basic_blocks(
+        lines, resolved_edges, block_leaders);
     return lower_function(LoweringContext(source_blocks, resolved_edges), function);
 }
 
@@ -1107,9 +1118,18 @@ lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
               const std::span<const katana::analysis::FunctionInfo> functions,
               const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges) {
     std::vector<std::uint32_t> function_entries;
-    function_entries.reserve(functions.size());
-    for (const auto& function : functions)
+    function_entries.reserve(functions.size() * 2u);
+    for (const auto& function : functions) {
         function_entries.push_back(function.entry_address);
+        if (function.size != 0u) {
+            const auto end =
+                static_cast<std::uint64_t>(function.entry_address) +
+                function.size;
+            if (end <= std::numeric_limits<std::uint32_t>::max())
+                function_entries.push_back(
+                    static_cast<std::uint32_t>(end));
+        }
+    }
     const auto source_blocks =
         katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
     return lower_program(LoweringContext(source_blocks, resolved_edges), functions);
@@ -1117,18 +1137,37 @@ lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
 
 std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis,
                                     const std::span<const std::uint32_t> additional_block_leaders) {
-    std::vector<std::uint32_t> seeds;
-    seeds.reserve(analysis.recursive.functions.size());
+    std::map<std::uint32_t, std::uint32_t> boundary_by_entry;
     for (const auto& function : analysis.recursive.functions) {
-        if (katana::analysis::control_flow_evidence_proven(function.evidence))
-            seeds.push_back(function.address);
+        if (!katana::analysis::control_flow_evidence_proven(
+                function.evidence) &&
+            function.size == 0u)
+            continue;
+        const auto [existing, inserted] =
+            boundary_by_entry.emplace(function.address, function.size);
+        if (!inserted && function.size != 0u) {
+            if (existing->second != 0u &&
+                existing->second != function.size)
+                throw std::invalid_argument(
+                    "IR-Lowering erhielt widerspruechliche "
+                    "Funktionsgrenzen.");
+            existing->second = function.size;
+        }
     }
     for (const auto& edge : analysis.resolved_edges) {
         if (edge.kind == katana::analysis::ResolvedControlFlowKind::Call &&
             katana::analysis::control_flow_evidence_proven(
                 katana::analysis::resolved_edge_evidence(edge))) {
-            seeds.push_back(edge.target_address);
+            boundary_by_entry.try_emplace(edge.target_address, 0u);
         }
+    }
+    std::vector<katana::analysis::FunctionBoundary> function_boundaries;
+    function_boundaries.reserve(boundary_by_entry.size());
+    std::vector<std::uint32_t> seeds;
+    seeds.reserve(boundary_by_entry.size());
+    for (const auto& [entry, size] : boundary_by_entry) {
+        function_boundaries.push_back({entry, size});
+        seeds.push_back(entry);
     }
     std::vector<std::uint32_t> candidate_leaders;
     for (const auto& table : analysis.jump_tables) {
@@ -1154,6 +1193,17 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     // precompiled code.  Keeping them out of `seeds` also preserves ordinary fallthrough within
     // the containing function instead of manufacturing a function return at every table entry.
     auto block_leaders = seeds;
+    block_leaders.reserve(seeds.size() + function_boundaries.size() +
+                          candidate_leaders.size() +
+                          additional_block_leaders.size());
+    for (const auto& boundary : function_boundaries) {
+        if (boundary.size == 0u) continue;
+        const auto end =
+            static_cast<std::uint64_t>(boundary.entry_address) +
+            boundary.size;
+        if (end <= std::numeric_limits<std::uint32_t>::max())
+            block_leaders.push_back(static_cast<std::uint32_t>(end));
+    }
     block_leaders.insert(block_leaders.end(), candidate_leaders.begin(), candidate_leaders.end());
     // Callers may request block boundaries for execution-policy reasons without
     // promoting those addresses to function-discovery evidence.
@@ -1165,7 +1215,7 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     const auto source_blocks = katana::analysis::build_basic_blocks(
         analysis.recursive.instructions, analysis.resolved_edges, block_leaders);
     const auto functions = katana::analysis::discover_functions_from_blocks(
-        source_blocks, seeds, analysis.resolved_edges);
+        source_blocks, function_boundaries, analysis.resolved_edges);
 
     std::set<std::uint32_t> owned_blocks;
     for (const auto& function : functions)

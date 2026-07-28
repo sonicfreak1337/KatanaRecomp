@@ -127,6 +127,35 @@ std::string game_project_export_identity(
     return katana::runtime::game_project_definition_identity(definition);
 }
 
+bool game_project_requires_external_runtime_definition(
+    const katana::runtime::GameProjectDefinition& definition) noexcept {
+    return !definition.function_overrides.empty() ||
+           !definition.mid_function_hooks.empty();
+}
+
+katana::runtime::GameProjectDefinition game_project_runtime_definition(
+    const katana::runtime::GameProjectDefinition& definition) {
+    if (game_project_requires_external_runtime_definition(definition))
+        return definition;
+
+    auto runtime_definition = definition;
+    runtime_definition.function_boundaries = {};
+    runtime_definition.jump_tables = {};
+    runtime_definition.callback_tables = {};
+    runtime_definition.runtime_code_templates = {};
+    runtime_definition.function_overrides = {};
+    runtime_definition.mid_function_hooks = {};
+    runtime_definition.symbols = {};
+    runtime_definition.code_identities = {};
+    return runtime_definition;
+}
+
+std::string game_project_runtime_identity(
+    const katana::runtime::GameProjectDefinition& definition) {
+    return katana::runtime::game_project_definition_identity(
+        game_project_runtime_definition(definition));
+}
+
 void add_game_project_symbol(katana::io::ExecutableImage& image,
                              katana::io::ImageSymbol symbol) {
     if (const auto* existing = image.find_symbol(symbol.name);
@@ -193,7 +222,8 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
     overrides.mode = katana::analysis::AnalysisDirectiveMode::Override;
     overrides.source_path = "external-game-project";
     for (const auto& function : definition.function_boundaries)
-        overrides.functions.push_back({function.start, 0u});
+        overrides.functions.push_back(
+            {function.start, 0u, function.size});
     for (const auto& hook : definition.mid_function_hooks)
         overrides.functions.push_back({hook.instruction_address, 0u});
     for (const auto& symbol : definition.symbols) {
@@ -218,7 +248,11 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
         overrides.functions.begin(),
         overrides.functions.end(),
         [](const auto& left, const auto& right) {
-            return left.address < right.address;
+            if (left.address != right.address)
+                return left.address < right.address;
+            // Preserve an exact external boundary when a hook, symbol or
+            // callback also contributes the same entry-only seed.
+            return left.size > right.size;
         });
     overrides.functions.erase(
         std::unique(
@@ -2142,11 +2176,17 @@ std::string handwritten_main(
         << (game_entry_handoff_binding != nullptr ? "true" : "false")
         << ";\n"
         << "constexpr std::string_view "
-           "expected_game_project_definition_identity = "
+           "expected_game_project_runtime_definition_identity = "
         << katana::io::quote_json(
                game_project != nullptr
-                   ? katana::runtime::game_project_definition_identity(
-                         *game_project)
+                   ? game_project_runtime_identity(*game_project)
+                   : std::string{})
+        << ";\n"
+        << "constexpr std::string_view "
+           "expected_game_project_export_definition_identity = "
+        << katana::io::quote_json(
+               game_project != nullptr
+                   ? game_project_export_identity(*game_project)
                    : std::string{})
         << ";\n";
     if (game_entry_handoff_binding != nullptr) {
@@ -2242,17 +2282,10 @@ std::string handwritten_main(
                     : "NativeDiscBoot")
             << ";\n";
     }
-    const bool artifact_only_game_entry_project =
+    const bool local_game_entry_project_supported =
         game_project != nullptr &&
         game_project->game_entry_handoff.has_value() &&
-        game_project->function_boundaries.empty() &&
-        game_project->jump_tables.empty() &&
-        game_project->callback_tables.empty() &&
-        game_project->runtime_code_templates.empty() &&
-        game_project->function_overrides.empty() &&
-        game_project->mid_function_hooks.empty() &&
-        game_project->symbols.empty() &&
-        game_project->code_identities.empty();
+        !game_project_requires_external_runtime_definition(*game_project);
     std::ostringstream product_game_entry_handoff;
     if (game_entry_handoff_binding != nullptr) {
         product_game_entry_handoff
@@ -2274,7 +2307,7 @@ std::string handwritten_main(
                "            *product_handoff_value != '\\0';\n"
                "        const auto* registered_game_project =\n"
                "            katana::runtime::active_game_project_bindings();\n";
-        if (artifact_only_game_entry_project) {
+        if (local_game_entry_project_supported) {
             const auto& definition = *game_project;
             product_game_entry_handoff
                 << "        if (registered_game_project == nullptr) {\n"
@@ -2316,12 +2349,15 @@ std::string handwritten_main(
                 << katana::io::quote_json(
                        definition.identity.boot_byte_identity)
                 << "};\n"
-                   "            local_definition.boot_config = runtime_boot_config;\n"
-                   "            local_definition.game_entry_handoff =\n"
+                << (definition.boot_config.has_value()
+                        ? "            local_definition.boot_config = "
+                          "runtime_boot_config;\n"
+                        : "")
+                << "            local_definition.game_entry_handoff =\n"
                    "                expected_handoff_binding;\n"
                    "            if (katana::runtime::game_project_definition_identity(\n"
                    "                    local_definition) !=\n"
-                   "                expected_game_project_definition_identity)\n"
+                   "                expected_game_project_runtime_definition_identity)\n"
                    "                throw std::runtime_error(\n"
                    "                    \"game-entry-handoff-local-project-identity-mismatch\");\n"
                    "            katana::runtime::GameProjectRuntimeProviders providers;\n"
@@ -2346,9 +2382,13 @@ std::string handwritten_main(
         }
         product_game_entry_handoff
             <<
-               "        if (katana::runtime::game_project_definition_identity(\n"
-               "                registered_game_project->definition()) !=\n"
-               "            expected_game_project_definition_identity)\n"
+               "        const auto registered_game_project_identity =\n"
+               "            katana::runtime::game_project_definition_identity(\n"
+               "                registered_game_project->definition());\n"
+               "        if (registered_game_project_identity !=\n"
+               "                expected_game_project_runtime_definition_identity &&\n"
+               "            registered_game_project_identity !=\n"
+               "                expected_game_project_export_definition_identity)\n"
                "            throw std::runtime_error(\n"
                "                \"game-entry-handoff-game-project-identity-mismatch\");\n"
                "        const auto expected_handoff_binding =\n"
@@ -7381,10 +7421,13 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                  return hook.strength ==
                         katana::runtime::GameProjectHookStrength::Required;
              }));
-    const auto external_game_project_identity =
+    const auto external_game_project_runtime_identity =
         external_game_project != nullptr
-            ? katana::runtime::game_project_definition_identity(
-                  *external_game_project)
+            ? game_project_runtime_identity(*external_game_project)
+            : std::string{};
+    const auto external_game_project_export_identity =
+        external_game_project != nullptr
+            ? game_project_export_identity(*external_game_project)
             : std::string{};
     std::unordered_set<std::uint32_t> external_hook_entries;
     if (external_game_project != nullptr) {
@@ -9014,13 +9057,21 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                    "        throw std::runtime_error(\"Erforderliches externes "
                    "Game-Project ist nicht registriert.\");\n";
         output
-            << "    if (registered_game_project != nullptr &&\n"
-               "        katana::runtime::game_project_definition_identity(\n"
-               "            registered_game_project->definition()) != "
-            << katana::io::quote_json(external_game_project_identity)
+            << "    if (registered_game_project != nullptr) {\n"
+               "        const auto registered_game_project_identity =\n"
+               "            katana::runtime::game_project_definition_identity(\n"
+               "                registered_game_project->definition());\n"
+               "        if (registered_game_project_identity != "
+            << katana::io::quote_json(
+                   external_game_project_runtime_identity)
+            << " &&\n"
+               "            registered_game_project_identity != "
+            << katana::io::quote_json(
+                   external_game_project_export_identity)
             << ")\n"
-               "        throw std::runtime_error(\"Registriertes externes "
-               "Game-Project besitzt die falsche Identitaet.\");\n";
+               "            throw std::runtime_error(\"Registriertes externes "
+               "Game-Project besitzt die falsche Identitaet.\");\n"
+               "    }\n";
     } else {
         output << "    const katana::runtime::GameProjectBindings* "
                   "registered_game_project = nullptr;\n";
@@ -9848,19 +9899,22 @@ static PortExportResult export_dreamcast_port_project_impl(
                     game_project.boot_config->post_bios_cpu_state,
                     prepared.boot_size);
         }
-        const auto has_function = [&](const std::uint32_t address) {
+        const auto has_function =
+            [&](const std::uint32_t address,
+                const std::uint32_t size = 0u) {
             return std::any_of(
                 prepared.analysis.recursive.functions.begin(),
                 prepared.analysis.recursive.functions.end(),
                 [&](const auto& candidate) {
-                    return candidate.address == address;
+                    return candidate.address == address &&
+                           (size == 0u || candidate.size == size);
                 });
         };
         for (const auto& function : game_project.function_boundaries) {
-            if (!has_function(function.start))
+            if (!has_function(function.start, function.size))
                 throw std::invalid_argument(
-                    "Game-Project-Funktionsgrenze fehlt in der vorbereiteten "
-                    "Analyse.");
+                    "Game-Project-Funktionsgrenze fehlt mit ihrer exakten "
+                    "Groesse in der vorbereiteten Analyse.");
         }
         for (const auto& hook : game_project.mid_function_hooks) {
             if (!has_function(hook.instruction_address))

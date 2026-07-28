@@ -7,6 +7,7 @@
 #include <array>
 #include <deque>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -47,15 +48,28 @@ struct SeedEvidence {
     std::set<FunctionOrigin> origins;
     bool proven = false;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
+    std::uint32_t function_size = 0u;
 };
 
 bool add_seed(std::map<std::uint32_t, SeedEvidence>& seeds,
               const std::uint32_t address,
               const std::span<const FunctionOrigin> origins = {},
               const bool proven = true,
-              const ControlFlowEvidence evidence = ControlFlowEvidence::ProvenComplete) {
+              const ControlFlowEvidence evidence =
+                  ControlFlowEvidence::ProvenComplete,
+              const std::uint32_t function_size = 0u) {
     const auto [iterator, inserted] = seeds.try_emplace(address);
     bool changed = inserted;
+    if (function_size != 0u) {
+        if (iterator->second.function_size != 0u &&
+            iterator->second.function_size != function_size)
+            throw std::invalid_argument(
+                "Explizite Funktionsgrenzen widersprechen sich.");
+        if (iterator->second.function_size == 0u) {
+            iterator->second.function_size = function_size;
+            changed = true;
+        }
+    }
     if (proven && !iterator->second.proven) {
         iterator->second.proven = true;
         changed = true;
@@ -134,6 +148,7 @@ RecursiveAnalysisOptions make_options(const std::map<std::uint32_t, SeedEvidence
         seed.function_origins.assign(evidence.origins.begin(), evidence.origins.end());
         seed.guarded_candidate = !evidence.proven;
         seed.evidence = evidence.evidence;
+        seed.function_size = evidence.function_size;
         options.additional_seeds.push_back(std::move(seed));
     }
     return options;
@@ -594,7 +609,24 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
     if (overrides != nullptr) {
         for (const auto& function : overrides->functions) {
-            const auto validation = validate_committed_code_address(image, function.address);
+            if ((function.size & 1u) != 0u) {
+                if (hints) {
+                    seed_diagnostics.push_back(
+                        {function.line,
+                         function.address,
+                         AnalysisDirectiveDiagnosticStatus::Rejected,
+                         "function-size-odd"});
+                    continue;
+                }
+                override_error(*overrides,
+                               function.line,
+                               function.address,
+                               "function-size-odd");
+            }
+            const auto validation = validate_committed_code_address(
+                image,
+                function.address,
+                function.size == 0u ? 2u : function.size);
             if (!validation.valid()) {
                 if (hints) {
                     seed_diagnostics.push_back({function.line,
@@ -603,16 +635,20 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                                                 code_address_status_name(validation.status)});
                     continue;
                 }
-                require_override_code_address(image, *overrides, function.line, function.address);
+                override_error(*overrides,
+                               function.line,
+                               function.address,
+                               code_address_status_name(validation.status));
             }
             const std::array origins{hints ? FunctionOrigin::UserHint
                                            : FunctionOrigin::UserOverride};
             static_cast<void>(add_seed(seeds,
-                                       function.address,
+                                       validation.resolved_address,
                                        origins,
                                        false,
                                        hints ? ControlFlowEvidence::HintCandidate
-                                             : ControlFlowEvidence::ForcedOverride));
+                                             : ControlFlowEvidence::ForcedOverride,
+                                       function.size));
             if (hints) {
                 seed_diagnostics.push_back({function.line,
                                             function.address,
@@ -994,11 +1030,13 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             continue;
         }
 
-        std::vector<std::uint32_t> function_entries;
-        function_entries.reserve(analysis.recursive.functions.size());
+        std::vector<FunctionBoundary> function_boundaries;
+        function_boundaries.reserve(
+            analysis.recursive.functions.size());
         for (const auto& function : analysis.recursive.functions) {
             if (function.evidence != ControlFlowEvidence::Unresolved)
-                function_entries.push_back(function.address);
+                function_boundaries.push_back(
+                    {function.address, function.size});
         }
         const auto provisional_edges =
             collect_function_value_edges(analysis.indirect_control_flow, analysis.jump_tables);
@@ -1006,7 +1044,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         auto function_values = analyze_function_values(
             image,
             analysis.recursive.instructions,
-            function_entries,
+            function_boundaries,
             provisional_edges,
             [&report_progress](const FunctionValueAnalysisProgress& progress) {
                 std::string phase = "function-values-";
@@ -1256,13 +1294,30 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             analysis.symbolic_addresses.push_back(std::move(*symbol));
         }
     }
-    std::vector<std::uint32_t> final_function_entries;
-    final_function_entries.reserve(analysis.recursive.functions.size());
+    std::vector<FunctionBoundary> final_function_boundaries;
+    final_function_boundaries.reserve(
+        analysis.recursive.functions.size());
     for (const auto& function : analysis.recursive.functions) {
-        final_function_entries.push_back(function.address);
+        final_function_boundaries.push_back(
+            {function.address, function.size});
+    }
+    std::vector<std::uint32_t> final_block_leaders;
+    final_block_leaders.reserve(final_function_boundaries.size() * 2u);
+    for (const auto& boundary : final_function_boundaries) {
+        final_block_leaders.push_back(boundary.entry_address);
+        if (boundary.size != 0u) {
+            const auto end =
+                static_cast<std::uint64_t>(boundary.entry_address) +
+                boundary.size;
+            if (end <= std::numeric_limits<std::uint32_t>::max())
+                final_block_leaders.push_back(
+                    static_cast<std::uint32_t>(end));
+        }
     }
     const auto final_blocks = build_basic_blocks(
-        analysis.recursive.instructions, analysis.resolved_edges, final_function_entries);
+        analysis.recursive.instructions,
+        analysis.resolved_edges,
+        final_block_leaders);
     analysis.instruction_arena =
         std::make_shared<const InstructionArena>(analysis.recursive.instructions);
     analysis.block_spans = build_block_spans(*analysis.instruction_arena, final_blocks);
