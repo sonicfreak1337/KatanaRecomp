@@ -48,17 +48,43 @@ class NativeAotCallDepthGuard final {
     bool acquired_ = false;
 };
 
-// Keeps only a compile-time selected subset of the SH-4 general registers in
-// native locals. Generated code uses this object only for pure leaf functions:
-// memory, host-service, exception, SR/register-bank and native-call boundaries
-// remain on CpuState. Destruction is the function/dispatcher boundary and makes
-// every selected register architecturally visible, including while unwinding a
-// host exception such as a guest-cycle budget stop.
-template <std::uint16_t RegisterMask>
+// A product backend entry is also the runtime block-table function. Native
+// guest calls enter that same function while their depth guard is alive; only
+// the outer table invocation must build and finalize a BlockExit.
+[[nodiscard]] inline bool native_aot_call_is_nested() noexcept {
+    return detail::native_aot_call_depth != 0u;
+}
+
+enum class NativeAotScalarRegister : std::uint8_t {
+    T,
+    Pr,
+    Gbr,
+    Mach,
+    Macl,
+    Fpul
+};
+
+using NativeAotScalarRegisterMask = std::uint8_t;
+
+[[nodiscard]] constexpr NativeAotScalarRegisterMask
+native_aot_scalar_register_bit(const NativeAotScalarRegister value) noexcept {
+    return static_cast<NativeAotScalarRegisterMask>(
+        NativeAotScalarRegisterMask{1u} << static_cast<std::uint8_t>(value));
+}
+
+// Keeps compile-time selected SH-4 GPR and scalar special-register values in
+// native locals. FPU register arrays deliberately remain outside this
+// contract. A generated architectural boundary first calls flush_release();
+// after the boundary, reload_acquire() observes the potentially new register
+// bank and exception/SR state. A released object never writes stale locals from
+// its destructor.
+template <std::uint16_t RegisterMask,
+          NativeAotScalarRegisterMask ScalarRegisterMask = 0u>
 class NativeAotRegisterFile final {
   public:
     explicit NativeAotRegisterFile(CpuState& cpu) noexcept : cpu_(cpu) {
         load(std::make_index_sequence<16u>{});
+        load_scalars();
     }
 
     ~NativeAotRegisterFile() { flush(); }
@@ -74,9 +100,85 @@ class NativeAotRegisterFile final {
         return values_[index];
     }
 
-    void flush() noexcept { store(std::make_index_sequence<16u>{}); }
+    [[nodiscard]] bool& t() noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::T));
+        return t_;
+    }
+    [[nodiscard]] const bool& t() const noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::T));
+        return t_;
+    }
+    [[nodiscard]] std::uint32_t& pr() noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Pr));
+        return pr_;
+    }
+    [[nodiscard]] const std::uint32_t& pr() const noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Pr));
+        return pr_;
+    }
+    [[nodiscard]] std::uint32_t& gbr() noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Gbr));
+        return gbr_;
+    }
+    [[nodiscard]] const std::uint32_t& gbr() const noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Gbr));
+        return gbr_;
+    }
+    [[nodiscard]] std::uint32_t& mach() noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Mach));
+        return mach_;
+    }
+    [[nodiscard]] const std::uint32_t& mach() const noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Mach));
+        return mach_;
+    }
+    [[nodiscard]] std::uint32_t& macl() noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Macl));
+        return macl_;
+    }
+    [[nodiscard]] const std::uint32_t& macl() const noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Macl));
+        return macl_;
+    }
+    [[nodiscard]] std::uint32_t& fpul() noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Fpul));
+        return fpul_;
+    }
+    [[nodiscard]] const std::uint32_t& fpul() const noexcept {
+        static_assert(scalar_selected(NativeAotScalarRegister::Fpul));
+        return fpul_;
+    }
+
+    [[nodiscard]] bool owns_registers() const noexcept { return owns_registers_; }
+
+    // Compatibility flush for native exits and exceptional unwinding. It keeps
+    // ownership, so a later mutation remains visible at destruction.
+    void flush() noexcept {
+        if (!owns_registers_) return;
+        store(std::make_index_sequence<16u>{});
+        store_scalars();
+    }
+
+    void flush_release() noexcept {
+        if (!owns_registers_) return;
+        store(std::make_index_sequence<16u>{});
+        store_scalars();
+        owns_registers_ = false;
+    }
+
+    void reload_acquire() noexcept {
+        if (owns_registers_) return;
+        load(std::make_index_sequence<16u>{});
+        load_scalars();
+        owns_registers_ = true;
+    }
 
   private:
+    [[nodiscard]] static constexpr bool
+    scalar_selected(const NativeAotScalarRegister value) noexcept {
+        return (ScalarRegisterMask & native_aot_scalar_register_bit(value)) != 0u;
+    }
+
     template <std::size_t Index>
     void load_one() noexcept {
         if constexpr ((RegisterMask & (std::uint16_t{1u} << Index)) != 0u)
@@ -99,8 +201,33 @@ class NativeAotRegisterFile final {
         (store_one<Indexes>(), ...);
     }
 
+    void load_scalars() noexcept {
+        if constexpr (scalar_selected(NativeAotScalarRegister::T)) t_ = cpu_.t;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Pr)) pr_ = cpu_.pr;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Gbr)) gbr_ = cpu_.gbr;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Mach)) mach_ = cpu_.mach;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Macl)) macl_ = cpu_.macl;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Fpul)) fpul_ = cpu_.fpul;
+    }
+
+    void store_scalars() noexcept {
+        if constexpr (scalar_selected(NativeAotScalarRegister::T)) cpu_.t = t_;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Pr)) cpu_.pr = pr_;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Gbr)) cpu_.gbr = gbr_;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Mach)) cpu_.mach = mach_;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Macl)) cpu_.macl = macl_;
+        if constexpr (scalar_selected(NativeAotScalarRegister::Fpul)) cpu_.fpul = fpul_;
+    }
+
     CpuState& cpu_;
     std::array<std::uint32_t, 16u> values_{};
+    bool t_ = false;
+    std::uint32_t pr_ = 0u;
+    std::uint32_t gbr_ = 0u;
+    std::uint32_t mach_ = 0u;
+    std::uint32_t macl_ = 0u;
+    std::uint32_t fpul_ = 0u;
+    bool owns_registers_ = true;
 };
 
 } // namespace katana::runtime

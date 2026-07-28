@@ -1,4 +1,5 @@
 #include "katana/ir/ir.hpp"
+#include "katana/ir/register_liveness.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -135,6 +136,119 @@ int main() {
     require(katana::ir::operand_width_name(OperandWidth::Bits32) == "i32" &&
                 katana::ir::operand_width_name(OperandWidth::None) == "none",
             "Textnamen der Operandbreiten sind instabil.");
+
+    using katana::ir::TrackedRegister;
+    using katana::ir::gpr_register_bit;
+    using katana::ir::register_bit;
+    using katana::ir::register_mask_contains;
+
+    katana::ir::Instruction addc;
+    addc.operation = Operation::AddWithCarry;
+    addc.destination_register = 2u;
+    addc.source_register = 3u;
+    const auto addc_use_def = katana::ir::instruction_register_use_def(addc);
+    require((addc_use_def.uses &
+             (gpr_register_bit(2u) | gpr_register_bit(3u) |
+              register_bit(TrackedRegister::T))) ==
+                (gpr_register_bit(2u) | gpr_register_bit(3u) |
+                 register_bit(TrackedRegister::T)) &&
+                (addc_use_def.defs &
+                 (gpr_register_bit(2u) | register_bit(TrackedRegister::T))) ==
+                    (gpr_register_bit(2u) | register_bit(TrackedRegister::T)),
+            "Register-Use/Def verliert ADDC-Eingaben oder T-/GPR-Ausgaben.");
+
+    katana::ir::Instruction sts_pr;
+    sts_pr.operation = Operation::StoreSpecialRegisterPreDecrement;
+    sts_pr.destination_register = 5u;
+    sts_pr.special_register = katana::ir::SpecialRegister::Pr;
+    const auto sts_pr_use_def = katana::ir::instruction_register_use_def(sts_pr);
+    require(register_mask_contains(sts_pr_use_def.uses, TrackedRegister::Pr) &&
+                (sts_pr_use_def.uses & gpr_register_bit(5u)) != 0u &&
+                (sts_pr_use_def.defs & gpr_register_bit(5u)) != 0u,
+            "STS.L modelliert PR oder den Predecrement-GPR nicht.");
+
+    katana::ir::Instruction fcnvds;
+    fcnvds.operation = Operation::FcnvDoubleToSingle;
+    const auto fcnvds_use_def = katana::ir::instruction_register_use_def(fcnvds);
+    katana::ir::Instruction fcnvsd;
+    fcnvsd.operation = Operation::FcnvSingleToDouble;
+    const auto fcnvsd_use_def = katana::ir::instruction_register_use_def(fcnvsd);
+    require(register_mask_contains(fcnvds_use_def.defs, TrackedRegister::Fpul) &&
+                register_mask_contains(fcnvsd_use_def.uses, TrackedRegister::Fpul),
+            "FPUL-Provenienz von FCNVDS/FCNVSD ist vertauscht oder fehlt.");
+
+    katana::ir::Function function;
+    function.entry_address = 0x100u;
+    katana::ir::BasicBlock entry;
+    entry.start_address = 0x100u;
+    katana::ir::Instruction move;
+    move.operation = Operation::MovRegister;
+    move.destination_register = 2u;
+    move.source_register = 1u;
+    entry.instructions.push_back(move);
+    katana::ir::Instruction dead_constant;
+    dead_constant.operation = Operation::MovImmediate;
+    dead_constant.destination_register = 6u;
+    entry.instructions.push_back(dead_constant);
+    entry.successors = {0x110u, 0x120u};
+
+    katana::ir::BasicBlock left;
+    left.start_address = 0x110u;
+    katana::ir::Instruction add;
+    add.operation = Operation::AddRegister;
+    add.destination_register = 3u;
+    add.source_register = 2u;
+    left.instructions.push_back(add);
+    left.successors = {0x130u};
+
+    katana::ir::BasicBlock right;
+    right.start_address = 0x120u;
+    katana::ir::Instruction constant;
+    constant.operation = Operation::MovImmediate;
+    constant.destination_register = 3u;
+    right.instructions.push_back(constant);
+    right.successors = {0x130u};
+
+    katana::ir::BasicBlock join;
+    join.start_address = 0x130u;
+    katana::ir::Instruction consume;
+    consume.operation = Operation::AddRegister;
+    consume.destination_register = 4u;
+    consume.source_register = 3u;
+    join.instructions.push_back(consume);
+    katana::ir::Instruction function_return;
+    function_return.operation = Operation::Return;
+    join.instructions.push_back(function_return);
+
+    function.blocks = {entry, left, right, join};
+    const auto localization = katana::ir::make_register_localization_plan(function);
+    const auto* entry_liveness = localization.find_block(0x100u);
+    const auto* right_liveness = localization.find_block(0x120u);
+    require(localization.closed_control_flow && entry_liveness != nullptr &&
+                right_liveness != nullptr &&
+                (entry_liveness->live_out & gpr_register_bit(2u)) != 0u &&
+                (entry_liveness->live_in & gpr_register_bit(1u)) != 0u &&
+                (entry_liveness->live_in & gpr_register_bit(2u)) == 0u &&
+                (right_liveness->live_in & gpr_register_bit(3u)) == 0u &&
+                register_mask_contains(entry_liveness->live_in, TrackedRegister::Pr) &&
+                (localization.general_register_candidates() & (1u << 2u)) != 0u &&
+                (localization.general_register_candidates() & (1u << 3u)) != 0u &&
+                (localization.referenced_registers & gpr_register_bit(6u)) != 0u &&
+                (localization.candidate_registers & gpr_register_bit(6u)) == 0u,
+            "CFG-Fixpunkt berechnet Live-In/Live-Out ueber Join oder Definition falsch.");
+
+    katana::ir::Function open_function;
+    katana::ir::BasicBlock open_block;
+    open_block.start_address = 0x200u;
+    open_block.successors = {0xDEADBEEFu};
+    open_function.blocks.push_back(open_block);
+    const auto open_localization =
+        katana::ir::make_register_localization_plan(open_function);
+    require(!open_localization.closed_control_flow &&
+                open_localization.blocks.front().has_open_successor &&
+                open_localization.blocks.front().live_out ==
+                    katana::ir::tracked_register_mask,
+            "Offene CFG-Kante wird nicht konservativ als vollstaendig live behandelt.");
 
     std::cout << "KR-1901 Explizite Operandbreiten erfolgreich.\n";
     return EXIT_SUCCESS;

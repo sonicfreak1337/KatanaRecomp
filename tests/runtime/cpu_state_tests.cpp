@@ -1,3 +1,4 @@
+#include "katana/runtime/aot_runtime_abi.hpp"
 #include "katana/runtime/runtime.hpp"
 
 #include <algorithm>
@@ -30,7 +31,7 @@ int main() {
     static_assert(katana::runtime::banked_register_count == 8u);
     static_assert(katana::runtime::fpu_register_count == 16u);
 
-    static_assert(katana::runtime::abi_version == 49u);
+    static_assert(katana::runtime::abi_version == 71u);
 
     CpuState cpu;
 
@@ -132,6 +133,89 @@ int main() {
 
     cpu.set_interrupt_mask(0xFFu);
     require(cpu.interrupt_mask() == 15u, "Die Interruptmaske wird nicht auf vier Bit begrenzt.");
+
+    constexpr auto scalar_mask =
+        katana::runtime::native_aot_scalar_register_bit(
+            katana::runtime::NativeAotScalarRegister::T) |
+        katana::runtime::native_aot_scalar_register_bit(
+            katana::runtime::NativeAotScalarRegister::Pr) |
+        katana::runtime::native_aot_scalar_register_bit(
+            katana::runtime::NativeAotScalarRegister::Gbr) |
+        katana::runtime::native_aot_scalar_register_bit(
+            katana::runtime::NativeAotScalarRegister::Mach) |
+        katana::runtime::native_aot_scalar_register_bit(
+            katana::runtime::NativeAotScalarRegister::Macl) |
+        katana::runtime::native_aot_scalar_register_bit(
+            katana::runtime::NativeAotScalarRegister::Fpul);
+    using LocalRegisters =
+        katana::runtime::NativeAotRegisterFile<(1u << 0u) | (1u << 8u), scalar_mask>;
+
+    CpuState released_cpu;
+    released_cpu.r[0] = 0x100u;
+    released_cpu.r[8] = 0x108u;
+    released_cpu.r_bank[0] = 0x200u;
+    released_cpu.t = false;
+    released_cpu.pr = 0x300u;
+    released_cpu.gbr = 0x400u;
+    released_cpu.mach = 0x500u;
+    released_cpu.macl = 0x600u;
+    released_cpu.fpul = 0x700u;
+    {
+        LocalRegisters locals(released_cpu);
+        require(locals.owns_registers() && locals[0] == 0x100u && locals[8] == 0x108u &&
+                    !locals.t() && locals.pr() == 0x300u && locals.gbr() == 0x400u &&
+                    locals.mach() == 0x500u && locals.macl() == 0x600u &&
+                    locals.fpul() == 0x700u,
+                "Native-AOT-Registerdatei erwirbt GPR-/Spezialzustand nicht atomar.");
+        locals[0] = 0x101u;
+        locals[8] = 0x109u;
+        locals.t() = true;
+        locals.pr() = 0x301u;
+        locals.gbr() = 0x401u;
+        locals.mach() = 0x501u;
+        locals.macl() = 0x601u;
+        locals.fpul() = 0x701u;
+        locals.flush_release();
+        require(!locals.owns_registers() && released_cpu.r[0] == 0x101u &&
+                    released_cpu.r[8] == 0x109u && released_cpu.t &&
+                    released_cpu.pr == 0x301u && released_cpu.gbr == 0x401u &&
+                    released_cpu.mach == 0x501u && released_cpu.macl == 0x601u &&
+                    released_cpu.fpul == 0x701u,
+                "flush_release veroeffentlicht nicht alle ausgewaehlten Register.");
+
+        released_cpu.write_sr(katana::runtime::sr_md_mask | katana::runtime::sr_rb_mask);
+        released_cpu.t = false;
+        released_cpu.pr = 0x310u;
+        released_cpu.gbr = 0x410u;
+        released_cpu.mach = 0x510u;
+        released_cpu.macl = 0x610u;
+        released_cpu.fpul = 0x710u;
+        locals[0] = 0xDEAD0000u;
+        locals.pr() = 0xDEAD0001u;
+    }
+    require(released_cpu.r[0] == 0x200u && released_cpu.r[8] == 0x109u &&
+                !released_cpu.t && released_cpu.pr == 0x310u &&
+                released_cpu.gbr == 0x410u && released_cpu.mach == 0x510u &&
+                released_cpu.macl == 0x610u && released_cpu.fpul == 0x710u,
+            "Freigegebener Destructor schreibt stale GPR-/Spezialwerte in neuen Zustand.");
+
+    CpuState reacquired_cpu;
+    reacquired_cpu.r[0] = 0x110u;
+    reacquired_cpu.r_bank[0] = 0x220u;
+    reacquired_cpu.pr = 0x330u;
+    {
+        LocalRegisters locals(reacquired_cpu);
+        locals.flush_release();
+        reacquired_cpu.write_sr(katana::runtime::sr_md_mask | katana::runtime::sr_rb_mask);
+        reacquired_cpu.pr = 0x331u;
+        locals.reload_acquire();
+        require(locals.owns_registers() && locals[0] == 0x220u && locals.pr() == 0x331u,
+                "reload_acquire beobachtet neue Registerbank/Spezialwerte nicht.");
+        locals[0] = 0x221u;
+        locals.pr() = 0x332u;
+    }
+    require(reacquired_cpu.r[0] == 0x221u && reacquired_cpu.pr == 0x332u,
+            "Erneut erworbene Register werden am Native-AOT-Ausgang nicht veroeffentlicht.");
 
     require(cpu.memory.size() == 1024u * 1024u,
             "Der vollstaendige CPU-Zustand verlor seinen Runtime-Speicher.");

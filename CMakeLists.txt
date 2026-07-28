@@ -530,6 +530,7 @@ add_library(katana_core STATIC
     src/ir/memory_effect.cpp
     src/ir/operand_width.cpp
     src/ir/optimize.cpp
+    src/ir/register_liveness.cpp
     src/ir/status_effect.cpp
     src/ir/serialize.cpp
     src/ir/verifier.cpp
