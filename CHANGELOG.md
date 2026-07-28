@@ -4,47 +4,46 @@
 
 ### Geaendert
 
-- `GameEntryHandoff` Schema 2 und Artefaktformat 2 trennen den
-  DirectBoot-Spieleinstieg vom allgemeinen Post-BIOS-Zustand. Das externe
-  Spielprojekt bindet einen privaten titel- und Executable-identitaetsgebundenen
-  Provider; Payloads werden vor dem ersten Gastblock ueber Offset, Groesse und
-  SHA-256 validiert. Der aktuell integrierte
-  `CpuMemoryDiagnostic`-Capture/-Apply uebernimmt bewusst nur CPU und RAM,
-  meldet Geraete und Scheduler als ausstehend und ist im Produktgate verboten.
-  `CompletePlatform` erzwingt unabdingbar alle 21 kanonischen
-  Dreamcast-Geraeteklassen samt Maple/VMU, DMA-, IRQ- und Timerquellen; eine
-  verkuerzte Caller-Liste kann nicht mehr als vollstaendig gelten.
-  Der reale Diagnose-A/B-Lauf erreicht ab dem identischen Entry
-  600.000.001 Gastzyklen und `GameCodeProgressed`, aber keinen Frame:
-  Scheduler- und Geraetezustand weichen ab. VMU-Inhalt und Maple-Anbindung
-  sind nachweislich vorhanden und identisch, sodass der vollstaendige
-  Plattform-Handoff der konkrete verbleibende DirectBoot-Blocker ist.
-  Maple kann seinen Bus-, Controller-, VMU- und DMA-Zustand inzwischen
-  verlustfrei als privaten `KATMAP1`-Payload erfassen und passiv
-  wiederherstellen; aktive DMA-Ereignisse erhalten beim Rehydrieren eine
-  frische Scheduler-ID. Unbekannte Maple-Peripherie wird hart abgelehnt.
-  Der generierte Produktpfad akzeptiert Handoff-only-Spielprojekte auch ohne
-  Hooks, bindet Definition, Executable, Konsolenprofil und
-  Descriptor-Identitaet und staged ausschliesslich `CompletePlatform`.
-  Solange der geraeteuebergreifende Apply-Pfad fehlt, endet er danach
-  ausdruecklich statt auf CPU/RAM zurueckzufallen.
-  Ein davon getrennter, gewoehnlicher `DirectBoot-v23` ohne externes Handoff
-  wurde aus Quellstand `31c5575` mit MSVC als Gateport exportiert: 1.939
-  Funktionen, 42 Partitionen und eine erfolgreiche lokale PAL-Discinstallation
-  mit drei Tracks und 521.461 Sektoren. Der Produktlauf erreichte exakt
-  600.000.000 Gastzyklen in 14,0113 Sekunden beziehungsweise 42,8225 MHz bei
-  52.329.316 zentralen Dispatches. Er meldete `GameCodeProgressed`, 70
-  abgeschlossene GD-ROM-Kommandos und 180 Audiopuffer und endete mit Exitcode
-  0 sowie `first_problem=none`; sichtbar blieben `visible_screen=none` und
-  `frames=0`. Der letzte PC war `0x8C65A624` (dezimal 2.355.471.908). Dieser
-  Lauf belegt weder den weiterhin unimplementierten
-  `CompletePlatform`-Apply noch einen sichtbaren Spielbildschirm.
-  Damit wird noch kein erfolgreicher Handoff-DirectBoot behauptet.
-  Runtime-ABI 62 und
-  Portprojektvertrag 52 invalidieren inkompatible Runtime- und
-  Whole-Export-Cachetreffer. Ersetzte,
-  unbrauchbare private Portexporte werden nach einem bestaetigten
-  Nachfolgeexport gezielt entfernt.
+- Der produktive `CompletePlatform`-Pfad ist erstmals real ausgefuehrt.
+  `GameEntryHandoff` Schema 3,
+  Artefaktformat 2, Runtime-ABI 63, Portprojektvertrag 53 und
+  Plattformzustandsvertrag 2 tragen den vollstaendigen Game-Entry-Zustand.
+  `CompletePlatform` erfasst und appliziert alle 22 kanonischen
+  Dreamcast-Geraeteklassen einschliesslich Flash; der titel- und
+  Executable-identitaetsgebundene Artefaktpfad ist vom Capture bis zur
+  Verwendung im generierten Port belegt. Die CLI kann daraus ein
+  artifact-only Spielprojekt exportieren, und ein fruehes Gastzyklusbudget
+  begrenzt den Produktlauf bereits vor dem ersten normalen Block. PVR-HBlank
+  bewahrt seine Zeilenmetadaten, nicht deterministische
+  Host-Medienereignisse werden aus dem Capture gefiltert, AICA validiert die
+  RTC-Quellzyklen vor der Uebernahme und Codec-Ereignisse werden mit frischen
+  Scheduler-IDs rehydriert.
+  Der aktuelle NativeDiscBoot-Lauf erreicht Schedulerzyklus 600.000.000 in
+  6,3161 Sekunden beziehungsweise 94,9954 MHz mit 17.080.114 zentralen
+  Dispatches und dem IP.BIN-Frame. Der DirectBoot-Artefaktlauf erreicht
+  nach Restore bei 415.233.270 das absolute Maximum 600.000.000. Er fuehrt
+  damit nur 184.766.730 Post-Entry-Zyklen in 5,01505 Sekunden
+  beziehungsweise 36,8425 MHz aus, mit 16.033.676 Dispatches und ohne Frame.
+  Der terminal gemeldete Wert von 119,64 MHz teilt faelschlich den absoluten
+  Schedulerstand durch die Hostzeit und ist kein vergleichbarer
+  Performancewert. Beide enden ohne `first_problem` am
+  PC `0x8C666D42`, mit jeweils 72 GD-ROM-Kommandos sowie 180
+  beziehungsweise 179 Audiopuffern. Damit sind
+  CompletePlatform-Capture und -Verwendung bewiesen; die normative
+  Digestparitaet ist jedoch noch nicht belegt. Der aktuelle Koordinator
+  validiert den Gesamtzustand vorab und prueft ihn durch semantischen
+  Recapture, besitzt aber noch keinen durchgehend unfehlbaren globalen
+  Commit und kein allgemein save-erhaltendes ProductHandoff-Profil.
+  `KR-4967` und `KR-4970` bleiben deshalb aktiv. `KR-4953` bleibt fuer den
+  deterministischen Doppel-Capture sowie die Inspect-/Verify-CLI,
+  `KR-4966` fuer das relative Post-Entry-Gate und `KR-4962` fuer den
+  normativen Paritaetsnachweis aktiv. `KR-4965` bleibt der erste
+  Produktblocker: NativeDisc und DirectBoot landen beide im
+  ADXT-/mwSnd-Completion-Wait. Ein Warmexport dauert 5,3 Sekunden. Beim
+  anschliessenden Workspace-Cleanup wurden
+  16.467.100.969 Bytes eindeutig regenerierbarer Build-, Publish- und
+  Testartefakte entfernt; Retailquellen, aktuelle Referenzen und Nutzerdaten
+  blieben erhalten.
 - v0.49 richtet den Produktpfad als statischen SH-4-Recompiler mit getrenntem
   Werkzeugkern, installierbarer interpreterfreier `runtime_core` und externer
   hashgebundener Spielprojektschnittstelle aus. Validierte
@@ -58,7 +57,7 @@
   produktseitig abgekoppelte Detaildiagnostik, adressgebundene
   Fastpathdeskriptoren, Bring-up-/Gateprofile und automatische Bindung des
   installierten Runtimepakets vervollstaendigen die neue Produktgrenze.
-  Der reale executable-first Port erreichte mit MSVC und clang-cl jeweils
+  Der vorangehende executable-first Port erreichte mit MSVC und clang-cl jeweils
   600.000.000 Gastzyklen ohne neues technisches Problem. Gemessen wurden
   40,3869 beziehungsweise 42,4662 MHz, 2,258 beziehungsweise 2,297 Sekunden
   Warmexport und identische 52.329.316 zentrale Dispatches. Ein sichtbarer

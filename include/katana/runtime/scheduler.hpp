@@ -105,6 +105,10 @@ class EventScheduler {
     [[nodiscard]] bool remove_reset_observer(SchedulerResetObserverId observer_id) noexcept;
     void clear() noexcept;
     void reset();
+    // Clears process-local callbacks and installs an already elapsed guest
+    // cycle without notifying reset observers. Device state must be restored
+    // afterwards and every typed pending event must receive a fresh ID.
+    void restore_time_passive(std::uint64_t guest_cycle);
 
     [[nodiscard]] SchedulerAdvanceResult advance_to(std::uint64_t guest_cycle,
                                                     std::size_t event_budget);

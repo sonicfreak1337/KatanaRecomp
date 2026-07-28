@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace katana::runtime {
@@ -113,6 +114,43 @@ AicaRtcSnapshot AicaRtc::snapshot() const noexcept {
         write_latch_,
         write_enabled_,
     };
+}
+
+void AicaRtc::validate_state_restore(const AicaRtcSnapshot& state) const {
+    const auto runtime_cycle =
+        scheduler_ != nullptr && !scheduler_lifetime_.expired()
+            ? scheduler_->current_cycle()
+            : state.base_cycle;
+    validate_state_restore(state, runtime_cycle);
+}
+
+void AicaRtc::validate_state_restore(
+    const AicaRtcSnapshot& state,
+    const std::uint64_t expected_scheduler_cycle) const {
+    if (state.guest_clock_hz == 0u ||
+        state.guest_clock_hz != guest_clock_hz_ ||
+        state.initial_seconds != initial_seconds_)
+        throw std::invalid_argument(
+            "AICA-RTC-Handoff passt nicht zum Runtime-Taktvertrag.");
+    if (state.scheduler_cycle != expected_scheduler_cycle ||
+        state.base_cycle > state.scheduler_cycle)
+        throw std::invalid_argument(
+            "AICA-RTC-Handoff passt nicht zur wiederhergestellten Gastzeit.");
+    const auto expected_counter = static_cast<std::uint32_t>(
+        state.base_seconds +
+        (state.scheduler_cycle - state.base_cycle) /
+            state.guest_clock_hz);
+    if (state.counter != expected_counter)
+        throw std::invalid_argument(
+            "AICA-RTC-Handoff besitzt einen inkonsistenten Zaehler.");
+}
+
+void AicaRtc::restore_state_passive(AicaRtcSnapshot state) {
+    validate_state_restore(state);
+    base_cycle_ = state.base_cycle;
+    base_seconds_ = state.base_seconds;
+    write_latch_ = state.write_latch;
+    write_enabled_ = state.write_enabled;
 }
 
 void AicaRtc::handle_scheduler_reset() noexcept {
@@ -501,6 +539,66 @@ AicaRegisterSnapshot AicaRegisterFile::snapshot() const noexcept {
 #pragma warning(pop)
 #endif
 
+void AicaRegisterFile::validate_state_restore(
+    const AicaRegisterSnapshot& state) const {
+    const auto valid_voice_error = [](const AicaVoiceError error) noexcept {
+        switch (error) {
+        case AicaVoiceError::Pcm16OutOfRange:
+        case AicaVoiceError::Pcm8OutOfRange:
+        case AicaVoiceError::AdpcmOutOfRange:
+            return true;
+        }
+        return false;
+    };
+    const auto valid_sample_format = [](const AicaSampleFormat format) noexcept {
+        switch (format) {
+        case AicaSampleFormat::Pcm16:
+        case AicaSampleFormat::Pcm8:
+        case AicaSampleFormat::Adpcm4:
+            return true;
+        }
+        return false;
+    };
+    for (const auto& channel : state.channels) {
+        if (channel.adpcm_predictor < -32768 ||
+            channel.adpcm_predictor > 32767 ||
+            channel.adpcm_step < 127 || channel.adpcm_step > 24576)
+            throw std::invalid_argument(
+                "AICA-Register-Handoff besitzt ungueltigen Voicezustand.");
+    }
+    if (state.first_voice_error) {
+        if (state.voice_errors == 0u ||
+            !valid_voice_error(state.first_voice_error->error) ||
+            !valid_sample_format(state.first_voice_error->format) ||
+            state.first_voice_error->channel >= aica_channel_count)
+            throw std::invalid_argument(
+                "AICA-Register-Handoff besitzt ungueltige Voicefehlerdaten.");
+    } else if (state.voice_errors != 0u) {
+        throw std::invalid_argument(
+            "AICA-Register-Handoff hat Voicefehler ohne ersten Fehler.");
+    }
+}
+
+void AicaRegisterFile::restore_state_passive(AicaRegisterSnapshot state) {
+    validate_state_restore(state);
+    registers_ = std::move(state.registers);
+    for (std::size_t index = 0u; index < channels_.size(); ++index) {
+        const auto& source = state.channels[index];
+        channels_[index] = {
+            source.phase,
+            source.adpcm_position,
+            source.adpcm_predictor,
+            source.adpcm_step,
+            source.active,
+        };
+    }
+    writes_ = state.writes;
+    rendered_buffers_ = state.rendered_buffers;
+    rendered_frames_ = state.rendered_frames;
+    voice_errors_ = state.voice_errors;
+    first_voice_error_ = std::move(state.first_voice_error);
+}
+
 std::uint64_t AicaRegisterFile::write_count() const noexcept {
     return writes_;
 }
@@ -672,6 +770,22 @@ AicaTimer::Snapshot AicaTimer::snapshot() const noexcept {
     return {remainder_, divisor_, counter_, enabled_};
 }
 
+void AicaTimer::validate_state_restore(const Snapshot& state) const {
+    if (state.divisor == 0u || state.divisor > 128u ||
+        !std::has_single_bit(state.divisor) ||
+        state.remainder >= state.divisor)
+        throw std::invalid_argument(
+            "AICA-Timer-Handoff besitzt einen ungueltigen Teilerzustand.");
+}
+
+void AicaTimer::restore_state_passive(Snapshot state) {
+    validate_state_restore(state);
+    remainder_ = state.remainder;
+    divisor_ = state.divisor;
+    counter_ = state.counter;
+    enabled_ = state.enabled;
+}
+
 void AicaInterruptState::set_enabled(const std::uint32_t mask) {
     const auto was_asserted = asserted();
     enabled_ = mask;
@@ -763,6 +877,18 @@ AicaInterruptState::Snapshot AicaInterruptState::snapshot() const noexcept {
     return {enabled_, pending_, asserted()};
 }
 
+void AicaInterruptState::validate_state_restore(const Snapshot& state) const {
+    if (state.asserted != ((state.pending & state.enabled) != 0u))
+        throw std::invalid_argument(
+            "AICA-Interrupt-Handoff besitzt einen inkonsistenten Pegel.");
+}
+
+void AicaInterruptState::restore_state_passive(Snapshot state) {
+    validate_state_restore(state);
+    enabled_ = state.enabled;
+    pending_ = state.pending;
+}
+
 void AicaExecutionController::reset() noexcept {
     mode_ = AicaArm7Mode::HighLevelAudio;
     arm7_reset_asserted_ = false;
@@ -773,6 +899,7 @@ void AicaExecutionController::reset() noexcept {
     if (scheduler_ != nullptr && !scheduler_lifetime_.expired() && tick_event_)
         static_cast<void>(scheduler_->cancel(*tick_event_));
     tick_event_.reset();
+    tick_event_rehydration_pending_ = false;
     if (scheduler_ == nullptr || scheduler_lifetime_.expired()) return;
     try {
         schedule_tick();
@@ -848,9 +975,494 @@ AicaExecutionController::Snapshot AicaExecutionController::snapshot() const noex
         result.timers[index] = timers_[index].snapshot();
     result.interrupts = interrupts_.snapshot();
     result.tick_event = tick_event_;
+    result.tick_event_rehydration_pending =
+        tick_event_rehydration_pending_;
     result.error = error_;
     result.guest_cycles_per_tick = guest_cycles_per_tick_;
     return result;
+}
+
+void AicaExecutionController::validate_state_restore(
+    const Snapshot& state) const {
+    const auto valid_mode = [](const AicaArm7Mode mode) noexcept {
+        switch (mode) {
+        case AicaArm7Mode::HighLevelAudio:
+        case AicaArm7Mode::LowLevelArm7:
+            return true;
+        }
+        return false;
+    };
+    const auto valid_error = [](const AicaExecutionError error) noexcept {
+        switch (error) {
+        case AicaExecutionError::None:
+        case AicaExecutionError::TickScheduleFailure:
+            return true;
+        }
+        return false;
+    };
+    if (!valid_mode(state.mode) || !valid_error(state.error) ||
+        state.mode != AicaArm7Mode::HighLevelAudio)
+        throw std::invalid_argument(
+            "AICA-Execution-Handoff besitzt einen nicht unterstuetzten Modus.");
+    for (std::size_t index = 0u; index < timers_.size(); ++index)
+        timers_[index].validate_state_restore(state.timers[index]);
+    interrupts_.validate_state_restore(state.interrupts);
+    if (state.tick_event && state.tick_event_rehydration_pending)
+        throw std::invalid_argument(
+            "AICA-Execution-Handoff darf kein gebundenes und ausstehendes "
+            "Tickevent zugleich besitzen.");
+
+    const auto scheduler_bound =
+        scheduler_ != nullptr && !scheduler_lifetime_.expired();
+    if (!scheduler_bound) {
+        if (state.guest_cycles_per_tick != 0u || state.tick_event ||
+            state.tick_event_rehydration_pending)
+            throw std::invalid_argument(
+                "AICA-Execution-Handoff erwartet einen nicht gebundenen Scheduler.");
+        return;
+    }
+    if (state.guest_cycles_per_tick == 0u ||
+        state.guest_cycles_per_tick != guest_cycles_per_tick_)
+        throw std::invalid_argument(
+            "AICA-Execution-Handoff passt nicht zum Runtime-Taktvertrag.");
+    const auto has_tick =
+        state.tick_event.has_value() ||
+        state.tick_event_rehydration_pending;
+    if ((state.error == AicaExecutionError::None) != has_tick)
+        throw std::invalid_argument(
+            "AICA-Execution-Handoff besitzt einen inkonsistenten Tickvertrag.");
+}
+
+void AicaExecutionController::restore_state_passive(Snapshot state) {
+    validate_state_restore(state);
+    const auto needs_tick_rehydration =
+        state.tick_event.has_value() ||
+        state.tick_event_rehydration_pending;
+    if (scheduler_ != nullptr && !scheduler_lifetime_.expired() &&
+        tick_event_)
+        static_cast<void>(scheduler_->cancel(*tick_event_));
+    tick_event_.reset();
+    mode_ = state.mode;
+    arm7_reset_asserted_ = state.arm7_reset_asserted;
+    for (std::size_t index = 0u; index < timers_.size(); ++index)
+        timers_[index].restore_state_passive(
+            std::move(state.timers[index]));
+    interrupts_.restore_state_passive(std::move(state.interrupts));
+    error_ = state.error;
+    tick_event_rehydration_pending_ = needs_tick_rehydration;
+}
+
+SchedulerEventId AicaExecutionController::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != dreamcast_aica_tick_event_channel ||
+        token != dreamcast_aica_tick_event_token_v1)
+        throw std::invalid_argument(
+            "AICA-Execution-Handoff besitzt einen unbekannten Eventkanal "
+            "oder Token.");
+    if (scheduler_ == nullptr || scheduler_lifetime_.expired() ||
+        !tick_event_rehydration_pending_ || tick_event_ ||
+        error_ != AicaExecutionError::None)
+        throw std::logic_error(
+            "AICA-Execution-Handoff erwartet kein Tickevent.");
+    if (guest_cycle < scheduler_->current_cycle())
+        throw std::invalid_argument(
+            "AICA-Tickevent darf nicht in der Vergangenheit liegen.");
+    tick_event_ = scheduler_->schedule_at(
+        guest_cycle,
+        [this](const auto event_id, const auto) {
+            handle_tick(event_id);
+        },
+        SchedulerEventKind::AicaTick);
+    tick_event_rehydration_pending_ = false;
+    return *tick_event_;
+}
+
+bool AicaExecutionController::event_rehydration_pending() const noexcept {
+    return tick_event_rehydration_pending_;
+}
+
+DreamcastAicaStateSnapshot snapshot_dreamcast_aica_state(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution) {
+    DreamcastAicaStateSnapshot state;
+    state.registers = registers.snapshot();
+    state.rtc = rtc.snapshot();
+    state.execution = execution.snapshot();
+    validate_dreamcast_aica_state_restore(
+        registers, rtc, execution, state);
+    state.execution.tick_event_rehydration_pending =
+        state.execution.tick_event.has_value() ||
+        state.execution.tick_event_rehydration_pending;
+    state.execution.tick_event.reset();
+    validate_dreamcast_aica_state_restore(
+        registers, rtc, execution, state);
+    return state;
+}
+
+void validate_dreamcast_aica_state_restore(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution,
+    const DreamcastAicaStateSnapshot& state) {
+    const auto expected_scheduler_cycle = state.rtc.scheduler_cycle;
+    rtc.validate_state_restore(state.rtc);
+    validate_dreamcast_aica_state_restore(
+        registers,
+        rtc,
+        execution,
+        state,
+        expected_scheduler_cycle);
+}
+
+void validate_dreamcast_aica_state_restore(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution,
+    const DreamcastAicaStateSnapshot& state,
+    const std::uint64_t expected_scheduler_cycle) {
+    if (state.contract_version != dreamcast_aica_state_contract_version)
+        throw std::invalid_argument(
+            "AICA-Handoff besitzt eine unbekannte Vertragsversion.");
+    registers.validate_state_restore(state.registers);
+    rtc.validate_state_restore(state.rtc, expected_scheduler_cycle);
+    execution.validate_state_restore(state.execution);
+    if ((state.registers.registers[0x2C00u] & 1u) !=
+        static_cast<std::uint8_t>(
+            state.execution.arm7_reset_asserted))
+        throw std::invalid_argument(
+            "AICA-Handoff besitzt inkonsistenten ARM7-Resetzustand.");
+}
+
+void restore_dreamcast_aica_state_passive(
+    AicaRegisterFile& registers,
+    AicaRtc& rtc,
+    AicaExecutionController& execution,
+    DreamcastAicaStateSnapshot state) {
+    validate_dreamcast_aica_state_restore(
+        registers, rtc, execution, state);
+    execution.restore_state_passive(std::move(state.execution));
+    registers.restore_state_passive(std::move(state.registers));
+    rtc.restore_state_passive(std::move(state.rtc));
+}
+
+namespace {
+
+constexpr std::array<std::uint8_t, 8u> aica_state_magic{
+    'K', 'A', 'T', 'A', 'I', 'C', '1', '\n'};
+constexpr std::size_t maximum_aica_state_payload_size = 1u << 20u;
+
+class AicaStateWriter final {
+  public:
+    void u8(const std::uint8_t value) { bytes_.push_back(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void i32(const std::int32_t value) {
+        u32(std::bit_cast<std::uint32_t>(value));
+    }
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void raw(const std::span<const std::uint8_t> bytes) {
+        if (bytes.size() >
+            maximum_aica_state_payload_size - bytes_.size())
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload ueberschreitet das Groessenlimit.");
+        bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        if (bytes_.size() > maximum_aica_state_payload_size)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload ueberschreitet das Groessenlimit.");
+        return std::move(bytes_);
+    }
+
+  private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+class AicaStateReader final {
+  public:
+    explicit AicaStateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {
+        if (bytes_.size() > maximum_aica_state_payload_size)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload ueberschreitet das Groessenlimit.");
+    }
+    [[nodiscard]] std::uint8_t u8() {
+        require(1u);
+        return bytes_[offset_++];
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload besitzt ein ungueltiges Boolean.");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        require(4u);
+        std::uint32_t value = 0u;
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            value |= static_cast<std::uint32_t>(
+                         bytes_[offset_ + byte])
+                     << (byte * 8u);
+        offset_ += 4u;
+        return value;
+    }
+    [[nodiscard]] std::int32_t i32() {
+        return std::bit_cast<std::int32_t>(u32());
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        require(8u);
+        std::uint64_t value = 0u;
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            value |= static_cast<std::uint64_t>(
+                         bytes_[offset_ + byte])
+                     << (byte * 8u);
+        offset_ += 8u;
+        return value;
+    }
+    void raw(const std::span<std::uint8_t> destination) {
+        require(destination.size());
+        std::copy_n(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset_),
+            destination.size(),
+            destination.begin());
+        offset_ += destination.size();
+    }
+    [[nodiscard]] bool matches(
+        const std::span<const std::uint8_t> expected) {
+        require(expected.size());
+        const auto equal = std::equal(
+            expected.begin(),
+            expected.end(),
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset_));
+        offset_ += expected.size();
+        return equal;
+    }
+    void expect_end() const {
+        if (offset_ != bytes_.size())
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload besitzt nachlaufende Bytes.");
+    }
+
+  private:
+    void require(const std::size_t size) const {
+        if (offset_ > bytes_.size() ||
+            size > bytes_.size() - offset_)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload ist abgeschnitten.");
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t offset_ = 0u;
+};
+
+template <typename Enum>
+void write_aica_enum(AicaStateWriter& writer, const Enum value) {
+    static_assert(std::is_enum_v<Enum>);
+    writer.u32(static_cast<std::uint32_t>(value));
+}
+
+template <typename Enum>
+[[nodiscard]] Enum read_aica_enum(AicaStateReader& reader) {
+    static_assert(std::is_enum_v<Enum>);
+    return static_cast<Enum>(reader.u32());
+}
+
+void validate_aica_payload_shape(
+    const DreamcastAicaStateSnapshot& state) {
+    if (state.contract_version != dreamcast_aica_state_contract_version)
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt einen inkompatiblen Vertrag.");
+    for (const auto& channel : state.registers.channels) {
+        if (channel.adpcm_predictor < -32768 ||
+            channel.adpcm_predictor > 32767 ||
+            channel.adpcm_step < 127 ||
+            channel.adpcm_step > 24576)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload besitzt ungueltigen Voicezustand.");
+    }
+    if ((state.registers.voice_errors == 0u) !=
+        !state.registers.first_voice_error)
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt inkonsistente Voicefehler.");
+    if (state.registers.first_voice_error) {
+        const auto& error = *state.registers.first_voice_error;
+        if (static_cast<std::uint32_t>(error.error) >
+                static_cast<std::uint32_t>(
+                    AicaVoiceError::AdpcmOutOfRange) ||
+            static_cast<std::uint32_t>(error.format) >
+                static_cast<std::uint32_t>(
+                    AicaSampleFormat::Adpcm4) ||
+            error.channel >= aica_channel_count)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload besitzt ungueltige Voicefehlerdaten.");
+    }
+    if (state.rtc.guest_clock_hz == 0u ||
+        state.rtc.base_cycle > state.rtc.scheduler_cycle ||
+        state.rtc.counter != static_cast<std::uint32_t>(
+            state.rtc.base_seconds +
+            (state.rtc.scheduler_cycle - state.rtc.base_cycle) /
+                state.rtc.guest_clock_hz))
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt ungueltigen RTC-Zustand.");
+    if (state.execution.mode != AicaArm7Mode::HighLevelAudio ||
+        (state.execution.error != AicaExecutionError::None &&
+         state.execution.error !=
+             AicaExecutionError::TickScheduleFailure) ||
+        state.execution.tick_event)
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt ungueltigen Executionzustand.");
+    for (const auto& timer : state.execution.timers) {
+        if (timer.divisor == 0u || timer.divisor > 128u ||
+            !std::has_single_bit(timer.divisor) ||
+            timer.remainder >= timer.divisor)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload besitzt ungueltigen Timerzustand.");
+    }
+    if (state.execution.interrupts.asserted !=
+        ((state.execution.interrupts.pending &
+          state.execution.interrupts.enabled) != 0u))
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt ungueltigen Interruptpegel.");
+    if (state.execution.guest_cycles_per_tick == 0u) {
+        if (state.execution.tick_event_rehydration_pending)
+            throw std::invalid_argument(
+                "AICA-Handoff-Payload erwartet einen nicht gebundenen Scheduler.");
+    } else if ((state.execution.error == AicaExecutionError::None) !=
+               state.execution.tick_event_rehydration_pending) {
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt einen inkonsistenten Tickvertrag.");
+    }
+    if ((state.registers.registers[0x2C00u] & 1u) !=
+        static_cast<std::uint8_t>(
+            state.execution.arm7_reset_asserted))
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt inkonsistenten ARM7-Resetzustand.");
+}
+
+} // namespace
+
+std::vector<std::uint8_t> encode_dreamcast_aica_state(
+    const DreamcastAicaStateSnapshot& state) {
+    validate_aica_payload_shape(state);
+    AicaStateWriter writer;
+    writer.raw(aica_state_magic);
+    writer.u32(dreamcast_aica_state_contract_version);
+    writer.raw(state.registers.registers);
+    for (const auto& channel : state.registers.channels) {
+        writer.u64(channel.phase);
+        writer.u32(channel.adpcm_position);
+        writer.i32(channel.adpcm_predictor);
+        writer.i32(channel.adpcm_step);
+        writer.boolean(channel.active);
+    }
+    writer.u64(state.registers.writes);
+    writer.u64(state.registers.rendered_buffers);
+    writer.u64(state.registers.rendered_frames);
+    writer.u64(state.registers.voice_errors);
+    writer.boolean(state.registers.first_voice_error.has_value());
+    if (state.registers.first_voice_error) {
+        const auto& error = *state.registers.first_voice_error;
+        write_aica_enum(writer, error.error);
+        write_aica_enum(writer, error.format);
+        writer.u32(error.channel);
+        writer.u64(error.sample_address);
+        writer.u64(error.rendered_frame);
+    }
+    writer.u64(state.rtc.scheduler_cycle);
+    writer.u64(state.rtc.guest_clock_hz);
+    writer.u64(state.rtc.base_cycle);
+    writer.u32(state.rtc.initial_seconds);
+    writer.u32(state.rtc.base_seconds);
+    writer.u32(state.rtc.counter);
+    writer.u32(state.rtc.write_latch);
+    writer.boolean(state.rtc.write_enabled);
+    write_aica_enum(writer, state.execution.mode);
+    writer.boolean(state.execution.arm7_reset_asserted);
+    for (const auto& timer : state.execution.timers) {
+        writer.u64(timer.remainder);
+        writer.u32(timer.divisor);
+        writer.u8(timer.counter);
+        writer.boolean(timer.enabled);
+    }
+    writer.u32(state.execution.interrupts.enabled);
+    writer.u32(state.execution.interrupts.pending);
+    writer.boolean(state.execution.interrupts.asserted);
+    writer.boolean(
+        state.execution.tick_event_rehydration_pending);
+    write_aica_enum(writer, state.execution.error);
+    writer.u64(state.execution.guest_cycles_per_tick);
+    return std::move(writer).finish();
+}
+
+DreamcastAicaStateSnapshot decode_dreamcast_aica_state(
+    const std::span<const std::uint8_t> bytes) {
+    AicaStateReader reader(bytes);
+    if (!reader.matches(aica_state_magic))
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt keine gueltige Signatur.");
+    if (reader.u32() != dreamcast_aica_state_contract_version)
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt einen inkompatiblen Vertrag.");
+    DreamcastAicaStateSnapshot state;
+    reader.raw(state.registers.registers);
+    for (auto& channel : state.registers.channels) {
+        channel.phase = reader.u64();
+        channel.adpcm_position = reader.u32();
+        channel.adpcm_predictor = reader.i32();
+        channel.adpcm_step = reader.i32();
+        channel.active = reader.boolean();
+    }
+    state.registers.writes = reader.u64();
+    state.registers.rendered_buffers = reader.u64();
+    state.registers.rendered_frames = reader.u64();
+    state.registers.voice_errors = reader.u64();
+    if (reader.boolean()) {
+        state.registers.first_voice_error = AicaVoiceFirstError{
+            read_aica_enum<AicaVoiceError>(reader),
+            read_aica_enum<AicaSampleFormat>(reader),
+            reader.u32(),
+            reader.u64(),
+            reader.u64(),
+        };
+    }
+    state.rtc.scheduler_cycle = reader.u64();
+    state.rtc.guest_clock_hz = reader.u64();
+    state.rtc.base_cycle = reader.u64();
+    state.rtc.initial_seconds = reader.u32();
+    state.rtc.base_seconds = reader.u32();
+    state.rtc.counter = reader.u32();
+    state.rtc.write_latch = reader.u32();
+    state.rtc.write_enabled = reader.boolean();
+    state.execution.mode =
+        read_aica_enum<AicaArm7Mode>(reader);
+    state.execution.arm7_reset_asserted = reader.boolean();
+    for (auto& timer : state.execution.timers) {
+        timer.remainder = reader.u64();
+        timer.divisor = reader.u32();
+        timer.counter = reader.u8();
+        timer.enabled = reader.boolean();
+    }
+    state.execution.interrupts.enabled = reader.u32();
+    state.execution.interrupts.pending = reader.u32();
+    state.execution.interrupts.asserted = reader.boolean();
+    state.execution.tick_event.reset();
+    state.execution.tick_event_rehydration_pending =
+        reader.boolean();
+    state.execution.error =
+        read_aica_enum<AicaExecutionError>(reader);
+    state.execution.guest_cycles_per_tick = reader.u64();
+    reader.expect_end();
+    validate_aica_payload_shape(state);
+    return state;
 }
 
 std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory) {

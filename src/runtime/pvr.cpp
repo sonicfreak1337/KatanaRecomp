@@ -9,9 +9,135 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace katana::runtime {
+namespace {
+
+[[nodiscard]] bool valid_pvr_list_type(
+    const PvrListType value) noexcept {
+    switch (value) {
+    case PvrListType::Opaque:
+    case PvrListType::OpaqueModifier:
+    case PvrListType::Translucent:
+    case PvrListType::TranslucentModifier:
+    case PvrListType::PunchThrough:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_pvr_input_error_reason(
+    const PvrTaInputErrorReason value) noexcept {
+    switch (value) {
+    case PvrTaInputErrorReason::InvalidPacket:
+    case PvrTaInputErrorReason::UnsupportedPacket:
+    case PvrTaInputErrorReason::InvalidListOrder:
+    case PvrTaInputErrorReason::IncompletePacket:
+    case PvrTaInputErrorReason::BufferOverflow:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_pvr_render_error(
+    const PvrRenderError value) noexcept {
+    switch (value) {
+    case PvrRenderError::InvalidTaState:
+    case PvrRenderError::InvalidConfiguration:
+    case PvrRenderError::MemoryRange:
+    case PvrRenderError::UnsupportedFeature:
+    case PvrRenderError::InternalLifecycle:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_pvr_render_start_error(
+    const PvrRenderStartError value) noexcept {
+    switch (value) {
+    case PvrRenderStartError::Busy:
+    case PvrRenderStartError::CaptureFailed:
+    case PvrRenderStartError::SchedulerFailure:
+    case PvrRenderStartError::GenerationExhausted:
+        return true;
+    }
+    return false;
+}
+
+void validate_pvr_vertex(const PvrVertex& vertex) {
+    if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
+        !std::isfinite(vertex.z) || !std::isfinite(vertex.u) ||
+        !std::isfinite(vertex.v) || !std::isfinite(vertex.volume_u) ||
+        !std::isfinite(vertex.volume_v))
+        throw std::invalid_argument(
+            "PVR-Handoff besitzt einen nicht endlichen Vertex.");
+}
+
+void validate_pvr_material(const PvrMaterial& material,
+                           const std::size_t depth = 0u) {
+    if (depth > 8u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Materialgraph ist zyklisch oder zu tief.");
+    if (material.depth_compare > 7u || material.culling > 3u ||
+        material.texture_shading > 3u || material.texture_filter > 3u ||
+        material.fog_mode > 3u || material.source_blend > 7u ||
+        material.destination_blend > 7u ||
+        material.user_clip_mode > 3u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Material besitzt ungueltige Bitfelder.");
+    if (material.volume_material)
+        validate_pvr_material(*material.volume_material, depth + 1u);
+}
+
+[[nodiscard]] PvrMaterial clone_pvr_material(
+    const PvrMaterial& material,
+    const std::size_t depth = 0u) {
+    validate_pvr_material(material, depth);
+    auto result = material;
+    result.volume_material.reset();
+    if (material.volume_material)
+        result.volume_material = std::make_shared<PvrMaterial>(
+            clone_pvr_material(*material.volume_material, depth + 1u));
+    return result;
+}
+
+void validate_pvr_primitive(const PvrPrimitive& primitive) {
+    if (!valid_pvr_list_type(primitive.list))
+        throw std::invalid_argument(
+            "PVR-Handoff-Primitive besitzt einen ungueltigen Listentyp.");
+    validate_pvr_material(primitive.material);
+    for (const auto& vertex : primitive.vertices)
+        validate_pvr_vertex(vertex);
+}
+
+void validate_pvr_modifier_volume(const PvrModifierVolume& volume) {
+    if (volume.list != PvrListType::OpaqueModifier &&
+        volume.list != PvrListType::TranslucentModifier)
+        throw std::invalid_argument(
+            "PVR-Handoff-Modifier-Volume besitzt einen ungueltigen Listentyp.");
+    if (volume.depth_mode > 3u || volume.culling > 3u ||
+        volume.user_clip_mode > 3u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Modifier-Volume besitzt ungueltige Bitfelder.");
+    for (const auto& triangle : volume.triangles)
+        for (const auto& vertex : triangle)
+            validate_pvr_vertex(vertex);
+}
+
+void detach_pvr_material_graphs(TileAcceleratorSnapshot& state) {
+    state.current_material = clone_pvr_material(state.current_material);
+    for (auto& primitive : state.primitives)
+        primitive.material = clone_pvr_material(primitive.material);
+}
+
+void detach_pvr_material_graphs(PvrTaFifoSnapshot& state) {
+    detach_pvr_material_graphs(state.accelerator);
+    state.active_material = clone_pvr_material(state.active_material);
+}
+
+} // namespace
 
 PvrRenderJobError::PvrRenderJobError(const PvrRenderError error,
                                      std::string ta_packet_class,
@@ -163,6 +289,13 @@ PvrRegisterSnapshot PvrRegisterFile::snapshot() const {
     result.vblank_in_event = vblank_in_event_;
     result.vblank_out_event = vblank_out_event_;
     result.hblank_event = hblank_event_;
+    result.vblank_in_event_rehydration_pending =
+        vblank_in_event_rehydration_pending_;
+    result.vblank_out_event_rehydration_pending =
+        vblank_out_event_rehydration_pending_;
+    result.hblank_event_rehydration_pending =
+        hblank_event_rehydration_pending_;
+    result.hblank_event_line = hblank_event_line_;
     result.scan_frame_cycles = scan_frame_cycles_;
     result.scan_epoch_cycle = scan_epoch_cycle_;
     result.timing = timing_;
@@ -179,6 +312,214 @@ PvrRegisterSnapshot PvrRegisterFile::snapshot() const {
     result.last_render_start_error = last_render_start_error_;
     result.last_render_failure = last_render_failure_;
     return result;
+}
+
+void PvrRegisterFile::validate_state_restore(
+    const PvrRegisterSnapshot& state) const {
+    if (state.timing.render_latency != timing_.render_latency ||
+        state.timing.guest_clock_hz != timing_.guest_clock_hz ||
+        state.timing.pixel_clock_hz != timing_.pixel_clock_hz ||
+        state.timing.guest_clock_hz == 0u ||
+        state.timing.pixel_clock_hz == 0u)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff passt nicht zum Runtime-Taktvertrag.");
+    if (state.read(pvr_register::Id) != pvr_id ||
+        state.read(pvr_register::Revision) != pvr_revision)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt eine ungueltige Hardwarekennung.");
+    if (state.framebuffer_read_control !=
+            state.registers[pvr_register::FramebufferReadControl / 4u] ||
+        state.framebuffer_read_size !=
+            state.registers[pvr_register::FramebufferReadSize / 4u] ||
+        state.framebuffer_read_sof1 !=
+            state.registers[pvr_register::FramebufferReadSof1 / 4u] ||
+        state.framebuffer_read_sof2 !=
+            state.registers[pvr_register::FramebufferReadSof2 / 4u] ||
+        state.framebuffer_write_control !=
+            state.registers[pvr_register::FramebufferWriteControl / 4u] ||
+        state.framebuffer_write_sof1 !=
+            state.registers[pvr_register::FramebufferWriteSof1 / 4u] ||
+        state.framebuffer_write_sof2 !=
+            state.registers[pvr_register::FramebufferWriteSof2 / 4u] ||
+        state.video_control !=
+            state.registers[pvr_register::VideoControl / 4u])
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt inkonsistente Registeransichten.");
+    if (!state.render_event_ids.empty() ||
+        state.active_render_request != 0u ||
+        state.active_render_generation != 0u ||
+        state.active_render_start_cycle != 0u ||
+        state.active_render_payload_digest != 0u)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff enthaelt einen nicht rekonstruierbaren "
+            "aktiven Renderjob.");
+    if (state.render_requests !=
+        state.render_completions + state.render_failures)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt inkonsistente Renderzaehler.");
+    if (state.render_overruns > state.render_failures ||
+        state.field > 1u)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt ungueltige Zaehler oder Feldbits.");
+    if (state.last_render_start_error &&
+        !valid_pvr_render_start_error(*state.last_render_start_error))
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt einen ungueltigen Startfehler.");
+    if (state.last_render_failure &&
+        (!valid_pvr_render_error(state.last_render_failure->error) ||
+         state.last_render_failure->request == 0u ||
+         state.last_render_failure->request > state.render_requests ||
+         state.last_render_failure->generation == 0u))
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt einen ungueltigen Renderfehler.");
+    if (state.vblank_in_event &&
+        state.vblank_in_event_rehydration_pending)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt VBlank-In doppelt gebunden.");
+    if (state.vblank_out_event &&
+        state.vblank_out_event_rehydration_pending)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt VBlank-Out doppelt gebunden.");
+    if (state.hblank_event &&
+        state.hblank_event_rehydration_pending)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt HBlank doppelt gebunden.");
+    const auto has_vblank_in =
+        state.vblank_in_event.has_value() ||
+        state.vblank_in_event_rehydration_pending;
+    const auto has_vblank_out =
+        state.vblank_out_event.has_value() ||
+        state.vblank_out_event_rehydration_pending;
+    const auto has_hblank =
+        state.hblank_event.has_value() ||
+        state.hblank_event_rehydration_pending;
+    if (state.scan_frame_cycles == 0u &&
+        (has_vblank_in || has_vblank_out || has_hblank))
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt Scanereignisse ohne Frameperiode.");
+    if (has_hblank != state.hblank_event_line.has_value())
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt keinen eindeutigen HBlank-Kanal.");
+    const auto vertical =
+        ((state.registers[pvr_register::SpgLoad / 4u] >> 16u) & 0x3FFu) +
+        1u;
+    if (state.hblank_event_line &&
+        *state.hblank_event_line >= vertical)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt eine ungueltige HBlank-Zeile.");
+    if (state.next_render_generation != 0u &&
+        state.next_render_generation <= state.render_completions)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt eine zuruecklaufende Generation.");
+}
+
+void PvrRegisterFile::restore_state_passive(PvrRegisterSnapshot state) {
+    validate_state_restore(state);
+    const auto needs_vblank_in =
+        state.vblank_in_event.has_value() ||
+        state.vblank_in_event_rehydration_pending;
+    const auto needs_vblank_out =
+        state.vblank_out_event.has_value() ||
+        state.vblank_out_event_rehydration_pending;
+    const auto needs_hblank =
+        state.hblank_event.has_value() ||
+        state.hblank_event_rehydration_pending;
+
+    for (const auto& [event, job] : render_jobs_) {
+        static_cast<void>(job);
+        static_cast<void>(scheduler_.cancel(event));
+    }
+    render_jobs_.clear();
+    cancel_scan_events();
+    registers_ = std::move(state.registers);
+    render_requests_ = state.render_requests;
+    render_completions_ = state.render_completions;
+    render_failures_ = state.render_failures;
+    render_overruns_ = state.render_overruns;
+    next_render_generation_ = state.next_render_generation;
+    last_render_start_error_ = state.last_render_start_error;
+    last_render_failure_ = std::move(state.last_render_failure);
+    resets_ = state.resets;
+    vblank_in_count_ = state.vblank_in;
+    vblank_out_count_ = state.vblank_out;
+    hblank_count_ = state.hblank;
+    scan_frame_cycles_ = state.scan_frame_cycles;
+    scan_epoch_cycle_ = state.scan_epoch_cycle;
+    in_vblank_ = state.in_vblank;
+    field_ = state.field;
+    vblank_in_event_rehydration_pending_ = needs_vblank_in;
+    vblank_out_event_rehydration_pending_ = needs_vblank_out;
+    hblank_event_rehydration_pending_ = needs_hblank;
+    hblank_event_line_ = state.hblank_event_line;
+}
+
+SchedulerEventId PvrRegisterFile::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (token != dreamcast_pvr_scan_event_token_v1)
+        throw std::invalid_argument(
+            "PVR-Register-Handoff besitzt einen unbekannten Eventtoken.");
+    if (guest_cycle < scheduler_.current_cycle())
+        throw std::invalid_argument(
+            "PVR-Scanereignis darf nicht in der Vergangenheit liegen.");
+    if (channel == dreamcast_pvr_vblank_in_event_channel) {
+        if (!vblank_in_event_rehydration_pending_ || vblank_in_event_)
+            throw std::logic_error(
+                "PVR-Register-Handoff erwartet kein VBlank-In-Ereignis.");
+        const auto event = scheduler_.schedule_at(
+            guest_cycle,
+            [this](const auto id, const auto) {
+                handle_scan_event(id, true);
+            },
+            SchedulerEventKind::PvrVblankIn);
+        vblank_in_event_ = event;
+        vblank_in_event_rehydration_pending_ = false;
+        return event;
+    }
+    if (channel == dreamcast_pvr_vblank_out_event_channel) {
+        if (!vblank_out_event_rehydration_pending_ || vblank_out_event_)
+            throw std::logic_error(
+                "PVR-Register-Handoff erwartet kein VBlank-Out-Ereignis.");
+        const auto event = scheduler_.schedule_at(
+            guest_cycle,
+            [this](const auto id, const auto) {
+                handle_scan_event(id, false);
+            },
+            SchedulerEventKind::PvrVblankOut);
+        vblank_out_event_ = event;
+        vblank_out_event_rehydration_pending_ = false;
+        return event;
+    }
+    if (channel == dreamcast_pvr_hblank_event_channel) {
+        if (!hblank_event_rehydration_pending_ || hblank_event_ ||
+            !hblank_event_line_)
+            throw std::logic_error(
+                "PVR-Register-Handoff erwartet kein HBlank-Ereignis.");
+        const auto line = *hblank_event_line_;
+        const auto event = scheduler_.schedule_at(
+            guest_cycle,
+            [this, line](const auto id, const auto) {
+                handle_hblank_event(id, line);
+            },
+            SchedulerEventKind::PvrHblank);
+        hblank_event_ = event;
+        hblank_event_rehydration_pending_ = false;
+        return event;
+    }
+    throw std::invalid_argument(
+        "PVR-Register-Handoff besitzt einen unbekannten Eventkanal.");
+}
+
+bool PvrRegisterFile::event_rehydration_pending(
+    const std::uint32_t channel) const noexcept {
+    if (channel == dreamcast_pvr_vblank_in_event_channel)
+        return vblank_in_event_rehydration_pending_;
+    if (channel == dreamcast_pvr_vblank_out_event_channel)
+        return vblank_out_event_rehydration_pending_;
+    if (channel == dreamcast_pvr_hblank_event_channel)
+        return hblank_event_rehydration_pending_;
+    return false;
 }
 
 void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t value) {
@@ -449,6 +790,10 @@ void PvrRegisterFile::handle_scheduler_reset() {
     vblank_in_event_.reset();
     vblank_out_event_.reset();
     hblank_event_.reset();
+    vblank_in_event_rehydration_pending_ = false;
+    vblank_out_event_rehydration_pending_ = false;
+    hblank_event_rehydration_pending_ = false;
+    hblank_event_line_.reset();
     reschedule_scanout();
 }
 
@@ -538,6 +883,10 @@ void PvrRegisterFile::cancel_scan_events() noexcept {
     vblank_in_event_.reset();
     vblank_out_event_.reset();
     hblank_event_.reset();
+    vblank_in_event_rehydration_pending_ = false;
+    vblank_out_event_rehydration_pending_ = false;
+    hblank_event_rehydration_pending_ = false;
+    hblank_event_line_.reset();
 }
 
 void PvrRegisterFile::reschedule_scanout(const bool derive_current_vblank) {
@@ -668,6 +1017,7 @@ void PvrRegisterFile::schedule_hblank_event(const std::uint32_t line) {
         delay,
         [this, line](const auto id, const auto) { handle_hblank_event(id, line); },
         SchedulerEventKind::PvrHblank);
+    hblank_event_line_ = line;
 }
 
 void PvrRegisterFile::handle_hblank_event(const SchedulerEventId event_id,
@@ -675,6 +1025,7 @@ void PvrRegisterFile::handle_hblank_event(const SchedulerEventId event_id,
     if (!hblank_event_ || *hblank_event_ != event_id)
         throw std::logic_error("PVR-HBlank-Completion besitzt kein aktives Ereignis.");
     hblank_event_.reset();
+    hblank_event_line_.reset();
     ++hblank_count_;
     if (hblank_observer_) hblank_observer_();
     const auto mode = (registers_[index(pvr_register::SpgHblankInterrupt)] >> 12u) & 3u;
@@ -700,6 +1051,7 @@ void PvrRegisterFile::handle_hblank_event(const SchedulerEventId event_id,
         delay,
         [this, line](const auto id, const auto) { handle_hblank_event(id, line); },
         SchedulerEventKind::PvrHblank);
+    hblank_event_line_ = line;
 }
 
 void configure_dreamcast_video(PvrRegisterFile& registers, const DreamcastVideoMode mode) {
@@ -1701,6 +2053,34 @@ TileAcceleratorSnapshot TileAccelerator::snapshot() const {
     };
 }
 
+void TileAccelerator::validate_state_restore(
+    const TileAcceleratorSnapshot& state) const {
+    if (!valid_pvr_list_type(state.current_list) ||
+        state.highest_list_rank > 4u ||
+        (state.list_open && !state.frame_has_list) ||
+        (!state.list_open && !state.current_strip.empty()))
+        throw std::invalid_argument(
+            "PVR-TA-Handoff besitzt einen inkonsistenten Listenstatus.");
+    validate_pvr_material(state.current_material);
+    for (const auto& vertex : state.current_strip)
+        validate_pvr_vertex(vertex);
+    for (const auto& primitive : state.primitives)
+        validate_pvr_primitive(primitive);
+}
+
+void TileAccelerator::restore_state_passive(
+    TileAcceleratorSnapshot state) {
+    validate_state_restore(state);
+    detach_pvr_material_graphs(state);
+    primitives_ = std::move(state.primitives);
+    current_strip_ = std::move(state.current_strip);
+    current_list_ = state.current_list;
+    current_material_ = std::move(state.current_material);
+    highest_list_rank_ = state.highest_list_rank;
+    frame_has_list_ = state.frame_has_list;
+    list_open_ = state.list_open;
+}
+
 namespace {
 
 std::uint32_t ta_u32(const std::span<const std::uint8_t> packet, const std::size_t offset) {
@@ -2290,6 +2670,74 @@ PvrTaFifoSnapshot PvrTaFifo::snapshot() const {
     };
 }
 
+void PvrTaFifo::validate_state_restore(
+    const PvrTaFifoSnapshot& state) const {
+    accelerator_.validate_state_restore(state.accelerator);
+    if (!valid_pvr_list_type(state.active_list) ||
+        state.active_color_type > 3u ||
+        state.user_clip_start_x > 1023u ||
+        state.user_clip_end_x > 1023u ||
+        state.user_clip_start_y > 1023u ||
+        state.user_clip_end_y > 1023u ||
+        state.frame_packets > pvr_ta_maximum_frame_packets ||
+        state.metrics.packets < state.frame_packets)
+        throw std::invalid_argument(
+            "PVR-TA-FIFO-Handoff besitzt ungueltige Parserdaten.");
+    validate_pvr_material(state.active_material);
+    if (state.pending_extended_vertex)
+        validate_pvr_vertex(*state.pending_extended_vertex);
+    for (const auto& volume : state.modifier_volumes)
+        validate_pvr_modifier_volume(volume);
+    if (state.active_modifier_volume &&
+        *state.active_modifier_volume >= state.modifier_volumes.size())
+        throw std::invalid_argument(
+            "PVR-TA-FIFO-Handoff besitzt einen ungueltigen Modifierindex.");
+    if (state.first_input_error) {
+        if (state.metrics.rejected_packets == 0u ||
+            !valid_pvr_input_error_reason(
+                state.first_input_error->reason) ||
+            state.first_input_error->packet == 0u)
+            throw std::invalid_argument(
+                "PVR-TA-FIFO-Handoff besitzt ungueltige Fehlerdaten.");
+    } else if (state.metrics.rejected_packets != 0u) {
+        throw std::invalid_argument(
+            "PVR-TA-FIFO-Handoff hat Ablehnungen ohne ersten Fehler.");
+    }
+}
+
+void PvrTaFifo::restore_state_passive(PvrTaFifoSnapshot state) {
+    validate_state_restore(state);
+    detach_pvr_material_graphs(state);
+    accelerator_.restore_state_passive(std::move(state.accelerator));
+    active_list_ = state.active_list;
+    active_textured_ = state.active_textured;
+    active_uv16_ = state.active_uv16;
+    active_color_type_ = state.active_color_type;
+    active_sprite_ = state.active_sprite;
+    active_two_volume_ = state.active_two_volume;
+    active_header_argb_ = state.active_header_argb;
+    active_header_oargb_ = state.active_header_oargb;
+    active_volume_header_argb_ = state.active_volume_header_argb;
+    intensity_face_color_valid_ = state.intensity_face_color_valid;
+    active_material_ = std::move(state.active_material);
+    user_clip_start_x_ = state.user_clip_start_x;
+    user_clip_start_y_ = state.user_clip_start_y;
+    user_clip_end_x_ = state.user_clip_end_x;
+    user_clip_end_y_ = state.user_clip_end_y;
+    pending_sprite_vertex_ = std::move(state.pending_sprite_vertex);
+    pending_extended_vertex_ = std::move(state.pending_extended_vertex);
+    pending_intensity_header_ = state.pending_intensity_header;
+    pending_extended_end_of_strip_ =
+        state.pending_extended_end_of_strip;
+    modifier_volumes_ = std::move(state.modifier_volumes);
+    active_modifier_volume_ = state.active_modifier_volume;
+    pending_modifier_vertex_packet_ =
+        std::move(state.pending_modifier_vertex_packet);
+    metrics_ = state.metrics;
+    frame_packets_ = state.frame_packets;
+    first_input_error_ = std::move(state.first_input_error);
+}
+
 void PvrTaFifo::continue_list() {
     if (accelerator_.list_open() || pending_sprite_vertex_ || pending_extended_vertex_ ||
         pending_intensity_header_ || pending_modifier_vertex_packet_)
@@ -2475,6 +2923,40 @@ PvrTaFifoMemoryDevice::Snapshot PvrTaFifoMemoryDevice::snapshot() const noexcept
     return {packet_, packet_base_, written_mask_, packet_active_};
 }
 
+void PvrTaFifoMemoryDevice::validate_state_restore(
+    const Snapshot& state) const {
+    if (!state.packet_active) {
+        if (state.packet_base != 0u || state.written_mask != 0u ||
+            std::any_of(state.packet.begin(),
+                        state.packet.end(),
+                        [](const auto byte) { return byte != 0u; }))
+            throw std::invalid_argument(
+                "PVR-TA-Apertur-Handoff besitzt inaktive Paketdaten.");
+        return;
+    }
+    if ((state.packet_base & 31u) != 0u ||
+        state.packet_base >= aperture_size ||
+        state.written_mask == 0u ||
+        state.written_mask ==
+            std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument(
+            "PVR-TA-Apertur-Handoff besitzt einen ungueltigen Paketstatus.");
+    for (std::size_t byte = 0u; byte < state.packet.size(); ++byte) {
+        if ((state.written_mask & (std::uint32_t{1u} << byte)) == 0u &&
+            state.packet[byte] != 0u)
+            throw std::invalid_argument(
+                "PVR-TA-Apertur-Handoff besitzt ungeschriebene Nutzdaten.");
+    }
+}
+
+void PvrTaFifoMemoryDevice::restore_state_passive(Snapshot state) {
+    validate_state_restore(state);
+    packet_ = std::move(state.packet);
+    packet_base_ = state.packet_base;
+    written_mask_ = state.written_mask;
+    packet_active_ = state.packet_active;
+}
+
 void PvrTaFifoMemoryDevice::reset() noexcept {
     packet_.fill(0u);
     packet_base_ = 0u;
@@ -2631,6 +3113,58 @@ PvrYuvConverterMemoryDevice::Snapshot PvrYuvConverterMemoryDevice::snapshot() co
         converted_macroblocks_,
         guest_memory_access_memory_ != nullptr,
     };
+}
+
+void PvrYuvConverterMemoryDevice::validate_state_restore(
+    const Snapshot& state) const {
+    if (state.guest_memory_access_bound !=
+        (guest_memory_access_memory_ != nullptr))
+        throw std::invalid_argument(
+            "PVR-YUV-Handoff passt nicht zum Runtime-Memory-Sink-Vertrag.");
+    const auto unconfigured =
+        state.configuration == std::numeric_limits<std::uint32_t>::max() &&
+        state.destination == std::numeric_limits<std::uint32_t>::max();
+    if (unconfigured) {
+        if (!state.input.empty() || state.frame_macroblock != 0u)
+            throw std::invalid_argument(
+                "PVR-YUV-Handoff besitzt Daten ohne Konfiguration.");
+        return;
+    }
+    if (state.configuration == std::numeric_limits<std::uint32_t>::max() ||
+        state.destination == std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument(
+            "PVR-YUV-Handoff besitzt eine unvollstaendige Konfiguration.");
+    const auto macroblock_size =
+        (state.configuration & 0x01000000u) != 0u ? 512u : 384u;
+    if (state.input.size() >= macroblock_size)
+        throw std::invalid_argument(
+            "PVR-YUV-Handoff besitzt einen uebervollen Eingabepuffer.");
+    const auto blocks_x =
+        static_cast<std::uint64_t>(state.configuration & 0x3Fu) + 1u;
+    const auto blocks_y =
+        static_cast<std::uint64_t>(
+            (state.configuration >> 8u) & 0x3Fu) +
+        1u;
+    const auto total_blocks = blocks_x * blocks_y;
+    if (state.frame_macroblock > total_blocks)
+        throw std::invalid_argument(
+            "PVR-YUV-Handoff besitzt einen ungueltigen Makroblockindex.");
+    const auto frame_bytes = blocks_x * 16u * blocks_y * 16u * 2u;
+    if (state.destination >= vram_->size() ||
+        frame_bytes >
+            static_cast<std::uint64_t>(vram_->size()) -
+                state.destination)
+        throw std::invalid_argument(
+            "PVR-YUV-Handoff-Ziel liegt ausserhalb des Runtime-VRAM.");
+}
+
+void PvrYuvConverterMemoryDevice::restore_state_passive(Snapshot state) {
+    validate_state_restore(state);
+    input_ = std::move(state.input);
+    configuration_ = state.configuration;
+    destination_ = state.destination;
+    frame_macroblock_ = state.frame_macroblock;
+    converted_macroblocks_ = state.converted_macroblocks;
 }
 
 void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
@@ -3861,6 +4395,1377 @@ PvrSoftwareRendererSnapshot PvrSoftwareRenderer::snapshot() const {
         queued_guest_frame_proof_,
         first_error_,
     };
+}
+
+void PvrSoftwareRenderer::validate_state_restore(
+    const PvrSoftwareRendererSnapshot& state) const {
+    if (state.guest_memory_access_bound !=
+        (guest_memory_access_memory_ != nullptr))
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff passt nicht zum Runtime-Memory-Sink-Vertrag.");
+    if (state.next_render_generation != 0u &&
+        state.next_render_generation <= state.last_render_generation)
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt eine zuruecklaufende Generation.");
+    if (state.pending_render_evidence.size() >
+        render_evidence_capacity)
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt zu viele Evidenzgenerationen.");
+    std::size_t evidence_bytes = 0u;
+    std::uint64_t previous_generation = 0u;
+    bool scan_generation_found =
+        state.next_evidence_scan_generation == 0u;
+    for (const auto& evidence : state.pending_render_evidence) {
+        if (evidence.generation == 0u ||
+            evidence.generation <= previous_generation ||
+            evidence.generation > state.last_render_generation ||
+            evidence.width == 0u || evidence.width > 2048u ||
+            evidence.height == 0u || evidence.height > 1024u ||
+            (evidence.pixel_bytes != 2u &&
+             evidence.pixel_bytes != 3u &&
+             evidence.pixel_bytes != 4u) ||
+            evidence.stride_bytes <
+                static_cast<std::uint64_t>(evidence.width) *
+                    evidence.pixel_bytes ||
+            evidence.changed_pixels !=
+                evidence.changed_pixel_values.size() ||
+            evidence.pixel_writes < evidence.changed_pixels ||
+            evidence.validation_cursor >
+                evidence.changed_pixel_values.size())
+            throw std::invalid_argument(
+                "PVR-Renderer-Handoff besitzt ungueltige Renderevidenz.");
+        for (const auto& pixel : evidence.changed_pixel_values) {
+            const auto valid_mask =
+                (std::uint32_t{1u} << evidence.pixel_bytes) - 1u;
+            if (pixel.offset >= dreamcast_vram_size ||
+                evidence.pixel_bytes >
+                    dreamcast_vram_size - pixel.offset ||
+                pixel.changed_byte_mask == 0u ||
+                (pixel.changed_byte_mask & ~valid_mask) != 0u)
+                throw std::invalid_argument(
+                    "PVR-Renderer-Handoff besitzt ungueltige Pixelevidenz.");
+        }
+        const auto bytes =
+            evidence.changed_pixel_values.size() *
+            sizeof(PvrChangedPixelEvidence);
+        if (bytes > render_evidence_byte_capacity - evidence_bytes)
+            throw std::invalid_argument(
+                "PVR-Renderer-Handoff ueberschreitet das Evidenzbudget.");
+        evidence_bytes += bytes;
+        previous_generation = evidence.generation;
+        scan_generation_found =
+            scan_generation_found ||
+            evidence.generation ==
+                state.next_evidence_scan_generation;
+    }
+    if (evidence_bytes != state.pending_render_evidence_bytes ||
+        !scan_generation_found ||
+        (state.pending_render_evidence.empty() &&
+         state.next_evidence_scan_generation != 0u))
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt inkonsistente Evidenzindizes.");
+
+    constexpr auto dirty_word_count =
+        (dreamcast_vram_size + 63u) / 64u;
+    if (!state.direct_dirty_words.empty() &&
+        state.direct_dirty_words.size() != dirty_word_count)
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt eine ungueltige Dirty-Bitmap.");
+    std::size_t dirty_bytes = 0u;
+    for (const auto word : state.direct_dirty_words)
+        dirty_bytes += std::popcount(word);
+    if (dirty_bytes != state.direct_dirty_byte_count)
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt einen inkonsistenten Dirty-Zaehler.");
+    if (!state.direct_vram_shadow.empty() &&
+        state.direct_vram_shadow.size() != dreamcast_vram_size)
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt kein vollstaendiges VRAM-Schattenabbild.");
+    if (!state.direct_vram_shadow_valid &&
+        !state.direct_vram_shadow.empty())
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff markiert ein vorhandenes Schattenabbild als ungueltig.");
+    if (state.pending_direct_write_generation !=
+            state.pending_direct_last_write_generation ||
+        ((state.pending_direct_first_write_generation == 0u) !=
+         (state.pending_direct_last_write_generation == 0u)) ||
+        (state.pending_direct_first_write_generation != 0u &&
+         state.pending_direct_first_write_generation >
+             state.pending_direct_last_write_generation) ||
+        (state.pending_direct_last_write_generation != 0u &&
+         state.next_direct_write_generation !=
+             std::numeric_limits<std::uint64_t>::max() &&
+         state.next_direct_write_generation <=
+             state.pending_direct_last_write_generation))
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt inkonsistente Direct-Write-Generationen.");
+    if (state.queued_guest_frame_proof) {
+        const auto& proof = *state.queued_guest_frame_proof;
+        if ((proof.source != PvrGuestFrameProofSource::TaRender &&
+             proof.source !=
+                 PvrGuestFrameProofSource::DirectFramebuffer) ||
+            proof.changed_pixels == 0u || proof.frame.width == 0u ||
+            proof.frame.height == 0u ||
+            proof.frame.width >
+                std::numeric_limits<std::size_t>::max() /
+                    proof.frame.height ||
+            static_cast<std::size_t>(proof.frame.width) *
+                    proof.frame.height >
+                std::numeric_limits<std::size_t>::max() / 4u ||
+            proof.frame.rgba.size() !=
+                static_cast<std::size_t>(proof.frame.width) *
+                    proof.frame.height * 4u ||
+            proof.scanout_field > 1u)
+            throw std::invalid_argument(
+                "PVR-Renderer-Handoff besitzt einen ungueltigen Framebeweis.");
+    }
+    if (state.first_error &&
+        !valid_pvr_render_error(state.first_error->error))
+        throw std::invalid_argument(
+            "PVR-Renderer-Handoff besitzt einen ungueltigen Fehler.");
+}
+
+void PvrSoftwareRenderer::restore_state_passive(
+    PvrSoftwareRendererSnapshot state) {
+    validate_state_restore(state);
+    metrics_ = state.metrics;
+    next_render_generation_ = state.next_render_generation;
+    last_render_generation_ = state.last_render_generation;
+    pending_render_evidence_ =
+        std::move(state.pending_render_evidence);
+    pending_render_evidence_bytes_ =
+        state.pending_render_evidence_bytes;
+    next_evidence_scan_generation_ =
+        state.next_evidence_scan_generation;
+    next_direct_write_generation_ =
+        state.next_direct_write_generation;
+    pending_direct_first_write_generation_ =
+        state.pending_direct_first_write_generation;
+    pending_direct_last_write_generation_ =
+        state.pending_direct_last_write_generation;
+    direct_dirty_words_ = std::move(state.direct_dirty_words);
+    direct_dirty_byte_count_ = state.direct_dirty_byte_count;
+    direct_vram_shadow_ = std::move(state.direct_vram_shadow);
+    direct_vram_shadow_valid_ = state.direct_vram_shadow_valid;
+    queued_guest_frame_proof_ =
+        std::move(state.queued_guest_frame_proof);
+    first_error_ = std::move(state.first_error);
+}
+
+DreamcastPvrStateSnapshot snapshot_dreamcast_pvr_state(
+    const PvrRegisterFile& registers,
+    const PvrTaFifo& ta_fifo,
+    const PvrTaFifoMemoryDevice& ta_aperture,
+    const PvrYuvConverterMemoryDevice& yuv,
+    const PvrSoftwareRenderer& renderer) {
+    DreamcastPvrStateSnapshot state;
+    state.registers = registers.snapshot();
+    state.ta_fifo = ta_fifo.snapshot();
+    state.ta_aperture = ta_aperture.snapshot();
+    state.yuv = yuv.snapshot();
+    state.renderer = renderer.snapshot();
+    validate_dreamcast_pvr_state_restore(
+        registers, ta_fifo, ta_aperture, yuv, renderer, state);
+    state.registers.vblank_in_event_rehydration_pending =
+        state.registers.vblank_in_event.has_value() ||
+        state.registers.vblank_in_event_rehydration_pending;
+    state.registers.vblank_out_event_rehydration_pending =
+        state.registers.vblank_out_event.has_value() ||
+        state.registers.vblank_out_event_rehydration_pending;
+    state.registers.hblank_event_rehydration_pending =
+        state.registers.hblank_event.has_value() ||
+        state.registers.hblank_event_rehydration_pending;
+    state.registers.vblank_in_event.reset();
+    state.registers.vblank_out_event.reset();
+    state.registers.hblank_event.reset();
+    detach_pvr_material_graphs(state.ta_fifo);
+    validate_dreamcast_pvr_state_restore(
+        registers, ta_fifo, ta_aperture, yuv, renderer, state);
+    return state;
+}
+
+void validate_dreamcast_pvr_state_restore(
+    const PvrRegisterFile& registers,
+    const PvrTaFifo& ta_fifo,
+    const PvrTaFifoMemoryDevice& ta_aperture,
+    const PvrYuvConverterMemoryDevice& yuv,
+    const PvrSoftwareRenderer& renderer,
+    const DreamcastPvrStateSnapshot& state) {
+    if (state.contract_version != dreamcast_pvr_state_contract_version)
+        throw std::invalid_argument(
+            "PVR-Handoff besitzt eine unbekannte Vertragsversion.");
+    registers.validate_state_restore(state.registers);
+    ta_fifo.validate_state_restore(state.ta_fifo);
+    ta_aperture.validate_state_restore(state.ta_aperture);
+    yuv.validate_state_restore(state.yuv);
+    renderer.validate_state_restore(state.renderer);
+}
+
+void restore_dreamcast_pvr_state_passive(
+    PvrRegisterFile& registers,
+    PvrTaFifo& ta_fifo,
+    PvrTaFifoMemoryDevice& ta_aperture,
+    PvrYuvConverterMemoryDevice& yuv,
+    PvrSoftwareRenderer& renderer,
+    DreamcastPvrStateSnapshot state) {
+    validate_dreamcast_pvr_state_restore(
+        registers, ta_fifo, ta_aperture, yuv, renderer, state);
+    ta_fifo.restore_state_passive(std::move(state.ta_fifo));
+    ta_aperture.restore_state_passive(std::move(state.ta_aperture));
+    yuv.restore_state_passive(std::move(state.yuv));
+    renderer.restore_state_passive(std::move(state.renderer));
+    registers.restore_state_passive(std::move(state.registers));
+}
+
+namespace {
+
+constexpr std::array<std::uint8_t, 8u> pvr_state_magic{
+    'K', 'A', 'T', 'P', 'V', 'R', '1', '\n'};
+constexpr std::size_t maximum_pvr_state_payload_size = 128u << 20u;
+constexpr std::size_t maximum_pvr_state_string_size = 1u << 20u;
+constexpr std::size_t maximum_pvr_state_vertices = 2u << 20u;
+constexpr std::size_t maximum_pvr_state_primitives = 1u << 20u;
+constexpr std::size_t maximum_pvr_state_modifier_volumes = 1u << 20u;
+
+class PvrStateWriter final {
+  public:
+    void u8(const std::uint8_t value) { bytes_.push_back(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u16(const std::uint16_t value) {
+        u8(static_cast<std::uint8_t>(value));
+        u8(static_cast<std::uint8_t>(value >> 8u));
+    }
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void f32(const float value) {
+        u32(std::bit_cast<std::uint32_t>(value));
+    }
+    void raw(const std::span<const std::uint8_t> bytes) {
+        if (bytes_.size() > maximum_pvr_state_payload_size ||
+            bytes.size() >
+                maximum_pvr_state_payload_size - bytes_.size())
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload ueberschreitet das Groessenlimit.");
+        bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
+    }
+    void string(const std::string& value) {
+        if (value.size() > maximum_pvr_state_string_size)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt einen zu langen Diagnosetext.");
+        u32(static_cast<std::uint32_t>(value.size()));
+        raw(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(value.data()),
+            value.size()));
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        if (bytes_.size() > maximum_pvr_state_payload_size)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload ueberschreitet das Groessenlimit.");
+        return std::move(bytes_);
+    }
+
+  private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+class PvrStateReader final {
+  public:
+    explicit PvrStateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {
+        if (bytes_.size() > maximum_pvr_state_payload_size)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload ueberschreitet das Groessenlimit.");
+    }
+    [[nodiscard]] std::uint8_t u8() {
+        require(1u);
+        return bytes_[offset_++];
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt ein ungueltiges Boolean.");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint16_t u16() {
+        require(2u);
+        const auto value = static_cast<std::uint16_t>(
+            static_cast<std::uint16_t>(bytes_[offset_]) |
+            static_cast<std::uint16_t>(
+                static_cast<std::uint16_t>(bytes_[offset_ + 1u])
+                << 8u));
+        offset_ += 2u;
+        return value;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        require(4u);
+        std::uint32_t value = 0u;
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            value |= static_cast<std::uint32_t>(
+                         bytes_[offset_ + byte])
+                     << (byte * 8u);
+        offset_ += 4u;
+        return value;
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        require(8u);
+        std::uint64_t value = 0u;
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            value |= static_cast<std::uint64_t>(
+                         bytes_[offset_ + byte])
+                     << (byte * 8u);
+        offset_ += 8u;
+        return value;
+    }
+    [[nodiscard]] float f32() {
+        const auto result = std::bit_cast<float>(u32());
+        if (!std::isfinite(result))
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt einen nicht endlichen Float.");
+        return result;
+    }
+    void raw(const std::span<std::uint8_t> destination) {
+        require(destination.size());
+        std::copy_n(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset_),
+            destination.size(),
+            destination.begin());
+        offset_ += destination.size();
+    }
+    [[nodiscard]] std::vector<std::uint8_t> bytes(
+        const std::size_t size,
+        const std::size_t maximum) {
+        if (size > maximum)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt einen zu grossen Bytevektor.");
+        require(size);
+        std::vector<std::uint8_t> result(size);
+        raw(result);
+        return result;
+    }
+    [[nodiscard]] std::string string() {
+        const auto size = u32();
+        if (size > maximum_pvr_state_string_size)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt einen zu langen Diagnosetext.");
+        require(size);
+        std::string result(
+            reinterpret_cast<const char*>(bytes_.data() + offset_),
+            size);
+        offset_ += size;
+        return result;
+    }
+    [[nodiscard]] bool matches(
+        const std::span<const std::uint8_t> expected) {
+        require(expected.size());
+        const auto equal = std::equal(
+            expected.begin(),
+            expected.end(),
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset_));
+        offset_ += expected.size();
+        return equal;
+    }
+    void expect_end() const {
+        if (offset_ != bytes_.size())
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt nachlaufende Bytes.");
+    }
+
+  private:
+    void require(const std::size_t size) const {
+        if (offset_ > bytes_.size() ||
+            size > bytes_.size() - offset_)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload ist abgeschnitten.");
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t offset_ = 0u;
+};
+
+template <typename Enum>
+void write_pvr_enum(PvrStateWriter& writer, const Enum value) {
+    static_assert(std::is_enum_v<Enum>);
+    writer.u32(static_cast<std::uint32_t>(value));
+}
+
+template <typename Enum>
+[[nodiscard]] Enum read_pvr_enum(PvrStateReader& reader) {
+    static_assert(std::is_enum_v<Enum>);
+    return static_cast<Enum>(reader.u32());
+}
+
+void encode_pvr_vertex(PvrStateWriter& writer,
+                       const PvrVertex& vertex) {
+    validate_pvr_vertex(vertex);
+    writer.f32(vertex.x);
+    writer.f32(vertex.y);
+    writer.f32(vertex.z);
+    writer.f32(vertex.u);
+    writer.f32(vertex.v);
+    writer.u32(vertex.argb);
+    writer.u32(vertex.oargb);
+    writer.f32(vertex.volume_u);
+    writer.f32(vertex.volume_v);
+    writer.u32(vertex.volume_argb);
+    writer.u32(vertex.volume_oargb);
+}
+
+[[nodiscard]] PvrVertex decode_pvr_vertex(PvrStateReader& reader) {
+    PvrVertex vertex;
+    vertex.x = reader.f32();
+    vertex.y = reader.f32();
+    vertex.z = reader.f32();
+    vertex.u = reader.f32();
+    vertex.v = reader.f32();
+    vertex.argb = reader.u32();
+    vertex.oargb = reader.u32();
+    vertex.volume_u = reader.f32();
+    vertex.volume_v = reader.f32();
+    vertex.volume_argb = reader.u32();
+    vertex.volume_oargb = reader.u32();
+    return vertex;
+}
+
+void encode_pvr_material(PvrStateWriter& writer,
+                         const PvrMaterial& material,
+                         const std::size_t depth = 0u) {
+    validate_pvr_material(material, depth);
+    std::uint32_t flags = 0u;
+    const std::array values{
+        material.gouraud,
+        material.textured,
+        material.texture_twiddled,
+        material.texture_vq,
+        material.texture_mipmapped,
+        material.texture_x32_stride,
+        material.texture_alpha_disabled,
+        material.vertex_alpha_enabled,
+        material.offset_color_enabled,
+        material.color_clamp_enabled,
+        material.texture_supersampling,
+        material.shadow_enabled,
+        material.blend_destination_accumulation,
+        material.blend_source_accumulation,
+        material.clamp_u,
+        material.clamp_v,
+        material.flip_u,
+        material.flip_v,
+        material.depth_write,
+    };
+    for (std::size_t bit = 0u; bit < values.size(); ++bit)
+        if (values[bit]) flags |= std::uint32_t{1u} << bit;
+    writer.u32(flags);
+    writer.u8(material.depth_compare);
+    writer.u8(material.culling);
+    writer.u8(material.texture_format);
+    writer.u8(material.texture_shading);
+    writer.u8(material.texture_filter);
+    writer.u8(material.texture_mipmap_bias);
+    writer.u8(material.fog_mode);
+    writer.u8(material.source_blend);
+    writer.u8(material.destination_blend);
+    writer.u8(material.palette_bank);
+    writer.u8(material.user_clip_mode);
+    writer.u16(material.user_clip_start_x);
+    writer.u16(material.user_clip_start_y);
+    writer.u16(material.user_clip_end_x);
+    writer.u16(material.user_clip_end_y);
+    writer.u32(material.texture_width);
+    writer.u32(material.texture_height);
+    writer.u32(material.texture_base);
+    writer.u32(material.texture_stride_width);
+    writer.boolean(material.volume_material != nullptr);
+    if (material.volume_material)
+        encode_pvr_material(
+            writer, *material.volume_material, depth + 1u);
+}
+
+[[nodiscard]] PvrMaterial decode_pvr_material(
+    PvrStateReader& reader,
+    const std::size_t depth = 0u) {
+    if (depth > 8u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu tiefen Materialgraph.");
+    PvrMaterial material;
+    const auto flags = reader.u32();
+    constexpr std::uint32_t valid_flags =
+        (std::uint32_t{1u} << 19u) - 1u;
+    if ((flags & ~valid_flags) != 0u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt ungueltige Materialflags.");
+    std::array<bool*, 19u> values{
+        &material.gouraud,
+        &material.textured,
+        &material.texture_twiddled,
+        &material.texture_vq,
+        &material.texture_mipmapped,
+        &material.texture_x32_stride,
+        &material.texture_alpha_disabled,
+        &material.vertex_alpha_enabled,
+        &material.offset_color_enabled,
+        &material.color_clamp_enabled,
+        &material.texture_supersampling,
+        &material.shadow_enabled,
+        &material.blend_destination_accumulation,
+        &material.blend_source_accumulation,
+        &material.clamp_u,
+        &material.clamp_v,
+        &material.flip_u,
+        &material.flip_v,
+        &material.depth_write,
+    };
+    for (std::size_t bit = 0u; bit < values.size(); ++bit)
+        *values[bit] = (flags & (std::uint32_t{1u} << bit)) != 0u;
+    material.depth_compare = reader.u8();
+    material.culling = reader.u8();
+    material.texture_format = reader.u8();
+    material.texture_shading = reader.u8();
+    material.texture_filter = reader.u8();
+    material.texture_mipmap_bias = reader.u8();
+    material.fog_mode = reader.u8();
+    material.source_blend = reader.u8();
+    material.destination_blend = reader.u8();
+    material.palette_bank = reader.u8();
+    material.user_clip_mode = reader.u8();
+    material.user_clip_start_x = reader.u16();
+    material.user_clip_start_y = reader.u16();
+    material.user_clip_end_x = reader.u16();
+    material.user_clip_end_y = reader.u16();
+    material.texture_width = reader.u32();
+    material.texture_height = reader.u32();
+    material.texture_base = reader.u32();
+    material.texture_stride_width = reader.u32();
+    if (reader.boolean())
+        material.volume_material = std::make_shared<PvrMaterial>(
+            decode_pvr_material(reader, depth + 1u));
+    validate_pvr_material(material);
+    return material;
+}
+
+void encode_pvr_primitive(PvrStateWriter& writer,
+                          const PvrPrimitive& primitive) {
+    validate_pvr_primitive(primitive);
+    write_pvr_enum(writer, primitive.list);
+    if (primitive.vertices.size() > maximum_pvr_state_vertices)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Vertices.");
+    writer.u32(
+        static_cast<std::uint32_t>(primitive.vertices.size()));
+    for (const auto& vertex : primitive.vertices)
+        encode_pvr_vertex(writer, vertex);
+    encode_pvr_material(writer, primitive.material);
+}
+
+[[nodiscard]] PvrPrimitive decode_pvr_primitive(
+    PvrStateReader& reader) {
+    PvrPrimitive primitive;
+    primitive.list = read_pvr_enum<PvrListType>(reader);
+    const auto count = reader.u32();
+    if (count > maximum_pvr_state_vertices)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Vertices.");
+    primitive.vertices.reserve(count);
+    for (std::uint32_t index = 0u; index < count; ++index)
+        primitive.vertices.push_back(decode_pvr_vertex(reader));
+    primitive.material = decode_pvr_material(reader);
+    validate_pvr_primitive(primitive);
+    return primitive;
+}
+
+void encode_pvr_modifier_volume(PvrStateWriter& writer,
+                                const PvrModifierVolume& volume) {
+    validate_pvr_modifier_volume(volume);
+    write_pvr_enum(writer, volume.list);
+    if (volume.triangles.size() > maximum_pvr_state_vertices / 3u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Modifierdreiecke.");
+    writer.u32(
+        static_cast<std::uint32_t>(volume.triangles.size()));
+    for (const auto& triangle : volume.triangles)
+        for (const auto& vertex : triangle)
+            encode_pvr_vertex(writer, vertex);
+    writer.u8(volume.depth_mode);
+    writer.u8(volume.culling);
+    writer.u8(volume.user_clip_mode);
+    writer.u16(volume.user_clip_start_x);
+    writer.u16(volume.user_clip_start_y);
+    writer.u16(volume.user_clip_end_x);
+    writer.u16(volume.user_clip_end_y);
+    writer.boolean(volume.volume_last);
+}
+
+[[nodiscard]] PvrModifierVolume decode_pvr_modifier_volume(
+    PvrStateReader& reader) {
+    PvrModifierVolume volume;
+    volume.list = read_pvr_enum<PvrListType>(reader);
+    const auto count = reader.u32();
+    if (count > maximum_pvr_state_vertices / 3u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Modifierdreiecke.");
+    volume.triangles.reserve(count);
+    for (std::uint32_t index = 0u; index < count; ++index) {
+        std::array<PvrVertex, 3u> triangle;
+        for (auto& vertex : triangle)
+            vertex = decode_pvr_vertex(reader);
+        volume.triangles.push_back(std::move(triangle));
+    }
+    volume.depth_mode = reader.u8();
+    volume.culling = reader.u8();
+    volume.user_clip_mode = reader.u8();
+    volume.user_clip_start_x = reader.u16();
+    volume.user_clip_start_y = reader.u16();
+    volume.user_clip_end_x = reader.u16();
+    volume.user_clip_end_y = reader.u16();
+    volume.volume_last = reader.boolean();
+    validate_pvr_modifier_volume(volume);
+    return volume;
+}
+
+void encode_tile_accelerator(PvrStateWriter& writer,
+                             const TileAcceleratorSnapshot& state) {
+    if (state.primitives.size() > maximum_pvr_state_primitives ||
+        state.current_strip.size() > maximum_pvr_state_vertices)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viel TA-Geometrie.");
+    writer.u32(static_cast<std::uint32_t>(state.primitives.size()));
+    for (const auto& primitive : state.primitives)
+        encode_pvr_primitive(writer, primitive);
+    writer.u32(static_cast<std::uint32_t>(state.current_strip.size()));
+    for (const auto& vertex : state.current_strip)
+        encode_pvr_vertex(writer, vertex);
+    write_pvr_enum(writer, state.current_list);
+    encode_pvr_material(writer, state.current_material);
+    writer.u8(state.highest_list_rank);
+    writer.boolean(state.frame_has_list);
+    writer.boolean(state.list_open);
+}
+
+[[nodiscard]] TileAcceleratorSnapshot decode_tile_accelerator(
+    PvrStateReader& reader) {
+    TileAcceleratorSnapshot state;
+    const auto primitive_count = reader.u32();
+    if (primitive_count > maximum_pvr_state_primitives)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Primitive.");
+    state.primitives.reserve(primitive_count);
+    for (std::uint32_t index = 0u; index < primitive_count; ++index)
+        state.primitives.push_back(decode_pvr_primitive(reader));
+    const auto strip_count = reader.u32();
+    if (strip_count > maximum_pvr_state_vertices)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu grossen TA-Strip.");
+    state.current_strip.reserve(strip_count);
+    for (std::uint32_t index = 0u; index < strip_count; ++index)
+        state.current_strip.push_back(decode_pvr_vertex(reader));
+    state.current_list = read_pvr_enum<PvrListType>(reader);
+    state.current_material = decode_pvr_material(reader);
+    state.highest_list_rank = reader.u8();
+    state.frame_has_list = reader.boolean();
+    state.list_open = reader.boolean();
+    TileAccelerator validator;
+    validator.validate_state_restore(state);
+    return state;
+}
+
+void encode_ta_metrics(PvrStateWriter& writer,
+                       const PvrTaMetrics& metrics) {
+    writer.u64(metrics.packets);
+    for (const auto count : metrics.normalized_packets)
+        writer.u64(count);
+    writer.u64(metrics.polygon_headers);
+    writer.u64(metrics.vertices);
+    writer.u64(metrics.list_completions);
+    writer.u64(metrics.frames);
+    writer.u64(metrics.continuations);
+    writer.u64(metrics.rejected_packets);
+}
+
+[[nodiscard]] PvrTaMetrics decode_ta_metrics(PvrStateReader& reader) {
+    PvrTaMetrics metrics;
+    metrics.packets = reader.u64();
+    for (auto& count : metrics.normalized_packets)
+        count = reader.u64();
+    metrics.polygon_headers = reader.u64();
+    metrics.vertices = reader.u64();
+    metrics.list_completions = reader.u64();
+    metrics.frames = reader.u64();
+    metrics.continuations = reader.u64();
+    metrics.rejected_packets = reader.u64();
+    return metrics;
+}
+
+void encode_ta_fifo(PvrStateWriter& writer,
+                    const PvrTaFifoSnapshot& state) {
+    PvrTaFifo validator;
+    validator.validate_state_restore(state);
+    encode_tile_accelerator(writer, state.accelerator);
+    write_pvr_enum(writer, state.active_list);
+    writer.boolean(state.active_textured);
+    writer.boolean(state.active_uv16);
+    writer.u8(state.active_color_type);
+    writer.boolean(state.active_sprite);
+    writer.boolean(state.active_two_volume);
+    writer.u32(state.active_header_argb);
+    writer.u32(state.active_header_oargb);
+    writer.u32(state.active_volume_header_argb);
+    writer.boolean(state.intensity_face_color_valid);
+    encode_pvr_material(writer, state.active_material);
+    writer.u16(state.user_clip_start_x);
+    writer.u16(state.user_clip_start_y);
+    writer.u16(state.user_clip_end_x);
+    writer.u16(state.user_clip_end_y);
+    writer.boolean(state.pending_sprite_vertex.has_value());
+    if (state.pending_sprite_vertex)
+        writer.raw(*state.pending_sprite_vertex);
+    writer.boolean(state.pending_extended_vertex.has_value());
+    if (state.pending_extended_vertex)
+        encode_pvr_vertex(writer, *state.pending_extended_vertex);
+    writer.boolean(state.pending_intensity_header);
+    writer.boolean(state.pending_extended_end_of_strip);
+    if (state.modifier_volumes.size() >
+        maximum_pvr_state_modifier_volumes)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Modifier-Volumes.");
+    writer.u32(
+        static_cast<std::uint32_t>(state.modifier_volumes.size()));
+    for (const auto& volume : state.modifier_volumes)
+        encode_pvr_modifier_volume(writer, volume);
+    writer.boolean(state.active_modifier_volume.has_value());
+    if (state.active_modifier_volume) {
+        if (*state.active_modifier_volume >
+            std::numeric_limits<std::uint32_t>::max())
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt einen zu grossen Modifierindex.");
+        writer.u32(static_cast<std::uint32_t>(
+            *state.active_modifier_volume));
+    }
+    writer.boolean(
+        state.pending_modifier_vertex_packet.has_value());
+    if (state.pending_modifier_vertex_packet)
+        writer.raw(*state.pending_modifier_vertex_packet);
+    encode_ta_metrics(writer, state.metrics);
+    writer.u64(state.frame_packets);
+    writer.boolean(state.first_input_error.has_value());
+    if (state.first_input_error) {
+        write_pvr_enum(writer, state.first_input_error->reason);
+        writer.u64(state.first_input_error->packet);
+        writer.string(state.first_input_error->detail);
+    }
+}
+
+[[nodiscard]] PvrTaFifoSnapshot decode_ta_fifo(
+    PvrStateReader& reader) {
+    PvrTaFifoSnapshot state;
+    state.accelerator = decode_tile_accelerator(reader);
+    state.active_list = read_pvr_enum<PvrListType>(reader);
+    state.active_textured = reader.boolean();
+    state.active_uv16 = reader.boolean();
+    state.active_color_type = reader.u8();
+    state.active_sprite = reader.boolean();
+    state.active_two_volume = reader.boolean();
+    state.active_header_argb = reader.u32();
+    state.active_header_oargb = reader.u32();
+    state.active_volume_header_argb = reader.u32();
+    state.intensity_face_color_valid = reader.boolean();
+    state.active_material = decode_pvr_material(reader);
+    state.user_clip_start_x = reader.u16();
+    state.user_clip_start_y = reader.u16();
+    state.user_clip_end_x = reader.u16();
+    state.user_clip_end_y = reader.u16();
+    if (reader.boolean()) {
+        std::array<std::uint8_t, 32u> packet{};
+        reader.raw(packet);
+        state.pending_sprite_vertex = packet;
+    }
+    if (reader.boolean())
+        state.pending_extended_vertex = decode_pvr_vertex(reader);
+    state.pending_intensity_header = reader.boolean();
+    state.pending_extended_end_of_strip = reader.boolean();
+    const auto volume_count = reader.u32();
+    if (volume_count > maximum_pvr_state_modifier_volumes)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Modifier-Volumes.");
+    state.modifier_volumes.reserve(volume_count);
+    for (std::uint32_t index = 0u; index < volume_count; ++index)
+        state.modifier_volumes.push_back(
+            decode_pvr_modifier_volume(reader));
+    if (reader.boolean())
+        state.active_modifier_volume = reader.u32();
+    if (reader.boolean()) {
+        std::array<std::uint8_t, 32u> packet{};
+        reader.raw(packet);
+        state.pending_modifier_vertex_packet = packet;
+    }
+    state.metrics = decode_ta_metrics(reader);
+    state.frame_packets = reader.u64();
+    if (reader.boolean()) {
+        state.first_input_error = PvrTaInputError{
+            read_pvr_enum<PvrTaInputErrorReason>(reader),
+            reader.u64(),
+            reader.string(),
+        };
+    }
+    PvrTaFifo validator;
+    validator.validate_state_restore(state);
+    return state;
+}
+
+void encode_pvr_registers(PvrStateWriter& writer,
+                          const PvrRegisterSnapshot& state) {
+    if (!state.render_event_ids.empty() || state.vblank_in_event ||
+        state.vblank_out_event || state.hblank_event)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload darf keine SchedulerEventIds enthalten.");
+    for (const auto value : state.registers) writer.u32(value);
+    writer.u32(state.framebuffer_read_control);
+    writer.u32(state.framebuffer_read_size);
+    writer.u32(state.framebuffer_read_sof1);
+    writer.u32(state.framebuffer_read_sof2);
+    writer.u32(state.framebuffer_write_control);
+    writer.u32(state.framebuffer_write_sof1);
+    writer.u32(state.framebuffer_write_sof2);
+    writer.u32(state.video_control);
+    writer.u64(state.render_requests);
+    writer.u64(state.render_completions);
+    writer.u64(state.render_failures);
+    writer.u64(state.render_overruns);
+    writer.u64(state.vblank_in);
+    writer.u64(state.vblank_out);
+    writer.u64(state.hblank);
+    writer.u64(state.resets);
+    writer.boolean(state.vblank_in_event_rehydration_pending);
+    writer.boolean(state.vblank_out_event_rehydration_pending);
+    writer.boolean(state.hblank_event_rehydration_pending);
+    writer.boolean(state.hblank_event_line.has_value());
+    if (state.hblank_event_line) writer.u32(*state.hblank_event_line);
+    writer.u64(state.scan_frame_cycles);
+    writer.u64(state.scan_epoch_cycle);
+    writer.u64(state.timing.render_latency);
+    writer.u64(state.timing.guest_clock_hz);
+    writer.u64(state.timing.pixel_clock_hz);
+    writer.boolean(state.in_vblank);
+    writer.u32(state.field);
+    writer.u64(state.next_render_generation);
+    writer.u64(state.active_render_request);
+    writer.u64(state.active_render_generation);
+    writer.u64(state.active_render_start_cycle);
+    writer.u64(state.active_render_payload_digest);
+    writer.boolean(state.last_render_start_error.has_value());
+    if (state.last_render_start_error)
+        write_pvr_enum(writer, *state.last_render_start_error);
+    writer.boolean(state.last_render_failure.has_value());
+    if (state.last_render_failure) {
+        const auto& failure = *state.last_render_failure;
+        writer.u64(failure.request);
+        writer.u64(failure.generation);
+        write_pvr_enum(writer, failure.error);
+        writer.string(failure.ta_packet_class);
+        writer.u64(failure.register_digest);
+        writer.u64(failure.guest_cycle);
+        writer.string(failure.detail);
+    }
+}
+
+[[nodiscard]] PvrRegisterSnapshot decode_pvr_registers(
+    PvrStateReader& reader) {
+    PvrRegisterSnapshot state;
+    for (auto& value : state.registers) value = reader.u32();
+    state.framebuffer_read_control = reader.u32();
+    state.framebuffer_read_size = reader.u32();
+    state.framebuffer_read_sof1 = reader.u32();
+    state.framebuffer_read_sof2 = reader.u32();
+    state.framebuffer_write_control = reader.u32();
+    state.framebuffer_write_sof1 = reader.u32();
+    state.framebuffer_write_sof2 = reader.u32();
+    state.video_control = reader.u32();
+    state.render_requests = reader.u64();
+    state.render_completions = reader.u64();
+    state.render_failures = reader.u64();
+    state.render_overruns = reader.u64();
+    state.vblank_in = reader.u64();
+    state.vblank_out = reader.u64();
+    state.hblank = reader.u64();
+    state.resets = reader.u64();
+    state.vblank_in_event_rehydration_pending = reader.boolean();
+    state.vblank_out_event_rehydration_pending = reader.boolean();
+    state.hblank_event_rehydration_pending = reader.boolean();
+    if (reader.boolean()) state.hblank_event_line = reader.u32();
+    state.scan_frame_cycles = reader.u64();
+    state.scan_epoch_cycle = reader.u64();
+    state.timing.render_latency = reader.u64();
+    state.timing.guest_clock_hz = reader.u64();
+    state.timing.pixel_clock_hz = reader.u64();
+    state.in_vblank = reader.boolean();
+    state.field = reader.u32();
+    state.next_render_generation = reader.u64();
+    state.active_render_request = reader.u64();
+    state.active_render_generation = reader.u64();
+    state.active_render_start_cycle = reader.u64();
+    state.active_render_payload_digest = reader.u64();
+    if (reader.boolean())
+        state.last_render_start_error =
+            read_pvr_enum<PvrRenderStartError>(reader);
+    if (reader.boolean()) {
+        PvrRenderFailure failure;
+        failure.request = reader.u64();
+        failure.generation = reader.u64();
+        failure.error = read_pvr_enum<PvrRenderError>(reader);
+        failure.ta_packet_class = reader.string();
+        failure.register_digest = reader.u64();
+        failure.guest_cycle = reader.u64();
+        failure.detail = reader.string();
+        state.last_render_failure = std::move(failure);
+    }
+    return state;
+}
+
+void encode_ta_aperture(
+    PvrStateWriter& writer,
+    const PvrTaFifoMemoryDevice::Snapshot& state) {
+    writer.raw(state.packet);
+    writer.u32(state.packet_base);
+    writer.u32(state.written_mask);
+    writer.boolean(state.packet_active);
+}
+
+[[nodiscard]] PvrTaFifoMemoryDevice::Snapshot decode_ta_aperture(
+    PvrStateReader& reader) {
+    PvrTaFifoMemoryDevice::Snapshot state;
+    reader.raw(state.packet);
+    state.packet_base = reader.u32();
+    state.written_mask = reader.u32();
+    state.packet_active = reader.boolean();
+    return state;
+}
+
+void encode_yuv(PvrStateWriter& writer,
+                const PvrYuvConverterMemoryDevice::Snapshot& state) {
+    if (state.input.size() > 512u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu grossen YUV-Puffer.");
+    writer.u32(static_cast<std::uint32_t>(state.input.size()));
+    writer.raw(state.input);
+    writer.u32(state.configuration);
+    writer.u32(state.destination);
+    writer.u32(state.frame_macroblock);
+    writer.u64(state.converted_macroblocks);
+    writer.boolean(state.guest_memory_access_bound);
+}
+
+[[nodiscard]] PvrYuvConverterMemoryDevice::Snapshot decode_yuv(
+    PvrStateReader& reader) {
+    PvrYuvConverterMemoryDevice::Snapshot state;
+    state.input = reader.bytes(reader.u32(), 512u);
+    state.configuration = reader.u32();
+    state.destination = reader.u32();
+    state.frame_macroblock = reader.u32();
+    state.converted_macroblocks = reader.u64();
+    state.guest_memory_access_bound = reader.boolean();
+    return state;
+}
+
+void encode_render_metrics(PvrStateWriter& writer,
+                           const PvrSoftwareRenderMetrics& metrics) {
+    writer.u64(metrics.frames);
+    writer.u64(metrics.triangles);
+    writer.u64(metrics.pixels);
+    writer.u64(metrics.pixel_writes);
+    writer.u64(metrics.changed_pixels);
+    writer.u64(metrics.proven_guest_frames);
+    writer.u64(metrics.direct_scanout_frames);
+    writer.u64(metrics.direct_scanout_changed_pixels);
+    writer.u64(metrics.last_frame_pixel_writes);
+    writer.u64(metrics.last_frame_changed_pixels);
+    writer.u64(metrics.dropped_render_evidence_generations);
+    writer.u64(metrics.render_evidence_pixels_examined);
+    writer.u64(metrics.render_evidence_range_rejections);
+    writer.u64(metrics.render_evidence_scan_budget_exhaustions);
+}
+
+[[nodiscard]] PvrSoftwareRenderMetrics decode_render_metrics(
+    PvrStateReader& reader) {
+    PvrSoftwareRenderMetrics metrics;
+    metrics.frames = reader.u64();
+    metrics.triangles = reader.u64();
+    metrics.pixels = reader.u64();
+    metrics.pixel_writes = reader.u64();
+    metrics.changed_pixels = reader.u64();
+    metrics.proven_guest_frames = reader.u64();
+    metrics.direct_scanout_frames = reader.u64();
+    metrics.direct_scanout_changed_pixels = reader.u64();
+    metrics.last_frame_pixel_writes = reader.u64();
+    metrics.last_frame_changed_pixels = reader.u64();
+    metrics.dropped_render_evidence_generations = reader.u64();
+    metrics.render_evidence_pixels_examined = reader.u64();
+    metrics.render_evidence_range_rejections = reader.u64();
+    metrics.render_evidence_scan_budget_exhaustions = reader.u64();
+    return metrics;
+}
+
+void encode_render_evidence(
+    PvrStateWriter& writer,
+    const PvrRenderGenerationEvidence& evidence) {
+    writer.u64(evidence.generation);
+    writer.u32(evidence.write_base);
+    writer.u32(evidence.stride_bytes);
+    writer.u32(evidence.width);
+    writer.u32(evidence.height);
+    writer.u8(evidence.pixel_bytes);
+    writer.boolean(evidence.render_to_texture);
+    writer.u64(evidence.pixel_writes);
+    writer.u64(evidence.changed_pixels);
+    writer.u64(evidence.validation_cursor);
+    if (evidence.changed_pixel_values.size() >
+        maximum_pvr_state_vertices)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Evidenzpixel.");
+    writer.u32(static_cast<std::uint32_t>(
+        evidence.changed_pixel_values.size()));
+    for (const auto& pixel : evidence.changed_pixel_values) {
+        writer.u32(pixel.offset);
+        writer.u32(pixel.packed_value);
+        writer.u32(pixel.changed_byte_mask);
+    }
+}
+
+[[nodiscard]] PvrRenderGenerationEvidence decode_render_evidence(
+    PvrStateReader& reader) {
+    PvrRenderGenerationEvidence evidence;
+    evidence.generation = reader.u64();
+    evidence.write_base = reader.u32();
+    evidence.stride_bytes = reader.u32();
+    evidence.width = reader.u32();
+    evidence.height = reader.u32();
+    evidence.pixel_bytes = reader.u8();
+    evidence.render_to_texture = reader.boolean();
+    evidence.pixel_writes = reader.u64();
+    evidence.changed_pixels = reader.u64();
+    const auto cursor = reader.u64();
+    if (cursor > std::numeric_limits<std::size_t>::max())
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu grossen Evidenzcursor.");
+    evidence.validation_cursor = static_cast<std::size_t>(cursor);
+    const auto count = reader.u32();
+    if (count > maximum_pvr_state_vertices)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Evidenzpixel.");
+    evidence.changed_pixel_values.reserve(count);
+    for (std::uint32_t index = 0u; index < count; ++index) {
+        evidence.changed_pixel_values.push_back({
+            reader.u32(),
+            reader.u32(),
+            reader.u32(),
+        });
+    }
+    return evidence;
+}
+
+void encode_scanout(PvrStateWriter& writer,
+                    const PvrScanoutDescriptor& scanout) {
+    writer.u32(scanout.width);
+    writer.u32(scanout.height);
+    writer.u32(scanout.source_width);
+    writer.u32(scanout.source_height);
+    writer.u32(scanout.stride_bytes);
+    writer.u64(scanout.base_offset);
+    writer.u64(scanout.second_base_offset);
+    write_pvr_enum(writer, scanout.format);
+    writer.u8(scanout.concat);
+    writer.boolean(scanout.line_double);
+    writer.boolean(scanout.interlaced);
+    writer.boolean(scanout.weave_fields);
+    writer.boolean(scanout.horizontal_scale);
+    writer.u16(scanout.vertical_scale_factor);
+    writer.boolean(scanout.video_blank);
+    writer.raw(scanout.border_rgba);
+}
+
+[[nodiscard]] PvrScanoutDescriptor decode_scanout(
+    PvrStateReader& reader) {
+    PvrScanoutDescriptor scanout;
+    scanout.width = reader.u32();
+    scanout.height = reader.u32();
+    scanout.source_width = reader.u32();
+    scanout.source_height = reader.u32();
+    scanout.stride_bytes = reader.u32();
+    const auto base = reader.u64();
+    const auto second = reader.u64();
+    if (base > std::numeric_limits<std::size_t>::max() ||
+        second > std::numeric_limits<std::size_t>::max())
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu grossen Scanoutoffset.");
+    scanout.base_offset = static_cast<std::size_t>(base);
+    scanout.second_base_offset = static_cast<std::size_t>(second);
+    scanout.format = read_pvr_enum<PvrFramebufferFormat>(reader);
+    if (scanout.format != PvrFramebufferFormat::Rgb565 &&
+        scanout.format != PvrFramebufferFormat::Rgb0555 &&
+        scanout.format != PvrFramebufferFormat::Rgb888 &&
+        scanout.format != PvrFramebufferFormat::Rgb0888)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt ein ungueltiges Scanoutformat.");
+    scanout.concat = reader.u8();
+    scanout.line_double = reader.boolean();
+    scanout.interlaced = reader.boolean();
+    scanout.weave_fields = reader.boolean();
+    scanout.horizontal_scale = reader.boolean();
+    scanout.vertical_scale_factor = reader.u16();
+    scanout.video_blank = reader.boolean();
+    reader.raw(scanout.border_rgba);
+    return scanout;
+}
+
+void encode_guest_frame_proof(PvrStateWriter& writer,
+                              const PvrGuestFrameProof& proof) {
+    writer.u64(proof.render_generation);
+    writer.u64(proof.changed_pixels);
+    writer.u32(proof.scanout_field);
+    encode_scanout(writer, proof.scanout);
+    writer.u32(proof.frame.width);
+    writer.u32(proof.frame.height);
+    if (proof.frame.rgba.size() > 16u * dreamcast_vram_size)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu grossen Framebeweis.");
+    writer.u32(static_cast<std::uint32_t>(proof.frame.rgba.size()));
+    writer.raw(proof.frame.rgba);
+    write_pvr_enum(writer, proof.source);
+    writer.u64(proof.write_generation_first);
+    writer.u64(proof.write_generation_last);
+}
+
+[[nodiscard]] PvrGuestFrameProof decode_guest_frame_proof(
+    PvrStateReader& reader) {
+    PvrGuestFrameProof proof;
+    proof.render_generation = reader.u64();
+    proof.changed_pixels = reader.u64();
+    proof.scanout_field = reader.u32();
+    proof.scanout = decode_scanout(reader);
+    proof.frame.width = reader.u32();
+    proof.frame.height = reader.u32();
+    proof.frame.rgba =
+        reader.bytes(reader.u32(), 16u * dreamcast_vram_size);
+    proof.source =
+        read_pvr_enum<PvrGuestFrameProofSource>(reader);
+    proof.write_generation_first = reader.u64();
+    proof.write_generation_last = reader.u64();
+    return proof;
+}
+
+void encode_renderer(PvrStateWriter& writer,
+                     const PvrSoftwareRendererSnapshot& state) {
+    encode_render_metrics(writer, state.metrics);
+    writer.u64(state.next_render_generation);
+    writer.u64(state.last_render_generation);
+    if (state.pending_render_evidence.size() >
+        PvrSoftwareRenderer::render_evidence_capacity)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Renderevidenzen.");
+    writer.u32(static_cast<std::uint32_t>(
+        state.pending_render_evidence.size()));
+    for (const auto& evidence : state.pending_render_evidence)
+        encode_render_evidence(writer, evidence);
+    writer.u64(state.pending_render_evidence_bytes);
+    writer.u64(state.next_evidence_scan_generation);
+    writer.u64(state.next_direct_write_generation);
+    writer.u64(state.pending_direct_write_generation);
+    writer.u64(state.pending_direct_first_write_generation);
+    writer.u64(state.pending_direct_last_write_generation);
+    if (state.direct_dirty_words.size() >
+        (dreamcast_vram_size + 63u) / 64u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt eine zu grosse Dirty-Bitmap.");
+    writer.u32(
+        static_cast<std::uint32_t>(state.direct_dirty_words.size()));
+    for (const auto word : state.direct_dirty_words) writer.u64(word);
+    writer.u64(state.direct_dirty_byte_count);
+    if (state.direct_vram_shadow.size() > dreamcast_vram_size)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt ein zu grosses VRAM-Schattenabbild.");
+    writer.u32(
+        static_cast<std::uint32_t>(state.direct_vram_shadow.size()));
+    writer.raw(state.direct_vram_shadow);
+    writer.boolean(state.guest_memory_access_bound);
+    writer.boolean(state.direct_vram_shadow_valid);
+    writer.boolean(state.queued_guest_frame_proof.has_value());
+    if (state.queued_guest_frame_proof)
+        encode_guest_frame_proof(
+            writer, *state.queued_guest_frame_proof);
+    writer.boolean(state.first_error.has_value());
+    if (state.first_error) {
+        write_pvr_enum(writer, state.first_error->error);
+        writer.u64(state.first_error->render_request);
+        writer.string(state.first_error->detail);
+    }
+}
+
+[[nodiscard]] PvrSoftwareRendererSnapshot decode_renderer(
+    PvrStateReader& reader) {
+    PvrSoftwareRendererSnapshot state;
+    state.metrics = decode_render_metrics(reader);
+    state.next_render_generation = reader.u64();
+    state.last_render_generation = reader.u64();
+    const auto evidence_count = reader.u32();
+    if (evidence_count >
+        PvrSoftwareRenderer::render_evidence_capacity)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt zu viele Renderevidenzen.");
+    for (std::uint32_t index = 0u; index < evidence_count; ++index)
+        state.pending_render_evidence.push_back(
+            decode_render_evidence(reader));
+    const auto evidence_bytes = reader.u64();
+    if (evidence_bytes > std::numeric_limits<std::size_t>::max())
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu grossen Evidenzzaehler.");
+    state.pending_render_evidence_bytes =
+        static_cast<std::size_t>(evidence_bytes);
+    state.next_evidence_scan_generation = reader.u64();
+    state.next_direct_write_generation = reader.u64();
+    state.pending_direct_write_generation = reader.u64();
+    state.pending_direct_first_write_generation = reader.u64();
+    state.pending_direct_last_write_generation = reader.u64();
+    const auto dirty_count = reader.u32();
+    if (dirty_count > (dreamcast_vram_size + 63u) / 64u)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt eine zu grosse Dirty-Bitmap.");
+    state.direct_dirty_words.reserve(dirty_count);
+    for (std::uint32_t index = 0u; index < dirty_count; ++index)
+        state.direct_dirty_words.push_back(reader.u64());
+    const auto dirty_bytes = reader.u64();
+    if (dirty_bytes > std::numeric_limits<std::size_t>::max())
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen zu grossen Dirty-Zaehler.");
+    state.direct_dirty_byte_count =
+        static_cast<std::size_t>(dirty_bytes);
+    state.direct_vram_shadow =
+        reader.bytes(reader.u32(), dreamcast_vram_size);
+    state.guest_memory_access_bound = reader.boolean();
+    state.direct_vram_shadow_valid = reader.boolean();
+    if (reader.boolean())
+        state.queued_guest_frame_proof =
+            decode_guest_frame_proof(reader);
+    if (reader.boolean()) {
+        state.first_error = PvrRenderFirstError{
+            read_pvr_enum<PvrRenderError>(reader),
+            reader.u64(),
+            reader.string(),
+        };
+    }
+    return state;
+}
+
+void validate_pvr_payload_shape(
+    const DreamcastPvrStateSnapshot& state) {
+    if (state.contract_version != dreamcast_pvr_state_contract_version)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen inkompatiblen Vertrag.");
+
+    EventScheduler scheduler;
+    PvrRegisterFile register_validator(
+        scheduler, state.registers.timing);
+    register_validator.validate_state_restore(state.registers);
+    if (state.registers.vblank_in_event ||
+        state.registers.vblank_out_event ||
+        state.registers.hblank_event ||
+        !state.registers.render_event_ids.empty())
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload darf keine SchedulerEventIds enthalten.");
+
+    PvrTaFifo fifo_validator;
+    fifo_validator.validate_state_restore(state.ta_fifo);
+    auto aperture_fifo = std::make_shared<PvrTaFifo>();
+    PvrTaFifoMemoryDevice aperture_validator(aperture_fifo);
+    aperture_validator.validate_state_restore(state.ta_aperture);
+
+    const auto& yuv = state.yuv;
+    const auto unconfigured =
+        yuv.configuration == std::numeric_limits<std::uint32_t>::max() &&
+        yuv.destination == std::numeric_limits<std::uint32_t>::max();
+    if (unconfigured) {
+        if (!yuv.input.empty() || yuv.frame_macroblock != 0u)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt YUV-Daten ohne Konfiguration.");
+    } else {
+        if (yuv.configuration ==
+                std::numeric_limits<std::uint32_t>::max() ||
+            yuv.destination ==
+                std::numeric_limits<std::uint32_t>::max())
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt eine unvollstaendige YUV-Konfiguration.");
+        const auto macroblock_size =
+            (yuv.configuration & 0x01000000u) != 0u ? 512u : 384u;
+        const auto blocks_x =
+            static_cast<std::uint64_t>(yuv.configuration & 0x3Fu) + 1u;
+        const auto blocks_y =
+            static_cast<std::uint64_t>(
+                (yuv.configuration >> 8u) & 0x3Fu) +
+            1u;
+        const auto total_blocks = blocks_x * blocks_y;
+        const auto frame_bytes =
+            blocks_x * 16u * blocks_y * 16u * 2u;
+        if (yuv.input.size() >= macroblock_size ||
+            yuv.frame_macroblock > total_blocks ||
+            yuv.destination >= dreamcast_vram_size ||
+            frame_bytes > dreamcast_vram_size - yuv.destination)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt ungueltigen YUV-Zustand.");
+    }
+
+    PvrSoftwareRenderer renderer_validator;
+    Memory memory_marker(1u);
+    if (state.renderer.guest_memory_access_bound)
+        renderer_validator.set_guest_memory_access_memory(&memory_marker);
+    renderer_validator.validate_state_restore(state.renderer);
+    if (state.renderer.queued_guest_frame_proof) {
+        const auto format =
+            state.renderer.queued_guest_frame_proof->scanout.format;
+        if (format != PvrFramebufferFormat::Rgb565 &&
+            format != PvrFramebufferFormat::Rgb0555 &&
+            format != PvrFramebufferFormat::Rgb888 &&
+            format != PvrFramebufferFormat::Rgb0888)
+            throw std::invalid_argument(
+                "PVR-Handoff-Payload besitzt ein ungueltiges Scanoutformat.");
+    }
+}
+
+} // namespace
+
+std::vector<std::uint8_t> encode_dreamcast_pvr_state(
+    const DreamcastPvrStateSnapshot& state) {
+    validate_pvr_payload_shape(state);
+    PvrStateWriter writer;
+    writer.raw(pvr_state_magic);
+    writer.u32(dreamcast_pvr_state_contract_version);
+    encode_pvr_registers(writer, state.registers);
+    encode_ta_fifo(writer, state.ta_fifo);
+    encode_ta_aperture(writer, state.ta_aperture);
+    encode_yuv(writer, state.yuv);
+    encode_renderer(writer, state.renderer);
+    return std::move(writer).finish();
+}
+
+DreamcastPvrStateSnapshot decode_dreamcast_pvr_state(
+    const std::span<const std::uint8_t> bytes) {
+    PvrStateReader reader(bytes);
+    if (!reader.matches(pvr_state_magic))
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt keine gueltige Signatur.");
+    if (reader.u32() != dreamcast_pvr_state_contract_version)
+        throw std::invalid_argument(
+            "PVR-Handoff-Payload besitzt einen inkompatiblen Vertrag.");
+    DreamcastPvrStateSnapshot state;
+    state.registers = decode_pvr_registers(reader);
+    state.ta_fifo = decode_ta_fifo(reader);
+    state.ta_aperture = decode_ta_aperture(reader);
+    state.yuv = decode_yuv(reader);
+    state.renderer = decode_renderer(reader);
+    reader.expect_end();
+    validate_pvr_payload_shape(state);
+    return state;
 }
 
 PvrTexture decode_pvr_texture(const std::span<const std::uint8_t> source,

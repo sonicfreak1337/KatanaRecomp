@@ -17,6 +17,9 @@
 
 namespace katana::runtime {
 
+inline constexpr std::uint32_t gdrom_async_reader_state_contract_version = 1u;
+inline constexpr std::uint32_t gdrom_async_read_event_channel = 0u;
+
 enum class DiscTrackKind : std::uint8_t { Audio, Data };
 
 struct DiscTrackLayout {
@@ -127,11 +130,16 @@ struct GdRomAsyncPendingSnapshot {
     std::uint64_t ready_cycle = 0u;
     GdRomRequest request;
     SchedulerEventId event_id = 0u;
+    // SchedulerEventId is process-local. Portable payloads omit it and set
+    // this marker until a fresh event is installed from the handoff timeline.
+    bool event_rehydration_pending = false;
 };
 
 struct GdRomAsyncReaderSnapshot {
     std::uint64_t scheduler_cycle = 0u;
     GdRomTiming timing{};
+    std::string drive_identity;
+    std::uint32_t drive_sector_size = 0u;
     std::uint64_t next_request_id = 0u;
     std::vector<GdRomAsyncPendingSnapshot> pending;
     std::vector<GdRomAsyncCompletion> completed;
@@ -153,6 +161,16 @@ class GdRomAsyncReader final {
     [[nodiscard]] std::size_t pending_count() const noexcept;
     [[nodiscard]] std::uint64_t current_cycle() const noexcept;
     [[nodiscard]] GdRomAsyncReaderSnapshot snapshot() const;
+    void validate_state_restore(const GdRomAsyncReaderSnapshot& state) const;
+    void validate_state_restore(
+        const GdRomAsyncReaderSnapshot& state,
+        std::uint64_t expected_scheduler_cycle) const;
+    void restore_state_passive(const GdRomAsyncReaderSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
     struct Pending {
@@ -160,6 +178,7 @@ class GdRomAsyncReader final {
         std::uint64_t ready_cycle = 0u;
         GdRomRequest request;
         SchedulerEventId event_id = 0u;
+        bool event_rehydration_pending = false;
     };
     void complete(std::uint64_t request_id, std::uint64_t cycle) noexcept;
     void handle_scheduler_reset() noexcept;
@@ -173,5 +192,10 @@ class GdRomAsyncReader final {
     std::vector<GdRomAsyncCompletion> completed_;
     std::function<void(std::uint64_t)> completion_observer_;
 };
+
+[[nodiscard]] std::vector<std::uint8_t>
+encode_gdrom_async_reader_state(const GdRomAsyncReaderSnapshot& state);
+[[nodiscard]] GdRomAsyncReaderSnapshot
+decode_gdrom_async_reader_state(std::span<const std::uint8_t> bytes);
 
 } // namespace katana::runtime

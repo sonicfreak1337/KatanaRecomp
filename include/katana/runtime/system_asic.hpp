@@ -11,6 +11,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -18,6 +20,9 @@ inline constexpr std::uint32_t system_asic_physical_base = 0x005F6900u;
 inline constexpr std::uint32_t system_asic_register_size = 0x58u;
 inline constexpr std::uint32_t system_bus_control_physical_base = 0x005F6800u;
 inline constexpr std::uint32_t system_bus_control_register_size = 0xB0u;
+inline constexpr std::uint32_t dreamcast_system_bus_state_contract_version = 1u;
+inline constexpr std::uint32_t dreamcast_system_asic_state_contract_version = 1u;
+inline constexpr std::uint32_t dreamcast_system_asic_event_channel = 0u;
 
 namespace system_bus_register {
 inline constexpr std::uint32_t Channel2Destination = 0x00u;
@@ -66,6 +71,10 @@ struct DreamcastSystemBusSnapshot {
     std::uint32_t revision = 0u;
     std::uint32_t root_bus_split = 0u;
     std::uint64_t system_reset_requests = 0u;
+    bool channel2_start_observer_bound = false;
+    bool system_reset_observer_bound = false;
+
+    [[nodiscard]] bool operator==(const DreamcastSystemBusSnapshot&) const = default;
 };
 
 class DreamcastSystemBusControl final {
@@ -79,6 +88,8 @@ class DreamcastSystemBusControl final {
     void reset() noexcept;
     [[nodiscard]] std::uint64_t system_reset_requests() const noexcept;
     [[nodiscard]] DreamcastSystemBusSnapshot snapshot() const noexcept;
+    void validate_state_restore(const DreamcastSystemBusSnapshot& state) const;
+    void restore_state_passive(const DreamcastSystemBusSnapshot& state);
     void complete_channel2() noexcept;
     [[nodiscard]] bool trigger_channel2();
     void set_system_reset_observer(SystemResetObserver observer);
@@ -151,9 +162,24 @@ struct DreamcastSystemAsicSnapshot {
     std::size_t event_capacity = 0u;
     std::uint64_t total_events = 0u;
     std::uint64_t dropped_events = 0u;
+    bool pvr_dma_trigger_observer_bound = false;
+    bool g2_dma_trigger_observer_bound = false;
+    struct ScheduledEvent {
+        std::uint64_t guest_cycle = 0u;
+        SystemAsicEvent event = SystemAsicEvent::PvrRenderDone;
+        std::optional<SchedulerEventId> event_id;
+        bool event_rehydration_pending = false;
+
+        [[nodiscard]] bool operator==(const ScheduledEvent&) const = default;
+    };
+    std::vector<ScheduledEvent> scheduled_events;
 
     [[nodiscard]] bool operator==(const DreamcastSystemAsicSnapshot&) const = default;
 };
+
+[[nodiscard]] std::array<bool, 3u>
+dreamcast_system_asic_expected_external_lines(
+    const DreamcastSystemAsicSnapshot& state) noexcept;
 
 class DreamcastSystemAsic final {
   public:
@@ -173,6 +199,18 @@ class DreamcastSystemAsic final {
     [[nodiscard]] std::uint64_t total_event_count() const noexcept;
     [[nodiscard]] std::uint64_t dropped_event_count() const noexcept;
     [[nodiscard]] DreamcastSystemAsicSnapshot snapshot() const;
+    void validate_state_restore(const DreamcastSystemAsicSnapshot& state) const;
+    // Router lines are restored by the separate interrupt-router contract.
+    // Passive restore never publishes DMA triggers or synchronizes IRQ lines.
+    void restore_state_passive(EventScheduler& scheduler,
+                               const DreamcastSystemAsicSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        EventScheduler& scheduler,
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
+    [[nodiscard]] std::array<bool, 3u> expected_external_lines() const noexcept;
     void set_dma_trigger_observers(DmaTriggerObserver pvr, DmaTriggerObserver g2);
     void reset() noexcept;
 
@@ -191,7 +229,25 @@ class DreamcastSystemAsic final {
     std::size_t event_capacity_ = product_event_capacity;
     std::uint64_t total_events_ = 0u;
     std::uint64_t dropped_events_ = 0u;
+    struct ScheduledEvent {
+        EventScheduler* scheduler = nullptr;
+        SchedulerLifetimeToken scheduler_lifetime;
+        std::uint64_t guest_cycle = 0u;
+        SystemAsicEvent event = SystemAsicEvent::PvrRenderDone;
+        std::optional<SchedulerEventId> event_id;
+        bool event_rehydration_pending = false;
+    };
+    std::vector<ScheduledEvent> scheduled_events_;
 };
+
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_system_bus_state(const DreamcastSystemBusSnapshot& state);
+[[nodiscard]] DreamcastSystemBusSnapshot
+decode_dreamcast_system_bus_state(std::span<const std::uint8_t> bytes);
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_system_asic_state(const DreamcastSystemAsicSnapshot& state);
+[[nodiscard]] DreamcastSystemAsicSnapshot
+decode_dreamcast_system_asic_state(std::span<const std::uint8_t> bytes);
 
 [[nodiscard]] std::shared_ptr<DreamcastSystemAsic>
 map_dreamcast_system_asic(Memory& memory,

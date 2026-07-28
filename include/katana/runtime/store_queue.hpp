@@ -146,6 +146,10 @@ class Sh4StoreQueues {
     [[nodiscard]] std::uint64_t rejected_transfer_count() const noexcept;
     [[nodiscard]] const std::optional<StoreQueueSinkFault>& last_sink_fault() const noexcept;
     [[nodiscard]] Sh4StoreQueueSnapshot snapshot() const;
+    void validate_state_restore(const Sh4StoreQueueSnapshot& state) const;
+    // Restores only guest-visible state and counters; host sinks, address
+    // translators and code-invalidation ownership remain bound in place.
+    void restore_state_passive(const Sh4StoreQueueSnapshot& state);
     void reset() noexcept;
     [[nodiscard]] CacheMaintenanceResult maintain(CacheMaintenanceOperation operation,
                                                   std::uint32_t address,

@@ -27,6 +27,7 @@
 #include "katana/platform/firmware_diagnostics.hpp"
 #include "katana/runtime/abi.hpp"
 #include "katana/runtime/disc_install.hpp"
+#include "katana/runtime/game_entry_handoff_artifact.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
@@ -1315,7 +1316,7 @@ bool path_is_within(const std::filesystem::path& path,
            *relative.begin() != "..";
 }
 
-inline constexpr std::uint32_t executable_port_export_cache_version = 1u;
+inline constexpr std::uint32_t executable_port_export_cache_version = 3u;
 
 struct CachedExecutablePortExport {
     std::string key;
@@ -1392,7 +1393,9 @@ std::string executable_port_export_cache_key(
     const katana::platform::DreamcastBootExecutableArtifact& artifact,
     const std::string_view target_name,
     const bool diagnostic_partial,
-    const std::string_view console_profile) {
+    const std::string_view console_profile,
+    const std::string_view game_project_identity,
+    const std::string_view game_entry_handoff_artifact_identity) {
     std::ostringstream identity;
     identity << "katana-port-executable-analysis-v"
              << executable_port_export_cache_version << ':'
@@ -1400,6 +1403,8 @@ std::string executable_port_export_cache_key(
              << artifact.install_recipe.content_identity << ':'
              << artifact.boot_sha256 << ':' << artifact.entry_address << ':'
              << target_name << ':' << diagnostic_partial << ':' << console_profile << ':'
+             << game_project_identity << ':'
+             << game_entry_handoff_artifact_identity << ':'
              << KATANA_RECOMP_VERSION << ':'
              << katana::build_contract::katana_git_commit << ':'
              << katana::build_contract::analyzer_abi_version << ':'
@@ -1556,7 +1561,9 @@ int export_port_project(const std::filesystem::path& source_path,
                         const std::string& target_name,
                         const bool diagnostic_partial = false,
                         const std::string& console_profile = "japan-ntsc",
-                        const bool boot_executable_artifact = false) {
+                        const bool boot_executable_artifact = false,
+                        const std::optional<std::filesystem::path>&
+                            game_entry_handoff_path = std::nullopt) {
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_binding = discover_runtime_binding_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
@@ -1591,15 +1598,98 @@ int export_port_project(const std::filesystem::path& source_path,
         absolute_output.parent_path() / (".katana-port-publish-" + stage_key.substr(0u, 12u));
     std::optional<katana::platform::DreamcastBootExecutableArtifact>
         verified_boot_artifact;
+    std::shared_ptr<katana::runtime::GameEntryHandoffArtifact>
+        verified_game_entry_handoff;
+    std::optional<katana::runtime::GameProjectDefinition>
+        artifact_only_game_project;
     std::optional<std::string> whole_export_cache_key;
+    if (game_entry_handoff_path.has_value() &&
+        (!boot_executable_artifact || diagnostic_partial))
+        throw std::invalid_argument(
+            "--game-entry-handoff ist ausschliesslich fuer "
+            "port-executable-Produktports erlaubt.");
     if (boot_executable_artifact) {
         verified_boot_artifact =
             katana::platform::load_dreamcast_boot_executable_artifact(source_path);
+        if (game_entry_handoff_path.has_value()) {
+            verified_game_entry_handoff =
+                katana::runtime::GameEntryHandoffArtifact::load(
+                    *game_entry_handoff_path);
+            const auto& descriptor =
+                verified_game_entry_handoff->descriptor();
+            const auto& binding = descriptor.binding;
+            if (descriptor.completeness !=
+                    katana::runtime::GameEntryHandoffCompleteness::
+                        CompletePlatform ||
+                binding.executable.content_identity !=
+                    verified_boot_artifact->install_recipe.content_identity ||
+                binding.executable.boot_file_name !=
+                    verified_boot_artifact->metadata.boot_file_name ||
+                binding.executable.boot_byte_identity !=
+                    "sha256:" + verified_boot_artifact->boot_sha256 ||
+                katana::runtime::dreamcast_console_profile_name(
+                    binding.console_profile) != console_profile)
+                throw std::invalid_argument(
+                    "Game-entry handoff passt nicht exakt zum "
+                    "Boot-Executable-Produktport.");
+            if (verified_boot_artifact->boot_file.size() >
+                std::numeric_limits<std::uint32_t>::max())
+                throw std::invalid_argument(
+                    "Boot-Executable ist fuer den Game-entry handoff zu gross.");
+            const std::array allowed_entry_ranges{
+                katana::runtime::GameEntryCodeRange{
+                    verified_boot_artifact->entry_address,
+                    static_cast<std::uint32_t>(
+                        verified_boot_artifact->boot_file.size())}};
+            katana::runtime::GameEntryHandoffRequest request;
+            request.expected_binding = binding;
+            request.allowed_entry_ranges = allowed_entry_ranges;
+            request.memory_layout = {
+                static_cast<std::uint32_t>(
+                    katana::runtime::dreamcast_main_ram_size),
+                static_cast<std::uint32_t>(
+                    katana::runtime::dreamcast_vram_size),
+                static_cast<std::uint32_t>(
+                    katana::runtime::dreamcast_aica_ram_size)};
+            request.required_devices =
+                katana::runtime::dreamcast_game_entry_required_devices_v2;
+            request.required_completeness =
+                katana::runtime::GameEntryHandoffCompleteness::
+                    CompletePlatform;
+            static_cast<void>(
+                katana::runtime::validate_and_stage_game_entry_handoff(
+                    request, verified_game_entry_handoff->provider()));
+
+            artifact_only_game_project.emplace();
+            auto& definition = *artifact_only_game_project;
+            definition.project_id =
+                "katana.artifact-only-game-entry-handoff";
+            definition.project_version = "1";
+            definition.identity = {
+                binding.executable.content_identity,
+                binding.executable.boot_file_name,
+                binding.executable.boot_byte_identity};
+            definition.boot_config =
+                katana::runtime::DreamcastRuntimeBootConfig{};
+            definition.game_entry_handoff = binding;
+            katana::runtime::validate_game_project_definition(definition);
+        }
+        const auto game_project_identity =
+            artifact_only_game_project.has_value()
+                ? katana::runtime::game_project_definition_identity(
+                      *artifact_only_game_project)
+                : std::string{};
+        const auto handoff_artifact_identity =
+            verified_game_entry_handoff
+                ? verified_game_entry_handoff->artifact_identity()
+                : std::string{};
         whole_export_cache_key = executable_port_export_cache_key(
             *verified_boot_artifact,
             target_name,
             diagnostic_partial,
-            console_profile);
+            console_profile,
+            game_project_identity,
+            handoff_artifact_identity);
     }
     std::error_code cleanup_error;
     if (safe_regular_port_directory_exists(publish_stage, "Altes Port-Publishing"))
@@ -1621,6 +1711,10 @@ int export_port_project(const std::filesystem::path& source_path,
                 std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n' << std::flush;
             }};
         export_options.codegen_cache_root = workspace / ".katana-codegen-cache";
+        export_options.game_project =
+            artifact_only_game_project.has_value()
+                ? &*artifact_only_game_project
+                : nullptr;
         katana::codegen::PortExportResult report;
         bool whole_export_cache_hit = false;
         if (whole_export_cache_key) {
@@ -1912,7 +2006,8 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <...>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
-              "--target-name <Name> [--console-profile <...>]\n"
+              "--target-name <Name> [--console-profile <...>] "
+              "[--game-entry-handoff <privates-Artefakt>]\n"
            << "  katana-recomp probe-port-executable <boot.katana-executable> --output "
               "<Ordner> --target-name <Name> [--console-profile <...>]\n\n"
            << "  katana-recomp workflow <validate|analyze|codegen|build|run-preflight> "
@@ -2081,7 +2176,7 @@ int main(const int argc, char* argv[]) {
 
         const auto port_command =
             argc >= 2 ? std::string_view(argv[1]) : std::string_view{};
-        if ((argc == 7 || argc == 9) &&
+        if ((argc == 7 || argc == 9 || argc == 11) &&
             (port_command == "port" || port_command == "probe-port" ||
              port_command == "port-executable" ||
              port_command == "probe-port-executable")) {
@@ -2093,6 +2188,8 @@ int main(const int argc, char* argv[]) {
                 port_command == "probe-port-executable";
             std::optional<std::filesystem::path> output_path;
             std::optional<std::string> target_name;
+            std::optional<std::filesystem::path>
+                game_entry_handoff_path;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             for (std::size_t argument = 3u; argument < static_cast<std::size_t>(argc);
@@ -2105,6 +2202,11 @@ int main(const int argc, char* argv[]) {
                 } else if (option == "--console-profile" && !console_profile_seen) {
                     console_profile = argv[argument + 1u];
                     console_profile_seen = true;
+                } else if (option == "--game-entry-handoff" &&
+                           port_command == "port-executable" &&
+                           !game_entry_handoff_path.has_value()) {
+                    game_entry_handoff_path =
+                        std::filesystem::path(argv[argument + 1u]);
                 } else {
                     throw std::invalid_argument(
                         "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
@@ -2119,7 +2221,8 @@ int main(const int argc, char* argv[]) {
                                        *target_name,
                                        diagnostic_partial,
                                        console_profile,
-                                       boot_executable_artifact);
+                                       boot_executable_artifact,
+                                       game_entry_handoff_path);
         }
 
         if ((argc == 3 || argc == 4) &&

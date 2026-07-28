@@ -22,10 +22,15 @@ namespace katana::runtime {
 
 class DreamcastG1BusController;
 struct G1DmaFault;
+struct DreamcastG1DmaSnapshot;
 
 inline constexpr std::uint32_t gdrom_register_physical_base = 0x005F7000u;
 inline constexpr std::size_t gdrom_register_size = 0x100u;
 inline constexpr std::size_t gdrom_guest_callback_capacity = 64u;
+inline constexpr std::uint32_t dreamcast_gdrom_state_contract_version = 1u;
+inline constexpr std::uint32_t dreamcast_gdrom_packet_event_channel = 0u;
+inline constexpr std::uint64_t dreamcast_gdrom_packet_event_token_v1 = 0u;
+inline constexpr std::uint32_t dreamcast_gdrom_async_read_event_channel = 1u;
 
 struct GdRomProductStatus {
     std::uint8_t ata_status = 0u;
@@ -127,6 +132,7 @@ struct DreamcastGdRomSnapshot {
     std::vector<std::uint8_t> packet;
     std::vector<std::uint8_t> data;
     std::size_t data_cursor = 0u;
+    DiscLoadSourceRange taskfile_data_source_range;
     std::uint32_t taskfile_phase_remaining = 0u;
     std::uint32_t taskfile_host_byte_limit = 0u;
     std::uint8_t taskfile_phase = 0u;
@@ -174,7 +180,15 @@ struct DreamcastGdRomSnapshot {
     std::uint64_t coalesced_guest_callbacks = 0u;
     std::uint64_t dropped_guest_callbacks = 0u;
     std::optional<SchedulerEventId> packet_event;
+    bool packet_event_rehydration_pending = false;
     bool g1_bus_bound = false;
+    bool completion_observer_bound = false;
+    bool module_load_observer_bound = false;
+    bool command_ack_observer_bound = false;
+    bool load_transaction_executor_bound = false;
+    std::string content_identity;
+    DiscLoadExecutionPolicy load_execution_policy =
+        DiscLoadExecutionPolicy::RequireAtomicExecutor;
 };
 
 class DreamcastGdRomController final {
@@ -208,6 +222,16 @@ class DreamcastGdRomController final {
     void handle_g1_dma_fault(const G1DmaFault& fault) noexcept;
     [[nodiscard]] std::optional<GdRomGuestCallback> take_pending_guest_callback();
     [[nodiscard]] DreamcastGdRomSnapshot snapshot() const;
+    void validate_state_restore(const DreamcastGdRomSnapshot& state) const;
+    void validate_state_restore(
+        const DreamcastGdRomSnapshot& state,
+        std::uint64_t expected_scheduler_cycle) const;
+    void restore_state_passive(const DreamcastGdRomSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void reset() noexcept;
 
   private:
@@ -372,9 +396,18 @@ class DreamcastGdRomController final {
     std::function<void(std::uint64_t)> completion_observer_;
     std::function<void()> command_ack_observer_;
     std::optional<SchedulerEventId> packet_event_;
+    bool packet_event_rehydration_pending_ = false;
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
 };
+
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_gdrom_state(const DreamcastGdRomSnapshot& state);
+[[nodiscard]] DreamcastGdRomSnapshot
+decode_dreamcast_gdrom_state(std::span<const std::uint8_t> bytes);
+void validate_dreamcast_gdrom_g1_restore_contract(
+    const DreamcastGdRomSnapshot& gdrom,
+    const DreamcastG1DmaSnapshot& g1);
 
 [[nodiscard]] std::shared_ptr<DreamcastGdRomController>
 map_dreamcast_gdrom(Memory& memory,

@@ -1,5 +1,6 @@
 #include "katana/runtime/cache_control.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace katana::runtime {
@@ -191,6 +192,40 @@ Sh4CacheControlSnapshot Sh4CacheControl::snapshot() const noexcept {
         operand_data_,
         on_chip_ram_,
     };
+}
+
+void Sh4CacheControl::validate_state_restore(
+    const Sh4CacheControlSnapshot& state) const {
+    if ((state.value & ~supported_write_mask) != 0u ||
+        (state.value & instruction_invalidate) != 0u)
+        throw std::invalid_argument(
+            "Cache-Handoff besitzt reservierte CCR-Bits.");
+    if (std::any_of(
+            state.instruction_addresses.begin(),
+            state.instruction_addresses.end(),
+            [](const std::uint32_t entry) {
+                return (entry & ~0x1FFFFC01u) != 0u;
+            }) ||
+        std::any_of(
+            state.operand_addresses.begin(),
+            state.operand_addresses.end(),
+            [](const std::uint32_t entry) {
+                return (entry & ~0x1FFFFC03u) != 0u;
+            }))
+        throw std::invalid_argument(
+            "Cache-Handoff besitzt ungueltige Address-Array-Bits.");
+}
+
+void Sh4CacheControl::restore_state_passive(
+    const Sh4CacheControlSnapshot& state) {
+    validate_state_restore(state);
+    value_ = state.value;
+    instruction_invalidations_ = state.instruction_invalidations;
+    instruction_addresses_ = state.instruction_addresses;
+    operand_addresses_ = state.operand_addresses;
+    instruction_data_ = state.instruction_data;
+    operand_data_ = state.operand_data;
+    on_chip_ram_ = state.on_chip_ram;
 }
 
 void Sh4CacheControl::reset() noexcept {

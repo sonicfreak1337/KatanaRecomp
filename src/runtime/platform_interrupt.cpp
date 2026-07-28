@@ -1,5 +1,6 @@
 #include "katana/runtime/platform_interrupt.hpp"
 
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <stdexcept>
@@ -139,6 +140,33 @@ PlatformInterruptRouterSnapshot PlatformInterruptRouter::snapshot() const noexce
         scif_pending_,
         external_pending_,
     };
+}
+
+void PlatformInterruptRouter::validate_state_restore(
+    const PlatformInterruptRouterSnapshot& state) const {
+    const auto valid_level = [](const std::uint8_t level) noexcept {
+        return level <= 15u;
+    };
+    if (!std::all_of(
+            state.tmu_levels.begin(), state.tmu_levels.end(), valid_level) ||
+        !valid_level(state.rtc_level) || !valid_level(state.dma_level) ||
+        !valid_level(state.scif_level))
+        throw std::invalid_argument(
+            "Interrupt-Router-Handoff besitzt einen ungueltigen Level.");
+}
+
+void PlatformInterruptRouter::restore_state_passive(
+    const PlatformInterruptRouterSnapshot& state) {
+    validate_state_restore(state);
+    tmu_levels_ = state.tmu_levels;
+    rtc_level_ = state.rtc_level;
+    dma_level_ = state.dma_level;
+    scif_level_ = state.scif_level;
+    scif_pending_ = state.scif_pending;
+    external_pending_ = state.external_pending;
+    device_pending_state_ = device_pending_state();
+    device_sources_dirty_ = true;
+    ++source_epoch_;
 }
 
 std::uint16_t PlatformInterruptRouter::device_pending_state() const noexcept {
@@ -320,6 +348,25 @@ Sh4InterruptRegistersSnapshot Sh4InterruptRegisters::snapshot() const noexcept {
         priority_c_,
         0u,
     };
+}
+
+void Sh4InterruptRegisters::validate_state_restore(
+    const Sh4InterruptRegistersSnapshot& state) const {
+    constexpr std::uint16_t writable_interrupt_control = 0x4380u;
+    if ((state.interrupt_control & ~writable_interrupt_control) != 0u ||
+        state.priority_d != 0u)
+        throw std::invalid_argument(
+            "INTC-Handoff besitzt reservierte Registerbits.");
+}
+
+void Sh4InterruptRegisters::restore_state_passive(
+    const Sh4InterruptRegistersSnapshot& state) {
+    validate_state_restore(state);
+    interrupt_control_ = state.interrupt_control;
+    priority_a_ = state.priority_a;
+    priority_b_ = state.priority_b;
+    priority_c_ = state.priority_c;
+    synchronize_priorities();
 }
 
 void Sh4InterruptRegisters::synchronize_priorities() noexcept {

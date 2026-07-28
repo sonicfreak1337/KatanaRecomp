@@ -9,15 +9,20 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace katana::runtime {
 
 class Sh4Dmac;
+struct Sh4DmacSnapshot;
 
 inline constexpr std::uint32_t g1_mmio_physical_base = 0x005F7400u;
 inline constexpr std::uint32_t g2_mmio_physical_base = 0x005F7800u;
 inline constexpr std::uint32_t pvr_dma_mmio_physical_base = 0x005F7C00u;
 inline constexpr std::uint32_t holly_dma_register_size = 0x100u;
+inline constexpr std::uint32_t dreamcast_holly_dma_state_contract_version = 1u;
+inline constexpr std::uint64_t dreamcast_holly_dma_event_token_v1 = 0u;
 
 struct HollyDmaTiming {
     std::uint64_t cycles_per_byte = 4u;
@@ -79,6 +84,7 @@ struct HollyDmaChannelState {
     std::uint64_t completion_cycle = 0u;
     std::uint64_t remaining_cycles = 0u;
     std::optional<SchedulerEventId> completion_event;
+    bool completion_event_rehydration_pending = false;
     HollyDmaFaultReason fault = HollyDmaFaultReason::None;
     std::uint64_t fault_count = 0u;
 
@@ -150,6 +156,13 @@ class DreamcastG2DmaController final {
     [[nodiscard]] const HollyDmaChannelState& channel_state(std::size_t channel) const;
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
     [[nodiscard]] DreamcastG2DmaSnapshot snapshot() const;
+    void validate_state_restore(const DreamcastG2DmaSnapshot& state) const;
+    void restore_state_passive(const DreamcastG2DmaSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void hardware_trigger(std::size_t channel);
     void interrupt_trigger(SystemAsicEvent event);
 
@@ -213,6 +226,13 @@ class DreamcastG1BusController final {
     [[nodiscard]] std::uint32_t gdrom_read_access_timing() const noexcept;
     [[nodiscard]] std::uint32_t address_protect() const noexcept;
     [[nodiscard]] DreamcastG1DmaSnapshot snapshot() const noexcept;
+    void validate_state_restore(const DreamcastG1DmaSnapshot& state) const;
+    void restore_state_passive(const DreamcastG1DmaSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
     void schedule_chunk(G1DmaFaultPhase failure_phase);
@@ -270,6 +290,13 @@ class DreamcastPvrDmaController final {
     [[nodiscard]] HollyDmaChannelState state() const noexcept;
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
     [[nodiscard]] DreamcastPvrDmaSnapshot snapshot() const noexcept;
+    void validate_state_restore(const DreamcastPvrDmaSnapshot& state) const;
+    void restore_state_passive(const DreamcastPvrDmaSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void set_suspended(bool suspended);
     void abort() noexcept;
 
@@ -310,6 +337,22 @@ class DreamcastPvrDmaController final {
     std::size_t dmac_channel_ = 0u;
     bool dmac_contract_required_ = false;
 };
+
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_g2_dma_state(const DreamcastG2DmaSnapshot& state);
+[[nodiscard]] DreamcastG2DmaSnapshot
+decode_dreamcast_g2_dma_state(std::span<const std::uint8_t> bytes);
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_g1_dma_state(const DreamcastG1DmaSnapshot& state);
+[[nodiscard]] DreamcastG1DmaSnapshot
+decode_dreamcast_g1_dma_state(std::span<const std::uint8_t> bytes);
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_pvr_dma_state(const DreamcastPvrDmaSnapshot& state);
+[[nodiscard]] DreamcastPvrDmaSnapshot
+decode_dreamcast_pvr_dma_state(std::span<const std::uint8_t> bytes);
+void validate_dreamcast_pvr_dma_dmac_restore_contract(
+    const DreamcastPvrDmaSnapshot& pvr,
+    const Sh4DmacSnapshot& dmac);
 
 struct DreamcastHollyDmaControllers {
     std::shared_ptr<DreamcastG1BusController> g1;

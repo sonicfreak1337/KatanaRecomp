@@ -28,6 +28,8 @@ inline constexpr std::uint32_t aica_rtc_default_seconds = 1'577'836'800u;
 inline constexpr std::size_t aica_channel_count = 64u;
 inline constexpr std::size_t aica_channel_register_stride = 0x80u;
 inline constexpr std::uint32_t aica_common_register_base = 0x2800u;
+inline constexpr std::uint32_t dreamcast_aica_tick_event_channel = 1u;
+inline constexpr std::uint64_t dreamcast_aica_tick_event_token_v1 = 1u;
 
 enum class AicaSampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
 
@@ -98,6 +100,8 @@ class AicaRegisterFile final {
     [[nodiscard]] std::uint64_t voice_error_count() const noexcept;
     [[nodiscard]] std::optional<AicaVoiceFirstError> first_voice_error() const noexcept;
     [[nodiscard]] AicaRegisterSnapshot snapshot() const noexcept;
+    void validate_state_restore(const AicaRegisterSnapshot& state) const;
+    void restore_state_passive(AicaRegisterSnapshot state);
 
   private:
     struct ChannelRuntime {
@@ -140,6 +144,11 @@ class AicaRtc final {
     [[nodiscard]] std::uint32_t counter() const noexcept;
     [[nodiscard]] bool write_enabled() const noexcept;
     [[nodiscard]] AicaRtcSnapshot snapshot() const noexcept;
+    void validate_state_restore(const AicaRtcSnapshot& state) const;
+    void validate_state_restore(
+        const AicaRtcSnapshot& state,
+        std::uint64_t expected_scheduler_cycle) const;
+    void restore_state_passive(AicaRtcSnapshot state);
 
   private:
     static void check(std::uint32_t offset, MemoryAccessWidth width);
@@ -231,6 +240,8 @@ class AicaTimer final {
         [[nodiscard]] bool operator==(const Snapshot&) const = default;
     };
     [[nodiscard]] Snapshot snapshot() const noexcept;
+    void validate_state_restore(const Snapshot& state) const;
+    void restore_state_passive(Snapshot state);
 
   private:
     std::uint64_t remainder_ = 0u;
@@ -257,6 +268,9 @@ class AicaInterruptState final {
         [[nodiscard]] bool operator==(const Snapshot&) const = default;
     };
     [[nodiscard]] Snapshot snapshot() const noexcept;
+    void validate_state_restore(const Snapshot& state) const;
+    // Direct assignment deliberately avoids the IRQ publication observer.
+    void restore_state_passive(Snapshot state);
 
   private:
     std::uint32_t enabled_ = 0u;
@@ -293,12 +307,22 @@ class AicaExecutionController final {
         std::array<AicaTimer::Snapshot, timer_count> timers{};
         AicaInterruptState::Snapshot interrupts{};
         std::optional<SchedulerEventId> tick_event;
+        // SchedulerEventId is process-local. Portable state carries the typed
+        // AICA tick event separately and sets this flag until rehydration.
+        bool tick_event_rehydration_pending = false;
         AicaExecutionError error = AicaExecutionError::None;
         std::uint64_t guest_cycles_per_tick = 0u;
 
         [[nodiscard]] bool operator==(const Snapshot&) const = default;
     };
     [[nodiscard]] Snapshot snapshot() const noexcept;
+    void validate_state_restore(const Snapshot& state) const;
+    void restore_state_passive(Snapshot state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
     void schedule_tick();
@@ -312,11 +336,46 @@ class AicaExecutionController final {
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
     std::optional<SchedulerEventId> tick_event_;
+    bool tick_event_rehydration_pending_ = false;
     AicaExecutionError error_ = AicaExecutionError::None;
     std::function<void()> dma_request_observer_;
     std::uint64_t guest_cycles_per_tick_ = 0u;
     static constexpr std::uint64_t audio_cycles_per_tick = 256u;
 };
+
+inline constexpr std::uint32_t dreamcast_aica_state_contract_version = 1u;
+
+struct DreamcastAicaStateSnapshot {
+    std::uint32_t contract_version = dreamcast_aica_state_contract_version;
+    AicaRegisterSnapshot registers;
+    AicaRtcSnapshot rtc;
+    AicaExecutionController::Snapshot execution;
+};
+
+[[nodiscard]] DreamcastAicaStateSnapshot snapshot_dreamcast_aica_state(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution);
+void validate_dreamcast_aica_state_restore(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution,
+    const DreamcastAicaStateSnapshot& state);
+void validate_dreamcast_aica_state_restore(
+    const AicaRegisterFile& registers,
+    const AicaRtc& rtc,
+    const AicaExecutionController& execution,
+    const DreamcastAicaStateSnapshot& state,
+    std::uint64_t expected_scheduler_cycle);
+void restore_dreamcast_aica_state_passive(
+    AicaRegisterFile& registers,
+    AicaRtc& rtc,
+    AicaExecutionController& execution,
+    DreamcastAicaStateSnapshot state);
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_aica_state(const DreamcastAicaStateSnapshot& state);
+[[nodiscard]] DreamcastAicaStateSnapshot
+decode_dreamcast_aica_state(std::span<const std::uint8_t> bytes);
 
 [[nodiscard]] std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory);
 [[nodiscard]] std::shared_ptr<AicaRegisterFile>

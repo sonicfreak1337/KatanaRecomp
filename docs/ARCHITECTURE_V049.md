@@ -65,14 +65,16 @@ Definition keine Titeldaten in KatanaRuntime.
 
 Der oeffentliche C++-Vertrag liegt in
 `katana/runtime/game_project.hpp`; der Export nimmt ihn ueber
-`PortExportOptions::game_project` entgegen. v0.49 liefert dafuer noch kein
-serialisiertes CLI-Descriptorformat und kein Spielprojekt-Scaffold. Das
-externe Projekt muss Definition, Callbackcode und Registrierung selbst in
-sein Portbinary integrieren.
+`PortExportOptions::game_project` entgegen. Vollstaendige externe
+Spielprojekte integrieren Definition, Callbackcode und Registrierung weiter
+selbst in ihr Portbinary. Fuer einen reinen, privaten Game-Entry-Vertrag gibt
+es zusaetzlich den schmalen artifact-only CLI-Pfad
+`port-executable --game-entry-handoff`; er erzeugt keine Titeladressen oder
+Payloadbytes im generischen Kern.
 
 ## Game-Entry-Handoff
 
-`GameEntryHandoff` Schema 2 trennt den Spieleinstieg vom allgemeinen
+`GameEntryHandoff` Schema 3 trennt den Spieleinstieg vom allgemeinen
 Post-BIOS-Zustand. Die Bindung umfasst Content- und
 Boot-Executable-Identitaet, Konsolenprofil, Runtime-ABI,
 Plattformzustandsvertrag und Descriptoridentitaet. Der Descriptor modelliert
@@ -80,20 +82,61 @@ den architektonischen CPU-Zustand einschliesslich physischer GPR-/FPU-Baenke,
 MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
 Geraetezustaende und ausstehende Schedulerereignisse.
 
-Private titelgebundene Payloads werden durch den externen
-Spielprojektprovider geliefert. Das Artefaktformat 2 bindet jede Slice an
-Offset, Groesse und SHA-256, wird vor der Freigabe vollstaendig validiert und
-anschliessend vom Provider aus eigenem unveraenderlichem Speicher gelesen.
-Lokale Pfade oder Payloadbytes werden nicht Teil des generischen
-Spielprojektvertrags.
+Der aktuelle Gesamtvertrag besteht aus Artefaktformat 2, Runtime-ABI 63,
+Portprojektvertrag 53 und Plattformzustandsvertrag 2. Private titelgebundene
+Payloads werden durch den externen Spielprojektprovider geliefert. Jede Slice
+ist an Offset, Groesse und SHA-256 gebunden, wird vor der Freigabe
+vollstaendig validiert und anschliessend aus eigenem unveraenderlichem
+Speicher gelesen. Lokale Pfade oder Payloadbytes werden nicht Teil des
+generischen Spielprojektvertrags oder des erzeugten Portpakets.
 
-Der derzeit integrierte Capture-/Apply-Schritt ist bewusst als
-`CpuMemoryDiagnostic` klassifiziert. Er kann am sauberen NativeDisc-Game-Entry
-CPU und RAM erfassen und vor DirectBoot-Gastcode vorvalidiert anwenden.
-Geraeteadapter und Schedulerwiederherstellung sind noch nicht implementiert;
-der Apply meldet deshalb `platform_state=pending`. Das Produktgate lehnt
-Capture und Diagnose-Apply ab. Erst ein `CompletePlatform`-Handoff des
-externen Spielprojekts darf als produktiver DirectBoot-Einstieg gelten.
+`CompletePlatform` verlangt exakt 22 Geraeteinstanzen: PVR, GD-ROM, G1,
+SH-4-DMAC, AICA, Maple, System Bus, System ASIC, Interruptcontroller,
+Interruptrouter, Interruptregister, MMU, Cache, Store Queues, I/O-Ports,
+Holly-G2-DMA, Holly-PVR-DMA, SH-4-TMU, SH-4-RTC-Clock, SH-4-RTC, SH-4-SCIF
+und Flash. Dazu kommt eine bijektive typisierte Scheduler-Timeline.
+Prozesslokale Event-IDs werden nicht serialisiert; die Zielruntime erzeugt
+nach passiver Geraetewiederherstellung neue IDs. Hostseitige
+`MediaVideo`-/`MediaAudio`-Ereignisse gehoeren nicht zum portablen
+Dreamcast-Zustand und werden von der Zielsession neu aufgebaut.
+
+Capture und Apply dieses vollstaendigen Vertrags sind im realen Produktport
+belegt. `port-executable --game-entry-handoff` validiert das private Artefakt
+bereits beim Export und bindet seine Identitaet in den Exportcache. Der
+erzeugte Produktport nimmt den lokalen Pfad ueber
+`KATANA_GAME_ENTRY_HANDOFF_PRODUCT` entgegen, prueft die exakte Bindung erneut
+und registriert einen auf dieses Artefakt begrenzten Provider. Der weiterhin
+vorhandene `CpuMemoryDiagnostic`-Teilpfad bleibt ausdrueckliche Diagnose und
+ist kein Produkt- oder Bootnachweis.
+
+Der aktuelle Koordinator validiert alle Payloads, Schedulerbeziehungen,
+IRQ-/DMA-Quervertraege und eine abgetrennte CPU/MMU-Sicht vor der Mutation.
+Nach dem Restore prueft ein vollstaendiger semantischer Recapture den Zustand.
+Das ist noch nicht der abschliessende `KR-4967`-Vertrag: CPU/RAM werden vor
+der passiven Geraetesequenz committed, und die einzelnen Restore- und
+Event-Rehydrationsschritte bilden noch keinen formal durchgehend
+`noexcept`-globalen Commit. Normative Subsystemdigests sowie das allgemein
+save-erhaltende `ProductHandoff` aus `KR-4970` bleiben offen.
+
+### Belegter Produktstand
+
+Die aktuellen Gates endeten ohne erstes neues Geraete-, AOT- oder
+Runtimeproblem jeweils bei Schedulerzyklus 600.000.000:
+
+- `NativeDiscBoot`: 6,3161 Sekunden, 94,9954 effektive Gast-MHz,
+  17.080.114 zentrale Dispatches und ein sichtbarer IP.BIN-Frame;
+- `DirectBootExecutable`: Restore bei 415.233.270, anschliessend
+  184.766.730 Post-Entry-Zyklen in 5,01505 Sekunden beziehungsweise
+  36,8425 MHz, 16.033.676 zentrale Dispatches und noch kein sichtbarer Frame.
+
+Der vom Direct-Port gemeldete Wert 119,64 MHz verwendet faelschlich den
+absoluten Schedulerstand als ausgefuehrte Arbeit. `KR-4966` muss das Gate auf
+eine relative Laufdauer ab Entry umstellen. 16.033.676 Dispatches entsprechen
+11,52 Zyklen pro Post-Entry-Dispatch und belegen noch keinen
+Performancegewinn. Beide Pfade erreichten PC `0x8C666D42`. Der unmittelbare
+Bring-up-Blocker ist der ADXT-/mwSnd-Wartepfad bei `0x8C65A624` mit Callback
+`0x8C666D42`; er tritt in beiden Pfaden auf. Ein warmer Direct-Export bei
+unveraenderter Analyse dauerte 5,3 Sekunden.
 
 ## Statischer und dynamischer AOT-Dispatch
 
@@ -172,5 +215,6 @@ Deep-Trace-Fenster bleibt offene Diagnosekonsolidierung.
 - Runtimecode wird nur nach Byteidentitaet, Herkunft und Generation aktiviert.
 - DirectBoot und NativeDiscBoot verwenden dieselbe Dreamcast-Runtime; sie
   unterscheiden ausschliesslich die Bootstrapgrenze.
-- Ein CPU-/RAM-Diagnosehandoff wird nicht als vollstaendiger Plattform- oder
-  Bootnachweis ausgegeben.
+- Nur ein vollstaendig validierter `CompletePlatform`-Handoff darf den
+  Produktpfad betreten; ein CPU-/RAM-Diagnosehandoff wird nicht als
+  Plattform- oder Bootnachweis ausgegeben.

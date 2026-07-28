@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace katana::runtime {
@@ -350,14 +352,323 @@ GdRomAsyncReaderSnapshot GdRomAsyncReader::snapshot() const {
     GdRomAsyncReaderSnapshot result;
     result.scheduler_cycle = scheduler_.current_cycle();
     result.timing = timing_;
+    result.drive_identity = drive_.identity();
+    result.drive_sector_size = drive_.sector_size();
     result.next_request_id = next_request_id_;
     result.pending.reserve(pending_.size());
     for (const auto& request : pending_) {
-        result.pending.push_back(
-            {request.request_id, request.ready_cycle, request.request, request.event_id});
+        result.pending.push_back({request.request_id,
+                                  request.ready_cycle,
+                                  request.request,
+                                  request.event_id,
+                                  request.event_rehydration_pending});
     }
     result.completed = completed_;
     return result;
+}
+
+void GdRomAsyncReader::validate_state_restore(
+    const GdRomAsyncReaderSnapshot& state) const {
+    validate_state_restore(state, scheduler_.current_cycle());
+}
+
+void GdRomAsyncReader::validate_state_restore(
+    const GdRomAsyncReaderSnapshot& state,
+    const std::uint64_t expected_scheduler_cycle) const {
+    if (state.scheduler_cycle != expected_scheduler_cycle)
+        throw std::invalid_argument(
+            "GD-ROM-Reader-Handoff passt nicht zur wiederhergestellten Gastzeit.");
+    if (state.timing.command_latency != timing_.command_latency ||
+        state.timing.cycles_per_sector != timing_.cycles_per_sector)
+        throw std::invalid_argument(
+            "GD-ROM-Reader-Handoff passt nicht zum Runtime-Timingvertrag.");
+    if (state.drive_identity != drive_.identity() ||
+        state.drive_sector_size != drive_.sector_size())
+        throw std::invalid_argument(
+            "GD-ROM-Reader-Handoff passt nicht zur gebundenen Discidentitaet.");
+    if (state.next_request_id == 0u)
+        throw std::invalid_argument(
+            "GD-ROM-Reader-Handoff besitzt keine gueltige naechste Request-ID.");
+
+    std::set<std::uint64_t> request_ids;
+    for (const auto& pending : state.pending) {
+        if (pending.request_id == 0u ||
+            pending.request_id >= state.next_request_id ||
+            pending.ready_cycle < state.scheduler_cycle ||
+            !request_ids.insert(pending.request_id).second)
+            throw std::invalid_argument(
+                "GD-ROM-Reader-Handoff besitzt eine ungueltige Pending-Queue.");
+        if ((pending.event_id != 0u) ==
+            pending.event_rehydration_pending)
+            throw std::invalid_argument(
+                "GD-ROM-Reader-Handoff besitzt keinen eindeutigen Eventvertrag.");
+        if (static_cast<std::uint8_t>(pending.request.command) >
+            static_cast<std::uint8_t>(GdRomCommand::ReadSectors))
+            throw std::invalid_argument(
+                "GD-ROM-Reader-Handoff besitzt ein unbekanntes Kommando.");
+    }
+    std::uint64_t previous_cycle = 0u;
+    std::uint64_t previous_id = 0u;
+    bool first = true;
+    for (const auto& completed : state.completed) {
+        if (completed.request_id == 0u ||
+            completed.request_id >= state.next_request_id ||
+            completed.ready_cycle > state.scheduler_cycle ||
+            !request_ids.insert(completed.request_id).second ||
+            static_cast<std::uint8_t>(completed.response.status) >
+                static_cast<std::uint8_t>(GdRomStatus::Aborted))
+            throw std::invalid_argument(
+                "GD-ROM-Reader-Handoff besitzt eine ungueltige Completion-Queue.");
+        if (!first &&
+            (completed.ready_cycle < previous_cycle ||
+             (completed.ready_cycle == previous_cycle &&
+              completed.request_id <= previous_id)))
+            throw std::invalid_argument(
+                "GD-ROM-Reader-Handoff-Completion-Queue ist nicht stabil sortiert.");
+        first = false;
+        previous_cycle = completed.ready_cycle;
+        previous_id = completed.request_id;
+    }
+}
+
+void GdRomAsyncReader::restore_state_passive(
+    const GdRomAsyncReaderSnapshot& state) {
+    validate_state_restore(state);
+
+    std::vector<Pending> restored_pending;
+    restored_pending.reserve(state.pending.size());
+    for (const auto& pending : state.pending)
+        restored_pending.push_back({pending.request_id,
+                                    pending.ready_cycle,
+                                    pending.request,
+                                    0u,
+                                    true});
+    auto restored_completed = state.completed;
+
+    if (!scheduler_lifetime_.expired()) {
+        for (const auto& pending : pending_)
+            if (pending.event_id != 0u)
+                static_cast<void>(scheduler_.cancel(pending.event_id));
+    }
+    pending_ = std::move(restored_pending);
+    completed_ = std::move(restored_completed);
+    next_request_id_ = state.next_request_id;
+}
+
+SchedulerEventId GdRomAsyncReader::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != gdrom_async_read_event_channel || token == 0u)
+        throw std::invalid_argument(
+            "GD-ROM-Reader-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    const auto pending =
+        std::find_if(pending_.begin(), pending_.end(), [token](const auto& value) {
+            return value.request_id == token;
+        });
+    if (pending == pending_.end() || !pending->event_rehydration_pending ||
+        pending->event_id != 0u)
+        throw std::logic_error(
+            "GD-ROM-Reader-Handoff erwartet dieses Completionevent nicht.");
+    if (guest_cycle != pending->ready_cycle ||
+        guest_cycle < scheduler_.current_cycle())
+        throw std::invalid_argument(
+            "GD-ROM-Reader-Completion passt nicht zur gespeicherten Gastzeit.");
+    const auto request_id = pending->request_id;
+    const auto event_id = scheduler_.schedule_at(
+        guest_cycle,
+        [this, request_id](const auto, const auto cycle) {
+            complete(request_id, cycle);
+        },
+        SchedulerEventKind::DiscRead);
+    pending->event_id = event_id;
+    pending->event_rehydration_pending = false;
+    return event_id;
+}
+
+bool GdRomAsyncReader::event_rehydration_pending() const noexcept {
+    return std::any_of(pending_.begin(), pending_.end(), [](const auto& value) {
+        return value.event_rehydration_pending;
+    });
+}
+
+namespace {
+
+class DiscStateWriter final {
+  public:
+    void u8(const std::uint8_t value) { bytes_.push_back(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void string(const std::string_view value) {
+        if (value.size() > std::numeric_limits<std::uint32_t>::max())
+            throw std::length_error("GD-ROM-Reader-State-String ist zu gross.");
+        u32(static_cast<std::uint32_t>(value.size()));
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    void raw(const std::span<const std::uint8_t> value) {
+        if (value.size() > std::numeric_limits<std::uint32_t>::max())
+            throw std::length_error("GD-ROM-Reader-State-Payload ist zu gross.");
+        u32(static_cast<std::uint32_t>(value.size()));
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        return std::move(bytes_);
+    }
+
+  private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+class DiscStateReader final {
+  public:
+    explicit DiscStateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+    [[nodiscard]] std::uint8_t u8() {
+        require(1u);
+        return bytes_[cursor_++];
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::invalid_argument(
+                "GD-ROM-Reader-State besitzt ein ungueltiges Boolean.");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        std::uint32_t value = 0u;
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            value |= static_cast<std::uint32_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        std::uint64_t value = 0u;
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            value |= static_cast<std::uint64_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    [[nodiscard]] std::string string() {
+        const auto size = u32();
+        require(size);
+        std::string result(
+            reinterpret_cast<const char*>(bytes_.data() + cursor_), size);
+        cursor_ += size;
+        return result;
+    }
+    [[nodiscard]] std::vector<std::uint8_t> raw() {
+        const auto size = u32();
+        require(size);
+        std::vector<std::uint8_t> result(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(cursor_),
+            bytes_.begin() + static_cast<std::ptrdiff_t>(cursor_ + size));
+        cursor_ += size;
+        return result;
+    }
+    void finish() const {
+        if (cursor_ != bytes_.size())
+            throw std::invalid_argument(
+                "GD-ROM-Reader-State besitzt nachlaufende Daten.");
+    }
+
+  private:
+    void require(const std::size_t size) const {
+        if (size > bytes_.size() - cursor_)
+            throw std::invalid_argument(
+                "GD-ROM-Reader-State ist abgeschnitten.");
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+};
+
+void write_response(DiscStateWriter& writer, const GdRomResponse& response) {
+    writer.u8(static_cast<std::uint8_t>(response.status));
+    writer.raw(response.data);
+    writer.u32(response.transferred_sectors);
+}
+
+GdRomResponse read_response(DiscStateReader& reader) {
+    GdRomResponse response;
+    response.status = static_cast<GdRomStatus>(reader.u8());
+    response.data = reader.raw();
+    response.transferred_sectors = reader.u32();
+    return response;
+}
+
+} // namespace
+
+std::vector<std::uint8_t>
+encode_gdrom_async_reader_state(const GdRomAsyncReaderSnapshot& state) {
+    DiscStateWriter writer;
+    writer.string("KATGDR1");
+    writer.u32(gdrom_async_reader_state_contract_version);
+    writer.u64(state.scheduler_cycle);
+    writer.u64(state.timing.command_latency);
+    writer.u64(state.timing.cycles_per_sector);
+    writer.string(state.drive_identity);
+    writer.u32(state.drive_sector_size);
+    writer.u64(state.next_request_id);
+    if (state.pending.size() > std::numeric_limits<std::uint32_t>::max() ||
+        state.completed.size() > std::numeric_limits<std::uint32_t>::max())
+        throw std::length_error("GD-ROM-Reader-State-Queue ist zu gross.");
+    writer.u32(static_cast<std::uint32_t>(state.pending.size()));
+    for (const auto& pending : state.pending) {
+        writer.u64(pending.request_id);
+        writer.u64(pending.ready_cycle);
+        writer.u8(static_cast<std::uint8_t>(pending.request.command));
+        writer.u32(pending.request.lba);
+        writer.u32(pending.request.sector_count);
+        // Process-local IDs are deliberately not serialized.
+        writer.boolean(true);
+    }
+    writer.u32(static_cast<std::uint32_t>(state.completed.size()));
+    for (const auto& completed : state.completed) {
+        writer.u64(completed.request_id);
+        writer.u64(completed.ready_cycle);
+        write_response(writer, completed.response);
+    }
+    return std::move(writer).finish();
+}
+
+GdRomAsyncReaderSnapshot
+decode_gdrom_async_reader_state(const std::span<const std::uint8_t> bytes) {
+    DiscStateReader reader(bytes);
+    if (reader.string() != "KATGDR1" ||
+        reader.u32() != gdrom_async_reader_state_contract_version)
+        throw std::invalid_argument(
+            "GD-ROM-Reader-State besitzt Magic oder Version nicht.");
+    GdRomAsyncReaderSnapshot state;
+    state.scheduler_cycle = reader.u64();
+    state.timing.command_latency = reader.u64();
+    state.timing.cycles_per_sector = reader.u64();
+    state.drive_identity = reader.string();
+    state.drive_sector_size = reader.u32();
+    state.next_request_id = reader.u64();
+    const auto pending_count = reader.u32();
+    state.pending.reserve(pending_count);
+    for (std::uint32_t index = 0u; index < pending_count; ++index) {
+        GdRomAsyncPendingSnapshot pending;
+        pending.request_id = reader.u64();
+        pending.ready_cycle = reader.u64();
+        pending.request.command = static_cast<GdRomCommand>(reader.u8());
+        pending.request.lba = reader.u32();
+        pending.request.sector_count = reader.u32();
+        pending.event_id = 0u;
+        pending.event_rehydration_pending = reader.boolean();
+        state.pending.push_back(std::move(pending));
+    }
+    const auto completed_count = reader.u32();
+    state.completed.reserve(completed_count);
+    for (std::uint32_t index = 0u; index < completed_count; ++index)
+        state.completed.push_back(
+            {reader.u64(), reader.u64(), read_response(reader)});
+    reader.finish();
+    return state;
 }
 
 } // namespace katana::runtime

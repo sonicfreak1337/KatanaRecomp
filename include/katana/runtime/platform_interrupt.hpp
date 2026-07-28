@@ -80,6 +80,12 @@ class PlatformInterruptRouter final {
     [[nodiscard]] bool scif_pending(std::size_t source) const;
     [[nodiscard]] bool external_pending(std::size_t line) const;
     [[nodiscard]] PlatformInterruptRouterSnapshot snapshot() const noexcept;
+    void validate_state_restore(
+        const PlatformInterruptRouterSnapshot& state) const;
+    // Does not publish routes into InterruptController. The caller restores
+    // all source devices first and performs one explicit synchronize().
+    void restore_state_passive(
+        const PlatformInterruptRouterSnapshot& state);
     // Advances only when a routed source's asserted state or priority changes. TMU, RTC and
     // DMAC are sampled as one compact state word so MMIO read-to-clear/write-to-change
     // transitions are observed without treating every MMIO access as an interrupt event.
@@ -128,6 +134,10 @@ class Sh4InterruptRegisters final {
     void write_priority_b(std::uint16_t value) noexcept;
     void write_priority_c(std::uint16_t value) noexcept;
     [[nodiscard]] Sh4InterruptRegistersSnapshot snapshot() const noexcept;
+    void validate_state_restore(
+        const Sh4InterruptRegistersSnapshot& state) const;
+    void restore_state_passive(
+        const Sh4InterruptRegistersSnapshot& state);
     void reset() noexcept;
 
   private:

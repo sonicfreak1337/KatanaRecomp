@@ -45,6 +45,8 @@ class Sh4IoPort final {
     void write_gpio_interrupt_control(std::uint16_t value) noexcept;
     void set_inputs(Sh4IoPortInputs inputs) noexcept;
     [[nodiscard]] Sh4IoPortSnapshot snapshot() const noexcept;
+    void validate_state_restore(const Sh4IoPortSnapshot& state) const;
+    void restore_state_passive(const Sh4IoPortSnapshot& state);
     void reset() noexcept;
 
   private:

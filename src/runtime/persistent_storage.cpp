@@ -285,6 +285,28 @@ void PersistentImage::write(const std::size_t offset, const std::span<const std:
     dirty_ = true;
 }
 
+void PersistentImage::validate_working_copy_restore(
+    const std::span<const std::uint8_t> expected_source,
+    const std::span<const std::uint8_t> working,
+    const bool) const {
+    if (expected_source.size() != source_.size() ||
+        working.size() != working_.size() ||
+        !std::equal(
+            expected_source.begin(), expected_source.end(), source_.begin()))
+        throw std::invalid_argument(
+            "Persistenter Handoff passt nicht zur installierten Quellidentitaet.");
+}
+
+void PersistentImage::restore_working_copy_passive(
+    const std::span<const std::uint8_t> expected_source,
+    const std::span<const std::uint8_t> working,
+    const bool dirty) {
+    validate_working_copy_restore(expected_source, working, dirty);
+    std::vector<std::uint8_t> prepared(working.begin(), working.end());
+    working_ = std::move(prepared);
+    dirty_ = dirty;
+}
+
 void PersistentImage::verify_source_unchanged() const {
     if (!config_.source_path) return;
     const auto current = read_file(*config_.source_path, config_.expected_size);

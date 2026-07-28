@@ -38,6 +38,11 @@ class InterruptController {
     [[nodiscard]] bool can_accept(const CpuState& cpu) const noexcept;
     [[nodiscard]] std::optional<PendingInterrupt> highest_pending() const noexcept;
     [[nodiscard]] InterruptControllerSnapshot snapshot() const;
+    // Portable handoffs restore only the sorted architectural pending set.
+    // Epoch, mask and highest level are target-runtime guard metadata and are
+    // deliberately rebuilt with a fresh epoch.
+    void validate_state_restore(const InterruptControllerSnapshot& state) const;
+    void restore_state_passive(const InterruptControllerSnapshot& state);
 
   private:
     friend bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept;

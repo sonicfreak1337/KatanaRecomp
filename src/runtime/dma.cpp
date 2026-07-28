@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace katana::runtime {
 
@@ -362,6 +363,7 @@ Sh4DmacSnapshot Sh4Dmac::snapshot() const noexcept {
     result.timing = timing_;
     result.execution_mode = execution_mode_;
     result.event_id = event_;
+    result.event_rehydration_pending = event_rehydration_pending_;
     result.scheduled_channel = scheduled_channel_;
     result.scheduled_units = scheduled_units_;
     result.last_fault = last_fault_;
@@ -369,6 +371,126 @@ Sh4DmacSnapshot Sh4Dmac::snapshot() const noexcept {
     result.round_robin_cursor = round_robin_cursor_;
     result.performance_counters = performance_counters_;
     return result;
+}
+
+void Sh4Dmac::validate_state_restore(const Sh4DmacSnapshot& state) const {
+    if (state.timing != timing_)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff passt nicht zum Runtime-Timingvertrag.");
+    if (static_cast<std::uint8_t>(state.execution_mode) >
+            static_cast<std::uint8_t>(
+                DmaExecutionMode::DeterministicBatch) ||
+        state.round_robin_cursor >= channel_count)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt ungueltige Controllerdaten.");
+    for (std::size_t index = 0u; index < state.channels.size(); ++index) {
+        const auto& current = state.channels[index];
+        if (current.count > transfer_count_mask ||
+            (current.control & ~(control_writable_mask | transfer_end)) != 0u ||
+            current.pending_on_demand_requests >
+                (index == 0u ? 1u : on_demand_queue_depth) ||
+            static_cast<std::uint8_t>(
+                current.external_destination_progression) >
+                static_cast<std::uint8_t>(
+                    DmaExternalDestinationProgression::
+                        IncrementByTransferUnit))
+            throw std::invalid_argument(
+                "SH4-DMAC-Handoff besitzt ungueltige Kanaldaten.");
+    }
+    if ((state.operation &
+         ~(operation_writable_mask | address_error_flag | nmi_flag)) != 0u)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt ungueltige DMAOR-Bits.");
+    const auto has_event = state.event_id.has_value();
+    if (has_event && state.event_rehydration_pending)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt keinen eindeutigen Eventvertrag.");
+    if (has_event || state.event_rehydration_pending) {
+        if (!state.scheduled_channel ||
+            *state.scheduled_channel >= channel_count ||
+            state.scheduled_units == 0u)
+            throw std::invalid_argument(
+                "SH4-DMAC-Handoff besitzt ein unvollstaendiges Completionevent.");
+        const auto& current = state.channels[*state.scheduled_channel];
+        const auto enabled_state =
+            (state.operation & master_enable) != 0u &&
+            (state.operation & (address_error_flag | nmi_flag)) == 0u &&
+            (current.control & channel_enable) != 0u &&
+            (current.control & transfer_end) == 0u;
+        if (!enabled_state)
+            throw std::invalid_argument(
+                "SH4-DMAC-Handoff plant einen nicht aktiven Kanal.");
+    } else if (state.scheduled_channel || state.scheduled_units != 0u) {
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt Schedulingdaten ohne Event.");
+    }
+    if (state.last_fault && state.last_fault->channel >= channel_count)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt einen ungueltigen Fehlerkanal.");
+    if (state.last_on_demand_channel &&
+        *state.last_on_demand_channel >= channel_count)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt einen ungueltigen DDT-Kanal.");
+}
+
+void Sh4Dmac::restore_state_passive(const Sh4DmacSnapshot& state) {
+    validate_state_restore(state);
+    cancel_event();
+    for (std::size_t index = 0u; index < channels_.size(); ++index) {
+        const auto& source = state.channels[index];
+        channels_[index] = {
+            source.source,
+            source.destination,
+            source.count,
+            source.control,
+            source.pending_requests,
+            source.pending_on_demand_requests,
+            source.completed_units,
+            source.external_destination_progression,
+            source.interrupt_pending,
+        };
+    }
+    operation_ = state.operation;
+    execution_mode_ = state.execution_mode;
+    scheduled_channel_ = state.scheduled_channel;
+    scheduled_units_ = state.scheduled_units;
+    last_fault_ = state.last_fault;
+    last_on_demand_channel_ = state.last_on_demand_channel;
+    round_robin_cursor_ = state.round_robin_cursor;
+    performance_counters_ = state.performance_counters;
+    event_.reset();
+    event_rehydration_pending_ =
+        state.event_id.has_value() || state.event_rehydration_pending;
+}
+
+SchedulerEventId Sh4Dmac::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (token != sh4_dmac_event_token_v1 || channel >= channel_count)
+        throw std::invalid_argument(
+            "SH4-DMAC-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    if (!event_rehydration_pending_ || event_ || !scheduled_channel_ ||
+        *scheduled_channel_ != channel || scheduled_units_ == 0u)
+        throw std::logic_error(
+            "SH4-DMAC-Handoff erwartet dieses Completionevent nicht.");
+    if (guest_cycle < scheduler_.current_cycle())
+        throw std::invalid_argument(
+            "SH4-DMAC-Completion darf nicht in der Vergangenheit liegen.");
+    const auto restored_channel = static_cast<std::size_t>(channel);
+    const auto event_id = scheduler_.schedule_at(
+        guest_cycle,
+        [this, restored_channel](const auto, const auto) {
+            handle_transfer(restored_channel);
+        },
+        SchedulerEventKind::Sh4Dmac);
+    event_ = event_id;
+    event_rehydration_pending_ = false;
+    return event_id;
+}
+
+bool Sh4Dmac::event_rehydration_pending() const noexcept {
+    return event_rehydration_pending_;
 }
 
 void Sh4Dmac::reset_performance_counters() noexcept {
@@ -473,6 +595,7 @@ void Sh4Dmac::cancel_event() noexcept {
     event_.reset();
     scheduled_channel_.reset();
     scheduled_units_ = 0u;
+    event_rehydration_pending_ = false;
 }
 
 void Sh4Dmac::schedule(const std::size_t index) {
@@ -488,6 +611,7 @@ void Sh4Dmac::schedule(const std::size_t index) {
         checked_delay(unit_delay, scheduled_units_),
         [this, index](const auto, const auto) { handle_transfer(index); },
         SchedulerEventKind::Sh4Dmac);
+    event_rehydration_pending_ = false;
 }
 
 std::size_t Sh4Dmac::batch_units(const std::size_t index, const std::size_t size) const noexcept {
@@ -517,6 +641,7 @@ std::size_t Sh4Dmac::batch_units(const std::size_t index, const std::size_t size
 
 void Sh4Dmac::handle_scheduler_reset() {
     event_.reset();
+    event_rehydration_pending_ = false;
     scheduled_channel_.reset();
     scheduled_units_ = 0u;
     reevaluate();
@@ -524,6 +649,7 @@ void Sh4Dmac::handle_scheduler_reset() {
 
 void Sh4Dmac::handle_transfer(const std::size_t index) {
     event_.reset();
+    event_rehydration_pending_ = false;
     scheduled_channel_.reset();
     const auto units = std::max<std::size_t>(1u, scheduled_units_);
     scheduled_units_ = 0u;
@@ -669,6 +795,181 @@ void Sh4Dmac::reset() noexcept {
     round_robin_cursor_ = 0u;
     scheduled_units_ = 0u;
     performance_counters_ = {};
+    event_rehydration_pending_ = false;
+}
+
+namespace {
+
+class DmacStateWriter final {
+  public:
+    void u8(const std::uint8_t value) { bytes_.push_back(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void magic(const std::string_view value) {
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        return std::move(bytes_);
+    }
+  private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+class DmacStateReader final {
+  public:
+    explicit DmacStateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+    [[nodiscard]] std::uint8_t u8() {
+        require(1u);
+        return bytes_[cursor_++];
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::invalid_argument(
+                "SH4-DMAC-State besitzt ein ungueltiges Boolean.");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        std::uint32_t value = 0u;
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            value |= static_cast<std::uint32_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        std::uint64_t value = 0u;
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            value |= static_cast<std::uint64_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    void magic(const std::string_view expected) {
+        require(expected.size());
+        for (const auto expected_byte : expected)
+            if (u8() != static_cast<std::uint8_t>(expected_byte))
+                throw std::invalid_argument(
+                    "SH4-DMAC-State besitzt ein ungueltiges Magic.");
+    }
+    void finish() const {
+        if (cursor_ != bytes_.size())
+            throw std::invalid_argument(
+                "SH4-DMAC-State besitzt nachlaufende Daten.");
+    }
+  private:
+    void require(const std::size_t size) const {
+        if (size > bytes_.size() - cursor_)
+            throw std::invalid_argument("SH4-DMAC-State ist abgeschnitten.");
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+};
+
+void write_fault(DmacStateWriter& writer,
+                 const std::optional<DmaFault>& fault) {
+    writer.boolean(fault.has_value());
+    if (!fault) return;
+    writer.u8(static_cast<std::uint8_t>(fault->reason));
+    writer.u64(fault->channel);
+    writer.u32(fault->source);
+    writer.u32(fault->destination);
+    writer.u64(fault->transfer_size);
+}
+
+std::optional<DmaFault> read_fault(DmacStateReader& reader) {
+    if (!reader.boolean()) return std::nullopt;
+    DmaFault fault;
+    fault.reason = static_cast<DmaFaultReason>(reader.u8());
+    fault.channel = static_cast<std::size_t>(reader.u64());
+    fault.source = reader.u32();
+    fault.destination = reader.u32();
+    fault.transfer_size = static_cast<std::size_t>(reader.u64());
+    return fault;
+}
+
+} // namespace
+
+std::vector<std::uint8_t>
+encode_sh4_dmac_state(const Sh4DmacSnapshot& state) {
+    DmacStateWriter writer;
+    writer.magic("KATDMA1");
+    writer.u32(sh4_dmac_state_contract_version);
+    for (const auto& channel : state.channels) {
+        writer.u32(channel.source);
+        writer.u32(channel.destination);
+        writer.u32(channel.count);
+        writer.u32(channel.control);
+        writer.u32(channel.pending_requests);
+        writer.u32(channel.pending_on_demand_requests);
+        writer.u64(channel.completed_units);
+        writer.u8(static_cast<std::uint8_t>(
+            channel.external_destination_progression));
+        writer.boolean(channel.interrupt_pending);
+    }
+    writer.u32(state.operation);
+    writer.u64(state.timing.guest_cycles_per_byte);
+    writer.u64(state.timing.maximum_batch_units);
+    writer.u8(static_cast<std::uint8_t>(state.execution_mode));
+    writer.boolean(state.event_id.has_value() ||
+                   state.event_rehydration_pending);
+    writer.boolean(state.scheduled_channel.has_value());
+    if (state.scheduled_channel)
+        writer.u32(static_cast<std::uint32_t>(*state.scheduled_channel));
+    writer.u64(state.scheduled_units);
+    write_fault(writer, state.last_fault);
+    writer.boolean(state.last_on_demand_channel.has_value());
+    if (state.last_on_demand_channel)
+        writer.u32(
+            static_cast<std::uint32_t>(*state.last_on_demand_channel));
+    writer.u64(state.round_robin_cursor);
+    writer.u64(state.performance_counters.scheduler_callbacks);
+    writer.u64(state.performance_counters.completed_batches);
+    return std::move(writer).finish();
+}
+
+Sh4DmacSnapshot
+decode_sh4_dmac_state(const std::span<const std::uint8_t> bytes) {
+    DmacStateReader reader(bytes);
+    reader.magic("KATDMA1");
+    if (reader.u32() != sh4_dmac_state_contract_version)
+        throw std::invalid_argument(
+            "SH4-DMAC-State besitzt eine unbekannte Version.");
+    Sh4DmacSnapshot state;
+    for (auto& channel : state.channels) {
+        channel.source = reader.u32();
+        channel.destination = reader.u32();
+        channel.count = reader.u32();
+        channel.control = reader.u32();
+        channel.pending_requests = reader.u32();
+        channel.pending_on_demand_requests = reader.u32();
+        channel.completed_units = reader.u64();
+        channel.external_destination_progression =
+            static_cast<DmaExternalDestinationProgression>(reader.u8());
+        channel.interrupt_pending = reader.boolean();
+    }
+    state.operation = reader.u32();
+    state.timing.guest_cycles_per_byte = reader.u64();
+    state.timing.maximum_batch_units =
+        static_cast<std::size_t>(reader.u64());
+    state.execution_mode =
+        static_cast<DmaExecutionMode>(reader.u8());
+    state.event_rehydration_pending = reader.boolean();
+    state.event_id.reset();
+    if (reader.boolean()) state.scheduled_channel = reader.u32();
+    state.scheduled_units = static_cast<std::size_t>(reader.u64());
+    state.last_fault = read_fault(reader);
+    if (reader.boolean()) state.last_on_demand_channel = reader.u32();
+    state.round_robin_cursor =
+        static_cast<std::size_t>(reader.u64());
+    state.performance_counters.scheduler_callbacks = reader.u64();
+    state.performance_counters.completed_batches = reader.u64();
+    reader.finish();
+    return state;
 }
 
 std::shared_ptr<Sh4Dmac>

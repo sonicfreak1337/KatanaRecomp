@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace katana::runtime {
@@ -20,6 +21,12 @@ inline constexpr std::size_t sh4_rtc_register_size = 0x40u;
 inline constexpr std::uint32_t sh4_tmu_p4_base = 0xFFD80000u;
 inline constexpr std::uint32_t sh4_tmu_area7_base = 0x1FD80000u;
 inline constexpr std::size_t sh4_tmu_register_size = 0x30u;
+inline constexpr std::uint64_t sh4_tmu_event_token_v1 = 1u;
+inline constexpr std::uint32_t sh4_rtc_event_channel = 0u;
+inline constexpr std::uint64_t sh4_rtc_event_token_v1 = 1u;
+inline constexpr std::uint32_t sh4_tmu_state_contract_version = 1u;
+inline constexpr std::uint32_t sh4_rtc_clock_state_contract_version = 1u;
+inline constexpr std::uint32_t sh4_rtc_state_contract_version = 1u;
 
 class Sh4RtcClockDomain final {
   public:
@@ -47,6 +54,10 @@ class Sh4RtcClockDomain final {
         [[nodiscard]] bool operator==(const Snapshot&) const = default;
     };
     [[nodiscard]] Snapshot snapshot() const;
+    void validate_state_restore(const Snapshot& state) const;
+    // Observer identities are process-local and remain bound to the
+    // destination clock. Passive restore only installs the portable epoch.
+    void restore_state_passive(const Snapshot& state);
 
   private:
     [[nodiscard]] std::uint64_t ticks_at(std::uint64_t guest_cycle) const;
@@ -73,6 +84,7 @@ struct Sh4TmuChannelSnapshot {
     std::uint64_t underflows = 0u;
     std::optional<SchedulerEventId> event;
     std::optional<std::uint64_t> event_deadline;
+    bool event_rehydration_pending = false;
     bool running = false;
 
     [[nodiscard]] bool operator==(const Sh4TmuChannelSnapshot&) const = default;
@@ -85,6 +97,13 @@ struct Sh4TmuSnapshot {
 
     [[nodiscard]] bool operator==(const Sh4TmuSnapshot&) const = default;
 };
+
+// Stable little-endian private-payload codecs. SchedulerEventIds and event
+// deadlines stay in GameEntrySchedulerState and are intentionally omitted.
+[[nodiscard]] std::vector<std::uint8_t>
+encode_sh4_tmu_state(const Sh4TmuSnapshot& state);
+[[nodiscard]] Sh4TmuSnapshot
+decode_sh4_tmu_state(std::span<const std::uint8_t> bytes);
 
 class Sh4Tmu final {
   public:
@@ -110,6 +129,18 @@ class Sh4Tmu final {
     void acknowledge_interrupt(std::size_t channel) noexcept;
     [[nodiscard]] std::uint64_t underflow_count(std::size_t channel) const;
     [[nodiscard]] Sh4TmuSnapshot snapshot() const;
+    void validate_state_restore(const Sh4TmuSnapshot& state) const;
+    void validate_state_restore(
+        const Sh4TmuSnapshot& state,
+        std::uint64_t expected_scheduler_cycle) const;
+    // Captured SchedulerEventIds are discarded. Each running channel remains
+    // inert until its typed event is rehydrated with a fresh ID.
+    void restore_state_passive(const Sh4TmuSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending(std::size_t channel) const;
     void reset() noexcept;
 
   private:
@@ -121,6 +152,8 @@ class Sh4Tmu final {
         std::uint32_t anchor_counter = 0xFFFFFFFFu;
         std::uint64_t underflows = 0u;
         std::optional<SchedulerEventId> event;
+        std::optional<std::uint64_t> event_deadline;
+        bool event_rehydration_pending = false;
         bool running = false;
     };
 
@@ -170,7 +203,10 @@ enum class RtcPeriodicRate : std::uint8_t {
 struct Sh4RtcSnapshot {
     RtcDateTime date_time{};
     Sh4RtcClockDomain::Snapshot clock{};
+    std::uint64_t scheduler_cycle = 0u;
     std::optional<SchedulerEventId> event;
+    std::optional<std::uint64_t> event_deadline;
+    bool event_rehydration_pending = false;
     RtcPeriodicRate periodic_rate = RtcPeriodicRate::Disabled;
     std::uint8_t divider_256hz_phase = 0u;
     std::uint8_t counter_64hz = 0u;
@@ -188,6 +224,15 @@ struct Sh4RtcSnapshot {
 
     [[nodiscard]] bool operator==(const Sh4RtcSnapshot&) const = default;
 };
+
+[[nodiscard]] std::vector<std::uint8_t>
+encode_sh4_rtc_clock_state(const Sh4RtcClockDomain::Snapshot& state);
+[[nodiscard]] Sh4RtcClockDomain::Snapshot
+decode_sh4_rtc_clock_state(std::span<const std::uint8_t> bytes);
+[[nodiscard]] std::vector<std::uint8_t>
+encode_sh4_rtc_state(const Sh4RtcSnapshot& state);
+[[nodiscard]] Sh4RtcSnapshot
+decode_sh4_rtc_state(std::span<const std::uint8_t> bytes);
 
 class Sh4Rtc final {
   public:
@@ -225,6 +270,18 @@ class Sh4Rtc final {
     [[nodiscard]] std::uint64_t tick_count() const noexcept;
     [[nodiscard]] std::uint64_t periodic_event_count() const noexcept;
     [[nodiscard]] Sh4RtcSnapshot snapshot() const;
+    void validate_state_restore(const Sh4RtcSnapshot& state) const;
+    void validate_state_restore(
+        const Sh4RtcSnapshot& state,
+        std::uint64_t expected_scheduler_cycle) const;
+    // Captured SchedulerEventIds are discarded. An enabled clock remains
+    // inert until its typed event is rehydrated with a fresh ID.
+    void restore_state_passive(const Sh4RtcSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
     static void validate(const RtcDateTime& value);
@@ -244,6 +301,8 @@ class Sh4Rtc final {
     SchedulerResetObserverId scheduler_reset_observer_ = 0u;
     RtcDateTime date_time_{};
     std::optional<SchedulerEventId> event_;
+    std::optional<std::uint64_t> event_deadline_;
+    bool event_rehydration_pending_ = false;
     RtcPeriodicRate periodic_rate_ = RtcPeriodicRate::Disabled;
     std::uint8_t divider_256hz_phase_ = 0u;
     std::uint8_t counter_64hz_ = 0u;

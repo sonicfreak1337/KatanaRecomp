@@ -166,6 +166,7 @@ bool valid_device_kind(const GameEntryDeviceKind kind) noexcept {
     case GameEntryDeviceKind::Sh4RtcClock:
     case GameEntryDeviceKind::Sh4Rtc:
     case GameEntryDeviceKind::Sh4Scif:
+    case GameEntryDeviceKind::Flash:
         return true;
     }
     return false;
@@ -192,6 +193,73 @@ bool valid_scheduler_event_kind(const SchedulerEventKind kind) noexcept {
     case SchedulerEventKind::Sh4Tmu2:
     case SchedulerEventKind::AicaTick:
         return true;
+    case SchedulerEventKind::MediaVideo:
+    case SchedulerEventKind::MediaAudio:
+    case SchedulerEventKind::Unknown:
+        return false;
+    }
+    return false;
+}
+
+bool valid_scheduler_event_owner(
+    const GameEntryScheduledEvent& event) noexcept {
+    const auto owner_is = [&](const GameEntryDeviceKind kind) noexcept {
+        return event.owner == GameEntryDeviceKey{kind, 0u};
+    };
+    switch (event.kind) {
+    case SchedulerEventKind::DiscRead:
+        return owner_is(GameEntryDeviceKind::GdRom) &&
+               event.channel == 1u && event.token != 0u;
+    case SchedulerEventKind::Sh4Dmac:
+        return owner_is(GameEntryDeviceKind::Sh4Dmac) &&
+               event.channel < 4u && event.token == 0u;
+    case SchedulerEventKind::GdRomPacket:
+        return owner_is(GameEntryDeviceKind::GdRom) &&
+               event.channel == 0u && event.token == 0u;
+    case SchedulerEventKind::HollyG1Dma:
+        return owner_is(GameEntryDeviceKind::G1) &&
+               event.channel == 0u && event.token == 0u;
+    case SchedulerEventKind::HollyG2Dma:
+        return owner_is(GameEntryDeviceKind::HollyG2Dma) &&
+               event.channel < 4u && event.token == 0u;
+    case SchedulerEventKind::HollyPvrDma:
+        return owner_is(GameEntryDeviceKind::HollyPvrDma) &&
+               event.channel == 0u && event.token == 0u;
+    case SchedulerEventKind::MapleDma:
+        return owner_is(GameEntryDeviceKind::Maple) &&
+               event.channel == 0u && event.token == 0u;
+    case SchedulerEventKind::PvrVblankIn:
+        return owner_is(GameEntryDeviceKind::Pvr) &&
+               event.channel == 1u && event.token == 1u;
+    case SchedulerEventKind::PvrVblankOut:
+        return owner_is(GameEntryDeviceKind::Pvr) &&
+               event.channel == 2u && event.token == 1u;
+    case SchedulerEventKind::PvrHblank:
+        return owner_is(GameEntryDeviceKind::Pvr) &&
+               event.channel == 3u && event.token == 1u;
+    case SchedulerEventKind::ScifTransmit:
+        return owner_is(GameEntryDeviceKind::Sh4Scif) &&
+               event.channel == 0u && event.token == 1u;
+    case SchedulerEventKind::SystemAsic:
+        return owner_is(GameEntryDeviceKind::SystemAsic) &&
+               event.channel == 0u &&
+               event.token <= std::numeric_limits<std::uint16_t>::max();
+    case SchedulerEventKind::Sh4Rtc:
+        return owner_is(GameEntryDeviceKind::Sh4Rtc) &&
+               event.channel == 0u && event.token == 1u;
+    case SchedulerEventKind::Sh4Tmu0:
+    case SchedulerEventKind::Sh4Tmu1:
+    case SchedulerEventKind::Sh4Tmu2:
+        return owner_is(GameEntryDeviceKind::Sh4Tmu) &&
+               event.channel ==
+                   static_cast<std::uint32_t>(event.kind) -
+                       static_cast<std::uint32_t>(
+                           SchedulerEventKind::Sh4Tmu0) &&
+               event.token == 1u;
+    case SchedulerEventKind::AicaTick:
+        return owner_is(GameEntryDeviceKind::Aica) &&
+               event.channel == 1u && event.token == 1u;
+    case SchedulerEventKind::PvrRender:
     case SchedulerEventKind::MediaVideo:
     case SchedulerEventKind::MediaAudio:
     case SchedulerEventKind::Unknown:
@@ -413,15 +481,13 @@ void validate_request(const GameEntryHandoffRequest& request) {
     }
     if (request.required_completeness ==
         GameEntryHandoffCompleteness::CompletePlatform) {
-        for (const auto& canonical :
-             dreamcast_game_entry_required_devices_v1) {
-            const auto present = std::find(
+        if (request.required_devices.size() !=
+                dreamcast_game_entry_required_devices_v2.size() ||
+            !std::equal(
                 request.required_devices.begin(),
                 request.required_devices.end(),
-                canonical);
-            if (present == request.required_devices.end())
-                fail(GameEntryHandoffFailure::DeviceStateInvalid);
-        }
+                dreamcast_game_entry_required_devices_v2.begin()))
+            fail(GameEntryHandoffFailure::DeviceStateInvalid);
     }
 }
 
@@ -527,6 +593,15 @@ void validate_devices(const GameEntryHandoff& handoff,
         previous_key = device.key;
         have_previous = true;
 
+        // Platform-state contract v2 gives every required device one stable,
+        // lossless binary payload in field 1. Scalars remain available to
+        // future per-device contract versions, but accepting an empty v1
+        // device would falsely advertise CompletePlatform.
+        if (device.state_contract_version == 1u &&
+            (!device.scalars.empty() || device.payloads.size() != 1u ||
+             device.payloads.front().field_id != 1u))
+            fail(GameEntryHandoffFailure::DeviceStateInvalid);
+
         if (device.scalars.size() >
                 request.limits.maximum_device_scalars - scalar_count ||
             device.payloads.size() >
@@ -574,6 +649,11 @@ void validate_devices(const GameEntryHandoff& handoff,
                 requirement.state_contract_version)
             fail(GameEntryHandoffFailure::DeviceStateInvalid);
     }
+    if (handoff.completeness ==
+            GameEntryHandoffCompleteness::CompletePlatform &&
+        handoff.devices.size() !=
+            dreamcast_game_entry_required_devices_v2.size())
+        fail(GameEntryHandoffFailure::DeviceStateInvalid);
 }
 
 void validate_scheduler(const GameEntryHandoff& handoff,
@@ -594,6 +674,7 @@ void validate_scheduler(const GameEntryHandoff& handoff,
     for (const auto& event : handoff.scheduler.pending_events) {
         if (!valid_scheduler_event_kind(event.kind) ||
             !valid_device_kind(event.owner.kind) ||
+            !valid_scheduler_event_owner(event) ||
             event.guest_cycle < handoff.scheduler.current_cycle ||
             find_device(handoff.devices, event.owner) == nullptr)
             fail(GameEntryHandoffFailure::SchedulerStateInvalid);
@@ -1085,6 +1166,12 @@ GameEntryHandoffError::GameEntryHandoffError(
               return "game-entry-handoff-cpu-memory-apply-failed";
           case GameEntryHandoffFailure::CompletenessMismatch:
               return "game-entry-handoff-completeness-mismatch";
+          case GameEntryHandoffFailure::DeviceStateApplyFailed:
+              return "game-entry-handoff-device-state-apply-failed";
+          case GameEntryHandoffFailure::SchedulerStateApplyFailed:
+              return "game-entry-handoff-scheduler-state-apply-failed";
+          case GameEntryHandoffFailure::SemanticStateMismatch:
+              return "game-entry-handoff-semantic-state-mismatch";
           }
           return "game-entry-handoff-invalid";
       }()),

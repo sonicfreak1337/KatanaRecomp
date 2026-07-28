@@ -152,6 +152,12 @@ class RuntimeAddressSpace {
                                                  std::uint32_t size,
                                                  bool privileged = true) const noexcept;
     [[nodiscard]] RuntimeAddressSpaceSnapshot snapshot() const;
+    void validate_state_restore(
+        const RuntimeAddressSpaceSnapshot& state) const;
+    // Imported guard generations are never trusted. Guest-visible mappings
+    // and ITLB replacement state are restored while local generations advance.
+    void restore_state_passive(
+        const RuntimeAddressSpaceSnapshot& state);
     [[nodiscard]] bool block_fits_translation_page(std::uint32_t virtual_start,
                                                    std::uint32_t size) const noexcept;
 

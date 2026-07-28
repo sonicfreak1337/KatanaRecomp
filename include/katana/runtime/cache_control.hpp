@@ -55,6 +55,9 @@ class Sh4CacheControl final {
                            MemoryAccessWidth width) noexcept;
     void write(std::uint32_t value);
     [[nodiscard]] Sh4CacheControlSnapshot snapshot() const noexcept;
+    void validate_state_restore(const Sh4CacheControlSnapshot& state) const;
+    // Preserves the already mapped host MemoryDevice binding.
+    void restore_state_passive(const Sh4CacheControlSnapshot& state);
     void reset() noexcept;
 
   private:

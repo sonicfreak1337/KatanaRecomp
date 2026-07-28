@@ -2,9 +2,11 @@
 
 #include "katana/runtime/dreamcast_memory.hpp"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace katana::runtime {
@@ -38,6 +40,18 @@ std::pair<std::size_t, std::uint32_t> event_bit(const SystemAsicEvent event) {
     const auto bit = static_cast<std::uint32_t>(code & 0xFFu);
     if (bank >= 3u || bit >= 32u) throw std::invalid_argument("Ungueltiges System-ASIC-Ereignis.");
     return {bank, std::uint32_t{1u} << bit};
+}
+
+std::array<bool, 3u> calculate_expected_external_lines(
+    const std::array<std::uint32_t, 3u>& pending,
+    const std::array<std::array<std::uint32_t, 3u>, 3u>& masks) noexcept {
+    std::array<bool, 3u> lines{};
+    for (std::size_t line = 0u; line < lines.size(); ++line)
+        for (std::size_t bank = 0u; bank < pending.size(); ++bank)
+            lines[line] =
+                lines[line] ||
+                (pending[bank] & masks[line][bank]) != 0u;
+    return lines;
 }
 
 bool is_system_bus_readable(const std::uint32_t offset) {
@@ -95,6 +109,12 @@ std::uint32_t system_bus_write_mask(const std::uint32_t offset) {
     }
 }
 } // namespace
+
+std::array<bool, 3u>
+dreamcast_system_asic_expected_external_lines(
+    const DreamcastSystemAsicSnapshot& state) noexcept {
+    return calculate_expected_external_lines(state.pending, state.masks);
+}
 
 DreamcastSystemBusControl::DreamcastSystemBusControl(
     Channel2StartObserver channel2_start_observer)
@@ -185,7 +205,74 @@ DreamcastSystemBusSnapshot DreamcastSystemBusControl::snapshot() const noexcept 
     result.revision = registers_[Revision / 4u];
     result.root_bus_split = registers_[RootBusSplit / 4u];
     result.system_reset_requests = system_reset_requests_;
+    result.channel2_start_observer_bound =
+        static_cast<bool>(channel2_start_observer_);
+    result.system_reset_observer_bound =
+        static_cast<bool>(system_reset_observer_);
     return result;
+}
+
+void DreamcastSystemBusControl::validate_state_restore(
+    const DreamcastSystemBusSnapshot& state) const {
+    if (state.channel2_start_observer_bound !=
+            static_cast<bool>(channel2_start_observer_) ||
+        state.system_reset_observer_bound !=
+            static_cast<bool>(system_reset_observer_))
+        throw std::invalid_argument(
+            "Systembus-Handoff passt nicht zum Runtime-Wiring.");
+    const auto require_register =
+        [&state](const std::uint32_t offset, const std::uint32_t value) {
+            if (state.registers[offset / 4u] != value)
+                throw std::invalid_argument(
+                    "Systembus-Handoff besitzt widerspruechliche Registerdaten.");
+        };
+    require_register(Channel2Destination, state.channel2_destination);
+    require_register(Channel2Length, state.channel2_length);
+    require_register(Channel2Start, state.channel2_start);
+    require_register(SortStartAddress, state.sort_start_address);
+    require_register(SortBaseAddress, state.sort_base_address);
+    require_register(SortLinkWidth, state.sort_link_width);
+    require_register(SortAddressShift, state.sort_address_shift);
+    require_register(SortStart, state.sort_start);
+    require_register(DbreqMask, state.dbreq_mask);
+    require_register(BavlWaitCount, state.bavl_wait_count);
+    require_register(Channel2Priority, state.channel2_priority);
+    require_register(Channel2MaxBurst, state.channel2_max_burst);
+    require_register(SortDivider, state.sort_divider);
+    require_register(TaFifoRemaining, state.ta_fifo_remaining);
+    require_register(TextureMemoryMode0, state.texture_memory_mode0);
+    require_register(TextureMemoryMode1, state.texture_memory_mode1);
+    require_register(FifoStatus, state.fifo_status);
+    require_register(Revision, state.revision);
+    require_register(RootBusSplit, state.root_bus_split);
+    if ((state.channel2_destination & ~0x13FFFFE0u) != 0u ||
+        (state.channel2_destination & 0x10000000u) == 0u ||
+        (state.channel2_length & ~0x00FFFFE0u) != 0u ||
+        state.channel2_start > 1u ||
+        (state.sort_start_address & 0x08000000u) == 0u ||
+        (state.sort_base_address & 0x08000000u) == 0u ||
+        state.sort_link_width > 1u ||
+        state.sort_address_shift > 1u || state.sort_start > 1u ||
+        state.dbreq_mask > 1u || state.bavl_wait_count > 0x1Fu ||
+        state.channel2_priority > 0xFu ||
+        state.channel2_max_burst > 3u ||
+        state.texture_memory_mode0 > 1u ||
+        state.texture_memory_mode1 > 1u ||
+        (state.root_bus_split & ~0x80000000u) != 0u)
+        throw std::invalid_argument(
+            "Systembus-Handoff besitzt ungueltige Registerbits.");
+    if (state.channel2_start != 0u &&
+        (state.channel2_length == 0u ||
+         !state.channel2_start_observer_bound))
+        throw std::invalid_argument(
+            "Systembus-Handoff besitzt keinen fortsetzbaren Channel-2-Transfer.");
+}
+
+void DreamcastSystemBusControl::restore_state_passive(
+    const DreamcastSystemBusSnapshot& state) {
+    validate_state_restore(state);
+    registers_ = state.registers;
+    system_reset_requests_ = state.system_reset_requests;
 }
 
 void DreamcastSystemBusControl::complete_channel2() noexcept {
@@ -267,10 +354,35 @@ void DreamcastSystemAsic::raise(const SystemAsicEvent event, const std::uint64_t
 SchedulerEventId DreamcastSystemAsic::schedule(EventScheduler& scheduler,
                                                const SystemAsicEvent event,
                                                const std::uint64_t guest_cycle) {
-    return scheduler.schedule_at_or_now(
-        guest_cycle,
-        [this, event](const auto, const auto cycle) { raise(event, cycle); },
+    static_cast<void>(event_bit(event));
+    const auto effective_cycle =
+        std::max(guest_cycle, scheduler.current_cycle());
+    const auto event_id = scheduler.schedule_at(
+        effective_cycle,
+        [this, event](const auto restored_event_id, const auto cycle) {
+            scheduled_events_.erase(
+                std::remove_if(
+                    scheduled_events_.begin(),
+                    scheduled_events_.end(),
+                    [restored_event_id](const auto& pending) {
+                        return pending.event_id == restored_event_id;
+                    }),
+                scheduled_events_.end());
+            raise(event, cycle);
+        },
         SchedulerEventKind::SystemAsic);
+    try {
+        scheduled_events_.push_back({&scheduler,
+                                     scheduler.lifetime_token(),
+                                     effective_cycle,
+                                     event,
+                                     event_id,
+                                     false});
+    } catch (...) {
+        static_cast<void>(scheduler.cancel(event_id));
+        throw;
+    }
+    return event_id;
 }
 std::uint32_t DreamcastSystemAsic::read(const std::uint32_t offset) const {
     if (offset == 0x00u) {
@@ -341,18 +453,179 @@ std::uint64_t DreamcastSystemAsic::dropped_event_count() const noexcept {
 }
 
 DreamcastSystemAsicSnapshot DreamcastSystemAsic::snapshot() const {
-    return {
-        pending_,
-        masks_,
-        dma_trigger_masks_,
-        events_,
-        last_event_,
-        next_sequence_,
-        last_guest_cycle_,
-        event_capacity_,
-        total_events_,
-        dropped_events_,
-    };
+    DreamcastSystemAsicSnapshot result;
+    result.pending = pending_;
+    result.masks = masks_;
+    result.dma_trigger_masks = dma_trigger_masks_;
+    result.events = events_;
+    result.last_event = last_event_;
+    result.next_sequence = next_sequence_;
+    result.last_guest_cycle = last_guest_cycle_;
+    result.event_capacity = event_capacity_;
+    result.total_events = total_events_;
+    result.dropped_events = dropped_events_;
+    result.pvr_dma_trigger_observer_bound =
+        static_cast<bool>(pvr_dma_trigger_observer_);
+    result.g2_dma_trigger_observer_bound =
+        static_cast<bool>(g2_dma_trigger_observer_);
+    result.scheduled_events.reserve(scheduled_events_.size());
+    for (const auto& pending : scheduled_events_)
+        result.scheduled_events.push_back(
+            {pending.guest_cycle,
+             pending.event,
+             pending.event_id,
+             pending.event_rehydration_pending});
+    return result;
+}
+
+void DreamcastSystemAsic::validate_state_restore(
+    const DreamcastSystemAsicSnapshot& state) const {
+    if (state.event_capacity != event_capacity_ ||
+        state.events.size() > state.event_capacity ||
+        state.pvr_dma_trigger_observer_bound !=
+            static_cast<bool>(pvr_dma_trigger_observer_) ||
+        state.g2_dma_trigger_observer_bound !=
+            static_cast<bool>(g2_dma_trigger_observer_))
+        throw std::invalid_argument(
+            "System-ASIC-Handoff passt nicht zum Runtime-Vertrag.");
+    if (state.next_sequence == 0u && state.total_events == 0u)
+        throw std::invalid_argument(
+            "System-ASIC-Handoff besitzt eine ungueltige Sequenz.");
+    std::uint64_t previous_cycle = 0u;
+    std::uint64_t previous_sequence = 0u;
+    bool first = true;
+    for (const auto& event : state.events) {
+        static_cast<void>(event_bit(event.event));
+        if (event.sequence == 0u ||
+            (!first &&
+             (event.guest_cycle < previous_cycle ||
+              event.sequence <= previous_sequence)))
+            throw std::invalid_argument(
+                "System-ASIC-Handoff besitzt eine ungueltige Ereignishistorie.");
+        first = false;
+        previous_cycle = event.guest_cycle;
+        previous_sequence = event.sequence;
+    }
+    if (state.last_event) {
+        static_cast<void>(event_bit(state.last_event->event));
+        if (state.last_event->sequence == 0u ||
+            state.last_event->guest_cycle != state.last_guest_cycle)
+            throw std::invalid_argument(
+                "System-ASIC-Handoff besitzt ein ungueltiges letztes Ereignis.");
+    } else if (state.total_events != 0u || state.last_guest_cycle != 0u) {
+        throw std::invalid_argument(
+            "System-ASIC-Handoff fehlt das letzte Ereignis.");
+    }
+    if (state.total_events < state.events.size() ||
+        state.dropped_events > state.total_events)
+        throw std::invalid_argument(
+            "System-ASIC-Handoff besitzt ungueltige Diagnosezaehler.");
+    for (const auto& scheduled : state.scheduled_events) {
+        static_cast<void>(event_bit(scheduled.event));
+        if ((!scheduled.event_id &&
+             !scheduled.event_rehydration_pending) ||
+            (scheduled.event_id &&
+             scheduled.event_rehydration_pending))
+            throw std::invalid_argument(
+                "System-ASIC-Handoff besitzt keinen eindeutigen Eventvertrag.");
+    }
+}
+
+void DreamcastSystemAsic::restore_state_passive(
+    EventScheduler& scheduler,
+    const DreamcastSystemAsicSnapshot& state) {
+    validate_state_restore(state);
+    for (const auto& scheduled : state.scheduled_events)
+        if (scheduled.guest_cycle < scheduler.current_cycle())
+            throw std::invalid_argument(
+                "System-ASIC-Handoff plant ein Ereignis in der Vergangenheit.");
+    std::vector<ScheduledEvent> restored_events;
+    restored_events.reserve(state.scheduled_events.size());
+    for (const auto& scheduled : state.scheduled_events)
+        restored_events.push_back({&scheduler,
+                                   scheduler.lifetime_token(),
+                                   scheduled.guest_cycle,
+                                   scheduled.event,
+                                   std::nullopt,
+                                   true});
+    auto restored_history = state.events;
+
+    for (const auto& scheduled : scheduled_events_)
+        if (scheduled.event_id && scheduled.scheduler &&
+            !scheduled.scheduler_lifetime.expired())
+            static_cast<void>(
+                scheduled.scheduler->cancel(*scheduled.event_id));
+    pending_ = state.pending;
+    masks_ = state.masks;
+    dma_trigger_masks_ = state.dma_trigger_masks;
+    events_ = std::move(restored_history);
+    last_event_ = state.last_event;
+    next_sequence_ = state.next_sequence;
+    last_guest_cycle_ = state.last_guest_cycle;
+    total_events_ = state.total_events;
+    dropped_events_ = state.dropped_events;
+    scheduled_events_ = std::move(restored_events);
+}
+
+SchedulerEventId DreamcastSystemAsic::rehydrate_scheduled_event(
+    EventScheduler& scheduler,
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != dreamcast_system_asic_event_channel ||
+        token > std::numeric_limits<std::uint16_t>::max())
+        throw std::invalid_argument(
+            "System-ASIC-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    const auto event =
+        static_cast<SystemAsicEvent>(static_cast<std::uint16_t>(token));
+    static_cast<void>(event_bit(event));
+    const auto pending = std::find_if(
+        scheduled_events_.begin(),
+        scheduled_events_.end(),
+        [&](const auto& candidate) {
+            return candidate.event_rehydration_pending &&
+                   candidate.guest_cycle == guest_cycle &&
+                   candidate.event == event;
+        });
+    if (pending == scheduled_events_.end() || pending->event_id)
+        throw std::logic_error(
+            "System-ASIC-Handoff erwartet dieses Ereignis nicht.");
+    if (guest_cycle < scheduler.current_cycle())
+        throw std::invalid_argument(
+            "System-ASIC-Ereignis darf nicht in der Vergangenheit liegen.");
+    const auto event_id = scheduler.schedule_at(
+        guest_cycle,
+        [this, event](const auto restored_event_id, const auto cycle) {
+            scheduled_events_.erase(
+                std::remove_if(
+                    scheduled_events_.begin(),
+                    scheduled_events_.end(),
+                    [restored_event_id](const auto& candidate) {
+                        return candidate.event_id == restored_event_id;
+                    }),
+                scheduled_events_.end());
+            raise(event, cycle);
+        },
+        SchedulerEventKind::SystemAsic);
+    pending->scheduler = &scheduler;
+    pending->scheduler_lifetime = scheduler.lifetime_token();
+    pending->event_id = event_id;
+    pending->event_rehydration_pending = false;
+    return event_id;
+}
+
+bool DreamcastSystemAsic::event_rehydration_pending() const noexcept {
+    return std::any_of(
+        scheduled_events_.begin(),
+        scheduled_events_.end(),
+        [](const auto& event) {
+            return event.event_rehydration_pending;
+        });
+}
+
+std::array<bool, 3u>
+DreamcastSystemAsic::expected_external_lines() const noexcept {
+    return calculate_expected_external_lines(pending_, masks_);
 }
 void DreamcastSystemAsic::set_dma_trigger_observers(DmaTriggerObserver pvr,
                                                      DmaTriggerObserver g2) {
@@ -360,6 +633,12 @@ void DreamcastSystemAsic::set_dma_trigger_observers(DmaTriggerObserver pvr,
     g2_dma_trigger_observer_ = std::move(g2);
 }
 void DreamcastSystemAsic::reset() noexcept {
+    for (const auto& scheduled : scheduled_events_)
+        if (scheduled.event_id && scheduled.scheduler &&
+            !scheduled.scheduler_lifetime.expired())
+            static_cast<void>(
+                scheduled.scheduler->cancel(*scheduled.event_id));
+    scheduled_events_.clear();
     pending_ = {};
     masks_ = {};
     dma_trigger_masks_ = {};
@@ -370,6 +649,232 @@ void DreamcastSystemAsic::reset() noexcept {
     total_events_ = 0u;
     dropped_events_ = 0u;
     synchronize_lines();
+}
+
+namespace {
+
+class AsicStateWriter final {
+  public:
+    void u8(const std::uint8_t value) { bytes_.push_back(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void magic(const std::string_view value) {
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        return std::move(bytes_);
+    }
+  private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+class AsicStateReader final {
+  public:
+    explicit AsicStateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+    [[nodiscard]] std::uint8_t u8() {
+        require(1u);
+        return bytes_[cursor_++];
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::invalid_argument(
+                "System-State besitzt ein ungueltiges Boolean.");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        std::uint32_t value = 0u;
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            value |= static_cast<std::uint32_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        std::uint64_t value = 0u;
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            value |= static_cast<std::uint64_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    void magic(const std::string_view expected) {
+        require(expected.size());
+        for (const auto expected_byte : expected)
+            if (u8() != static_cast<std::uint8_t>(expected_byte))
+                throw std::invalid_argument(
+                    "System-State besitzt ein ungueltiges Magic.");
+    }
+    void finish() const {
+        if (cursor_ != bytes_.size())
+            throw std::invalid_argument(
+                "System-State besitzt nachlaufende Daten.");
+    }
+  private:
+    void require(const std::size_t size) const {
+        if (size > bytes_.size() - cursor_)
+            throw std::invalid_argument("System-State ist abgeschnitten.");
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+};
+
+void write_event_record(AsicStateWriter& writer,
+                        const SystemAsicEventRecord& record) {
+    writer.u64(record.guest_cycle);
+    writer.u64(record.sequence);
+    writer.u32(static_cast<std::uint16_t>(record.event));
+}
+
+SystemAsicEventRecord read_event_record(AsicStateReader& reader) {
+    return {reader.u64(),
+            reader.u64(),
+            static_cast<SystemAsicEvent>(
+                static_cast<std::uint16_t>(reader.u32()))};
+}
+
+} // namespace
+
+std::vector<std::uint8_t>
+encode_dreamcast_system_bus_state(
+    const DreamcastSystemBusSnapshot& state) {
+    AsicStateWriter writer;
+    writer.magic("KATBUS1");
+    writer.u32(dreamcast_system_bus_state_contract_version);
+    for (const auto value : state.registers) writer.u32(value);
+    writer.u64(state.system_reset_requests);
+    writer.boolean(state.channel2_start_observer_bound);
+    writer.boolean(state.system_reset_observer_bound);
+    return std::move(writer).finish();
+}
+
+DreamcastSystemBusSnapshot
+decode_dreamcast_system_bus_state(
+    const std::span<const std::uint8_t> bytes) {
+    AsicStateReader reader(bytes);
+    reader.magic("KATBUS1");
+    if (reader.u32() != dreamcast_system_bus_state_contract_version)
+        throw std::invalid_argument(
+            "Systembus-State besitzt eine unbekannte Version.");
+    DreamcastSystemBusSnapshot state;
+    for (auto& value : state.registers) value = reader.u32();
+    state.channel2_destination =
+        state.registers[Channel2Destination / 4u];
+    state.channel2_length = state.registers[Channel2Length / 4u];
+    state.channel2_start = state.registers[Channel2Start / 4u];
+    state.sort_start_address =
+        state.registers[SortStartAddress / 4u];
+    state.sort_base_address =
+        state.registers[SortBaseAddress / 4u];
+    state.sort_link_width = state.registers[SortLinkWidth / 4u];
+    state.sort_address_shift =
+        state.registers[SortAddressShift / 4u];
+    state.sort_start = state.registers[SortStart / 4u];
+    state.dbreq_mask = state.registers[DbreqMask / 4u];
+    state.bavl_wait_count = state.registers[BavlWaitCount / 4u];
+    state.channel2_priority =
+        state.registers[Channel2Priority / 4u];
+    state.channel2_max_burst =
+        state.registers[Channel2MaxBurst / 4u];
+    state.sort_divider = state.registers[SortDivider / 4u];
+    state.ta_fifo_remaining =
+        state.registers[TaFifoRemaining / 4u];
+    state.texture_memory_mode0 =
+        state.registers[TextureMemoryMode0 / 4u];
+    state.texture_memory_mode1 =
+        state.registers[TextureMemoryMode1 / 4u];
+    state.fifo_status = state.registers[FifoStatus / 4u];
+    state.revision = state.registers[Revision / 4u];
+    state.root_bus_split =
+        state.registers[RootBusSplit / 4u];
+    state.system_reset_requests = reader.u64();
+    state.channel2_start_observer_bound = reader.boolean();
+    state.system_reset_observer_bound = reader.boolean();
+    reader.finish();
+    return state;
+}
+
+std::vector<std::uint8_t>
+encode_dreamcast_system_asic_state(
+    const DreamcastSystemAsicSnapshot& state) {
+    AsicStateWriter writer;
+    writer.magic("KATASI1");
+    writer.u32(dreamcast_system_asic_state_contract_version);
+    for (const auto value : state.pending) writer.u32(value);
+    for (const auto& line : state.masks)
+        for (const auto value : line) writer.u32(value);
+    for (const auto& group : state.dma_trigger_masks)
+        for (const auto value : group) writer.u32(value);
+    if (state.events.size() > std::numeric_limits<std::uint32_t>::max() ||
+        state.scheduled_events.size() >
+            std::numeric_limits<std::uint32_t>::max())
+        throw std::length_error("System-ASIC-State ist zu gross.");
+    writer.u32(static_cast<std::uint32_t>(state.events.size()));
+    for (const auto& event : state.events)
+        write_event_record(writer, event);
+    writer.boolean(state.last_event.has_value());
+    if (state.last_event) write_event_record(writer, *state.last_event);
+    writer.u64(state.next_sequence);
+    writer.u64(state.last_guest_cycle);
+    writer.u64(state.event_capacity);
+    writer.u64(state.total_events);
+    writer.u64(state.dropped_events);
+    writer.boolean(state.pvr_dma_trigger_observer_bound);
+    writer.boolean(state.g2_dma_trigger_observer_bound);
+    writer.u32(
+        static_cast<std::uint32_t>(state.scheduled_events.size()));
+    for (const auto& scheduled : state.scheduled_events) {
+        writer.u64(scheduled.guest_cycle);
+        writer.u32(static_cast<std::uint16_t>(scheduled.event));
+        // Process-local scheduler IDs are deliberately omitted.
+        writer.boolean(true);
+    }
+    return std::move(writer).finish();
+}
+
+DreamcastSystemAsicSnapshot
+decode_dreamcast_system_asic_state(
+    const std::span<const std::uint8_t> bytes) {
+    AsicStateReader reader(bytes);
+    reader.magic("KATASI1");
+    if (reader.u32() != dreamcast_system_asic_state_contract_version)
+        throw std::invalid_argument(
+            "System-ASIC-State besitzt eine unbekannte Version.");
+    DreamcastSystemAsicSnapshot state;
+    for (auto& value : state.pending) value = reader.u32();
+    for (auto& line : state.masks)
+        for (auto& value : line) value = reader.u32();
+    for (auto& group : state.dma_trigger_masks)
+        for (auto& value : group) value = reader.u32();
+    const auto event_count = reader.u32();
+    for (std::uint32_t index = 0u; index < event_count; ++index)
+        state.events.push_back(read_event_record(reader));
+    if (reader.boolean()) state.last_event = read_event_record(reader);
+    state.next_sequence = reader.u64();
+    state.last_guest_cycle = reader.u64();
+    state.event_capacity = static_cast<std::size_t>(reader.u64());
+    state.total_events = reader.u64();
+    state.dropped_events = reader.u64();
+    state.pvr_dma_trigger_observer_bound = reader.boolean();
+    state.g2_dma_trigger_observer_bound = reader.boolean();
+    const auto scheduled_count = reader.u32();
+    state.scheduled_events.reserve(scheduled_count);
+    for (std::uint32_t index = 0u; index < scheduled_count; ++index) {
+        DreamcastSystemAsicSnapshot::ScheduledEvent scheduled;
+        scheduled.guest_cycle = reader.u64();
+        scheduled.event =
+            static_cast<SystemAsicEvent>(
+                static_cast<std::uint16_t>(reader.u32()));
+        scheduled.event_id.reset();
+        scheduled.event_rehydration_pending = reader.boolean();
+        state.scheduled_events.push_back(scheduled);
+    }
+    reader.finish();
+    return state;
 }
 
 std::shared_ptr<DreamcastSystemBusControl> map_dreamcast_system_bus_control(Memory& memory) {

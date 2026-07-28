@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <sstream>
 
 namespace katana::runtime {
@@ -389,6 +390,81 @@ RuntimeAddressSpaceSnapshot RuntimeAddressSpace::snapshot() const {
         itlb_lru_,
         itlb_source_slots_,
     };
+}
+
+void RuntimeAddressSpace::validate_state_restore(
+    const RuntimeAddressSpaceSnapshot& state) const {
+    if (state.mode != AddressTranslationMode::NoMmu &&
+        state.mode != AddressTranslationMode::Mmu)
+        throw std::invalid_argument(
+            "MMU-Handoff besitzt einen ungueltigen Modus.");
+    if (state.mappings.size() > 64u ||
+        address_space_generation_ ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        mmu_generation_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::invalid_argument(
+            "MMU-Handoff kann nicht guard-sicher importiert werden.");
+
+    const auto valid_mapping = [](const TlbMapping& mapping) noexcept {
+        const bool valid_size =
+            mapping.page_size == 1024u ||
+            mapping.page_size == 4096u ||
+            mapping.page_size == 65536u ||
+            mapping.page_size == 1048576u;
+        return valid_size && mapping.slot < 64u &&
+               (mapping.virtual_page % mapping.page_size) == 0u &&
+               (mapping.physical_page % mapping.page_size) == 0u &&
+               canonical_physical_address(mapping.physical_page) ==
+                   mapping.physical_page;
+    };
+    std::array<bool, 64u> seen_slots{};
+    for (const auto& mapping : state.mappings) {
+        if (!valid_mapping(mapping) || seen_slots[mapping.slot])
+            throw std::invalid_argument(
+                "MMU-Handoff besitzt eine ungueltige UTLB-Abbildung.");
+        seen_slots[mapping.slot] = true;
+    }
+
+    const auto valid_count = static_cast<std::size_t>(
+        std::count(state.itlb_valid.begin(), state.itlb_valid.end(), true));
+    std::array<bool, 4u> seen_ranks{};
+    for (std::size_t index = 0u; index < state.itlb.size(); ++index) {
+        if (!state.itlb_valid[index]) {
+            if (state.itlb_source_slots[index] != 0xFFu)
+                throw std::invalid_argument(
+                    "MMU-Handoff besitzt eine inkonsistente ITLB-Quelle.");
+            continue;
+        }
+        const auto source = state.itlb_source_slots[index];
+        const auto rank = state.itlb_lru[index];
+        const auto mapping = std::find_if(
+            state.mappings.begin(),
+            state.mappings.end(),
+            [source](const auto& value) { return value.slot == source; });
+        if (source >= 64u || mapping == state.mappings.end() ||
+            !valid_mapping(state.itlb[index]) ||
+            state.itlb[index] != *mapping || rank >= valid_count ||
+            seen_ranks[rank])
+            throw std::invalid_argument(
+                "MMU-Handoff besitzt einen inkonsistenten ITLB-Zustand.");
+        seen_ranks[rank] = true;
+    }
+}
+
+void RuntimeAddressSpace::restore_state_passive(
+    const RuntimeAddressSpaceSnapshot& state) {
+    validate_state_restore(state);
+    auto prepared_mappings = state.mappings;
+    mode_ = state.mode;
+    mmucr_ = state.mmucr;
+    asid_ = state.asid;
+    mappings_ = std::move(prepared_mappings);
+    itlb_ = state.itlb;
+    itlb_valid_ = state.itlb_valid;
+    itlb_lru_ = state.itlb_lru;
+    itlb_source_slots_ = state.itlb_source_slots;
+    ++address_space_generation_;
+    ++mmu_generation_;
 }
 
 bool RuntimeAddressSpace::block_fits_translation_page(const std::uint32_t virtual_start,

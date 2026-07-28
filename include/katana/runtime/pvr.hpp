@@ -119,6 +119,11 @@ struct PvrTiming {
     std::uint64_t pixel_clock_hz = 27'000'000u;
 };
 
+inline constexpr std::uint32_t dreamcast_pvr_vblank_in_event_channel = 1u;
+inline constexpr std::uint32_t dreamcast_pvr_vblank_out_event_channel = 2u;
+inline constexpr std::uint32_t dreamcast_pvr_hblank_event_channel = 3u;
+inline constexpr std::uint64_t dreamcast_pvr_scan_event_token_v1 = 1u;
+
 enum class PvrRenderResult : std::uint8_t { Success, Failed };
 enum class PvrRenderError : std::uint8_t {
     InvalidTaState,
@@ -192,6 +197,12 @@ struct PvrRegisterSnapshot {
     std::optional<SchedulerEventId> vblank_in_event;
     std::optional<SchedulerEventId> vblank_out_event;
     std::optional<SchedulerEventId> hblank_event;
+    // SchedulerEventIds are process-local and are never imported. Portable
+    // handoffs use these flags plus the typed scheduler-event contract.
+    bool vblank_in_event_rehydration_pending = false;
+    bool vblank_out_event_rehydration_pending = false;
+    bool hblank_event_rehydration_pending = false;
+    std::optional<std::uint32_t> hblank_event_line;
     std::uint64_t scan_frame_cycles = 0u;
     std::uint64_t scan_epoch_cycle = 0u;
     PvrTiming timing{};
@@ -254,6 +265,17 @@ class PvrRegisterFile final {
     [[nodiscard]] bool in_vblank() const noexcept;
     [[nodiscard]] std::uint32_t field() const noexcept;
     [[nodiscard]] PvrRegisterSnapshot snapshot() const;
+    void validate_state_restore(const PvrRegisterSnapshot& state) const;
+    // Passive restore never imports scheduler IDs, invokes observers, starts a
+    // render job or publishes an interrupt. Scan events remain inert until
+    // their typed scheduler records are rehydrated.
+    void restore_state_passive(PvrRegisterSnapshot state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending(
+        std::uint32_t channel) const noexcept;
     void set_render_observer(std::function<void()> observer);
     void set_render_result_observer(std::function<PvrRenderResult()> observer);
     void set_render_job_factory(RenderJobFactory factory);
@@ -308,6 +330,10 @@ class PvrRegisterFile final {
     std::optional<SchedulerEventId> vblank_in_event_;
     std::optional<SchedulerEventId> vblank_out_event_;
     std::optional<SchedulerEventId> hblank_event_;
+    bool vblank_in_event_rehydration_pending_ = false;
+    bool vblank_out_event_rehydration_pending_ = false;
+    bool hblank_event_rehydration_pending_ = false;
+    std::optional<std::uint32_t> hblank_event_line_;
     std::uint64_t vblank_in_count_ = 0u;
     std::uint64_t vblank_out_count_ = 0u;
     std::uint64_t hblank_count_ = 0u;
@@ -489,6 +515,8 @@ class TileAccelerator final {
     [[nodiscard]] PvrTaFrame finish_frame();
     [[nodiscard]] bool list_open() const noexcept;
     [[nodiscard]] TileAcceleratorSnapshot snapshot() const;
+    void validate_state_restore(const TileAcceleratorSnapshot& state) const;
+    void restore_state_passive(TileAcceleratorSnapshot state);
 
   private:
     [[nodiscard]] static std::uint8_t list_rank(PvrListType type) noexcept;
@@ -604,6 +632,8 @@ class PvrTaFifo final {
     [[nodiscard]] PvrTaFrame finish_frame();
     [[nodiscard]] const PvrTaMetrics& metrics() const noexcept;
     [[nodiscard]] PvrTaFifoSnapshot snapshot() const;
+    void validate_state_restore(const PvrTaFifoSnapshot& state) const;
+    void restore_state_passive(PvrTaFifoSnapshot state);
     void continue_list();
     void reset() noexcept;
 
@@ -677,6 +707,8 @@ class PvrTaFifoMemoryDevice final : public MemoryDevice {
         [[nodiscard]] bool operator==(const Snapshot&) const = default;
     };
     [[nodiscard]] Snapshot snapshot() const noexcept;
+    void validate_state_restore(const Snapshot& state) const;
+    void restore_state_passive(Snapshot state);
     void reset() noexcept;
 
   private:
@@ -709,6 +741,8 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
         bool guest_memory_access_bound = false;
     };
     [[nodiscard]] Snapshot snapshot() const;
+    void validate_state_restore(const Snapshot& state) const;
+    void restore_state_passive(Snapshot state);
 
   private:
     void refresh_configuration();
@@ -834,6 +868,8 @@ class PvrSoftwareRenderer final {
     void record_error(PvrRenderError error, std::uint64_t render_request, std::string detail);
     [[nodiscard]] const std::optional<PvrRenderFirstError>& first_error() const noexcept;
     [[nodiscard]] PvrSoftwareRendererSnapshot snapshot() const;
+    void validate_state_restore(const PvrSoftwareRendererSnapshot& state) const;
+    void restore_state_passive(PvrSoftwareRendererSnapshot state);
 
   private:
     PvrSoftwareRenderMetrics metrics_;
@@ -853,6 +889,42 @@ class PvrSoftwareRenderer final {
     std::optional<PvrGuestFrameProof> queued_guest_frame_proof_;
     std::optional<PvrRenderFirstError> first_error_;
 };
+
+inline constexpr std::uint32_t dreamcast_pvr_state_contract_version = 1u;
+
+struct DreamcastPvrStateSnapshot {
+    std::uint32_t contract_version = dreamcast_pvr_state_contract_version;
+    PvrRegisterSnapshot registers;
+    PvrTaFifoSnapshot ta_fifo;
+    PvrTaFifoMemoryDevice::Snapshot ta_aperture;
+    PvrYuvConverterMemoryDevice::Snapshot yuv;
+    PvrSoftwareRendererSnapshot renderer;
+};
+
+[[nodiscard]] DreamcastPvrStateSnapshot snapshot_dreamcast_pvr_state(
+    const PvrRegisterFile& registers,
+    const PvrTaFifo& ta_fifo,
+    const PvrTaFifoMemoryDevice& ta_aperture,
+    const PvrYuvConverterMemoryDevice& yuv,
+    const PvrSoftwareRenderer& renderer);
+void validate_dreamcast_pvr_state_restore(
+    const PvrRegisterFile& registers,
+    const PvrTaFifo& ta_fifo,
+    const PvrTaFifoMemoryDevice& ta_aperture,
+    const PvrYuvConverterMemoryDevice& yuv,
+    const PvrSoftwareRenderer& renderer,
+    const DreamcastPvrStateSnapshot& state);
+void restore_dreamcast_pvr_state_passive(
+    PvrRegisterFile& registers,
+    PvrTaFifo& ta_fifo,
+    PvrTaFifoMemoryDevice& ta_aperture,
+    PvrYuvConverterMemoryDevice& yuv,
+    PvrSoftwareRenderer& renderer,
+    DreamcastPvrStateSnapshot state);
+[[nodiscard]] std::vector<std::uint8_t>
+encode_dreamcast_pvr_state(const DreamcastPvrStateSnapshot& state);
+[[nodiscard]] DreamcastPvrStateSnapshot
+decode_dreamcast_pvr_state(std::span<const std::uint8_t> bytes);
 
 enum class PvrTextureFormat : std::uint8_t { Rgb565, Argb1555, Argb4444 };
 

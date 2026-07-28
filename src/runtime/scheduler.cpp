@@ -150,6 +150,23 @@ void EventScheduler::reset() {
     if (first_observer_error) std::rethrow_exception(first_observer_error);
 }
 
+void EventScheduler::restore_time_passive(const std::uint64_t guest_cycle) {
+    if (advance_in_progress_) {
+        throw std::logic_error(
+            "Passive Schedulerwiederherstellung ist waehrend eines laufenden Advances "
+            "nicht erlaubt.");
+    }
+    if (guest_cycle_budget_ && guest_cycle > *guest_cycle_budget_) {
+        throw std::invalid_argument(
+            "Passive Schedulerwiederherstellung liegt hinter dem Gastzyklusbudget.");
+    }
+
+    // next_event_id_ deliberately remains monotonic. Captured IDs and
+    // callbacks are process-local and are replaced by typed rehydration.
+    clear();
+    current_cycle_ = guest_cycle;
+}
+
 SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycle,
                                                   const std::size_t event_budget) {
     if (advance_in_progress_) {

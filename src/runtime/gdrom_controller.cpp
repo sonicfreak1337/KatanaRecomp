@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace katana::runtime {
@@ -731,8 +733,10 @@ void DreamcastGdRomController::schedule_packet() {
             1'000u,
             [this](const auto event_id, const auto cycle) { complete_packet(event_id, cycle); },
             SchedulerEventKind::GdRomPacket);
+        packet_event_rehydration_pending_ = false;
     } catch (const std::overflow_error&) {
         packet_event_.reset();
+        packet_event_rehydration_pending_ = false;
         fail_taskfile_command(0x0Bu, 0u, 0u, true);
     }
 }
@@ -741,6 +745,7 @@ void DreamcastGdRomController::complete_packet(const SchedulerEventId event_id,
                                                const std::uint64_t cycle) {
     if (!packet_event_ || *packet_event_ != event_id) return;
     packet_event_.reset();
+    packet_event_rehydration_pending_ = false;
     try {
         execute_packet();
     } catch (...) {
@@ -1880,6 +1885,7 @@ DreamcastGdRomSnapshot DreamcastGdRomController::snapshot() const {
     result.packet = packet_;
     result.data = data_;
     result.data_cursor = data_cursor_;
+    result.taskfile_data_source_range = taskfile_data_source_range_;
     result.taskfile_phase_remaining = taskfile_phase_remaining_;
     result.taskfile_host_byte_limit = taskfile_host_byte_limit_;
     result.taskfile_phase = static_cast<std::uint8_t>(taskfile_phase_);
@@ -1960,8 +1966,944 @@ DreamcastGdRomSnapshot DreamcastGdRomController::snapshot() const {
     result.coalesced_guest_callbacks = coalesced_guest_callbacks_;
     result.dropped_guest_callbacks = dropped_guest_callbacks_;
     result.packet_event = packet_event_;
+    result.packet_event_rehydration_pending =
+        packet_event_rehydration_pending_;
     result.g1_bus_bound = g1_bus_ != nullptr;
+    result.completion_observer_bound =
+        static_cast<bool>(completion_observer_);
+    result.module_load_observer_bound =
+        static_cast<bool>(module_load_observer_);
+    result.command_ack_observer_bound =
+        static_cast<bool>(command_ack_observer_);
+    result.load_transaction_executor_bound =
+        static_cast<bool>(load_transaction_executor_);
+    result.content_identity = content_identity_;
+    result.load_execution_policy = load_execution_policy_;
     return result;
+}
+
+void DreamcastGdRomController::validate_state_restore(
+    const DreamcastGdRomSnapshot& state) const {
+    validate_state_restore(state, scheduler_.current_cycle());
+}
+
+void DreamcastGdRomController::validate_state_restore(
+    const DreamcastGdRomSnapshot& state,
+    const std::uint64_t expected_scheduler_cycle) const {
+    reader_.validate_state_restore(state.reader, expected_scheduler_cycle);
+    if (state.g1_bus_bound != (g1_bus_ != nullptr) ||
+        state.completion_observer_bound !=
+            static_cast<bool>(completion_observer_) ||
+        state.module_load_observer_bound !=
+            static_cast<bool>(module_load_observer_) ||
+        state.command_ack_observer_bound !=
+            static_cast<bool>(command_ack_observer_) ||
+        state.load_transaction_executor_bound !=
+            static_cast<bool>(load_transaction_executor_) ||
+        state.content_identity != content_identity_ ||
+        state.load_execution_policy != load_execution_policy_)
+        throw std::invalid_argument(
+            "GD-ROM-Handoff passt nicht zum Runtime-Wiring oder zur Discidentitaet.");
+    if (state.taskfile_phase >
+            static_cast<std::uint8_t>(TaskfilePhase::DataOut) ||
+        state.drive_owner >
+            static_cast<std::uint8_t>(DriveOwner::Taskfile) ||
+        state.data_cursor > state.data.size() ||
+        state.packet.size() > 12u ||
+        state.taskfile_host_byte_limit == 0u ||
+        state.pending_guest_callbacks.size() >
+            gdrom_guest_callback_capacity ||
+        static_cast<std::uint8_t>(state.load_execution_policy) >
+            static_cast<std::uint8_t>(
+                DiscLoadExecutionPolicy::StandaloneTestMode))
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt ungueltige Transportdaten.");
+    if ((!state.taskfile_data_source_range.known &&
+         (state.taskfile_data_source_range.byte_offset != 0u ||
+          state.taskfile_data_source_range.byte_count != 0u)) ||
+        (state.taskfile_data_source_range.known &&
+         (state.taskfile_data_source_range.byte_count !=
+              state.data.size() ||
+          state.taskfile_data_source_range.byte_offset >
+              std::numeric_limits<std::uint64_t>::max() -
+                  state.taskfile_data_source_range.byte_count)))
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt eine ungueltige Discquellrange.");
+    const auto phase = static_cast<TaskfilePhase>(state.taskfile_phase);
+    const auto scheduled =
+        state.packet_event.has_value() ||
+        state.packet_event_rehydration_pending;
+    if (state.packet_event &&
+        state.packet_event_rehydration_pending)
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt keinen eindeutigen Paket-Eventvertrag.");
+    if ((phase == TaskfilePhase::Executing) != scheduled)
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt einen inkonsistenten Paketzustand.");
+    if (phase == TaskfilePhase::PacketIn &&
+        (!state.expecting_packet || state.packet.size() > 12u))
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt eine ungueltige Paketannahme.");
+    if ((phase == TaskfilePhase::DataIn ||
+         phase == TaskfilePhase::DataOut) &&
+        (state.data.empty() ||
+         state.taskfile_phase_remaining == 0u ||
+         state.taskfile_phase_remaining >
+             state.data.size() - state.data_cursor))
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt eine ungueltige PIO-Phase.");
+    if (phase == TaskfilePhase::DmaIn &&
+        (state.data.empty() ||
+         state.data_cursor > state.data.size()))
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt eine ungueltige DMA-Phase.");
+
+    std::set<std::uint32_t> request_ids;
+    for (const auto& request : state.bios_requests) {
+        if (request.id == 0u ||
+            request.id >= state.next_bios_request ||
+            !request_ids.insert(request.id).second ||
+            static_cast<std::uint8_t>(request.state) >
+                static_cast<std::uint8_t>(
+                    GdRomBiosRequestState::Aborted) ||
+            static_cast<std::uint8_t>(request.response.status) >
+                static_cast<std::uint8_t>(GdRomStatus::Aborted) ||
+            static_cast<std::uint8_t>(request.write_source) >
+                static_cast<std::uint8_t>(CodeWriteSource::Fallback) ||
+            static_cast<std::uint8_t>(request.transfer_kind) >
+                static_cast<std::uint8_t>(
+                    GdRomBiosTransferKind::Pio) ||
+            request.stream_consumed_bytes >
+                request.stream_total_bytes ||
+            request.transfer_transferred > request.transfer_size ||
+            (!request.guest_binding_present &&
+             request.guest_address_space.has_value()))
+            throw std::invalid_argument(
+                "GD-ROM-Handoff besitzt eine ungueltige BIOS-Requestqueue.");
+        if (request.transfer_active) {
+            if (!request.transfer_buffer ||
+                !request.guest_binding_present ||
+                request.transfer_kind ==
+                    GdRomBiosTransferKind::None ||
+                request.transfer_buffer->size != request.transfer_size ||
+                request.transfer_buffer->access !=
+                    GuestBufferAccess::Write ||
+                request.transfer_buffer->alignment == 0u ||
+                !memory_.is_writable_linear_range(
+                    request.transfer_buffer->physical_address,
+                    request.transfer_buffer->size))
+                throw std::invalid_argument(
+                    "GD-ROM-Handoff besitzt keinen fortsetzbaren BIOS-Transfer.");
+        } else if (request.transfer_buffer) {
+            throw std::invalid_argument(
+                "GD-ROM-Handoff besitzt einen Buffer ohne aktiven Transfer.");
+        }
+        if (request.guest_address_space) {
+            auto restored_space =
+                std::make_shared<RuntimeAddressSpace>();
+            restored_space->validate_state_restore(
+                *request.guest_address_space);
+            restored_space->restore_state_passive(
+                *request.guest_address_space);
+            if (request.transfer_buffer) {
+                const GuestAddressSpaceBinding binding{
+                    std::move(restored_space),
+                    request.guest_binding_privileged};
+                const auto resolved = resolve_guest_write_buffer(
+                    binding,
+                    memory_,
+                    request.transfer_buffer->guest_address,
+                    request.transfer_buffer->size,
+                    request.transfer_buffer->alignment);
+                if (!resolved ||
+                    resolved->physical_address !=
+                        request.transfer_buffer->physical_address)
+                    throw std::invalid_argument(
+                        "GD-ROM-Handoff-BIOS-Buffer passt nicht zur MMU-Abbildung.");
+            }
+        }
+    }
+    if (state.next_bios_request == 0u ||
+        state.next_bios_call_sequence == 0u ||
+        state.next_load_transaction == 0u)
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt eine erschoepfte Sequenz.");
+    std::uint64_t previous_call_sequence = 0u;
+    std::uint64_t previous_call_cycle = 0u;
+    for (const auto& event : state.bios_call_events) {
+        if (event.sequence == 0u ||
+            event.sequence >= state.next_bios_call_sequence ||
+            event.sequence <= previous_call_sequence ||
+            event.guest_cycle < previous_call_cycle ||
+            event.guest_cycle > expected_scheduler_cycle ||
+            static_cast<std::uint8_t>(event.state_before) >
+                static_cast<std::uint8_t>(
+                    GdRomBiosRequestState::Aborted) ||
+            static_cast<std::uint8_t>(event.state_after) >
+                static_cast<std::uint8_t>(
+                    GdRomBiosRequestState::Aborted))
+            throw std::invalid_argument(
+                "GD-ROM-Handoff besitzt eine ungueltige BIOS-Aufrufhistorie.");
+        previous_call_sequence = event.sequence;
+        previous_call_cycle = event.guest_cycle;
+    }
+    if (static_cast<std::uint8_t>(state.last_bios_request.state) >
+            static_cast<std::uint8_t>(
+                GdRomBiosRequestState::Aborted) ||
+        (state.last_bios_request.id != 0u &&
+         state.last_bios_request.id >= state.next_bios_request) ||
+        (state.last_bios_request.id == 0u &&
+         state.last_bios_request.state !=
+             GdRomBiosRequestState::None))
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt einen ungueltigen letzten BIOS-Request.");
+    const auto valid_completion =
+        [&request_ids](const bool pending, const std::uint32_t request) {
+            return pending ? request != 0u && request_ids.contains(request)
+                           : request == 0u;
+        };
+    if (!valid_completion(
+            state.dma_completion_pending,
+            state.dma_completion_request) ||
+        !valid_completion(
+            state.pio_completion_pending,
+            state.pio_completion_request))
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt einen ungueltigen Completionvertrag.");
+    for (const auto& callback : state.pending_guest_callbacks)
+        if (callback.kind == GdRomBiosTransferKind::None ||
+            static_cast<std::uint8_t>(callback.kind) >
+                static_cast<std::uint8_t>(GdRomBiosTransferKind::Pio) ||
+            callback.address == 0u ||
+            callback.request_id == 0u ||
+            !request_ids.contains(callback.request_id))
+            throw std::invalid_argument(
+                "GD-ROM-Handoff besitzt einen ungueltigen Gastcallback.");
+}
+
+void DreamcastGdRomController::restore_state_passive(
+    const DreamcastGdRomSnapshot& state) {
+    validate_state_restore(state);
+
+    std::map<std::uint64_t, BiosRequest> restored_requests;
+    for (const auto& source : state.bios_requests) {
+        BiosRequest request;
+        request.id = source.id;
+        request.command = source.command;
+        request.parameters = source.parameters;
+        request.async_id = source.async_id;
+        request.destination = source.destination;
+        request.write_source = source.write_source;
+        request.state = source.state;
+        request.status = source.status;
+        request.response = source.response;
+        request.streaming_dma = source.streaming_dma;
+        request.stream_lba = source.stream_lba;
+        request.stream_sector_count = source.stream_sector_count;
+        request.stream_total_bytes = source.stream_total_bytes;
+        request.stream_consumed_bytes = source.stream_consumed_bytes;
+        request.cached_stream_sector = source.cached_stream_sector;
+        request.stream_sector_cache = source.stream_sector_cache;
+        request.transfer_kind = source.transfer_kind;
+        request.transfer_destination = source.transfer_destination;
+        request.transfer_size = source.transfer_size;
+        request.transfer_transferred = source.transfer_transferred;
+        request.transfer_active = source.transfer_active;
+        request.transfer_buffer = source.transfer_buffer;
+        if (source.guest_binding_present) {
+            GuestAddressSpaceBinding binding;
+            binding.privileged = source.guest_binding_privileged;
+            if (source.guest_address_space) {
+                binding.address_space =
+                    std::make_shared<RuntimeAddressSpace>();
+                binding.address_space->restore_state_passive(
+                    *source.guest_address_space);
+            }
+            request.guest_binding = std::move(binding);
+        }
+        restored_requests.emplace(request.id, std::move(request));
+    }
+    auto restored_packet = state.packet;
+    auto restored_data = state.data;
+    auto restored_bios_call_events = state.bios_call_events;
+    auto restored_callbacks = state.pending_guest_callbacks;
+
+    reader_.restore_state_passive(state.reader);
+    if (packet_event_ && !scheduler_lifetime_.expired())
+        static_cast<void>(scheduler_.cancel(*packet_event_));
+    packet_event_.reset();
+    packet_ = std::move(restored_packet);
+    data_ = std::move(restored_data);
+    data_cursor_ = state.data_cursor;
+    taskfile_data_source_range_ =
+        state.taskfile_data_source_range;
+    taskfile_phase_remaining_ = state.taskfile_phase_remaining;
+    taskfile_host_byte_limit_ = state.taskfile_host_byte_limit;
+    taskfile_phase_ = static_cast<TaskfilePhase>(state.taskfile_phase);
+    drive_owner_ = static_cast<DriveOwner>(state.drive_owner);
+    command_irq_asserted_ = state.command_irq_asserted;
+    command_irq_reassert_pending_ =
+        state.command_irq_reassert_pending;
+    taskfile_command_failed_ = state.taskfile_command_failed;
+    clear_sense_after_data_ = state.clear_sense_after_data;
+    set_mode_offset_ = state.set_mode_offset;
+    drive_mode_ = state.drive_mode;
+    sense_key_ = state.sense_key;
+    sense_asc_ = state.sense_asc;
+    sense_ascq_ = state.sense_ascq;
+    status_ = state.status;
+    error_ = state.error;
+    interrupt_reason_ = state.interrupt_reason;
+    features_ = state.features;
+    sector_count_register_ = state.sector_count_register;
+    sector_number_ = state.sector_number;
+    drive_select_ = state.drive_select;
+    byte_count_ = state.byte_count;
+    current_fad_ = state.current_fad;
+    expecting_packet_ = state.expecting_packet;
+    bios_requests_ = std::move(restored_requests);
+    next_bios_request_ = state.next_bios_request;
+    last_bios_request_ = state.last_bios_request;
+    bios_call_events_ = std::move(restored_bios_call_events);
+    next_bios_call_sequence_ = state.next_bios_call_sequence;
+    dropped_bios_call_events_ = state.dropped_bios_call_events;
+    completed_commands_ = state.completed_commands;
+    completed_dma_ = state.completed_dma;
+    next_load_transaction_ = state.next_load_transaction;
+    committed_load_transactions_ =
+        state.committed_load_transactions;
+    failed_load_transactions_ = state.failed_load_transactions;
+    sector_mode_ = state.sector_mode;
+    dma_callback_ = state.dma_callback;
+    dma_callback_argument_ = state.dma_callback_argument;
+    pio_callback_ = state.pio_callback;
+    pio_callback_argument_ = state.pio_callback_argument;
+    dma_completion_pending_ = state.dma_completion_pending;
+    pio_completion_pending_ = state.pio_completion_pending;
+    dma_completion_request_ = state.dma_completion_request;
+    pio_completion_request_ = state.pio_completion_request;
+    pending_guest_callbacks_ = std::move(restored_callbacks);
+    coalesced_guest_callbacks_ = state.coalesced_guest_callbacks;
+    dropped_guest_callbacks_ = state.dropped_guest_callbacks;
+    packet_event_rehydration_pending_ =
+        state.packet_event.has_value() ||
+        state.packet_event_rehydration_pending;
+}
+
+SchedulerEventId DreamcastGdRomController::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel == dreamcast_gdrom_async_read_event_channel)
+        return reader_.rehydrate_scheduled_event(
+            guest_cycle,
+            gdrom_async_read_event_channel,
+            token);
+    if (channel != dreamcast_gdrom_packet_event_channel ||
+        token != dreamcast_gdrom_packet_event_token_v1)
+        throw std::invalid_argument(
+            "GD-ROM-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    if (!packet_event_rehydration_pending_ || packet_event_ ||
+        taskfile_phase_ != TaskfilePhase::Executing)
+        throw std::logic_error(
+            "GD-ROM-Handoff erwartet kein Paket-Completionevent.");
+    if (guest_cycle < scheduler_.current_cycle())
+        throw std::invalid_argument(
+            "GD-ROM-Paketcompletion darf nicht in der Vergangenheit liegen.");
+    const auto event_id = scheduler_.schedule_at(
+        guest_cycle,
+        [this](const auto restored_event_id, const auto cycle) {
+            complete_packet(restored_event_id, cycle);
+        },
+        SchedulerEventKind::GdRomPacket);
+    packet_event_ = event_id;
+    packet_event_rehydration_pending_ = false;
+    return event_id;
+}
+
+bool DreamcastGdRomController::event_rehydration_pending() const noexcept {
+    return packet_event_rehydration_pending_ ||
+           reader_.event_rehydration_pending();
+}
+
+namespace {
+
+class GdStateWriter final {
+  public:
+    void u8(const std::uint8_t value) { bytes_.push_back(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void string(const std::string_view value) {
+        if (value.size() > std::numeric_limits<std::uint32_t>::max())
+            throw std::length_error("GD-ROM-State-String ist zu gross.");
+        u32(static_cast<std::uint32_t>(value.size()));
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    void raw(const std::span<const std::uint8_t> value) {
+        if (value.size() > std::numeric_limits<std::uint32_t>::max())
+            throw std::length_error("GD-ROM-State-Payload ist zu gross.");
+        u32(static_cast<std::uint32_t>(value.size()));
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        return std::move(bytes_);
+    }
+  private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+class GdStateReader final {
+  public:
+    explicit GdStateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+    [[nodiscard]] std::uint8_t u8() {
+        require(1u);
+        return bytes_[cursor_++];
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::invalid_argument(
+                "GD-ROM-State besitzt ein ungueltiges Boolean.");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        std::uint32_t value = 0u;
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            value |= static_cast<std::uint32_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        std::uint64_t value = 0u;
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            value |= static_cast<std::uint64_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    [[nodiscard]] std::string string() {
+        const auto size = u32();
+        require(size);
+        std::string result(
+            reinterpret_cast<const char*>(bytes_.data() + cursor_), size);
+        cursor_ += size;
+        return result;
+    }
+    [[nodiscard]] std::vector<std::uint8_t> raw() {
+        const auto size = u32();
+        require(size);
+        std::vector<std::uint8_t> result(
+            bytes_.begin() + static_cast<std::ptrdiff_t>(cursor_),
+            bytes_.begin() + static_cast<std::ptrdiff_t>(cursor_ + size));
+        cursor_ += size;
+        return result;
+    }
+    void finish() const {
+        if (cursor_ != bytes_.size())
+            throw std::invalid_argument(
+                "GD-ROM-State besitzt nachlaufende Daten.");
+    }
+  private:
+    void require(const std::size_t size) const {
+        if (size > bytes_.size() - cursor_)
+            throw std::invalid_argument("GD-ROM-State ist abgeschnitten.");
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+};
+
+void write_response(GdStateWriter& writer,
+                    const GdRomResponse& response) {
+    writer.u8(static_cast<std::uint8_t>(response.status));
+    writer.raw(response.data);
+    writer.u32(response.transferred_sectors);
+}
+
+GdRomResponse read_response(GdStateReader& reader) {
+    GdRomResponse response;
+    response.status = static_cast<GdRomStatus>(reader.u8());
+    response.data = reader.raw();
+    response.transferred_sectors = reader.u32();
+    return response;
+}
+
+void write_tlb_mapping(GdStateWriter& writer,
+                       const TlbMapping& mapping) {
+    writer.u32(mapping.virtual_page);
+    writer.u32(mapping.physical_page);
+    writer.u32(mapping.page_size);
+    writer.u8(mapping.asid);
+    writer.u8(mapping.slot);
+    writer.boolean(mapping.valid);
+    writer.boolean(mapping.readable);
+    writer.boolean(mapping.writable);
+    writer.boolean(mapping.executable);
+    writer.boolean(mapping.user_access);
+    writer.boolean(mapping.dirty);
+    writer.boolean(mapping.shared);
+}
+
+TlbMapping read_tlb_mapping(GdStateReader& reader) {
+    TlbMapping mapping;
+    mapping.virtual_page = reader.u32();
+    mapping.physical_page = reader.u32();
+    mapping.page_size = reader.u32();
+    mapping.asid = reader.u8();
+    mapping.slot = reader.u8();
+    mapping.valid = reader.boolean();
+    mapping.readable = reader.boolean();
+    mapping.writable = reader.boolean();
+    mapping.executable = reader.boolean();
+    mapping.user_access = reader.boolean();
+    mapping.dirty = reader.boolean();
+    mapping.shared = reader.boolean();
+    return mapping;
+}
+
+void write_address_space(
+    GdStateWriter& writer,
+    const RuntimeAddressSpaceSnapshot& state) {
+    writer.u8(static_cast<std::uint8_t>(state.mode));
+    writer.u32(state.mmucr);
+    writer.u8(state.asid);
+    if (state.mappings.size() >
+        std::numeric_limits<std::uint32_t>::max())
+        throw std::length_error(
+            "GD-ROM-State-MMU-Tabelle ist zu gross.");
+    auto mappings = state.mappings;
+    std::sort(
+        mappings.begin(),
+        mappings.end(),
+        [](const auto& left, const auto& right) {
+            return left.slot < right.slot;
+        });
+    writer.u32(static_cast<std::uint32_t>(mappings.size()));
+    for (const auto& mapping : mappings)
+        write_tlb_mapping(writer, mapping);
+    for (const auto& mapping : state.itlb)
+        write_tlb_mapping(writer, mapping);
+    for (const auto valid : state.itlb_valid) writer.boolean(valid);
+    for (const auto lru : state.itlb_lru) writer.u8(lru);
+    for (const auto slot : state.itlb_source_slots) writer.u8(slot);
+}
+
+RuntimeAddressSpaceSnapshot read_address_space(GdStateReader& reader) {
+    RuntimeAddressSpaceSnapshot state;
+    state.mode = static_cast<AddressTranslationMode>(reader.u8());
+    state.mmucr = reader.u32();
+    state.asid = reader.u8();
+    // Guard generations are process-local and deliberately not imported.
+    state.address_space_generation = 0u;
+    state.mmu_generation = 0u;
+    state.watchpoint_generation = 0u;
+    const auto mapping_count = reader.u32();
+    if (mapping_count > 64u)
+        throw std::invalid_argument(
+            "GD-ROM-State besitzt zu viele UTLB-Abbildungen.");
+    state.mappings.reserve(mapping_count);
+    for (std::uint32_t index = 0u; index < mapping_count; ++index)
+        state.mappings.push_back(read_tlb_mapping(reader));
+    for (auto& mapping : state.itlb)
+        mapping = read_tlb_mapping(reader);
+    for (auto& valid : state.itlb_valid) valid = reader.boolean();
+    for (auto& lru : state.itlb_lru) lru = reader.u8();
+    for (auto& slot : state.itlb_source_slots) slot = reader.u8();
+    return state;
+}
+
+void write_guest_buffer(
+    GdStateWriter& writer,
+    const std::optional<GuestLinearBuffer>& buffer) {
+    writer.boolean(buffer.has_value());
+    if (!buffer) return;
+    writer.u32(buffer->guest_address);
+    writer.u32(buffer->physical_address);
+    writer.u64(buffer->size);
+    writer.u64(buffer->alignment);
+    writer.u8(static_cast<std::uint8_t>(buffer->access));
+}
+
+std::optional<GuestLinearBuffer>
+read_guest_buffer(GdStateReader& reader) {
+    if (!reader.boolean()) return std::nullopt;
+    GuestLinearBuffer buffer;
+    buffer.guest_address = reader.u32();
+    buffer.physical_address = reader.u32();
+    buffer.size = static_cast<std::size_t>(reader.u64());
+    buffer.alignment = static_cast<std::size_t>(reader.u64());
+    buffer.access = static_cast<GuestBufferAccess>(reader.u8());
+    return buffer;
+}
+
+void write_bios_request(
+    GdStateWriter& writer,
+    const GdRomBiosRequestSnapshot& request) {
+    writer.u32(request.id);
+    writer.u32(request.command);
+    for (const auto value : request.parameters) writer.u32(value);
+    writer.u64(request.async_id);
+    writer.u32(request.destination);
+    writer.u8(static_cast<std::uint8_t>(request.write_source));
+    writer.u8(static_cast<std::uint8_t>(request.state));
+    for (const auto value : request.status) writer.u32(value);
+    write_response(writer, request.response);
+    writer.boolean(request.streaming_dma);
+    writer.u32(request.stream_lba);
+    writer.u32(request.stream_sector_count);
+    writer.u64(request.stream_total_bytes);
+    writer.u64(request.stream_consumed_bytes);
+    writer.u32(request.cached_stream_sector);
+    writer.raw(request.stream_sector_cache);
+    writer.u8(static_cast<std::uint8_t>(request.transfer_kind));
+    writer.u32(request.transfer_destination);
+    writer.u32(request.transfer_size);
+    writer.u32(request.transfer_transferred);
+    writer.boolean(request.transfer_active);
+    write_guest_buffer(writer, request.transfer_buffer);
+    writer.boolean(request.guest_binding_present);
+    writer.boolean(request.guest_binding_privileged);
+    writer.boolean(request.guest_address_space.has_value());
+    if (request.guest_address_space)
+        write_address_space(writer, *request.guest_address_space);
+}
+
+GdRomBiosRequestSnapshot read_bios_request(GdStateReader& reader) {
+    GdRomBiosRequestSnapshot request;
+    request.id = reader.u32();
+    request.command = reader.u32();
+    for (auto& value : request.parameters) value = reader.u32();
+    request.async_id = reader.u64();
+    request.destination = reader.u32();
+    request.write_source = static_cast<CodeWriteSource>(reader.u8());
+    request.state = static_cast<GdRomBiosRequestState>(reader.u8());
+    for (auto& value : request.status) value = reader.u32();
+    request.response = read_response(reader);
+    request.streaming_dma = reader.boolean();
+    request.stream_lba = reader.u32();
+    request.stream_sector_count = reader.u32();
+    request.stream_total_bytes = reader.u64();
+    request.stream_consumed_bytes = reader.u64();
+    request.cached_stream_sector = reader.u32();
+    request.stream_sector_cache = reader.raw();
+    request.transfer_kind =
+        static_cast<GdRomBiosTransferKind>(reader.u8());
+    request.transfer_destination = reader.u32();
+    request.transfer_size = reader.u32();
+    request.transfer_transferred = reader.u32();
+    request.transfer_active = reader.boolean();
+    request.transfer_buffer = read_guest_buffer(reader);
+    request.guest_binding_present = reader.boolean();
+    request.guest_binding_privileged = reader.boolean();
+    if (reader.boolean())
+        request.guest_address_space = read_address_space(reader);
+    return request;
+}
+
+void write_bios_status(GdStateWriter& writer,
+                       const GdRomBiosRequestStatus& status) {
+    writer.u32(status.id);
+    writer.u32(status.command);
+    writer.u8(static_cast<std::uint8_t>(status.state));
+    for (const auto value : status.status) writer.u32(value);
+}
+
+GdRomBiosRequestStatus read_bios_status(GdStateReader& reader) {
+    GdRomBiosRequestStatus status;
+    status.id = reader.u32();
+    status.command = reader.u32();
+    status.state = static_cast<GdRomBiosRequestState>(reader.u8());
+    for (auto& value : status.status) value = reader.u32();
+    return status;
+}
+
+void write_bios_call(GdStateWriter& writer,
+                     const GdRomBiosCallEvent& event) {
+    writer.u64(event.sequence);
+    writer.u64(event.guest_cycle);
+    writer.u32(event.callsite);
+    writer.u32(event.return_address);
+    writer.u32(event.selector);
+    writer.u32(event.super_selector);
+    for (const auto value : event.arguments) writer.u32(value);
+    writer.u32(event.request_id);
+    writer.u8(static_cast<std::uint8_t>(event.state_before));
+    writer.u8(static_cast<std::uint8_t>(event.state_after));
+    writer.u32(event.result);
+    for (const auto value : event.status) writer.u32(value);
+}
+
+GdRomBiosCallEvent read_bios_call(GdStateReader& reader) {
+    GdRomBiosCallEvent event;
+    event.sequence = reader.u64();
+    event.guest_cycle = reader.u64();
+    event.callsite = reader.u32();
+    event.return_address = reader.u32();
+    event.selector = reader.u32();
+    event.super_selector = reader.u32();
+    for (auto& value : event.arguments) value = reader.u32();
+    event.request_id = reader.u32();
+    event.state_before =
+        static_cast<GdRomBiosRequestState>(reader.u8());
+    event.state_after =
+        static_cast<GdRomBiosRequestState>(reader.u8());
+    event.result = reader.u32();
+    for (auto& value : event.status) value = reader.u32();
+    return event;
+}
+
+void write_callback(GdStateWriter& writer,
+                    const GdRomGuestCallback& callback) {
+    writer.u8(static_cast<std::uint8_t>(callback.kind));
+    writer.u32(callback.address);
+    writer.u32(callback.argument);
+    writer.u32(callback.request_id);
+}
+
+GdRomGuestCallback read_callback(GdStateReader& reader) {
+    return {static_cast<GdRomBiosTransferKind>(reader.u8()),
+            reader.u32(),
+            reader.u32(),
+            reader.u32()};
+}
+
+} // namespace
+
+std::vector<std::uint8_t>
+encode_dreamcast_gdrom_state(const DreamcastGdRomSnapshot& state) {
+    GdStateWriter writer;
+    writer.string("KATGDC1");
+    writer.u32(dreamcast_gdrom_state_contract_version);
+    writer.raw(encode_gdrom_async_reader_state(state.reader));
+    writer.raw(state.packet);
+    writer.raw(state.data);
+    writer.u64(state.data_cursor);
+    writer.boolean(state.taskfile_data_source_range.known);
+    writer.u64(state.taskfile_data_source_range.byte_offset);
+    writer.u64(state.taskfile_data_source_range.byte_count);
+    writer.u32(state.taskfile_phase_remaining);
+    writer.u32(state.taskfile_host_byte_limit);
+    writer.u8(state.taskfile_phase);
+    writer.u8(state.drive_owner);
+    writer.boolean(state.command_irq_asserted);
+    writer.boolean(state.command_irq_reassert_pending);
+    writer.boolean(state.taskfile_command_failed);
+    writer.boolean(state.clear_sense_after_data);
+    writer.u8(state.set_mode_offset);
+    for (const auto value : state.drive_mode) writer.u8(value);
+    writer.u8(state.sense_key);
+    writer.u8(state.sense_asc);
+    writer.u8(state.sense_ascq);
+    writer.u8(state.status);
+    writer.u8(state.error);
+    writer.u8(state.interrupt_reason);
+    writer.u8(state.features);
+    writer.u8(state.sector_count_register);
+    writer.u8(state.sector_number);
+    writer.u8(state.drive_select);
+    writer.u32(state.byte_count);
+    writer.u32(state.current_fad);
+    writer.boolean(state.expecting_packet);
+    if (state.bios_requests.size() >
+            std::numeric_limits<std::uint32_t>::max() ||
+        state.bios_call_events.size() >
+            std::numeric_limits<std::uint32_t>::max() ||
+        state.pending_guest_callbacks.size() >
+            std::numeric_limits<std::uint32_t>::max())
+        throw std::length_error("GD-ROM-State-Queue ist zu gross.");
+    writer.u32(static_cast<std::uint32_t>(state.bios_requests.size()));
+    for (const auto& request : state.bios_requests)
+        write_bios_request(writer, request);
+    writer.u32(state.next_bios_request);
+    write_bios_status(writer, state.last_bios_request);
+    writer.u32(static_cast<std::uint32_t>(state.bios_call_events.size()));
+    for (const auto& event : state.bios_call_events)
+        write_bios_call(writer, event);
+    writer.u64(state.next_bios_call_sequence);
+    writer.u64(state.dropped_bios_call_events);
+    writer.u64(state.completed_commands);
+    writer.u64(state.completed_dma);
+    writer.u64(state.next_load_transaction);
+    writer.u64(state.committed_load_transactions);
+    writer.u64(state.failed_load_transactions);
+    for (const auto value : state.sector_mode) writer.u32(value);
+    writer.u32(state.dma_callback);
+    writer.u32(state.dma_callback_argument);
+    writer.u32(state.pio_callback);
+    writer.u32(state.pio_callback_argument);
+    writer.boolean(state.dma_completion_pending);
+    writer.boolean(state.pio_completion_pending);
+    writer.u32(state.dma_completion_request);
+    writer.u32(state.pio_completion_request);
+    writer.u32(
+        static_cast<std::uint32_t>(state.pending_guest_callbacks.size()));
+    for (const auto& callback : state.pending_guest_callbacks)
+        write_callback(writer, callback);
+    writer.u64(state.coalesced_guest_callbacks);
+    writer.u64(state.dropped_guest_callbacks);
+    // Process-local packet_event is deliberately omitted.
+    writer.boolean(state.packet_event.has_value() ||
+                   state.packet_event_rehydration_pending);
+    writer.boolean(state.g1_bus_bound);
+    writer.boolean(state.completion_observer_bound);
+    writer.boolean(state.module_load_observer_bound);
+    writer.boolean(state.command_ack_observer_bound);
+    writer.boolean(state.load_transaction_executor_bound);
+    writer.string(state.content_identity);
+    writer.u8(static_cast<std::uint8_t>(state.load_execution_policy));
+    return std::move(writer).finish();
+}
+
+DreamcastGdRomSnapshot
+decode_dreamcast_gdrom_state(
+    const std::span<const std::uint8_t> bytes) {
+    GdStateReader reader(bytes);
+    if (reader.string() != "KATGDC1" ||
+        reader.u32() != dreamcast_gdrom_state_contract_version)
+        throw std::invalid_argument(
+            "GD-ROM-State besitzt Magic oder Version nicht.");
+    DreamcastGdRomSnapshot state;
+    state.reader = decode_gdrom_async_reader_state(reader.raw());
+    state.packet = reader.raw();
+    state.data = reader.raw();
+    state.data_cursor = static_cast<std::size_t>(reader.u64());
+    state.taskfile_data_source_range.known = reader.boolean();
+    state.taskfile_data_source_range.byte_offset = reader.u64();
+    state.taskfile_data_source_range.byte_count = reader.u64();
+    state.taskfile_phase_remaining = reader.u32();
+    state.taskfile_host_byte_limit = reader.u32();
+    state.taskfile_phase = reader.u8();
+    state.drive_owner = reader.u8();
+    state.command_irq_asserted = reader.boolean();
+    state.command_irq_reassert_pending = reader.boolean();
+    state.taskfile_command_failed = reader.boolean();
+    state.clear_sense_after_data = reader.boolean();
+    state.set_mode_offset = reader.u8();
+    for (auto& value : state.drive_mode) value = reader.u8();
+    state.sense_key = reader.u8();
+    state.sense_asc = reader.u8();
+    state.sense_ascq = reader.u8();
+    state.status = reader.u8();
+    state.error = reader.u8();
+    state.interrupt_reason = reader.u8();
+    state.features = reader.u8();
+    state.sector_count_register = reader.u8();
+    state.sector_number = reader.u8();
+    state.drive_select = reader.u8();
+    state.byte_count = static_cast<std::uint16_t>(reader.u32());
+    state.current_fad = reader.u32();
+    state.expecting_packet = reader.boolean();
+    const auto request_count = reader.u32();
+    if (request_count > 65'536u)
+        throw std::invalid_argument(
+            "GD-ROM-State besitzt zu viele BIOS-Requests.");
+    state.bios_requests.reserve(request_count);
+    for (std::uint32_t index = 0u; index < request_count; ++index)
+        state.bios_requests.push_back(read_bios_request(reader));
+    state.next_bios_request = reader.u32();
+    state.last_bios_request = read_bios_status(reader);
+    const auto call_count = reader.u32();
+    if (call_count > 65'536u)
+        throw std::invalid_argument(
+            "GD-ROM-State besitzt zu viele BIOS-Call-Events.");
+    state.bios_call_events.reserve(call_count);
+    for (std::uint32_t index = 0u; index < call_count; ++index)
+        state.bios_call_events.push_back(read_bios_call(reader));
+    state.next_bios_call_sequence = reader.u64();
+    state.dropped_bios_call_events = reader.u64();
+    state.completed_commands = reader.u64();
+    state.completed_dma = reader.u64();
+    state.next_load_transaction = reader.u64();
+    state.committed_load_transactions = reader.u64();
+    state.failed_load_transactions = reader.u64();
+    for (auto& value : state.sector_mode) value = reader.u32();
+    state.dma_callback = reader.u32();
+    state.dma_callback_argument = reader.u32();
+    state.pio_callback = reader.u32();
+    state.pio_callback_argument = reader.u32();
+    state.dma_completion_pending = reader.boolean();
+    state.pio_completion_pending = reader.boolean();
+    state.dma_completion_request = reader.u32();
+    state.pio_completion_request = reader.u32();
+    const auto callback_count = reader.u32();
+    if (callback_count > gdrom_guest_callback_capacity)
+        throw std::invalid_argument(
+            "GD-ROM-State besitzt zu viele Gastcallbacks.");
+    state.pending_guest_callbacks.reserve(callback_count);
+    for (std::uint32_t index = 0u; index < callback_count; ++index)
+        state.pending_guest_callbacks.push_back(read_callback(reader));
+    state.coalesced_guest_callbacks = reader.u64();
+    state.dropped_guest_callbacks = reader.u64();
+    state.packet_event.reset();
+    state.packet_event_rehydration_pending = reader.boolean();
+    state.g1_bus_bound = reader.boolean();
+    state.completion_observer_bound = reader.boolean();
+    state.module_load_observer_bound = reader.boolean();
+    state.command_ack_observer_bound = reader.boolean();
+    state.load_transaction_executor_bound = reader.boolean();
+    state.content_identity = reader.string();
+    state.load_execution_policy =
+        static_cast<DiscLoadExecutionPolicy>(reader.u8());
+    reader.finish();
+    return state;
+}
+
+void validate_dreamcast_gdrom_g1_restore_contract(
+    const DreamcastGdRomSnapshot& gdrom,
+    const DreamcastG1DmaSnapshot& g1) {
+    if (g1.channel.active == 0u) return;
+    if (!gdrom.g1_bus_bound ||
+        !g1.transfer_handler_bound ||
+        g1.channel.direction != 1u ||
+        g1.channel.remaining == 0u)
+        throw std::invalid_argument(
+            "GD-ROM/G1-Handoff besitzt keinen gebundenen aktiven Transfer.");
+
+    constexpr std::uint8_t taskfile_dma_in_phase = 4u;
+    if (gdrom.taskfile_phase == taskfile_dma_in_phase) {
+        if (gdrom.features != 1u ||
+            (gdrom.status & ata_drq) != 0u ||
+            gdrom.data_cursor > gdrom.data.size() ||
+            gdrom.data_cursor < g1.channel.peripheral_counter ||
+            g1.channel.remaining >
+                gdrom.data.size() - gdrom.data_cursor)
+            throw std::invalid_argument(
+                "GD-ROM/G1-Handoff besitzt einen widerspruechlichen Taskfile-DMA-Prefix.");
+        return;
+    }
+
+    const GdRomBiosRequestSnapshot* active_request = nullptr;
+    for (const auto& request : gdrom.bios_requests) {
+        if (!request.transfer_active ||
+            request.transfer_kind != GdRomBiosTransferKind::Dma)
+            continue;
+        if (active_request)
+            throw std::invalid_argument(
+                "GD-ROM/G1-Handoff besitzt mehrere aktive DMA-Requests.");
+        active_request = &request;
+    }
+    if (!active_request || !active_request->transfer_buffer ||
+        active_request->transfer_transferred >
+            active_request->transfer_size ||
+        g1.channel.remaining !=
+            active_request->transfer_size -
+                active_request->transfer_transferred)
+        throw std::invalid_argument(
+            "GD-ROM/G1-Handoff besitzt keinen passenden BIOS-DMA-Request.");
+    const auto expected_address =
+        static_cast<std::uint64_t>(
+            active_request->transfer_buffer->physical_address) +
+        active_request->transfer_transferred;
+    if (expected_address > std::numeric_limits<std::uint32_t>::max() ||
+        canonical_physical_address(g1.channel.system_counter) !=
+            canonical_physical_address(
+                static_cast<std::uint32_t>(expected_address)))
+        throw std::invalid_argument(
+            "GD-ROM/G1-Handoff besitzt einen widerspruechlichen DMA-Zielcursor.");
 }
 
 const GdRomBiosRequestStatus& DreamcastGdRomController::last_bios_request() const noexcept {
@@ -2084,6 +3026,7 @@ void DreamcastGdRomController::reset_transport() noexcept {
     if (packet_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*packet_event_));
     packet_event_.reset();
+    packet_event_rehydration_pending_ = false;
     packet_.clear();
     data_.clear();
     data_cursor_ = 0u;

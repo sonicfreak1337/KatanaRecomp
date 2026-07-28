@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace katana::runtime {
@@ -16,11 +17,17 @@ namespace katana::runtime {
 inline constexpr std::uint32_t sh4_scif_p4_base = 0xFFE80000u;
 inline constexpr std::uint32_t sh4_scif_area7_base = 0x1FE80000u;
 inline constexpr std::size_t sh4_scif_register_size = 0x28u;
+inline constexpr std::uint32_t sh4_scif_transmit_event_channel = 0u;
+inline constexpr std::uint64_t sh4_scif_transmit_event_token_v1 = 1u;
+inline constexpr std::uint32_t sh4_scif_state_contract_version = 1u;
 
 enum class Sh4ScifInterrupt : std::uint8_t { Error, Receive, Break, Transmit };
 
 struct Sh4ScifSnapshot {
+    std::uint64_t scheduler_cycle = 0u;
     std::optional<SchedulerEventId> transmit_event;
+    std::optional<std::uint64_t> transmit_event_deadline;
+    bool transmit_event_rehydration_pending = false;
     std::vector<std::uint8_t> transmit_fifo;
     std::vector<std::uint8_t> receive_fifo;
     std::vector<std::uint8_t> transmitted_bytes;
@@ -35,6 +42,13 @@ struct Sh4ScifSnapshot {
 
     [[nodiscard]] bool operator==(const Sh4ScifSnapshot&) const = default;
 };
+
+// Stable little-endian private-payload codec. SchedulerEventIds and event
+// deadlines stay in GameEntrySchedulerState and are intentionally omitted.
+[[nodiscard]] std::vector<std::uint8_t>
+encode_sh4_scif_state(const Sh4ScifSnapshot& state);
+[[nodiscard]] Sh4ScifSnapshot
+decode_sh4_scif_state(std::span<const std::uint8_t> bytes);
 
 class Sh4Scif final {
   public:
@@ -58,6 +72,18 @@ class Sh4Scif final {
     [[nodiscard]] std::size_t receive_fifo_size() const noexcept;
     [[nodiscard]] const std::vector<std::uint8_t>& transmitted_bytes() const noexcept;
     [[nodiscard]] Sh4ScifSnapshot snapshot() const;
+    void validate_state_restore(const Sh4ScifSnapshot& state) const;
+    void validate_state_restore(
+        const Sh4ScifSnapshot& state,
+        std::uint64_t expected_scheduler_cycle) const;
+    // Captured SchedulerEventIds are discarded. A pending frame remains
+    // inert until its typed event is rehydrated with a fresh ID.
+    void restore_state_passive(const Sh4ScifSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
     static constexpr std::uint16_t status_error = 0x0080u;
@@ -85,6 +111,8 @@ class Sh4Scif final {
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
     std::optional<SchedulerEventId> transmit_event_;
+    std::optional<std::uint64_t> transmit_event_deadline_;
+    bool transmit_event_rehydration_pending_ = false;
     std::deque<std::uint8_t> transmit_fifo_;
     std::deque<std::uint8_t> receive_fifo_;
     std::vector<std::uint8_t> transmitted_bytes_;

@@ -9,12 +9,16 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace katana::runtime {
 
 inline constexpr std::uint32_t sh4_dmac_p4_base = 0xFFA00000u;
 inline constexpr std::uint32_t sh4_dmac_area7_base = 0x1FA00000u;
 inline constexpr std::size_t sh4_dmac_register_size = 0x44u;
+inline constexpr std::uint32_t sh4_dmac_state_contract_version = 1u;
+inline constexpr std::uint64_t sh4_dmac_event_token_v1 = 0u;
 
 struct DmaTiming {
     std::uint64_t guest_cycles_per_byte = 1u;
@@ -78,6 +82,7 @@ struct Sh4DmacSnapshot {
     DmaTiming timing;
     DmaExecutionMode execution_mode = DmaExecutionMode::SingleUnitReference;
     std::optional<SchedulerEventId> event_id;
+    bool event_rehydration_pending = false;
     std::optional<std::size_t> scheduled_channel;
     std::size_t scheduled_units = 0u;
     std::optional<DmaFault> last_fault;
@@ -156,6 +161,13 @@ class Sh4Dmac final {
     void set_execution_mode(DmaExecutionMode mode);
     [[nodiscard]] const DmaPerformanceCounters& performance_counters() const noexcept;
     [[nodiscard]] Sh4DmacSnapshot snapshot() const noexcept;
+    void validate_state_restore(const Sh4DmacSnapshot& state) const;
+    void restore_state_passive(const Sh4DmacSnapshot& state);
+    [[nodiscard]] SchedulerEventId rehydrate_scheduled_event(
+        std::uint64_t guest_cycle,
+        std::uint32_t channel,
+        std::uint64_t token);
+    [[nodiscard]] bool event_rehydration_pending() const noexcept;
     void reset_performance_counters() noexcept;
     void reset() noexcept;
 
@@ -207,9 +219,15 @@ class Sh4Dmac final {
     std::optional<std::size_t> last_on_demand_channel_;
     mutable std::size_t round_robin_cursor_ = 0u;
     DmaPerformanceCounters performance_counters_;
+    bool event_rehydration_pending_ = false;
     std::function<void(std::size_t)> completion_observer_;
     std::function<void(const DmaFault&)> fault_observer_;
 };
+
+[[nodiscard]] std::vector<std::uint8_t>
+encode_sh4_dmac_state(const Sh4DmacSnapshot& state);
+[[nodiscard]] Sh4DmacSnapshot
+decode_sh4_dmac_state(std::span<const std::uint8_t> bytes);
 
 [[nodiscard]] std::shared_ptr<Sh4Dmac>
 map_sh4_dmac_registers(Memory& memory, EventScheduler& scheduler, DmaTiming timing = {});

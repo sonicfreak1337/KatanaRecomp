@@ -17,8 +17,8 @@ namespace katana::runtime {
 enum class DreamcastConsoleProfile : std::uint8_t;
 struct DreamcastRuntimeState;
 
-inline constexpr std::uint32_t game_entry_handoff_schema_version = 2u;
-inline constexpr std::uint32_t game_entry_platform_state_contract_version = 1u;
+inline constexpr std::uint32_t game_entry_handoff_schema_version = 3u;
+inline constexpr std::uint32_t game_entry_platform_state_contract_version = 2u;
 
 // Content identity is the representation-independent, unprefixed lower-case
 // SHA-256 used by the disc installer. Byte and descriptor identities use the
@@ -198,6 +198,7 @@ enum class GameEntryDeviceKind : std::uint16_t {
     Sh4RtcClock = 19u,
     Sh4Rtc = 20u,
     Sh4Scif = 21u,
+    Flash = 22u,
 };
 
 struct GameEntryDeviceKey {
@@ -240,8 +241,8 @@ struct GameEntryDeviceRequirement {
     [[nodiscard]] bool operator==(const GameEntryDeviceRequirement&) const = default;
 };
 
-inline constexpr std::array<GameEntryDeviceRequirement, 21u>
-    dreamcast_game_entry_required_devices_v1{{
+inline constexpr std::array<GameEntryDeviceRequirement, 22u>
+    dreamcast_game_entry_required_devices_v2{{
         {{GameEntryDeviceKind::Pvr, 0u}, 1u},
         {{GameEntryDeviceKind::GdRom, 0u}, 1u},
         {{GameEntryDeviceKind::G1, 0u}, 1u},
@@ -263,6 +264,7 @@ inline constexpr std::array<GameEntryDeviceRequirement, 21u>
         {{GameEntryDeviceKind::Sh4RtcClock, 0u}, 1u},
         {{GameEntryDeviceKind::Sh4Rtc, 0u}, 1u},
         {{GameEntryDeviceKind::Sh4Scif, 0u}, 1u},
+        {{GameEntryDeviceKind::Flash, 0u}, 1u},
     }};
 
 struct GameEntryScheduledEvent {
@@ -316,7 +318,7 @@ struct GameEntryHandoffRequest {
     std::span<const GameEntryCodeRange> allowed_entry_ranges;
     GameEntryMemoryLayout memory_layout;
     std::span<const GameEntryDeviceRequirement> required_devices =
-        dreamcast_game_entry_required_devices_v1;
+        dreamcast_game_entry_required_devices_v2;
     GameEntryHandoffLimits limits;
     GameEntryHandoffCompleteness required_completeness =
         GameEntryHandoffCompleteness::CompletePlatform;
@@ -356,6 +358,9 @@ enum class GameEntryHandoffFailure : std::uint8_t {
     MemoryAfterIdentityMismatch,
     CpuMemoryApplyFailed,
     CompletenessMismatch,
+    DeviceStateApplyFailed,
+    SchedulerStateApplyFailed,
+    SemanticStateMismatch,
 };
 
 class GameEntryHandoffError final : public std::runtime_error {
@@ -476,6 +481,19 @@ struct GameEntryMemoryDelta {
     std::uint64_t changed_bytes = 0u;
 };
 
+struct CapturedGameEntryDevicePayload {
+    GameEntryDeviceKey device;
+    std::uint32_t field_id = 0u;
+    std::string name;
+    std::vector<std::uint8_t> bytes;
+};
+
+struct CapturedGameEntryPlatformState {
+    std::vector<GameEntryDeviceState> devices;
+    GameEntrySchedulerState scheduler;
+    std::vector<CapturedGameEntryDevicePayload> payloads;
+};
+
 // Capture helpers are intentionally title-neutral. The snapshot is taken at
 // the common initialized-runtime boundary; the delta is formed later at the
 // exact executable-entry boundary without embedding private bytes in Katana.
@@ -485,6 +503,12 @@ capture_game_entry_memory_snapshot(const DreamcastRuntimeState& runtime);
     const GameEntryMemorySnapshot& before,
     const DreamcastRuntimeState& after,
     std::uint32_t page_size = 4096u);
+// Captures every guest-visible Dreamcast platform device required by the
+// current platform-state contract. Device payload bytes remain owning and
+// private; callers bind them into a local artifact.
+[[nodiscard]] CapturedGameEntryPlatformState
+capture_complete_game_entry_platform_state(
+    const DreamcastRuntimeState& runtime);
 
 // The returned plan owns every referenced byte. All structure, identity,
 // bounds, completeness and provider reads are validated before it is returned;
@@ -501,6 +525,22 @@ validate_and_stage_game_entry_handoff(
 // application API; the nodiscard result reports whether such state remains.
 [[nodiscard]] GameEntryCpuMemoryApplyResult
 apply_validated_game_entry_cpu_memory_handoff(
+    CpuState& cpu,
+    DreamcastRuntimeState& runtime,
+    const ValidatedGameEntryHandoff& handoff);
+
+struct GameEntryCompletePlatformApplyResult {
+    std::size_t memory_operations_applied = 0u;
+    std::uint64_t memory_bytes_applied = 0u;
+    std::size_t devices_applied = 0u;
+    std::size_t scheduler_events_rehydrated = 0u;
+};
+
+// Decodes and validates all 22 device contracts and their exact typed-event
+// bijection before committing. The target runtime must already be fully
+// constructed and quiescent. Any incompatibility fails before guest code.
+[[nodiscard]] GameEntryCompletePlatformApplyResult
+apply_validated_game_entry_complete_platform_handoff(
     CpuState& cpu,
     DreamcastRuntimeState& runtime,
     const ValidatedGameEntryHandoff& handoff);

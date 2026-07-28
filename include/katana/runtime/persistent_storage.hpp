@@ -39,6 +39,16 @@ class PersistentImage final {
     [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept;
     void write_byte(std::size_t offset, std::uint8_t value);
     void write(std::size_t offset, std::span<const std::uint8_t> bytes);
+    // Game-entry imports preserve the installed source identity and replace
+    // only the in-memory working copy. No file is published by this method.
+    void validate_working_copy_restore(
+        std::span<const std::uint8_t> expected_source,
+        std::span<const std::uint8_t> working,
+        bool dirty) const;
+    void restore_working_copy_passive(
+        std::span<const std::uint8_t> expected_source,
+        std::span<const std::uint8_t> working,
+        bool dirty);
     void save();
     [[nodiscard]] bool dirty() const noexcept;
     [[nodiscard]] PersistentImageRecovery recovery() const noexcept;

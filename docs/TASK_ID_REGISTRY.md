@@ -59,8 +59,8 @@
 | ID | Titel | Status |
 |---|---|---|
 | KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | abgeschlossen, Folgearbeit KR-4966 |
-| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | aktiv P0, blockiert durch KR-4967 bis KR-4970 |
-| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | aktiv P0, CPU/RAM umgesetzt |
+| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | aktiv P0; reales CompletePlatform-Capture/-Apply belegt, strikt atomarer Commit, Save-Profil und normative Digests offen |
+| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | aktiv P0; 22-Geraete-/5-Event-Artefakt erfasst und verwendet, Doppel-Capture, Inspect/Verify und allgemeiner Save-Schutz offen |
 | KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | geplant P1 |
 | KR-4955 | Explizite Funktionsgrenzen und Tabellenhinweise End-to-End | geplant P0 nach stabilem DirectBoot |
 | KR-4956 | Static-AOT-Dispatchflucht inventarisieren und schliessen | aktiv P0 Performance |
@@ -69,22 +69,22 @@
 | KR-4959 | Ereignisgetriebene Scheduler-/IRQ-Safepoints | geplant P1 Performance und Korrektheit |
 | KR-4960 | 200-MHz-Produkt-Hotpath | geplant P0 Performance-Gate |
 | KR-4961 | Externes SonicAdventureRecomp-Bring-up-Projekt | geplant P1 |
-| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | geplant P0 Boot-Gate |
-| KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | aktiv P1 |
+| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | aktiv P0; gleicher letzter PC und gleiche GD-ROM-Zaehler, nahezu gleiche AICA-Zaehler, normative Digests, Sound, Frame und relatives 600-Millionen-Gate offen |
+| KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | aktiv P1; warmer Direct-v24-Build 5,3 s, erster frischer Build 169,3 s, Runtime-/Hook-Schleifen und aktuelles Compiler-A/B offen |
 | KR-4964 | v0.49 Produktabnahme bis sichtbarem Spielbild | Gate |
-| KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | aktiv P0, erster Produktblocker |
-| KR-4966 | Post-Entry-Produktgate und erforderliche Meilensteine | geplant P0 |
-| KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | geplant P0 |
-| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | geplant P0 |
-| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | geplant P0 |
-| KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | geplant P0 |
+| KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | aktiv P0, erster Produktblocker; gleicher Waitvertrag in NativeDisc und DirectBoot |
+| KR-4966 | Post-Entry-Produktgate und erforderliche Meilensteine | aktiv P0; absolutes 600-Millionen-Limit laesst nach Restore nur 184.766.730 Post-Entry-Zyklen |
+| KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | aktiv P0, teilweise umgesetzt; Vorvalidierung, passive Restoreplaene, semantischer Recapture und Produkt-Apply belegt, globaler noexcept-Commit und Subsystemdigests offen |
+| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | aktiv P0; Adapter umgesetzt, Sound-Completion und exakte Paritaet offen |
+| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | aktiv P0; Adapter umgesetzt, erster Frame und exakte Paritaet offen |
+| KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | aktiv P0; Game-Entry-Adapter, Produktlauf und einmal identische migrierte Saves belegt, allgemeines No-Rollback-Profil offen |
 
 ## Aktuelle Meilensteinzuordnung
 
 - `KR-4965` ist der erste aktive Produktblocker.
-- `KR-4966` korrigiert den Mess- und Meilensteinvertrag vor einem produktiven Schedulerrestore.
-- `KR-4967` bis `KR-4970` vervollstaendigen `KR-4952` und `KR-4953`.
-- `KR-4962` ist der erste reale CompletePlatform-Bootnachweis.
+- `KR-4966` korrigiert den im realen v24-Schedulerrestore belegten absoluten Mess- und Meilensteinfehler.
+- `KR-4967` bis `KR-4970` vervollstaendigen den strikt atomaren, digestgeprueften und Save-erhaltenden Vertrag aus `KR-4952` und `KR-4953`.
+- `KR-4962` liefert die normative Game-Entry-Paritaet sowie den Sound-/Frame-Nachweis mit relativem 600-Millionen-Budget.
 - `KR-4955` bis `KR-4960` folgen nach einem stabilen Game-Entry-Produktmeilenstein.
 - `KR-4954` und `KR-4961` erzeugen danach das externe Spielprojekt.
 - `KR-4963` laeuft parallel, sobald die Handoff-Grundlage stabil ist.

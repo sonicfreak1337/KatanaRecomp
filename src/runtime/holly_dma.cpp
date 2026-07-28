@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace katana::runtime {
@@ -170,6 +171,7 @@ void DreamcastG2DmaController::write(const std::uint32_t offset, const std::uint
                 if (state.completion_event)
                     static_cast<void>(scheduler_.cancel(*state.completion_event));
                 state.completion_event.reset();
+                state.completion_event_rehydration_pending = false;
                 state.active = 0u;
                 state.completion_cycle = 0u;
                 state.remaining_cycles = 0u;
@@ -300,6 +302,7 @@ void DreamcastG2DmaController::schedule_completion(const std::size_t channel,
             cycles,
             [this, channel](const auto event_id, const auto) { complete(channel, event_id); },
             SchedulerEventKind::HollyG2Dma);
+        state.completion_event_rehydration_pending = false;
     } catch (...) {
         fail(channel, HollyDmaFaultReason::SchedulerFailure, std::nullopt);
     }
@@ -318,6 +321,7 @@ void DreamcastG2DmaController::set_suspended(const std::size_t channel,
         state.remaining_cycles = state.completion_cycle > now ? state.completion_cycle - now : 1u;
         static_cast<void>(scheduler_.cancel(*state.completion_event));
         state.completion_event.reset();
+        state.completion_event_rehydration_pending = false;
         state.completion_cycle = 0u;
         state.suspend |= 0x10u;
     } else if (!suspended && state.active != 0u && (state.suspend & 0x10u) != 0u) {
@@ -334,6 +338,7 @@ void DreamcastG2DmaController::complete(const std::size_t channel,
         return;
     }
     state.completion_event.reset();
+    state.completion_event_rehydration_pending = false;
     state.completion_cycle = 0u;
     state.remaining_cycles = 0u;
     const auto chunk =
@@ -379,6 +384,7 @@ void DreamcastG2DmaController::fail(const std::size_t channel,
     if (state.completion_event && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*state.completion_event));
     state.completion_event.reset();
+    state.completion_event_rehydration_pending = false;
     state.active = 0u;
     state.enabled = 0u;
     state.completion_cycle = 0u;
@@ -422,12 +428,14 @@ void DreamcastG2DmaController::cancel_events() noexcept {
         if (channel.completion_event)
             static_cast<void>(scheduler_.cancel(*channel.completion_event));
         channel.completion_event.reset();
+        channel.completion_event_rehydration_pending = false;
     }
 }
 
 void DreamcastG2DmaController::handle_scheduler_reset() noexcept {
     for (auto& channel : channels_) {
         channel.completion_event.reset();
+        channel.completion_event_rehydration_pending = false;
         channel.active = 0u;
         channel.completion_cycle = 0u;
         channel.remaining_cycles = 0u;
@@ -474,6 +482,114 @@ DreamcastG2DmaSnapshot DreamcastG2DmaController::snapshot() const {
         reset_observer_,
         static_cast<bool>(completion_observer_),
     };
+}
+
+void DreamcastG2DmaController::validate_state_restore(
+    const DreamcastG2DmaSnapshot& state) const {
+    if (state.timing != timing_ ||
+        state.completion_observer_bound !=
+            static_cast<bool>(completion_observer_))
+        throw std::invalid_argument(
+            "G2-DMA-Handoff passt nicht zum Runtime-Vertrag.");
+    for (std::size_t index = 0u; index < state.channels.size(); ++index) {
+        const auto& channel = state.channels[index];
+        if (channel.direction > 1u || channel.trigger_select > 7u ||
+            channel.enabled > 1u || channel.active > 1u ||
+            (channel.suspend & ~0x11u) != 0u ||
+            static_cast<std::uint8_t>(channel.fault) >
+                static_cast<std::uint8_t>(
+                    HollyDmaFaultReason::HandshakeMismatch) ||
+            (channel.completion_event &&
+             channel.completion_event_rehydration_pending))
+            throw std::invalid_argument(
+                "G2-DMA-Handoff besitzt ungueltige Kanaldaten.");
+        const auto scheduled =
+            channel.completion_event.has_value() ||
+            channel.completion_event_rehydration_pending;
+        if (scheduled) {
+            if (channel.active == 0u || channel.completion_cycle == 0u ||
+                channel.remaining_cycles != 0u)
+                throw std::invalid_argument(
+                    "G2-DMA-Handoff besitzt ein ungueltiges Completionevent.");
+        } else if (channel.completion_cycle != 0u) {
+            throw std::invalid_argument(
+                "G2-DMA-Handoff besitzt einen Zyklus ohne Completionevent.");
+        }
+        if (channel.active != 0u) {
+            if (channel.remaining == 0u ||
+                !protected_range(state.address_protect,
+                                 channel.system_counter,
+                                 channel.remaining) ||
+                !memory_.contains(channel.system_counter,
+                                  channel.remaining) ||
+                !memory_.contains(channel.peripheral_counter,
+                                  channel.remaining))
+                throw std::invalid_argument(
+                    "G2-DMA-Handoff passt nicht zum Runtime-Speichervertrag.");
+        }
+    }
+    if (state.last_fault &&
+        (state.last_fault->channel >= state.channels.size() ||
+         static_cast<std::uint8_t>(state.last_fault->reason) >
+             static_cast<std::uint8_t>(
+                 HollyDmaFaultReason::HandshakeMismatch)))
+        throw std::invalid_argument(
+            "G2-DMA-Handoff besitzt einen ungueltigen Fehlerzustand.");
+}
+
+void DreamcastG2DmaController::restore_state_passive(
+    const DreamcastG2DmaSnapshot& state) {
+    validate_state_restore(state);
+    cancel_events();
+    channels_ = state.channels;
+    for (auto& channel : channels_) {
+        const auto pending =
+            channel.completion_event.has_value() ||
+            channel.completion_event_rehydration_pending;
+        channel.completion_event.reset();
+        channel.completion_event_rehydration_pending = pending;
+    }
+    address_protect_ = state.address_protect;
+    ds_timeout_ = state.ds_timeout;
+    tr_timeout_ = state.tr_timeout;
+    modem_timeout_ = state.modem_timeout;
+    modem_wait_ = state.modem_wait;
+    completed_dma_count_ = state.completed_dma_count;
+    last_fault_ = state.last_fault;
+}
+
+SchedulerEventId DreamcastG2DmaController::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel >= channels_.size() ||
+        token != dreamcast_holly_dma_event_token_v1)
+        throw std::invalid_argument(
+            "G2-DMA-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    auto& state = channels_[channel];
+    if (!state.completion_event_rehydration_pending ||
+        state.completion_event || state.active == 0u)
+        throw std::logic_error(
+            "G2-DMA-Handoff erwartet dieses Completionevent nicht.");
+    if (guest_cycle != state.completion_cycle ||
+        guest_cycle < scheduler_.current_cycle())
+        throw std::invalid_argument(
+            "G2-DMA-Completion passt nicht zur gespeicherten Gastzeit.");
+    const auto event_id = scheduler_.schedule_at(
+        guest_cycle,
+        [this, channel](const auto restored_event_id, const auto) {
+            complete(channel, restored_event_id);
+        },
+        SchedulerEventKind::HollyG2Dma);
+    state.completion_event = event_id;
+    state.completion_event_rehydration_pending = false;
+    return event_id;
+}
+
+bool DreamcastG2DmaController::event_rehydration_pending() const noexcept {
+    return std::any_of(channels_.begin(), channels_.end(), [](const auto& channel) {
+        return channel.completion_event_rehydration_pending;
+    });
 }
 
 DreamcastG1BusController::DreamcastG1BusController(
@@ -766,6 +882,8 @@ HollyDmaChannelState DreamcastG1BusController::state() const noexcept {
                                   ? next_chunk_cycle_ - scheduler_.current_cycle()
                                   : 0u;
     result.completion_event = completion_event_;
+    result.completion_event_rehydration_pending =
+        event_rehydration_pending();
     result.fault = fault_;
     result.fault_count = fault_count_;
     return result;
@@ -807,6 +925,122 @@ DreamcastG1DmaSnapshot DreamcastG1BusController::snapshot() const noexcept {
         static_cast<bool>(range_validator_),
         static_cast<bool>(fault_observer_),
     };
+}
+
+void DreamcastG1BusController::validate_state_restore(
+    const DreamcastG1DmaSnapshot& state) const {
+    if (state.timing != timing_ ||
+        state.transfer_handler_bound !=
+            static_cast<bool>(transfer_handler_) ||
+        state.completion_observer_bound !=
+            static_cast<bool>(completion_observer_) ||
+        state.range_validator_bound !=
+            static_cast<bool>(range_validator_) ||
+        state.fault_observer_bound != static_cast<bool>(fault_observer_))
+        throw std::invalid_argument(
+            "G1-DMA-Handoff passt nicht zum Runtime-Vertrag.");
+    const auto& channel = state.channel;
+    if (channel.direction > 1u || channel.enabled > 1u ||
+        channel.active > 1u ||
+        static_cast<std::uint8_t>(channel.fault) >
+            static_cast<std::uint8_t>(
+                HollyDmaFaultReason::HandshakeMismatch) ||
+        (channel.completion_event &&
+         channel.completion_event_rehydration_pending))
+        throw std::invalid_argument(
+            "G1-DMA-Handoff besitzt ungueltige Kanaldaten.");
+    const auto scheduled =
+        channel.completion_event.has_value() ||
+        channel.completion_event_rehydration_pending;
+    if (channel.active != 0u) {
+        const auto start_page =
+            (state.address_protect >> 8u) & 0x7Fu;
+        const auto end_page = state.address_protect & 0x7Fu;
+        const auto bottom =
+            0x08000000u | (start_page << 20u);
+        const auto top = 0x080FFFFFu | (end_page << 20u);
+        const auto physical =
+            channel.system_counter & 0x1FFFFFFFu;
+        const auto physical_end =
+            static_cast<std::uint64_t>(physical) +
+            channel.remaining - 1u;
+        if (!scheduled || channel.completion_cycle == 0u ||
+            channel.remaining_cycles > channel.completion_cycle ||
+            channel.remaining == 0u ||
+            channel.system_counter !=
+                channel.system_address + channel.peripheral_counter ||
+            start_page > end_page || physical < bottom ||
+            physical_end > top)
+            throw std::invalid_argument(
+                "G1-DMA-Handoff besitzt keinen fortsetzbaren Transfer.");
+    } else if (scheduled || channel.completion_cycle != 0u ||
+               channel.remaining != 0u) {
+        throw std::invalid_argument(
+            "G1-DMA-Handoff besitzt Schedulingdaten ohne aktiven Transfer.");
+    }
+    if (state.last_g1_fault &&
+        static_cast<std::uint8_t>(state.last_g1_fault->phase) >
+            static_cast<std::uint8_t>(G1DmaFaultPhase::Chunk))
+        throw std::invalid_argument(
+            "G1-DMA-Handoff besitzt eine ungueltige Fehlerphase.");
+}
+
+void DreamcastG1BusController::restore_state_passive(
+    const DreamcastG1DmaSnapshot& state) {
+    validate_state_restore(state);
+    if (completion_event_ && !scheduler_lifetime_.expired())
+        static_cast<void>(scheduler_.cancel(*completion_event_));
+    completion_event_.reset();
+    configured_address_ = state.channel.system_address;
+    configured_length_ = state.channel.length;
+    live_address_ = state.channel.system_counter;
+    transferred_length_ = state.channel.peripheral_counter;
+    remaining_length_ = state.channel.remaining;
+    bios_handoff_live_address_ = state.bios_handoff_live_address;
+    dma_direction_ = state.channel.direction;
+    dma_enabled_ = state.channel.enabled;
+    dma_active_ = state.channel.active;
+    system_mode_ = state.system_mode;
+    gdrom_read_access_timing_ = state.gdrom_read_access_timing;
+    address_protect_ = state.address_protect;
+    next_chunk_cycle_ = state.channel.completion_cycle;
+    fault_ = state.channel.fault;
+    fault_count_ = state.channel.fault_count;
+    last_fault_ = state.last_fault;
+    last_g1_fault_ = state.last_g1_fault;
+    // The absence of a local event ID while next_chunk_cycle_ is non-zero is
+    // the passive rehydration marker for G1.
+}
+
+SchedulerEventId DreamcastG1BusController::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != 0u ||
+        token != dreamcast_holly_dma_event_token_v1)
+        throw std::invalid_argument(
+            "G1-DMA-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    if (completion_event_ || dma_active_ == 0u ||
+        next_chunk_cycle_ == 0u)
+        throw std::logic_error(
+            "G1-DMA-Handoff erwartet kein Completionevent.");
+    if (guest_cycle != next_chunk_cycle_ ||
+        guest_cycle < scheduler_.current_cycle())
+        throw std::invalid_argument(
+            "G1-DMA-Completion passt nicht zur gespeicherten Gastzeit.");
+    const auto event_id = scheduler_.schedule_at(
+        guest_cycle,
+        [this](const auto restored_event_id, const auto) {
+            complete_chunk(restored_event_id);
+        },
+        SchedulerEventKind::HollyG1Dma);
+    completion_event_ = event_id;
+    return event_id;
+}
+
+bool DreamcastG1BusController::event_rehydration_pending() const noexcept {
+    return dma_active_ != 0u && next_chunk_cycle_ != 0u &&
+           !completion_event_;
 }
 
 DreamcastPvrDmaController::DreamcastPvrDmaController(
@@ -1153,6 +1387,8 @@ HollyDmaChannelState DreamcastPvrDmaController::state() const noexcept {
             ? completion_cycle_ - scheduler_.current_cycle()
             : remaining_cycles_;
     result.completion_event = completion_event_;
+    result.completion_event_rehydration_pending =
+        event_rehydration_pending();
     result.fault = fault_;
     result.fault_count = fault_count_;
     return result;
@@ -1174,6 +1410,429 @@ DreamcastPvrDmaSnapshot DreamcastPvrDmaController::snapshot() const noexcept {
         dmac_contract_required_,
         static_cast<bool>(completion_observer_),
     };
+}
+
+void DreamcastPvrDmaController::validate_state_restore(
+    const DreamcastPvrDmaSnapshot& state) const {
+    if (state.timing != timing_ ||
+        state.completion_observer_bound !=
+            static_cast<bool>(completion_observer_) ||
+        state.dmac_contract_required != dmac_contract_required_ ||
+        state.dmac_bound != !dmac_.expired() ||
+        state.dmac_channel != dmac_channel_)
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff passt nicht zum Runtime-Vertrag.");
+    const auto& channel = state.channel;
+    if (channel.direction > 1u || channel.trigger_select > 1u ||
+        channel.enabled > 1u || channel.active > 1u ||
+        (channel.suspend & ~0x11u) != 0u ||
+        static_cast<std::uint8_t>(channel.fault) >
+            static_cast<std::uint8_t>(
+                HollyDmaFaultReason::HandshakeMismatch) ||
+        (channel.completion_event &&
+         channel.completion_event_rehydration_pending))
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff besitzt ungueltige Kanaldaten.");
+    const auto scheduled =
+        channel.completion_event.has_value() ||
+        channel.completion_event_rehydration_pending;
+    if (scheduled) {
+        if (channel.active == 0u || channel.completion_cycle == 0u ||
+            channel.remaining_cycles > channel.completion_cycle)
+            throw std::invalid_argument(
+                "PVR-DMA-Handoff besitzt ein ungueltiges Completionevent.");
+    } else if (channel.completion_cycle != 0u) {
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff besitzt einen Zyklus ohne Completionevent.");
+    }
+    if (channel.active != 0u &&
+        (channel.remaining == 0u ||
+         !protected_range(state.address_protect,
+                          channel.system_counter,
+                          channel.remaining) ||
+         !memory_.contains(channel.system_counter, channel.remaining) ||
+         !memory_.contains(channel.peripheral_counter, channel.remaining)))
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff passt nicht zum Runtime-Speichervertrag.");
+}
+
+void DreamcastPvrDmaController::restore_state_passive(
+    const DreamcastPvrDmaSnapshot& state) {
+    validate_state_restore(state);
+    cancel();
+    const auto& channel = state.channel;
+    pvr_address_ = channel.peripheral_address;
+    system_address_ = channel.system_address;
+    length_ = channel.length;
+    direction_ = channel.direction;
+    trigger_select_ = channel.trigger_select;
+    enabled_ = channel.enabled;
+    active_ = channel.active;
+    suspend_ = channel.suspend;
+    address_protect_ = state.address_protect;
+    pvr_counter_ = channel.peripheral_counter;
+    system_counter_ = channel.system_counter;
+    remaining_ = channel.remaining;
+    completion_cycle_ = channel.completion_cycle;
+    remaining_cycles_ = channel.remaining_cycles;
+    fault_ = channel.fault;
+    fault_count_ = channel.fault_count;
+    last_fault_ = state.last_fault;
+}
+
+SchedulerEventId DreamcastPvrDmaController::rehydrate_scheduled_event(
+    const std::uint64_t guest_cycle,
+    const std::uint32_t channel,
+    const std::uint64_t token) {
+    if (channel != 0u ||
+        token != dreamcast_holly_dma_event_token_v1)
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff besitzt einen unbekannten Eventkanal oder Token.");
+    if (completion_event_ || active_ == 0u || completion_cycle_ == 0u)
+        throw std::logic_error(
+            "PVR-DMA-Handoff erwartet kein Completionevent.");
+    if (guest_cycle != completion_cycle_ ||
+        guest_cycle < scheduler_.current_cycle())
+        throw std::invalid_argument(
+            "PVR-DMA-Completion passt nicht zur gespeicherten Gastzeit.");
+    const auto event_id = scheduler_.schedule_at(
+        guest_cycle,
+        [this](const auto restored_event_id, const auto) {
+            complete(restored_event_id);
+        },
+        SchedulerEventKind::HollyPvrDma);
+    completion_event_ = event_id;
+    return event_id;
+}
+
+bool DreamcastPvrDmaController::event_rehydration_pending() const noexcept {
+    return active_ != 0u && completion_cycle_ != 0u &&
+           !completion_event_;
+}
+
+namespace {
+
+class HollyStateWriter final {
+  public:
+    void u8(const std::uint8_t value) { bytes_.push_back(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+    void magic(const std::string_view value) {
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        return std::move(bytes_);
+    }
+  private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+class HollyStateReader final {
+  public:
+    explicit HollyStateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+    [[nodiscard]] std::uint8_t u8() {
+        require(1u);
+        return bytes_[cursor_++];
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::invalid_argument(
+                "Holly-DMA-State besitzt ein ungueltiges Boolean.");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        std::uint32_t value = 0u;
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            value |= static_cast<std::uint32_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        std::uint64_t value = 0u;
+        for (std::size_t byte = 0u; byte < 8u; ++byte)
+            value |= static_cast<std::uint64_t>(u8()) << (byte * 8u);
+        return value;
+    }
+    void magic(const std::string_view expected) {
+        require(expected.size());
+        for (const auto expected_byte : expected)
+            if (u8() != static_cast<std::uint8_t>(expected_byte))
+                throw std::invalid_argument(
+                    "Holly-DMA-State besitzt ein ungueltiges Magic.");
+    }
+    void finish() const {
+        if (cursor_ != bytes_.size())
+            throw std::invalid_argument(
+                "Holly-DMA-State besitzt nachlaufende Daten.");
+    }
+  private:
+    void require(const std::size_t size) const {
+        if (size > bytes_.size() - cursor_)
+            throw std::invalid_argument("Holly-DMA-State ist abgeschnitten.");
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+};
+
+void write_channel(HollyStateWriter& writer,
+                   const HollyDmaChannelState& channel) {
+    writer.u32(channel.peripheral_address);
+    writer.u32(channel.system_address);
+    writer.u32(channel.length);
+    writer.u32(channel.direction);
+    writer.u32(channel.trigger_select);
+    writer.u32(channel.enabled);
+    writer.u32(channel.active);
+    writer.u32(channel.suspend);
+    writer.u32(channel.peripheral_counter);
+    writer.u32(channel.system_counter);
+    writer.u32(channel.remaining);
+    writer.u64(channel.completion_cycle);
+    writer.u64(channel.remaining_cycles);
+    writer.boolean(channel.completion_event.has_value() ||
+                   channel.completion_event_rehydration_pending);
+    writer.u8(static_cast<std::uint8_t>(channel.fault));
+    writer.u64(channel.fault_count);
+}
+
+HollyDmaChannelState read_channel(HollyStateReader& reader) {
+    HollyDmaChannelState channel;
+    channel.peripheral_address = reader.u32();
+    channel.system_address = reader.u32();
+    channel.length = reader.u32();
+    channel.direction = reader.u32();
+    channel.trigger_select = reader.u32();
+    channel.enabled = reader.u32();
+    channel.active = reader.u32();
+    channel.suspend = reader.u32();
+    channel.peripheral_counter = reader.u32();
+    channel.system_counter = reader.u32();
+    channel.remaining = reader.u32();
+    channel.completion_cycle = reader.u64();
+    channel.remaining_cycles = reader.u64();
+    channel.completion_event.reset();
+    channel.completion_event_rehydration_pending = reader.boolean();
+    channel.fault = static_cast<HollyDmaFaultReason>(reader.u8());
+    channel.fault_count = reader.u64();
+    return channel;
+}
+
+void write_fault(HollyStateWriter& writer,
+                 const std::optional<HollyDmaFault>& fault) {
+    writer.boolean(fault.has_value());
+    if (!fault) return;
+    writer.u8(static_cast<std::uint8_t>(fault->reason));
+    writer.boolean(fault->event.has_value());
+    if (fault->event)
+        writer.u32(static_cast<std::uint16_t>(*fault->event));
+    writer.u64(fault->channel);
+    writer.u32(fault->peripheral_address);
+    writer.u32(fault->system_address);
+    writer.u32(fault->remaining);
+}
+
+std::optional<HollyDmaFault> read_fault(HollyStateReader& reader) {
+    if (!reader.boolean()) return std::nullopt;
+    HollyDmaFault fault;
+    fault.reason = static_cast<HollyDmaFaultReason>(reader.u8());
+    if (reader.boolean())
+        fault.event =
+            static_cast<SystemAsicEvent>(
+                static_cast<std::uint16_t>(reader.u32()));
+    fault.channel = static_cast<std::size_t>(reader.u64());
+    fault.peripheral_address = reader.u32();
+    fault.system_address = reader.u32();
+    fault.remaining = reader.u32();
+    return fault;
+}
+
+void write_g1_fault(HollyStateWriter& writer,
+                    const std::optional<G1DmaFault>& fault) {
+    writer.boolean(fault.has_value());
+    if (!fault) return;
+    writer.u8(static_cast<std::uint8_t>(fault->reason));
+    writer.u32(fault->fault_address);
+    writer.u32(fault->transferred_bytes);
+    writer.u32(fault->residue);
+    writer.u8(static_cast<std::uint8_t>(fault->phase));
+}
+
+std::optional<G1DmaFault> read_g1_fault(HollyStateReader& reader) {
+    if (!reader.boolean()) return std::nullopt;
+    G1DmaFault fault;
+    fault.reason = static_cast<HollyDmaFaultReason>(reader.u8());
+    fault.fault_address = reader.u32();
+    fault.transferred_bytes = reader.u32();
+    fault.residue = reader.u32();
+    fault.phase = static_cast<G1DmaFaultPhase>(reader.u8());
+    return fault;
+}
+
+void write_common_header(HollyStateWriter& writer,
+                         const std::string_view magic) {
+    writer.magic(magic);
+    writer.u32(dreamcast_holly_dma_state_contract_version);
+}
+
+void read_common_header(HollyStateReader& reader,
+                        const std::string_view magic) {
+    reader.magic(magic);
+    if (reader.u32() != dreamcast_holly_dma_state_contract_version)
+        throw std::invalid_argument(
+            "Holly-DMA-State besitzt eine unbekannte Version.");
+}
+
+} // namespace
+
+std::vector<std::uint8_t>
+encode_dreamcast_g2_dma_state(const DreamcastG2DmaSnapshot& state) {
+    HollyStateWriter writer;
+    write_common_header(writer, "KATG2D1");
+    for (const auto& channel : state.channels) write_channel(writer, channel);
+    writer.u64(state.timing.cycles_per_byte);
+    writer.u32(state.address_protect);
+    writer.u32(state.ds_timeout);
+    writer.u32(state.tr_timeout);
+    writer.u32(state.modem_timeout);
+    writer.u32(state.modem_wait);
+    writer.u64(state.completed_dma_count);
+    write_fault(writer, state.last_fault);
+    writer.boolean(state.completion_observer_bound);
+    return std::move(writer).finish();
+}
+
+DreamcastG2DmaSnapshot
+decode_dreamcast_g2_dma_state(const std::span<const std::uint8_t> bytes) {
+    HollyStateReader reader(bytes);
+    read_common_header(reader, "KATG2D1");
+    DreamcastG2DmaSnapshot state;
+    for (auto& channel : state.channels) channel = read_channel(reader);
+    state.timing.cycles_per_byte = reader.u64();
+    state.address_protect = reader.u32();
+    state.ds_timeout = reader.u32();
+    state.tr_timeout = reader.u32();
+    state.modem_timeout = reader.u32();
+    state.modem_wait = reader.u32();
+    state.completed_dma_count = reader.u64();
+    state.last_fault = read_fault(reader);
+    state.reset_observer = 0u;
+    state.completion_observer_bound = reader.boolean();
+    reader.finish();
+    return state;
+}
+
+std::vector<std::uint8_t>
+encode_dreamcast_g1_dma_state(const DreamcastG1DmaSnapshot& state) {
+    HollyStateWriter writer;
+    write_common_header(writer, "KATG1D1");
+    write_channel(writer, state.channel);
+    writer.u64(state.timing.cycles_per_byte);
+    writer.u32(state.bios_handoff_live_address);
+    writer.u32(state.system_mode);
+    writer.u32(state.gdrom_read_access_timing);
+    writer.u32(state.address_protect);
+    write_fault(writer, state.last_fault);
+    write_g1_fault(writer, state.last_g1_fault);
+    writer.boolean(state.transfer_handler_bound);
+    writer.boolean(state.completion_observer_bound);
+    writer.boolean(state.range_validator_bound);
+    writer.boolean(state.fault_observer_bound);
+    return std::move(writer).finish();
+}
+
+DreamcastG1DmaSnapshot
+decode_dreamcast_g1_dma_state(const std::span<const std::uint8_t> bytes) {
+    HollyStateReader reader(bytes);
+    read_common_header(reader, "KATG1D1");
+    DreamcastG1DmaSnapshot state;
+    state.channel = read_channel(reader);
+    state.timing.cycles_per_byte = reader.u64();
+    state.bios_handoff_live_address = reader.u32();
+    state.system_mode = reader.u32();
+    state.gdrom_read_access_timing = reader.u32();
+    state.address_protect = reader.u32();
+    state.last_fault = read_fault(reader);
+    state.last_g1_fault = read_g1_fault(reader);
+    state.reset_observer = 0u;
+    state.transfer_handler_bound = reader.boolean();
+    state.completion_observer_bound = reader.boolean();
+    state.range_validator_bound = reader.boolean();
+    state.fault_observer_bound = reader.boolean();
+    reader.finish();
+    return state;
+}
+
+std::vector<std::uint8_t>
+encode_dreamcast_pvr_dma_state(const DreamcastPvrDmaSnapshot& state) {
+    HollyStateWriter writer;
+    write_common_header(writer, "KATPVD1");
+    write_channel(writer, state.channel);
+    writer.u64(state.timing.cycles_per_byte);
+    writer.u32(state.address_protect);
+    write_fault(writer, state.last_fault);
+    writer.u64(state.dmac_channel);
+    writer.boolean(state.dmac_bound);
+    writer.boolean(state.dmac_contract_required);
+    writer.boolean(state.completion_observer_bound);
+    return std::move(writer).finish();
+}
+
+DreamcastPvrDmaSnapshot
+decode_dreamcast_pvr_dma_state(const std::span<const std::uint8_t> bytes) {
+    HollyStateReader reader(bytes);
+    read_common_header(reader, "KATPVD1");
+    DreamcastPvrDmaSnapshot state;
+    state.channel = read_channel(reader);
+    state.timing.cycles_per_byte = reader.u64();
+    state.address_protect = reader.u32();
+    state.last_fault = read_fault(reader);
+    state.reset_observer = 0u;
+    state.dmac_channel = static_cast<std::size_t>(reader.u64());
+    state.dmac_bound = reader.boolean();
+    state.dmac_contract_required = reader.boolean();
+    state.completion_observer_bound = reader.boolean();
+    reader.finish();
+    return state;
+}
+
+void validate_dreamcast_pvr_dma_dmac_restore_contract(
+    const DreamcastPvrDmaSnapshot& pvr,
+    const Sh4DmacSnapshot& dmac) {
+    if (!pvr.dmac_contract_required || pvr.channel.active == 0u)
+        return;
+    if (!pvr.dmac_bound ||
+        pvr.dmac_channel >= dmac.channels.size() ||
+        pvr.channel.remaining == 0u ||
+        pvr.channel.remaining % holly_dma_transfer_unit_bytes != 0u)
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff besitzt keinen gebundenen SH4-DMAC-Vertrag.");
+    const auto& channel = dmac.channels[pvr.dmac_channel];
+    const auto control = channel.control;
+    const auto contract_matches =
+        (dmac.operation & Sh4Dmac::master_enable) != 0u &&
+        (dmac.operation &
+         (Sh4Dmac::address_error_flag | Sh4Dmac::nmi_flag)) == 0u &&
+        (control & Sh4Dmac::channel_enable) != 0u &&
+        (control & Sh4Dmac::transfer_end) == 0u &&
+        ((control >> 8u) & 0xFu) == 8u &&
+        ((control >> 12u) & 0x3u) == 1u &&
+        ((control >> 14u) & 0x3u) == 0u &&
+        ((control >> 4u) & 0x7u) == 4u &&
+        (channel.source & 0x1FFFFFFFu) ==
+            (pvr.channel.system_counter & 0x1FFFFFFFu) &&
+        channel.count ==
+            pvr.channel.remaining / holly_dma_transfer_unit_bytes;
+    if (!contract_matches)
+        throw std::invalid_argument(
+            "PVR-DMA-Handoff passt nicht zum SH4-DMAC-Snapshot.");
 }
 
 DreamcastHollyDmaControllers

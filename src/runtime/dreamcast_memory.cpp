@@ -311,14 +311,76 @@ bool FlashMemoryDevice::persistent_working_copy() const noexcept {
     return persistent_image_ != nullptr;
 }
 
-FlashMemorySnapshot FlashMemoryDevice::snapshot() const noexcept {
+FlashMemorySnapshot FlashMemoryDevice::snapshot() const {
+    std::vector<std::uint8_t> source(size());
+    std::vector<std::uint8_t> working(size());
+    for (std::size_t offset = 0u; offset < size(); ++offset) {
+        source[offset] = persistent_image_
+                             ? persistent_image_->source_byte(offset)
+                             : source_[offset];
+        working[offset] = persistent_image_
+                              ? persistent_image_->read_byte(offset)
+                              : working_[offset];
+    }
     return {
         size(),
         state_,
         write_protected_,
         working_copy_dirty(),
         persistent_working_copy(),
+        std::move(source),
+        std::move(working),
     };
+}
+
+void FlashMemoryDevice::validate_state_restore(
+    const FlashMemorySnapshot& state) const {
+    const auto valid_command_state =
+        state.command_state == FlashCommandState::ReadArray ||
+        state.command_state == FlashCommandState::Unlock2 ||
+        state.command_state == FlashCommandState::Command ||
+        state.command_state == FlashCommandState::Program ||
+        state.command_state == FlashCommandState::EraseUnlock1 ||
+        state.command_state == FlashCommandState::EraseUnlock2 ||
+        state.command_state == FlashCommandState::EraseConfirm;
+    if (!valid_command_state || state.size != size() ||
+        state.size != dreamcast_flash_size ||
+        state.source_bytes.size() != state.size ||
+        state.working_bytes.size() != state.size ||
+        state.persistent_working_copy != persistent_working_copy() ||
+        (!state.persistent_working_copy && state.working_copy_dirty))
+        throw std::invalid_argument(
+            "Flash-Handoff besitzt einen inkompatiblen Zustandsvertrag.");
+
+    if (persistent_image_) {
+        persistent_image_->validate_working_copy_restore(
+            state.source_bytes,
+            state.working_bytes,
+            state.working_copy_dirty);
+    } else if (!std::equal(
+                   state.source_bytes.begin(),
+                   state.source_bytes.end(),
+                   source_.begin())) {
+        throw std::invalid_argument(
+            "Flash-Handoff passt nicht zur installierten Quellidentitaet.");
+    }
+}
+
+void FlashMemoryDevice::restore_state_passive(
+    const FlashMemorySnapshot& state) {
+    validate_state_restore(state);
+    std::vector<std::uint8_t> prepared;
+    if (!persistent_image_) prepared = state.working_bytes;
+    if (persistent_image_) {
+        persistent_image_->restore_working_copy_passive(
+            state.source_bytes,
+            state.working_bytes,
+            state.working_copy_dirty);
+    } else {
+        working_ = std::move(prepared);
+    }
+    state_ = state.command_state;
+    write_protected_ = state.write_protected;
 }
 
 std::shared_ptr<LinearMemoryDevice> map_dreamcast_main_ram(Memory& memory) {

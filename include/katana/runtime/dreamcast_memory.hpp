@@ -41,6 +41,8 @@ struct FlashMemorySnapshot {
     bool write_protected = false;
     bool working_copy_dirty = false;
     bool persistent_working_copy = false;
+    std::vector<std::uint8_t> source_bytes;
+    std::vector<std::uint8_t> working_bytes;
 
     [[nodiscard]] bool operator==(const FlashMemorySnapshot&) const = default;
 };
@@ -59,7 +61,9 @@ class FlashMemoryDevice final : public MemoryDevice {
     void save_working_copy();
     [[nodiscard]] bool working_copy_dirty() const noexcept;
     [[nodiscard]] bool persistent_working_copy() const noexcept;
-    [[nodiscard]] FlashMemorySnapshot snapshot() const noexcept;
+    [[nodiscard]] FlashMemorySnapshot snapshot() const;
+    void validate_state_restore(const FlashMemorySnapshot& state) const;
+    void restore_state_passive(const FlashMemorySnapshot& state);
 
   private:
     void check(std::uint32_t offset) const;

@@ -3,6 +3,7 @@
 #include "katana/runtime/exception.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace katana::runtime {
 
@@ -96,6 +97,29 @@ InterruptControllerSnapshot InterruptController::snapshot() const {
         return left.source < right.source;
     });
     return {std::move(pending)};
+}
+
+void InterruptController::validate_state_restore(
+    const InterruptControllerSnapshot& state) const {
+    InterruptSource previous_source = 0u;
+    bool have_previous = false;
+    for (const auto& interrupt : state.pending) {
+        if (interrupt.level > 15u ||
+            (have_previous && interrupt.source <= previous_source))
+            throw std::invalid_argument(
+                "Interrupt-Handoff besitzt keine kanonische Pending-Liste.");
+        previous_source = interrupt.source;
+        have_previous = true;
+    }
+}
+
+void InterruptController::restore_state_passive(
+    const InterruptControllerSnapshot& state) {
+    validate_state_restore(state);
+    auto prepared = state.pending;
+    pending_ = std::move(prepared);
+    ++interrupt_epoch_;
+    update_pending_metadata();
 }
 
 bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept {

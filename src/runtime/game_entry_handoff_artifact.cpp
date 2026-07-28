@@ -596,7 +596,7 @@ bool valid_device_kind(const GameEntryDeviceKind value) noexcept {
     const auto number = static_cast<std::uint32_t>(value);
     return number >= static_cast<std::uint32_t>(GameEntryDeviceKind::Pvr) &&
            number <=
-               static_cast<std::uint32_t>(GameEntryDeviceKind::Sh4Scif);
+               static_cast<std::uint32_t>(GameEntryDeviceKind::Flash);
 }
 
 bool valid_scheduler_kind(const SchedulerEventKind value) noexcept {

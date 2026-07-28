@@ -92,6 +92,34 @@ Sh4IoPortSnapshot Sh4IoPort::snapshot() const noexcept {
         gpio_interrupt_control_,
     };
 }
+void Sh4IoPort::validate_state_restore(
+    const Sh4IoPortSnapshot& state) const {
+    const auto outputs_a = output_mask(state.control_a, 16u);
+    const auto effective_a = static_cast<std::uint16_t>(
+        (state.data_a_latch & outputs_a) |
+        (state.inputs.port_a & ~outputs_a));
+    const auto outputs_b = output_mask(state.control_b, 4u);
+    const auto effective_b = static_cast<std::uint16_t>(
+        ((state.data_b_latch & outputs_b) |
+         (state.inputs.port_b & ~outputs_b)) &
+        0x000Fu);
+    if ((state.control_b & ~0xFFu) != 0u ||
+        (state.data_b_latch & ~0xFu) != 0u ||
+        state.effective_data_a != effective_a ||
+        state.effective_data_b != effective_b)
+        throw std::invalid_argument(
+            "I/O-Port-Handoff besitzt inkonsistente Latches.");
+}
+void Sh4IoPort::restore_state_passive(
+    const Sh4IoPortSnapshot& state) {
+    validate_state_restore(state);
+    inputs_ = state.inputs;
+    control_a_ = state.control_a;
+    data_a_latch_ = state.data_a_latch;
+    control_b_ = state.control_b;
+    data_b_latch_ = state.data_b_latch;
+    gpio_interrupt_control_ = state.gpio_interrupt_control;
+}
 void Sh4IoPort::reset() noexcept {
     control_a_ = 0u;
     data_a_latch_ = 0u;

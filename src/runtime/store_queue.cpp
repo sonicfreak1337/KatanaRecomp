@@ -1,5 +1,6 @@
 #include "katana/runtime/store_queue.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <utility>
 
@@ -241,6 +242,42 @@ Sh4StoreQueueSnapshot Sh4StoreQueues::snapshot() const {
         rejected_transfer_count_,
         last_sink_fault_,
     };
+}
+
+void Sh4StoreQueues::validate_state_restore(
+    const Sh4StoreQueueSnapshot& state) const {
+    const auto live = snapshot();
+    if (state.operand_cache_ram_profile != ocram_profile_ ||
+        state.external_sink_bound != live.external_sink_bound ||
+        state.address_translator_bound != live.address_translator_bound ||
+        state.code_tracker_bound != live.code_tracker_bound ||
+        (state.operand_cache_ram_enabled &&
+         state.operand_cache_ram_profile == OperandCacheRamProfile::Reject) ||
+        std::any_of(state.qacr.begin(), state.qacr.end(), [](const auto value) {
+            return (value & ~qacr_mask) != 0u;
+        }))
+        throw std::invalid_argument(
+            "Store-Queue-Handoff passt nicht zur Runtime-Topologie.");
+    if (state.last_sink_fault &&
+        state.last_sink_fault->reason !=
+            StoreQueueSinkErrorReason::DeviceRejected &&
+        state.last_sink_fault->reason !=
+            StoreQueueSinkErrorReason::UnsupportedInput)
+        throw std::invalid_argument(
+            "Store-Queue-Handoff besitzt einen ungueltigen Fehlergrund.");
+}
+
+void Sh4StoreQueues::restore_state_passive(
+    const Sh4StoreQueueSnapshot& state) {
+    validate_state_restore(state);
+    auto prepared_fault = state.last_sink_fault;
+    queues_ = state.queues;
+    qacr_ = state.qacr;
+    operand_cache_ram_ = state.operand_cache_ram;
+    operand_cache_ram_enabled_ = state.operand_cache_ram_enabled;
+    transfer_count_ = state.transfer_count;
+    rejected_transfer_count_ = state.rejected_transfer_count;
+    last_sink_fault_ = std::move(prepared_fault);
 }
 
 void Sh4StoreQueues::reset() noexcept {

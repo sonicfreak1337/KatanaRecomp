@@ -87,7 +87,8 @@ $env:KATANA_PORT_CODEGEN_JOBS = '8'
   D:\private\game-boot\boot.katana-executable `
   --output D:\private\ports\game-direct `
   --target-name GameDirect `
-  --console-profile europe-pal
+  --console-profile europe-pal `
+  --game-entry-handoff D:\private\game-boot\game-entry.katana-handoff
 ```
 
 Das Artefakt enthaelt lokal `boot.bin`; diese Datei ist Retailinhalt und darf
@@ -107,14 +108,23 @@ Der vollstaendige Discpfad bleibt erhalten:
 `DirectBootExecutable` ist der executable-first Entwicklungspfad. Ein
 bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
-Spielprojekt. Schema 2 und der private Artefaktprovider sind vorhanden; der
-aktuelle Capture-/Apply-Pfad uebernimmt ehrlich nur CPU und RAM als
-`CpuMemoryDiagnostic`. Geraete- und Schedulerzustand sind noch ausstehend,
-weshalb dieser Diagnosepfad im Produktgate verboten ist und noch keinen
-erfolgreichen Spielboot belegt. `NativeDiscBoot` kompiliert auch den
-disc-eigenen Bootstrap und bleibt Referenz- und finales Genauigkeitsgate sowie
-Grundlage der Nutzerinstallation. Beide Pfade verwenden dieselbe
-Dreamcast-Runtime; keiner interpretiert SH-4.
+Spielprojekt. Der aktuelle Vertrag verwendet Handoff-Schema 3,
+Artefaktformat 2, Runtime-ABI 63, Portprojektvertrag 53 und
+Plattformzustandsvertrag 2. `CompletePlatform` erfasst und restauriert den
+kanonischen Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die
+exakte typisierte Scheduler-Timeline. Capture und Apply sind im realen
+Produktport belegt.
+
+Fuer den schmalen artifact-only Entwicklungsweg bindet
+`port-executable --game-entry-handoff` das private Artefakt bereits beim
+Export an Executable-, Konsolen- und Descriptoridentitaet. Das Artefakt wird
+nicht in den Port kopiert. Der erzeugte Produktport laedt es lokal ueber
+`KATANA_GAME_ENTRY_HANDOFF_PRODUCT`, prueft dieselbe Bindung erneut und wendet
+den vollstaendigen Plattformzustand vor dem ersten Spielblock an.
+`NativeDiscBoot` kompiliert weiterhin den disc-eigenen Bootstrap und bleibt
+Referenz- und finales Genauigkeitsgate sowie Grundlage der
+Nutzerinstallation. Beide Pfade verwenden dieselbe Dreamcast-Runtime; keiner
+interpretiert SH-4.
 
 Vollstaendiger Vertrag:
 [Executable-First-Entwicklung](docs/EXECUTABLE_FIRST_DEVELOPMENT.md)
@@ -163,28 +173,44 @@ Profile und Toolchainauswahl:
 ## Produkt-Gate
 
 Bootkorrektheit und Performance sind getrennte Ergebnisse. Ein Produktlauf
-wird nicht mehr anhand eines festen Drei-Sekunden-Hostlimits bewertet.
-Mindestens 600.000.000 Gastzyklen und ein grosszuegiger Host-Watchdog sind der
-normale Messvertrag:
+wird nicht mehr anhand eines festen Drei-Sekunden-Hostlimits bewertet. Der
+aktuelle Schalter setzt noch ein absolutes Schedulermaximum:
 
 ```powershell
 $env:KATANA_GUEST_CYCLE_BUDGET = '600000000'
 $env:KATANA_PORT_FINAL_PROGRESS = '1'
+$env:KATANA_GAME_ENTRY_HANDOFF_PRODUCT = 'D:\private\game-boot\game-entry.katana-handoff'
 .\GameDirect.exe
 ```
 
-Die terminale Zusammenfassung nennt Gastzyklen, Hostzeit, effektive
-Gast-MHz, zentrale Dispatches, technische Framemarker und das erste neue
-AOT-, Runtime- oder Geraeteproblem. Ein sichtbarer Bildschirm wird separat
-anhand einer realen Ausgabeaufnahme klassifiziert.
+Ohne restaurierten Scheduler ist das ein 600-Millionen-Gastzyklus-Gate. Nach
+einem Game-Entry-Handoff muss `KR-4966` daraus noch eine Laufdauer relativ zum
+restaurierten Entry-Zyklus machen. Bis dahin darf die terminal aus dem
+absoluten Zaehler berechnete MHz-Zahl eines Handoff-Laufs nicht mit einem
+Lauf ab Zyklus null verglichen werden. Die Zusammenfassung nennt Gastzyklen,
+Hostzeit, Dispatches, technische Framemarker und das erste neue AOT-,
+Runtime- oder Geraeteproblem; ein sichtbarer Bildschirm wird separat anhand
+einer realen Ausgabeaufnahme klassifiziert.
 
-Der executable-first Produktport erreichte mit MSVC und clang-cl jeweils exakt
-600.000.000 Gastzyklen. MSVC lieferte 40,3869 MHz in 14,8563 Sekunden,
-clang-cl 42,4662 MHz in 14,1289 Sekunden; beide Laeufe zaehlten 52.329.316
-zentrale Dispatches, meldeten kein neues technisches Problem und
-praesentierten keinen klassifizierbaren Frame. Das 200-MHz-Ziel und der
-sichtbare SEGA-Nachweis bleiben damit offen; die weitere Bootursachenanalyse
-ist vertagt.
+Der aktuelle `CompletePlatform`-Nachweis endete in beiden Pfaden bei
+Schedulerzyklus 600.000.000 ohne erstes neues AOT-, Runtime- oder
+Geraeteproblem:
+
+- `NativeDiscBoot`: 6,3161 Sekunden, 94,9954 effektive Gast-MHz,
+  17.080.114 zentrale Dispatches und ein sichtbarer IP.BIN-Frame;
+- `DirectBootExecutable`: Restore bei 415.233.270, danach 184.766.730
+  Post-Entry-Zyklen in 5,01505 Sekunden, also 36,8425 MHz ueber die
+  tatsaechlich ausgefuehrte Gastarbeit, 16.033.676 zentrale Dispatches und
+  noch kein sichtbarer Frame.
+
+Der Direct-Port meldete aus dem absoluten Zaehler 119,64 MHz; dieser Wert ist
+bis `KR-4966` kein gueltiger Performancevergleich. Seine 16.033.676
+Dispatches entsprechen 11,52 Post-Entry-Gastzyklen pro Zentraldispatch und
+belegen noch keinen Hotpathgewinn. Beide Laeufe endeten am PC `0x8C666D42`.
+Ein warmer Direct-Export mit unveraenderter Analyse dauerte 5,3 Sekunden. Die
+unmittelbare funktionale Grenze ist der ADXT-/mwSnd-Wartepfad bei
+`0x8C65A624` mit Callback `0x8C666D42`. Das 200-MHz-Ziel, das relative Gate
+und ein sichtbarer DirectBoot-Spielbildnachweis bleiben offen.
 
 ## Diagnose
 

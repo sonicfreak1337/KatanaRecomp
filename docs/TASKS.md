@@ -18,19 +18,27 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 ## Aktueller Produktstand
 
 ```text
-Dokumentations-HEAD: 69f3d122613338672d0e74d8a775c772d090746d
-Code-HEAD:           31c5575bd4e89c2bc85c20a14f4d1745fbbc987f
+Roadmap-Basis:                     origin/main 3714e26e117c609980b2b9be6ea0b85c2484c2dd
+Produktartefakt:                   DirectBoot-v24 / CompletePlatform
 
-Gastzyklen:          600.000.000
-Hostzeit:            14,0113 s
-effektive Gast-MHz:  42,8225
-Zentraldispatches:   52.329.316
-GD-ROM-Kommandos:    70
-AICA-Audiopuffer:    180
-Frames:              0
-sichtbarer Screen:   keiner
-letzter PC:          0x8C65A624
+restaurierter Game-Entry-Zyklus:   415.233.270
+absolutes Stopmaximum:             600.000.000
+tatsaechliche Post-Entry-Zyklen:   184.766.730
+Hostzeit:                          5,01505 s
+gueltige Post-Entry-Gast-MHz:      36,8425
+ungueltige alte Anzeige:           119,64 MHz
+Zentraldispatches:                 16.033.676
+GD-ROM-Kommandos:                  72
+AICA-Audiopuffer:                  179
+aktive AICA-Kanaele:               0
+sichtbarer Screen:                 keiner
+letzter PC:                        0x8C666D42
 ```
+
+Die alte Anzeige teilte den absoluten Zaehlerstand von 600 Millionen durch
+die Hostzeit, obwohl 415.233.270 Zyklen restauriert und nicht ausgefuehrt
+wurden. Sie ist kein gueltiger Geschwindigkeitswert. `KR-4966` muss das Gate
+auf ein relatives Post-Entry-Budget umstellen.
 
 ## Aktueller erster Blocker
 
@@ -44,6 +52,10 @@ Completion-Writer:    0x8C65A458
 ```
 
 Der Waitpfad setzt `[object+24]` auf `0` und pollt danach auf `1`. Der Writer setzt dasselbe Feld auf `1`. Alle sechs statisch aufgeloesten Caller liegen in ADXT-/mwSnd-Soundpfaden.
+
+NativeDisc-v24 und DirectBoot-v24 enden am selben Waitvertrag, mit demselben
+letzten PC und jeweils 72 GD-ROM-Kommandos. Der CompletePlatform-Handoff allein
+schliesst die Sound-Completion daher nicht.
 
 Wahrscheinliche Fehlerzone:
 
@@ -100,7 +112,8 @@ Status: Baseline umgesetzt. Das Folgeproblem der absoluten statt relativen Sched
 
 ### Offene Folgerisiken
 
-- nach Scheduler-Handoff waere `600.000.000` derzeit ein absolutes Maximum statt einer Laufdauer ab Game-Entry
+- der reale v24-Schedulerrestore lief nur bis zum absoluten Maximum
+  `600.000.000` statt fuer diese Laufdauer ab Game-Entry
 - `visible_screen=none` kann noch mit Exitcode 0 und `first_problem=none` enden
 
 ---
@@ -111,7 +124,25 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967, KR-4968, KR-4969, KR-4970
 
-Status: Aktiv. Schema, Identitaetsbindung und CPU/RAM-Diagnostik existieren; `CompletePlatform` fehlt.
+Status: Aktiv. Reales `CompletePlatform`-Capture und produktives Apply sind
+belegt. Offen bleiben der strikt globale atomare/`noexcept`-Commitvertrag aus
+`KR-4967`, das allgemeine Save-erhaltende Produktprofil aus `KR-4970` und die
+normativen Subsystemdigests.
+
+### Bereits belegt
+
+- ein privates CompletePlatform-Artefakt wurde aus NativeDisc erfasst
+- der DirectBoot-Produktport hat 22 Geraete und 5 typisierte
+  Schedulerereignisse daraus angewendet
+- der reale Produktlauf erreichte `GameCodeProgressed` ohne neuen
+  terminalen Runtimefehler
+
+### Offen
+
+- nach Commitbeginn darf global kein fallibler Schritt mehr existieren
+- aktuelle Nutzersaves muessen fuer jedes Produktartefakt bewahrt werden
+- NativeDisc und DirectBoot muessen am Entry pro Subsystem normativ
+  uebereinstimmen
 
 ### Umfang
 
@@ -136,7 +167,10 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967, KR-4968, KR-4969, KR-4970
 
-Status: Aktiv. Artefaktformat und CPU/RAM-Capture sind umgesetzt; Plattform-Capture fehlt.
+Status: Aktiv. Das reale CompletePlatform-Artefakt mit 22 Geraeten und 5
+Schedulerereignissen wurde erfasst und vom DirectBoot-Produktport verwendet.
+Offen bleiben der byteidentische Doppel-Capture, eigene Inspect-/Verify-
+Operationen und der allgemeine Schutz aktueller Saves.
 
 ### Umfang
 
@@ -349,6 +383,12 @@ Prioritaet: P0 Boot-Gate
 
 Abhaengigkeiten: KR-4952, KR-4953, KR-4967, KR-4968, KR-4969, KR-4970
 
+Status: Aktiv. NativeDisc-v24 und DirectBoot-v24 enden am selben PC
+`0x8C666D42`, mit jeweils 72 GD-ROM-Kommandos und nahezu gleichen
+AICA-Pufferzaehlern (180 beziehungsweise 179). Das ist operative Evidenz,
+aber kein normativer Digestnachweis. Sound-Completion, erster Spielframe und
+ein echter Lauf ueber 600 Millionen Post-Entry-Zyklen bleiben offen.
+
 ### Umfang
 
 - NativeDisc bis unmittelbar vor erste BootExecutable-Instruktion
@@ -379,7 +419,10 @@ Prioritaet: P1
 
 Abhaengigkeiten: stabile Handoff-Grundlage
 
-Status: Warmexport etwa 2,3 Sekunden; Kaltbuild und externe Hook-only-Schleife bleiben offen.
+Status: Der reale unveraenderte warme Direct-v24-Export/Build dauerte etwa
+5,3 Sekunden; der erste frische Direct-v24-Export/Build etwa 169,3 Sekunden.
+Runtime-only-, Hook-only- und aktueller MSVC-/clang-cl-Produktvergleich
+bleiben offen.
 
 ### Umfang
 
@@ -430,6 +473,10 @@ Prioritaet: P0 - zuerst
 
 Abhaengigkeiten: keine
 
+Status: Aktiv und weiterhin erster P0-Produktblocker. NativeDisc-v24 und
+DirectBoot-v24 erreichen denselben ADXT-/mwSnd-Waitvertrag; der
+CompletePlatform-Handoff hat den Completion-Writer noch nicht freigegeben.
+
 ### Produktbefund
 
 - Objekt `0x8C8D3908`
@@ -466,6 +513,23 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4951
 
+Status: Aktiv. Der konkrete v24-Produktlauf belegt den absoluten Budgetfehler.
+
+### Produktbefund
+
+```text
+restaurierter Game-Entry-Zyklus: 415.233.270
+absolutes Stopmaximum:           600.000.000
+ausgefuehrte Post-Entry-Zyklen:  184.766.730
+Hostzeit:                        5,01505 s
+gueltige effektive Gast-MHz:     36,8425
+ungueltig berichteter Wert:      119,64 MHz
+```
+
+Die 119,64 MHz verwenden den restaurierten absoluten Zaehlerstand als
+ausgefuehrte Arbeit. NativeDisc und DirectBoot haben damit noch keine gleiche
+Post-Entry-Arbeit erhalten.
+
 ### Umfang
 
 - Gastzyklusbudget als Laufdauer ab Game-Entry definieren
@@ -491,6 +555,20 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4966
 
+Status: Aktiv, teilweise umgesetzt. Vollstaendige Vorvalidierung, passive
+Restoreplaene, semantischer Recapture und ein reales produktives
+CompletePlatform-Apply sind belegt. Offen bleiben ein strikt globaler
+`noexcept`-Commit nach der ersten Mutation und normative Digests pro
+Subsystem.
+
+### Umgesetzter Zwischenstand
+
+- alle 22 Geraetepayloads und 5 typisierten Schedulerereignisse werden vor
+  dem Apply validiert
+- Geraete besitzen passive Restore-/Game-Entry-Adapter
+- der angewendete Zustand kann semantisch erneut erfasst werden
+- der DirectBoot-v24-Produktlauf hat den Koordinator real verwendet
+
 ### Umfang
 
 - globaler Prepare-/Commit-Vertrag
@@ -514,6 +592,11 @@ Abhaengigkeiten: KR-4966
 Prioritaet: P0
 
 Abhaengigkeiten: KR-4965, KR-4967
+
+Status: Aktiv. Die erforderlichen Game-Entry-Adapter sind implementiert und
+im CompletePlatform-Artefakt transportiert. Die echte Sound-Completion und
+die exakte NativeDisc-/DirectBoot-Paritaet dieses Subsystemverbunds bleiben
+offen.
 
 ### Umfang
 
@@ -539,6 +622,10 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967
 
+Status: Aktiv. Die PVR-/SPG-/ASIC-Game-Entry-Adapter sind implementiert und
+wurden im realen Produkt-Apply verwendet. Ein erster Spielframe und die
+normative NativeDisc-/DirectBoot-Paritaet bleiben offen.
+
 ### Umfang
 
 - PVR Registerfile und SPG-Timing
@@ -562,7 +649,10 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4967
 
-Status: Maple Snapshot, Codec, passive Restore und Event-Rehydration existieren; GameEntry-Adapter und Product-Profil fehlen.
+Status: Aktiv. Game-Entry-Adapter und Produktlauf sind belegt; identische
+migrierte Saves wurden in einem realen Fall nachgewiesen. Ein allgemeines
+Product-Handoff-Profil mit garantiertem Schutz vor Save-Rollback bleibt
+offen.
 
 ### Umfang
 
