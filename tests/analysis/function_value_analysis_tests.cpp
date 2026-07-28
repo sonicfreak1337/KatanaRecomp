@@ -271,7 +271,8 @@ incomplete_return_family_values() {
          katana::analysis::ResolvedControlFlowKind::Call,
          true,
          katana::analysis::ControlFlowEvidence::GuardedPartial,
-         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot}},
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true}, // private analysis-candidate carrier, never an executable CFG edge
     }};
     return katana::analysis::analyze_function_values(
         image, lines, function_entries, edges);
@@ -920,8 +921,8 @@ int main() {
         require(table != nullptr &&
                     table->target_addresses ==
                         std::vector<std::uint32_t>{0x50u},
-                "Separate Inventory-Provenienz verlor den bekannten "
-                "Guarded-Table-Seed (tables=" +
+                "Candidate-Call-Carrier verlor den bewachten Returned-Table-Seed "
+                "(tables=" +
                     std::to_string(
                         incomplete_family.guarded_code_inventory
                             .returned_code_address_tables.size()) +
@@ -930,8 +931,8 @@ int main() {
                     dispatch->guarded && !dispatch->complete &&
                     dispatch->evidence ==
                         katana::analysis::ControlFlowEvidence::GuardedPartial,
-                "Inventory-only Non-Stack-Provenienz erzeugte einen normalen "
-                "CFG-Beweis.");
+                "Candidate-Call-Carrier erzeugte einen autoritativen CFG-Beweis "
+                "statt eines bewachten Inventory-Kandidaten.");
     }
 
     for (const auto isolated_harvest : {false, true}) {

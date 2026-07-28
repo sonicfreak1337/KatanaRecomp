@@ -2706,6 +2706,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
         std::uint32_t transfer_site = 0u;
         std::uint32_t target = 0u;
     };
+    struct CandidateCallCarrier {
+        std::uint32_t call_site = 0u;
+        std::uint32_t target = 0u;
+    };
+    std::vector<CandidateCallCarrier> candidate_call_carriers;
     std::vector<CandidateTailCarrier> candidate_tail_carriers;
     for (const auto& edge : resolved_edges) {
         if (!edge.analysis_candidate_carrier ||
@@ -2727,10 +2732,17 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                  return candidate.address < address;
                              });
         if (line == lines.end() || line->address != edge.instruction_address ||
-            line->instruction.control_flow !=
-                katana::sh4::ControlFlowKind::IndirectBranch ||
             target == lines.end() || target->address != edge.target_address ||
             target->is_delay_slot)
+            continue;
+        if (line->instruction.control_flow ==
+            katana::sh4::ControlFlowKind::IndirectCall) {
+            candidate_call_carriers.push_back(
+                {edge.instruction_address, edge.target_address});
+            continue;
+        }
+        if (line->instruction.control_flow !=
+            katana::sh4::ControlFlowKind::IndirectBranch)
             continue;
         if (std::find(edge.evidence_origins.begin(),
                       edge.evidence_origins.end(),
@@ -2739,6 +2751,20 @@ detail::analyze_function_values_with_guarded_entry_cache(
         candidate_tail_carriers.push_back(
             {edge.instruction_address, edge.target_address});
     }
+    std::sort(candidate_call_carriers.begin(),
+              candidate_call_carriers.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.call_site, left.target) <
+                         std::tie(right.call_site, right.target);
+              });
+    candidate_call_carriers.erase(
+        std::unique(candidate_call_carriers.begin(),
+                    candidate_call_carriers.end(),
+                    [](const auto& left, const auto& right) {
+                        return left.call_site == right.call_site &&
+                               left.target == right.target;
+                    }),
+        candidate_call_carriers.end());
     std::sort(candidate_tail_carriers.begin(),
               candidate_tail_carriers.end(),
               [](const auto& left, const auto& right) {
@@ -2816,7 +2842,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
     result.strongly_connected_components = components.size();
     report_progress("functions-complete");
     std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_callees;
-    indirect_callees.reserve(function_edges.size());
+    indirect_callees.reserve(function_edges.size() +
+                              candidate_call_carriers.size());
     for (const auto& edge : function_edges) {
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
         auto& candidates = indirect_callees[edge.instruction_address];
@@ -2824,6 +2851,12 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto evidence = resolved_edge_evidence(edge);
         candidates.guarded = candidates.guarded || evidence != ControlFlowEvidence::ProvenComplete;
         candidates.complete = candidates.complete && control_flow_evidence_complete(evidence);
+    }
+    for (const auto& carrier : candidate_call_carriers) {
+        auto& candidates = indirect_callees[carrier.call_site];
+        candidates.targets.push_back(carrier.target);
+        candidates.guarded = true;
+        candidates.complete = false;
     }
     for (auto& [call_site, candidates] : indirect_callees) {
         static_cast<void>(call_site);
@@ -3124,6 +3157,18 @@ detail::analyze_function_values_with_guarded_entry_cache(
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
     }
+    for (const auto& carrier : candidate_call_carriers) {
+        const auto owners = function_owners_by_control.find(carrier.call_site);
+        if (owners == function_owners_by_control.end()) continue;
+        auto& callers = callers_by_callee[carrier.target];
+        callers.insert(callers.end(),
+                       owners->second.begin(),
+                       owners->second.end());
+    }
+    for (auto& [callee, callers] : callers_by_callee) {
+        static_cast<void>(callee);
+        normalize(callers);
+    }
     std::unordered_set<std::uint32_t> functions_reaching_guarded_inventory_sink;
     functions_reaching_guarded_inventory_sink.reserve(functions.size());
     std::deque<std::uint32_t> pending_inventory_reachability;
@@ -3159,6 +3204,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto input = candidate_inputs.find(edge.target_address);
         if (input == candidate_inputs.end()) continue;
         input->second.expected_call_sites.insert(edge.instruction_address);
+    }
+    for (const auto& carrier : candidate_call_carriers) {
+        const auto input = candidate_inputs.find(carrier.target);
+        if (input == candidate_inputs.end()) continue;
+        input->second.expected_call_sites.insert(carrier.call_site);
     }
     for (auto& [address, input] : candidate_inputs) {
         input.state.stack_offsets[15u] = 0;
