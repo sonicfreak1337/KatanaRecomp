@@ -5,9 +5,9 @@
 #include "katana/sh4/instruction_timing.hpp"
 
 #include "katana/ir/ir.hpp"
+#include "cpp_lexical_replace.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -71,38 +71,6 @@ void emit_multi_block_completion(
     bool exception_exit,
     const NativeRegisterEmission& registers);
 
-void replace_all_text(std::string& text,
-                      const std::string_view from,
-                      const std::string_view to) {
-    std::size_t offset = 0u;
-    while ((offset = text.find(from, offset)) != std::string::npos) {
-        text.replace(offset, from.size(), to);
-        offset += to.size();
-    }
-}
-
-void replace_cpp_token(std::string& text,
-                       const std::string_view from,
-                       const std::string_view to) {
-    std::size_t offset = 0u;
-    while ((offset = text.find(from, offset)) != std::string::npos) {
-        const auto end = offset + from.size();
-        const auto identifier_character = [](const char value) noexcept {
-            return std::isalnum(static_cast<unsigned char>(value)) != 0 ||
-                   value == '_';
-        };
-        const auto touches_identifier =
-            (offset != 0u && identifier_character(text[offset - 1u])) ||
-            (end < text.size() && identifier_character(text[end]));
-        if (touches_identifier) {
-            offset = end;
-            continue;
-        }
-        text.replace(offset, from.size(), to);
-        offset += to.size();
-    }
-}
-
 std::string general_register_expression(
     const std::uint8_t index,
     const NativeRegisterEmission& registers) {
@@ -160,9 +128,10 @@ void localize_instruction_fragment(
     if (!registers.enabled()) return;
     for (std::uint8_t index = 0u; index < 16u; ++index) {
         if (!registers.general(index)) continue;
-        replace_all_text(fragment,
-                         "cpu.r[" + std::to_string(index) + "]",
-                         general_register_expression(index, registers));
+        detail::replace_cpp_code_token(
+            fragment,
+            "cpu.r[" + std::to_string(index) + "]",
+            general_register_expression(index, registers));
     }
     for (const auto value : {katana::ir::TrackedRegister::T,
                              katana::ir::TrackedRegister::Pr,
@@ -172,9 +141,10 @@ void localize_instruction_fragment(
                              katana::ir::TrackedRegister::Fpul}) {
         if (!registers.scalar(value)) continue;
         const NativeRegisterEmission none;
-        replace_cpp_token(fragment,
-                          scalar_register_expression(value, none),
-                          scalar_register_expression(value, registers));
+        detail::replace_cpp_code_token(
+            fragment,
+            scalar_register_expression(value, none),
+            scalar_register_expression(value, registers));
     }
 }
 

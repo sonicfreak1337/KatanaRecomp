@@ -7,6 +7,8 @@
 #include "katana/runtime/abi.hpp"
 #include "katana/sh4/disassembler.hpp"
 
+#include "../../src/codegen/cpp_lexical_replace.hpp"
+
 #include <array>
 #include <cstdlib>
 #include <filesystem>
@@ -1344,6 +1346,52 @@ int main() {
         "LDC SR laesst nach IMASK/BL/RB/MD-Aenderung weitere native "
         "Gastinstruktionen vor dem Runtime-Safepoint laufen oder bindet die "
         "neue Registerbank nicht erneut.");
+
+    {
+        std::string fragment =
+            "cpu.r[1] = cpu.r[10]; cpu.t = cpu.pr;\n"
+            "// cpu.r[1] cpu.t \\\n"
+            "cpu.pr remains in the spliced comment\n"
+            "/* cpu.r[10] cpu.t cpu.pr */\n"
+            "const auto normal = \"cpu.r[1] \\\" cpu.t cpu.pr\";\n"
+            "const auto character = 'cpu.t';\n"
+            "const auto raw = u8R\"tag(cpu.r[10] cpu.t cpu.pr)tag\";\n"
+            "some_cpu.r[1] = cpu.toggle_fpu_register_bank() + cpu.prior;\n"
+            "cpu.r[1] = cpu.pr;\n";
+        katana::codegen::detail::replace_cpp_code_token(
+            fragment, "cpu.r[1]", "katana_registers[1]");
+        katana::codegen::detail::replace_cpp_code_token(
+            fragment, "cpu.r[10]", "katana_registers[10]");
+        katana::codegen::detail::replace_cpp_code_token(
+            fragment, "cpu.t", "katana_registers.t()");
+        katana::codegen::detail::replace_cpp_code_token(
+            fragment, "cpu.pr", "katana_registers.pr()");
+        require(
+            fragment.find(
+                "katana_registers[1] = katana_registers[10]; "
+                "katana_registers.t() = katana_registers.pr();") !=
+                    std::string::npos &&
+                fragment.find("// cpu.r[1] cpu.t \\\n"
+                              "cpu.pr remains in the spliced comment") !=
+                    std::string::npos &&
+                fragment.find("/* cpu.r[10] cpu.t cpu.pr */") !=
+                    std::string::npos &&
+                fragment.find(
+                    "\"cpu.r[1] \\\" cpu.t cpu.pr\"") !=
+                    std::string::npos &&
+                fragment.find("'cpu.t'") != std::string::npos &&
+                fragment.find(
+                    "u8R\"tag(cpu.r[10] cpu.t cpu.pr)tag\"") !=
+                    std::string::npos &&
+                fragment.find(
+                    "some_cpu.r[1] = cpu.toggle_fpu_register_bank() + "
+                    "cpu.prior;") != std::string::npos &&
+                fragment.find(
+                    "katana_registers[1] = katana_registers.pr();") !=
+                    std::string::npos,
+            "Registerlokalisierung veraenderte Kommentare, Literale, "
+            "Raw-Strings oder groessere C++-Tokens.");
+    }
 
     constexpr std::array<std::uint8_t, 10> token_boundary_bytes = {
         0x18u,
