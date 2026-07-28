@@ -19,6 +19,7 @@
 namespace katana::runtime {
 
 class ExecutableCodeTracker;
+struct GuestWriteEvent;
 
 using BackendBlockFunction = BlockExit (*)(CpuState&, BlockExecutionContext&);
 
@@ -292,6 +293,11 @@ class RuntimeBlockTable {
                                                    std::size_t size) const noexcept;
     [[nodiscard]] std::size_t erase_overlapping_physical(std::uint32_t physical_address,
                                                          std::size_t size) noexcept;
+    // Allocation-free companion for a direct-RAM store batch. Changed pages
+    // narrow the search and each active block candidate is evaluated once for
+    // the complete event span.
+    [[nodiscard]] std::size_t erase_overlapping_physical_batch(
+        std::span<const GuestWriteEvent> events) noexcept;
     void bind_code_tracker(
         const ExecutableCodeTracker* tracker,
         StaticAotInvalidationContract static_aot_invalidation =
@@ -326,6 +332,7 @@ class RuntimeBlockTable {
         RuntimeBlock block;
         std::string identity;
         std::uint64_t generation = 1u;
+        std::uint64_t write_batch_visit_epoch = 0u;
         bool active = true;
         bool static_block = false;
     };
@@ -400,6 +407,7 @@ class RuntimeBlockTable {
     mutable std::map<VariantAddressKey, std::uint64_t> rejected_generations_;
     std::uint64_t dispatch_lifetime_ = 0u;
     std::uint64_t dispatch_generation_ = 1u;
+    std::uint64_t write_batch_visit_epoch_ = 0u;
     StaticAotInvalidationContract static_aot_invalidation_ =
         StaticAotInvalidationContract::Conservative;
     std::vector<std::unique_ptr<StaticAotPage>> static_aot_pages_;

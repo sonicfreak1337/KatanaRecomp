@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -160,6 +161,92 @@ void for_each_dreamcast_executable_backing_extent(const std::uint32_t address,
         return;
     }
     operation(physical, 0u, size, false);
+}
+
+struct DreamcastGuestWriteBatchContext {
+    std::weak_ptr<ExecutableCodeTracker> tracker;
+    std::weak_ptr<RuntimeBlockTable> blocks;
+    std::weak_ptr<ExecutableModuleCatalog> modules;
+    std::weak_ptr<ExecutableDiscLoadTransactionCoordinator> transactions;
+};
+
+[[nodiscard]] bool map_dreamcast_main_ram_write_batch(
+    const std::span<const GuestWriteEvent> events,
+    std::array<GuestWriteEvent, direct_linear_write_batch_capacity>&
+        backing_events) noexcept {
+    if (events.empty() ||
+        events.size() > backing_events.size())
+        return false;
+    for (std::size_t index = 0u; index < events.size(); ++index) {
+        bool mapped = false;
+        bool valid = true;
+        for_each_dreamcast_executable_backing_extent(
+            events[index].address,
+            events[index].size,
+            [&](const std::uint32_t backing,
+                const std::size_t source_offset,
+                const std::size_t extent_size,
+                const bool main_ram) noexcept {
+                if (mapped || !main_ram || source_offset != 0u ||
+                    extent_size != events[index].size) {
+                    valid = false;
+                    return;
+                }
+                backing_events[index] = {
+                    backing,
+                    extent_size,
+                    events[index].source,
+                    events[index].bytes_changed};
+                mapped = true;
+            });
+        if (!valid || !mapped) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool admit_dreamcast_main_ram_write_batch(
+    void* const opaque,
+    const std::span<const GuestWriteEvent> events) noexcept {
+    auto& context =
+        *static_cast<DreamcastGuestWriteBatchContext*>(opaque);
+    if (const auto transactions = context.transactions.lock();
+        transactions && transactions->transaction_active())
+        return false;
+
+    std::array<GuestWriteEvent, direct_linear_write_batch_capacity>
+        backing_events{};
+    if (!map_dreamcast_main_ram_write_batch(events, backing_events))
+        return false;
+    const auto mapped = std::span<const GuestWriteEvent>(
+        backing_events.data(), events.size());
+    const auto modules = context.modules.lock();
+    const auto tracker = context.tracker.lock();
+    const auto blocks = context.blocks.lock();
+    return modules && tracker && blocks &&
+           modules->can_record_runtime_write_batch(mapped) &&
+           tracker->can_observe_write_batch(mapped);
+}
+
+void commit_dreamcast_main_ram_write_batch(
+    void* const opaque,
+    const std::span<const GuestWriteEvent> events) noexcept {
+    auto& context =
+        *static_cast<DreamcastGuestWriteBatchContext*>(opaque);
+    std::array<GuestWriteEvent, direct_linear_write_batch_capacity>
+        backing_events{};
+    if (!map_dreamcast_main_ram_write_batch(events, backing_events))
+        std::terminate();
+    const auto mapped = std::span<const GuestWriteEvent>(
+        backing_events.data(), events.size());
+    const auto modules = context.modules.lock();
+    const auto tracker = context.tracker.lock();
+    const auto blocks = context.blocks.lock();
+    if (!modules || !tracker || !blocks)
+        std::terminate();
+    modules->record_runtime_write_batch(mapped);
+    tracker->observe_write_batch(mapped);
+    static_cast<void>(
+        blocks->erase_overlapping_physical_batch(mapped));
 }
 
 std::uint16_t flash_block_crc(const std::span<const std::uint8_t> block) {
@@ -1060,13 +1147,22 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto runtime_blocks = std::weak_ptr<RuntimeBlockTable>(state.runtime_blocks);
     const auto runtime_modules = std::weak_ptr<ExecutableModuleCatalog>(state.module_catalog);
     const auto direct_scanout = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
+    const auto write_batch_context =
+        std::make_shared<DreamcastGuestWriteBatchContext>(
+            DreamcastGuestWriteBatchContext{
+                code_tracker,
+                runtime_blocks,
+                runtime_modules,
+                disc_load_transactions});
     cpu.memory.set_guest_write_observer(
         [code_tracker,
          runtime_blocks,
          runtime_modules,
          disc_load_transactions,
-         direct_scanout](
+         direct_scanout,
+         write_batch_context](
             const GuestWriteEvent& event) noexcept {
+            static_cast<void>(write_batch_context);
             if (const auto renderer = direct_scanout.lock())
                 renderer->observe_vram_write(event.address, event.size, event.bytes_changed);
             if (const auto transactions = disc_load_transactions.lock();
@@ -1099,6 +1195,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
                 });
         },
         GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+    cpu.memory.set_guest_write_batch_observer(
+        GuestWriteBatchObserver{
+            write_batch_context.get(),
+            &admit_dreamcast_main_ram_write_batch,
+            &commit_dreamcast_main_ram_write_batch});
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
     state.store_queue_transfers->reserve(1024u);
     state.dropped_store_queue_transfers = std::make_shared<std::uint64_t>(0u);

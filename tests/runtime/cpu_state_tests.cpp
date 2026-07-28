@@ -31,7 +31,7 @@ int main() {
     static_assert(katana::runtime::banked_register_count == 8u);
     static_assert(katana::runtime::fpu_register_count == 16u);
 
-    static_assert(katana::runtime::abi_version == 71u);
+    static_assert(katana::runtime::abi_version == 72u);
 
     CpuState cpu;
 

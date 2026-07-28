@@ -169,6 +169,15 @@ class ExecutableModuleCatalog final {
                               std::size_t size,
                               CodeWriteSource source,
                               bool bytes_changed = true);
+    // Allocation-free product path. Admission rejects writes touching a live
+    // module extent (the scalar path owns extent splitting) and provenance
+    // pages whose required map node is not already present. Commit processes
+    // each touched page once while preserving event order inside that page and
+    // is valid only immediately after true admission with the same span.
+    [[nodiscard]] bool can_record_runtime_write_batch(
+        std::span<const GuestWriteEvent> events) const noexcept;
+    void record_runtime_write_batch(
+        std::span<const GuestWriteEvent> events) noexcept;
     [[nodiscard]] bool promote_runtime_write(const Memory& memory,
                                              std::uint32_t address,
                                              std::uint32_t maximum_bytes = 128u);

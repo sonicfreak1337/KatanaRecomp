@@ -138,6 +138,55 @@ canonical_load_range(const std::uint32_t address, const std::size_t size) noexce
     return std::pair{begin, static_cast<std::uint64_t>(begin) + size};
 }
 
+[[nodiscard]] bool direct_write_batch_range(
+    const GuestWriteEvent& event,
+    std::uint32_t& physical_begin,
+    std::uint64_t& physical_end,
+    std::uint32_t& physical_page) noexcept {
+    if ((event.size != 1u && event.size != 2u && event.size != 4u))
+        return false;
+    const auto range = canonical_load_range(event.address, event.size);
+    if (!range) return false;
+    physical_begin = range->first;
+    physical_end = range->second;
+    physical_page = physical_begin & ~(ExecutableCodeTracker::page_size - 1u);
+    return (physical_end - 1u) /
+               ExecutableCodeTracker::page_size *
+               ExecutableCodeTracker::page_size ==
+           physical_page;
+}
+
+[[nodiscard]] bool establishes_runtime_write_provenance(
+    const CodeWriteSource source) noexcept {
+    return source == CodeWriteSource::Cpu ||
+           source == CodeWriteSource::Fpu ||
+           source == CodeWriteSource::StoreQueue ||
+           source == CodeWriteSource::Fallback;
+}
+
+template <std::size_t Size>
+void update_runtime_write_bits(std::array<std::uint64_t, Size>& written,
+                               std::uint32_t offset,
+                               const std::uint32_t end_offset,
+                               const bool set) noexcept {
+    while (offset < end_offset) {
+        const auto word = offset / 64u;
+        const auto first_bit = offset % 64u;
+        const auto word_end =
+            std::min<std::uint32_t>(end_offset, (word + 1u) * 64u);
+        const auto last_bit = word_end - word * 64u;
+        auto mask =
+            std::numeric_limits<std::uint64_t>::max() << first_bit;
+        if (last_bit < 64u)
+            mask &= (std::uint64_t{1u} << last_bit) - 1u;
+        if (set)
+            written[word] |= mask;
+        else
+            written[word] &= ~mask;
+        offset = word_end;
+    }
+}
+
 bool bytes_match_excluding_mutable(
     const std::span<const std::uint8_t> left,
     const std::span<const std::uint8_t> right,
@@ -1140,6 +1189,155 @@ void ExecutableModuleCatalog::record_runtime_write(const std::uint32_t address,
     };
     if (bytes_changed) update_provenance(false);
     if (establishes_provenance) update_provenance(true);
+}
+
+bool ExecutableModuleCatalog::can_record_runtime_write_batch(
+    const std::span<const GuestWriteEvent> events) const noexcept {
+    if (events.size() > direct_linear_write_batch_capacity) return false;
+    for (const auto& event : events) {
+        std::uint32_t physical_begin = 0u;
+        std::uint64_t physical_end = 0u;
+        std::uint32_t page = 0u;
+        if (!direct_write_batch_range(
+                event, physical_begin, physical_end, page))
+            return false;
+        if (event.bytes_changed &&
+            active_extent_index_may_overlap(physical_begin, physical_end))
+            return false;
+        if (establishes_runtime_write_provenance(event.source) &&
+            !runtime_write_pages_.contains(page))
+            return false;
+    }
+
+    // Leaving an empty provenance page would require erasing/deallocating its
+    // map node in commit. Reject that rare clear-only case to scalar replay.
+    for (std::size_t index = 0u; index < events.size(); ++index) {
+        std::uint32_t physical_begin = 0u;
+        std::uint64_t physical_end = 0u;
+        std::uint32_t page = 0u;
+        if (!direct_write_batch_range(
+                events[index], physical_begin, physical_end, page))
+            return false;
+        bool page_seen = false;
+        for (std::size_t previous = 0u; previous < index; ++previous) {
+            std::uint32_t previous_begin = 0u;
+            std::uint64_t previous_end = 0u;
+            std::uint32_t previous_page = 0u;
+            if (!direct_write_batch_range(events[previous],
+                                          previous_begin,
+                                          previous_end,
+                                          previous_page))
+                return false;
+            if (previous_page == page) {
+                page_seen = true;
+                break;
+            }
+        }
+        if (page_seen) continue;
+        const auto found = runtime_write_pages_.find(page);
+        if (found == runtime_write_pages_.end()) {
+            for (const auto& event : events) {
+                std::uint32_t event_begin = 0u;
+                std::uint64_t event_end = 0u;
+                std::uint32_t event_page = 0u;
+                if (!direct_write_batch_range(
+                        event, event_begin, event_end, event_page))
+                    std::terminate();
+                if (event_page == page &&
+                    establishes_runtime_write_provenance(event.source))
+                    std::terminate();
+            }
+            continue;
+        }
+        auto written = found->second.written;
+        for (const auto& event : events) {
+            std::uint32_t event_begin = 0u;
+            std::uint64_t event_end = 0u;
+            std::uint32_t event_page = 0u;
+            if (!direct_write_batch_range(
+                    event, event_begin, event_end, event_page))
+                return false;
+            if (event_page != page) continue;
+            const auto begin_offset = event_begin - page;
+            const auto end_offset =
+                static_cast<std::uint32_t>(event_end - page);
+            if (event.bytes_changed)
+                update_runtime_write_bits(
+                    written, begin_offset, end_offset, false);
+            if (establishes_runtime_write_provenance(event.source))
+                update_runtime_write_bits(
+                    written, begin_offset, end_offset, true);
+        }
+        if (std::all_of(written.begin(),
+                        written.end(),
+                        [](const auto word) { return word == 0u; }))
+            return false;
+    }
+    return true;
+}
+
+void ExecutableModuleCatalog::record_runtime_write_batch(
+    const std::span<const GuestWriteEvent> events) noexcept {
+    if (events.size() > direct_linear_write_batch_capacity)
+        std::terminate();
+    if (std::any_of(events.begin(), events.end(), [](const auto& event) {
+            return event.bytes_changed;
+        }))
+        increment(metrics_.write_index_rejections);
+
+    for (std::size_t index = 0u; index < events.size(); ++index) {
+        std::uint32_t physical_begin = 0u;
+        std::uint64_t physical_end = 0u;
+        std::uint32_t page = 0u;
+        if (!direct_write_batch_range(
+                events[index], physical_begin, physical_end, page))
+            std::terminate();
+        bool page_seen = false;
+        for (std::size_t previous = 0u; previous < index; ++previous) {
+            std::uint32_t previous_begin = 0u;
+            std::uint64_t previous_end = 0u;
+            std::uint32_t previous_page = 0u;
+            if (!direct_write_batch_range(events[previous],
+                                          previous_begin,
+                                          previous_end,
+                                          previous_page))
+                std::terminate();
+            if (previous_page == page) {
+                page_seen = true;
+                break;
+            }
+        }
+        if (page_seen) continue;
+        const auto found = runtime_write_pages_.find(page);
+        if (found == runtime_write_pages_.end()) continue;
+
+        for (const auto& event : events) {
+            std::uint32_t event_begin = 0u;
+            std::uint64_t event_end = 0u;
+            std::uint32_t event_page = 0u;
+            if (!direct_write_batch_range(
+                    event, event_begin, event_end, event_page))
+                std::terminate();
+            if (event_page != page) continue;
+            const auto begin_offset = event_begin - page;
+            const auto end_offset =
+                static_cast<std::uint32_t>(event_end - page);
+            if (event.bytes_changed)
+                update_runtime_write_bits(found->second.written,
+                                          begin_offset,
+                                          end_offset,
+                                          false);
+            if (establishes_runtime_write_provenance(event.source))
+                update_runtime_write_bits(found->second.written,
+                                          begin_offset,
+                                          end_offset,
+                                          true);
+        }
+        if (std::all_of(found->second.written.begin(),
+                        found->second.written.end(),
+                        [](const auto word) { return word == 0u; }))
+            std::terminate();
+    }
 }
 
 bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,

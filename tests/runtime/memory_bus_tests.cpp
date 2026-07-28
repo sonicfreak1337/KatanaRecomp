@@ -44,6 +44,39 @@ void count_guest_memory_access(void* const context,
     ++*static_cast<std::size_t*>(context);
 }
 
+struct DirectWriteBatchProbe {
+    std::array<katana::runtime::GuestWriteEvent,
+               katana::runtime::direct_linear_write_batch_capacity>
+        admitted_events{};
+    std::array<katana::runtime::GuestWriteEvent,
+               katana::runtime::direct_linear_write_batch_capacity>
+        committed_events{};
+    std::size_t admitted_count = 0u;
+    std::size_t committed_count = 0u;
+    std::size_t admissions = 0u;
+    std::size_t commits = 0u;
+    bool accept = true;
+};
+
+bool admit_direct_write_batch(
+    void* const context,
+    const std::span<const katana::runtime::GuestWriteEvent> events) noexcept {
+    auto& probe = *static_cast<DirectWriteBatchProbe*>(context);
+    ++probe.admissions;
+    probe.admitted_count = events.size();
+    std::copy(events.begin(), events.end(), probe.admitted_events.begin());
+    return probe.accept;
+}
+
+void commit_direct_write_batch(
+    void* const context,
+    const std::span<const katana::runtime::GuestWriteEvent> events) noexcept {
+    auto& probe = *static_cast<DirectWriteBatchProbe*>(context);
+    ++probe.commits;
+    probe.committed_count = events.size();
+    std::copy(events.begin(), events.end(), probe.committed_events.begin());
+}
+
 constexpr std::string_view fill_observer_terminate_child =
     "--fill-observer-terminate-child";
 constexpr int fill_observer_terminate_exit_code = 86;
@@ -111,6 +144,16 @@ int main(const int argc, const char* const* argv) {
         std::is_nothrow_move_constructible_v<Memory::PreparedRepeatedU32Sequence> &&
         !std::is_copy_constructible_v<Memory::PreparedRepeatedU32Sequence> &&
         !std::is_move_assignable_v<Memory::PreparedRepeatedU32Sequence>);
+    static_assert(
+        std::is_trivially_copyable_v<
+            katana::runtime::GuestWriteBatchObserver> &&
+        std::is_nothrow_move_constructible_v<
+            Memory::DirectLinearWriteBatch> &&
+        !std::is_copy_constructible_v<
+            Memory::DirectLinearWriteBatch> &&
+        !std::is_move_assignable_v<
+            Memory::DirectLinearWriteBatch> &&
+        noexcept(std::declval<Memory::DirectLinearWriteBatch&>().flush()));
     static_assert(noexcept(std::declval<Memory&>().commit_prepared_linear_fill(
                       std::declval<Memory::PreparedLinearFill>())) &&
                   noexcept(std::declval<Memory&>().commit_prepared_linear_u32_pattern(
@@ -164,6 +207,138 @@ int main(const int argc, const char* const* argv) {
     bus.clear_guest_write_observer();
     require(bus.guest_write_observer_allows_prevalidated_linear_writes(),
             "Geloeschter GuestWriteObserver hinterlaesst einen unsicheren Batch-Vertrag.");
+
+    {
+        constexpr std::uint32_t base = 0x0C000000u;
+        Memory direct(0u);
+        const auto backing =
+            std::make_shared<LinearMemoryDevice>(4096u);
+        direct.map_region("direct-batch", base, backing);
+        direct.bind_direct_linear_alias_window(
+            base, 4096u, *backing);
+        std::vector<katana::runtime::GuestWriteEvent> scalar_events;
+        scalar_events.reserve(
+            katana::runtime::direct_linear_write_batch_capacity);
+        direct.set_guest_write_observer(
+            [&](const auto& event) noexcept {
+                scalar_events.push_back(event);
+            },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        DirectWriteBatchProbe probe;
+        direct.set_guest_write_batch_observer(
+            {&probe,
+             &admit_direct_write_batch,
+             &commit_direct_write_batch});
+
+        auto batch = direct.begin_direct_linear_write_batch();
+        require(batch && batch.try_stage_u32(base, 0x11223344u) &&
+                    batch.try_stage_u16(base, 0x3344u) &&
+                    batch.try_stage_u8(base + 1u, 0xAAu) &&
+                    backing->read_u32(0u) == 0u,
+                "Direct-RAM-Batch staged Stores nicht unsichtbar oder "
+                "lehnt gueltige Stores ab.");
+        batch.flush();
+        require(backing->read_u32(0u) == 0x1122AA44u &&
+                    probe.admissions == 1u && probe.commits == 1u &&
+                    probe.admitted_count == 3u &&
+                    probe.committed_count == 3u &&
+                    probe.committed_events[0u].bytes_changed &&
+                    !probe.committed_events[1u].bytes_changed &&
+                    probe.committed_events[2u].bytes_changed &&
+                    scalar_events.empty(),
+                "Direct-RAM-Batch verliert logische bytes_changed-Kanten, "
+                "Storeordnung oder den einmaligen Observercommit.");
+        require(direct.performance_counters().indexed_region_hits == 3u &&
+                    direct.performance_counters().unobserved_accesses == 3u,
+                "Direct-RAM-Batch zaehlt Gaststores nicht exakt.");
+
+        probe = {};
+        probe.accept = false;
+        scalar_events.clear();
+        direct.set_guest_write_batch_observer(
+            {&probe,
+             &admit_direct_write_batch,
+             &commit_direct_write_batch});
+        auto rejected = direct.begin_direct_linear_write_batch();
+        require(rejected.try_stage_u32(base + 4u, 0xAABBCCDDu) &&
+                    rejected.try_stage_u32(base + 4u, 0xAABBCCDDu),
+                "Direct-RAM-Batch kann den Admission-Replay nicht vorbereiten.");
+        rejected.flush();
+        require(backing->read_u32(4u) == 0xAABBCCDDu &&
+                    probe.admissions == 1u && probe.commits == 0u &&
+                    scalar_events.size() == 2u &&
+                    scalar_events[0u].bytes_changed &&
+                    !scalar_events[1u].bytes_changed,
+                "Abgelehnte Batch-Admission verliert Stores oder exakte "
+                "skalare bytes_changed-Ereignisse.");
+
+        probe = {};
+        scalar_events.clear();
+        direct.set_guest_write_batch_observer(
+            {&probe,
+             &admit_direct_write_batch,
+             &commit_direct_write_batch});
+        try {
+            auto unwind_commit =
+                direct.begin_direct_linear_write_batch();
+            require(unwind_commit.try_stage_u16(
+                        base + 8u, 0xCAFEu),
+                    "Direct-RAM-Batch kann Destruktorcommit nicht stagen.");
+            throw std::runtime_error("expected-host-unwind");
+        } catch (const std::runtime_error&) {
+        }
+        require(backing->read_u16(8u) == 0xCAFEu &&
+                    probe.commits == 1u,
+                "Destruktor/Host-Unwind verwirft offene Gaststores.");
+
+        probe = {};
+        scalar_events.clear();
+        direct.set_guest_write_batch_observer(
+            {&probe,
+             &admit_direct_write_batch,
+             &commit_direct_write_batch});
+        auto expired = direct.begin_direct_linear_write_batch();
+        require(expired.try_stage_u8(base + 10u, 0x5Au),
+                "Direct-RAM-Batch kann Guard-Ablauf nicht vorbereiten.");
+        std::size_t traced_writes = 0u;
+        direct.set_trace_handler([&](const auto& event) {
+            if (event.operation ==
+                katana::runtime::MemoryAccessOperation::Write)
+                ++traced_writes;
+        });
+        expired.flush();
+        require(backing->read_u8(10u) == 0x5Au &&
+                    traced_writes == 1u &&
+                    scalar_events.size() == 1u &&
+                    probe.commits == 0u &&
+                    !direct.begin_direct_linear_write_batch(),
+                "Abgelaufener Direct-RAM-Guard publiziert nicht exakt ueber "
+                "den sicheren Diagnosefallback.");
+        direct.clear_trace_handler();
+
+        const auto watchpoint = direct.add_watchpoint(
+            base,
+            4u,
+            katana::runtime::MemoryWatchpointAccess::Write,
+            [](const auto&) {});
+        require(!direct.begin_direct_linear_write_batch(),
+                "Watchpoint laesst Direct-RAM-Batching zu.");
+        require(direct.remove_watchpoint(watchpoint),
+                "Batch-Admissionstest kann Watchpoint nicht entfernen.");
+
+        std::size_t sink_events = 0u;
+        direct.set_guest_memory_access_sink(
+            {&sink_events, &count_guest_memory_access});
+        require(!direct.begin_direct_linear_write_batch(),
+                "GuestMemoryAccessSink laesst Direct-RAM-Batching zu.");
+        direct.clear_guest_memory_access_sink();
+        direct.set_guest_write_observer(
+            [](const auto&) noexcept {},
+            GuestWriteObserverContract::General);
+        require(!direct.begin_direct_linear_write_batch(),
+                "Instabiler GuestWriteObserver laesst Direct-RAM-Batching zu.");
+    }
+
     const auto work_ram = std::make_shared<LinearMemoryDevice>(16u);
     const auto adjacent_ram = std::make_shared<LinearMemoryDevice>(16u);
     const auto boot_rom = std::make_shared<LinearMemoryDevice>(8u);

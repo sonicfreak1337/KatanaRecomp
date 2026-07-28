@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -29,6 +30,29 @@ std::uint64_t allocate_block_table_lifetime() noexcept {
 void advance_generation(std::uint64_t& generation) noexcept {
     ++generation;
     if (generation == 0u) ++generation;
+}
+
+[[nodiscard]] bool direct_write_batch_range(
+    const GuestWriteEvent& event,
+    std::uint32_t& physical_begin,
+    std::uint32_t& physical_page) noexcept {
+    constexpr auto address_space_end =
+        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
+    if ((event.size != 1u && event.size != 2u && event.size != 4u) ||
+        event.size > address_space_end - event.address)
+        return false;
+    physical_begin = canonical_physical_address(event.address);
+    const auto physical_end =
+        static_cast<std::uint64_t>(physical_begin) + event.size;
+    const auto final_virtual =
+        event.address + static_cast<std::uint32_t>(event.size - 1u);
+    if (physical_end > address_space_end ||
+        canonical_physical_address(final_virtual) != physical_end - 1u)
+        return false;
+    physical_page = physical_begin / physical_page_size;
+    return static_cast<std::uint32_t>((physical_end - 1u) /
+                                     physical_page_size) ==
+           physical_page;
 }
 
 class ScopedBlockExceptionGeneration final {
@@ -508,7 +532,14 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
     }
     const auto id = next_id_++;
     auto [record_it, inserted] =
-        records_.emplace(id, Record{std::move(block), identity, 1u, true, !runtime_registered});
+        records_.emplace(
+            id,
+            Record{std::move(block),
+                   identity,
+                   1u,
+                   0u,
+                   true,
+                   !runtime_registered});
     if (!inserted) throw std::logic_error("Runtime-Block-ID konnte nicht angelegt werden.");
     identities_.emplace(identity, id);
     index_active(id, record_it->second);
@@ -1131,6 +1162,97 @@ std::size_t RuntimeBlockTable::erase_overlapping_physical(const std::uint32_t ph
     return invalidated.size();
 }
 
+std::size_t RuntimeBlockTable::erase_overlapping_physical_batch(
+    const std::span<const GuestWriteEvent> events) noexcept {
+    if (events.size() > direct_linear_write_batch_capacity)
+        std::terminate();
+
+    ++write_batch_visit_epoch_;
+    if (write_batch_visit_epoch_ == 0u) {
+        for (auto& [id, record] : records_) {
+            static_cast<void>(id);
+            record.write_batch_visit_epoch = 0u;
+        }
+        write_batch_visit_epoch_ = 1u;
+    }
+    const auto epoch = write_batch_visit_epoch_;
+    std::size_t invalidated = 0u;
+
+    const auto overlaps_any_changed_event =
+        [&](const RuntimeBlock& block) noexcept {
+            const auto tracked_start = validation_physical_start(block);
+            for (const auto& event : events) {
+                if (!event.bytes_changed) continue;
+                std::uint32_t physical = 0u;
+                std::uint32_t page = 0u;
+                if (!direct_write_batch_range(event, physical, page))
+                    std::terminate();
+                if (native_aot_write_overlaps_immutable(
+                        tracked_start,
+                        validation_extent(block),
+                        validation_mutable_ranges(block),
+                        physical,
+                        event.size))
+                    return true;
+            }
+            return false;
+        };
+
+    for (std::size_t event_index = 0u;
+         event_index < events.size();
+         ++event_index) {
+        if (!events[event_index].bytes_changed) continue;
+        std::uint32_t physical = 0u;
+        std::uint32_t page = 0u;
+        if (!direct_write_batch_range(
+                events[event_index], physical, page))
+            std::terminate();
+        bool page_seen = false;
+        for (std::size_t previous = 0u;
+             previous < event_index;
+             ++previous) {
+            if (!events[previous].bytes_changed) continue;
+            std::uint32_t previous_physical = 0u;
+            std::uint32_t previous_page = 0u;
+            if (!direct_write_batch_range(
+                    events[previous],
+                    previous_physical,
+                    previous_page))
+                std::terminate();
+            if (previous_page == page) {
+                page_seen = true;
+                break;
+            }
+        }
+        if (page_seen) continue;
+
+        auto candidates = active_physical_pages_.find(page);
+        if (candidates == active_physical_pages_.end()) continue;
+        auto candidate = candidates->second.begin();
+        while (candidates != active_physical_pages_.end() &&
+               candidate != candidates->second.end()) {
+            const auto id = *candidate;
+            ++candidate;
+            const auto found = records_.find(id);
+            if (found == records_.end() || !found->second.active ||
+                found->second.write_batch_visit_epoch == epoch)
+                continue;
+            found->second.write_batch_visit_epoch = epoch;
+            if (!overlaps_any_changed_event(found->second.block))
+                continue;
+
+            deactivate(id);
+            ++invalidated;
+            // deactivate() can erase the current page map node. Reacquire it;
+            // the per-record epoch prevents duplicate candidate work.
+            candidates = active_physical_pages_.find(page);
+            if (candidates == active_physical_pages_.end()) break;
+            candidate = candidates->second.begin();
+        }
+    }
+    return invalidated;
+}
+
 void RuntimeBlockTable::bind_code_tracker(
     const ExecutableCodeTracker* const tracker,
     const StaticAotInvalidationContract static_aot_invalidation) noexcept {
@@ -1159,6 +1281,7 @@ void RuntimeBlockTable::clear() noexcept {
     active_physical_pages_.clear();
     static_aot_pages_.clear();
     static_aot_entries_.clear();
+    write_batch_visit_epoch_ = 0u;
     active_count_ = 0u;
     static_sealed_ = false;
     static_aot_invalidation_ = StaticAotInvalidationContract::Conservative;

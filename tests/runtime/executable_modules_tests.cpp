@@ -2848,6 +2848,64 @@ void materializer_alias_boundary_invalidation_regression() {
             "Materialisierungsursprung.");
 }
 
+void direct_runtime_write_batch_regression() {
+    using namespace katana::runtime;
+
+    ExecutableModuleCatalog catalog;
+    catalog.record_runtime_write(
+        0x4000u, 4u, CodeWriteSource::Cpu, true);
+    const auto rejections_before =
+        catalog.metrics().write_index_rejections;
+    const std::array<GuestWriteEvent, 3u> events{{
+        {0x4000u, 1u, CodeWriteSource::Dma, true},
+        {0x4004u, 1u, CodeWriteSource::Cpu, true},
+        {0x4004u, 1u, CodeWriteSource::Cpu, false},
+    }};
+    require(catalog.can_record_runtime_write_batch(events),
+            "Vorallozierte freie Runtimewrite-Seite lehnt Direct-Batch ab.");
+    catalog.record_runtime_write_batch(events);
+    const auto snapshot = catalog.snapshot();
+    require(snapshot.runtime_write_pages.size() == 1u &&
+                snapshot.runtime_write_pages.front().physical_page ==
+                    0x4000u &&
+                snapshot.runtime_write_pages.front().written[0u] ==
+                    0x1Eu &&
+                catalog.metrics().write_index_rejections ==
+                    rejections_before + 1u,
+            "Modulkatalog-Batch verliert Ereignisreihenfolge oder behandelt "
+            "dieselbe Seite mehrfach.");
+
+    const std::array<GuestWriteEvent, 1u> unseeded{{
+        {0x6000u, 1u, CodeWriteSource::Cpu, true},
+    }};
+    require(!catalog.can_record_runtime_write_batch(unseeded),
+            "Modulkatalog-Batch wuerde eine Provenienzseite im Commit "
+            "allozieren.");
+
+    catalog.record_runtime_write(
+        0x7000u, 1u, CodeWriteSource::Cpu, true);
+    const std::array<GuestWriteEvent, 1u> clear_last_bit{{
+        {0x7000u, 1u, CodeWriteSource::Dma, true},
+    }};
+    require(!catalog.can_record_runtime_write_batch(clear_last_bit),
+            "Modulkatalog-Batch wuerde eine leere Seitennode im Hotpath "
+            "deallozieren.");
+
+    ExecutableModule active;
+    active.id = "batch-active";
+    active.source_identity = "free-batch-active-v1";
+    active.guest_start = 0x8000u;
+    active.bytes = {0x09u, 0x00u, 0x0Bu, 0x00u};
+    catalog.publish(active);
+    catalog.record_runtime_write(
+        0x8000u, 1u, CodeWriteSource::Cpu, false);
+    const std::array<GuestWriteEvent, 1u> smc{{
+        {0x8000u, 1u, CodeWriteSource::Cpu, true},
+    }};
+    require(!catalog.can_record_runtime_write_batch(smc),
+            "Direct-Batch umgeht die skalare SMC-Extentaufteilung.");
+}
+
 } // namespace
 
 int main() {
@@ -3003,6 +3061,7 @@ int main() {
     mmu_materialization_origin_regression();
     deterministic_materialization_without_host_time_regression();
     materializer_alias_boundary_invalidation_regression();
+    direct_runtime_write_batch_regression();
 
     std::cout << "KR-4704 executable module and materialization regression passed.\n";
     return EXIT_SUCCESS;

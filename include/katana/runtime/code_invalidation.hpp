@@ -112,6 +112,15 @@ class ExecutableCodeTracker {
                                                        std::size_t size,
                                                        CodeWriteSource source,
                                                        bool bytes_changed = true);
+    // Allocation-free product path for a fixed direct-RAM store batch. Every
+    // changed physical page and every indexed block candidate is processed at
+    // most once. Detailed provenance is deliberately counted as dropped here;
+    // the exact per-store events remain available at the Memory batch observer.
+    // A false admission requires scalar observe_write() replay; commit is
+    // valid only immediately after a true admission with the same span.
+    [[nodiscard]] bool
+    can_observe_write_batch(std::span<const GuestWriteEvent> events) const noexcept;
+    void observe_write_batch(std::span<const GuestWriteEvent> events) noexcept;
     [[nodiscard]] bool valid(const std::string& identity) const;
     [[nodiscard]] bool dispatchable(const std::string& identity) const noexcept;
     // A cached target is reusable across unrelated global invalidations only

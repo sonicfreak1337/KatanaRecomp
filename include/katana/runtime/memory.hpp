@@ -231,6 +231,27 @@ enum class GuestWriteObserverContract : std::uint8_t {
     StableForPrevalidatedLinearWrites,
 };
 
+using GuestWriteBatchAdmissionCallback =
+    bool (*)(void* context, std::span<const GuestWriteEvent> events) noexcept;
+using GuestWriteBatchCommitCallback =
+    void (*)(void* context, std::span<const GuestWriteEvent> events) noexcept;
+
+// A product observer can replace N scalar GuestWriteObserver calls with one
+// allocation-free span commit. Admission must not mutate guest-visible state;
+// after it returns true, commit must remain valid until it is called immediately
+// afterwards. The context is caller-owned and must outlive Memory.
+struct GuestWriteBatchObserver {
+    void* context = nullptr;
+    GuestWriteBatchAdmissionCallback admit = nullptr;
+    GuestWriteBatchCommitCallback commit = nullptr;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return admit != nullptr && commit != nullptr;
+    }
+};
+
+inline constexpr std::size_t direct_linear_write_batch_capacity = 32u;
+
 struct GuestMemoryAccessEvent {
     MemoryAccessOperation operation = MemoryAccessOperation::Read;
     GuestMemoryAccessOrigin access_origin = GuestMemoryAccessOrigin::Memory;
@@ -401,6 +422,77 @@ struct LinearMemoryTransactionWrite {
 
 class Memory {
   public:
+    // Fixed-storage product-RAM store batch. Accepted stores are not visible
+    // until flush(), and the destructor flushes them during host unwind. The
+    // object contains no owning/allocating member. Codegen must end the batch
+    // before a guest read, code fetch/control transfer, MMIO/device/host call,
+    // mapping or observer mutation, exception, interrupt or other safepoint.
+    // A store that can alias executable bytes is batch-terminal: flush it
+    // immediately and leave the current native region before the next guest
+    // instruction fetch. No chained/dispatch target may be entered while
+    // stores remain staged. Active module extent changes are intentionally
+    // rejected by observer admission and replayed through the scalar SMC path.
+    class DirectLinearWriteBatch final {
+      public:
+        DirectLinearWriteBatch(const DirectLinearWriteBatch&) = delete;
+        DirectLinearWriteBatch& operator=(const DirectLinearWriteBatch&) = delete;
+        DirectLinearWriteBatch(DirectLinearWriteBatch&& other) noexcept;
+        DirectLinearWriteBatch& operator=(DirectLinearWriteBatch&&) = delete;
+        ~DirectLinearWriteBatch() noexcept;
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return owner_ != nullptr;
+        }
+        [[nodiscard]] bool empty() const noexcept { return size_ == 0u; }
+        [[nodiscard]] std::size_t size() const noexcept { return size_; }
+        [[nodiscard]] bool full() const noexcept {
+            return size_ == entries_.size();
+        }
+        [[nodiscard]] bool try_stage_u8(
+            std::uint32_t physical_address,
+            std::uint8_t value,
+            CodeWriteSource source = CodeWriteSource::Cpu) noexcept;
+        [[nodiscard]] bool try_stage_u16(
+            std::uint32_t physical_address,
+            std::uint16_t value,
+            CodeWriteSource source = CodeWriteSource::Cpu) noexcept;
+        [[nodiscard]] bool try_stage_u32(
+            std::uint32_t physical_address,
+            std::uint32_t value,
+            CodeWriteSource source = CodeWriteSource::Cpu) noexcept;
+        // Never rejects stores accepted by try_stage_*. If the combined
+        // observer cannot admit them, they are replayed in order through the
+        // ordinary scalar path. Contract violations terminate.
+        void flush() noexcept;
+
+      private:
+        friend class Memory;
+        struct Entry {
+            std::uint32_t physical_address = 0u;
+            std::uint32_t backing_offset = 0u;
+            std::uint32_t value = 0u;
+            std::uint8_t width = 0u;
+            CodeWriteSource source = CodeWriteSource::Cpu;
+            bool bytes_changed = false;
+        };
+
+        DirectLinearWriteBatch() = default;
+        DirectLinearWriteBatch(Memory& owner,
+                               std::uint64_t direct_generation,
+                               std::uint64_t observer_generation) noexcept;
+        [[nodiscard]] bool try_stage(std::uint32_t physical_address,
+                                     std::uint32_t value,
+                                     std::uint8_t width,
+                                     CodeWriteSource source) noexcept;
+
+        Memory* owner_ = nullptr;
+        std::array<Entry, direct_linear_write_batch_capacity> entries_{};
+        std::array<GuestWriteEvent, direct_linear_write_batch_capacity> events_{};
+        std::size_t size_ = 0u;
+        std::uint64_t direct_generation_ = 0u;
+        std::uint64_t observer_generation_ = 0u;
+    };
+
     class PreparedLinearTransactionBatch final {
       public:
         PreparedLinearTransactionBatch(
@@ -623,6 +715,8 @@ class Memory {
     try_write_direct_linear_u32(std::uint32_t physical_address,
                                 std::uint32_t value,
                                 CodeWriteSource source = CodeWriteSource::Cpu);
+    [[nodiscard]] DirectLinearWriteBatch
+    begin_direct_linear_write_batch() noexcept;
 
     [[nodiscard]] MemoryWatchpointId add_watchpoint(std::uint32_t address,
                                                     std::size_t size,
@@ -667,6 +761,11 @@ class Memory {
     [[nodiscard]] bool has_guest_write_observer() const noexcept;
     [[nodiscard]] bool
     guest_write_observer_allows_prevalidated_linear_writes() const noexcept;
+    void set_guest_write_batch_observer(GuestWriteBatchObserver observer) noexcept;
+    void clear_guest_write_batch_observer() noexcept;
+    [[nodiscard]] bool has_guest_write_batch_observer() const noexcept {
+        return static_cast<bool>(guest_write_batch_observer_);
+    }
 
     void set_guest_memory_access_sink(GuestMemoryAccessSink sink) noexcept;
     void clear_guest_memory_access_sink() noexcept;
@@ -863,6 +962,9 @@ class Memory {
     void rebuild_region_index();
     [[nodiscard]] bool access_observers_active() const noexcept;
     void refresh_direct_linear_access_state() noexcept;
+    [[nodiscard]] bool direct_linear_write_batch_current(
+        const DirectLinearWriteBatch& batch) const noexcept;
+    void flush_direct_linear_write_batch(DirectLinearWriteBatch& batch) noexcept;
     [[nodiscard]] bool direct_linear_offset(std::uint32_t physical_address,
                                             std::size_t width,
                                             std::uint32_t& offset) const noexcept;
@@ -906,6 +1008,7 @@ class Memory {
     GuestWriteObserverContract guest_write_observer_contract_ =
         GuestWriteObserverContract::General;
     std::uint64_t guest_write_observer_generation_ = 1u;
+    GuestWriteBatchObserver guest_write_batch_observer_;
     GuestMemoryAccessSink guest_memory_access_sink_;
     MmioInterruptStateSink mmio_interrupt_state_sink_;
     CrashCapsule* crash_capsule_ = nullptr;

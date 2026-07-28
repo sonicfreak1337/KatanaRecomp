@@ -20,6 +20,9 @@ template <typename Exception, typename Function> bool throws(Function&& function
     }
     return false;
 }
+BlockExit direct_batch_block(CpuState&, BlockExecutionContext&) {
+    return {};
+}
 } // namespace
 
 int main() {
@@ -283,6 +286,91 @@ int main() {
                     indexed.performance_counters().indexed_candidates == 1u &&
                     reference.performance_counters().reference_candidates == 2u,
                 "Page-to-Block-Index und Referenzscan divergieren oder sind nicht messbar.");
+
+        ExecutableCodeTracker batch_tracker;
+        static_cast<void>(batch_tracker.observe_write(
+            0x0C020100u, 1u, CodeWriteSource::Cpu, true));
+        static_cast<void>(batch_tracker.observe_write(
+            0x0C021100u, 1u, CodeWriteSource::Cpu, true));
+        static_cast<void>(batch_tracker.register_block(
+            {"batch-cross-page",
+             0x0C020FFCu,
+             8u,
+             "direct-batch",
+             {"batch-caller"}}));
+        static_cast<void>(batch_tracker.register_block(
+            {"batch-page-two",
+             0x0C021004u,
+             4u,
+             "direct-batch",
+             {"batch-caller"}}));
+        const std::array<GuestWriteEvent, 4u> batch_events{{
+            {0x8C020FFCu, 4u, CodeWriteSource::Cpu, true},
+            {0xAC020FFEu, 1u, CodeWriteSource::Cpu, true},
+            {0x0C021000u, 4u, CodeWriteSource::Cpu, true},
+            {0x0C021004u, 4u, CodeWriteSource::Cpu, true},
+        }};
+        const auto batch_candidates_before =
+            batch_tracker.performance_counters().indexed_candidates;
+        const auto batch_drops_before =
+            batch_tracker.dropped_provenance_events();
+        require(batch_tracker.can_observe_write_batch(batch_events),
+                "Vorbereitete Tracker-Seiten lehnen einen Direct-Write-Batch ab.");
+        batch_tracker.observe_write_batch(batch_events);
+        require(!batch_tracker.valid("batch-cross-page") &&
+                    !batch_tracker.valid("batch-page-two") &&
+                    batch_tracker.page_generation(0x0C020000u) == 2u &&
+                    batch_tracker.page_generation(0x0C021000u) == 2u &&
+                    batch_tracker.hotspots().at(0x0C020000u) == 2u &&
+                    batch_tracker.hotspots().at(0x0C021000u) == 2u &&
+                    batch_tracker.performance_counters().indexed_candidates -
+                            batch_candidates_before ==
+                        2u &&
+                    batch_tracker.dropped_provenance_events() -
+                            batch_drops_before ==
+                        batch_events.size(),
+                "Tracker-Batch behandelt Seite/Blockkandidat mehrfach oder "
+                "verliert die produktseitige Provenienzkennzeichnung.");
+        const std::array<GuestWriteEvent, 1u> unseeded_batch{{
+            {0x0C022000u, 1u, CodeWriteSource::Cpu, true},
+        }};
+        require(!batch_tracker.can_observe_write_batch(unseeded_batch),
+                "Tracker-Batch wuerde im Commit eine neue Seitennode allozieren.");
+
+        RuntimeBlockTable batch_blocks;
+        const auto first_batch_block =
+            batch_blocks.register_static(
+                {0x8C030FFCu,
+                 0x0C030FFCu,
+                 8u,
+                 BlockEndKind::Fallthrough,
+                 {},
+                 direct_batch_block,
+                 "batch-cross-page",
+                 false});
+        const auto second_batch_block =
+            batch_blocks.register_static(
+                {0x8C031004u,
+                 0x0C031004u,
+                 4u,
+                 BlockEndKind::Return,
+                 {},
+                 direct_batch_block,
+                 "batch-second-page",
+                 false});
+        const std::array<GuestWriteEvent, 4u> block_batch_events{{
+            {0x0C030FFCu, 4u, CodeWriteSource::Cpu, true},
+            {0x0C030FFEu, 1u, CodeWriteSource::Cpu, true},
+            {0x0C031000u, 4u, CodeWriteSource::Cpu, true},
+            {0x0C031004u, 4u, CodeWriteSource::Cpu, true},
+        }};
+        require(batch_blocks.erase_overlapping_physical_batch(
+                    block_batch_events) == 2u &&
+                    !batch_blocks.active(first_batch_block) &&
+                    !batch_blocks.active(second_batch_block),
+                "Blocktabellen-Batch invalidiert einen mehrseitigen Kandidaten "
+                "mehrfach oder laesst einen ueberlappenden Block aktiv.");
+
         for (std::uint32_t address = 0x0C200000u; address < 0x0C204000u; address += 0x1000u) {
             static_cast<void>(indexed.observe_write(address, 1u, CodeWriteSource::Dma, false));
         }

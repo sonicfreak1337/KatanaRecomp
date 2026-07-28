@@ -861,6 +861,193 @@ bool Memory::try_write_direct_linear_u32(const std::uint32_t physical_address,
     return true;
 }
 
+Memory::DirectLinearWriteBatch::DirectLinearWriteBatch(
+    Memory& owner,
+    const std::uint64_t direct_generation,
+    const std::uint64_t observer_generation) noexcept
+    : owner_(&owner),
+      direct_generation_(direct_generation),
+      observer_generation_(observer_generation) {}
+
+Memory::DirectLinearWriteBatch::DirectLinearWriteBatch(
+    DirectLinearWriteBatch&& other) noexcept
+    : owner_(std::exchange(other.owner_, nullptr)),
+      entries_(other.entries_),
+      events_(other.events_),
+      size_(std::exchange(other.size_, 0u)),
+      direct_generation_(std::exchange(other.direct_generation_, 0u)),
+      observer_generation_(std::exchange(other.observer_generation_, 0u)) {}
+
+Memory::DirectLinearWriteBatch::~DirectLinearWriteBatch() noexcept {
+    flush();
+}
+
+bool Memory::DirectLinearWriteBatch::try_stage_u8(
+    const std::uint32_t physical_address,
+    const std::uint8_t value,
+    const CodeWriteSource source) noexcept {
+    return try_stage(physical_address, value, sizeof(value), source);
+}
+
+bool Memory::DirectLinearWriteBatch::try_stage_u16(
+    const std::uint32_t physical_address,
+    const std::uint16_t value,
+    const CodeWriteSource source) noexcept {
+    return try_stage(physical_address, value, sizeof(value), source);
+}
+
+bool Memory::DirectLinearWriteBatch::try_stage_u32(
+    const std::uint32_t physical_address,
+    const std::uint32_t value,
+    const CodeWriteSource source) noexcept {
+    return try_stage(physical_address, value, sizeof(value), source);
+}
+
+bool Memory::DirectLinearWriteBatch::try_stage(
+    const std::uint32_t physical_address,
+    const std::uint32_t value,
+    const std::uint8_t width,
+    const CodeWriteSource source) noexcept {
+    if (owner_ == nullptr || size_ == entries_.size() ||
+        !owner_->direct_linear_write_batch_current(*this))
+        return false;
+    std::uint32_t backing_offset = 0u;
+    if (!owner_->direct_linear_offset(physical_address, width, backing_offset))
+        return false;
+
+    bool changed = false;
+    for (std::uint32_t byte = 0u; byte < width; ++byte) {
+        auto previous = owner_->direct_linear_bytes_[backing_offset + byte];
+        for (std::size_t index = 0u; index < size_; ++index) {
+            const auto& staged = entries_[index];
+            if (backing_offset + byte < staged.backing_offset ||
+                backing_offset + byte >=
+                    staged.backing_offset + staged.width)
+                continue;
+            const auto staged_byte =
+                backing_offset + byte - staged.backing_offset;
+            previous = static_cast<std::uint8_t>(
+                staged.value >> (staged_byte * 8u));
+        }
+        const auto next =
+            static_cast<std::uint8_t>(value >> (byte * 8u));
+        changed = changed || previous != next;
+    }
+
+    entries_[size_] = {
+        physical_address, backing_offset, value, width, source, changed};
+    events_[size_] = {physical_address, width, source, changed};
+    ++size_;
+    return true;
+}
+
+void Memory::DirectLinearWriteBatch::flush() noexcept {
+    if (owner_ == nullptr) return;
+    auto* const owner = owner_;
+    owner->flush_direct_linear_write_batch(*this);
+    owner_ = nullptr;
+    size_ = 0u;
+}
+
+Memory::DirectLinearWriteBatch
+Memory::begin_direct_linear_write_batch() noexcept {
+    const auto scalar_observer = static_cast<bool>(guest_write_observer_);
+    const auto batch_observer = static_cast<bool>(guest_write_batch_observer_);
+    if (!direct_linear_writes_enabled_ || mmio_access_tracking_enabled_ ||
+        mmio_trace_handler_ || scalar_observer != batch_observer)
+        return {};
+    return DirectLinearWriteBatch(
+        *this, direct_linear_generation_, guest_write_observer_generation_);
+}
+
+bool Memory::direct_linear_write_batch_current(
+    const DirectLinearWriteBatch& batch) const noexcept {
+    const auto scalar_observer = static_cast<bool>(guest_write_observer_);
+    const auto batch_observer = static_cast<bool>(guest_write_batch_observer_);
+    return batch.owner_ == this &&
+           batch.direct_generation_ == direct_linear_generation_ &&
+           batch.observer_generation_ == guest_write_observer_generation_ &&
+           direct_linear_writes_enabled_ &&
+           !mmio_access_tracking_enabled_ && !mmio_trace_handler_ &&
+           scalar_observer == batch_observer;
+}
+
+void Memory::flush_direct_linear_write_batch(
+    DirectLinearWriteBatch& batch) noexcept {
+    if (batch.size_ == 0u) return;
+    const auto events = std::span<const GuestWriteEvent>(
+        batch.events_.data(), batch.size_);
+    const auto direct_commit =
+        direct_linear_write_batch_current(batch) &&
+        (!guest_write_batch_observer_ ||
+         guest_write_batch_observer_.admit(
+             guest_write_batch_observer_.context, events));
+
+    if (direct_commit) {
+        for (std::size_t index = 0u; index < batch.size_; ++index) {
+            const auto& entry = batch.entries_[index];
+            for (std::uint32_t byte = 0u; byte < entry.width; ++byte) {
+                direct_linear_bytes_[entry.backing_offset + byte] =
+                    static_cast<std::uint8_t>(
+                        entry.value >> (byte * 8u));
+            }
+        }
+        performance_counters_.indexed_region_hits += batch.size_;
+        performance_counters_.unobserved_accesses += batch.size_;
+        if (guest_write_batch_observer_) {
+            guest_write_batch_observer_.commit(
+                guest_write_batch_observer_.context, events);
+        }
+        return;
+    }
+
+    // Admission and guard expiry are ordinary fallbacks, not late failures.
+    // Replay retains guest-store order, overlapping-store bytes_changed edges,
+    // watchpoints/tracing and the scalar observer contract.
+    try {
+        for (std::size_t index = 0u; index < batch.size_; ++index) {
+            const auto& entry = batch.entries_[index];
+            bool written = false;
+            switch (entry.width) {
+            case sizeof(std::uint8_t):
+                written = try_write_direct_linear_u8(
+                    entry.physical_address,
+                    static_cast<std::uint8_t>(entry.value),
+                    entry.source);
+                if (!written)
+                    write_u8(entry.physical_address,
+                             static_cast<std::uint8_t>(entry.value),
+                             entry.source);
+                break;
+            case sizeof(std::uint16_t):
+                written = try_write_direct_linear_u16(
+                    entry.physical_address,
+                    static_cast<std::uint16_t>(entry.value),
+                    entry.source);
+                if (!written)
+                    write_u16(entry.physical_address,
+                              static_cast<std::uint16_t>(entry.value),
+                              entry.source);
+                break;
+            case sizeof(std::uint32_t):
+                written = try_write_direct_linear_u32(
+                    entry.physical_address, entry.value, entry.source);
+                if (!written)
+                    write_u32(
+                        entry.physical_address, entry.value, entry.source);
+                break;
+            default:
+                std::terminate();
+            }
+        }
+    } catch (...) {
+        // A staged guest store cannot be rolled back safely. Stable product
+        // observers are nonthrowing by contract; violating that contract is
+        // terminal rather than silently dropping a suffix of the batch.
+        std::terminate();
+    }
+}
+
 MemoryWatchpointId Memory::add_watchpoint(const std::uint32_t address,
                                           const std::size_t size,
                                           const MemoryWatchpointAccess access,
@@ -993,6 +1180,9 @@ bool Memory::has_mmio_trace_handler() const noexcept {
 
 void Memory::set_guest_write_observer(GuestWriteObserver observer,
                                       const GuestWriteObserverContract contract) {
+    // A batch observer's raw context is tied to the scalar observer contract.
+    // Replacing either half invalidates the pair.
+    guest_write_batch_observer_ = {};
     guest_write_observer_ = std::move(observer);
     guest_write_observer_contract_ =
         guest_write_observer_ ? contract : GuestWriteObserverContract::General;
@@ -1003,6 +1193,7 @@ void Memory::set_guest_write_observer(GuestWriteObserver observer,
 }
 
 void Memory::clear_guest_write_observer() noexcept {
+    guest_write_batch_observer_ = {};
     guest_write_observer_ = {};
     guest_write_observer_contract_ = GuestWriteObserverContract::General;
     ++guest_write_observer_generation_;
@@ -1019,6 +1210,24 @@ bool Memory::guest_write_observer_allows_prevalidated_linear_writes() const noex
     return !guest_write_observer_ ||
            guest_write_observer_contract_ ==
                GuestWriteObserverContract::StableForPrevalidatedLinearWrites;
+}
+
+void Memory::set_guest_write_batch_observer(
+    const GuestWriteBatchObserver observer) noexcept {
+    guest_write_batch_observer_ =
+        observer ? observer : GuestWriteBatchObserver{};
+    ++guest_write_observer_generation_;
+    if (guest_write_observer_generation_ == 0u)
+        ++guest_write_observer_generation_;
+    refresh_direct_linear_access_state();
+}
+
+void Memory::clear_guest_write_batch_observer() noexcept {
+    guest_write_batch_observer_ = {};
+    ++guest_write_observer_generation_;
+    if (guest_write_observer_generation_ == 0u)
+        ++guest_write_observer_generation_;
+    refresh_direct_linear_access_state();
 }
 
 void Memory::set_guest_memory_access_sink(const GuestMemoryAccessSink sink) noexcept {

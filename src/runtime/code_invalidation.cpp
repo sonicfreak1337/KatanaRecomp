@@ -1,11 +1,41 @@
 #include "katana/runtime/code_invalidation.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
 
 namespace katana::runtime {
+namespace {
+
+[[nodiscard]] bool direct_write_batch_range(
+    const GuestWriteEvent& event,
+    std::uint32_t& physical_begin,
+    std::uint32_t& physical_page) noexcept {
+    constexpr auto address_space_end =
+        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
+    if ((event.size != 1u && event.size != 2u && event.size != 4u) ||
+        event.size > address_space_end - event.address)
+        return false;
+    physical_begin = canonical_physical_address(event.address);
+    const auto physical_end =
+        static_cast<std::uint64_t>(physical_begin) + event.size;
+    const auto final_virtual =
+        event.address + static_cast<std::uint32_t>(event.size - 1u);
+    if (physical_end > address_space_end ||
+        canonical_physical_address(final_virtual) != physical_end - 1u)
+        return false;
+    physical_page =
+        physical_begin / ExecutableCodeTracker::page_size *
+        ExecutableCodeTracker::page_size;
+    return (physical_end - 1u) /
+               ExecutableCodeTracker::page_size *
+               ExecutableCodeTracker::page_size ==
+           physical_page;
+}
+
+} // namespace
 
 static_assert(std::is_nothrow_move_constructible_v<CodeInvalidationEvent>);
 static_assert(std::is_nothrow_move_assignable_v<CodeInvalidationEvent>);
@@ -148,6 +178,168 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(const std::uint32_t 
         result.unlinked_sources.end());
     record_invalidation_event(address, canonical, size, result);
     return result;
+}
+
+bool ExecutableCodeTracker::can_observe_write_batch(
+    const std::span<const GuestWriteEvent> events) const noexcept {
+    if (events.size() > direct_linear_write_batch_capacity) return false;
+    for (const auto& event : events) {
+        std::uint32_t physical = 0u;
+        std::uint32_t page = 0u;
+        if (!direct_write_batch_range(event, physical, page)) return false;
+        if (!event.bytes_changed) continue;
+        // Insertion would allocate during commit. The first changed store to a
+        // page therefore seeds it through scalar fallback.
+        if (!generations_.contains(page) || !hotspots_.contains(page))
+            return false;
+    }
+    return true;
+}
+
+void ExecutableCodeTracker::observe_write_batch(
+    const std::span<const GuestWriteEvent> events) noexcept {
+    if (events.size() > direct_linear_write_batch_capacity)
+        std::terminate();
+    for (std::size_t index = 0u; index < events.size(); ++index) {
+        if (!events[index].bytes_changed) continue;
+        std::uint32_t physical = 0u;
+        std::uint32_t page = 0u;
+        if (!direct_write_batch_range(events[index], physical, page))
+            std::terminate();
+        bool page_seen = false;
+        for (std::size_t previous = 0u; previous < index; ++previous) {
+            if (!events[previous].bytes_changed) continue;
+            std::uint32_t previous_physical = 0u;
+            std::uint32_t previous_page = 0u;
+            if (!direct_write_batch_range(
+                    events[previous], previous_physical, previous_page))
+                std::terminate();
+            if (previous_page == page) {
+                page_seen = true;
+                break;
+            }
+        }
+        if (page_seen) continue;
+        auto generation = generations_.find(page);
+        auto hotspot = hotspots_.find(page);
+        if (generation == generations_.end() || hotspot == hotspots_.end())
+            std::terminate();
+        ++generation->second;
+        ++hotspot->second;
+    }
+
+    const auto overlaps_any_changed_event =
+        [&](const TrackedExecutableBlock& tracked) noexcept {
+            for (const auto& event : events) {
+                if (!event.bytes_changed) continue;
+                std::uint32_t physical = 0u;
+                std::uint32_t page = 0u;
+                if (!direct_write_batch_range(event, physical, page))
+                    std::terminate();
+                if (native_aot_write_overlaps_immutable(
+                        tracked.block.physical_start,
+                        tracked.block.size,
+                        tracked.block.mutable_ranges,
+                        physical,
+                        event.size))
+                    return true;
+            }
+            return false;
+        };
+
+    const auto any_changed =
+        std::any_of(events.begin(), events.end(), [](const auto& event) {
+            return event.bytes_changed;
+        });
+    if (!any_changed) {
+        // Byte-identical stores still consume exact provenance sequence slots
+        // below, but never probe executable candidates.
+    } else if (lookup_mode_ == CodeInvalidationLookupMode::ReferenceScan) {
+        performance_counters_.reference_candidates += blocks_.size();
+        for (auto& tracked : blocks_) {
+            if (!tracked.valid || !overlaps_any_changed_event(tracked))
+                continue;
+            tracked.valid = false;
+            ++invalidation_count_;
+        }
+    } else {
+        for (std::size_t event_index = 0u;
+             event_index < events.size();
+             ++event_index) {
+            if (!events[event_index].bytes_changed) continue;
+            std::uint32_t physical = 0u;
+            std::uint32_t page = 0u;
+            if (!direct_write_batch_range(
+                    events[event_index], physical, page))
+                std::terminate();
+
+            bool page_seen = false;
+            for (std::size_t previous = 0u;
+                 previous < event_index;
+                 ++previous) {
+                if (!events[previous].bytes_changed) continue;
+                std::uint32_t previous_physical = 0u;
+                std::uint32_t previous_page = 0u;
+                if (!direct_write_batch_range(
+                        events[previous],
+                        previous_physical,
+                        previous_page))
+                    std::terminate();
+                if (previous_page == page) {
+                    page_seen = true;
+                    break;
+                }
+            }
+            if (page_seen) continue;
+
+            const auto candidates = page_blocks_.find(page);
+            if (candidates == page_blocks_.end()) continue;
+            for (const auto candidate : candidates->second) {
+                bool candidate_seen = false;
+                for (std::size_t previous = 0u;
+                     previous < event_index && !candidate_seen;
+                     ++previous) {
+                    if (!events[previous].bytes_changed) continue;
+                    std::uint32_t previous_physical = 0u;
+                    std::uint32_t previous_page = 0u;
+                    if (!direct_write_batch_range(
+                            events[previous],
+                            previous_physical,
+                            previous_page))
+                        std::terminate();
+                    if (previous_page == page) continue;
+                    const auto previous_candidates =
+                        page_blocks_.find(previous_page);
+                    candidate_seen =
+                        previous_candidates != page_blocks_.end() &&
+                        std::find(previous_candidates->second.begin(),
+                                  previous_candidates->second.end(),
+                                  candidate) !=
+                            previous_candidates->second.end();
+                }
+                if (candidate_seen) continue;
+                ++performance_counters_.indexed_candidates;
+                if (candidate >= blocks_.size()) std::terminate();
+                auto& tracked = blocks_[candidate];
+                if (!tracked.valid ||
+                    !overlaps_any_changed_event(tracked))
+                    continue;
+                tracked.valid = false;
+                ++invalidation_count_;
+            }
+        }
+    }
+
+    // The always-on product path retains exact events in the fixed Memory
+    // span, but intentionally does not allocate detailed strings/vectors.
+    for (std::size_t index = 0u; index < events.size(); ++index) {
+        if (dropped_provenance_events_ !=
+            std::numeric_limits<std::uint64_t>::max())
+            ++dropped_provenance_events_;
+        if (next_provenance_sequence_ !=
+            std::numeric_limits<std::uint64_t>::max())
+            ++next_provenance_sequence_;
+    }
 }
 
 ExecutableCodeTracker::PreparedDiscLoadWrite
