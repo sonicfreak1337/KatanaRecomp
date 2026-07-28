@@ -962,6 +962,10 @@ std::uint64_t Memory::mmio_access_epoch() const noexcept {
     return 0u;
 }
 
+std::uint64_t Memory::mmio_boundary_epoch() const noexcept {
+    return mmio_boundary_epoch_;
+}
+
 void Memory::set_mmio_interrupt_state_sink(const MmioInterruptStateSink sink) noexcept {
     mmio_interrupt_state_sink_ = sink;
 }
@@ -2476,6 +2480,8 @@ void Memory::record_mmio_access(const MappedRegion& mapped,
                                 const MemoryAccessWidth width,
                                 const std::uint32_t value) const noexcept {
     if (!mapped.mmio) return;
+    ++mmio_boundary_epoch_;
+    if (mmio_boundary_epoch_ == 0u) ++mmio_boundary_epoch_;
     notify_interrupt_source_state_maybe_changed();
     if (crash_capsule_ != nullptr) {
         crash_capsule_->note_mmio(static_cast<std::uint8_t>(operation),

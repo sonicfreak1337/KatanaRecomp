@@ -646,6 +646,11 @@ class Memory {
     // PlatformInterruptRouter::source_epoch(); ordinary MMIO traffic must not advance this
     // value and force a complete interrupt-router walk.
     [[nodiscard]] std::uint64_t mmio_access_epoch() const noexcept;
+    // Per-access architectural boundary token. Unlike mmio_access_epoch(), this does
+    // not invalidate interrupt-router metadata. Generated AOT code samples it only
+    // around an otherwise unproven guest memory instruction so a successful device
+    // access cannot be followed by more native guest work before a real safepoint.
+    [[nodiscard]] std::uint64_t mmio_boundary_epoch() const noexcept;
     void set_mmio_interrupt_state_sink(MmioInterruptStateSink sink) noexcept;
     void clear_mmio_interrupt_state_sink() noexcept;
     // Direct device paths which can change a router-polled source outside MMIO or a scheduler
@@ -906,6 +911,7 @@ class Memory {
     CrashCapsule* crash_capsule_ = nullptr;
     bool mmio_access_tracking_enabled_ = false;
     mutable std::optional<LastMmioAccessRecord> last_mmio_access_;
+    mutable std::uint64_t mmio_boundary_epoch_ = 1u;
     MemoryWatchpointId next_watchpoint_id_ = 1u;
     mutable MemoryPerformanceCounters performance_counters_;
     LinearMemoryDevice* direct_linear_backing_ = nullptr;

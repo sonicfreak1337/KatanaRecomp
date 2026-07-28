@@ -2249,12 +2249,94 @@ void emit_instruction_observer(std::ostringstream& output,
            << ");\n";
 }
 
+bool requires_post_instruction_architectural_safepoint(
+    const katana::ir::Instruction& instruction) noexcept {
+    using Operation = katana::ir::Operation;
+    using Register = katana::ir::SpecialRegister;
+
+    if ((instruction.operation == Operation::LoadSpecialRegister ||
+         instruction.operation == Operation::LoadSpecialRegisterPostIncrement) &&
+        (instruction.special_register == Register::Sr ||
+         instruction.special_register == Register::Fpscr))
+        return true;
+
+    return instruction.operation == Operation::LoadTlb ||
+           instruction.operation == Operation::Frchg ||
+           instruction.operation == Operation::Fschg;
+}
+
+std::string deferred_safepoint_flag(const katana::ir::Instruction& instruction) {
+    std::ostringstream output;
+    output << "katana_deferred_safepoint_" << std::hex << std::uppercase << std::setw(8)
+           << std::setfill('0') << instruction.source_address;
+    return output.str();
+}
+
+void emit_post_instruction_safepoint(std::ostringstream& output,
+                                     const katana::ir::Instruction& instruction,
+                                     const int indent,
+                                     const bool track_mmio_boundary,
+                                     const bool defer_until_terminal) {
+    const bool architectural =
+        requires_post_instruction_architectural_safepoint(instruction);
+    if ((!architectural && !track_mmio_boundary) ||
+        (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+         !defer_until_terminal))
+        return;
+
+    const auto condition =
+        architectural
+            ? std::string{"true"}
+            : std::string{"cpu.memory.mmio_boundary_epoch() != "
+                          "katana_mmio_boundary_epoch_before"};
+    if (defer_until_terminal) {
+        emit_indent(output, indent);
+        output << deferred_safepoint_flag(instruction) << " = " << condition << ";\n";
+        return;
+    }
+
+    emit_indent(output, indent);
+    output << "if (services != nullptr && " << condition << ") {\n";
+    emit_indent(output, indent + 1);
+    output << "cpu.pc = " << relocated_code_address(fallthrough_address(instruction)) << ";\n";
+    emit_indent(output, indent + 1);
+    output << "if (katana_commit_post_instruction_safepoint(\n";
+    emit_indent(output, indent + 2);
+    output << "cpu, *services, " << relocated_code_address(instruction.source_address)
+           << ")) return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
+void emit_deferred_post_instruction_safepoint(
+    std::ostringstream& output,
+    const katana::ir::Instruction& instruction,
+    const int indent) {
+    emit_indent(output, indent);
+    output << "if (services != nullptr && " << deferred_safepoint_flag(instruction) << ") {\n";
+    emit_indent(output, indent + 1);
+    output << "if (katana_commit_post_instruction_safepoint(\n";
+    emit_indent(output, indent + 2);
+    output << "cpu, *services, " << relocated_code_address(instruction.source_address)
+           << ")) return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
 void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const katana::ir::Instruction& instruction,
                                      const int indent,
                                      const bool single_block,
-                                     const bool external_instruction_observer) {
+                                     const bool external_instruction_observer,
+                                     const bool defer_post_instruction_safepoint = false) {
     const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+    const bool possible_mmio =
+        timing.requires_cycle_flush && !has_proven_linear_ram_access(instruction);
+    const bool track_mmio_boundary =
+        possible_mmio &&
+        !requires_post_instruction_architectural_safepoint(instruction) &&
+        (instruction.delay_slot.role != katana::ir::DelaySlotRole::Slot ||
+         defer_post_instruction_safepoint);
     emit_indent(output, indent);
     output << "{\n";
     emit_indent(output, indent);
@@ -2264,6 +2346,11 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
         emit_indent(output, indent + 1);
         output << "if (services != nullptr) "
                   "katana::runtime::flush_pending_guest_cycles(cpu, *services);\n";
+    }
+    if (track_mmio_boundary) {
+        emit_indent(output, indent + 1);
+        output << "const auto katana_mmio_boundary_epoch_before = "
+                  "cpu.memory.mmio_boundary_epoch();\n";
     }
     emit_indent(output, indent + 1);
     output << "katana::runtime::ExplicitGuestInstructionAttempt "
@@ -2287,6 +2374,11 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
         emit_simple_instruction(output, instruction, indent + 1);
         emit_indent(output, indent + 1);
         output << "guest_instruction_attempt.complete();\n";
+        emit_post_instruction_safepoint(output,
+                                        instruction,
+                                        indent + 1,
+                                        track_mmio_boundary,
+                                        defer_post_instruction_safepoint);
         if (instruction.operation == katana::ir::Operation::Unknown) {
             emit_multi_block_completion(output, indent + 1, single_block, true);
             emit_indent(output, indent + 1);
@@ -2324,6 +2416,11 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     output << "return;\n";
     emit_indent(output, indent + 1);
     output << "}\n";
+    emit_post_instruction_safepoint(output,
+                                    instruction,
+                                    indent + 1,
+                                    track_mmio_boundary,
+                                    defer_post_instruction_safepoint);
     emit_indent(output, indent);
     output << "}\n";
 }
@@ -2332,14 +2429,20 @@ void emit_call_delay_slot(std::ostringstream& output,
                           const katana::ir::Instruction& instruction,
                           const int indent,
                           const bool single_block,
-                          const bool external_instruction_observer) {
+                          const bool external_instruction_observer,
+                          const bool defer_post_instruction_safepoint) {
     emit_indent(output, indent);
     output << "const auto exception_generation_before_delay_slot = "
               "cpu.exception_generation;\n";
     emit_indent(output, indent);
     output << "[&] {\n";
     emit_guarded_simple_instruction(
-        output, instruction, indent + 1, single_block, external_instruction_observer);
+        output,
+        instruction,
+        indent + 1,
+        single_block,
+        external_instruction_observer,
+        defer_post_instruction_safepoint);
     emit_indent(output, indent);
     output << "}();\n";
     emit_indent(output, indent);
@@ -2562,6 +2665,26 @@ void emit_terminal(std::ostringstream& output,
         delay_slot = &block.instructions[control_index + 1u];
     }
 
+    const bool delay_slot_may_require_safepoint =
+        delay_slot != nullptr &&
+        (requires_post_instruction_architectural_safepoint(*delay_slot) ||
+         (katana::sh4::instruction_timing(delay_slot->original_opcode).requires_cycle_flush &&
+          !has_proven_linear_ram_access(*delay_slot)));
+    const bool defer_delay_slot_safepoint =
+        single_block && delay_slot_may_require_safepoint &&
+        (instruction.operation == Operation::Branch ||
+         instruction.operation == Operation::Call ||
+         instruction.operation == Operation::BranchIfTrue ||
+         instruction.operation == Operation::BranchIfFalse ||
+         instruction.operation == Operation::JumpRegister ||
+         instruction.operation == Operation::CallRegister ||
+         instruction.operation == Operation::Return ||
+         instruction.operation == Operation::ReturnFromException);
+    if (defer_delay_slot_safepoint) {
+        emit_indent(output, indent);
+        output << "bool " << deferred_safepoint_flag(*delay_slot) << " = false;\n";
+    }
+
     switch (instruction.operation) {
     case Operation::Branch:
         if (!instruction.target_address.has_value()) {
@@ -2570,13 +2693,20 @@ void emit_terminal(std::ostringstream& output,
 
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(
-                output, *delay_slot, indent, single_block, external_instruction_observer);
+                output,
+                *delay_slot,
+                indent,
+                single_block,
+                external_instruction_observer,
+                defer_delay_slot_safepoint);
         }
 
         emit_indent(output, indent);
         output << "cpu.pc = " << relocated_code_address(*instruction.target_address) << ";\n";
 
         emit_terminal_instruction_completion(output, indent, single_block);
+        if (defer_delay_slot_safepoint)
+            emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
         emit_block_transition(output,
                               indent,
                               single_block,
@@ -2599,14 +2729,20 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_call_delay_slot(
-                output, *delay_slot, indent, single_block, external_instruction_observer);
+            emit_call_delay_slot(output,
+                                 *delay_slot,
+                                 indent,
+                                 single_block,
+                                 external_instruction_observer,
+                                 defer_delay_slot_safepoint);
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
         if (single_block) {
             emit_indent(output, indent);
             output << "cpu.pc = " << relocated_code_address(*instruction.target_address) << ";\n";
+            if (defer_delay_slot_safepoint)
+                emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
             const auto return_address = instruction.source_address + 4u;
             if (native_internal_block_labels &&
                 known_functions.contains(*instruction.target_address) &&
@@ -2672,7 +2808,12 @@ void emit_terminal(std::ostringstream& output,
 
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(
-                output, *delay_slot, indent, single_block, external_instruction_observer);
+                output,
+                *delay_slot,
+                indent,
+                single_block,
+                external_instruction_observer,
+                defer_delay_slot_safepoint);
 
             emit_indent(output, indent);
             output << "cpu.pc = take_branch ? "
@@ -2686,6 +2827,8 @@ void emit_terminal(std::ostringstream& output,
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
+        if (defer_delay_slot_safepoint)
+            emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
         emit_conditional_block_transition(
             output,
             indent,
@@ -2711,13 +2854,20 @@ void emit_terminal(std::ostringstream& output,
 
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(
-                output, *delay_slot, indent, single_block, external_instruction_observer);
+                output,
+                *delay_slot,
+                indent,
+                single_block,
+                external_instruction_observer,
+                defer_delay_slot_safepoint);
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
         if (single_block) {
             emit_indent(output, indent);
             output << "cpu.pc = jump_target;\n";
+            if (defer_delay_slot_safepoint)
+                emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
             emit_indent(output, indent);
             output << "return;\n";
             return;
@@ -2798,14 +2948,20 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_call_delay_slot(
-                output, *delay_slot, indent, single_block, external_instruction_observer);
+            emit_call_delay_slot(output,
+                                 *delay_slot,
+                                 indent,
+                                 single_block,
+                                 external_instruction_observer,
+                                 defer_delay_slot_safepoint);
         }
 
         emit_terminal_instruction_completion(output, indent, single_block);
         if (single_block) {
             emit_indent(output, indent);
             output << "cpu.pc = call_target;\n";
+            if (defer_delay_slot_safepoint)
+                emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
             const auto return_address = instruction.source_address + 4u;
             const auto guarded_native_target =
                 guarded_native_call_targets.find(instruction.source_address);
@@ -2905,13 +3061,20 @@ void emit_terminal(std::ostringstream& output,
 
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(
-                output, *delay_slot, indent, single_block, external_instruction_observer);
+                output,
+                *delay_slot,
+                indent,
+                single_block,
+                external_instruction_observer,
+                defer_delay_slot_safepoint);
         }
 
         emit_indent(output, indent);
         output << "cpu.pc = return_target;\n";
 
         emit_terminal_instruction_completion(output, indent, single_block);
+        if (defer_delay_slot_safepoint)
+            emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
         emit_multi_block_completion(output, indent, single_block);
         emit_indent(output, indent);
         output << "return;\n";
@@ -2932,9 +3095,16 @@ void emit_terminal(std::ostringstream& output,
         output << "return_from_exception(cpu);\n";
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(
-                output, *delay_slot, indent, single_block, external_instruction_observer);
+                output,
+                *delay_slot,
+                indent,
+                single_block,
+                external_instruction_observer,
+                defer_delay_slot_safepoint);
         }
         emit_terminal_instruction_completion(output, indent, single_block);
+        if (defer_delay_slot_safepoint)
+            emit_deferred_post_instruction_safepoint(output, *delay_slot, indent);
         emit_multi_block_completion(output, indent, single_block);
         emit_indent(output, indent);
         output << "return;\n";
@@ -3624,6 +3794,27 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 "Eine Callsite besitzt mehrere guardierte native Singleton-Ziele.");
         }
     }
+    const bool emits_post_instruction_safepoint =
+        std::any_of(functions.begin(), functions.end(), [&](const auto& function) {
+            return std::any_of(
+                function.blocks.begin(), function.blocks.end(), [&](const auto& block) {
+                    return std::any_of(
+                        block.instructions.begin(),
+                        block.instructions.end(),
+                        [&](const auto& instruction) {
+                            if (instruction.delay_slot.role ==
+                                    katana::ir::DelaySlotRole::Slot &&
+                                !request.single_block_execution)
+                                return false;
+                            return requires_post_instruction_architectural_safepoint(
+                                       instruction) ||
+                                   (katana::sh4::instruction_timing(
+                                        instruction.original_opcode)
+                                        .requires_cycle_flush &&
+                                    !has_proven_linear_ram_access(instruction));
+                        });
+                });
+        });
 
     std::ostringstream declarations;
     std::ostringstream function_bodies;
@@ -3700,8 +3891,17 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
     }
     if (request.external_instruction_observer) {
         declarations << "void note_instruction_entry(std::uint32_t address, "
-                        "bool in_delay_slot) noexcept;\n\n";
+                         "bool in_delay_slot) noexcept;\n\n";
     }
+    if (emits_post_instruction_safepoint)
+        declarations
+            << "[[nodiscard]] static bool katana_commit_post_instruction_safepoint(\n"
+            << "    CpuState& cpu, PlatformServices& services, "
+               "const std::uint32_t checkpoint) {\n"
+            << "    return katana::runtime::finalize_guest_block(\n"
+            << "        cpu, services, 1024u, checkpoint, 0u, false, false, false)\n"
+            << "        .interrupt.has_value();\n"
+            << "}\n\n";
 
     std::vector<std::uint32_t> ordered_known_functions(known_functions.begin(),
                                                        known_functions.end());

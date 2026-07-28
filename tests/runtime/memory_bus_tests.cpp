@@ -216,6 +216,10 @@ int main(const int argc, const char* const* argv) {
         },
         [](const auto, const auto, const auto) {});
     bus.map_region("diagnostic-mmio", 0x00003000u, diagnostic_mmio);
+    const auto mmio_boundary_before_ram = bus.mmio_boundary_epoch();
+    static_cast<void>(bus.read_u32(0x00001004u));
+    require(bus.mmio_boundary_epoch() == mmio_boundary_before_ram,
+            "Lineares RAM veraendert den MMIO-Architekturgrenzentoken.");
     const std::array<const katana::runtime::MemoryDevice*, 2u> permitted{
         work_ram.get(), diagnostic_mmio.get()};
     std::uint64_t diagnostic_trace_calls = 0u;
@@ -229,6 +233,10 @@ int main(const int argc, const char* const* argv) {
     bus.set_mmio_access_tracking(true);
     require(bus.read_u32(0x00003000u) == 0xDEADBEEFu,
             "MMIO-Sentinel fuer die Peek-Invarianz konnte nicht gesetzt werden.");
+    require(bus.mmio_boundary_epoch() != mmio_boundary_before_ram &&
+                bus.mmio_access_epoch() == 0u,
+            "Erfolgreiches MMIO publiziert keine lokale AOT-Safepointgrenze oder "
+            "invalidiert faelschlich den Interrupt-Routertoken.");
     const auto last_mmio_before_peek = bus.last_mmio_access();
     const auto diagnostic_mmio_reads_before_peek = diagnostic_mmio_reads;
     diagnostic_trace_calls = 0u;

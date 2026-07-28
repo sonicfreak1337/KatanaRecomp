@@ -769,6 +769,70 @@ int main() {
         "Ein allgemeiner als NormalRam bewiesener Register-Load nutzt nicht den "
         "funktionsweiten direkten RAM-Guard mit korrektem Fallback.");
 
+    katana::codegen::BackendRequest deferred_mmio_request{
+        delay_memory_program, 0x8C020000u};
+    deferred_mmio_request.single_block_execution = true;
+    deferred_mmio_request.guarded_local_block_chaining = true;
+    deferred_mmio_request.external_dynamic_dispatch = true;
+    const auto deferred_mmio_source =
+        katana::codegen::CppBackend{}.emit(deferred_mmio_request).joined_text();
+    const auto deferred_flag =
+        deferred_mmio_source.find("bool katana_deferred_safepoint_8C020002 = false;");
+    const auto deferred_epoch = deferred_mmio_source.find(
+        "const auto katana_mmio_boundary_epoch_before = "
+        "cpu.memory.mmio_boundary_epoch();",
+        deferred_flag);
+    const auto deferred_load =
+        deferred_mmio_source.find("guest_read_u32_at(cpu, guest_origin, cpu.r[1])",
+                                  deferred_epoch);
+    const auto deferred_assignment = deferred_mmio_source.find(
+        "katana_deferred_safepoint_8C020002 = "
+        "cpu.memory.mmio_boundary_epoch() != katana_mmio_boundary_epoch_before;",
+        deferred_load);
+    const auto deferred_target = deferred_mmio_source.find(
+        "cpu.pc = katana::runtime::relocate_code_address(0x8C020006u);",
+        deferred_assignment);
+    const auto deferred_terminal_completion =
+        deferred_mmio_source.find("terminal_instruction_attempt.complete();", deferred_target);
+    const auto deferred_finalize = deferred_mmio_source.find(
+        "katana_commit_post_instruction_safepoint(", deferred_terminal_completion);
+    const auto deferred_chain =
+        deferred_mmio_source.find("services->can_chain_executable_block(cpu.pc)",
+                                  deferred_finalize);
+    require(
+        deferred_flag != std::string::npos &&
+            deferred_epoch != std::string::npos &&
+            deferred_load != std::string::npos &&
+            deferred_assignment != std::string::npos &&
+            deferred_target != std::string::npos &&
+            deferred_terminal_completion != std::string::npos &&
+            deferred_finalize != std::string::npos &&
+            deferred_chain != std::string::npos &&
+            deferred_flag < deferred_epoch && deferred_epoch < deferred_load &&
+            deferred_load < deferred_assignment &&
+            deferred_assignment < deferred_target &&
+            deferred_target < deferred_terminal_completion &&
+            deferred_terminal_completion < deferred_finalize &&
+            deferred_finalize < deferred_chain &&
+            count_occurrences(deferred_mmio_source,
+                              "if (katana_commit_post_instruction_safepoint(") == 1u,
+        "Ein tatsaechlicher MMIO-Kandidat im Delay Slot wird nicht erst nach Ziel-PC "
+        "und Terminal-Retirement genau einmal am Runtime-Safepoint abgeschlossen.");
+
+    katana::codegen::BackendRequest proven_delay_request{
+        proven_delay_memory_program, 0x8C020000u};
+    proven_delay_request.single_block_execution = true;
+    proven_delay_request.guarded_local_block_chaining = true;
+    proven_delay_request.external_dynamic_dispatch = true;
+    const auto proven_delay_product_source =
+        katana::codegen::CppBackend{}.emit(proven_delay_request).joined_text();
+    require(
+        proven_delay_product_source.find("katana_deferred_safepoint_8C020002") ==
+                std::string::npos &&
+            proven_delay_product_source.find("mmio_boundary_epoch()") ==
+                std::string::npos,
+        "Bewiesenes lineares Delay-Slot-RAM erhaelt eine unnoetige MMIO-Safepointkante.");
+
     constexpr std::array<std::uint8_t, 10> pc_relative_bytes = {
         0x00u,
         0x91u, // MOV.W @(0,PC),R1 -> 0x8C030004
@@ -814,7 +878,8 @@ int main() {
                     std::string::npos &&
                 count_occurrences(pc_relative_word, "GuestInstructionOrigin{0x8C030000u") == 1u &&
                 count_occurrences(pc_relative_word, "guest_read_s16_at(cpu, guest_origin") == 1u &&
-                pc_relative_word.find("0x8C030002u") == std::string_view::npos &&
+                pc_relative_word.find("GuestInstructionOrigin{0x8C030002u") ==
+                    std::string_view::npos &&
                 count_occurrences(pc_relative_long, "GuestInstructionOrigin{0x8C030002u") == 1u &&
                 count_occurrences(pc_relative_long, "guest_read_u32_at(cpu, guest_origin") == 1u &&
                 pc_relative_long.find("GuestInstructionOrigin{0x8C030000u") ==
@@ -1081,6 +1146,128 @@ int main() {
                 timing_source.find("base_guest_cycles_per_instruction") == std::string::npos,
             "Eine reine NOP-Praefixregion wird nicht gebatcht vor der exakten "
             "Memory-Fault-Grenze verbucht.");
+
+    constexpr std::array<std::uint8_t, 8> sr_boundary_bytes = {
+        0x0Eu,
+        0x41u, // LDC R1,SR
+        0x09u,
+        0x00u, // NOP
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto sr_boundary_lines =
+        katana::sh4::disassemble(sr_boundary_bytes, 0x8C060000u);
+    constexpr std::array<std::uint32_t, 1> sr_boundary_seeds = {0x8C060000u};
+    const auto sr_boundary_functions =
+        katana::analysis::discover_functions(sr_boundary_lines, sr_boundary_seeds);
+    const auto sr_boundary_program =
+        katana::ir::lower_program(sr_boundary_lines, sr_boundary_functions);
+    const auto sr_boundary_source =
+        katana::codegen::emit_cpp_program(sr_boundary_program, 0x8C060000u);
+    const auto sr_instruction =
+        emitted_instruction(sr_boundary_source, "0x8C060000");
+    const auto sr_write = sr_instruction.find("cpu.write_sr(value);");
+    const auto sr_retirement =
+        sr_instruction.find("guest_instruction_attempt.complete();", sr_write);
+    const auto sr_continuation = sr_instruction.find(
+        "cpu.pc = katana::runtime::relocate_code_address(0x8C060002u);",
+        sr_retirement);
+    const auto sr_finalize = sr_instruction.find(
+        "katana_commit_post_instruction_safepoint(", sr_continuation);
+    require(
+        sr_write != std::string_view::npos &&
+            sr_retirement != std::string_view::npos &&
+            sr_continuation != std::string_view::npos &&
+            sr_finalize != std::string_view::npos &&
+            sr_write < sr_retirement && sr_retirement < sr_continuation &&
+            sr_continuation < sr_finalize,
+        "LDC SR laesst nach IMASK/BL/RB/MD-Aenderung weitere native "
+        "Gastinstruktionen vor dem Runtime-Safepoint laufen.");
+
+    constexpr std::array<std::uint8_t, 8> ldtlb_boundary_bytes = {
+        0x38u,
+        0x00u, // LDTLB
+        0x09u,
+        0x00u, // NOP
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto ldtlb_boundary_lines =
+        katana::sh4::disassemble(ldtlb_boundary_bytes, 0x8C061000u);
+    constexpr std::array<std::uint32_t, 1> ldtlb_boundary_seeds = {0x8C061000u};
+    const auto ldtlb_boundary_functions =
+        katana::analysis::discover_functions(ldtlb_boundary_lines, ldtlb_boundary_seeds);
+    const auto ldtlb_boundary_program =
+        katana::ir::lower_program(ldtlb_boundary_lines, ldtlb_boundary_functions);
+    const auto ldtlb_boundary_source =
+        katana::codegen::emit_cpp_program(ldtlb_boundary_program, 0x8C061000u);
+    const auto ldtlb_instruction =
+        emitted_instruction(ldtlb_boundary_source, "0x8C061000");
+    const auto ldtlb_write =
+        ldtlb_instruction.find("katana::runtime::load_tlb(cpu);");
+    const auto ldtlb_retirement =
+        ldtlb_instruction.find("guest_instruction_attempt.complete();", ldtlb_write);
+    const auto ldtlb_finalize = ldtlb_instruction.find(
+        "katana_commit_post_instruction_safepoint(", ldtlb_retirement);
+    require(
+        ldtlb_write != std::string_view::npos &&
+            ldtlb_retirement != std::string_view::npos &&
+            ldtlb_finalize != std::string_view::npos &&
+            ldtlb_write < ldtlb_retirement && ldtlb_retirement < ldtlb_finalize,
+        "LDTLB aktualisiert die MMU ohne unmittelbaren Runtime-Safepoint.");
+
+    constexpr std::array<std::uint8_t, 4> return_sr_delay_bytes = {
+        0x0Bu,
+        0x00u, // RTS
+        0x0Eu,
+        0x41u // LDC R1,SR (Delay Slot)
+    };
+    const auto return_sr_delay_lines =
+        katana::sh4::disassemble(return_sr_delay_bytes, 0x8C062000u);
+    constexpr std::array<std::uint32_t, 1> return_sr_delay_seeds = {0x8C062000u};
+    const auto return_sr_delay_functions =
+        katana::analysis::discover_functions(return_sr_delay_lines, return_sr_delay_seeds);
+    const auto return_sr_delay_program =
+        katana::ir::lower_program(return_sr_delay_lines, return_sr_delay_functions);
+    katana::codegen::BackendRequest return_sr_delay_request{
+        return_sr_delay_program, 0x8C062000u};
+    return_sr_delay_request.single_block_execution = true;
+    return_sr_delay_request.guarded_local_block_chaining = true;
+    return_sr_delay_request.external_dynamic_dispatch = true;
+    const auto return_sr_delay_source =
+        katana::codegen::CppBackend{}.emit(return_sr_delay_request).joined_text();
+    const auto return_sr_write =
+        return_sr_delay_source.find("cpu.write_sr(value);");
+    const auto return_sr_deferred = return_sr_delay_source.find(
+        "katana_deferred_safepoint_8C062002 = true;", return_sr_write);
+    const auto return_sr_target =
+        return_sr_delay_source.find("cpu.pc = return_target;", return_sr_deferred);
+    const auto return_sr_terminal = return_sr_delay_source.find(
+        "terminal_instruction_attempt.complete();", return_sr_target);
+    const auto return_sr_finalize = return_sr_delay_source.find(
+        "katana_commit_post_instruction_safepoint(", return_sr_terminal);
+    const auto return_sr_return =
+        return_sr_delay_source.find("return;", return_sr_finalize);
+    require(
+        return_sr_write != std::string::npos &&
+            return_sr_deferred != std::string::npos &&
+            return_sr_target != std::string::npos &&
+            return_sr_terminal != std::string::npos &&
+            return_sr_finalize != std::string::npos &&
+            return_sr_return != std::string::npos &&
+            return_sr_write < return_sr_deferred &&
+            return_sr_deferred < return_sr_target &&
+            return_sr_target < return_sr_terminal &&
+            return_sr_terminal < return_sr_finalize &&
+            return_sr_finalize < return_sr_return &&
+            count_occurrences(return_sr_delay_source,
+                              "if (katana_commit_post_instruction_safepoint(") == 1u,
+        "Ein SR-Write im RTS-Delay-Slot kehrt ohne post-Return-Safepoint "
+        "in den nativen Caller zurueck.");
 
     require(
         katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::LoadTlb) ==
