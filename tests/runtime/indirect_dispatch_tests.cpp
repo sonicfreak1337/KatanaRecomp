@@ -402,6 +402,87 @@ void missing_aot_dispatch_regression() {
             "Missing-AOT ging zwischen Binder, Materializer und Dispatchdiagnose verloren.");
 }
 
+void materialization_identity_diagnostic_regression() {
+    const auto expect_rejection =
+        [](const MaterializationFailure failure,
+           const DispatchDiagnosticError expected_error,
+           const char* expected_name) {
+            constexpr std::uint32_t runtime_address = 0x00003000u;
+            const std::vector<std::uint8_t> bytes{0x0Bu, 0x00u, 0x09u, 0x00u};
+            CpuState cpu;
+            cpu.memory.write_bytes(runtime_address, bytes, CodeWriteSource::Copy);
+
+            ExecutableModule loaded;
+            loaded.id = "diagnostic-runtime-module";
+            loaded.source_identity = "free-diagnostic-runtime-module-v1";
+            loaded.guest_start = runtime_address;
+            loaded.bytes = bytes;
+            ExecutableModuleCatalog modules;
+            modules.publish(loaded);
+
+            RuntimeBlockTable blocks;
+            ExecutableCodeTracker tracker;
+            blocks.bind_code_tracker(&tracker);
+            BlockMaterializationPolicy policy;
+            policy.enabled = true;
+            policy.max_blocks = 1u;
+            policy.max_bytes = static_cast<std::uint64_t>(bytes.size());
+            policy.max_memory_bytes = bytes.size();
+            policy.max_materializations_per_run = 1u;
+            policy.max_repeated_misses_per_target = 1u;
+            DemandBlockMaterializer materializer(
+                modules,
+                blocks,
+                &tracker,
+                policy,
+                [failure](const std::uint32_t,
+                          const std::uint32_t,
+                          const std::span<const std::uint8_t>,
+                          const BlockVariantKey&) {
+                    MaterializedBlockCandidate candidate;
+                    candidate.rejection_failure = failure;
+                    return candidate;
+                });
+            IndirectDispatchMetrics metrics;
+            IndirectDispatchRequest request;
+            request.kind = IndirectDispatchKind::TailJump;
+            request.callsite = 0x90u;
+            request.target = runtime_address;
+            request.resolution_origin = DispatchResolutionOrigin::RuntimeOnly;
+            request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+            request.metrics = &metrics;
+            request.materializer = &materializer;
+
+            std::string terminal_message;
+            std::string terminal_metrics;
+            DispatchDiagnosticError caught_error = DispatchDiagnosticError::None;
+            try {
+                static_cast<void>(dispatch_indirect(cpu, blocks, request));
+            } catch (const IndirectDispatchError& error) {
+                caught_error = error.error();
+                terminal_message = error.what();
+                terminal_metrics = error.metrics_json();
+            }
+            require(materializer.last_failure() == failure &&
+                        metrics.first_error().has_value() &&
+                        metrics.first_error()->error == expected_error &&
+                        caught_error == expected_error &&
+                        dispatch_diagnostic_error_name(expected_error) ==
+                            std::string(expected_name) &&
+                        terminal_message.find(expected_name) != std::string::npos &&
+                        terminal_metrics.find(expected_name) != std::string::npos,
+                    "Materializer-Identitaetsfehler verlor seinen eigenen terminalen "
+                    "Dispatchdiagnosevertrag.");
+        };
+
+    expect_rejection(MaterializationFailure::ByteIdentityMismatch,
+                     DispatchDiagnosticError::ByteIdentityMismatch,
+                     "byte-identity-mismatch");
+    expect_rejection(MaterializationFailure::AotTemplateMismatch,
+                     DispatchDiagnosticError::AotTemplateMismatch,
+                     "aot-template-mismatch");
+}
+
 void runtime_only_hit_hotloop_regression() {
     constexpr std::uint32_t callsite = 0x8C003002u;
     constexpr std::uint32_t target = 0x8C004000u;
@@ -601,6 +682,7 @@ int main() {
         materializer_lifecycle_regression();
         runtime_aot_alias_lifetime_regression();
         missing_aot_dispatch_regression();
+        materialization_identity_diagnostic_regression();
         runtime_only_hit_hotloop_regression();
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};

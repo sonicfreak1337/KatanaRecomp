@@ -45,7 +45,8 @@ enum class DispatchDiagnosticError : std::uint8_t {
     MissingAot,
     GenerationMismatch,
     RelocationMismatch,
-    StaleBlock
+    StaleBlock,
+    AotTemplateMismatch
 };
 
 struct DispatchDiagnosticEvent {

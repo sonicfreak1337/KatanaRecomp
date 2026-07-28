@@ -371,6 +371,8 @@ const char* dispatch_diagnostic_error_name(const DispatchDiagnosticError value) 
         return "relocation-mismatch";
     case DispatchDiagnosticError::StaleBlock:
         return "stale-block";
+    case DispatchDiagnosticError::AotTemplateMismatch:
+        return "aot-template-mismatch";
     }
     return "unknown";
 }
