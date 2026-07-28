@@ -154,15 +154,19 @@ tatsaechliche Post-Entry-Arbeit ergibt in 5,275792 Sekunden 26,3008 MHz
 gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`, aber noch kein
 600-Millionen-Gate.
 
-Der neue erste Blocker KR-4972 ist
+Der erste Blocker KR-4972 bleibt
 `0x8C11088C -> 0x8C64784E`. Das Ziel beginnt mit einem `BRA` auf den
-gemeinsamen Pfad `0x8C6478C2`; die Callback-/Shared-Tail-/Thunk-Modellierung
-und exakte Grenze muessen aus dem unveraenderten Executable bewiesen werden.
+gemeinsamen Pfad `0x8C6478C2`. Die generische Analyse gewinnt Ziel und Body
+jetzt aus konkreter Codepointer-Provenienz ueber einen begrenzten
+Tail-Jump-/Runtime-Frame-Pfad. Der vollstaendige Export mit dem externen
+Spielprojekt erhaelt diesen Seed aber noch nicht in CFG, Source-Map und AOT.
 Die terminale Diagnose meldet den Materializergrund
 `AotTemplateMismatch` (14) nun korrekt als `aot-template-mismatch`.
-Sound-/G2- und technische PVR-Evidenz bleiben erhalten, aber sechzehn reale
-Fensteraufnahmen bleiben schwarz. Der warme Gesamtexport dauerte 4,209083
-Sekunden, der unveraenderte Hostbuild 0,219272 Sekunden.
+Der reale v30-Port endet deshalb mit denselben `553.990.562` Gastzyklen und
+`10.079.932` Zentraldispatches wie v28. Sound-/G2- und technische
+PVR-Evidenz bleiben erhalten, aber 15 neue reale Fensteraufnahmen bleiben
+schwarz. Die frueheren warmen v28-Buildwerte bleiben der aktuelle
+Warmbuildnachweis; der frische v30-Export war kalt.
 
 ## Statischer und dynamischer AOT-Dispatch
 

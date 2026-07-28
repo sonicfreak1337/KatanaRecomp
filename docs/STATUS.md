@@ -5,8 +5,8 @@ Aktuelle interne Version: `v0.49.0`
 Main-Ausgangsbasis dieser Implementierungs- und Produktrunde:
 
 ```text
-8e5ab3145fb5fcafc056fd87025baf3497085342
-Distinguish AOT template mismatches
+854141b8780626e24815c0bbbb60b5927635a1a6
+Preserve callbacks through guarded runtime frames
 ```
 
 ## Zielarchitektur
@@ -65,7 +65,7 @@ Tatsaechlich wurden nur 184.766.730 Zyklen ausgefuehrt. Die vergleichbare Rate
 betraegt 36,8425 MHz und belegt keinen Performancegewinn. Das relative
 Post-Entry-Budget und die Pflichtmeilensteinwertung bleiben in `KR-4966` offen.
 
-Der aktuelle v28-Funktionslauf wurde auf der Main-Basis
+Der historische v28-Funktionslauf wurde auf der Main-Basis
 `8e5ab3145fb5fcafc056fd87025baf3497085342` mit dem neuen externen
 `GameProjectArtifact` erzeugt und ueber den echten Produktinstaller mit der
 privaten PAL-Disc installiert:
@@ -104,6 +104,42 @@ Die Walltime endet vor dem vorgesehenen Budget und ist kein
 folgen `26,3008 MHz` gegen `23,9578 MHz` bei v26, also provisorisch
 `+9,78 %` bei identischem Restore, aber keine Gateabnahme. Sechzehn reale
 Fensteraufnahmen blieben schwarz.
+
+### Aktueller v30-KR-4972-Lauf
+
+Die generische Analyse gewinnt den Callback `0x8C64784E` jetzt ueber einen
+begrenzten Candidate-Tail-Jump und einen bewiesenen Runtime-Stackframe
+zurueck. `0x8C6478C2` ist darin als gemeinsamer Body erreichbar. Der
+vollstaendige Export mit dem externen Spielprojekt uebernimmt diesen Seed
+noch nicht in produktive CFG, Source-Map und AOT.
+
+Der frische v30-MSVC-Port wurde aus der oben genannten Main-Basis exportiert,
+mit der privaten Originaldisc installiert und real ausgefuehrt:
+
+| Metrik | DirectBoot-v30 |
+|---|---:|
+| Entry-/Restore-Zyklus | 415.233.270 |
+| CompletePlatform-Apply | 22 Geraete, 5 Events |
+| Endzyklus am typisierten Fehler | 553.990.562 |
+| Post-Entry-Zyklen | 138.757.292 |
+| Zentraldispatches | 10.079.932 |
+| retired Gastinstruktionen | 92.554.138 |
+| GD-ROM-Kommandos | 72 |
+| AICA-Audiopuffer | 165 |
+| PVR-Gast-/Direct-Frames | 2 / 2 |
+| veraenderte Direct-Pixel | 302.287 |
+| Hostframe / sichtbarer Screen | 0 / keiner |
+| Sichtlauf | 15 Aufnahmen, alle schwarz; `sega_seen=false` |
+| terminales Dispatchlabel | `aot-template-mismatch` |
+| Callsite / Ziel | `0x8C11088C` / `0x8C64784E` |
+| MSVC-Gateexport | 1.959 Funktionen / 42 Partitionen |
+| Produkt-EXE | 52.616.192 Bytes |
+| Produkt-EXE SHA-256 | `801f69727d1df3166b4ff29710856e327450f622e61fe2fd2fec76cc3a39d77e` |
+
+Der Lauf endet vor dem 600-Millionen-Budget und liefert keinen neuen
+Performancewert. Sein Funktions-, Dispatch-, Geraete- und Sichtresultat ist
+gegen v28 unveraendert. Der v30-Export war kalt und darf nicht als
+Warmbuildvergleich gegen v28 gewertet werden.
 
 ## Abgeschlossene Sound-/AOT-Blocker und aktueller erster Blocker
 
@@ -147,7 +183,7 @@ beobachtete Grenze `0x8C010F22 + 0x18` in Analyzer, CFG, IR und AOT. Der
 Produktlauf passiert dieses Ziel. Die generischen Katana-Quellen enthalten
 keine Sonic-Adresse.
 
-Der erste aktive Produktblocker ist KR-4972:
+Der erste aktive Produktblocker bleibt KR-4972:
 
 ```text
 indirekter Call:       0x8C11088C
@@ -156,12 +192,15 @@ Dispatchlabel:         aot-template-mismatch
 Materializergrund:     AotTemplateMismatch (14)
 ```
 
-Fuer das unveraenderte Ziel im initialen Boot-Executable fehlt ein
-generierter Block beziehungsweise passendes Runtime-AOT-Template. Der Zielcode
-beginnt mit einem `BRA` auf den gemeinsamen Pfad `0x8C6478C2`; das deutet auf
-einen Callback-/Shared-Tail-/Thunk-Vertrag, beweist aber weder die exakte
-finale Funktionsgrenze noch die richtige allgemeine Modellierung. Interpreter,
-JIT, Runtime-Decoder und Emulationsfallback sind keine zulaessige Reparatur.
+Fuer das unveraenderte Ziel im initialen Boot-Executable fehlt im
+vollstaendig exportierten Port ein generierter Block beziehungsweise
+passendes Runtime-AOT-Template. Die generische Analyse beweist den
+Callback-/Shared-Tail-Pfad inzwischen aus konkreter Codepointer-Provenienz
+und erreicht den gemeinsamen Body `0x8C6478C2`. Offen ist die
+Spielprojekt-/Exportintegration, die diesen allgemeinen Seed derzeit nicht
+in CFG, Source-Map und AOT erhaelt. Interpreter, JIT, Runtime-Decoder,
+Emulationsfallback und eine geratene Sonic-Grenze sind keine zulaessige
+Reparatur.
 
 ## GameEntryHandoff-Stand
 
@@ -381,7 +420,7 @@ KR-4971 RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel
   [abgeschlossen]
 
 KR-4972 Hashgebundene Shared-Callback-/Thunk-AOT-Coverage
-  (zuerst)
+  (zuerst; generische Analyse teilweise abgeschlossen, Produktexport offen)
 
 Parallel offen:
 KR-4966 korrektes relatives Post-Entry-Gate
@@ -417,11 +456,20 @@ Ergebnis:
 - neuer typisierter Produktblocker aus KR-4972
 - 16 reale Fensteraufnahmen schwarz
 
-### Lauf A3 - nach KR-4972
+### Lauf A3 - KR-4972-Analyserunde [ausgefuehrt, Abnahme offen]
 
-- denselben DirectBoot-Produktpfad verwenden
-- Shared-Callback-/Thunk-Ziel ueber bewiesene externe Metadaten abdecken
-- bis zum naechsten typisierten Produktresultat fortschreiten
+- derselbe DirectBoot-Produktpfad und dieselbe private Discinstallation
+- generischer Analyzer erkennt `0x8C64784E` und den Body `0x8C6478C2`
+- vollstaendiger Produktexport enthaelt den Seed noch nicht
+- identischer typisierter Fehler bei `553.990.562` Gastzyklen
+- 15 reale Fensteraufnahmen schwarz
+
+### Lauf A4 - nach KR-4972-Exportintegration
+
+- gewonnenen generischen Seed bis in produktive CFG, IR und AOT erhalten
+- denselben DirectBoot-Produktpfad erneut installieren und ausfuehren
+- `0x8C64784E` ueber validiertes statisches AOT passieren oder einen
+  engeren typisierten Produktblocker belegen
 
 ### Lauf B - nach KR-4966 und KR-4967
 

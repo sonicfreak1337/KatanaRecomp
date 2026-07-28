@@ -79,13 +79,14 @@
 | KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | aktiv P0; zwei technische Direct-Frames mit 302.287 geaenderten Pixeln belegt, sichtbarer Hostframe und exakte Paritaet offen |
 | KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | aktiv P0; Game-Entry-Adapter, Produktlauf und einmal identische migrierte Saves belegt, allgemeines No-Rollback-Profil offen |
 | KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze `0x8C010F22 + 0x18`, getrennte AOT-Template-Diagnose belegt |
-| KR-4972 | Hashgebundene Shared-Callback-/Thunk-AOT-Coverage herstellen | aktiv P0, erster Produktblocker; v28 endet bei `0x8C11088C -> 0x8C64784E`, unveraenderter Zielcode verzweigt auf gemeinsamen Pfad `0x8C6478C2` |
+| KR-4972 | Hashgebundene Shared-Callback-/Thunk-AOT-Coverage herstellen | aktiv P0, teilweise umgesetzt und erster Produktblocker; generische Analyse erkennt `0x8C64784E` sowie Body `0x8C6478C2`, v30-Produktexport uebernimmt den Seed noch nicht und endet unveraendert bei `0x8C11088C -> 0x8C64784E` |
 
 ## Aktuelle Meilensteinzuordnung
 
 - `KR-4965` ist ueber den belegten engeren allgemeinen Blocker abgeschlossen.
 - `KR-4971` ist durch den v28-Produktlauf abgeschlossen.
-- `KR-4972` ist der erste aktive Produktblocker.
+- `KR-4972` ist der erste aktive Produktblocker; seine allgemeine
+  Analyzer-Recovery ist belegt, die Produkt-Exportintegration bleibt offen.
 - `KR-4966` korrigiert den im realen v24-Schedulerrestore belegten absoluten Mess- und Meilensteinfehler.
 - `KR-4967` bis `KR-4970` vervollstaendigen den strikt atomaren, digestgeprueften und Save-erhaltenden Vertrag aus `KR-4952` und `KR-4953`.
 - `KR-4962` liefert die normative Game-Entry-Paritaet sowie den Sound-/Frame-Nachweis mit relativem 600-Millionen-Budget.

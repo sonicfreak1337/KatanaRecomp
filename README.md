@@ -218,30 +218,38 @@ bis `KR-4966` kein gueltiger Performancevergleich. Seine 16.033.676
 Dispatches entsprechen 11,52 Post-Entry-Gastzyklen pro Zentraldispatch und
 belegen noch keinen Hotpathgewinn.
 
-Der aktuelle v28-DirectBoot verwendet ein externes,
-hashgebundenes `GameProjectArtifact`. Die darin privat beschriebene exakte
+Der aktuelle v30-DirectBoot verwendet weiterhin das externe,
+hashgebundene `GameProjectArtifact`. Die darin privat beschriebene exakte
 Funktionsgrenze wird durch Analyzer, CFG, IR und AOT transportiert; dadurch
 passiert der Produktlauf den bisherigen Blocker aus KR-4971. Der echte Lauf
 endet bei Gastzyklus `553.990.562`, also nach `138.757.292`
 Post-Entry-Zyklen und `10.079.932` Zentraldispatches. Gegen v26 sind das
-`+1.086.915` Gastzyklen. Die `138.757.292` tatsaechlichen
-Post-Entry-Zyklen in 5,275792 Sekunden ergeben 26,3008 MHz gegen 23,9578 MHz
-bei v26, also provisorisch `+9,78 %`; das ist wegen des vorzeitigen Fehlers
-keine 600-Millionen-Performanceabnahme.
+`+1.086.915` Gastzyklen. Der fruehere v28-Fehler-zu-Fehler-Vergleich mass
+dieselben `138.757.292` Post-Entry-Zyklen in 5,275792 Sekunden, also
+26,3008 MHz gegen 23,9578 MHz bei v26 und provisorisch `+9,78 %`. Der
+v30-Sichtlauf ist kein kontrollierter Performancebenchmark; wegen des
+vorzeitigen Fehlers gibt es weiterhin keine 600-Millionen-Abnahme.
 
-Der neue erste Blocker KR-4972 ist
+Der erste Blocker KR-4972 bleibt
 `0x8C11088C -> 0x8C64784E`. Das unveraenderte Ziel beginnt mit einem Sprung
-auf einen gemeinsamen Codepfad und benoetigt eine bewiesene
-Callback-/Shared-Tail-/Thunk-Modellierung; seine Grenze wird nicht geraten.
+auf einen gemeinsamen Codepfad. Die generische Analyse verfolgt den
+Callback jetzt ueber begrenzte Tail-Jump- und Runtime-Frame-Pfade, erkennt
+`0x8C64784E` als Funktion und erreicht `0x8C6478C2` als gemeinsamen Body.
+Der vollstaendige Export mit dem externen Spielprojekt uebernimmt diesen
+Seed aber noch nicht in CFG, Source-Map oder AOT; diese Integrationsluecke
+bleibt zu schliessen, ohne eine Grenze zu raten.
 Die terminale Diagnose unterscheidet diesen Fall jetzt korrekt als
 `aot-template-mismatch` von echten Byteidentitaetsfehlern.
 
 Sound-/G2- und technische PVR-Evidenz bleiben erhalten: alle G2-Kanaele sind
-inaktiv, zwei Direct-Frames enthalten 302.287 geaenderte Pixel. Sechzehn
-reale Fensteraufnahmen bleiben schwarz und der Host-Presenter meldet null
-Frames. Der warme Gesamtexport dauerte 4,209083 Sekunden, der unveraenderte
-Hostbuild 0,219272 Sekunden. Das 200-MHz-Ziel, das relative Gate und ein
-sichtbarer DirectBoot-Spielbildnachweis bleiben offen.
+inaktiv, zwei Direct-Frames enthalten 302.287 geaenderte Pixel. Der
+v30-Sichtlauf bestaetigt mit 15 realen Aufnahmen erneut einen vollstaendig
+schwarzen Hostscreen; der Host-Presenter meldet null Frames. Der frische
+v30-Gateexport erzeugt 1.959 Funktionen in 42 Partitionen und eine
+52.616.192 Byte grosse MSVC-EXE. Sein kalter Export ist nicht mit dem
+frueheren warmen v28-Export von 4,209083 Sekunden vergleichbar. Das
+200-MHz-Ziel, das relative Gate und ein sichtbarer
+DirectBoot-Spielbildnachweis bleiben offen.
 
 ## Diagnose
 

@@ -241,6 +241,62 @@ Erhalten bleiben ausschliesslich v28,
 `.katana-port-work-e0e2126c4352`, Bootartefakt, Handoff, private GDI und
 installierter Disc-Cache; die Entfernung ist nicht rueckgaengig.
 
+### DirectBoot-v30-Produktevidenz fuer KR-4972
+
+Die allgemeine Funktionswertanalyse verfolgt Callback-Provenienz jetzt ueber
+streng begrenzte Candidate-Tail-Jumps sowie ueber bewiesene
+Runtime-Stackframes. Sie verwirft die Provenienz bei transformierender
+Arithmetik, schliesst direkte `r15`-Prolog-Stores als Inventarsink aus und
+haelt exakte Stackoffsets nur fuer vollstaendige, nicht aliasierende
+Singletonwerte innerhalb eines kleinen Guardfensters. Der bestehende enge
+Kontrollflusstest wurde fuer den konkret beobachteten Spill-/Reload- und
+Runtime-Objektstore-Vertrag erweitert; keine neue Testsuite entstand.
+
+Auf dem unveraenderten Sonic-Executable findet die generische Analyse damit
+`0x8C64784E` als Funktion und `0x8C6478C2` als erreichbaren gemeinsamen Body:
+
+```text
+Analysezeit:                       15,901 s
+Outer-Iterationen:                 30
+finale Seeds / Funktionen:         1.715 / 1.756
+analysierte Instruktionen:         154.092
+Budgeterschoepfung:                nein
+```
+
+Der vollstaendige Export mit dem externen Spielprojekt transportiert diesen
+Seed jedoch noch nicht in seine produktive CFG, Source-Map und AOT-Ausgabe.
+Der frisch aus
+`854141b8780626e24815c0bbbb60b5927635a1a6` erzeugte v30-MSVC-Port wurde
+erneut ueber den Produktinstaller mit der privaten PAL-Disc installiert
+(`3` Tracks, `521.461` Sektoren; weiterhin `0` Retailsektoren im
+Repository). Sein realer Gate- und Sichtlauf ergab:
+
+```text
+Restore-Zyklus:                    415.233.270
+CompletePlatform-Apply:            22 Geraete, 5 Events
+Endzyklus am typisierten Fehler:   553.990.562
+Post-Entry-Zyklen:                 138.757.292
+zentrale Dispatches:               10.079.932
+GD-ROM-Kommandos:                  72
+AICA-Audiopuffer:                  165
+PVR-Gastframes / Direct-Frames:    2 / 2
+veraenderte Direct-Pixel:          302.287
+Hostframes / sichtbarer Screen:    0 / keiner
+reale Sichtaufnahmen:              15, alle schwarz
+terminales Dispatchlabel:          aot-template-mismatch
+Callsite / Ziel:                   0x8C11088C / 0x8C64784E
+MSVC-Export:                       1.959 Funktionen / 42 Partitionen
+Produkt-EXE:                       52.616.192 Bytes
+Produkt-EXE SHA-256:               801f69727d1df3166b4ff29710856e327450f622e61fe2fd2fec76cc3a39d77e
+```
+
+Der Produktlauf ist damit metrisch an derselben funktionalen Grenze wie v28;
+es gibt weder einen Boot- noch einen Dispatchfortschritt. Der frische Export
+war ein kalter Export und ist kein gueltiger Warmbuildvergleich. KR-4972 ist
+teilweise umgesetzt: Die allgemeine Analyseluecke ist im standalone
+Lauf auf demselben Produktinput geschlossen, die Uebernahme dieser Erkenntnis durch die
+Spielprojekt-/Exportintegration bleibt der aktive Blocker.
+
 `GameProjectArtifact` Format 1 besitzt eine Payload-SHA-256 und eine
 Artefakt-SHA-256, kann durch die Runtime-API geschrieben und geladen werden
 und bindet die vollstaendige deklarative Definition an den Export.
@@ -292,18 +348,20 @@ meldet `AotTemplateMismatch` nun korrekt als `aot-template-mismatch`, statt
 ihn mit einem echten Byteidentitaetsfehler zusammenzufassen. Der v28-Lauf
 passiert das alte Ziel und belegt einen neuen, engeren allgemeinen Blocker.
 
-Der **erste aktive Produktblocker** ist jetzt KR-4972: Ein indirekter Call
+Der **erste aktive Produktblocker** bleibt KR-4972: Ein indirekter Call
 bei `0x8C11088C` erreicht das unveraenderte Boot-Executable-Ziel
-`0x8C64784E`, fuer das weiterhin kein passendes statisches AOT vorliegt. Der
-Zielcode beginnt mit einem `BRA` auf den gemeinsamen Zielpfad
-`0x8C6478C2`; das spricht fuer einen Callback-/Shared-Tail-/Thunk-Vertrag.
-Die exakte finale Funktionsgrenze und die richtige allgemeine Modellierung
-sind noch nicht bewiesen und duerfen nicht geraten werden.
+`0x8C64784E`, fuer das im real exportierten Port weiterhin kein passendes
+statisches AOT vorliegt. Der Zielcode beginnt mit einem `BRA` auf den
+gemeinsamen Zielpfad `0x8C6478C2`. Die generische Analyse beweist diesen
+Callback-/Shared-Tail-Pfad inzwischen aus Codepointer-Provenienz und
+Runtime-Frame-Daten; der vollstaendige Spielprojektexport verwirft
+beziehungsweise uebernimmt das Ergebnis aber noch nicht.
 
-KR-4972 muss den gemeinsamen Zielvertrag aus dem unveraenderten Executable
-analysieren und ueber hashgebundene Metadaten des externen Spielprojekts
-statisch abdecken. Interpreter, JIT, Runtime-Dekodierung und
-Emulationsfallback bleiben verboten.
+KR-4972 muss deshalb nicht mit einer geratenen Sonic-Grenze umgangen werden,
+sondern den allgemein erkannten Zielvertrag durch die
+Spielprojekt-/Exportintegration bis in CFG, IR und statisches AOT erhalten.
+Interpreter, JIT, Runtime-Dekodierung und Emulationsfallback bleiben
+verboten.
 
 ## Verbleibende CompletePlatform-Luecken
 
@@ -333,8 +391,9 @@ Die Produktabnahme bleibt dennoch offen:
 - KR-4962 bleibt bis zur belegten NativeDisc-/DirectBoot-Paritaet und einem
   ersten DirectBoot-Frame offen.
 - KR-4972 muss den neuen hashgebundenen Shared-Callback-/Thunk-AOT-
-  Coverageblocker schliessen, bevor ein relatives Langzeitgate aussagekraeftig
-  laufen kann.
+  Coverageblocker im vollstaendigen Export schliessen, bevor ein relatives
+  Langzeitgate aussagekraeftig laufen kann. Die generische Analyse erkennt
+  das Ziel bereits; der v30-Produktport enthaelt es noch nicht.
 
 ## Verbindlicher v0.49-Kritischer Pfad
 
@@ -346,7 +405,7 @@ KR-4965 ADXT/mwSnd-Sound-Completion bis zum Writer schliessen
          Ziel herstellen [abgeschlossen; altes Ziel statisch emittiert]
          |
          +--> KR-4972 Hashgebundene Shared-Callback-/Thunk-AOT-Coverage
-                herstellen [FIRST, offen]
+                herstellen [FIRST, Analyse teilweise; Produktexport offen]
                 |
                 +--> KR-4966 Post-Entry-Produktgate und erforderliche
                        Meilensteine [offen]
@@ -542,6 +601,23 @@ Ergebnis:
 - neuer erster Blocker `0x8C11088C -> 0x8C64784E` aus KR-4972
 - 16 reale Fensteraufnahmen bleiben schwarz
 - kein 600-Millionen-Performanceergebnis
+
+### Produktlauf A3 - KR-4972-Analyserunde [ausgefuehrt, Abnahme offen]
+
+Der v30-MSVC-Gateport wurde frisch aus der korrigierten generischen Analyse
+erzeugt, ueber den Produktinstaller mit derselben PAL-GDI installiert und
+real ausgefuehrt.
+
+Ergebnis:
+
+- generische Analyse erkennt `0x8C64784E` als Funktion und `0x8C6478C2` als
+  erreichbaren gemeinsamen Body
+- produktive CFG, Source-Map und AOT-Ausgabe enthalten den Seed noch nicht
+- derselbe Fehler bei `553.990.562` Gastzyklen und `10.079.932`
+  Zentraldispatches
+- Sound-/G2- und technische PVR-Evidenz unveraendert
+- 15 reale Fensteraufnahmen schwarz; `sega_seen=false`
+- KR-4972 bleibt bis zur Exportintegration offen
 
 ### Produktlauf B - nach KR-4967 bis KR-4970
 

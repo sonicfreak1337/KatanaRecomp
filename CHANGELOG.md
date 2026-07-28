@@ -4,6 +4,24 @@
 
 ### Geaendert
 
+- KR-4972 verfolgt Callbackwerte jetzt allgemein auch ueber streng begrenzte
+  Tail-Jump-Inventarregionen und ueber bewiesene Runtime-Stackframes.
+  Nicht-identitaetserhaltende Arithmetik verwirft die Codepointer-Provenienz;
+  direkte Stack-Prolog-Stores gelten nicht als Inventarsink, und exakte
+  `r15`-Offsets werden nur fuer vollstaendige, nicht aliasierende
+  Singletonwerte in einem kleinen Guardfenster fortgeschrieben. Der
+  bestehende Kontrollflussvertrag deckt Spill, Reload und Runtime-Objektstore
+  ab. Die reale generische Analyse findet dadurch `0x8C64784E` als Funktion
+  und den gemeinsamen Body `0x8C6478C2` als erreichbaren Code, ohne
+  Budgeterschoepfung. Der vollstaendige, aus
+  `854141b8780626e24815c0bbbb60b5927635a1a6` erzeugte v30-Produktport
+  uebernimmt diesen Seed jedoch noch nicht in CFG, Source-Map und AOT. Der
+  erneut mit der privaten Originaldisc installierte Lauf endet deshalb
+  unveraendert bei Gastzyklus `553.990.562`, `10.079.932`
+  Zentraldispatches und `0x8C11088C -> 0x8C64784E` mit
+  `aot-template-mismatch`. Zwei technische Direct-Frames und `302.287`
+  geaenderte Pixel bleiben erhalten; 15 reale Fensteraufnahmen bleiben
+  schwarz. KR-4972 ist damit teilweise umgesetzt, aber produktseitig offen.
 - KR-4971 fuehrt ein besitzendes, hashgebundenes `GameProjectArtifact`
   Format 1 samt `write()`/`load()` und
   `port-executable --game-project` ein. Das Artefakt serialisiert nur

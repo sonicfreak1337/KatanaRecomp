@@ -671,10 +671,12 @@ Prioritaet: P0 - zuerst
 
 Abhaengigkeiten: KR-4971
 
-Status: Aktiv und erster Produktblocker. Der v28-DirectBoot erreicht nach der
-neu emittierten statischen Funktion einen indirekten Call auf ein anderes
-unveraendertes Ziel des initialen Boot-Executables, fuer das kein passender
-AOT-Eintrag existiert.
+Status: Teilweise umgesetzt, weiterhin erster Produktblocker. Die generische
+Analyse gewinnt das Ziel aus Candidate-Tail-Jumps und einem bewiesenen
+Runtime-Stackframe zurueck. Der vollstaendige Export mit dem externen
+Spielprojekt uebernimmt den gewonnenen Seed aber noch nicht in CFG,
+Source-Map und AOT. Der reale v30-DirectBoot endet deshalb weiterhin am
+indirekten Call auf das unveraenderte Ziel des initialen Boot-Executables.
 
 ### Produktbefund
 
@@ -685,20 +687,29 @@ Callsite:                     0x8C11088C
 RuntimeCode-Ziel:             0x8C64784E
 terminales Dispatchlabel:     aot-template-mismatch
 interner Materializerfehler:  AotTemplateMismatch (14)
+zentrale Dispatches:          10.079.932
+sichtbarer Screen:            keiner; 15 Aufnahmen schwarz
 ```
 
 Das unveraenderte Ziel beginnt mit einem `BRA` auf den gemeinsamen Zielpfad
-`0x8C6478C2`. Das deutet auf einen Callback-, Shared-Tail- oder Thunkvertrag,
-beweist aber weder die exakte finale Funktionsgrenze noch die passende
-allgemeine Analysemodellierung.
+`0x8C6478C2`. Die allgemeine Analyse erkennt `0x8C64784E` jetzt als Funktion
+und `0x8C6478C2` als erreichbaren gemeinsamen Body. Die Analyse endet mit
+`1.715` Seeds, `1.756` Funktionen und `154.092` Instruktionen ohne
+Budgeterschoepfung. Der aus Commit
+`854141b8780626e24815c0bbbb60b5927635a1a6` frisch erzeugte
+v30-Produktport erzeugt dagegen keinen CFG-, Source-Map- oder AOT-Eintrag
+fuer das Ziel und reproduziert die v28-Grenze exakt.
 
 ### Umfang
 
-- Caller-, Callbacktabellen- und Shared-Tail-Herkunft statisch bestimmen
-- exakte Grenze beziehungsweise gemeinsamen Zielvertrag beweisen, nicht raten
-- bewiesene Metadaten hashgebunden im externen Spielprojekt ablegen
-- Analyzer/AOT so erweitern, dass der allgemeine Vertrag statisch emittiert
-  wird
+- [x] Caller-, Callback- und Shared-Tail-Herkunft im generischen Analyzer
+  ueber konkrete Codepointer-Provenienz bestimmen
+- [x] Runtime-Frame-Spill, Reload und Objektstore mit engen Guards
+  modellieren
+- [ ] den generisch gewonnenen Seed durch die externe
+  Spielprojekt-/Exportkonfiguration bis in CFG, IR und AOT erhalten
+- [ ] nur falls danach noch erforderlich: bewiesene Metadaten hashgebunden
+  im externen Spielprojekt ablegen
 - keine Titeladresse als Sonderfall in KatanaRecomp oder KatanaRuntime
 - kein Interpreter, JIT, Runtime-Decoder oder Emulationsfallback
 
@@ -709,6 +720,9 @@ allgemeine Analysemodellierung.
 - Sound-/G2- und technische PVR-Evidenz bleiben erhalten
 - reale Discinstallation und sichtbare Aufnahme werden erneut ausgefuehrt
 - vorzeitiger Fehler wird nicht als 600-Millionen-Performancewert ausgegeben
+
+Der v30-Lauf erfuellt die erneute Discinstallation und Sichtpruefung, aber
+nicht die erste Abnahmebedingung. KR-4972 bleibt deshalb offen.
 
 ---
 
@@ -898,12 +912,23 @@ offen.
 - neuer engerer Blocker aus KR-4972
 - 16 reale Aufnahmen schwarz; keine 600-Millionen-Abnahme
 
-### Lauf A3 - nach KR-4972
+### Lauf A3 - KR-4972-Analyserunde [ausgefuehrt, Abnahme offen]
 
-- denselben gewoehnlichen DirectBoot ausfuehren
-- Shared-Callback-/Thunk-Ziel ueber bewiesene hashgebundene AOT-Metadaten
-  abdecken
-- mindestens bis zum naechsten typisierten Ergebnis fortschreiten
+- generischer Analyzer erkennt `0x8C64784E` und den gemeinsamen Body
+  `0x8C6478C2`
+- v30 wurde frisch exportiert, mit der privaten Disc installiert und real
+  ausgefuehrt
+- produktive CFG, Source-Map und AOT-Ausgabe enthalten den Seed noch nicht
+- unveraenderter Fehler bei `553.990.562` Gastzyklen und `10.079.932`
+  Zentraldispatches
+- 15 reale Fensteraufnahmen schwarz
+
+### Lauf A4 - nach KR-4972-Exportintegration
+
+- gewonnenen generischen Seed bis in produktive CFG, IR und AOT erhalten
+- denselben gewoehnlichen DirectBoot erneut installieren und ausfuehren
+- Ziel ueber validiertes statisches AOT passieren oder einen engeren
+  typisierten Blocker belegen
 
 ### Lauf B - nach KR-4967 bis KR-4970
 

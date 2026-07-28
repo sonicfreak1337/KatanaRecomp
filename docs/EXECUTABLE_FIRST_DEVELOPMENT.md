@@ -230,20 +230,24 @@ Der terminal gemeldete Direct-Wert von 119,64 MHz verwendet den absoluten
 Schedulerstand und ist nicht vergleichbar. Die 16.033.676 Dispatches ergeben
 11,52 Zyklen je ausgefuehrtem Post-Entry-Dispatch.
 
-Der aktuelle v28-DirectBoot installiert weiterhin die private Originaldisc
+Der aktuelle v30-DirectBoot installiert weiterhin die private Originaldisc
 ueber den Produktinstaller, startet danach aber executable-first mit dem
 CompletePlatform-Handoff und dem externen Spielprojektartefakt. Die exakte
 hashgebundene Funktionsgrenze gelangt durch Analyzer, CFG, IR und AOT; der
 Produktlauf passiert damit den bisherigen KR-4971-Blocker. Er endet bei
 Gastzyklus `553.990.562`, nach `138.757.292` Post-Entry-Zyklen und
 `10.079.932` Zentraldispatches. Das sind `+1.086.915` Gastzyklen gegen v26.
-Die tatsaechliche Post-Entry-Arbeit ergibt in 5,275792 Sekunden 26,3008 MHz
-bis zum Fehler gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`,
-nicht aber ein 600-Millionen-Gate.
+Der historische v28-Fehler-zu-Fehler-Vergleich mass dieselbe
+Post-Entry-Arbeit in 5,275792 Sekunden, also 26,3008 MHz gegen 23,9578 MHz
+bei v26 und provisorisch `+9,78 %`. Der v30-Sichtlauf ist kein
+Performancebenchmark; ein 600-Millionen-Gate liegt weiterhin nicht vor.
 
-Der neue erste Blocker KR-4972 ist
+Der erste Blocker KR-4972 bleibt
 `0x8C11088C -> 0x8C64784E`. Das unveraenderte Ziel springt in einen
-gemeinsamen Codepfad; die richtige Callback-/Shared-Tail-/Thunk-Modellierung
-und exakte Grenze muessen bewiesen werden. Der Fehler wird korrekt als
-`aot-template-mismatch` klassifiziert. Zwei technische Direct-Frames sind
-vorhanden, die sechzehn realen Fensteraufnahmen bleiben jedoch schwarz.
+gemeinsamen Codepfad. Die generische Analyse erkennt Ziel und gemeinsamen
+Body inzwischen ueber begrenzte Tail-Jump- und Runtime-Frame-Provenienz; der
+vollstaendige Spielprojektexport uebernimmt den Seed aber noch nicht in CFG,
+Source-Map und AOT. Der v30-Produktlauf reproduziert deshalb den
+`aot-template-mismatch` mit denselben Gastzyklen und Dispatches wie v28.
+Zwei technische Direct-Frames sind vorhanden, die 15 neuen realen
+Fensteraufnahmen bleiben jedoch schwarz.
