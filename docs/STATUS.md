@@ -5,19 +5,32 @@ Aktuelle interne Version: `v0.49.0`
 ## Evidenztrennung
 
 ```text
-letzte reale Produktevidenz: 1b25f1d / ABI 74 / NativeDisc-v33
-aktueller Source-Head main:   24d6132 / Analyzer-ABI 9 / Portvertrag 65
+letzte reale Produktevidenz: 60887f4 / ABI 74 / NativeDisc-v33
+aktueller Source-Head main:   d3b87a1 / Analyzer-ABI 9 / Portvertrag 65
 lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
-offene Produktabnahme:        kein Sonic-Port aus 24d6132
+offene Produktabnahme:        PVR-Fix d3b87a1 noch nicht im Sonic-Port
 ```
 
 Der letzte reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
-PAL-Sega-Screen. Er stoppt danach fail-closed bei Gesamtzyklus `553.990.562`
-beziehungsweise `138.757.292` Post-Entry-Zyklen am fehlenden statischen Ziel
-`0x8C11088C -> 0x8C64784E`. Bis dorthin vergehen `4,73991 s`, entsprechend
-vorlaeufig `29,2742 MHz`, bei `13.612.189` zentralen Dispatches. Das
-600-Millionen-Gate ist nicht vollstaendig und diese Rate daher nur eine
-Abbruchmessung.
+PAL-Sega-Screen und passiert das zuvor fehlende statische Ziel
+`0x8C11088C -> 0x8C64784E`. Er stoppt danach fail-closed bei Gesamtzyklus
+`573.987.074` beziehungsweise `158.753.804` Post-Entry-Zyklen an der
+PVR-Meldung `PVR-Hintergrundvertex ist kleiner als sein ISP/TSP-Format`.
+Bis dorthin vergehen `6,87382 s`, entsprechend vorlaeufig `23,0954 MHz`,
+bei `16.376.023` zentralen Dispatches. Das sind `+19.996.512` Gastzyklen
+gegen den vorherigen Produktlauf. Das 600-Millionen-Gate ist nicht
+vollstaendig und diese Rate daher nur eine Abbruchmessung.
+
+`d3b87a1` korrigiert den allgemeinen Hardwarevertrag hinter diesem neuen
+Blocker. `ISP_BACKGND_T` und `PARAM_BASE` adressieren Background-Parameter
+im logischen 32-Bit-VRAM-Bereich; der Renderer hatte stattdessen den
+numerisch gleichen Raw-/64-Bit-Backingoffset dekodiert. Parameter und
+Vertices werden nun korrekt projiziert, Texturdaten bewusst nicht.
+`FPU_SHAD_SCALE.bit8` wird ausserdem korrekt als Intensity-Volume
+interpretiert; nur Parameter-Selection verwendet `3 + 2*SKIP`. Der
+fokussierte bestehende Renderertest passiert die neue Poison-Regression
+und die Shadow-Stride-Pruefung, bevor er spaeter an einer unabhaengigen
+bestehenden Direct-C888-Pruefung endet. Die Sonic-Produktabnahme steht aus.
 
 `24d6132` schliesst die dazugehoerige allgemeine Analyseluecke: Der
 Inventargraph transportiert Candidate-Calls getrennt vom semantischen CFG,

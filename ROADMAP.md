@@ -43,17 +43,30 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
-letzte reale Produktevidenz: 1b25f1d / ABI 74 / NativeDisc-v33
-aktueller Source-Head main:   24d6132 / Analyzer-ABI 9 / Portvertrag 65
+letzte reale Produktevidenz: 60887f4 / ABI 74 / NativeDisc-v33
+aktueller Source-Head main:   d3b87a1 / Analyzer-ABI 9 / Portvertrag 65
 lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
 ```
 
-Der reale ABI-74-NativeDisc-v33-Lauf praesentiert den PAL-Sega-Screen und
-stoppt danach fail-closed bei Gesamtzyklus `553.990.562` am noch fehlenden
-AOT-Einstieg `0x8C11088C -> 0x8C64784E`. Er fuehrt `138.757.292`
-Post-Entry-Zyklen in `4,73991 s` beziehungsweise vorlaeufig `29,2742 MHz`
-mit `13.612.189` zentralen Dispatches aus. Das ist kein vollstaendiges
-600-Millionen-Gate, belegt aber den NativeDisc-/IP.BIN-Bildpfad.
+Der reale, erneut aus dem sauberen Main-Stand exportierte und mit der
+privaten Originaldisc installierte ABI-74-NativeDisc-v33-Lauf praesentiert
+den PAL-Sega-Screen. Er passiert den frueheren fehlenden AOT-Einstieg
+`0x8C11088C -> 0x8C64784E` und stoppt erst bei Gesamtzyklus `573.987.074`
+fail-closed an einer ungueltigen PVR-Background-Parameterdekodierung.
+Ausgefuehrt wurden `158.753.804` Post-Entry-Zyklen in `6,87382 s`,
+vorlaeufig `23,0954 MHz`, mit `16.376.023` zentralen Dispatches. Gegen den
+vorherigen Lauf sind das `+19.996.512` Gastzyklen und `+2.763.834`
+Dispatches. Das bleibt ein vorzeitig beendeter Bring-up-Lauf, kein
+600-Millionen-Performancegate.
+
+`d3b87a1` behebt die daraus allgemein abgeleitete PVR-Ursache: Background-
+ISP/TSP-Parameter und ihre Vertices werden aus dem logischen
+32-Bit-VRAM-Adressraum in das gemeinsame Backing projiziert; Texturdaten
+bleiben im 64-Bit-Pfad. Zusaetzlich ist die Polaritaet von
+`FPU_SHAD_SCALE.bit8` fuer Parameter-Selection gegen Intensity-Volume
+korrigiert. Die kleine bestehende Rendererregression vergiftet den
+numerisch gleichen Raw-Offset und passiert damit den zuvor fehlerhaften
+Readpfad. Die reale Sonic-Abnahme dieses Source-Fixes steht noch aus.
 
 `24d6132` schliesst vor dem naechsten Produktlauf die offenen
 Reviewvertraege allgemein: Candidate-Calls nehmen am getrennten

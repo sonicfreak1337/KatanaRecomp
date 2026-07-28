@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- `d3b87a1` korrigiert den PVR-Backgroundzugriff allgemein. Die durch
+  `PARAM_BASE + ISP_BACKGND_T` adressierten ISP/TSP-Parameter und Vertices
+  werden jetzt aus dem logischen 32-Bit-VRAM-Bereich in das gemeinsame
+  Backing projiziert, waehrend Texturdaten weiter den 64-Bit-Pfad benutzen.
+  Die Polaritaet von `FPU_SHAD_SCALE.bit8` ist ebenfalls korrigiert:
+  Parameter-Selection verwendet `3 + 2*SKIP`, Intensity-Volume
+  `3 + SKIP`. Eine Poison-Regression deckt den zuvor irrtuemlich gelesenen
+  Raw-Offset ab. Der vorausgehende reale NativeDisc-v33-Lauf zeigte den
+  PAL-Sega-Screen, passierte den alten Guarded-AOT-Blocker und erreichte
+  Gesamtzyklus `573.987.074`, bevor er genau an der nun korrigierten
+  Background-Dekodierung fail-closed stoppte. Die erneute Produktabnahme
+  steht aus.
 - `24d6132` schliesst die vor dem naechsten Sonic-Lauf offenen
   Guarded-AOT-Reviews. Candidate-Calls erreichen einen separaten
   Inventar-Rueckwaertsgraph, echte Codepointerprovenienz folgt ueber
