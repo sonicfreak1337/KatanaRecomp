@@ -160,6 +160,7 @@ ValidatedBlockExecution make_validated_execution(
     execution.runtime_registered = block.runtime_registered;
     execution.provenance = block.provenance;
     execution.aot_template = block.aot_template ? &*block.aot_template : nullptr;
+    execution.fastpath = block.fastpath;
     execution.generation_guard =
         reusable_guard.value_or(BlockDispatchGenerationGuard{
             .block = handle,

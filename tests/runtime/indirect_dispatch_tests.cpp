@@ -33,8 +33,13 @@ void static_aot_p2_alias_regression() {
                         block,
                         "static-aot-alias",
                         false};
+    const std::uint32_t fastpath_descriptor = 0xA07FA57u;
     native.static_variant_policy =
         StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+    native.fastpath = {
+        RuntimeBlockFastpathKind::MemoryFill,
+        &fastpath_descriptor,
+    };
     static_cast<void>(blocks.register_static(std::move(native)));
     blocks.seal_static();
 
@@ -55,8 +60,12 @@ void static_aot_p2_alias_regression() {
                 first.execution.virtual_start == 0x8C001000u &&
                 cached.execution.virtual_start == 0x8C001000u &&
                 cached.execution.variant.runtime_generation == runtime_generation &&
+                first.execution.fastpath.kind == RuntimeBlockFastpathKind::MemoryFill &&
+                first.execution.fastpath.descriptor == &fastpath_descriptor &&
+                cached.execution.fastpath.kind == RuntimeBlockFastpathKind::MemoryFill &&
+                cached.execution.fastpath.descriptor == &fastpath_descriptor &&
                 cpu.pc == 0x8C001000u,
-            "Static-AOT-P2-Alias oder sein Inline-Cachehit verliert den nativen Owner-PC.");
+            "Static-AOT-P2-Alias oder sein Inline-Cachehit verliert Owner-PC/Fastpathbindung.");
 }
 
 void materializer_lifecycle_regression() {

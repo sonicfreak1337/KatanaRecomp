@@ -79,6 +79,21 @@ struct RuntimeAotTemplateContract {
     [[nodiscard]] bool operator==(const RuntimeAotTemplateContract&) const noexcept = default;
 };
 
+enum class RuntimeBlockFastpathKind : std::uint8_t {
+    None,
+    CompositeCallback,
+    MemoryFill,
+    MmioWait,
+    CountedLoop
+};
+
+struct RuntimeBlockFastpathBinding {
+    RuntimeBlockFastpathKind kind = RuntimeBlockFastpathKind::None;
+    // The descriptor is immutable process-local data owned by the generated
+    // product and must outlive the registered block.
+    const void* descriptor = nullptr;
+};
+
 struct RuntimeBlock {
     std::uint32_t virtual_start = 0u;
     std::uint32_t physical_origin = 0u;
@@ -90,6 +105,7 @@ struct RuntimeBlock {
     bool runtime_registered = false;
     std::optional<RuntimeAotTemplateContract> aot_template;
     StaticVariantPolicy static_variant_policy = StaticVariantPolicy::Exact;
+    RuntimeBlockFastpathBinding fastpath;
 };
 
 struct RuntimeBlockHandle {
@@ -123,19 +139,6 @@ struct BlockDispatchGenerationGuard {
     bool runtime_registered = false;
 
     [[nodiscard]] bool operator==(const BlockDispatchGenerationGuard&) const noexcept = default;
-};
-
-enum class RuntimeBlockFastpathKind : std::uint8_t {
-    None,
-    CompositeCallback,
-    MemoryFill,
-    MmioWait,
-    CountedLoop
-};
-
-struct RuntimeBlockFastpathBinding {
-    RuntimeBlockFastpathKind kind = RuntimeBlockFastpathKind::None;
-    const void* descriptor = nullptr;
 };
 
 // An indirect-dispatch result is consumed immediately by the generated caller.

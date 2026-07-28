@@ -368,6 +368,12 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
         throw std::invalid_argument(
             "Blockeintrag benoetigt Groesse, Backendfunktion und Provenienz.");
     }
+    if ((block.fastpath.kind == RuntimeBlockFastpathKind::None) !=
+        (block.fastpath.descriptor == nullptr)) {
+        throw std::invalid_argument(
+            "Fastpathbindung benoetigt konsistent Typ und Deskriptor: " +
+            block.provenance);
+    }
     const auto virtual_end = static_cast<std::uint64_t>(block.virtual_start) + block.size;
     if (virtual_end > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
         throw std::length_error("Blockbereich laeuft ueber den 32-Bit-Gastadressraum hinaus: " +
@@ -779,6 +785,7 @@ RuntimeBlockTable::lookup_static_aot(const std::uint32_t physical_address,
     execution.end_kind = record->block.end_kind;
     execution.runtime_registered = false;
     execution.provenance = record->block.provenance;
+    execution.fastpath = record->block.fastpath;
     execution.generation_guard = {
         .block = execution.block,
         .kind = BlockDispatchGenerationGuardKind::StaticAot,
