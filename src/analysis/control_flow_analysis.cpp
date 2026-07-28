@@ -569,12 +569,18 @@ collect_function_value_edges(
     const std::span<const IndirectControlFlowResolution> resolutions,
     const std::span<const JumpTableAnalysis> tables) {
     auto edges = collect_resolved_edges(resolutions, tables);
-    // Candidate-only calls must not become executable CFG edges, but the
-    // interprocedural value analysis needs their possible callees so it can
-    // propagate ABI arguments into registration functions.  GuardedPartial
+    // Candidate-only transfers must not become executable CFG edges.  This
+    // private edge set uses Call as a non-successor carrier for finite calls
+    // and non-table jumps; the value analyzer inspects the real opcode and
+    // reclassifies Jmp/Braf sites as guarded tail ingress.  GuardedPartial
     // keeps unknown live targets authoritative.
     for (const auto& resolution : resolutions) {
-        if (resolution.kind != IndirectControlFlowKind::Call) continue;
+        if (resolution.kind != IndirectControlFlowKind::Call &&
+            resolution.kind != IndirectControlFlowKind::Jump)
+            continue;
+        if (resolution.kind == IndirectControlFlowKind::Jump &&
+            resolution.origin_class == IndirectControlFlowOriginClass::Table)
+            continue;
         for (const auto target : resolution.analysis_candidates) {
             edges.push_back({resolution.instruction_address,
                              target,

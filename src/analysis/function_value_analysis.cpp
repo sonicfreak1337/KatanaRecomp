@@ -23,6 +23,7 @@
 #include <set>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -33,6 +34,8 @@ namespace {
 constexpr std::size_t maximum_summary_values = 8u;
 constexpr std::size_t maximum_guarded_code_inventory = 1'024u;
 constexpr std::size_t maximum_forwarded_store_contexts = 64u;
+constexpr std::size_t maximum_inventory_regions = maximum_guarded_code_inventory;
+constexpr std::size_t maximum_inventory_region_blocks = 256u;
 constexpr std::size_t maximum_memory_values = 256u;
 constexpr std::size_t maximum_fixpoint_iterations = 65'536u;
 constexpr std::size_t maximum_parallel_resolution_jobs = 12u;
@@ -159,6 +162,14 @@ struct FunctionEvaluation {
         AbstractState state;
     };
     std::vector<CallArguments> call_arguments;
+    struct InventoryTransfer {
+        std::uint32_t transfer_site = 0u;
+        std::uint32_t target = 0u;
+        AbstractState state;
+        bool guarded = true;
+        bool complete = false;
+    };
+    std::vector<InventoryTransfer> inventory_transfers;
 };
 
 struct IndirectCalleeCandidates {
@@ -1308,6 +1319,80 @@ const FunctionRegisterValueSummary* register_summary(const FunctionValueSummary&
     return found == summary.registers.end() ? nullptr : &*found;
 }
 
+void observe_callee_arguments(
+    const AbstractState& state,
+    const std::uint32_t call_site,
+    const std::span<const std::uint32_t> candidate_callees,
+    const bool candidate_callees_guarded,
+    std::vector<FunctionEvaluation::CallArguments>* const call_arguments) {
+    if (call_arguments == nullptr || candidate_callees.empty()) return;
+    AbstractState observation;
+    observation.registers = state.registers;
+    observation.stack_offsets = state.stack_offsets;
+    observation.stack_may_alias = state.stack_may_alias;
+    observation.inventory_stack_may_alias = state.inventory_stack_may_alias;
+    observation.inventory_vbr_relative = state.inventory_vbr_relative;
+    observation.memory_values = state.memory_values;
+    // Caller-local stack slots are not part of callee ingress.  Keeping
+    // them in observations only deep-copied irrelevant state and could
+    // requeue a callee when the effective merged input was unchanged.
+    if (candidate_callees_guarded) {
+        for (auto& value : observation)
+            value.guarded = true;
+        for (auto& [address, value] : observation.memory_values) {
+            static_cast<void>(address);
+            value.guarded = true;
+        }
+    }
+    for (std::size_t index = 0u; index < candidate_callees.size(); ++index) {
+        const auto candidate = candidate_callees[index];
+        if (index + 1u == candidate_callees.size())
+            call_arguments->push_back({call_site, candidate, std::move(observation)});
+        else
+            call_arguments->push_back({call_site, candidate, observation});
+    }
+}
+
+void observe_inventory_transfers(
+    const AbstractState& state,
+    const std::uint32_t transfer_site,
+    const std::span<const std::uint32_t> candidate_callees,
+    const bool guarded,
+    const bool complete,
+    std::vector<FunctionEvaluation::InventoryTransfer>* const transfers) {
+    if (transfers == nullptr || candidate_callees.empty()) return;
+    auto observation = state;
+    if (guarded || !complete) {
+        for (auto& value : observation) {
+            if (!value.known) continue;
+            value.guarded = true;
+            value.complete = value.complete && complete;
+        }
+        for (auto& [offset, value] : observation.stack_values) {
+            static_cast<void>(offset);
+            value.guarded = true;
+            value.complete = value.complete && complete;
+        }
+        for (auto& [address, value] : observation.memory_values) {
+            static_cast<void>(address);
+            value.guarded = true;
+            value.complete = value.complete && complete;
+        }
+    }
+    for (std::size_t index = 0u; index < candidate_callees.size(); ++index) {
+        const auto candidate = candidate_callees[index];
+        if (index + 1u == candidate_callees.size())
+            transfers->push_back({transfer_site,
+                                  candidate,
+                                  std::move(observation),
+                                  guarded,
+                                  complete});
+        else
+            transfers->push_back(
+                {transfer_site, candidate, observation, guarded, complete});
+    }
+}
+
 void apply_call(AbstractState& state,
                 const katana::io::ExecutableImage& image,
                 const std::uint32_t call_site,
@@ -1318,35 +1403,8 @@ void apply_call(AbstractState& state,
                 const std::map<std::uint32_t, FunctionValueSummary>& summaries,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments,
                 const bool preserve_guarded_stack_inventory = false) {
-    if (call_arguments != nullptr && !candidate_callees.empty()) {
-        AbstractState observation;
-        observation.registers = state.registers;
-        observation.stack_offsets = state.stack_offsets;
-        observation.stack_may_alias = state.stack_may_alias;
-        observation.inventory_stack_may_alias =
-            state.inventory_stack_may_alias;
-        observation.inventory_vbr_relative =
-            state.inventory_vbr_relative;
-        observation.memory_values = state.memory_values;
-        // Caller-local stack slots are not part of callee ingress.  Keeping
-        // them in observations only deep-copied irrelevant state and could
-        // requeue a callee when the effective merged input was unchanged.
-        if (candidate_callees_guarded) {
-            for (auto& value : observation)
-                value.guarded = true;
-            for (auto& [address, value] : observation.memory_values) {
-                static_cast<void>(address);
-                value.guarded = true;
-            }
-        }
-        for (std::size_t index = 0u; index < candidate_callees.size(); ++index) {
-            const auto candidate = candidate_callees[index];
-            if (index + 1u == candidate_callees.size())
-                call_arguments->push_back({call_site, candidate, std::move(observation)});
-            else
-                call_arguments->push_back({call_site, candidate, observation});
-        }
-    }
+    observe_callee_arguments(
+        state, call_site, candidate_callees, candidate_callees_guarded, call_arguments);
     if (image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC) {
         for (std::size_t index = 0u; index < state.size(); ++index) {
             make_unknown(state[index]);
@@ -1786,6 +1844,7 @@ FunctionEvaluation evaluate_function(
     const FunctionInfo& function,
     const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
     const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>& indirect_callees,
+    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>& tail_ingresses,
     const std::map<std::uint32_t, FunctionValueSummary>& summaries,
     const AbstractState& initial_state,
     const bool collect_resolutions,
@@ -1796,9 +1855,11 @@ FunctionEvaluation evaluate_function(
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
     if (!collect_resolutions)
-        evaluation.call_arguments.reserve(function.direct_callees.size());
-    auto* const call_arguments =
-        collect_resolutions ? nullptr : &evaluation.call_arguments;
+        evaluation.call_arguments.reserve(function.direct_callees.size() +
+                                          function.tail_jump_targets.size());
+    auto* const call_arguments = collect_resolutions ? nullptr : &evaluation.call_arguments;
+    auto* const inventory_transfers =
+        guarded_inventory_collector == nullptr ? nullptr : &evaluation.inventory_transfers;
     std::unordered_set<std::uint32_t> members;
     members.reserve(function.block_addresses.size());
     members.insert(function.block_addresses.begin(), function.block_addresses.end());
@@ -1827,6 +1888,13 @@ FunctionEvaluation evaluate_function(
             bool candidate_callees_complete = false;
         };
         std::optional<DelayedCall> delayed_call;
+        struct DelayedTailIngress {
+            std::uint32_t transfer_site = 0u;
+            std::vector<std::uint32_t> candidate_callees;
+            bool candidate_callees_guarded = true;
+            bool candidate_callees_complete = false;
+        };
+        std::optional<DelayedTailIngress> delayed_tail_ingress;
         for (const auto& line : block->second->lines) {
             const bool indirect = line.instruction.kind == katana::sh4::InstructionKind::Jmp ||
                                   line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
@@ -1917,6 +1985,16 @@ FunctionEvaluation evaluate_function(
                            may_merge_stack_inventory);
                 delayed_call.reset();
             }
+            if (delayed_tail_ingress.has_value()) {
+                observe_inventory_transfers(
+                    state,
+                    delayed_tail_ingress->transfer_site,
+                    delayed_tail_ingress->candidate_callees,
+                    delayed_tail_ingress->candidate_callees_guarded,
+                    delayed_tail_ingress->candidate_callees_complete,
+                    inventory_transfers);
+                delayed_tail_ingress.reset();
+            }
             if (call) {
                 const auto callee =
                     line.instruction.control_flow == katana::sh4::ControlFlowKind::Call
@@ -1951,6 +2029,28 @@ FunctionEvaluation evaluate_function(
                                summaries,
                                call_arguments,
                                may_merge_stack_inventory);
+            }
+            if (!call &&
+                (line.instruction.control_flow ==
+                     katana::sh4::ControlFlowKind::UnconditionalBranch ||
+                 line.instruction.control_flow ==
+                     katana::sh4::ControlFlowKind::IndirectBranch)) {
+                const auto tail_ingress = tail_ingresses.find(line.address);
+                if (tail_ingress == tail_ingresses.end()) continue;
+                if (line.instruction.has_delay_slot) {
+                    delayed_tail_ingress = DelayedTailIngress{
+                        line.address,
+                        tail_ingress->second.targets,
+                        tail_ingress->second.guarded,
+                        tail_ingress->second.complete};
+                } else {
+                    observe_inventory_transfers(state,
+                                                line.address,
+                                                tail_ingress->second.targets,
+                                                tail_ingress->second.guarded,
+                                                tail_ingress->second.complete,
+                                                inventory_transfers);
+                }
             }
         }
         if (controlling_line(*block->second).instruction.kind ==
@@ -2261,10 +2361,35 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
     return input;
 }
 
-bool requires_forwarded_isolated_store_harvest(
-    const katana::io::ExecutableImage& image,
-    const AbstractState& observation,
-    const AbstractState& merged_input) {
+AbstractState tail_store_input(const AbstractState& observation) {
+    auto input = observation;
+    for (auto& value : input) {
+        if (!value.known) continue;
+        value.guarded = true;
+        value.complete = false;
+        if (value.values.size() > maximum_summary_values)
+            make_unknown_preserving_provenance(value);
+    }
+    for (auto& [offset, value] : input.stack_values) {
+        static_cast<void>(offset);
+        value.guarded = true;
+        value.complete = false;
+        if (value.values.size() > maximum_summary_values)
+            make_unknown_preserving_provenance(value);
+    }
+    for (auto& [address, value] : input.memory_values) {
+        static_cast<void>(address);
+        value.guarded = true;
+        value.complete = false;
+        if (value.values.size() > maximum_summary_values)
+            make_unknown_preserving_provenance(value);
+    }
+    return input;
+}
+
+bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage& image,
+                                               const AbstractState& observation,
+                                               const AbstractState& merged_input) {
     for (std::uint8_t index = 4u; index <= 7u; ++index) {
         const auto& observed = observation[index];
         if (!observed.known || observed.values.empty() ||
@@ -2353,8 +2478,71 @@ analyze_function_values(
     if (lines.empty() || function_boundaries.empty() ||
         image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC)
         return result;
+    struct CandidateTailCarrier {
+        std::uint32_t transfer_site = 0u;
+        std::uint32_t target = 0u;
+    };
+    std::vector<CandidateTailCarrier> candidate_tail_carriers;
+    std::set<std::pair<std::uint32_t, std::uint32_t>>
+        private_candidate_carrier_pairs;
+    for (const auto& edge : resolved_edges) {
+        if (edge.kind != ResolvedControlFlowKind::Call ||
+            resolved_edge_evidence(edge) != ControlFlowEvidence::GuardedPartial)
+            continue;
+        const auto line = std::lower_bound(
+            lines.begin(),
+            lines.end(),
+            edge.instruction_address,
+            [](const auto& candidate, const std::uint32_t address) {
+                return candidate.address < address;
+            });
+        const auto target =
+            std::lower_bound(lines.begin(),
+                             lines.end(),
+                             edge.target_address,
+                             [](const auto& candidate, const std::uint32_t address) {
+                                 return candidate.address < address;
+                             });
+        if (line == lines.end() || line->address != edge.instruction_address ||
+            line->instruction.control_flow !=
+                katana::sh4::ControlFlowKind::IndirectBranch ||
+            target == lines.end() || target->address != edge.target_address ||
+            target->is_delay_slot)
+            continue;
+        private_candidate_carrier_pairs.emplace(
+            edge.instruction_address, edge.target_address);
+        if (std::find(edge.evidence_origins.begin(),
+                      edge.evidence_origins.end(),
+                      AnalysisEvidenceOrigin::JumpTable) != edge.evidence_origins.end())
+            continue;
+        candidate_tail_carriers.push_back(
+            {edge.instruction_address, edge.target_address});
+    }
+    std::sort(candidate_tail_carriers.begin(),
+              candidate_tail_carriers.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.transfer_site, left.target) <
+                         std::tie(right.transfer_site, right.target);
+              });
+    candidate_tail_carriers.erase(
+        std::unique(candidate_tail_carriers.begin(),
+                    candidate_tail_carriers.end(),
+                    [](const auto& left, const auto& right) {
+                        return left.transfer_site == right.transfer_site &&
+                               left.target == right.target;
+                    }),
+        candidate_tail_carriers.end());
+    std::vector<ResolvedControlFlowEdge> function_edges;
+    function_edges.reserve(resolved_edges.size());
+    for (const auto& edge : resolved_edges) {
+        if (!private_candidate_carrier_pairs.contains(
+                {edge.instruction_address, edge.target_address}))
+            function_edges.push_back(edge);
+    }
+
     std::vector<std::uint32_t> block_leaders;
-    block_leaders.reserve(function_boundaries.size() * 2u);
+    block_leaders.reserve(function_boundaries.size() * 2u +
+                          candidate_tail_carriers.size());
     for (const auto& boundary : function_boundaries) {
         block_leaders.push_back(boundary.entry_address);
         if (boundary.size != 0u) {
@@ -2365,8 +2553,10 @@ analyze_function_values(
                 block_leaders.push_back(static_cast<std::uint32_t>(end));
         }
     }
+    for (const auto& carrier : candidate_tail_carriers)
+        block_leaders.push_back(carrier.target);
     const auto blocks =
-        build_basic_blocks(lines, resolved_edges, block_leaders);
+        build_basic_blocks(lines, function_edges, block_leaders);
     block_count = blocks.size();
     report_progress("blocks-complete");
     std::unordered_map<std::uint32_t, const BasicBlock*> block_index;
@@ -2374,14 +2564,40 @@ analyze_function_values(
     for (const auto& block : blocks)
         block_index.emplace(block.start_address, &block);
     const auto functions = discover_functions_from_blocks(
-        blocks, function_boundaries, resolved_edges);
+        blocks, function_boundaries, function_edges);
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        function_owners_by_block;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        function_owners_by_control;
+    function_owners_by_block.reserve(blocks.size());
+    function_owners_by_control.reserve(blocks.size());
+    for (const auto& function : functions) {
+        for (const auto block_address : function.block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end() || block->second->lines.empty())
+                continue;
+            function_owners_by_block[block_address].push_back(
+                function.entry_address);
+            function_owners_by_control
+                [controlling_line(*block->second).address]
+                    .push_back(function.entry_address);
+        }
+    }
+    for (auto& [block, owners] : function_owners_by_block) {
+        static_cast<void>(block);
+        normalize(owners);
+    }
+    for (auto& [control, owners] : function_owners_by_control) {
+        static_cast<void>(control);
+        normalize(owners);
+    }
     const auto components = strong_components(functions);
     function_count = functions.size();
     result.strongly_connected_components = components.size();
     report_progress("functions-complete");
     std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_callees;
-    indirect_callees.reserve(resolved_edges.size());
-    for (const auto& edge : resolved_edges) {
+    indirect_callees.reserve(function_edges.size());
+    for (const auto& edge : function_edges) {
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
         auto& candidates = indirect_callees[edge.instruction_address];
         candidates.targets.push_back(edge.target_address);
@@ -2393,6 +2609,251 @@ analyze_function_values(
         static_cast<void>(call_site);
         normalize(candidates.targets);
     }
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_jump_candidates;
+    indirect_jump_candidates.reserve(function_edges.size());
+    std::unordered_set<std::uint32_t> jump_table_jump_sites;
+    for (const auto& edge : function_edges) {
+        if (edge.kind != ResolvedControlFlowKind::Jump) continue;
+        if (std::find(edge.evidence_origins.begin(),
+                      edge.evidence_origins.end(),
+                      AnalysisEvidenceOrigin::JumpTable) != edge.evidence_origins.end())
+            jump_table_jump_sites.insert(edge.instruction_address);
+        auto& candidates = indirect_jump_candidates[edge.instruction_address];
+        candidates.targets.push_back(edge.target_address);
+        const auto evidence = resolved_edge_evidence(edge);
+        candidates.guarded = candidates.guarded || evidence != ControlFlowEvidence::ProvenComplete;
+        candidates.complete = candidates.complete && control_flow_evidence_complete(evidence);
+    }
+    for (auto& [transfer_site, candidates] : indirect_jump_candidates) {
+        static_cast<void>(transfer_site);
+        normalize(candidates.targets);
+    }
+    struct InventoryRegionTailIngress {
+        std::uint32_t transfer_site = 0u;
+        std::uint32_t target = 0u;
+        bool guarded = true;
+        bool complete = false;
+    };
+    struct InventoryRegion {
+        FunctionInfo function;
+    };
+    std::vector<InventoryRegion> inventory_regions;
+    inventory_regions.reserve(std::min(candidate_tail_carriers.size(),
+                                       maximum_inventory_regions));
+    std::vector<InventoryRegionTailIngress> inventory_region_tail_ingresses;
+    std::deque<std::uint32_t> pending_inventory_regions;
+    std::unordered_set<std::uint32_t> queued_inventory_regions;
+    bool inventory_region_walk_truncated = false;
+    const auto enqueue_inventory_region =
+        [&](const std::uint32_t target) {
+            if (!block_index.contains(target) ||
+                !queued_inventory_regions.insert(target).second)
+                return;
+            pending_inventory_regions.push_back(target);
+        };
+    for (const auto& carrier : candidate_tail_carriers)
+        enqueue_inventory_region(carrier.target);
+    for (const auto& [transfer_site, candidates] : indirect_jump_candidates) {
+        if (!candidates.guarded || candidates.complete ||
+            candidates.targets.size() != 1u ||
+            jump_table_jump_sites.contains(transfer_site))
+            continue;
+        enqueue_inventory_region(candidates.targets.front());
+    }
+
+    const std::vector<std::uint32_t> no_function_owners;
+    const auto owners_for_block =
+        [&](const std::uint32_t address) -> const std::vector<std::uint32_t>& {
+            const auto owners = function_owners_by_block.find(address);
+            return owners == function_owners_by_block.end() ? no_function_owners
+                                                            : owners->second;
+        };
+    while (!pending_inventory_regions.empty() &&
+           inventory_regions.size() < maximum_inventory_regions) {
+        const auto target = pending_inventory_regions.front();
+        pending_inventory_regions.pop_front();
+        const auto& target_owners = owners_for_block(target);
+        if (target_owners.size() > 1u) {
+            inventory_region_walk_truncated = true;
+            continue;
+        }
+        const auto block_within_owner_domain =
+            [&](const std::uint32_t address) {
+                const auto& owners = owners_for_block(address);
+                if (target_owners.empty())
+                    return owners.empty();
+                return std::binary_search(owners.begin(),
+                                          owners.end(),
+                                          target_owners.front());
+            };
+        std::deque<std::uint32_t> pending_blocks{target};
+        std::unordered_set<std::uint32_t> visited_blocks;
+        visited_blocks.reserve(maximum_inventory_region_blocks);
+        std::vector<InventoryRegionTailIngress> local_tail_ingresses;
+        bool region_budget_exhausted = false;
+        while (!pending_blocks.empty()) {
+            const auto block_address = pending_blocks.front();
+            pending_blocks.pop_front();
+            if (visited_blocks.contains(block_address) ||
+                !block_within_owner_domain(block_address))
+                continue;
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end() || block->second->lines.empty())
+                continue;
+            if (visited_blocks.size() >= maximum_inventory_region_blocks) {
+                region_budget_exhausted = true;
+                break;
+            }
+            visited_blocks.insert(block_address);
+            const auto& control = controlling_line(*block->second);
+            const auto flow = control.instruction.control_flow;
+            const auto indirect_call = indirect_callees.find(control.address);
+            for (const auto successor : block->second->successors) {
+                const bool direct_call_target =
+                    flow == katana::sh4::ControlFlowKind::Call &&
+                    control.target_address.has_value() &&
+                    successor == *control.target_address;
+                const bool indirect_call_target =
+                    flow == katana::sh4::ControlFlowKind::IndirectCall &&
+                    indirect_call != indirect_callees.end() &&
+                    std::binary_search(indirect_call->second.targets.begin(),
+                                       indirect_call->second.targets.end(),
+                                       successor);
+                if (direct_call_target || indirect_call_target)
+                    continue;
+                if (block_within_owner_domain(successor)) {
+                    pending_blocks.push_back(successor);
+                    continue;
+                }
+                if (flow != katana::sh4::ControlFlowKind::UnconditionalBranch &&
+                    flow != katana::sh4::ControlFlowKind::IndirectBranch)
+                    continue;
+                if (control.target_address.has_value() &&
+                    successor == *control.target_address) {
+                    local_tail_ingresses.push_back(
+                        {control.address, successor, false, true});
+                    continue;
+                }
+                const auto candidates =
+                    indirect_jump_candidates.find(control.address);
+                if (candidates == indirect_jump_candidates.end() ||
+                    !std::binary_search(candidates->second.targets.begin(),
+                                        candidates->second.targets.end(),
+                                        successor))
+                    continue;
+                local_tail_ingresses.push_back(
+                    {control.address,
+                     successor,
+                     candidates->second.guarded,
+                     candidates->second.complete});
+            }
+        }
+        if (region_budget_exhausted)
+            inventory_region_walk_truncated = true;
+        if (visited_blocks.empty() || region_budget_exhausted)
+            continue;
+        InventoryRegion region;
+        region.function.entry_address = target;
+        region.function.evidence = ControlFlowEvidence::GuardedPartial;
+        region.function.block_addresses.assign(visited_blocks.begin(),
+                                               visited_blocks.end());
+        normalize(region.function.block_addresses);
+        inventory_regions.push_back(std::move(region));
+        for (const auto& ingress : local_tail_ingresses) {
+            inventory_region_tail_ingresses.push_back(ingress);
+            enqueue_inventory_region(ingress.target);
+        }
+    }
+    if (!pending_inventory_regions.empty())
+        inventory_region_walk_truncated = true;
+    std::unordered_map<std::uint32_t, const FunctionInfo*>
+        inventory_region_by_address;
+    inventory_region_by_address.reserve(inventory_regions.size());
+    for (const auto& region : inventory_regions)
+        inventory_region_by_address.emplace(region.function.entry_address,
+                                            &region.function);
+
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates> tail_ingresses;
+    tail_ingresses.reserve(indirect_jump_candidates.size() +
+                           candidate_tail_carriers.size() +
+                           inventory_region_tail_ingresses.size());
+    const auto add_tail_ingress =
+        [&tail_ingresses,
+         &inventory_region_by_address](const std::uint32_t transfer_site,
+                                       const std::span<const std::uint32_t> targets,
+                                       const bool guarded,
+                                       const bool complete) {
+        if (targets.empty()) return;
+        auto accepted = std::vector<std::uint32_t>{};
+        accepted.reserve(targets.size());
+        for (const auto target : targets) {
+            if (inventory_region_by_address.contains(target))
+                accepted.push_back(target);
+        }
+        if (accepted.empty()) return;
+        auto& ingress = tail_ingresses[transfer_site];
+        ingress.targets.insert(ingress.targets.end(), accepted.begin(), accepted.end());
+        ingress.guarded = ingress.guarded || guarded;
+        ingress.complete = ingress.complete && complete;
+    };
+    for (const auto& carrier : candidate_tail_carriers) {
+        const std::array target{carrier.target};
+        add_tail_ingress(carrier.transfer_site, target, true, false);
+    }
+    for (const auto& function : functions) {
+        for (const auto block_address : function.block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end() || block->second->lines.empty()) continue;
+            const auto& control = controlling_line(*block->second);
+            const auto flow = control.instruction.control_flow;
+            if (flow != katana::sh4::ControlFlowKind::UnconditionalBranch &&
+                flow != katana::sh4::ControlFlowKind::IndirectBranch)
+                continue;
+            if (control.target_address.has_value() &&
+                std::binary_search(function.tail_jump_targets.begin(),
+                                   function.tail_jump_targets.end(),
+                                   *control.target_address)) {
+                const std::array target{*control.target_address};
+                add_tail_ingress(control.address, target, false, true);
+            }
+            const auto candidates = indirect_jump_candidates.find(control.address);
+            if (candidates == indirect_jump_candidates.end()) continue;
+            std::vector<std::uint32_t> tail_targets;
+            tail_targets.reserve(candidates->second.targets.size());
+            for (const auto target : candidates->second.targets) {
+                if (std::binary_search(function.tail_jump_targets.begin(),
+                                       function.tail_jump_targets.end(),
+                                       target))
+                    tail_targets.push_back(target);
+            }
+            add_tail_ingress(control.address,
+                             tail_targets,
+                             candidates->second.guarded,
+                             candidates->second.complete);
+        }
+    }
+    for (const auto& ingress : inventory_region_tail_ingresses) {
+        const std::array target{ingress.target};
+        add_tail_ingress(ingress.transfer_site,
+                         target,
+                         ingress.guarded,
+                         ingress.complete);
+    }
+    for (auto& [transfer_site, ingress] : tail_ingresses) {
+        static_cast<void>(transfer_site);
+        normalize(ingress.targets);
+    }
+    std::unordered_set<std::uint32_t> functions_with_inventory_tail;
+    for (const auto& [transfer_site, ingress] : tail_ingresses) {
+        static_cast<void>(ingress);
+        const auto owners = function_owners_by_control.find(transfer_site);
+        if (owners == function_owners_by_control.end())
+            continue;
+        functions_with_inventory_tail.insert(owners->second.begin(),
+                                             owners->second.end());
+    }
+    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
+        no_tail_ingresses;
     std::map<std::uint32_t, FunctionValueSummary> summaries;
     std::map<std::uint32_t, CandidateInput> candidate_inputs;
     std::unordered_map<std::uint32_t, const FunctionInfo*> function_by_address;
@@ -2408,24 +2869,26 @@ analyze_function_values(
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
     }
-    std::unordered_set<std::uint32_t> functions_reaching_guarded_inventory_store;
-    functions_reaching_guarded_inventory_store.reserve(functions.size());
-    std::deque<std::uint32_t> pending_store_reachability;
+    std::unordered_set<std::uint32_t> functions_reaching_guarded_inventory_sink;
+    functions_reaching_guarded_inventory_sink.reserve(functions.size());
+    std::deque<std::uint32_t> pending_inventory_reachability;
+    const auto add_inventory_sink = [&](const std::uint32_t address) {
+        if (functions_reaching_guarded_inventory_sink.insert(address).second)
+            pending_inventory_reachability.push_back(address);
+    };
     for (const auto& function : functions) {
-        if (!function_contains_guarded_inventory_store(function, block_index))
-            continue;
-        functions_reaching_guarded_inventory_store.insert(
-            function.entry_address);
-        pending_store_reachability.push_back(function.entry_address);
+        if (!function_contains_guarded_inventory_store(function, block_index)) continue;
+        add_inventory_sink(function.entry_address);
     }
-    while (!pending_store_reachability.empty()) {
-        const auto callee = pending_store_reachability.front();
-        pending_store_reachability.pop_front();
+    for (const auto function : functions_with_inventory_tail)
+        add_inventory_sink(function);
+    while (!pending_inventory_reachability.empty()) {
+        const auto callee = pending_inventory_reachability.front();
+        pending_inventory_reachability.pop_front();
         const auto callers = callers_by_callee.find(callee);
         if (callers == callers_by_callee.end()) continue;
         for (const auto caller : callers->second) {
-            if (functions_reaching_guarded_inventory_store.insert(caller).second)
-                pending_store_reachability.push_back(caller);
+            add_inventory_sink(caller);
         }
     }
     for (const auto& line : lines) {
@@ -2436,7 +2899,7 @@ analyze_function_values(
             input != candidate_inputs.end())
             input->second.expected_call_sites.insert(line.address);
     }
-    for (const auto& edge : resolved_edges) {
+    for (const auto& edge : function_edges) {
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
         const auto input = candidate_inputs.find(edge.target_address);
         if (input == candidate_inputs.end()) continue;
@@ -2481,6 +2944,7 @@ analyze_function_values(
                                             *function->second,
                                             block_index,
                                             indirect_callees,
+                                            no_tail_ingresses,
                                             summaries,
                                             candidate_inputs[address].state,
                                             false);
@@ -2546,83 +3010,119 @@ analyze_function_values(
     struct ResolutionFunctionResult {
         FunctionEvaluation evaluation;
         GuardedCodeInventoryCollector inventory{true};
+        bool inventory_walk_truncated = false;
     };
     const auto& final_candidate_inputs = std::as_const(candidate_inputs);
     const auto& final_function_by_address = std::as_const(function_by_address);
+    const auto& final_inventory_region_by_address =
+        std::as_const(inventory_region_by_address);
     const auto evaluate_resolution_function = [&](const std::size_t function_index) {
         ResolutionFunctionResult function_result;
         const auto* function = resolution_functions[function_index];
         const auto& input = final_candidate_inputs.at(function->entry_address);
-        function_result.evaluation =
-            evaluate_function(image,
-                              *function,
-                              block_index,
-                              indirect_callees,
-                              summaries,
-                              input.state,
-                              true,
-                              false,
-                              &function_result.inventory);
-        if (image.guest_call_abi() == katana::io::GuestCallAbi::SuperHC &&
-            !result.budget_exhausted &&
-            functions_reaching_guarded_inventory_store.contains(
-                function->entry_address)) {
-            for (const auto& [call_site, observation] : input.observations) {
-                if (!requires_isolated_store_harvest(
-                        input, call_site, observation))
-                    continue;
-                auto isolated_evaluation = evaluate_function(
-                    image,
-                    *function,
-                    block_index,
-                    indirect_callees,
-                    summaries,
-                    isolated_store_input(call_site, observation),
-                    false,
-                    true,
-                    &function_result.inventory,
-                    call_site);
+        function_result.evaluation = evaluate_function(image,
+                                                       *function,
+                                                       block_index,
+                                                       indirect_callees,
+                                                       tail_ingresses,
+                                                       summaries,
+                                                       input.state,
+                                                       true,
+                                                       false,
+                                                       &function_result.inventory);
+        std::size_t forwarded_context_count = 0u;
+        const auto harvest_forwarded_inventory =
+            [&](const FunctionEvaluation& seed,
+                const std::optional<std::uint32_t> root_call_site) {
                 struct ForwardedStoreContext {
                     const FunctionInfo* function = nullptr;
-                    std::uint32_t call_site = 0u;
-                    AbstractState observation;
+                    std::uint32_t target = 0u;
+                    std::uint32_t ingress_site = 0u;
+                    bool tail = false;
+                    AbstractState input;
                 };
                 std::deque<ForwardedStoreContext> forwarded_contexts;
-                std::set<std::pair<std::uint32_t, std::uint32_t>>
+                std::vector<ForwardedStoreContext>
                     visited_forwarded_contexts;
-                std::size_t forwarded_context_count = 0u;
-                const auto enqueue_forwarded =
+                visited_forwarded_contexts.reserve(maximum_forwarded_store_contexts);
+                const auto enqueue_context =
+                    [&](const FunctionInfo* target_function,
+                        const std::uint32_t target,
+                        const std::uint32_t ingress_site,
+                        const bool tail,
+                        AbstractState forwarded_input) {
+                        if (std::any_of(
+                                visited_forwarded_contexts.begin(),
+                                visited_forwarded_contexts.end(),
+                                [&](const auto& visited) {
+                                    return visited.target == target &&
+                                           visited.ingress_site == ingress_site &&
+                                           visited.tail == tail &&
+                                           visited.input == forwarded_input;
+                                }))
+                            return;
+                        if (forwarded_context_count + forwarded_contexts.size() >=
+                            maximum_forwarded_store_contexts) {
+                            function_result.inventory_walk_truncated = true;
+                            return;
+                        }
+                        visited_forwarded_contexts.push_back(
+                            {target_function,
+                             target,
+                             ingress_site,
+                             tail,
+                             forwarded_input});
+                        forwarded_contexts.push_back(
+                            {target_function,
+                             target,
+                             ingress_site,
+                             tail,
+                             std::move(forwarded_input)});
+                    };
+                const auto enqueue_call =
                     [&](const FunctionEvaluation::CallArguments& forwarded) {
-                    if (forwarded_context_count + forwarded_contexts.size() >=
-                        maximum_forwarded_store_contexts)
-                        return;
-                    const auto forwarded_function =
-                        final_function_by_address.find(forwarded.callee);
-                    const auto forwarded_input =
-                        final_candidate_inputs.find(forwarded.callee);
-                    if (forwarded_function == final_function_by_address.end() ||
-                        forwarded_input == final_candidate_inputs.end() ||
-                        !functions_reaching_guarded_inventory_store.contains(
-                            forwarded.callee) ||
-                        !requires_forwarded_isolated_store_harvest(
-                            image, forwarded.state, forwarded_input->second.state))
-                        return;
-                    if (!visited_forwarded_contexts
-                             .emplace(forwarded.callee, forwarded.call_site)
-                             .second)
-                        return;
-                    forwarded_contexts.push_back(
-                        {forwarded_function->second,
-                         forwarded.call_site,
-                         forwarded.state});
-                };
-                for (const auto& forwarded : isolated_evaluation.call_arguments)
-                    enqueue_forwarded(forwarded);
-                // A callback may pass through thin ABI wrappers before the
-                // actual registration store.  Follow only finite code-valued
-                // arguments lost by ordinary merged ingress.  The small
-                // context cap and entry/callsite set make this inventory-only
-                // walk bounded and cycle-safe; it never contributes a CFG edge.
+                        const auto forwarded_function =
+                            final_function_by_address.find(forwarded.callee);
+                        const auto forwarded_input =
+                            final_candidate_inputs.find(forwarded.callee);
+                        if (forwarded_function == final_function_by_address.end() ||
+                            forwarded_input == final_candidate_inputs.end() ||
+                            !functions_reaching_guarded_inventory_sink.contains(
+                                forwarded.callee) ||
+                            !requires_forwarded_isolated_store_harvest(
+                                image,
+                                forwarded.state,
+                                forwarded_input->second.state))
+                            return;
+                        enqueue_context(
+                            forwarded_function->second,
+                            forwarded.callee,
+                            forwarded.call_site,
+                            false,
+                            isolated_store_input(forwarded.call_site,
+                                                 forwarded.state));
+                    };
+                const auto enqueue_tail =
+                    [&](const FunctionEvaluation::InventoryTransfer& forwarded) {
+                        const auto region =
+                            final_inventory_region_by_address.find(forwarded.target);
+                        if (region == final_inventory_region_by_address.end())
+                            return;
+                        enqueue_context(region->second,
+                                        forwarded.target,
+                                        forwarded.transfer_site,
+                                        true,
+                                        tail_store_input(forwarded.state));
+                    };
+                for (const auto& forwarded : seed.call_arguments)
+                    enqueue_call(forwarded);
+                for (const auto& forwarded : seed.inventory_transfers)
+                    enqueue_tail(forwarded);
+
+                // This is an inventory-only walk.  Calls retain the existing
+                // isolated ABI contract, while terminal jumps preserve the
+                // complete post-delay state in an owner-bounded ephemeral
+                // region.  Neither path contributes summaries or CFG edges.
                 while (!forwarded_contexts.empty() &&
                        forwarded_context_count <
                            maximum_forwarded_store_contexts) {
@@ -2634,17 +3134,45 @@ analyze_function_values(
                         *forwarded.function,
                         block_index,
                         indirect_callees,
+                        tail_ingresses,
                         summaries,
-                        isolated_store_input(forwarded.call_site,
-                                             forwarded.observation),
+                        forwarded.input,
                         false,
                         true,
                         &function_result.inventory,
-                        call_site);
-                    for (const auto& nested :
-                         forwarded_evaluation.call_arguments)
-                        enqueue_forwarded(nested);
+                        root_call_site);
+                    for (const auto& nested : forwarded_evaluation.call_arguments)
+                        enqueue_call(nested);
+                    for (const auto& nested : forwarded_evaluation.inventory_transfers)
+                        enqueue_tail(nested);
                 }
+                if (!forwarded_contexts.empty())
+                    function_result.inventory_walk_truncated = true;
+            };
+        if (!result.budget_exhausted)
+            harvest_forwarded_inventory(function_result.evaluation,
+                                        std::nullopt);
+        if (!result.budget_exhausted &&
+            functions_reaching_guarded_inventory_sink.contains(
+                function->entry_address)) {
+            for (const auto& [call_site, observation] : input.observations) {
+                if (!functions_with_inventory_tail.contains(function->entry_address) &&
+                    !requires_isolated_store_harvest(input, call_site, observation))
+                    continue;
+                auto isolated_evaluation =
+                    evaluate_function(image,
+                                      *function,
+                                      block_index,
+                                      indirect_callees,
+                                      tail_ingresses,
+                                      summaries,
+                                      isolated_store_input(call_site, observation),
+                                      false,
+                                      true,
+                                      &function_result.inventory,
+                                      call_site);
+                harvest_forwarded_inventory(isolated_evaluation,
+                                            call_site);
             }
         }
         return function_result;
@@ -2690,8 +3218,11 @@ analyze_function_values(
         }
     }
 
+    bool inventory_walk_truncated = inventory_region_walk_truncated;
     for (auto& function_result : function_results) {
         auto resolved = std::move(*function_result);
+        inventory_walk_truncated =
+            inventory_walk_truncated || resolved.inventory_walk_truncated;
         resolution_count += resolved.evaluation.resolutions.size();
         result.resolutions.insert(
             result.resolutions.end(),
@@ -2704,6 +3235,9 @@ analyze_function_values(
             report_progress("resolution-progress");
     }
     result.guarded_code_inventory = guarded_inventory_collector.finish();
+    result.guarded_code_inventory.candidate_inventory_truncated =
+        result.guarded_code_inventory.candidate_inventory_truncated ||
+        inventory_walk_truncated;
     std::sort(result.resolutions.begin(),
               result.resolutions.end(),
               [](const auto& left, const auto& right) {

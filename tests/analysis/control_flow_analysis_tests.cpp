@@ -285,6 +285,107 @@ int main() {
                         [](const auto& function) { return function.entry_address == 0x30u; }) &&
                 katana::ir::verify_program(stored_callback_ir).empty(),
             "Gespeicherter Codepointer erreichte das native IR-Inventar nicht.");
+
+    const auto tail_registered_callback_image = [] {
+        std::vector<std::uint8_t> bytes(0x90u, 0x09u);
+        const auto put_u32 = [&bytes](const std::size_t offset, const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+        bytes[0x00u] = 0x03u;
+        bytes[0x01u] = 0xD4u; // mov.l @(0x10,pc),r4 -> callback 0x70
+        bytes[0x02u] = 0x04u;
+        bytes[0x03u] = 0xD3u; // mov.l @(0x14,pc),r3 -> wrapper 0x20
+        bytes[0x04u] = 0x0Bu;
+        bytes[0x05u] = 0x43u; // jsr @r3
+        bytes[0x06u] = 0x09u;
+        bytes[0x07u] = 0x00u; // nop (delay)
+        bytes[0x08u] = 0x0Bu;
+        bytes[0x09u] = 0x00u; // rts
+        bytes[0x0Au] = 0x09u;
+        bytes[0x0Bu] = 0x00u; // nop (delay)
+        put_u32(0x10u, 0x70u);
+        put_u32(0x14u, 0x20u);
+
+        bytes[0x20u] = 0x46u;
+        bytes[0x21u] = 0x2Fu; // mov.l r4,@-r15
+        bytes[0x22u] = 0x03u;
+        bytes[0x23u] = 0xD2u; // mov.l @(0x30,pc),r2 -> store target 0x40
+        bytes[0x24u] = 0x2Bu;
+        bytes[0x25u] = 0x42u; // jmp @r2
+        bytes[0x26u] = 0xF6u;
+        bytes[0x27u] = 0x65u; // mov.l @r15+,r5 (delay)
+        put_u32(0x30u, 0x40u);
+
+        bytes[0x40u] = 0x5Cu;
+        bytes[0x41u] = 0xE2u; // mov #0x5c,r2 (proven non-stack destination)
+        bytes[0x42u] = 0x52u;
+        bytes[0x43u] = 0x22u; // mov.l r5,@r2
+        bytes[0x44u] = 0x0Bu;
+        bytes[0x45u] = 0x00u; // rts
+        bytes[0x46u] = 0x09u;
+        bytes[0x47u] = 0x00u; // nop (delay)
+
+        bytes[0x70u] = 0x06u;
+        bytes[0x71u] = 0xA0u; // bra 0x80
+        bytes[0x72u] = 0x00u;
+        bytes[0x73u] = 0xE4u; // mov #0,r4 (delay)
+        bytes[0x80u] = 0x0Bu;
+        bytes[0x81u] = 0x00u; // shared tail: rts
+        bytes[0x82u] = 0x09u;
+        bytes[0x83u] = 0x00u; // nop (delay)
+
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".tail-registered-callback",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-tail-registered-callback"});
+        image.add_entry_point(0u);
+        return image;
+    };
+    const auto tail_registered_callback =
+        katana::analysis::analyze_control_flow(tail_registered_callback_image());
+    const auto* tail_registered_handler = find_function(tail_registered_callback, 0x70u);
+    const auto tail_transfer = std::find_if(
+        tail_registered_callback.indirect_control_flow.begin(),
+        tail_registered_callback.indirect_control_flow.end(),
+        [](const auto& resolution) { return resolution.instruction_address == 0x24u; });
+    require(find_function(tail_registered_callback, 0x40u) == nullptr &&
+                has_instruction(tail_registered_callback, 0x40u) &&
+                tail_registered_handler != nullptr &&
+                tail_registered_handler->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+                tail_registered_handler->evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                has_instruction(tail_registered_callback, 0x70u) &&
+                has_instruction(tail_registered_callback, 0x80u),
+            "Callbackprovenienz ging ueber einen terminalen Tail-Jump verloren.");
+    require(tail_transfer != tail_registered_callback.indirect_control_flow.end() &&
+                tail_transfer->kind == katana::analysis::IndirectControlFlowKind::Jump &&
+                tail_transfer->status == katana::analysis::ResolutionStatus::Unresolved &&
+                tail_transfer->evidence == katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                !tail_transfer->target.has_value() &&
+                tail_transfer->targets.empty() &&
+                tail_transfer->analysis_candidates == std::vector<std::uint32_t>{0x40u} &&
+                std::none_of(tail_registered_callback.resolved_edges.begin(),
+                             tail_registered_callback.resolved_edges.end(),
+                             [](const auto& edge) {
+                                 return edge.instruction_address == 0x24u ||
+                                        edge.target_address == 0x70u;
+                             }),
+            "Tail-Jump-Inventar fror den Live-Transfer als statische Kante ein.");
+
     katana::analysis::AnalysisOverrides stored_callback_override;
     stored_callback_override.source_path = "stored-callback-override.txt";
     stored_callback_override.functions.push_back({0x30u, 1u});
@@ -1172,64 +1273,64 @@ int main() {
                          }),
             "Relative16-Snapshotkandidaten erzeugten feste CFG-Kanten.");
 
-    const auto relative_table_ir = katana::ir::lower_program(relative_table);
-    bool runtime_relative_jump_found = false;
-    std::size_t relative_table_native_blocks = 0u;
-    for (const auto& function : relative_table_ir) {
-        for (const auto& block : function.blocks) {
-            if (std::binary_search(relative_table_targets.begin(),
-                                   relative_table_targets.end(),
-                                   block.start_address))
-                ++relative_table_native_blocks;
-            for (const auto& instruction : block.instructions) {
-                if (instruction.source_address != relative_table_dispatch) continue;
-                runtime_relative_jump_found =
-                    block.has_indirect_successor &&
-                    instruction.operation == katana::ir::Operation::JumpRegister &&
-                    instruction.branch_register_relative && instruction.branch_register == 4u &&
-                    !instruction.target_address.has_value() &&
-                    instruction.resolved_targets.empty() &&
-                    instruction.dynamic_target_class ==
-                        katana::ir::DynamicTargetClass::RuntimeOnly;
+        const auto relative_table_ir = katana::ir::lower_program(relative_table);
+        bool runtime_relative_jump_found = false;
+        std::size_t relative_table_native_blocks = 0u;
+        for (const auto& function : relative_table_ir) {
+            for (const auto& block : function.blocks) {
+                if (std::binary_search(relative_table_targets.begin(),
+                                       relative_table_targets.end(),
+                                       block.start_address))
+                    ++relative_table_native_blocks;
+                for (const auto& instruction : block.instructions) {
+                    if (instruction.source_address != relative_table_dispatch) continue;
+                    runtime_relative_jump_found =
+                        block.has_indirect_successor &&
+                        instruction.operation == katana::ir::Operation::JumpRegister &&
+                        instruction.branch_register_relative && instruction.branch_register == 4u &&
+                        !instruction.target_address.has_value() &&
+                        instruction.resolved_targets.empty() &&
+                        instruction.dynamic_target_class ==
+                            katana::ir::DynamicTargetClass::RuntimeOnly;
+                }
             }
         }
-    }
-    require(runtime_relative_jump_found,
-            "Die IR ersetzte das lebende BRAF-Ziel durch Snapshotwerte.");
-    require(relative_table_native_blocks == relative_table_targets.size(),
-            "Nicht jedes Relative16-Snapshotziel erhielt einen nativen Blockleader.");
+        require(runtime_relative_jump_found,
+                "Die IR ersetzte das lebende BRAF-Ziel durch Snapshotwerte.");
+        require(relative_table_native_blocks == relative_table_targets.size(),
+                "Nicht jedes Relative16-Snapshotziel erhielt einen nativen Blockleader.");
 
-    for (const auto& [source_kind, load_phase, policy] :
-         std::array{std::tuple{katana::io::ImageSourceKind::DiscBootFile,
-                              katana::io::ImageLoadPhase::Initial,
-                              katana::io::InitialSnapshotPolicy::ImmutableOnly},
-                    std::tuple{katana::io::ImageSourceKind::RuntimeMemory,
-                              katana::io::ImageLoadPhase::Initial,
-                              katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent},
-                    std::tuple{katana::io::ImageSourceKind::DiscBootFile,
-                              katana::io::ImageLoadPhase::RuntimeModule,
-                              katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent}}) {
-        const auto rejected = katana::analysis::analyze_control_flow(
-            relative_table_image(source_kind, load_phase, policy));
-        const auto resolution = std::find_if(
-            rejected.indirect_control_flow.begin(),
-            rejected.indirect_control_flow.end(),
-            [](const auto& candidate) {
-                return candidate.instruction_address == relative_table_dispatch;
-            });
-        require(resolution != rejected.indirect_control_flow.end() &&
-                    resolution->status == katana::analysis::ResolutionStatus::Unresolved &&
-                    resolution->evidence == katana::analysis::ControlFlowEvidence::RuntimeOnly &&
-                    resolution->targets.empty() && resolution->analysis_candidates.empty() &&
-                    resolution->reason == "dynamic-writable-table" &&
-                    std::none_of(rejected.resolved_edges.begin(),
-                                 rejected.resolved_edges.end(),
-                                 [](const auto& edge) {
-                                     return edge.instruction_address == relative_table_dispatch;
-                                 }),
-                "Relative16-Runtimebytes wurden ohne Initial-Snapshotvertrag eingefroren.");
-    }
-
+        for (const auto& [source_kind, load_phase, policy] : std::array{
+                 std::tuple{katana::io::ImageSourceKind::DiscBootFile,
+                            katana::io::ImageLoadPhase::Initial,
+                            katana::io::InitialSnapshotPolicy::ImmutableOnly},
+                 std::tuple{katana::io::ImageSourceKind::RuntimeMemory,
+                            katana::io::ImageLoadPhase::Initial,
+                            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent},
+                 std::tuple{katana::io::ImageSourceKind::DiscBootFile,
+                            katana::io::ImageLoadPhase::RuntimeModule,
+                            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent}}) {
+            const auto rejected = katana::analysis::analyze_control_flow(
+                relative_table_image(source_kind, load_phase, policy));
+            const auto resolution =
+                std::find_if(rejected.indirect_control_flow.begin(),
+                             rejected.indirect_control_flow.end(),
+                             [](const auto& candidate) {
+                                 return candidate.instruction_address == relative_table_dispatch;
+                             });
+            require(resolution != rejected.indirect_control_flow.end() &&
+                        resolution->status == katana::analysis::ResolutionStatus::Unresolved &&
+                        resolution->evidence ==
+                            katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                        resolution->targets.empty() && resolution->analysis_candidates.empty() &&
+                        resolution->reason == "dynamic-writable-table" &&
+                        std::none_of(rejected.resolved_edges.begin(),
+                                     rejected.resolved_edges.end(),
+                                     [](const auto& edge) {
+                                         return edge.instruction_address == relative_table_dispatch;
+                                     }),
+                    "Relative16-Runtimebytes wurden ohne Initial-Snapshotvertrag eingefroren.");
+        }
     }();
 
     constexpr std::uint32_t relative_call_base = 0x00500000u;
