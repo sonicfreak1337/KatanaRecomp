@@ -8044,6 +8044,57 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             return left->descriptor.call_instruction_address <
                    right->descriptor.call_instruction_address;
         });
+    enum class StaticFastpathBindingKind : std::uint8_t {
+        CompositeCallback,
+        MemoryFill,
+        MmioWait,
+        CountedLoop
+    };
+    struct StaticFastpathBindingEmission {
+        StaticFastpathBindingKind kind;
+        std::size_t descriptor_index = 0u;
+
+        [[nodiscard]] bool
+        operator==(const StaticFastpathBindingEmission&) const noexcept = default;
+    };
+    std::map<std::uint32_t, std::vector<StaticFastpathBindingEmission>>
+        static_fastpath_bindings;
+    const auto add_static_fastpath_binding =
+        [&](const std::uint32_t address,
+            const StaticFastpathBindingEmission binding) {
+            auto& bindings = static_fastpath_bindings[address];
+            if (std::find(bindings.begin(), bindings.end(), binding) ==
+                bindings.end())
+                bindings.push_back(binding);
+        };
+    if (!diagnostic_interpreter) {
+        for (std::size_t index = 0u;
+             index < composite_callback_emission.size();
+             ++index)
+            add_static_fastpath_binding(
+                composite_callback_emission[index]
+                    ->descriptor.kernel_address,
+                {StaticFastpathBindingKind::CompositeCallback, index});
+        for (std::size_t index = 0u; index < memory_fill_loops.size();
+             ++index) {
+            add_static_fastpath_binding(
+                memory_fill_loops[index].descriptor.guard_address,
+                {StaticFastpathBindingKind::MemoryFill, index});
+            add_static_fastpath_binding(
+                memory_fill_loops[index].descriptor.body_address,
+                {StaticFastpathBindingKind::MemoryFill, index});
+        }
+        for (std::size_t index = 0u; index < mmio_wait_loops.size();
+             ++index)
+            add_static_fastpath_binding(
+                mmio_wait_loops[index].descriptor.loop_header,
+                {StaticFastpathBindingKind::MmioWait, index});
+        for (std::size_t index = 0u; index < counted_loops.size();
+             ++index)
+            add_static_fastpath_binding(
+                counted_loops[index].descriptor.guard_address,
+                {StaticFastpathBindingKind::CountedLoop, index});
+    }
     const auto symbol = [](const std::uint32_t address) {
         constexpr std::array digits{
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -8509,6 +8560,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         << "extern thread_local katana::runtime::DynamicDispatchSiteClass "
            "active_exit_site_class;\n"
         << "extern thread_local bool tail_dispatch_completed;\n"
+        << "[[nodiscard]] katana::runtime::RuntimeBlockFastpathBinding "
+           "static_fastpath_binding(std::uint32_t address) noexcept;\n"
         << "void append_static_block(\n"
         << "    std::vector<katana::runtime::RuntimeBlock>& blocks,\n"
         << "    std::uint32_t address, std::uint32_t size,\n"
@@ -8709,6 +8762,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    block.static_variant_policy = katana::runtime::StaticVariantPolicy::"
               "DirectP1P2RuntimeStateAgnostic;\n"
            << "    block.provenance = provenance;\n"
+           << "    block.fastpath = static_fastpath_binding(address);\n"
            << "    blocks.emplace_back(std::move(block));\n"
            << "}\n"
            << "} // namespace runtime_dispatch_detail\n"
@@ -8920,33 +8974,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             output << "},\n";
         }
     }
-    output << "}};\n"
-              "struct CompositeCallbackBatchDescriptorRange {\n"
-              "    std::size_t first = 0u;\n"
-              "    std::size_t count = 0u;\n"
-              "};\n"
-              "CompositeCallbackBatchDescriptorRange composite_callback_batch_descriptors_for(\n"
-              "        const std::uint32_t callsite) noexcept {\n"
-              "    switch (callsite) {\n";
-    if (!diagnostic_interpreter) {
-        std::map<std::uint32_t, std::pair<std::size_t, std::size_t>>
-            descriptors_by_callsite;
-        for (std::size_t index = 0u; index < composite_callback_emission.size(); ++index) {
-            const auto callsite =
-                composite_callback_emission[index]->descriptor.call_instruction_address;
-            const auto [entry, inserted] =
-                descriptors_by_callsite.try_emplace(
-                    callsite, std::pair{index, std::size_t{0u}});
-            static_cast<void>(inserted);
-            ++entry->second.second;
-        }
-        for (const auto [callsite, range] : descriptors_by_callsite)
-            output << "    case 0x" << symbol(callsite)
-                   << "u: return {" << range.first << "u, " << range.second << "u};\n";
-    }
-    output << "    default: return {};\n"
-              "    }\n"
-              "}\n\n";
+    output << "}};\n";
     const auto emitted_memory_fill_loop_count =
         diagnostic_interpreter ? std::size_t{0u} : memory_fill_loops.size();
     output << "constexpr std::array<MemoryFillLoopBatchDescriptor, "
@@ -8979,24 +9007,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                    << symbol(descriptor.body_address) << "\"},\n";
         }
     }
-    output << "}};\n"
-              "const MemoryFillLoopBatchDescriptor* memory_fill_loop_descriptor(\n"
-              "        const std::uint32_t address) noexcept {\n"
-              "    switch (address) {\n";
-    if (!diagnostic_interpreter) {
-        std::map<std::uint32_t, std::size_t> descriptors_by_address;
-        for (std::size_t index = 0u; index < memory_fill_loops.size(); ++index) {
-            const auto& descriptor = memory_fill_loops[index].descriptor;
-            descriptors_by_address.try_emplace(descriptor.guard_address, index);
-            descriptors_by_address.try_emplace(descriptor.body_address, index);
-        }
-        for (const auto [address, index] : descriptors_by_address)
-            output << "    case 0x" << symbol(address)
-                   << "u: return &memory_fill_loop_batch_descriptors[" << index << "u];\n";
-    }
-    output << "    default: return nullptr;\n"
-              "    }\n"
-              "}\n\n";
+    output << "}};\n";
     const auto emitted_mmio_wait_loop_count =
         diagnostic_interpreter ? std::size_t{0u} : mmio_wait_loops.size();
     output << "constexpr std::array<MmioWaitLoopBatchDescriptor, "
@@ -9027,22 +9038,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                    << symbol(descriptor.loop_header) << "\"},\n";
         }
     }
-    output << "}};\n"
-              "const MmioWaitLoopBatchDescriptor* mmio_wait_loop_descriptor(\n"
-              "        const std::uint32_t address) noexcept {\n"
-              "    switch (address) {\n";
-    if (!diagnostic_interpreter) {
-        std::map<std::uint32_t, std::size_t> descriptors_by_address;
-        for (std::size_t index = 0u; index < mmio_wait_loops.size(); ++index)
-            descriptors_by_address.try_emplace(
-                mmio_wait_loops[index].descriptor.loop_header, index);
-        for (const auto [address, index] : descriptors_by_address)
-            output << "    case 0x" << symbol(address)
-                   << "u: return &mmio_wait_loop_batch_descriptors[" << index << "u];\n";
-    }
-    output << "    default: return nullptr;\n"
-              "    }\n"
-              "}\n\n";
+    output << "}};\n";
     const auto emitted_counted_loop_count =
         diagnostic_interpreter ? std::size_t{0u} : counted_loops.size();
     output << "constexpr std::array<CountedLoopBatchDescriptor, " << emitted_counted_loop_count
@@ -9076,22 +9072,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                    << symbol(descriptor.increment_address) << "\"},\n";
         }
     }
-    output << "}};\n"
-              "const CountedLoopBatchDescriptor* counted_loop_descriptor(\n"
-              "        const std::uint32_t address) noexcept {\n"
-              "    switch (address) {\n";
-    if (!diagnostic_interpreter) {
-        std::map<std::uint32_t, std::size_t> descriptors_by_address;
-        for (std::size_t index = 0u; index < counted_loops.size(); ++index)
-            descriptors_by_address.try_emplace(
-                counted_loops[index].descriptor.guard_address, index);
-        for (const auto [address, index] : descriptors_by_address)
-            output << "    case 0x" << symbol(address)
-                   << "u: return &counted_loop_batch_descriptors[" << index << "u];\n";
-    }
-    output << "    default: return nullptr;\n"
-              "    }\n"
-              "}\n\n";
+    output << "}};\n";
     output
         << "std::uint64_t configured_block_budget() {\n"
            "    static const auto budget = [] {\n"
@@ -9407,20 +9388,19 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                    cpu.last_exception_cause);\n"
            "            return fastpath_source;\n"
            "        };\n"
-           "        const auto composite_callbacks =\n"
-           "            kind == katana::runtime::IndirectDispatchKind::Call\n"
-           "                ? composite_callback_batch_descriptors_for(dispatch_callsite)\n"
-           "                : CompositeCallbackBatchDescriptorRange{};\n"
-           "        bool composite_callback_applied = false;\n"
-           "        for (std::size_t candidate = 0u;\n"
-           "             candidate < composite_callbacks.count; ++candidate) {\n"
-           "            const auto& composite_callback =\n"
-           "                composite_callback_batch_descriptors[\n"
-           "                    composite_callbacks.first + candidate];\n"
-           "                const auto fastpath_retired_before =\n"
-           "                    cpu.retired_guest_instructions;\n"
-           "                const auto fastpath_exception_generation_before =\n"
-           "                    cpu.exception_generation;\n"
+           "        switch (selected_block.fastpath.kind) {\n"
+           "        case katana::runtime::RuntimeBlockFastpathKind::CompositeCallback: {\n"
+           "            const auto& composite_callback = *static_cast<const\n"
+           "                CompositeCallbackBatchDescriptor*>(\n"
+           "                    selected_block.fastpath.descriptor);\n"
+           "            if (kind != katana::runtime::IndirectDispatchKind::Call ||\n"
+           "                dispatch_callsite !=\n"
+           "                    composite_callback.call_instruction_address)\n"
+           "                break;\n"
+           "            const auto fastpath_retired_before =\n"
+           "                cpu.retired_guest_instructions;\n"
+           "            const auto fastpath_exception_generation_before =\n"
+           "                cpu.exception_generation;\n"
            "            if (try_product_composite_callback_batch(\n"
            "                    cpu, *active_services, selected_block,\n"
            "                    composite_callback)) {\n"
@@ -9440,33 +9420,31 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                dispatch_origin =\n"
            "                    katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
            "                diagnostic = false;\n"
-           "                composite_callback_applied = true;\n"
-           "                break;\n"
-           "            }\n"
-           "        }\n"
-           "        if (composite_callback_applied) {\n"
-           "            pending_escape_reason = "
+           "                pending_escape_reason = "
            "StaticAotEscapeReason::ProductFastpath;\n"
-           "            pending_escape_site_id = selected_escape_site_id;\n"
-           "            pending_escape_address = selected_block.virtual_start;\n"
-           "            continue;\n"
+           "                pending_escape_site_id = selected_escape_site_id;\n"
+           "                pending_escape_address = selected_block.virtual_start;\n"
+           "                continue;\n"
+           "            }\n"
+           "            break;\n"
            "        }\n"
-           "        if (const auto* memory_fill_loop =\n"
-           "                memory_fill_loop_descriptor(selected.diagnostic_target);\n"
-           "            memory_fill_loop != nullptr) {\n"
+           "        case katana::runtime::RuntimeBlockFastpathKind::MemoryFill: {\n"
+           "            const auto& memory_fill_loop = *static_cast<const\n"
+           "                MemoryFillLoopBatchDescriptor*>(\n"
+           "                    selected_block.fastpath.descriptor);\n"
            "            const auto fastpath_retired_before =\n"
            "                cpu.retired_guest_instructions;\n"
            "            const auto fastpath_exception_generation_before =\n"
            "                cpu.exception_generation;\n"
            "            if (try_product_memory_fill_loop_batch(\n"
            "                    cpu, *active_services, selected_block, "
-           "*memory_fill_loop)) {\n"
+           "memory_fill_loop)) {\n"
            "                const auto fastpath_source = finalize_product_fastpath(\n"
            "                    fastpath_retired_before,\n"
            "                    fastpath_exception_generation_before,\n"
-           "                    {memory_fill_loop->branch_instruction_address,\n"
+           "                    {memory_fill_loop.branch_instruction_address,\n"
            "                     katana::runtime::canonical_physical_address(\n"
-           "                         memory_fill_loop->branch_instruction_address)},\n"
+           "                         memory_fill_loop.branch_instruction_address)},\n"
            "                    katana::runtime::BlockEndKind::ConditionalBranch);\n"
            "                target = cpu.pc;\n"
            "                dispatch_callsite = fastpath_source.virtual_address;\n"
@@ -9483,23 +9461,25 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                pending_escape_address = selected_block.virtual_start;\n"
            "                continue;\n"
            "            }\n"
+           "            break;\n"
            "        }\n"
-           "        if (const auto* mmio_wait_loop =\n"
-           "                mmio_wait_loop_descriptor(selected.diagnostic_target);\n"
-           "            mmio_wait_loop != nullptr) {\n"
+           "        case katana::runtime::RuntimeBlockFastpathKind::MmioWait: {\n"
+           "            const auto& mmio_wait_loop = *static_cast<const\n"
+           "                MmioWaitLoopBatchDescriptor*>(\n"
+           "                    selected_block.fastpath.descriptor);\n"
            "            const auto fastpath_retired_before =\n"
            "                cpu.retired_guest_instructions;\n"
            "            const auto fastpath_exception_generation_before =\n"
            "                cpu.exception_generation;\n"
            "            if (try_product_mmio_wait_loop_batch(\n"
            "                    cpu, *active_services, selected_block, "
-           "*mmio_wait_loop)) {\n"
+           "mmio_wait_loop)) {\n"
            "                const auto fastpath_source = finalize_product_fastpath(\n"
            "                    fastpath_retired_before,\n"
            "                    fastpath_exception_generation_before,\n"
-           "                    {mmio_wait_loop->backedge_instruction_address,\n"
+           "                    {mmio_wait_loop.backedge_instruction_address,\n"
            "                     katana::runtime::canonical_physical_address(\n"
-           "                         mmio_wait_loop->backedge_instruction_address)},\n"
+           "                         mmio_wait_loop.backedge_instruction_address)},\n"
            "                    katana::runtime::BlockEndKind::ConditionalBranch);\n"
            "                target = cpu.pc;\n"
            "                dispatch_callsite = fastpath_source.virtual_address;\n"
@@ -9516,20 +9496,22 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                pending_escape_address = selected_block.virtual_start;\n"
            "                continue;\n"
            "            }\n"
+           "            break;\n"
            "        }\n"
-           "        if (const auto* counted_loop =\n"
-           "                counted_loop_descriptor(selected.diagnostic_target);\n"
-           "            counted_loop != nullptr) {\n"
+           "        case katana::runtime::RuntimeBlockFastpathKind::CountedLoop: {\n"
+           "            const auto& counted_loop = *static_cast<const\n"
+           "                CountedLoopBatchDescriptor*>(\n"
+           "                    selected_block.fastpath.descriptor);\n"
            "            const auto fastpath_retired_before =\n"
            "                cpu.retired_guest_instructions;\n"
            "            const auto fastpath_exception_generation_before =\n"
            "                cpu.exception_generation;\n"
            "            if (try_product_counted_loop_batch(\n"
            "                    cpu, *active_services, selected_block, "
-           "*counted_loop)) {\n"
+           "counted_loop)) {\n"
            "                const auto counted_fastpath_kind =\n"
            "                    cpu.active_instruction_pc ==\n"
-           "                            counted_loop->store_instruction_address\n"
+           "                            counted_loop.store_instruction_address\n"
            "                        ? katana::runtime::BlockEndKind::Fallthrough\n"
            "                        : katana::runtime::BlockEndKind::ConditionalBranch;\n"
            "                const auto fastpath_source = finalize_product_fastpath(\n"
@@ -9553,6 +9535,10 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "                pending_escape_address = selected_block.virtual_start;\n"
            "                continue;\n"
            "            }\n"
+           "            break;\n"
+           "        }\n"
+           "        case katana::runtime::RuntimeBlockFastpathKind::None:\n"
+           "            break;\n"
            "        }\n"
            "        const auto retired_before = cpu.retired_guest_instructions;\n"
            "        const auto exception_generation_before = cpu.exception_generation;\n"
@@ -9681,8 +9667,56 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "    }\n"
            "    throw std::runtime_error(\"Runtime-Blockbudget erschoepft.\");\n"
            "}\n"
-           "} // namespace\n\n"
-           "std::uint64_t runtime_central_dispatch_count() noexcept {\n"
+           "} // namespace\n\n";
+    output << "namespace runtime_dispatch_detail {\n"
+              "katana::runtime::RuntimeBlockFastpathBinding "
+              "static_fastpath_binding(\n"
+              "        const std::uint32_t address) noexcept {\n"
+              "    switch (address) {\n";
+    for (const auto& [address, bindings] : static_fastpath_bindings) {
+        // A block can carry exactly one immutable descriptor. In particular,
+        // multiple composite callsite/target contracts sharing a target remain
+        // conservative instead of choosing a descriptor by array order.
+        if (bindings.size() != 1u)
+            continue;
+        const auto binding = bindings.front();
+        output << "    case 0x" << symbol(address) << "u: return {\n";
+        switch (binding.kind) {
+        case StaticFastpathBindingKind::CompositeCallback:
+            output
+                << "        katana::runtime::RuntimeBlockFastpathKind::"
+                   "CompositeCallback,\n"
+                << "        &composite_callback_batch_descriptors["
+                << binding.descriptor_index << "u]};\n";
+            break;
+        case StaticFastpathBindingKind::MemoryFill:
+            output
+                << "        katana::runtime::RuntimeBlockFastpathKind::"
+                   "MemoryFill,\n"
+                << "        &memory_fill_loop_batch_descriptors["
+                << binding.descriptor_index << "u]};\n";
+            break;
+        case StaticFastpathBindingKind::MmioWait:
+            output
+                << "        katana::runtime::RuntimeBlockFastpathKind::"
+                   "MmioWait,\n"
+                << "        &mmio_wait_loop_batch_descriptors["
+                << binding.descriptor_index << "u]};\n";
+            break;
+        case StaticFastpathBindingKind::CountedLoop:
+            output
+                << "        katana::runtime::RuntimeBlockFastpathKind::"
+                   "CountedLoop,\n"
+                << "        &counted_loop_batch_descriptors["
+                << binding.descriptor_index << "u]};\n";
+            break;
+        }
+    }
+    output << "    default: return {};\n"
+              "    }\n"
+              "}\n"
+              "} // namespace runtime_dispatch_detail\n\n";
+    output << "std::uint64_t runtime_central_dispatch_count() noexcept {\n"
            "    return executed_dispatch_blocks;\n"
            "}\n\n"
            "void static_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"

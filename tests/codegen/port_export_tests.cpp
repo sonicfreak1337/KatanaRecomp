@@ -1623,6 +1623,13 @@ int run_test(const int argc, char* argv[]) {
             "std::array<MmioWaitLoopBatchDescriptor, 1u> "
             "mmio_wait_loop_batch_descriptors") != std::string::npos &&
             mmio_wait_dispatch.find(mmio_wait_descriptor) != std::string::npos &&
+            mmio_wait_dispatch.find(
+                "case 0x8C010000u: return {\n"
+                "        katana::runtime::RuntimeBlockFastpathKind::MmioWait,\n"
+                "        &mmio_wait_loop_batch_descriptors[0u]}") !=
+                std::string::npos &&
+            mmio_wait_dispatch.find("mmio_wait_loop_descriptor(") ==
+                std::string::npos &&
             mmio_wait_header.find("struct MmioWaitLoopBatchDescriptor") !=
                 std::string::npos &&
             mmio_wait_header.find("bool try_product_mmio_wait_loop_batch(") !=
@@ -1976,14 +1983,24 @@ int run_test(const int argc, char* argv[]) {
             "memory_fill_loop_batch_descriptors") != std::string::npos &&
             memory_fill_dispatch.find(memory_fill_descriptor) != std::string::npos &&
             memory_fill_dispatch.find(
-                "case 0x8C01000Au: return &memory_fill_loop_batch_descriptors[0u]") !=
+                "case 0x8C01000Au: return {\n"
+                "        katana::runtime::RuntimeBlockFastpathKind::MemoryFill,\n"
+                "        &memory_fill_loop_batch_descriptors[0u]}") !=
                 std::string::npos &&
             memory_fill_dispatch.find(
-                "case 0x8C01000Eu: return &memory_fill_loop_batch_descriptors[0u]") !=
+                "case 0x8C01000Eu: return {\n"
+                "        katana::runtime::RuntimeBlockFastpathKind::MemoryFill,\n"
+                "        &memory_fill_loop_batch_descriptors[0u]}") !=
                 std::string::npos &&
             memory_fill_dispatch.find(
                 "for (const auto& descriptor : memory_fill_loop_batch_descriptors)") ==
                 std::string::npos &&
+            memory_fill_dispatch.find("memory_fill_loop_descriptor(") ==
+                std::string::npos &&
+            memory_fill_dispatch.find(
+                "switch (selected_block.fastpath.kind)") != std::string::npos &&
+            memory_fill_dispatch.find(
+                "selected_block.fastpath.descriptor") != std::string::npos &&
             memory_fill_header.find("struct MemoryFillLoopBatchDescriptor") !=
                 std::string::npos &&
             memory_fill_header.find("bool try_product_memory_fill_loop_batch(") !=
@@ -2282,6 +2299,18 @@ int run_test(const int argc, char* argv[]) {
             "composite_callback_batch_descriptors") != std::string::npos &&
             composite_dispatch.find("0x8C010018u, 0x8C01001Cu, 0x8C010020u, "
                                     "0x8C010028u, 0x8C010090u, 0x8C01009Cu") !=
+                std::string::npos &&
+            composite_dispatch.find(
+                "case 0x8C010090u: return {\n"
+                "        katana::runtime::RuntimeBlockFastpathKind::"
+                "CompositeCallback,\n"
+                "        &composite_callback_batch_descriptors[0u]}") !=
+                std::string::npos &&
+            composite_dispatch.find(
+                "composite_callback_batch_descriptors_for(") == std::string::npos &&
+            composite_dispatch.find(
+                "dispatch_callsite !=\n"
+                "                    composite_callback.call_instruction_address") !=
                 std::string::npos &&
             composite_header.find("struct CompositeCallbackBatchDescriptor") !=
                 std::string::npos &&
@@ -2600,7 +2629,7 @@ int run_test(const int argc, char* argv[]) {
     const auto counted_dynamic_kind =
         counted_loop_dispatch.find("const auto counted_fastpath_kind", counted_loop_call);
     const auto counted_dynamic_kind_store = counted_loop_dispatch.find(
-        "counted_loop->store_instruction_address", counted_dynamic_kind);
+        "counted_loop.store_instruction_address", counted_dynamic_kind);
     const auto counted_dynamic_kind_fallthrough = counted_loop_dispatch.find(
         "BlockEndKind::Fallthrough", counted_dynamic_kind_store);
     const auto counted_fastpath_finalize =
@@ -2669,6 +2698,15 @@ int run_test(const int argc, char* argv[]) {
     require(counted_loop_dispatch.find("std::array<CountedLoopBatchDescriptor, 1u> "
                                        "counted_loop_batch_descriptors") != std::string::npos,
             "Exakte positive Counted-Loop-Fixture erzeugt nicht genau einen Descriptor.");
+    require(
+        counted_loop_dispatch.find(
+            "case 0x8C010016u: return {\n"
+            "        katana::runtime::RuntimeBlockFastpathKind::CountedLoop,\n"
+            "        &counted_loop_batch_descriptors[0u]}") != std::string::npos &&
+            counted_loop_dispatch.find("counted_loop_descriptor(") ==
+                std::string::npos,
+        "Counted-Loop-Descriptor ist nicht direkt an seinen statischen Runtimeblock "
+        "gebunden.");
     const auto counted_loop_array = counted_loop_dispatch.find("counted_loop_batch_descriptors{{");
     require(counted_loop_dispatch.find(counted_loop_descriptor) != std::string::npos,
             "Counted-Loop-Descriptor verliert Adressen, Register, Timing oder Schrittweite: " +
@@ -2724,7 +2762,7 @@ int run_test(const int argc, char* argv[]) {
             counted_loop_method.find(
                 "const ScopedCpuActiveBlockProvenance active_block_provenance(") !=
                 std::string::npos &&
-            counted_loop_dispatch.find("selected_block, *counted_loop") !=
+            counted_loop_dispatch.find("selected_block, counted_loop") !=
                 std::string::npos &&
             counted_loop_dispatch.find("active_context->scheduler_cycle =") != std::string::npos &&
             counted_loop_call != std::string::npos && ordinary_block_execute != std::string::npos &&
@@ -3291,10 +3329,16 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             runtime_dispatch.find(
                 "for (const auto& descriptor :\n"
-                "                 composite_callback_batch_descriptors)") ==
+                 "                 composite_callback_batch_descriptors)") ==
                 std::string::npos &&
             runtime_dispatch.find(
-                "composite_callback_batch_descriptors_for(dispatch_callsite)") !=
+                "composite_callback_batch_descriptors_for(") ==
+                std::string::npos &&
+            runtime_dispatch.find(
+                "block.fastpath = static_fastpath_binding(address)") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "switch (selected_block.fastpath.kind)") !=
                 std::string::npos,
         "Der Produktdispatch bindet Detaildiagnostik oder Fastpathdeskriptoren "
         "weiterhin pauschal an den Erfolgs-Hotpath.");
