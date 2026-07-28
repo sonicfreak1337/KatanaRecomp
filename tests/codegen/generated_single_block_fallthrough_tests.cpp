@@ -24,6 +24,18 @@ void note_block_entry(const std::uint32_t address) noexcept {
 
 } // namespace single_block_fallthrough_fixture
 
+namespace native_owner_exit_fixture::runtime_dispatch_detail {
+
+thread_local PlatformServices* active_services = nullptr;
+thread_local katana::runtime::BlockAddress active_exit_source;
+thread_local katana::runtime::BlockEndKind active_exit_kind =
+    katana::runtime::BlockEndKind::Fallthrough;
+thread_local katana::runtime::DynamicDispatchSiteClass active_exit_site_class =
+    katana::runtime::DynamicDispatchSiteClass::NotDynamic;
+thread_local bool tail_dispatch_completed = false;
+
+} // namespace native_owner_exit_fixture::runtime_dispatch_detail
+
 namespace {
 
 void require(const bool condition, const std::string& message) {
@@ -78,8 +90,14 @@ class ChainServices final : public katana::runtime::PlatformServices {
     }
     [[nodiscard]] bool
     can_chain_executable_block(const std::uint32_t address) const noexcept override {
-        return address == 0x2002u;
+        if (observed_chain_count < observed_chain_addresses.size())
+            observed_chain_addresses[observed_chain_count] = address;
+        ++observed_chain_count;
+        return address == 0x2002u || address == 12u;
     }
+
+    mutable std::array<std::uint32_t, 4u> observed_chain_addresses{};
+    mutable std::size_t observed_chain_count = 0u;
 };
 
 } // namespace
@@ -108,6 +126,60 @@ int main() {
     require(observed_block_count == 2u && observed_blocks[0] == 0x2000u &&
                 observed_blocks[1] == 0x2002u,
             "Lokales Mehrblock-Chaining betritt nicht beide Bloecke genau einmal.");
+
+    services.observed_chain_count = 0u;
+    native_owner_exit_fixture::CpuState owner_exit_cpu;
+    katana::runtime::BlockExecutionContext owner_exit_context;
+    owner_exit_cpu.pc = 0u;
+    constexpr katana::runtime::BlockAddress saved_exit_source{
+        0x11111111u, 0x01234567u};
+    native_owner_exit_fixture::runtime_dispatch_detail::active_services =
+        &services;
+    native_owner_exit_fixture::runtime_dispatch_detail::active_exit_source =
+        saved_exit_source;
+    native_owner_exit_fixture::runtime_dispatch_detail::active_exit_kind =
+        katana::runtime::BlockEndKind::Sleep;
+    native_owner_exit_fixture::runtime_dispatch_detail::active_exit_site_class =
+        katana::runtime::DynamicDispatchSiteClass::RuntimeOnly;
+    native_owner_exit_fixture::runtime_dispatch_detail::
+        tail_dispatch_completed = true;
+    const auto owner_exit =
+        native_owner_exit_fixture::fn_00000000_runtime_entry(
+            owner_exit_cpu, owner_exit_context);
+    native_owner_exit_fixture::runtime_dispatch_detail::active_services =
+        nullptr;
+    require(
+        services.observed_chain_count == 2u &&
+            services.observed_chain_addresses[0] == 12u &&
+            services.observed_chain_addresses[1] == 6u &&
+            owner_exit_cpu.pc == 6u &&
+            owner_exit_cpu.retired_guest_instructions == 5u,
+        "Aufgeloester indirekter Native-Call kehrt nicht normal zur "
+        "abgelehnten Caller-Fortsetzung zurueck.");
+    require(
+        owner_exit.kind == katana::runtime::BlockEndKind::Call &&
+            owner_exit.source ==
+                katana::runtime::BlockAddress{
+                    2u, katana::runtime::canonical_physical_address(2u)} &&
+            owner_exit.target.has_value() &&
+            *owner_exit.target ==
+                katana::runtime::BlockAddress{
+                    6u, katana::runtime::canonical_physical_address(6u)},
+        "Verschachtelter Owner-Entry ersetzt den aeusseren Caller-BlockExit.");
+    require(
+        native_owner_exit_fixture::runtime_dispatch_detail::
+                active_exit_source ==
+                katana::runtime::BlockAddress{
+                    2u, katana::runtime::canonical_physical_address(2u)} &&
+            native_owner_exit_fixture::runtime_dispatch_detail::
+                active_exit_kind == katana::runtime::BlockEndKind::Call &&
+            native_owner_exit_fixture::runtime_dispatch_detail::
+                    active_exit_site_class ==
+                katana::runtime::DynamicDispatchSiteClass::Unresolved &&
+            !native_owner_exit_fixture::runtime_dispatch_detail::
+                tail_dispatch_completed,
+        "Aeusserer Owner-Entry veroeffentlicht nicht seinen eigenen "
+        "Exit-Zustand an den zentralen Dispatcher.");
 
     normal_fallthrough_fixture::CpuState normal_cpu;
     normal_fallthrough_fixture::run(normal_cpu);

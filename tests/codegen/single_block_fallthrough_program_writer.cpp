@@ -72,6 +72,35 @@ std::vector<katana::ir::Function> build_program() {
     return program;
 }
 
+std::vector<katana::ir::Function> native_owner_exit_program() {
+    constexpr std::array<std::uint8_t, 16u> bytes = {
+        0x0Cu, 0xE1u, // mov #12,r1
+        0x0Bu, 0x41u, // jsr @r1
+        0x09u, 0x00u, // delay-slot nop
+        0x0Bu, 0x00u, // caller continuation: rts
+        0x09u, 0x00u, // delay-slot nop
+        0x09u, 0x00u, // unreachable padding
+        0x0Bu, 0x00u, // resolved callee: rts
+        0x09u, 0x00u  // delay-slot nop
+    };
+    constexpr std::array<std::uint32_t, 1u> seeds = {0u};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> resolved_edges = {
+        katana::analysis::ResolvedControlFlowEdge{
+            2u, 12u, katana::analysis::ResolvedControlFlowKind::Call}};
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    const auto discovered =
+        katana::analysis::discover_functions(lines, seeds, resolved_edges);
+    auto program = katana::ir::lower_program(lines, discovered, resolved_edges);
+    if (program.size() != 2u || program.front().entry_address != 0u ||
+        program.front().blocks.size() != 2u ||
+        program.back().entry_address != 12u) {
+        throw std::runtime_error(
+            "Testfixture besitzt keine aufgeloeste indirekte "
+            "Caller/Callee-Rueckkehrkante.");
+    }
+    return program;
+}
+
 } // namespace
 
 int main(const int argc, char* argv[]) {
@@ -88,6 +117,20 @@ int main(const int argc, char* argv[]) {
         request.conservative_register_localization = true;
         const auto single_block_source =
             katana::codegen::generate_program(backend, request).joined_text();
+
+        const auto owner_exit_program = native_owner_exit_program();
+        katana::codegen::BackendRequest owner_exit_request{
+            owner_exit_program, 0u};
+        owner_exit_request.symbol_namespace = "native_owner_exit_fixture";
+        owner_exit_request.emit_run_functions = false;
+        owner_exit_request.external_function_linkage = true;
+        owner_exit_request.single_block_execution = true;
+        owner_exit_request.external_dynamic_dispatch = true;
+        owner_exit_request.guarded_local_block_chaining = true;
+        owner_exit_request.conservative_register_localization = true;
+        const auto owner_exit_source =
+            katana::codegen::emit_cpp_port_translation_unit(owner_exit_request)
+                .joined_text();
 
         katana::codegen::BackendRequest normal_request{program, 0x1000u};
         normal_request.symbol_namespace = "normal_fallthrough_fixture";
@@ -106,6 +149,10 @@ int main(const int argc, char* argv[]) {
         std::ofstream output(argv[1], std::ios::binary | std::ios::trunc);
         output.write(single_block_source.data(),
                      static_cast<std::streamsize>(single_block_source.size()));
+        output.write(reset_dispatch_macros.data(),
+                     static_cast<std::streamsize>(reset_dispatch_macros.size()));
+        output.write(owner_exit_source.data(),
+                     static_cast<std::streamsize>(owner_exit_source.size()));
         output.write(reset_dispatch_macros.data(),
                      static_cast<std::streamsize>(reset_dispatch_macros.size()));
         output.write(normal_source.data(), static_cast<std::streamsize>(normal_source.size()));

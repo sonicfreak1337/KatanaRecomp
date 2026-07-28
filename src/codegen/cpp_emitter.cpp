@@ -4700,12 +4700,14 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "    auto* const services = runtime_dispatch_detail::active_services;\n"
                 << "    if (services == nullptr)\n"
                 << "        throw std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
-                << "    runtime_dispatch_detail::active_exit_source = {\n"
-                << "        cpu.pc, katana::runtime::canonical_physical_address(cpu.pc)};\n"
-                << "    runtime_dispatch_detail::active_exit_kind = "
-                   "katana::runtime::BlockEndKind::Fallthrough;\n"
-                << "    runtime_dispatch_detail::active_exit_site_class = "
-                   "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
+                << "    katana::runtime::NativeAotCallExitStateFrame "
+                   "native_call_exit_state(\n"
+                << "        runtime_dispatch_detail::active_exit_source,\n"
+                << "        runtime_dispatch_detail::active_exit_kind,\n"
+                << "        runtime_dispatch_detail::active_exit_site_class,\n"
+                << "        runtime_dispatch_detail::tail_dispatch_completed,\n"
+                << "        {cpu.pc, "
+                   "katana::runtime::canonical_physical_address(cpu.pc)});\n"
                 << "    const auto exception_generation_on_entry = "
                    "cpu.exception_generation;\n"
                 << "    [&] {\n"
@@ -4826,12 +4828,14 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "        std::exchange(runtime_dispatch_detail::"
                    "tail_dispatch_completed, false))\n"
                 << "        kind = katana::runtime::BlockEndKind::Return;\n"
-                << "    return katana::runtime::make_block_exit(\n"
+                << "    auto exit = katana::runtime::make_block_exit(\n"
                 << "        cpu, context, kind, "
                    "runtime_dispatch_detail::active_exit_source,\n"
                 << "        katana::runtime::BlockAddress{\n"
                 << "            cpu.pc, "
-                   "katana::runtime::canonical_physical_address(cpu.pc)});\n";
+                   "katana::runtime::canonical_physical_address(cpu.pc)});\n"
+                << "    native_call_exit_state.release();\n"
+                << "    return exit;\n";
         }
         emitted_function << "}\n\n";
 

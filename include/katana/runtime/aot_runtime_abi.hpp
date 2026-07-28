@@ -67,6 +67,61 @@ class NativeAotCallDepthGuard final {
     return detail::native_aot_call_depth != 0u;
 }
 
+// Product owner entries share their active BlockExit metadata with the central
+// dispatcher. Native calls enter another owner on the same host thread, so
+// each entry must preserve the caller's metadata until that native call level
+// returns. The frame also gives every level a fresh tail-dispatch flag.
+class NativeAotCallExitStateFrame final {
+  public:
+    NativeAotCallExitStateFrame(
+        BlockAddress& active_source,
+        BlockEndKind& active_kind,
+        DynamicDispatchSiteClass& active_site_class,
+        bool& tail_dispatch_completed,
+        const BlockAddress entry_source) noexcept
+        : active_source_(active_source),
+          active_kind_(active_kind),
+          active_site_class_(active_site_class),
+          tail_dispatch_completed_(tail_dispatch_completed),
+          saved_source_(active_source),
+          saved_kind_(active_kind),
+          saved_site_class_(active_site_class),
+          saved_tail_dispatch_completed_(tail_dispatch_completed) {
+        active_source_ = entry_source;
+        active_kind_ = BlockEndKind::Fallthrough;
+        active_site_class_ = DynamicDispatchSiteClass::NotDynamic;
+        tail_dispatch_completed_ = false;
+    }
+
+    ~NativeAotCallExitStateFrame() noexcept {
+        if (!restore_on_exit_) return;
+        active_source_ = saved_source_;
+        active_kind_ = saved_kind_;
+        active_site_class_ = saved_site_class_;
+        tail_dispatch_completed_ = saved_tail_dispatch_completed_;
+    }
+
+    // The outer block-table invocation publishes its completed site class to
+    // the central dispatcher after returning. Nested owner calls do not release
+    // their frame and therefore restore the caller level normally.
+    void release() noexcept { restore_on_exit_ = false; }
+
+    NativeAotCallExitStateFrame(const NativeAotCallExitStateFrame&) = delete;
+    NativeAotCallExitStateFrame&
+    operator=(const NativeAotCallExitStateFrame&) = delete;
+
+  private:
+    BlockAddress& active_source_;
+    BlockEndKind& active_kind_;
+    DynamicDispatchSiteClass& active_site_class_;
+    bool& tail_dispatch_completed_;
+    BlockAddress saved_source_;
+    BlockEndKind saved_kind_;
+    DynamicDispatchSiteClass saved_site_class_;
+    bool saved_tail_dispatch_completed_ = false;
+    bool restore_on_exit_ = true;
+};
+
 enum class NativeAotScalarRegister : std::uint8_t {
     T,
     Pr,
