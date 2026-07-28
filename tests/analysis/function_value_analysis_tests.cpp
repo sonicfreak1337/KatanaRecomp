@@ -330,13 +330,24 @@ shifted_stack_alias_values(const bool isolated_harvest) {
 }
 
 katana::analysis::FunctionValueAnalysisResult
-guarded_inventory_budget_values(const std::size_t candidate_count) {
+guarded_inventory_budget_values(
+    const std::size_t candidate_count,
+    const bool include_returned_method_table = false) {
     constexpr std::size_t record_size = 0x20u;
     constexpr std::uint32_t handler_base = 0x1'0000u;
+    constexpr std::uint32_t method_caller = 0x8000u;
+    constexpr std::uint32_t method_accessor = 0x8040u;
+    constexpr std::uint32_t method_table = 0x9000u;
+    const auto returned_handler =
+        handler_base + static_cast<std::uint32_t>(candidate_count * 4u);
     std::vector<std::uint8_t> bytes(
-        handler_base + candidate_count * 4u, 0x09u);
+        handler_base +
+            (candidate_count + (include_returned_method_table ? 1u : 0u)) *
+                4u,
+        0x09u);
     std::vector<std::uint32_t> function_entries;
-    function_entries.reserve(candidate_count);
+    function_entries.reserve(
+        candidate_count + (include_returned_method_table ? 2u : 0u));
     const auto put_u16 = [&bytes](const std::size_t offset,
                                   const std::uint16_t value) {
         bytes[offset] = static_cast<std::uint8_t>(value);
@@ -367,9 +378,35 @@ guarded_inventory_budget_values(const std::size_t candidate_count) {
         put_u16(callback, 0x000Bu);
         put_u16(callback + 2u, 0x0009u);
     }
+    if (include_returned_method_table) {
+        function_entries.push_back(method_caller);
+        function_entries.push_back(method_accessor);
+        put_u16(method_caller + 0x00u, 0xB01Eu); // bsr method_accessor
+        put_u16(method_caller + 0x02u, 0x0009u);
+        put_u16(method_caller + 0x04u, 0x6C03u); // mov r0,r12
+        put_u16(method_caller + 0x06u, 0x63C2u); // mov.l @r12,r3
+        put_u16(method_caller + 0x08u, 0x430Bu); // jsr @r3
+        put_u16(method_caller + 0x0Au, 0x0009u);
+        put_u16(method_caller + 0x0Cu, 0x000Bu);
+        put_u16(method_caller + 0x0Eu, 0x0009u);
+        put_u16(method_accessor + 0x00u, 0xD001u); // mov.l @(0x8048,pc),r0
+        put_u16(method_accessor + 0x02u, 0x000Bu);
+        put_u16(method_accessor + 0x04u, 0x0009u);
+        put_u32(method_accessor + 0x08u, method_table);
+        put_u32(method_table + 0x00u, returned_handler);
+        put_u32(method_table + 0x04u, 1u); // bounded-table sentinel
+        put_u16(returned_handler, 0x000Bu);
+        put_u16(returned_handler + 2u, 0x0009u);
+    }
 
     katana::io::ExecutableImage image;
     image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    if (include_returned_method_table) {
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::
+                EntryPointStraightLineQuiescent);
+        image.set_initial_snapshot_entry(method_caller);
+    }
     image.add_segment({".guarded-inventory-budget",
                        0u,
                        0u,
@@ -381,6 +418,8 @@ guarded_inventory_budget_values(const std::size_t candidate_count) {
                        katana::io::ImageLoadPhase::Initial,
                        "synthetic-guarded-inventory-budget"});
     image.add_entry_point(0u);
+    if (include_returned_method_table)
+        image.add_entry_point(method_caller);
     const auto lines = katana::sh4::disassemble(bytes, 0u);
     return katana::analysis::analyze_function_values(
         image, lines, function_entries);
@@ -1811,6 +1850,60 @@ int main() {
             "Das 1.025. eindeutige Guarded-Code-Ziel wurde nicht waehrend "
             "der Sammlung mit korrekter Truncation und stabilem Prefix "
             "abgewiesen.");
+
+        const auto returned_method_priority =
+            guarded_inventory_budget_values(inventory_budget, true);
+        const auto& prioritized_inventory =
+            returned_method_priority.guarded_code_inventory;
+        const auto returned_handler =
+            handler_base +
+            static_cast<std::uint32_t>(inventory_budget * 4u);
+        const auto prioritized_stored_prefix =
+            prioritized_inventory.stored_code_addresses.size() ==
+                inventory_budget - 1u &&
+            std::all_of(
+                prioritized_inventory.stored_code_addresses.begin(),
+                prioritized_inventory.stored_code_addresses.end(),
+                [&](const auto& candidate) {
+                    const auto index = static_cast<std::size_t>(
+                        &candidate -
+                        prioritized_inventory.stored_code_addresses.data());
+                    return candidate.target_address ==
+                           handler_base +
+                               static_cast<std::uint32_t>(index * 4u);
+                });
+        require(
+            prioritized_inventory.candidate_budget == inventory_budget &&
+                prioritized_inventory.candidate_count == inventory_budget &&
+                prioritized_inventory.candidate_inventory_truncated &&
+                prioritized_inventory.returned_code_address_tables.size() ==
+                    1u &&
+                prioritized_inventory.returned_code_address_tables.front()
+                        .target_addresses ==
+                    std::vector<std::uint32_t>{returned_handler} &&
+                prioritized_stored_prefix,
+            "Konkrete Accessor-Returned-Methodentabelle verlor gegen das "
+            "breite Stored-Inventar oder verdraengte keinen deterministischen "
+            "Stored-Suffix (candidate_count=" +
+                std::to_string(prioritized_inventory.candidate_count) +
+                ", truncated=" +
+                std::to_string(
+                    prioritized_inventory.candidate_inventory_truncated) +
+                ", stored=" +
+                std::to_string(
+                    prioritized_inventory.stored_code_addresses.size()) +
+                ", tables=" +
+                std::to_string(
+                    prioritized_inventory.returned_code_address_tables.size()) +
+                ", table_targets=" +
+                std::to_string(
+                    prioritized_inventory.returned_code_address_tables.empty()
+                        ? 0u
+                        : prioritized_inventory.returned_code_address_tables
+                              .front()
+                              .target_addresses.size()) +
+                ", prefix=" +
+                std::to_string(prioritized_stored_prefix) + ").");
     }
 
     std::cout << "KR-4713 interprozedurale Zielwertsummaries erfolgreich.\n";

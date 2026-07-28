@@ -10569,6 +10569,26 @@ static PortExportResult export_dreamcast_port_project_impl(
         throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(incomplete) +
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
+    if (!options.diagnostic_partial &&
+        (prepared.analysis.function_budget_exhausted ||
+         prepared.analysis.candidate_inventory_truncated ||
+         prepared.analysis.returned_table_scan_truncated)) {
+        std::ostringstream reason;
+        reason << "Portanalyse besitzt kein vollstaendiges Guarded-AOT-Inventar:"
+               << " function_budget_exhausted="
+               << prepared.analysis.function_budget_exhausted
+               << " candidate_inventory_truncated="
+               << prepared.analysis.candidate_inventory_truncated
+               << " returned_table_scan_truncated="
+               << prepared.analysis.returned_table_scan_truncated
+               << " candidates="
+               << prepared.analysis.guarded_code_inventory_candidates
+               << '/' << prepared.analysis.guarded_code_inventory_budget
+               << " shape_budget_exceeded="
+               << prepared.analysis
+                      .guarded_code_shape_budget_exceeded_candidates;
+        throw std::runtime_error(reason.str());
+    }
     katana::ir::require_valid_program(prepared.program);
     require_guarded_aot_program_entries(
         prepared.program,
@@ -11252,6 +11272,17 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     }
     report_progress(options, "disc-load");
     const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
+    return export_dreamcast_port_project(disc, output_root, options);
+}
+
+PortExportResult export_dreamcast_port_project(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options) {
+    if (!disc.source || disc.system_bootstrap.empty() ||
+        disc.boot_file.empty())
+        throw std::invalid_argument(
+            "Portexport braucht eine vollstaendig geladene GDI-Quelle.");
     report_progress(options, "boot-image");
     auto image = katana::platform::make_dreamcast_disc_executable(
         disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);

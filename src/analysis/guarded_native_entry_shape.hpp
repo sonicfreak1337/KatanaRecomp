@@ -143,6 +143,15 @@ class GuardedNativeEntryShapeCache {
             const auto address = pending.front();
             pending.pop_front();
             if (!visited.insert(address).second) continue;
+            if (address != entry_address) {
+                const auto cached = results_.find(address);
+                if (cached != results_.end()) {
+                    if (cached->second ==
+                        GuardedNativeEntryShapeStatus::Valid)
+                        continue;
+                    return cached->second;
+                }
+            }
 
             const auto decoded = decode_at(address, candidate_work);
             if (!decoded.instruction.has_value()) return decoded.status;
@@ -192,6 +201,16 @@ class GuardedNativeEntryShapeCache {
             case katana::sh4::ControlFlowKind::Halt:
                 break;
             }
+        }
+        // A successful walk proves every ordinary CFG node reached from this
+        // entry.  Cache those suffixes as well; delay-slot-only decodes were
+        // never inserted into visited and therefore never become standalone
+        // entry proofs.  Large families of tiny wrappers and shared tails no
+        // longer repeat the same 4K walk for every candidate.
+        for (const auto address : visited) {
+            if (address != entry_address)
+                results_.try_emplace(
+                    address, GuardedNativeEntryShapeStatus::Valid);
         }
         return GuardedNativeEntryShapeStatus::Valid;
     }

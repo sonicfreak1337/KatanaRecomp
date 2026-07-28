@@ -10,6 +10,7 @@
 #include "katana/cli/exit_code.hpp"
 #include "katana/cli/hardware_audit_policy.hpp"
 #include "katana/codegen/backend.hpp"
+#include "katana/codegen/cache.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/native_aot_profile.hpp"
 #include "katana/codegen/port_export.hpp"
@@ -36,6 +37,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -1317,16 +1319,18 @@ bool path_is_within(const std::filesystem::path& path,
            *relative.begin() != "..";
 }
 
-inline constexpr std::uint32_t executable_port_export_cache_version = 3u;
+inline constexpr std::uint32_t port_export_cache_version = 4u;
+inline constexpr std::uint32_t port_ir_contract_version = 2u;
+inline constexpr std::string_view untrusted_katana_source_identity =
+    "0000000000000000000000000000000000000000";
 
-struct CachedExecutablePortExport {
+struct CachedPortExport {
     std::string key;
+    std::string source_kind;
     std::string tree_identity;
+    std::string recipe_identity;
     std::size_t functions = 0u;
     std::size_t partitions = 0u;
-    std::size_t disc_tracks = 0u;
-    std::string job_generation;
-    std::string content_identity;
 };
 
 bool valid_cache_digest(const std::string_view value) noexcept {
@@ -1340,10 +1344,11 @@ bool valid_cache_digest(const std::string_view value) noexcept {
 std::optional<std::string>
 port_codegen_tree_identity(const std::filesystem::path& root) {
     std::vector<std::filesystem::path> files;
-    constexpr std::array<std::string_view, 4u> required_files{
+    constexpr std::array<std::string_view, 5u> required_files{
         "CMakeLists.txt",
         ".gitignore",
         "INSTALL_ORIGINAL_DISC.txt",
+        "run-product-gate.ps1",
         "content/game.katana-install"};
     for (const auto relative : required_files) {
         const auto path = root / relative;
@@ -1390,46 +1395,87 @@ port_codegen_tree_identity(const std::filesystem::path& root) {
     return katana::io::sha256_bytes(identity.str());
 }
 
-std::string executable_port_export_cache_key(
-    const katana::platform::DreamcastBootExecutableArtifact& artifact,
+void append_port_export_cache_field(std::ostringstream& output,
+                                    const std::string_view value) {
+    output << value.size() << ':' << value << ';';
+}
+
+std::string port_export_recipe_identity(
+    const katana::runtime::DiscInstallRecipe& recipe) {
+    return katana::io::sha256_bytes(
+        katana::runtime::format_disc_install_recipe(recipe));
+}
+
+std::string port_export_cache_key(
+    const std::string_view source_kind,
+    const std::uint32_t source_contract_version,
+    const katana::runtime::DiscInstallRecipe& recipe,
+    const std::string_view boot_file_name,
+    const std::uint32_t entry_address,
     const std::string_view target_name,
     const bool diagnostic_partial,
     const std::string_view console_profile,
     const std::string_view game_project_identity,
-    const std::string_view game_entry_handoff_artifact_identity) {
+    const std::string_view game_entry_handoff_artifact_identity,
+    const katana::codegen::PartitionOptions& partition_options = {}) {
     std::ostringstream identity;
-    identity << "katana-port-executable-analysis-v"
-             << executable_port_export_cache_version << ':'
-             << artifact.version << ':' << artifact.project_identity << ':'
-             << artifact.install_recipe.content_identity << ':'
-             << artifact.boot_sha256 << ':' << artifact.entry_address << ':'
-             << target_name << ':' << diagnostic_partial << ':' << console_profile << ':'
-             << game_project_identity << ':'
-             << game_entry_handoff_artifact_identity << ':'
-             << KATANA_RECOMP_VERSION << ':'
-             << katana::build_contract::katana_git_commit << ':'
-             << katana::build_contract::analyzer_abi_version << ':'
-             << katana::runtime::abi_version << ':'
-             << katana::codegen::backend_interface_abi_version << ':'
-             << katana::codegen::port_project_contract_version << ':'
-             << katana::codegen::port_partition_emission_schema_version << ':'
-             << katana::codegen::port_metadata_cache_schema_version << ':'
-             << katana::codegen::native_aot_emission_profile_version;
+    const auto append = [&identity](const auto& value) {
+        std::ostringstream field;
+        field << value;
+        append_port_export_cache_field(identity, field.str());
+    };
+    append("katana-port-whole-export");
+    append(port_export_cache_version);
+    append(source_kind);
+    append(source_contract_version);
+    append(recipe.version);
+    append(port_export_recipe_identity(recipe));
+    append(recipe.job_generation);
+    append(recipe.content_identity);
+    append(recipe.boot_sha256);
+    append(boot_file_name);
+    append(entry_address);
+    append(target_name);
+    append(diagnostic_partial);
+    append(console_profile);
+    append(game_project_identity);
+    append(game_entry_handoff_artifact_identity);
+    append(partition_options.maximum_functions);
+    append(partition_options.maximum_instructions);
+    append(KATANA_RECOMP_VERSION);
+    append(katana::build_contract::katana_git_commit);
+    append(katana::build_contract::analyzer_abi_version);
+    append(katana::build_contract::runtime_abi_version);
+    append(katana::build_contract::block_abi_version);
+    append(katana::build_contract::platform_services_abi_version);
+    append(katana::codegen::backend_interface_abi_version);
+    append(katana::codegen::port_project_contract_version);
+    append(katana::codegen::port_partition_emission_schema_version);
+    append(katana::codegen::port_metadata_cache_schema_version);
+    append(katana::codegen::codegen_cache_schema_version);
+    append(katana::codegen::native_aot_emission_profile_version);
+    append(port_ir_contract_version);
+    append(katana::runtime::game_project_contract_version);
+    append(katana::runtime::game_project_artifact_format_version);
     return katana::io::sha256_bytes(identity.str());
 }
 
-std::filesystem::path executable_port_export_cache_path(
+std::filesystem::path port_export_cache_path(
     const std::filesystem::path& workspace,
+    const std::string_view source_kind,
     const std::string_view key) {
     return workspace / ".katana-codegen-cache" / "whole-export" /
-           ("port-executable-" + std::string(key) + ".state");
+           ("port-" + std::string(source_kind) + '-' + std::string(key) + ".state");
 }
 
-std::optional<CachedExecutablePortExport>
-load_cached_executable_port_export(const std::filesystem::path& workspace,
-                                   const std::string_view expected_key) {
+std::optional<CachedPortExport>
+load_cached_port_export(
+    const std::filesystem::path& workspace,
+    const std::string_view expected_source_kind,
+    const std::string_view expected_key,
+    const katana::runtime::DiscInstallRecipe& expected_recipe) {
     const auto state_path =
-        executable_port_export_cache_path(workspace, expected_key);
+        port_export_cache_path(workspace, expected_source_kind, expected_key);
     std::error_code status_error;
     const auto status = std::filesystem::symlink_status(state_path, status_error);
     if (status_error == std::errc::no_such_file_or_directory ||
@@ -1441,43 +1487,44 @@ load_cached_executable_port_export(const std::filesystem::path& workspace,
     std::ifstream input(state_path, std::ios::binary);
     std::string magic;
     std::uint32_t version = 0u;
-    CachedExecutablePortExport cached;
+    CachedPortExport cached;
     std::string key_name;
+    std::string source_name;
     std::string tree_name;
+    std::string recipe_name;
     std::string functions_name;
     std::string partitions_name;
-    std::string tracks_name;
-    std::string job_name;
-    std::string content_name;
     if (!(input >> magic >> version >> key_name >> cached.key >>
-          tree_name >> cached.tree_identity >> functions_name >> cached.functions >>
-          partitions_name >> cached.partitions >> tracks_name >> cached.disc_tracks >>
-          job_name >> cached.job_generation >> content_name >> cached.content_identity))
+          source_name >> cached.source_kind >>
+          tree_name >> cached.tree_identity >>
+          recipe_name >> cached.recipe_identity >>
+          functions_name >> cached.functions >>
+          partitions_name >> cached.partitions))
         return std::nullopt;
     input >> std::ws;
     if (!input.eof() ||
-        magic != "KATANA_PORT_EXECUTABLE_EXPORT_STATE" ||
-        version != executable_port_export_cache_version ||
-        key_name != "key" || tree_name != "tree" ||
+        magic != "KATANA_PORT_EXPORT_STATE" ||
+        version != port_export_cache_version ||
+        key_name != "key" || source_name != "source" ||
+        tree_name != "tree" || recipe_name != "recipe" ||
         functions_name != "functions" || partitions_name != "partitions" ||
-        tracks_name != "tracks" || job_name != "job" ||
-        content_name != "content" || cached.key != expected_key ||
+        cached.key != expected_key ||
+        cached.source_kind != expected_source_kind ||
+        cached.recipe_identity != port_export_recipe_identity(expected_recipe) ||
         !valid_cache_digest(cached.key) ||
         !valid_cache_digest(cached.tree_identity) ||
-        !valid_cache_digest(cached.job_generation) ||
-        !valid_cache_digest(cached.content_identity) ||
-        cached.functions == 0u || cached.partitions == 0u ||
-        cached.disc_tracks == 0u)
+        !valid_cache_digest(cached.recipe_identity) ||
+        cached.functions == 0u || cached.partitions == 0u)
         return std::nullopt;
     const auto actual_tree = port_codegen_tree_identity(workspace);
     if (!actual_tree || *actual_tree != cached.tree_identity)
         return std::nullopt;
     const auto recipe_path = workspace / "content" / "game.katana-install";
     try {
-        const auto recipe = katana::runtime::parse_disc_install_recipe(recipe_path);
-        if (recipe.job_generation != cached.job_generation ||
-            recipe.content_identity != cached.content_identity ||
-            recipe.tracks.size() != cached.disc_tracks)
+        const auto actual_recipe =
+            katana::runtime::parse_disc_install_recipe(recipe_path);
+        if (katana::runtime::format_disc_install_recipe(actual_recipe) !=
+            katana::runtime::format_disc_install_recipe(expected_recipe))
             return std::nullopt;
     } catch (...) {
         return std::nullopt;
@@ -1485,27 +1532,33 @@ load_cached_executable_port_export(const std::filesystem::path& workspace,
     return cached;
 }
 
-void store_cached_executable_port_export(
+void store_cached_port_export(
     const std::filesystem::path& workspace,
+    const std::string_view source_kind,
     const std::string_view key,
+    const katana::runtime::DiscInstallRecipe& expected_recipe,
     const katana::codegen::PortExportResult& report) {
+    if (report.job_generation != expected_recipe.job_generation ||
+        report.content_identity != expected_recipe.content_identity ||
+        report.disc_tracks != expected_recipe.tracks.size())
+        throw std::runtime_error(
+            "Content-addressed Portexport besitzt eine unerwartete Disc-Bindung.");
     const auto tree_identity = port_codegen_tree_identity(workspace);
     if (!tree_identity)
         throw std::runtime_error(
             "Content-addressed Portcodegen-Ausgabe ist nach Export unvollstaendig.");
-    const auto state_path = executable_port_export_cache_path(workspace, key);
+    const auto state_path = port_export_cache_path(workspace, source_kind, key);
     std::filesystem::create_directories(state_path.parent_path());
     const auto temporary = std::filesystem::path(state_path.string() + ".tmp");
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    output << "KATANA_PORT_EXECUTABLE_EXPORT_STATE "
-           << executable_port_export_cache_version << '\n'
+    output << "KATANA_PORT_EXPORT_STATE "
+           << port_export_cache_version << '\n'
            << "key " << key << '\n'
+           << "source " << source_kind << '\n'
            << "tree " << *tree_identity << '\n'
+           << "recipe " << port_export_recipe_identity(expected_recipe) << '\n'
            << "functions " << report.functions << '\n'
-           << "partitions " << report.partitions << '\n'
-           << "tracks " << report.disc_tracks << '\n'
-           << "job " << report.job_generation << '\n'
-           << "content " << report.content_identity << '\n';
+           << "partitions " << report.partitions << '\n';
     output.flush();
     if (!output)
         throw std::runtime_error(
@@ -1601,6 +1654,10 @@ int export_port_project(const std::filesystem::path& source_path,
         absolute_output.parent_path() / (".katana-port-publish-" + stage_key.substr(0u, 12u));
     std::optional<katana::platform::DreamcastBootExecutableArtifact>
         verified_boot_artifact;
+    std::optional<katana::platform::DreamcastDiscBoot>
+        verified_native_disc;
+    std::optional<katana::runtime::DiscInstallRecipe>
+        verified_install_recipe;
     std::shared_ptr<katana::runtime::GameEntryHandoffArtifact>
         verified_game_entry_handoff;
     std::shared_ptr<katana::runtime::GameProjectArtifact>
@@ -1608,6 +1665,13 @@ int export_port_project(const std::filesystem::path& source_path,
     std::optional<katana::runtime::GameProjectDefinition>
         resolved_game_project;
     std::optional<std::string> whole_export_cache_key;
+    std::string whole_export_source_kind;
+    std::uint32_t whole_export_source_contract_version = 0u;
+    std::string whole_export_boot_file_name;
+    std::uint32_t whole_export_entry_address = 0u;
+    const bool whole_export_cache_enabled =
+        katana::build_contract::katana_git_commit !=
+        untrusted_katana_source_identity;
     if (game_project_path.has_value() && diagnostic_partial)
         throw std::invalid_argument(
             "--game-project ist ausschliesslich fuer vollstaendige Produktports erlaubt.");
@@ -1616,6 +1680,12 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--game-entry-handoff ist ausschliesslich fuer "
             "port-executable-Produktports erlaubt.");
+    std::cout << "KATANA_PORT_PHASE analysis-codegen\n";
+    if (!whole_export_cache_enabled)
+        std::cout
+            << "KATANA_PORT_SUBPHASE "
+               "whole-program-analysis-ir-cache-disabled-untrusted-source\n";
+    std::cout << std::flush;
     if (game_project_path.has_value()) {
         verified_game_project =
             katana::runtime::GameProjectArtifact::load(
@@ -1625,19 +1695,12 @@ int export_port_project(const std::filesystem::path& source_path,
     if (boot_executable_artifact) {
         verified_boot_artifact =
             katana::platform::load_dreamcast_boot_executable_artifact(source_path);
-        if (verified_game_project) {
-            const auto& definition =
-                verified_game_project->definition();
-            if (definition.identity.content_identity !=
-                    verified_boot_artifact->install_recipe.content_identity ||
-                definition.identity.boot_file_name !=
-                    verified_boot_artifact->metadata.boot_file_name ||
-                definition.identity.boot_byte_identity !=
-                    "sha256:" + verified_boot_artifact->boot_sha256)
-                throw std::invalid_argument(
-                    "Game-project artifact passt nicht exakt zum "
-                    "Boot-Executable-Produktport.");
-        }
+        verified_install_recipe = verified_boot_artifact->install_recipe;
+        whole_export_source_kind = "boot-executable";
+        whole_export_source_contract_version = verified_boot_artifact->version;
+        whole_export_boot_file_name =
+            verified_boot_artifact->metadata.boot_file_name;
+        whole_export_entry_address = verified_boot_artifact->entry_address;
         if (game_entry_handoff_path.has_value()) {
             verified_game_entry_handoff =
                 katana::runtime::GameEntryHandoffArtifact::load(
@@ -1705,28 +1768,78 @@ int export_port_project(const std::filesystem::path& source_path,
             definition.game_entry_handoff = binding;
             katana::runtime::validate_game_project_definition(definition);
         }
-        const auto game_project_definition_identity =
-            resolved_game_project.has_value()
-                ? katana::runtime::game_project_definition_identity(
-                      *resolved_game_project)
-                : std::string{};
-        const auto game_project_identity =
-            verified_game_project
-                ? game_project_definition_identity + ':' +
-                      verified_game_project->artifact_identity()
-                : game_project_definition_identity;
-        const auto handoff_artifact_identity =
-            verified_game_entry_handoff
-                ? verified_game_entry_handoff->artifact_identity()
-                : std::string{};
-        whole_export_cache_key = executable_port_export_cache_key(
-            *verified_boot_artifact,
+    } else {
+        const auto disc_load_started = std::chrono::steady_clock::now();
+        std::cout << "KATANA_PORT_SUBPHASE disc-load\n" << std::flush;
+        verified_native_disc =
+            katana::platform::load_dreamcast_gdi_boot(source_path);
+        const auto boot_sha256 = katana::io::sha256_bytes(
+            std::string_view(
+                reinterpret_cast<const char*>(
+                    verified_native_disc->boot_file.data()),
+                verified_native_disc->boot_file.size()));
+        const auto project_identity =
+            katana::platform::dreamcast_disc_project_identity(
+                *verified_native_disc);
+        verified_install_recipe =
+            katana::runtime::make_disc_install_recipe(
+                *verified_native_disc->source,
+                project_identity,
+                boot_sha256);
+        std::cout
+            << "KATANA_PORT_SUBPHASE disc-load-complete-ms"
+            << std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - disc_load_started)
+                   .count()
+            << '\n'
+            << std::flush;
+        whole_export_source_kind = "native-disc";
+        whole_export_source_contract_version = 1u;
+        whole_export_boot_file_name =
+            verified_native_disc->metadata.boot_file_name;
+        whole_export_entry_address =
+            katana::platform::dreamcast_system_bootstrap_entry_address;
+    }
+    if (!verified_install_recipe)
+        throw std::logic_error(
+            "Portexport besitzt keine validierte Installationsrecipe.");
+    if (verified_game_project) {
+        const auto& definition = verified_game_project->definition();
+        if (definition.identity.content_identity !=
+                verified_install_recipe->content_identity ||
+            definition.identity.boot_file_name !=
+                whole_export_boot_file_name ||
+            definition.identity.boot_byte_identity !=
+                "sha256:" + verified_install_recipe->boot_sha256)
+            throw std::invalid_argument(
+                "Game-project artifact passt nicht exakt zum Produktport.");
+    }
+    const auto game_project_definition_identity =
+        resolved_game_project.has_value()
+            ? katana::runtime::game_project_definition_identity(
+                  *resolved_game_project)
+            : std::string{};
+    const auto game_project_identity =
+        verified_game_project
+            ? game_project_definition_identity + ':' +
+                  verified_game_project->artifact_identity()
+            : game_project_definition_identity;
+    const auto handoff_artifact_identity =
+        verified_game_entry_handoff
+            ? verified_game_entry_handoff->artifact_identity()
+            : std::string{};
+    if (whole_export_cache_enabled)
+        whole_export_cache_key = port_export_cache_key(
+            whole_export_source_kind,
+            whole_export_source_contract_version,
+            *verified_install_recipe,
+            whole_export_boot_file_name,
+            whole_export_entry_address,
             target_name,
             diagnostic_partial,
             console_profile,
             game_project_identity,
             handoff_artifact_identity);
-    }
     std::error_code cleanup_error;
     if (safe_regular_port_directory_exists(publish_stage, "Altes Port-Publishing"))
         std::filesystem::remove_all(publish_stage, cleanup_error);
@@ -1735,7 +1848,6 @@ int export_port_project(const std::filesystem::path& source_path,
     try {
         if (!safe_regular_port_directory_exists(workspace, "Port-Arbeitsverzeichnis"))
             copy_port_tree_for_distribution(absolute_output, workspace);
-        std::cout << "KATANA_PORT_PHASE analysis-codegen\n" << std::flush;
         katana::codegen::PortExportOptions export_options{
             target_name,
             KATANA_RECOMP_VERSION,
@@ -1755,14 +1867,12 @@ int export_port_project(const std::filesystem::path& source_path,
         bool whole_export_cache_hit = false;
         if (whole_export_cache_key) {
             if (const auto cached =
-                    load_cached_executable_port_export(
-                        workspace, *whole_export_cache_key);
-                cached &&
-                verified_boot_artifact &&
-                cached->job_generation ==
-                    verified_boot_artifact->project_identity &&
-                cached->content_identity ==
-                    verified_boot_artifact->install_recipe.content_identity) {
+                    load_cached_port_export(
+                        workspace,
+                        whole_export_source_kind,
+                        *whole_export_cache_key,
+                        *verified_install_recipe);
+                cached) {
                 report.output_root = workspace;
                 report.functions = cached->functions;
                 report.partitions = cached->partitions;
@@ -1770,9 +1880,12 @@ int export_port_project(const std::filesystem::path& source_path,
                 report.metadata_cache_hit = true;
                 report.disc_install_recipe =
                     workspace / "content" / "game.katana-install";
-                report.job_generation = cached->job_generation;
-                report.content_identity = cached->content_identity;
-                report.disc_tracks = cached->disc_tracks;
+                report.job_generation =
+                    verified_install_recipe->job_generation;
+                report.content_identity =
+                    verified_install_recipe->content_identity;
+                report.disc_tracks =
+                    verified_install_recipe->tracks.size();
                 report.checkpoints = {
                     "whole-program-analysis-ir-cache-hit",
                     "partition-codegen-cache-hit",
@@ -1790,10 +1903,14 @@ int export_port_project(const std::filesystem::path& source_path,
                           export_dreamcast_port_project_from_boot_artifact(
                               source_path, workspace, export_options)
                     : katana::codegen::export_dreamcast_port_project(
-                          source_path, workspace, export_options);
+                          *verified_native_disc, workspace, export_options);
             if (whole_export_cache_key)
-                store_cached_executable_port_export(
-                    workspace, *whole_export_cache_key, report);
+                store_cached_port_export(
+                    workspace,
+                    whole_export_source_kind,
+                    *whole_export_cache_key,
+                    *verified_install_recipe,
+                    report);
         }
         const auto build_profile =
             configured_environment_value("KATANA_PORT_BUILD_PROFILE")

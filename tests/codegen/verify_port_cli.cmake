@@ -90,8 +90,13 @@ execute_process(
   OUTPUT_VARIABLE game_output
   ERROR_VARIABLE game_error
 )
-if(NOT game_result EQUAL 0 OR NOT game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
-   NOT game_output MATCHES "KR_GUEST_PROGRAM_ENTERED")
+if(NOT game_result EQUAL 1 OR
+   NOT game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
+   NOT game_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
+   NOT game_output MATCHES
+       "required_milestone=FirstVisibleGameFrame required_milestone_reached=0" OR
+   NOT game_output MATCHES "highest_milestone=GameCodeProgressed" OR
+   NOT game_output MATCHES "first_problem=required-milestone-not-reached")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR "Porttarget startet nicht aus dem lokal installierten Cache: ${game_output} ${game_error}")
 endif()
@@ -102,19 +107,20 @@ execute_process(
   OUTPUT_VARIABLE generated_output
   ERROR_VARIABLE generated_error
 )
-# Bootstrap und alle vier synthetischen Gastbloecke werden zentral abgeschlossen. Der erste
-# Gastblock darf erst lokal weiterketten, nachdem sein Abschluss GuestProgramProgressed belegt.
-if(NOT generated_result EQUAL 0 OR
+# Bootstrap und drei Post-Entry-Bloecke werden zentral abgeschlossen; der
+# bewiesene interne Folgeblock bleibt im lokalen statischen AOT-Chaining.
+if(NOT generated_result EQUAL 1 OR
    NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
    NOT generated_output MATCHES "KR_GUEST_PROGRAM_DISPATCHED" OR
    NOT generated_output MATCHES "KR_GUEST_PROGRAM_PROGRESSED" OR
    NOT generated_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
    NOT generated_output MATCHES "silent_failures=0" OR
    NOT generated_output MATCHES "indirect_dispatches=0" OR
-   NOT generated_output MATCHES "runtime_dispatch_hits=5 runtime_dispatch_misses=0" OR
-   NOT generated_output MATCHES "executed_blocks=5 guest_cycle_contract=2" OR
-   NOT generated_output MATCHES "frames=0" OR
-   NOT generated_output MATCHES "audio_buffers=0")
+   NOT generated_output MATCHES "runtime_dispatch_hits=4 runtime_dispatch_misses=0" OR
+   NOT generated_output MATCHES "executed_blocks=3 guest_cycle_contract=2" OR
+   NOT generated_output MATCHES "post_entry_host_presented_frames=0" OR
+   NOT generated_output MATCHES "post_entry_host_audio_submitted_buffers=0" OR
+   NOT generated_output MATCHES "first_problem=required-milestone-not-reached")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
     "Eigenstaendiger PackedDiscSource-Runtimepfad ist nicht lauffaehig (${generated_result}): "
@@ -131,12 +137,13 @@ execute_process(
 )
 unset(ENV{KATANA_PORT_CONTROLLER_TEST})
 unset(ENV{KATANA_PORT_IGNORE_FOCUS})
-if(NOT controller_result EQUAL 0 OR
+if(NOT controller_result EQUAL 1 OR
    NOT controller_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
    NOT controller_output MATCHES "silent_failures=0" OR
    NOT controller_output MATCHES "controller_changes=[1-9][0-9]*" OR
    NOT controller_output MATCHES "controller_samples=[1-9][0-9]*" OR
-   NOT controller_output MATCHES "controller_contract=31")
+   NOT controller_output MATCHES "controller_contract=31" OR
+   NOT controller_output MATCHES "first_problem=required-milestone-not-reached")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
     "Produkt-Controllervertrag erreicht Gamepad-Timeline und Maple nicht: "
@@ -222,6 +229,11 @@ file(TO_CMAKE_PATH "${incremental_port_build}" incremental_port_build)
 if(NOT incremental_port_result EQUAL 0 OR NOT incremental_build_cache_match OR
    NOT "${incremental_port_build}" STREQUAL "${port_build}" OR
    NOT EXISTS "${port_build}/katana-incremental-marker" OR
+   NOT incremental_port_output MATCHES "Analyse-/IR-Cache-Hit: ja" OR
+   NOT incremental_port_output MATCHES
+       "KATANA_PORT_SUBPHASE whole-program-analysis-ir-cache-hit" OR
+   incremental_port_output MATCHES
+       "KATANA_PORT_SUBPHASE control-flow-analysis" OR
    EXISTS "${fixture}/port/build" OR EXISTS "${fixture}/port/build-ninja" OR
    NOT EXISTS "${fixture}/port/user-data/content/game.katana-disc")
   file(REMOVE_RECURSE "${fixture}")
@@ -251,8 +263,12 @@ foreach(lifecycle_case IN ITEMS running-close focus-resume-close paused-close)
     OUTPUT_VARIABLE lifecycle_output
     ERROR_VARIABLE lifecycle_error
   )
-  if(NOT lifecycle_result EQUAL 0 OR
-     NOT lifecycle_output MATCHES "KR_HOST_SHUTDOWN guest_dispatch_stopped=1")
+  if(NOT lifecycle_result EQUAL 1 OR
+     NOT lifecycle_output MATCHES "KR_HOST_SHUTDOWN guest_dispatch_stopped=1" OR
+     NOT lifecycle_output MATCHES
+         "KATANA_BRINGUP_RUN status=(error|early-exit-before-required-milestone)" OR
+     NOT lifecycle_output MATCHES
+         "first_problem=(runtime-contract|required-milestone-not-reached)")
     file(REMOVE_RECURSE "${fixture}")
     message(FATAL_ERROR
       "Lifecycle ${lifecycle_case} beendet nativen Gastdispatch nicht: "
@@ -436,7 +452,9 @@ execute_process(
   OUTPUT_VARIABLE moved_output
   ERROR_VARIABLE moved_error
 )
-if(NOT moved_result EQUAL 0 OR NOT moved_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
+if(NOT moved_result EQUAL 1 OR
+   NOT moved_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
+   NOT moved_output MATCHES "first_problem=required-milestone-not-reached" OR
    NOT EXISTS "${fixture}/disc/disc.gdi")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR

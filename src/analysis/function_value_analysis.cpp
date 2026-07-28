@@ -287,25 +287,17 @@ class GuardedCodeInventoryCollector {
             throw std::logic_error(
                 "Deferred Guarded-Code-Inventar muss vor Finish zusammengefuehrt werden.");
         GuardedCodeInventory inventory;
-        inventory.stored_code_addresses.reserve(stored_candidates_.size());
-        for (auto& [target, candidate] : stored_candidates_) {
-            static_cast<void>(target);
-            normalize(candidate.store_instruction_addresses);
-            normalize(candidate.evidence_call_sites);
-            normalize(candidate.evidence_callees);
-            inventory.stored_code_addresses.push_back(std::move(candidate));
-        }
         inventory.returned_code_address_tables.reserve(returned_tables_.size());
+        // A returned method table has a concrete table base, load site,
+        // callsite and callee.  Admit that stronger inventory before broad
+        // forwarded-store observations compete for the same bounded native
+        // entry set.  The live table load remains authoritative at runtime.
         for (auto& [table_address, candidate] : returned_tables_) {
             static_cast<void>(table_address);
             normalize(candidate.target_addresses);
-            // Stored callback addresses carry the strongest inventory
-            // provenance, so admit all of them before broad returned-table
-            // scans compete for the shared bounded candidate budget.
             std::erase_if(candidate.target_addresses,
                           [&](const auto target) {
-                              return !admissible_shape(target) ||
-                                     !admit(target);
+                              return !admit_candidate(target);
                           });
             if (candidate.target_addresses.empty()) continue;
             normalize(candidate.load_instruction_addresses);
@@ -313,6 +305,14 @@ class GuardedCodeInventoryCollector {
             normalize(candidate.evidence_callees);
             inventory.returned_code_address_tables.push_back(
                 std::move(candidate));
+        }
+        inventory.stored_code_addresses.reserve(stored_candidates_.size());
+        for (auto& [target, candidate] : stored_candidates_) {
+            if (!admit_candidate(target)) continue;
+            normalize(candidate.store_instruction_addresses);
+            normalize(candidate.evidence_call_sites);
+            normalize(candidate.evidence_callees);
+            inventory.stored_code_addresses.push_back(std::move(candidate));
         }
         inventory.candidate_budget = maximum_guarded_code_inventory;
         inventory.candidate_count = admitted_targets_.size();
@@ -343,8 +343,6 @@ class GuardedCodeInventoryCollector {
     }
 
     void collect_stored_candidate(StoredCodeAddressCandidate candidate) {
-        if (!admissible_shape(candidate.target_address)) return;
-        if (!admit(candidate.target_address)) return;
         candidate.guarded = true;
         const auto [stored, inserted] =
             stored_candidates_.try_emplace(candidate.target_address, std::move(candidate));
@@ -389,12 +387,16 @@ class GuardedCodeInventoryCollector {
             destination.scan_truncated || candidate.scan_truncated;
     }
 
-    bool admit(const std::uint32_t target) {
+    bool admit_candidate(const std::uint32_t target) {
         if (admitted_targets_.contains(target)) return true;
         if (admitted_targets_.size() >= maximum_guarded_code_inventory) {
             candidate_inventory_truncated_ = true;
             return false;
         }
+        // Do not spend structural-walk work on a target that could not be
+        // admitted anyway.  This keeps resource exhaustion deterministic and
+        // independent of broad low-priority candidate tails.
+        if (!admissible_shape(target)) return false;
         admitted_targets_.insert(target);
         return true;
     }

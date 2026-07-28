@@ -16,6 +16,10 @@
 #include <string_view>
 #include <vector>
 
+namespace katana::platform {
+struct DreamcastDiscBoot;
+}
+
 namespace katana::codegen {
 
 inline constexpr std::uint32_t port_project_contract_version =
@@ -85,6 +89,14 @@ export_dreamcast_port_project(const PreparedPortProgram& prepared,
 export_dreamcast_port_project(const std::filesystem::path& gdi_path,
                               const std::filesystem::path& output_root,
                               const PortExportOptions& options);
+
+// Reuses a single fully validated disc load for content-addressed cache
+// admission and a following NativeDisc export without rehashing the GDI.
+[[nodiscard]] PortExportResult
+export_dreamcast_port_project(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options);
 
 // Bring-up export from an immutable private boot-executable artifact. The
 // generated distributable contains native AOT plus the hash/layout recipe, but
