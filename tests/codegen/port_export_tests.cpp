@@ -4035,6 +4035,96 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "run-product-gate.ps1")
                     .find("status=host-watchdog-hang") != std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    const auto chain_method_begin = generated_main.find(
+        "bool can_chain_executable_block(std::uint32_t address)");
+    const auto chain_direct_begin =
+        generated_main.find("if (direct_p1_p2_target) {", chain_method_begin);
+    const auto chain_slow_begin = generated_main.find(
+        "const auto found = executable_blocks_.find(address);", chain_direct_begin);
+    const auto chain_method_end =
+        generated_main.find("last_executable_chain_rejection() const", chain_slow_begin);
+    const auto prepare_guard_begin =
+        generated_main.find("void prepare_static_aot_chain_guard(");
+    const auto prepare_guard_end = generated_main.find(
+        "static_aot_chain_guard_rejection(", prepare_guard_begin);
+    const auto defer_method_begin =
+        generated_main.find("bool can_defer_guest_block_completion()");
+    const auto defer_direct_begin =
+        generated_main.find("if (direct_p1_p2_target) {", defer_method_begin);
+    const auto defer_method_end = generated_main.find(
+        "bool try_composite_callback_flag_poll_batch(", defer_direct_begin);
+    require(chain_method_begin != std::string::npos &&
+                chain_direct_begin != std::string::npos &&
+                chain_slow_begin != std::string::npos &&
+                chain_method_end != std::string::npos &&
+                prepare_guard_begin != std::string::npos &&
+                prepare_guard_end != std::string::npos &&
+                defer_method_begin != std::string::npos &&
+                defer_direct_begin != std::string::npos &&
+                defer_method_end != std::string::npos,
+            "Static-AOT-Chain-Guard oder Fast-/Slow-Tier wurde nicht erzeugt.");
+    const auto direct_chain = std::string_view(generated_main).substr(
+        chain_direct_begin, chain_slow_begin - chain_direct_begin);
+    const auto slow_chain = std::string_view(generated_main).substr(
+        chain_slow_begin, chain_method_end - chain_slow_begin);
+    const auto prepared_guard = std::string_view(generated_main).substr(
+        prepare_guard_begin, prepare_guard_end - prepare_guard_begin);
+    const auto direct_defer = std::string_view(generated_main).substr(
+        defer_direct_begin, defer_method_end - defer_direct_begin);
+    require(
+        direct_chain.find("executable_chain_pages_") != std::string_view::npos &&
+            direct_chain.find("static_aot_chain_guard_rejection(address)") !=
+                std::string_view::npos &&
+            direct_chain.find("guard.chain_pending_cycle_limit") !=
+                std::string_view::npos &&
+            direct_chain.find("direct_p1_p2_instruction_guard") ==
+                std::string_view::npos &&
+            direct_chain.find("block_variant_key(") == std::string_view::npos &&
+            direct_chain.find("current_cycle()") == std::string_view::npos &&
+            direct_chain.find("remaining_guest_cycles()") == std::string_view::npos &&
+            direct_chain.find("next_event_cycle()") == std::string_view::npos &&
+            direct_chain.find("synchronize_interrupt_sources_if_needed") ==
+                std::string_view::npos &&
+            direct_chain.find("dispatchable(") == std::string_view::npos &&
+            slow_chain.find("inspect_translation(") != std::string_view::npos &&
+            slow_chain.find("prove_instruction_mapping(") != std::string_view::npos &&
+            slow_chain.find("translate_guest_address(") != std::string_view::npos,
+        "Direkter P1/P2-Chainpfad wiederholt Translation, Variantenermittlung, "
+        "Scheduler-/Routerarbeit oder verliert den konservativen MMU-Slowpath.");
+    require(
+        prepared_guard.find("remaining_guest_cycles()") != std::string_view::npos &&
+            prepared_guard.find("next_event_cycle()") != std::string_view::npos &&
+            prepared_guard.find("product_target_guest_cycle_") !=
+                std::string_view::npos &&
+            prepared_guard.find("scheduler_reset_generation") !=
+                std::string_view::npos &&
+            prepared_guard.find("runtime_dispatch_generation") !=
+                std::string_view::npos &&
+            prepared_guard.find("router_epoch") != std::string_view::npos &&
+            prepared_guard.find("controller_epoch") != std::string_view::npos &&
+            prepared_guard.find("pending_mask") != std::string_view::npos &&
+            prepared_guard.find("highest_pending_level") !=
+                std::string_view::npos &&
+            prepared_guard.find("synchronize_interrupt_sources_if_needed") !=
+                std::string_view::npos &&
+            direct_defer.find("defer_pending_cycle_limit") !=
+                std::string_view::npos &&
+            direct_defer.find(
+                "active_static_aot_chain_guard_.defer_pending_cycle_limit;\n"
+                "        }\n"
+                "        return false;") != std::string_view::npos &&
+            direct_defer.find("direct_p1_p2_instruction_guard") ==
+                std::string_view::npos &&
+            direct_defer.find("current_cycle()") == std::string_view::npos &&
+            direct_defer.find("remaining_guest_cycles()") == std::string_view::npos &&
+            direct_defer.find("next_event_cycle()") == std::string_view::npos &&
+            direct_defer.find("synchronize_interrupt_sources_if_needed") ==
+                std::string_view::npos &&
+            generated_main.find("mmio_access_epoch()") == std::string::npos &&
+            generated_main.find("synchronized_interrupt_mmio_epoch_") ==
+                std::string::npos,
+        "Static-AOT-Rootguard konserviert Budget/Ereignis/IRQ-Generationen nicht "
+        "oder der direkte Completionpfad liest weiterhin volatile Hotpathzustände.");
     auto diagnostic_options = options;
     diagnostic_options.diagnostic_partial = true;
     const auto diagnostic_output = fixture.root / "diagnostic-port";
