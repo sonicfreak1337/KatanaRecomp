@@ -3362,11 +3362,14 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
         (static_cast<std::uint64_t>(parameter_bank) +
          static_cast<std::uint64_t>(tag_address) * 4u) &
         (dreamcast_vram_size - 1u);
-    const auto background_isp =
-        vram.read_u32(static_cast<std::uint32_t>(background_address & 0x007FFFFCu));
     const auto read_background_word = [&](const std::uint64_t address) {
-        return vram.read_u32(static_cast<std::uint32_t>(address & 0x007FFFFCu));
+        const auto logical_offset =
+            static_cast<std::uint32_t>(address & (dreamcast_vram_size - 1u)) &
+            0x007FFFFCu;
+        return vram.read_u32(
+            dreamcast_vram_32bit_to_linear_offset(logical_offset));
     };
+    const auto background_isp = read_background_word(background_address);
     const auto background_tsp = read_background_word(background_address + 4u);
     const auto background_tcw = read_background_word(background_address + 8u);
     const auto textured = (background_isp & 0x02000000u) != 0u;
@@ -3374,13 +3377,28 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     const auto offset_color = (background_isp & 0x01000000u) != 0u;
     const auto required_vertex_payload_words =
         (textured ? (uv16 ? 1u : 2u) : 0u) + 1u + (offset_color ? 1u : 0u);
-    if (skip < required_vertex_payload_words)
+    if (skip < required_vertex_payload_words) {
+        const auto logical_offset =
+            static_cast<std::uint32_t>(background_address) & 0x007FFFFCu;
         throw std::invalid_argument(
-            "PVR-Hintergrundvertex ist kleiner als sein ISP/TSP-Format.");
+            "PVR-Hintergrundvertex ist kleiner als sein ISP/TSP-Format: "
+            "config=" +
+            std::to_string(background_config) +
+            " parameter_base=" +
+            std::to_string(registers.read(pvr_register::ParameterBase)) +
+            " logical_address=" + std::to_string(logical_offset) +
+            " backing_address=" +
+            std::to_string(dreamcast_vram_32bit_to_linear_offset(logical_offset)) +
+            " isp=" + std::to_string(background_isp) +
+            " tsp=" + std::to_string(background_tsp) +
+            " tcw=" + std::to_string(background_tcw) +
+            " skip=" + std::to_string(skip) +
+            " required=" + std::to_string(required_vertex_payload_words) + ".");
+    }
     auto vertex_words = 3u + skip;
-    const auto intensity_shadow =
+    const auto intensity_volume_mode =
         (registers.read(pvr_register::ShadingScale) & 0x00000100u) != 0u;
-    if (shadow && intensity_shadow) vertex_words += skip;
+    if (shadow && !intensity_volume_mode) vertex_words += skip;
     const auto vertex_stride = static_cast<std::uint64_t>(vertex_words) * 4u;
     const auto first_vertex = background_address + 12u + tag_offset * vertex_stride;
     const auto background_depth =

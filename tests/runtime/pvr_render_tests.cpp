@@ -47,19 +47,19 @@ template <std::size_t Capacity> struct FixedAccessRecorder {
     }
 };
 
-std::uint32_t framebuffer_backing_offset(const std::uint32_t logical_offset) {
+std::uint32_t vram_32bit_backing_offset(const std::uint32_t logical_offset) {
     return katana::runtime::dreamcast_vram_32bit_to_linear_offset(logical_offset & 0x007FFFFFu);
 }
 
 std::uint32_t read_fb_u32(const katana::runtime::LinearMemoryDevice& vram,
                           const std::uint32_t logical_offset) {
-    return vram.read_u32(framebuffer_backing_offset(logical_offset));
+    return vram.read_u32(vram_32bit_backing_offset(logical_offset));
 }
 
 void write_fb_u32(katana::runtime::LinearMemoryDevice& vram,
                   const std::uint32_t logical_offset,
                   const std::uint32_t value) {
-    vram.write_u32(framebuffer_backing_offset(logical_offset), value);
+    vram.write_u32(vram_32bit_backing_offset(logical_offset), value);
 }
 } // namespace
 
@@ -118,7 +118,7 @@ int main() {
                         (background_skip << 24u));
     registers.write(pvr_register::BackgroundPlaneDepth, std::bit_cast<std::uint32_t>(0.75f));
     const auto put_float = [&](const std::uint32_t offset, const float value) {
-        vram.write_u32(offset, std::bit_cast<std::uint32_t>(value));
+        write_fb_u32(vram, offset, std::bit_cast<std::uint32_t>(value));
     };
     const auto put_background_vertex = [&](const std::uint32_t address,
                                            const float x,
@@ -127,14 +127,14 @@ int main() {
         put_float(address, x);
         put_float(address + 4u, y);
         put_float(address + 8u, 0.10f);
-        vram.write_u32(address + 12u, color);
-        vram.write_u32(address + 16u, 0xDEADBEEFu);
+        write_fb_u32(vram, address + 12u, color);
+        write_fb_u32(vram, address + 16u, 0xDEADBEEFu);
     };
     constexpr std::uint32_t background_tsp =
         (1u << 29u) | (2u << 22u) | (1u << 20u);
-    vram.write_u32(background_strip, 0u);
-    vram.write_u32(background_strip + 4u, background_tsp);
-    vram.write_u32(background_strip + 8u, 0u);
+    write_fb_u32(vram, background_strip, 0u);
+    write_fb_u32(vram, background_strip + 4u, background_tsp);
+    write_fb_u32(vram, background_strip + 8u, 0u);
     // An untextured background is the full background surface; its stored
     // coordinates define interpolation, not a triangle-shaped coverage clip.
     put_background_vertex(background_first, 100.0f, 102.0f, 0x80402010u);
@@ -142,6 +142,10 @@ int main() {
         background_first + background_stride, 100.0f, 100.0f, 0x80402010u);
     put_background_vertex(
         background_first + background_stride * 2u, 102.0f, 102.0f, 0x80402010u);
+    // Poison the numerically identical offset in the raw 64-bit backing. A
+    // renderer that skips the 32-bit VRAM projection decodes this as an
+    // impossible textured+offset format for SKIP=2.
+    vram.write_u32(background_strip, 0x03000000u);
     LinearMemoryDevice unobserved_vram = vram;
     PvrSoftwareRenderer unobserved_software;
     unobserved_software.render({}, registers, unobserved_vram);
@@ -263,16 +267,18 @@ int main() {
             ordering_registers.read(pvr_register::VideoControl) & ~0x8u);
         ordering_registers.write(pvr_register::SpgLoad, (9u << 16u) | 9u);
         ordering_registers.write(pvr_register::SpgVblankInterrupt, (2u << 16u) | 1u);
-        ordering_vram.write_u32(0x00100000u, 0u);
-        ordering_vram.write_u32(0x00100004u, background_tsp);
-        ordering_vram.write_u32(0x00100008u, 0u);
+        write_fb_u32(ordering_vram, 0x00100000u, 0u);
+        write_fb_u32(ordering_vram, 0x00100004u, background_tsp);
+        write_fb_u32(ordering_vram, 0x00100008u, 0u);
         const auto put_ordering_vertex = [&](const std::uint32_t address,
                                              const float x,
                                              const float y) {
-            ordering_vram.write_u32(address, std::bit_cast<std::uint32_t>(x));
-            ordering_vram.write_u32(address + 4u, std::bit_cast<std::uint32_t>(y));
-            ordering_vram.write_u32(address + 8u, 0u);
-            ordering_vram.write_u32(address + 12u, 0xFF204060u);
+            write_fb_u32(
+                ordering_vram, address, std::bit_cast<std::uint32_t>(x));
+            write_fb_u32(
+                ordering_vram, address + 4u, std::bit_cast<std::uint32_t>(y));
+            write_fb_u32(ordering_vram, address + 8u, 0u);
+            write_fb_u32(ordering_vram, address + 12u, 0xFF204060u);
         };
         put_ordering_vertex(0x0010000Cu, 0.0f, 1.0f);
         put_ordering_vertex(0x0010001Cu, 0.0f, 0.0f);
@@ -326,16 +332,18 @@ int main() {
         pal_registers.write(pvr_register::SpgControl,
                             pal_registers.read(pvr_register::SpgControl) | 0x10u);
         const auto write_pal_background = [&](const std::uint32_t color) {
-            pal_vram.write_u32(pal_parameter_base, 0u);
-            pal_vram.write_u32(pal_parameter_base + 4u, background_tsp);
-            pal_vram.write_u32(pal_parameter_base + 8u, 0u);
+            write_fb_u32(pal_vram, pal_parameter_base, 0u);
+            write_fb_u32(pal_vram, pal_parameter_base + 4u, background_tsp);
+            write_fb_u32(pal_vram, pal_parameter_base + 8u, 0u);
             const auto write_vertex = [&](const std::uint32_t address,
                                           const float x,
                                           const float y) {
-                pal_vram.write_u32(address, std::bit_cast<std::uint32_t>(x));
-                pal_vram.write_u32(address + 4u, std::bit_cast<std::uint32_t>(y));
-                pal_vram.write_u32(address + 8u, 0u);
-                pal_vram.write_u32(address + 12u, color);
+                write_fb_u32(
+                    pal_vram, address, std::bit_cast<std::uint32_t>(x));
+                write_fb_u32(
+                    pal_vram, address + 4u, std::bit_cast<std::uint32_t>(y));
+                write_fb_u32(pal_vram, address + 8u, 0u);
+                write_fb_u32(pal_vram, address + 12u, color);
             };
             write_vertex(pal_parameter_base + 12u, 0.0f, 1.0f);
             write_vertex(pal_parameter_base + 28u, 0.0f, 0.0f);
@@ -397,11 +405,13 @@ int main() {
     registers.write(pvr_register::BackgroundPlaneConfig,
                     (textured_tag_address << 3u) | (3u << 24u));
     registers.write(pvr_register::FramebufferWriteSof1, 0x3000u);
-    vram.write_u32(textured_strip, (1u << 25u) | (1u << 23u));
-    vram.write_u32(textured_strip + 4u, (1u << 29u) | (2u << 22u));
-    vram.write_u32(textured_strip + 8u,
-                   (1u << 27u) | (1u << 26u) |
-                       ((texture_base >> 3u) & 0x01FFFFFFu));
+    write_fb_u32(vram, textured_strip, (1u << 25u) | (1u << 23u));
+    write_fb_u32(
+        vram, textured_strip + 4u, (1u << 29u) | (2u << 22u));
+    write_fb_u32(vram,
+                 textured_strip + 8u,
+                 (1u << 27u) | (1u << 26u) |
+                     ((texture_base >> 3u) & 0x01FFFFFFu));
     const auto put_textured_background_vertex = [&](const std::uint32_t address,
                                                     const float x,
                                                     const float y,
@@ -412,7 +422,7 @@ int main() {
         put_float(address + 8u, 0.1f);
         put_float(address + 12u, u);
         put_float(address + 16u, v);
-        vram.write_u32(address + 20u, 0xFFFFFFFFu);
+        write_fb_u32(vram, address + 20u, 0xFFFFFFFFu);
     };
     put_textured_background_vertex(textured_first, 0.0f, 0.0f, 0.0f, 0.0f);
     put_textured_background_vertex(
@@ -451,19 +461,24 @@ int main() {
         background_registers.write(pvr_register::BackgroundPlaneDepth,
                                    std::bit_cast<std::uint32_t>(0.5f));
         const auto write_gradient_background = [&](const float coordinate_bias) {
-            background_vram.write_u32(parameter_base, 0x01800000u);
-            background_vram.write_u32(parameter_base + 4u, background_tsp);
-            background_vram.write_u32(parameter_base + 8u, 0u);
+            write_fb_u32(background_vram, parameter_base, 0x01800000u);
+            write_fb_u32(
+                background_vram, parameter_base + 4u, background_tsp);
+            write_fb_u32(background_vram, parameter_base + 8u, 0u);
             const auto write_vertex = [&](const std::uint32_t address,
                                           const float x,
                                           const float y,
                                           const std::uint32_t color,
                                           const std::uint32_t offset) {
-                background_vram.write_u32(address, std::bit_cast<std::uint32_t>(x));
-                background_vram.write_u32(address + 4u, std::bit_cast<std::uint32_t>(y));
-                background_vram.write_u32(address + 8u, 0u);
-                background_vram.write_u32(address + 12u, color);
-                background_vram.write_u32(address + 16u, offset);
+                write_fb_u32(background_vram,
+                             address,
+                             std::bit_cast<std::uint32_t>(x));
+                write_fb_u32(background_vram,
+                             address + 4u,
+                             std::bit_cast<std::uint32_t>(y));
+                write_fb_u32(background_vram, address + 8u, 0u);
+                write_fb_u32(background_vram, address + 12u, color);
+                write_fb_u32(background_vram, address + 16u, offset);
             };
             write_vertex(parameter_base + 12u,
                          coordinate_bias + 100.0f,
@@ -537,22 +552,33 @@ int main() {
         textured_registers.write(pvr_register::BackgroundPlaneDepth,
                                  std::bit_cast<std::uint32_t>(0.5f));
         const auto write_textured_parameters = [&] {
-            textured_vram.write_u32(parameter_base, 0x02800000u);
-            textured_vram.write_u32(parameter_base + 4u, (1u << 29u) | (2u << 22u));
-            textured_vram.write_u32(parameter_base + 8u,
-                                    (1u << 27u) | (1u << 26u) |
-                                        ((texture_address >> 3u) & 0x01FFFFFFu));
+            write_fb_u32(textured_vram, parameter_base, 0x02800000u);
+            write_fb_u32(textured_vram,
+                         parameter_base + 4u,
+                         (1u << 29u) | (2u << 22u));
+            write_fb_u32(textured_vram,
+                         parameter_base + 8u,
+                         (1u << 27u) | (1u << 26u) |
+                             ((texture_address >> 3u) & 0x01FFFFFFu));
             const auto write_vertex = [&](const std::uint32_t address,
                                           const float x,
                                           const float y,
                                           const float u,
                                           const float v) {
-                textured_vram.write_u32(address, std::bit_cast<std::uint32_t>(x));
-                textured_vram.write_u32(address + 4u, std::bit_cast<std::uint32_t>(y));
-                textured_vram.write_u32(address + 8u, 0u);
-                textured_vram.write_u32(address + 12u, std::bit_cast<std::uint32_t>(u));
-                textured_vram.write_u32(address + 16u, std::bit_cast<std::uint32_t>(v));
-                textured_vram.write_u32(address + 20u, 0xFFFFFFFFu);
+                write_fb_u32(textured_vram,
+                             address,
+                             std::bit_cast<std::uint32_t>(x));
+                write_fb_u32(textured_vram,
+                             address + 4u,
+                             std::bit_cast<std::uint32_t>(y));
+                write_fb_u32(textured_vram, address + 8u, 0u);
+                write_fb_u32(textured_vram,
+                             address + 12u,
+                             std::bit_cast<std::uint32_t>(u));
+                write_fb_u32(textured_vram,
+                             address + 16u,
+                             std::bit_cast<std::uint32_t>(v));
+                write_fb_u32(textured_vram, address + 20u, 0xFFFFFFFFu);
             };
             write_vertex(parameter_base + 12u, 0.0f, 0.0f, 0.0f, 0.0f);
             write_vertex(
@@ -605,10 +631,10 @@ int main() {
     constexpr std::uint32_t shadow_stride = (3u + 1u + 1u) * 4u;
     registers.write(pvr_register::BackgroundPlaneConfig,
                     (shadow_tag_address << 3u) | (1u << 24u) | (1u << 27u));
-    registers.write(pvr_register::ShadingScale, 0x00000100u);
-    vram.write_u32(shadow_strip, 0u);
-    vram.write_u32(shadow_strip + 4u, background_tsp);
-    vram.write_u32(shadow_strip + 8u, 0u);
+    registers.write(pvr_register::ShadingScale, 0u);
+    write_fb_u32(vram, shadow_strip, 0u);
+    write_fb_u32(vram, shadow_strip + 4u, background_tsp);
+    write_fb_u32(vram, shadow_strip + 8u, 0u);
     put_background_vertex(shadow_strip + 12u, 0.0f, 2.0f, 0xFF102030u);
     put_background_vertex(shadow_strip + 12u + shadow_stride, 0.0f, 0.0f, 0xFF102030u);
     put_background_vertex(
@@ -639,9 +665,11 @@ int main() {
                         (background_skip << 24u));
     registers.write(pvr_register::ShadingScale, 0u);
     registers.write(pvr_register::BackgroundPlaneDepth, 0u);
-    vram.write_u32(background_first + 12u, 0u);
-    vram.write_u32(background_first + background_stride + 12u, 0u);
-    vram.write_u32(background_first + background_stride * 2u + 12u, 0u);
+    write_fb_u32(vram, background_first + 12u, 0u);
+    write_fb_u32(
+        vram, background_first + background_stride + 12u, 0u);
+    write_fb_u32(
+        vram, background_first + background_stride * 2u + 12u, 0u);
     registers.write(pvr_register::FramebufferWriteSof1, 0x2000u);
     PvrTaFrame fog_frame;
     PvrPrimitive fog_triangle;
@@ -882,9 +910,11 @@ int main() {
          generation < PvrSoftwareRenderer::render_evidence_capacity + 8u;
          ++generation) {
         const auto color = (generation & 1u) == 0u ? 0xFF102030u : 0xFF405060u;
-        vram.write_u32(background_first + 12u, color);
-        vram.write_u32(background_first + background_stride + 12u, color);
-        vram.write_u32(background_first + background_stride * 2u + 12u, color);
+        write_fb_u32(vram, background_first + 12u, color);
+        write_fb_u32(
+            vram, background_first + background_stride + 12u, color);
+        write_fb_u32(
+            vram, background_first + background_stride * 2u + 12u, color);
         bounded_evidence.render({}, registers, vram);
     }
     require(bounded_evidence.pending_render_generations() ==
@@ -920,16 +950,18 @@ int main() {
         cap_registers.write(pvr_register::BackgroundPlaneDepth,
                             std::bit_cast<std::uint32_t>(0.5f));
         const auto write_cap_background = [&](const std::uint32_t color) {
-            cap_vram.write_u32(cap_parameter_base, 0u);
-            cap_vram.write_u32(cap_parameter_base + 4u, background_tsp);
-            cap_vram.write_u32(cap_parameter_base + 8u, 0u);
+            write_fb_u32(cap_vram, cap_parameter_base, 0u);
+            write_fb_u32(cap_vram, cap_parameter_base + 4u, background_tsp);
+            write_fb_u32(cap_vram, cap_parameter_base + 8u, 0u);
             const auto write_vertex = [&](const std::uint32_t address,
                                           const float x,
                                           const float y) {
-                cap_vram.write_u32(address, std::bit_cast<std::uint32_t>(x));
-                cap_vram.write_u32(address + 4u, std::bit_cast<std::uint32_t>(y));
-                cap_vram.write_u32(address + 8u, 0u);
-                cap_vram.write_u32(address + 12u, color);
+                write_fb_u32(
+                    cap_vram, address, std::bit_cast<std::uint32_t>(x));
+                write_fb_u32(
+                    cap_vram, address + 4u, std::bit_cast<std::uint32_t>(y));
+                write_fb_u32(cap_vram, address + 8u, 0u);
+                write_fb_u32(cap_vram, address + 12u, color);
             };
             write_vertex(cap_parameter_base + 12u, 0.0f, 512.0f);
             write_vertex(cap_parameter_base + 28u, 0.0f, 0.0f);
