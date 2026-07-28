@@ -8597,41 +8597,15 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
 
         std::ostringstream shard_output;
         shard_output << "#include \"../include/runtime-dispatch-internal.hpp\"\n"
-                     << "#include <stdexcept>\n#include <utility>\n\n"
+                     << "\n"
                      << "namespace " << entry_namespace << " {\n";
         for (const auto owner : owners) {
-            shard_output << "void fn_" << symbol(owner)
-                         << "_with_services(katana::runtime::CpuState&, "
-                            "katana::runtime::PlatformServices*);\n";
-        }
-        shard_output << "namespace runtime_dispatch_detail {\nnamespace {\n";
-        for (const auto owner : owners) {
             shard_output
-                << "katana::runtime::BlockExit dispatch_owner_" << symbol(owner)
-                << "(katana::runtime::CpuState& cpu, "
-                   "katana::runtime::BlockExecutionContext& context) {\n"
-                << "    if (active_services == nullptr) throw "
-                   "std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
-                << "    active_exit_source = {cpu.pc, "
-                   "katana::runtime::canonical_physical_address(cpu.pc)};\n"
-                << "    active_exit_kind = katana::runtime::BlockEndKind::Fallthrough;\n"
-                << "    active_exit_site_class = "
-                   "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
-                << "    const auto exception_generation_on_entry = cpu.exception_generation;\n"
-                << "    fn_" << symbol(owner) << "_with_services(cpu, active_services);\n"
-                << "    context.scheduler_cycle = active_services->scheduler_cycle();\n"
-                << "    auto kind = active_exit_kind;\n"
-                << "    if (cpu.exception_generation != exception_generation_on_entry)\n"
-                << "        kind = katana::runtime::BlockEndKind::Exception;\n"
-                << "    if (kind != katana::runtime::BlockEndKind::Exception &&\n"
-                   "        std::exchange(tail_dispatch_completed, false))\n"
-                << "        kind = katana::runtime::BlockEndKind::Return;\n"
-                << "    return katana::runtime::make_block_exit(cpu, context,\n"
-                << "        kind, active_exit_source, katana::runtime::BlockAddress{cpu.pc, "
-                   "katana::runtime::canonical_physical_address(cpu.pc)});\n"
-                << "}\n";
+                << "katana::runtime::BlockExit fn_" << symbol(owner)
+                << "_runtime_entry(katana::runtime::CpuState&, "
+                   "katana::runtime::BlockExecutionContext&);\n";
         }
-        shard_output << "} // namespace\n\n"
+        shard_output << "namespace runtime_dispatch_detail {\n"
                      << "void append_static_blocks_shard_" << suffix
                      << "(std::vector<katana::runtime::RuntimeBlock>& blocks) {\n";
         for (auto index = begin; index < end; ++index) {
@@ -8639,7 +8613,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             const auto address = symbol(block.address);
             shard_output << "    append_static_block(blocks, 0x" << address << "u, " << block.size
                          << "u, katana::runtime::BlockEndKind::" << block.end_kind
-                         << ", &dispatch_owner_" << symbol(block.owner) << ", \"generated-block-"
+                         << ", &fn_" << symbol(block.owner)
+                         << "_runtime_entry, \"generated-block-"
                          << address << "\");\n";
         }
         shard_output << "}\n\n"
@@ -10848,7 +10823,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         // declaration table in every unit would make source size quadratic.
         NativeAotBackendRequestOptions request_options;
         request_options.symbol_namespace = port_namespace;
-        request_options.emit_run_functions = contains_program_entry;
+        request_options.emit_run_functions = false;
         request_options.metadata_entry_address = prepared.entry_address;
         auto request = make_native_aot_backend_request(NativeAotEmissionProfile::Product,
                                                        functions,

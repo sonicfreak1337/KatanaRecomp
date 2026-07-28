@@ -1078,7 +1078,7 @@ int run_test(const int argc, char* argv[]) {
     require(
         external_boundary_export.functions != 0u &&
             external_boundary_units.find(
-                 "fn_8C010010_with_services") != std::string::npos &&
+                 "fn_8C010010_runtime_entry") != std::string::npos &&
             external_boundary_sources.at("metadata/game-project.json")
                     .find("\"start\":2348875792,\"size\":2") !=
                 std::string::npos &&
@@ -1223,8 +1223,11 @@ int run_test(const int argc, char* argv[]) {
     const auto generated_main = read_text(output / "src" / "main.cpp");
     const auto& runtime_dispatch = generated_before.at("code/runtime-dispatch.cpp");
     std::string runtime_dispatch_shards;
+    std::string generated_units;
     std::size_t runtime_dispatch_shard_count = 0u;
     for (const auto& [path, content] : generated_before) {
+        if (path.starts_with("code/unit-") && path.ends_with(".cpp"))
+            generated_units += content;
         if (!path.starts_with("code/runtime-dispatch-shard-") || !path.ends_with(".cpp"))
             continue;
         runtime_dispatch_shards += content;
@@ -3242,7 +3245,7 @@ int run_test(const int argc, char* argv[]) {
                         std::string::npos;
             }
             constexpr std::string_view service_declaration =
-                "_with_services(CpuState& cpu, PlatformServices* services);";
+                "_runtime_entry(CpuState& cpu, BlockExecutionContext& context);";
             std::size_t declaration_count = 0u;
             for (auto offset = content.find(service_declaration); offset != std::string::npos;
                  offset = content.find(service_declaration, offset + service_declaration.size()))
@@ -3283,23 +3286,28 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 generated_before.at("code/runtime-dispatch.cpp").find("generated-block-") ==
                     std::string::npos &&
-                runtime_dispatch_shards.find(
+                generated_units.find(
                     "const auto exception_generation_on_entry = "
                     "cpu.exception_generation;") != std::string::npos &&
-                runtime_dispatch_shards.find(
+                generated_units.find(
                     "if (cpu.exception_generation != exception_generation_on_entry)") !=
                     std::string::npos &&
-                runtime_dispatch_shards.find(
+                generated_units.find(
                     "cpu.exception_generation != exception_generation_on_entry &&") ==
                     std::string::npos &&
-                runtime_dispatch_shards.find("cpu.trap_pending") == std::string::npos &&
-                runtime_dispatch_shards.find("exception_active_on_entry") ==
+                generated_units.find("cpu.trap_pending") == std::string::npos &&
+                generated_units.find("exception_active_on_entry") ==
                     std::string::npos &&
+                generated_units.find(
+                    "if (katana::runtime::native_aot_call_is_nested())\n"
+                    "        return {};") != std::string::npos &&
                 occurrences(runtime_dispatch_shards,
-                            "BlockExit dispatch_owner_8C010000(") == 1u &&
-                occurrences(runtime_dispatch_shards, "&dispatch_owner_8C010000") == 3u,
-            "Runtime-Dispatch ist nicht deterministisch geshardet, dupliziert Wrapper pro Block "
-            "oder koppelt neue Exceptionkanten an einen persistenten Trapzustand.");
+                            "BlockExit fn_8C010000_runtime_entry(") == 1u &&
+                occurrences(runtime_dispatch_shards, "&fn_8C010000_runtime_entry") == 3u &&
+                runtime_dispatch_shards.find("dispatch_owner_") == std::string::npos,
+            "Runtime-Dispatch ist nicht deterministisch geshardet, bindet Bloecke nicht direkt "
+            "an ihren Owner-Entry oder koppelt neue Exceptionkanten an einen persistenten "
+            "Trapzustand.");
     require(
         generated_main.find("#include \"katana/runtime/crash_capsule.hpp\"") !=
                 std::string::npos &&
@@ -4719,8 +4727,12 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 occurrences(shard_zero, "append_static_block(blocks,") == 512u &&
                 occurrences(shard_one, "append_static_block(blocks,") == 1u &&
-                occurrences(shard_zero, "BlockExit dispatch_owner_8C010000(") == 1u &&
-                occurrences(shard_one, "BlockExit dispatch_owner_8C010000(") == 1u &&
+                occurrences(shard_zero,
+                            "BlockExit fn_8C010000_runtime_entry(") == 1u &&
+                occurrences(shard_one,
+                            "BlockExit fn_8C010000_runtime_entry(") == 1u &&
+                shard_zero.find("dispatch_owner_") == std::string::npos &&
+                shard_one.find("dispatch_owner_") == std::string::npos &&
                 shard_sources.at("CMakeLists.txt")
                         .find("code/runtime-dispatch-shard-00001.cpp") != std::string::npos &&
                 shard_sources.at(".katana-generated-artifacts")

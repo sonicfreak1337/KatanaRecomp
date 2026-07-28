@@ -15,6 +15,7 @@ namespace katana::codegen {
 // backend declarations and definitions.
 [[nodiscard]] std::string cpp_function_name(std::uint32_t address);
 [[nodiscard]] std::string cpp_service_function_name(std::uint32_t address);
+[[nodiscard]] std::string cpp_runtime_block_function_name(std::uint32_t address);
 
 class CppBackend final : public Backend {
   public:

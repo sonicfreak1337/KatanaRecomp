@@ -31,6 +31,10 @@ std::string cpp_service_function_name(const std::uint32_t address) {
     return cpp_function_name(address) + "_with_services";
 }
 
+std::string cpp_runtime_block_function_name(const std::uint32_t address) {
+    return cpp_function_name(address) + "_runtime_entry";
+}
+
 namespace {
 
 enum class BlockEntryMetadataMode : std::uint8_t { None, Routed, Direct };
@@ -2459,7 +2463,8 @@ void emit_direct_call(std::ostringstream& output,
                       const std::uint32_t target,
                       const std::unordered_set<std::uint32_t>& known_functions,
                       const int indent,
-                      const std::string_view runtime_target) {
+                      const std::string_view runtime_target,
+                      const bool table_compatible_function_entries) {
     emit_indent(output, indent);
     output << "cpu.pc = " << runtime_target << ";\n";
     emit_multi_block_completion(output, indent, false);
@@ -2475,7 +2480,11 @@ void emit_direct_call(std::ostringstream& output,
         emit_indent(output, indent + 1);
         output << "const auto exception_generation_before_call = cpu.exception_generation;\n";
         emit_indent(output, indent + 1);
-        output << cpp_service_function_name(target) << "(cpu, services);\n";
+        if (table_compatible_function_entries)
+            output << "static_cast<void>(" << cpp_runtime_block_function_name(target)
+                   << "(cpu, context));\n";
+        else
+            output << cpp_service_function_name(target) << "(cpu, services);\n";
         emit_indent(output, indent + 1);
         output << "if (cpu.exception_generation != exception_generation_before_call) {\n";
         emit_indent(output, indent + 2);
@@ -2636,7 +2645,8 @@ void emit_terminal(std::ostringstream& output,
                    const bool guarded_local_block_chaining,
                    const bool native_internal_block_labels,
                    const bool uses_proven_linear_ram,
-                   const bool external_instruction_observer) {
+                   const bool external_instruction_observer,
+                   const bool table_compatible_function_entries) {
     using Operation = katana::ir::Operation;
 
     const auto& instruction = block.instructions[control_index];
@@ -2758,8 +2768,13 @@ void emit_terminal(std::ostringstream& output,
                 output << "const auto exception_generation_before_native_call = "
                           "cpu.exception_generation;\n";
                 emit_indent(output, indent + 2);
-                output << cpp_service_function_name(*instruction.target_address)
-                       << "(cpu, services);\n";
+                if (table_compatible_function_entries)
+                    output << "static_cast<void>("
+                           << cpp_runtime_block_function_name(*instruction.target_address)
+                           << "(cpu, context));\n";
+                else
+                    output << cpp_service_function_name(*instruction.target_address)
+                           << "(cpu, services);\n";
                 emit_indent(output, indent + 2);
                 output << "if (cpu.exception_generation != "
                           "exception_generation_before_native_call) return;\n";
@@ -2780,8 +2795,12 @@ void emit_terminal(std::ostringstream& output,
             }
         } else {
             const auto runtime_target = relocated_code_address(*instruction.target_address);
-            emit_direct_call(
-                output, *instruction.target_address, known_functions, indent, runtime_target);
+            emit_direct_call(output,
+                             *instruction.target_address,
+                             known_functions,
+                             indent,
+                             runtime_target,
+                             table_compatible_function_entries);
         }
 
         emit_multi_block_completion(output, indent, single_block);
@@ -2908,8 +2927,13 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 3);
                 output << "katana::runtime::NativeAotCallDepthGuard native_call_depth;\n";
                 emit_indent(output, indent + 3);
-                output << "if (native_call_depth) "
-                       << cpp_service_function_name(target) << "(cpu, services);\n";
+                output << "if (native_call_depth) ";
+                if (table_compatible_function_entries)
+                    output << "static_cast<void>("
+                           << cpp_runtime_block_function_name(target)
+                           << "(cpu, context));\n";
+                else
+                    output << cpp_service_function_name(target) << "(cpu, services);\n";
                 emit_indent(output, indent + 2);
                 output << "}\n";
                 emit_indent(output, indent + 2);
@@ -2982,8 +3006,13 @@ void emit_terminal(std::ostringstream& output,
                 output << "const auto exception_generation_before_native_call = "
                           "cpu.exception_generation;\n";
                 emit_indent(output, indent + 2);
-                output << cpp_service_function_name(guarded_native_target->second)
-                       << "(cpu, services);\n";
+                if (table_compatible_function_entries)
+                    output << "static_cast<void>("
+                           << cpp_runtime_block_function_name(guarded_native_target->second)
+                           << "(cpu, context));\n";
+                else
+                    output << cpp_service_function_name(guarded_native_target->second)
+                           << "(cpu, services);\n";
                 emit_indent(output, indent + 2);
                 output << "if (cpu.exception_generation != "
                           "exception_generation_before_native_call) return;\n";
@@ -3020,7 +3049,12 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 1);
                 output << "case " << hex32(target) << ":\n";
                 if (known_functions.contains(target) && !single_block) {
-                    emit_direct_call(output, target, known_functions, indent + 2, "call_target");
+                    emit_direct_call(output,
+                                     target,
+                                     known_functions,
+                                     indent + 2,
+                                     "call_target",
+                                     table_compatible_function_entries);
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 } else if (known_functions.contains(target)) {
@@ -3559,6 +3593,8 @@ void emit_block(std::ostringstream& output,
                 const bool uses_proven_linear_ram,
                 const BlockEntryMetadataMode block_entry_metadata_mode,
                 const bool external_instruction_observer) {
+    const bool table_compatible_function_entries =
+        block_entry_metadata_mode == BlockEntryMetadataMode::Direct;
     if (native_internal_block_labels) {
         output << "        " << cpp_block_label(block.start_address) << ":\n"
                << "        {\n";
@@ -3655,7 +3691,8 @@ void emit_block(std::ostringstream& output,
                       guarded_local_block_chaining,
                       native_internal_block_labels,
                       uses_proven_linear_ram,
-                      external_instruction_observer);
+                      external_instruction_observer,
+                      table_compatible_function_entries);
     } else if (block.successors.size() == 1u) {
         emit_indent(output, 4);
         output << "cpu.pc = " << relocated_code_address(block.successors.front()) << ";\n";
@@ -3794,6 +3831,20 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 "Eine Callsite besitzt mehrere guardierte native Singleton-Ziele.");
         }
     }
+    std::unordered_map<std::uint32_t, std::uint32_t> native_block_owner_entries;
+    native_block_owner_entries.reserve(request.native_block_owner_entries.size());
+    for (const auto& entry : request.native_block_owner_entries) {
+        if (!known_functions.contains(entry.owner_entry)) {
+            throw std::invalid_argument(
+                "Native Blockownership verweist auf keinen bekannten Funktionsentry.");
+        }
+        const auto [found, inserted] =
+            native_block_owner_entries.emplace(entry.block_address, entry.owner_entry);
+        if (!inserted && found->second != entry.owner_entry) {
+            throw std::invalid_argument(
+                "Ein nativer AOT-Block besitzt mehrere Owner-Entries.");
+        }
+    }
     const bool emits_post_instruction_safepoint =
         std::any_of(functions.begin(), functions.end(), [&](const auto& function) {
             return std::any_of(
@@ -3838,6 +3889,8 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << "using CpuState = katana::runtime::CpuState;\n"
                  << "using Memory = katana::runtime::Memory;\n"
                  << "using PlatformServices = katana::runtime::PlatformServices;\n"
+                 << "using BlockExecutionContext = katana::runtime::BlockExecutionContext;\n"
+                 << "using BlockExit = katana::runtime::BlockExit;\n"
                  << "using katana::runtime::enter_memory_exception;\n"
                  << "using katana::runtime::raise_fpu_disabled;\n"
                  << "using katana::runtime::raise_illegal_instruction;\n"
@@ -3850,10 +3903,12 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         } else if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct) {
             declarations
                 << "namespace runtime_dispatch_detail {\n"
+                << "extern thread_local PlatformServices* active_services;\n"
                 << "extern thread_local katana::runtime::BlockAddress active_exit_source;\n"
                 << "extern thread_local katana::runtime::BlockEndKind active_exit_kind;\n"
                 << "extern thread_local katana::runtime::DynamicDispatchSiteClass "
                    "active_exit_site_class;\n"
+                << "extern thread_local bool tail_dispatch_completed;\n"
                 << "} // namespace runtime_dispatch_detail\n";
         }
         declarations << "void resolved_call(CpuState& cpu, std::uint32_t target);\n"
@@ -3907,16 +3962,25 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                                                        known_functions.end());
     std::sort(ordered_known_functions.begin(), ordered_known_functions.end());
     for (const auto entry : ordered_known_functions) {
-        declarations << (request.external_function_linkage ? "void " : "static void ")
-                     << cpp_service_function_name(entry)
-                     << "(CpuState& cpu, PlatformServices* services);\n";
+        if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct)
+            declarations << (request.external_function_linkage ? "BlockExit "
+                                                                : "static BlockExit ")
+                         << cpp_runtime_block_function_name(entry)
+                         << "(CpuState& cpu, BlockExecutionContext& context);\n";
+        else
+            declarations << (request.external_function_linkage ? "void " : "static void ")
+                         << cpp_service_function_name(entry)
+                         << "(CpuState& cpu, PlatformServices* services);\n";
     }
-    for (const auto& function : functions) {
-        declarations << "[[maybe_unused]] static void " << cpp_function_name(function.entry_address)
-                     << "(CpuState& cpu) {\n"
-                     << "    " << cpp_service_function_name(function.entry_address)
-                     << "(cpu, nullptr);\n"
-                     << "}\n";
+    if (block_entry_metadata_mode != BlockEntryMetadataMode::Direct) {
+        for (const auto& function : functions) {
+            declarations
+                << "[[maybe_unused]] static void " << cpp_function_name(function.entry_address)
+                << "(CpuState& cpu) {\n"
+                << "    " << cpp_service_function_name(function.entry_address)
+                << "(cpu, nullptr);\n"
+                << "}\n";
+        }
     }
 
     declarations << '\n';
@@ -3934,10 +3998,32 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             }
         }
         const bool uses_proven_linear_ram = direct_ram_read_kinds != 0u;
-        emitted_function << (request.external_function_linkage ? "void " : "static void ")
-                         << cpp_service_function_name(function.entry_address)
-                         << "(CpuState& cpu, PlatformServices* services) {\n"
-                         << "    static_cast<void>(services);\n";
+        if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct) {
+            emitted_function
+                << (request.external_function_linkage ? "BlockExit "
+                                                      : "static BlockExit ")
+                << cpp_runtime_block_function_name(function.entry_address)
+                << "(CpuState& cpu, BlockExecutionContext& context) {\n"
+                << "    auto* const services = runtime_dispatch_detail::active_services;\n"
+                << "    if (services == nullptr)\n"
+                << "        throw std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
+                << "    runtime_dispatch_detail::active_exit_source = {\n"
+                << "        cpu.pc, katana::runtime::canonical_physical_address(cpu.pc)};\n"
+                << "    runtime_dispatch_detail::active_exit_kind = "
+                   "katana::runtime::BlockEndKind::Fallthrough;\n"
+                << "    runtime_dispatch_detail::active_exit_site_class = "
+                   "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
+                << "    const auto exception_generation_on_entry = "
+                   "cpu.exception_generation;\n"
+                << "    [&] {\n"
+                << "    static_cast<void>(services);\n";
+        } else {
+            emitted_function
+                << (request.external_function_linkage ? "void " : "static void ")
+                << cpp_service_function_name(function.entry_address)
+                << "(CpuState& cpu, PlatformServices* services) {\n"
+                << "    static_cast<void>(services);\n";
+        }
         if (uses_proven_linear_ram)
             emitted_function
                 << "    auto katana_direct_ram = "
@@ -4014,8 +4100,28 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                              << "\"PC liegt ausserhalb der generierten Funktion\");\n"
                              << "        }\n";
         }
-        emitted_function << "    }\n"
-                         << "}\n\n";
+        emitted_function << "    }\n";
+        if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct) {
+            emitted_function
+                << "    }();\n"
+                << "    if (katana::runtime::native_aot_call_is_nested())\n"
+                << "        return {};\n"
+                << "    context.scheduler_cycle = services->scheduler_cycle();\n"
+                << "    auto kind = runtime_dispatch_detail::active_exit_kind;\n"
+                << "    if (cpu.exception_generation != exception_generation_on_entry)\n"
+                << "        kind = katana::runtime::BlockEndKind::Exception;\n"
+                << "    if (kind != katana::runtime::BlockEndKind::Exception &&\n"
+                << "        std::exchange(runtime_dispatch_detail::"
+                   "tail_dispatch_completed, false))\n"
+                << "        kind = katana::runtime::BlockEndKind::Return;\n"
+                << "    return katana::runtime::make_block_exit(\n"
+                << "        cpu, context, kind, "
+                   "runtime_dispatch_detail::active_exit_source,\n"
+                << "        katana::runtime::BlockAddress{\n"
+                << "            cpu.pc, "
+                   "katana::runtime::canonical_physical_address(cpu.pc)});\n";
+        }
+        emitted_function << "}\n\n";
 
         auto emitted_function_text = emitted_function.str();
         if (request.conservative_register_localization &&
@@ -4063,6 +4169,10 @@ BackendEmission emit_cpp_port_translation_unit(const BackendRequest& request) {
     if (!request.external_dynamic_dispatch) {
         throw std::invalid_argument(
             "Direkte Port-Blockmetadaten brauchen externen Runtime-Dispatch.");
+    }
+    if (request.emit_run_functions) {
+        throw std::invalid_argument(
+            "Produkt-Port-TUs werden ausschliesslich ueber run_runtime gestartet.");
     }
     return emit_cpp_backend(request, BlockEntryMetadataMode::Direct);
 }

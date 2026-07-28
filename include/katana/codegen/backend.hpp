@@ -46,6 +46,15 @@ struct GuardedNativeCallTarget {
     std::uint32_t target = 0u;
 };
 
+// Canonical product-AOT ownership for a guest block. The owner entry names the
+// one table-compatible native function that contains the block. Keeping this
+// mapping on the backend request lets later finite jump/call lowering reuse the
+// same entry contract without teaching the runtime about IR ownership.
+struct NativeAotBlockOwnerEntry {
+    std::uint32_t block_address = 0u;
+    std::uint32_t owner_entry = 0u;
+};
+
 struct BackendRequest {
     std::span<const katana::ir::Function> functions;
     std::uint32_t entry_address = 0u;
@@ -68,6 +77,7 @@ struct BackendRequest {
     // Localize a conservatively selected GPR subset only when the complete
     // emitted guest function is a pure leaf with no architectural boundary.
     bool conservative_register_localization = false;
+    std::span<const NativeAotBlockOwnerEntry> native_block_owner_entries;
 };
 
 struct BackendEmission {
