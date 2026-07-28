@@ -385,6 +385,135 @@ guarded_inventory_budget_values(const std::size_t candidate_count) {
         image, lines, function_entries);
 }
 
+bool has_stored_code_address(
+    const katana::analysis::FunctionValueAnalysisResult& analysis,
+    const std::uint32_t target) {
+    return std::any_of(
+        analysis.guarded_code_inventory.stored_code_addresses.begin(),
+        analysis.guarded_code_inventory.stored_code_addresses.end(),
+        [target](const auto& candidate) {
+            return candidate.target_address == target;
+        });
+}
+
+katana::analysis::FunctionValueAnalysisResult
+conditional_shared_tail_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0xE470u); // mov #0x70,r4 (callback)
+    put_u16(0x02u, 0xB00Du); // bsr 0x20
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x08u, 0x0009u);
+    put_u16(0x20u, 0x412Bu); // jmp @r1 (candidate-only tail)
+    put_u16(0x22u, 0x0009u);
+    put_u16(0x40u, 0x890Eu); // bt 0x60 (unknown condition)
+    put_u16(0x42u, 0x000Bu); // internal path without a store
+    put_u16(0x44u, 0x0009u);
+    put_u16(0x60u, 0x2742u); // external shared tail: mov.l r4,@r7
+    put_u16(0x62u, 0x000Bu);
+    put_u16(0x64u, 0x0009u);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".conditional-shared-tail",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u> boundaries{{
+        {0x00u, 0x0Au},
+        {0x20u, 0x04u},
+        {0x60u, 0x06u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x20u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+object_field_tail_values(const bool overwrite_callback_from_object) {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xE460u); // mov #0x60,r4 (object)
+    put_u16(0x02u, 0xE570u); // mov #0x70,r5 (real callback argument)
+    put_u16(0x04u, 0xB00Cu); // bsr 0x20
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0x000Bu);
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x20u, 0xE004u); // mov #4,r0
+    put_u16(0x22u,
+            overwrite_callback_from_object
+                ? 0x054Eu // mov.l @(r0,r4),r5
+                : 0x0009u);
+    put_u16(0x24u, 0x462Bu); // jmp @r6 (candidate-only tail)
+    put_u16(0x26u, 0x0009u);
+    put_u16(0x40u, 0x2752u); // mov.l r5,@r7 (unknown object)
+    put_u16(0x42u, 0x000Bu);
+    put_u16(0x44u, 0x0009u);
+    put_u16(0x60u, 0x000Bu); // object address is also decode-valid
+    put_u16(0x62u, 0x0009u);
+    put_u32(0x64u, 0x70u);   // ordinary field, coincidentally code-like
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".object-field-tail",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x0Cu},
+        {0x20u, 0x08u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x24u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
 } // namespace
 
 int main() {
@@ -407,6 +536,85 @@ int main() {
     const auto* preserved = summary(unique, 0x20u, 8u);
     require(preserved != nullptr && preserved->abi_preserved,
             "SH-C-Erhalt von R8 wurde in der Funktionssummary nicht ausgewiesen.");
+
+    {
+        std::vector<std::uint8_t> bytes(0x26u, 0x09u);
+        bytes[0x00u] = 0x2Bu;
+        bytes[0x01u] = 0x41u; // jmp @r1
+        bytes[0x02u] = 0x09u;
+        bytes[0x03u] = 0x00u;
+        bytes[0x20u] = 0x2Au;
+        bytes[0x21u] = 0xE0u; // mov #42,r0
+        bytes[0x22u] = 0x0Bu;
+        bytes[0x23u] = 0x00u;
+        bytes[0x24u] = 0x09u;
+        bytes[0x25u] = 0x00u;
+        auto image = classification_image(bytes);
+        const auto lines = katana::sh4::disassemble(bytes, 0u);
+        constexpr std::array<std::uint32_t, 1u> function_entries{0u};
+        const std::array<katana::analysis::ResolvedControlFlowEdge, 2u> edges{{
+            {0x00u,
+             0x20u,
+             katana::analysis::ResolvedControlFlowKind::Jump,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedComplete,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot}},
+            {0x00u,
+             0x20u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+        }};
+        const auto values = katana::analysis::analyze_function_values(
+            image, lines, function_entries, edges);
+        const auto owner =
+            std::find_if(values.summaries.begin(),
+                         values.summaries.end(),
+                         [](const auto& candidate) {
+                             return candidate.function_address == 0u;
+                         });
+        require(owner != values.summaries.end(),
+                "Candidate-Carrier entfernte die Owner-Funktionssummary.");
+        const auto r0 =
+            std::find_if(owner->registers.begin(),
+                         owner->registers.end(),
+                         [](const auto& candidate) {
+                             return candidate.register_index == 0u;
+                         });
+        require(r0 != owner->registers.end() && r0->complete &&
+                    r0->values == std::vector<std::uint32_t>{42u},
+                "Candidate-Carrier entfernte die reale Jump-Kante mit "
+                "identischem Callsite-/Zielpaar.");
+    }
+
+    {
+        const auto conditional = conditional_shared_tail_values();
+        const auto stored =
+            std::find_if(
+                conditional.guarded_code_inventory.stored_code_addresses.begin(),
+                conditional.guarded_code_inventory.stored_code_addresses.end(),
+                [](const auto& candidate) {
+                    return candidate.target_address == 0x70u;
+                });
+        require(stored !=
+                        conditional.guarded_code_inventory.stored_code_addresses.end() &&
+                    stored->guarded &&
+                    !conditional.guarded_code_inventory
+                         .candidate_inventory_truncated,
+                "Bedingter externer Shared-Tail verlor seinen "
+                "Callbackstore oder meldete ein falsches vollstaendiges Inventar.");
+    }
+
+    {
+        const auto direct_argument = object_field_tail_values(false);
+        const auto loaded_field = object_field_tail_values(true);
+        require(has_stored_code_address(direct_argument, 0x70u) &&
+                    !has_stored_code_address(loaded_field, 0x70u),
+                "Objektadress-Provenienz wurde weiterhin als Provenienz "
+                "des geladenen Feldinhalts behandelt.");
+    }
 
     std::vector<std::uint8_t> guarded_callee_bytes(0x26u, 0x09u);
     const std::array<std::uint8_t, 10u> guarded_caller{

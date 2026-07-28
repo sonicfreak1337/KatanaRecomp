@@ -587,7 +587,8 @@ collect_function_value_edges(
                              ResolvedControlFlowKind::Call,
                              true,
                              ControlFlowEvidence::GuardedPartial,
-                             resolution.evidence_origins});
+                             resolution.evidence_origins,
+                             true});
         }
     }
     std::sort(edges.begin(), edges.end(), [](const auto& left, const auto& right) {
@@ -598,7 +599,10 @@ collect_function_value_edges(
         if (left.kind != right.kind) return left.kind < right.kind;
         if (left.guarded != right.guarded) return left.guarded < right.guarded;
         if (left.evidence != right.evidence) return left.evidence < right.evidence;
-        return left.evidence_origins < right.evidence_origins;
+        if (left.evidence_origins != right.evidence_origins)
+            return left.evidence_origins < right.evidence_origins;
+        return left.analysis_candidate_carrier <
+               right.analysis_candidate_carrier;
     });
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
     return edges;

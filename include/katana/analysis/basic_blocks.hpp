@@ -30,6 +30,10 @@ struct ResolvedControlFlowEdge {
     bool guarded = false;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::vector<AnalysisEvidenceOrigin> evidence_origins;
+    // Private transport for analysis_candidates into the function-value
+    // inventory.  This is never an executable CFG edge and must be filtered by
+    // this exact identity rather than by its callsite/target pair.
+    bool analysis_candidate_carrier = false;
 
     bool operator==(const ResolvedControlFlowEdge&) const = default;
 };

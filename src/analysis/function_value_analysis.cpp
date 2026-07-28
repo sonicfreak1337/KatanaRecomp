@@ -1395,6 +1395,7 @@ const FunctionRegisterValueSummary* register_summary(const FunctionValueSummary&
 }
 
 void observe_callee_arguments(
+    const katana::io::ExecutableImage& image,
     const AbstractState& state,
     const std::uint32_t call_site,
     const std::span<const std::uint32_t> candidate_callees,
@@ -1408,6 +1409,19 @@ void observe_callee_arguments(
     observation.inventory_stack_may_alias = state.inventory_stack_may_alias;
     observation.inventory_vbr_relative = state.inventory_vbr_relative;
     observation.memory_values = state.memory_values;
+    // This provenance belongs to the value passed in an ABI argument register,
+    // not to an address used to load that value.  Loads deliberately do not
+    // inherit it from their address operand.
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        auto& value = observation[index];
+        if (!value.known || value.values.empty() ||
+            value.values.size() > maximum_summary_values ||
+            !std::ranges::all_of(value.values, [&](const auto candidate) {
+                return validate_decode_candidate(image, candidate).valid();
+            }))
+            continue;
+        value.inventory_code_pointer = true;
+    }
     // Caller-local stack slots are not part of callee ingress.  Keeping
     // them in observations only deep-copied irrelevant state and could
     // requeue a callee when the effective merged input was unchanged.
@@ -1440,26 +1454,25 @@ void observe_inventory_transfers(
     if (transfers == nullptr || candidate_callees.empty()) return;
     auto observation = state;
     bool found_code_pointer = false;
-    const auto mark_code_pointer = [&](AbstractValue& value) {
-        if (!value.known || value.values.empty() ||
+    const auto observe_code_pointer = [&](const AbstractValue& value) {
+        if (!value.inventory_code_pointer || !value.known ||
+            value.values.empty() ||
             value.values.size() > maximum_summary_values ||
-            value.call_sites.empty() ||
             !std::ranges::all_of(value.values, [&](const auto candidate) {
                 return validate_decode_candidate(image, candidate).valid();
             }))
             return;
-        value.inventory_code_pointer = true;
         found_code_pointer = true;
     };
-    for (auto& value : observation)
-        mark_code_pointer(value);
-    for (auto& [offset, value] : observation.stack_values) {
+    for (const auto& value : observation)
+        observe_code_pointer(value);
+    for (const auto& [offset, value] : observation.stack_values) {
         static_cast<void>(offset);
-        mark_code_pointer(value);
+        observe_code_pointer(value);
     }
-    for (auto& [address, value] : observation.memory_values) {
+    for (const auto& [address, value] : observation.memory_values) {
         static_cast<void>(address);
-        mark_code_pointer(value);
+        observe_code_pointer(value);
     }
     if (requires_code_pointer && !found_code_pointer) return;
     if (guarded || !complete) {
@@ -1503,7 +1516,8 @@ void apply_call(AbstractState& state,
                 const std::map<std::uint32_t, FunctionValueSummary>& summaries,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments,
                 const bool preserve_guarded_stack_inventory = false) {
-    observe_callee_arguments(state,
+    observe_callee_arguments(image,
+                             state,
                              call_site,
                              candidate_callees,
                              candidate_callees_guarded,
@@ -2166,7 +2180,9 @@ FunctionEvaluation evaluate_function(
                 (line.instruction.control_flow ==
                      katana::sh4::ControlFlowKind::UnconditionalBranch ||
                  line.instruction.control_flow ==
-                     katana::sh4::ControlFlowKind::IndirectBranch)) {
+                     katana::sh4::ControlFlowKind::IndirectBranch ||
+                 line.instruction.control_flow ==
+                     katana::sh4::ControlFlowKind::ConditionalBranch)) {
                 const auto tail_ingress = tail_ingresses.find(line.address);
                 if (tail_ingress == tail_ingresses.end()) continue;
                 if (line.instruction.has_delay_slot) {
@@ -2645,10 +2661,9 @@ analyze_function_values(
         std::uint32_t target = 0u;
     };
     std::vector<CandidateTailCarrier> candidate_tail_carriers;
-    std::set<std::pair<std::uint32_t, std::uint32_t>>
-        private_candidate_carrier_pairs;
     for (const auto& edge : resolved_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Call ||
+        if (!edge.analysis_candidate_carrier ||
+            edge.kind != ResolvedControlFlowKind::Call ||
             resolved_edge_evidence(edge) != ControlFlowEvidence::GuardedPartial)
             continue;
         const auto line = std::lower_bound(
@@ -2671,8 +2686,6 @@ analyze_function_values(
             target == lines.end() || target->address != edge.target_address ||
             target->is_delay_slot)
             continue;
-        private_candidate_carrier_pairs.emplace(
-            edge.instruction_address, edge.target_address);
         if (std::find(edge.evidence_origins.begin(),
                       edge.evidence_origins.end(),
                       AnalysisEvidenceOrigin::JumpTable) != edge.evidence_origins.end())
@@ -2697,8 +2710,7 @@ analyze_function_values(
     std::vector<ResolvedControlFlowEdge> function_edges;
     function_edges.reserve(resolved_edges.size());
     for (const auto& edge : resolved_edges) {
-        if (!private_candidate_carrier_pairs.contains(
-                {edge.instruction_address, edge.target_address}))
+        if (!edge.analysis_candidate_carrier)
             function_edges.push_back(edge);
     }
 
@@ -2795,6 +2807,7 @@ analyze_function_values(
         std::uint32_t target = 0u;
         bool guarded = true;
         bool complete = false;
+        bool requires_code_pointer = false;
     };
     struct InventoryRegion {
         FunctionInfo function;
@@ -2887,6 +2900,14 @@ analyze_function_values(
                     pending_blocks.push_back(successor);
                     continue;
                 }
+                if (flow == katana::sh4::ControlFlowKind::ConditionalBranch) {
+                    // Both conditional successors are real but path-guarded.
+                    // Crossing an owner boundary starts a separate ephemeral
+                    // inventory region instead of silently truncating the walk.
+                    local_tail_ingresses.push_back(
+                        {control.address, successor, true, true, true});
+                    continue;
+                }
                 if (flow != katana::sh4::ControlFlowKind::UnconditionalBranch &&
                     flow != katana::sh4::ControlFlowKind::IndirectBranch)
                     continue;
@@ -2967,7 +2988,7 @@ analyze_function_values(
     };
     for (const auto& carrier : candidate_tail_carriers) {
         const std::array target{carrier.target};
-        add_tail_ingress(carrier.transfer_site, target, true, false);
+        add_tail_ingress(carrier.transfer_site, target, true, false, true);
     }
     for (const auto& [transfer_site, candidates] : indirect_jump_candidates) {
         if (!candidates.guarded || candidates.complete ||
@@ -3024,7 +3045,8 @@ analyze_function_values(
         add_tail_ingress(ingress.transfer_site,
                          target,
                          ingress.guarded,
-                         ingress.complete);
+                         ingress.complete,
+                         ingress.requires_code_pointer);
     }
     for (auto& [transfer_site, ingress] : tail_ingresses) {
         static_cast<void>(transfer_site);
