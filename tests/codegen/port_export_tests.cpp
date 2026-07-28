@@ -4134,6 +4134,8 @@ int run_test(const int argc, char* argv[]) {
                     .find("KATANA_GUEST_CYCLE_BUDGET = '600000000'") !=
                 std::string::npos &&
             read_text(output / "run-product-gate.ps1")
+                    .find("UseShellExecute = $false") != std::string::npos &&
+            read_text(output / "run-product-gate.ps1")
                     .find("status=host-watchdog-hang") != std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     const auto product_entry_boundary =
