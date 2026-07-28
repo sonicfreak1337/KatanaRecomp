@@ -4048,21 +4048,20 @@ void PvrSoftwareRenderer::reset_guest_frame_evidence(
         direct_vram_shadow_valid_ = true;
     }
     queued_guest_frame_proof_.reset();
+    queued_scanout_frame_.reset();
 }
 
 void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& registers,
                                                  const std::span<const std::uint8_t> vram) {
-    // Keep the first unconsumed proof intact. This bounds queued frame storage and
-    // prevents later VBlanks from replacing the exact image that established the
-    // first host-independent guest-frame boundary.
-    if (queued_guest_frame_proof_) return;
     const auto scanout = decode_pvr_scanout(registers, vram.size());
-    if (!scanout || scanout->video_blank) return;
+    if (!scanout) return;
 
     const auto scanout_field = scanout->interlaced ? (registers.field() & 1u) : 0u;
     const auto active_base = scanout_field == 0u ? scanout->base_offset
                                                  : scanout->second_base_offset;
-    const auto capture_scanout = [&](const std::span<const std::uint8_t> source_vram) {
+    const auto capture_scanout =
+        [&](const std::span<const std::uint8_t> source_vram,
+            const std::optional<std::array<std::uint8_t, 4u>> solid_color = std::nullopt) {
         PvrFramebuffer framebuffer;
         const auto weave_fields = scanout->interlaced && scanout->weave_fields;
         framebuffer.configure(scanout->width,
@@ -4079,10 +4078,22 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
             source_vram,
             weave_fields ? scanout->base_offset : active_base,
             weave_fields ? std::optional<std::size_t>{scanout->second_base_offset}
-                         : std::nullopt);
+                         : std::nullopt,
+            solid_color);
     };
+    if (scanout->video_blank) {
+        queued_scanout_frame_ = capture_scanout({}, scanout->border_rgba);
+        return;
+    }
     if (direct_vram_shadow_.empty()) direct_vram_shadow_.resize(dreamcast_vram_size, 0u);
     auto frame = capture_scanout(vram);
+    // Keep the first unconsumed proof intact, but never let diagnostic evidence
+    // suppress a newer real scanout. The host queue is latest-wins and bounded to
+    // one frame.
+    if (queued_guest_frame_proof_) {
+        queued_scanout_frame_ = std::move(frame);
+        return;
+    }
     if (!direct_vram_shadow_valid_) {
         std::copy(vram.begin(), vram.end(), direct_vram_shadow_.begin());
         std::fill(direct_dirty_words_.begin(), direct_dirty_words_.end(), std::uint64_t{0u});
@@ -4162,7 +4173,7 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
     };
     const auto direct_scanout = observe_direct_scanout();
     const auto queue_direct_scanout = [&] {
-        if (direct_scanout.changed_pixels == 0u) return;
+        if (direct_scanout.changed_pixels == 0u) return false;
         auto proof = PvrGuestFrameProof{direct_scanout.last_generation,
                                         direct_scanout.changed_pixels,
                                         scanout_field,
@@ -4175,9 +4186,11 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
         ++metrics_.proven_guest_frames;
         ++metrics_.direct_scanout_frames;
         metrics_.direct_scanout_changed_pixels += direct_scanout.changed_pixels;
+        queued_scanout_frame_.reset();
+        return true;
     };
     if (pending_render_evidence_.empty()) {
-        queue_direct_scanout();
+        if (!queue_direct_scanout()) queued_scanout_frame_ = std::move(frame);
         return;
     }
 
@@ -4300,7 +4313,7 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
         next_evidence_scan_generation_ = pending_render_evidence_[previous_index].generation;
     }
     if (!selected_index) {
-        queue_direct_scanout();
+        if (!queue_direct_scanout()) queued_scanout_frame_ = std::move(frame);
         return;
     }
     const auto selected_generation = pending_render_evidence_[*selected_index].generation;
@@ -4312,6 +4325,7 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
                                                    scanout_field,
                                                    *scanout,
                                                    std::move(frame)};
+    queued_scanout_frame_.reset();
     for (auto evidence = pending_render_evidence_.begin();
          evidence != pending_render_evidence_.end() &&
          evidence->generation <= selected_generation;) {
@@ -4330,6 +4344,13 @@ std::optional<PvrGuestFrameProof> PvrSoftwareRenderer::take_guest_frame_proof() 
     auto proof = std::move(queued_guest_frame_proof_);
     queued_guest_frame_proof_.reset();
     return proof;
+}
+
+std::optional<PvrFrame> PvrSoftwareRenderer::take_scanout_frame() {
+    if (!queued_scanout_frame_) return std::nullopt;
+    auto frame = std::move(queued_scanout_frame_);
+    queued_scanout_frame_.reset();
+    return frame;
 }
 
 const PvrSoftwareRenderMetrics& PvrSoftwareRenderer::metrics() const noexcept {
@@ -4549,6 +4570,7 @@ void PvrSoftwareRenderer::restore_state_passive(
     direct_vram_shadow_valid_ = state.direct_vram_shadow_valid;
     queued_guest_frame_proof_ =
         std::move(state.queued_guest_frame_proof);
+    queued_scanout_frame_.reset();
     first_error_ = std::move(state.first_error);
 }
 

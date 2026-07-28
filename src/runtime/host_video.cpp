@@ -401,14 +401,25 @@ bool GuestFrameEvidenceTracker::bootstrap_scanout_seen() const noexcept {
 GuestFramePumpResult pump_guest_frame_proof(PvrSoftwareRenderer& renderer,
                                             NativeVideoOutput* const output) {
     auto proof = renderer.take_guest_frame_proof();
-    if (!proof) return {};
+    auto scanout = renderer.take_scanout_frame();
     GuestFramePumpResult result;
-    result.guest_frame_proven = true;
-    result.proof_source = proof->source;
-    result.render_generation = proof->render_generation;
-    result.write_generation_first = proof->write_generation_first;
-    result.write_generation_last = proof->write_generation_last;
-    if (output != nullptr) result.frame_presented = present_guest_frame_proof(*output, *proof);
+    if (proof) {
+        result.guest_frame_proven = true;
+        result.proof_source = proof->source;
+        result.render_generation = proof->render_generation;
+        result.write_generation_first = proof->write_generation_first;
+        result.write_generation_last = proof->write_generation_last;
+    }
+    if (output != nullptr) {
+        if (scanout) {
+            const auto presented_before = output->presented_frames();
+            output->present(*scanout);
+            result.frame_presented = output->presented_frames() > presented_before;
+        } else if (proof) {
+            result.frame_presented = present_guest_frame_proof(*output, *proof);
+            result.proven_frame_presented = result.frame_presented;
+        }
+    }
     return result;
 }
 

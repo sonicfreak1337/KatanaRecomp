@@ -861,6 +861,7 @@ class PvrSoftwareRenderer final {
     void observe_vblank_scanout(const PvrRegisterFile& registers,
                                 std::span<const std::uint8_t> vram);
     [[nodiscard]] std::optional<PvrGuestFrameProof> take_guest_frame_proof();
+    [[nodiscard]] std::optional<PvrFrame> take_scanout_frame();
     [[nodiscard]] const PvrSoftwareRenderMetrics& metrics() const noexcept;
     [[nodiscard]] std::uint64_t last_render_generation() const noexcept;
     [[nodiscard]] std::size_t pending_render_generations() const noexcept;
@@ -887,6 +888,10 @@ class PvrSoftwareRenderer final {
     Memory* guest_memory_access_memory_ = nullptr;
     bool direct_vram_shadow_valid_ = true;
     std::optional<PvrGuestFrameProof> queued_guest_frame_proof_;
+    // Host presentation is deliberately independent from guest-frame evidence.
+    // This latest-wins queue is transient host-boundary state and is rebuilt from
+    // the restored PVR registers and VRAM at the next VBlank.
+    std::optional<PvrFrame> queued_scanout_frame_;
     std::optional<PvrRenderFirstError> first_error_;
 };
 

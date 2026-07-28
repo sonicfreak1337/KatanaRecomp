@@ -2336,7 +2336,7 @@ int run_test(const int argc, char* argv[]) {
                 "guest_write_observer_allows_prevalidated_linear_writes()") ==
                 std::string::npos &&
             flag_poll_method.find(
-                "katana::runtime::AddressTranslationMode::NoMmu") ==
+                "katana::runtime::AddressTranslationMode::NoMmu") !=
                 std::string::npos &&
             flag_poll_method.find("const auto proves_direct_instruction_range") !=
                 std::string::npos &&
@@ -3933,6 +3933,8 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("result.frame_presented") !=
                 std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("result.proven_frame_presented") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_GUEST_FRAME") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_GUEST_SCANOUT") !=

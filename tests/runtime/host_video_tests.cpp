@@ -119,24 +119,75 @@ int main() {
     static_cast<void>(scheduler.advance_to(20u, 8u));
     FakeVideoOutput scheduler_video;
     const auto early_pump = pump_guest_frame_proof(renderer, &scheduler_video);
-    require(!early_pump.guest_frame_proven && !early_pump.frame_presented &&
+    require(!early_pump.guest_frame_proven && early_pump.frame_presented &&
+                !early_pump.proven_frame_presented &&
                 !early_pump.proof_source.has_value() && early_pump.render_generation == 0u &&
                 early_pump.write_generation_first == 0u &&
-                early_pump.write_generation_last == 0u,
-            "Render nach einem frueheren VBlank wird rueckwirkend als Hostframe gepumpt.");
+                early_pump.write_generation_last == 0u &&
+                scheduler_video.presented_frames() == 1u,
+            "Gueltiger VBlank-Scanout ohne Renderbeweis erreicht das Hostvideo nicht.");
     static_cast<void>(scheduler.advance_to(110u, 16u));
     const auto vblank_pump = pump_guest_frame_proof(renderer, &scheduler_video);
     require(vblank_pump.guest_frame_proven && vblank_pump.frame_presented &&
+                vblank_pump.proven_frame_presented &&
                 vblank_pump.proof_source == PvrGuestFrameProofSource::TaRender &&
                 vblank_pump.render_generation != 0u &&
                 vblank_pump.write_generation_first == 0u &&
                 vblank_pump.write_generation_last == 0u &&
-                scheduler_video.presented_frames() == 1u &&
+                scheduler_video.presented_frames() == 2u &&
                 scheduler_video.last_frame().width == 1u &&
                 scheduler_video.last_frame().height == 1u &&
                 scheduler_video.last_frame().rgba ==
                     std::vector<std::uint8_t>({0x20u, 0x40u, 0x60u, 0xFFu}),
             "Scheduler-VBlank, Proof-Pump und Fake-Video bilden keinen ausführbaren Markerpfad.");
+    renderer.observe_vblank_scanout(registers, vram.bytes());
+    const auto stable_scanout_pump =
+        pump_guest_frame_proof(renderer, &scheduler_video);
+    require(!stable_scanout_pump.guest_frame_proven &&
+                stable_scanout_pump.frame_presented &&
+                !stable_scanout_pump.proven_frame_presented &&
+                !stable_scanout_pump.proof_source.has_value() &&
+                scheduler_video.presented_frames() == 3u &&
+                scheduler_video.last_frame().rgba ==
+                    std::vector<std::uint8_t>({0x20u, 0x40u, 0x60u, 0xFFu}),
+            "Unveraenderter aktiver PVR-Scanout wird ohne neuen Diagnosebeweis nicht "
+            "an das Hostvideo ausgegeben.");
+    vram.write_u32(parameter_base + 24u, 0xFF806040u);
+    vram.write_u32(parameter_base + 40u, 0xFF806040u);
+    vram.write_u32(parameter_base + 56u, 0xFF806040u);
+    static_cast<void>(renderer.render({}, registers, vram));
+    renderer.observe_vblank_scanout(registers, vram.bytes());
+    renderer.observe_vblank_scanout(registers, vram.bytes());
+    const auto mismatched_scanout_pump =
+        pump_guest_frame_proof(renderer, &scheduler_video);
+    require(mismatched_scanout_pump.guest_frame_proven &&
+                mismatched_scanout_pump.frame_presented &&
+                !mismatched_scanout_pump.proven_frame_presented &&
+                mismatched_scanout_pump.proof_source ==
+                    PvrGuestFrameProofSource::TaRender &&
+                scheduler_video.presented_frames() == 4u,
+            "Ein neuerer Scanout wird faelschlich als zum aelteren Renderbeweis "
+            "gehoerender sichtbarer Frame gemeldet.");
+    renderer.observe_vblank_scanout(registers, vram.bytes());
+    renderer.reset_guest_frame_evidence(vram.bytes());
+    const auto reset_pump = pump_guest_frame_proof(renderer, &scheduler_video);
+    require(!reset_pump.guest_frame_proven && !reset_pump.frame_presented &&
+                !reset_pump.proven_frame_presented &&
+                scheduler_video.presented_frames() == 4u,
+            "PVR-Evidenzreset laesst einen veralteten Scanout im Hostqueue zurueck.");
+    registers.write(pvr_register::BorderColor, 0x00123456u);
+    registers.write(pvr_register::VideoControl,
+                    registers.read(pvr_register::VideoControl) | 0x8u);
+    renderer.observe_vblank_scanout(registers, vram.bytes());
+    const auto blanked_scanout_pump =
+        pump_guest_frame_proof(renderer, &scheduler_video);
+    require(!blanked_scanout_pump.guest_frame_proven &&
+                blanked_scanout_pump.frame_presented &&
+                !blanked_scanout_pump.proven_frame_presented &&
+                scheduler_video.presented_frames() == 5u &&
+                scheduler_video.last_frame().rgba ==
+                    std::vector<std::uint8_t>({0x12u, 0x34u, 0x56u, 0xFFu}),
+            "PVR-Blanking gibt den Borderframe nicht ohne falschen Gastframenachweis aus.");
     GuestFrameEvidenceTracker evidence;
     GuestFramePumpResult bootstrap_frame;
     bootstrap_frame.guest_frame_proven = true;

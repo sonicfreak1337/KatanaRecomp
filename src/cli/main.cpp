@@ -1608,19 +1608,24 @@ int export_port_project(const std::filesystem::path& source_path,
     std::optional<katana::runtime::GameProjectDefinition>
         resolved_game_project;
     std::optional<std::string> whole_export_cache_key;
-    if ((game_project_path.has_value() ||
-         game_entry_handoff_path.has_value()) &&
+    if (game_project_path.has_value() && diagnostic_partial)
+        throw std::invalid_argument(
+            "--game-project ist ausschliesslich fuer vollstaendige Produktports erlaubt.");
+    if (game_entry_handoff_path.has_value() &&
         (!boot_executable_artifact || diagnostic_partial))
         throw std::invalid_argument(
-            "--game-project und --game-entry-handoff sind ausschliesslich fuer "
+            "--game-entry-handoff ist ausschliesslich fuer "
             "port-executable-Produktports erlaubt.");
+    if (game_project_path.has_value()) {
+        verified_game_project =
+            katana::runtime::GameProjectArtifact::load(
+                *game_project_path);
+        resolved_game_project = verified_game_project->definition();
+    }
     if (boot_executable_artifact) {
         verified_boot_artifact =
             katana::platform::load_dreamcast_boot_executable_artifact(source_path);
-        if (game_project_path.has_value()) {
-            verified_game_project =
-                katana::runtime::GameProjectArtifact::load(
-                    *game_project_path);
+        if (verified_game_project) {
             const auto& definition =
                 verified_game_project->definition();
             if (definition.identity.content_identity !=
@@ -1632,7 +1637,6 @@ int export_port_project(const std::filesystem::path& source_path,
                 throw std::invalid_argument(
                     "Game-project artifact passt nicht exakt zum "
                     "Boot-Executable-Produktport.");
-            resolved_game_project = definition;
         }
         if (game_entry_handoff_path.has_value()) {
             verified_game_entry_handoff =
@@ -2034,7 +2038,8 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp extract-boot-executable <eigene.gdi> --output "
               "<privater-Ordner>\n"
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
-              "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>]\n"
+              "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
+              "[--game-project <privates-Artefakt>]\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <...>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
@@ -2242,7 +2247,8 @@ int main(const int argc, char* argv[]) {
                     game_entry_handoff_path =
                         std::filesystem::path(argv[argument + 1u]);
                 } else if (option == "--game-project" &&
-                           port_command == "port-executable" &&
+                           (port_command == "port" ||
+                            port_command == "port-executable") &&
                            !game_project_path.has_value()) {
                     game_project_path =
                         std::filesystem::path(argv[argument + 1u]);

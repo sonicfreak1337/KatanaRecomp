@@ -53,6 +53,7 @@ create_native_video_output(const NativeVideoConfig& config = {});
 struct GuestFramePumpResult {
     bool guest_frame_proven = false;
     bool frame_presented = false;
+    bool proven_frame_presented = false;
     std::optional<PvrGuestFrameProofSource> proof_source;
     std::uint64_t render_generation = 0u;
     std::uint64_t write_generation_first = 0u;
