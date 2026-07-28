@@ -93,6 +93,56 @@ template <typename Function> std::string failure(Function&& function) {
 #pragma warning(suppress : 6262) // Deliberately comprehensive analysis-regression driver.
 #endif
 int main() {
+    {
+        std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        put_u16(0x00u, 0xE470u); // mov #0x70,r4 (ordinary data pointer)
+        put_u16(0x02u, 0xE560u); // mov #0x60,r5 (non-stack object field)
+        put_u16(0x04u, 0xB00Cu); // bsr 0x20
+        put_u16(0x06u, 0x0009u);
+        put_u16(0x08u, 0x000Bu);
+        put_u16(0x0Au, 0x0009u);
+        put_u16(0x20u, 0x2542u); // mov.l r4,@r5
+        put_u16(0x22u, 0x000Bu);
+        put_u16(0x24u, 0x0009u);
+        // Executable-range data can begin with several valid opcodes. Its
+        // local shape is nevertheless not native code because the BRA delay
+        // slot contains another control-flow instruction.
+        put_u16(0x70u, 0xE2DAu);
+        put_u16(0x72u, 0xBF0Eu);
+        put_u16(0x74u, 0x5FDCu);
+        put_u16(0x76u, 0x3E0Du);
+        put_u16(0x78u, 0xA1BEu);
+        put_u16(0x7Au, 0xBF4Cu);
+
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.add_segment({".mixed-code-and-data",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes)});
+        image.add_entry_point(0u);
+        const auto rejected_data_entry =
+            katana::analysis::analyze_control_flow(image);
+        require(!has_instruction(rejected_data_entry, 0x70u) &&
+                    find_guarded_aot_entry(rejected_data_entry, 0x70u) == nullptr &&
+                    rejected_data_entry.guarded_code_inventory_candidates == 0u,
+                "Strukturell ungueltige Mixed-Segment-Daten wurden als "
+                "Guarded-AOT-Einstieg akzeptiert.");
+        const auto rejected_data_ir =
+            katana::ir::lower_program(rejected_data_entry);
+        require(katana::ir::verify_program(rejected_data_ir).empty(),
+                "Abgelehnter Guarded-Dateneinstieg hinterliess ungueltige "
+                "Callee-Metadaten im IR.");
+    }
+
     auto jump_image = code_image(
         {0x08u, 0xE1u, 0x2Bu, 0x41u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u});
     const auto jump = katana::analysis::analyze_control_flow(jump_image);

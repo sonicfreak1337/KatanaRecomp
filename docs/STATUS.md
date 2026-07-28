@@ -19,6 +19,19 @@ ABI-73-Sonic-PAL-NativeDisc-Export, die Installation, der echte
 Bis dahin wird kein neuer Boot-, Bild- oder Geschwindigkeitsfortschritt
 behauptet.
 
+Der erste kalte ABI-73-Exportversuch lief 419,5 Sekunden und brach noch vor
+dem Hostcompiler in der IR-Validierung ab. Die allgemeine Ursache war ein
+bewachter Inventarkandidat in einem als `Mixed` markierten Bereich, dessen
+Datentabelle zufaellig als gueltiger SH-4-Einstieg dekodierbar war. Der
+naechste Quellstand schuetzt solche `Stored`-/`Returned`-Einstiege deshalb
+durch einen begrenzten lokalen CFG-Strukturcheck, behandelt den
+Ausfuehrungskontext eines Delay Slots vor den Rohopcode-Eigenschaften und
+baut direkte Callee-Metadaten ausschliesslich aus den finalen
+Blockterminatoren neu auf. Das ist ein generischer Analyse- und
+IR-Vertrag; es wurden keine Sonic-Adressen oder Retailbytes eingetragen.
+Fokussierter Build und realer Produktnachweis folgen nach dem fuer die
+Source-Identity erforderlichen Commit.
+
 ## Zielarchitektur
 
 KatanaRecomp, KatanaRuntime und das spaetere externe Spielprojekt sind getrennte Produkte:

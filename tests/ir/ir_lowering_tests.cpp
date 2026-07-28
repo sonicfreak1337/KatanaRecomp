@@ -121,6 +121,34 @@ int main() {
     require(katana::ir::operation_name(katana::ir::Operation::MovImmediate) == "mov_imm",
             "Der IR-Operationsname ist falsch.");
 
+    constexpr std::array<std::uint8_t, 10> control_in_slot_bytes = {
+        0x01u, 0xA0u, // bra +1
+        0x00u, 0xB0u, // bsr +0, decoded while executing as the BRA delay slot
+        0x09u, 0x00u, // nop
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop
+    };
+    constexpr std::uint32_t control_in_slot_base = 0x0F000000u;
+    const auto control_in_slot_lines =
+        katana::sh4::disassemble(control_in_slot_bytes, control_in_slot_base);
+    constexpr std::array<std::uint32_t, 1> control_in_slot_seeds = {
+        control_in_slot_base};
+    const auto control_in_slot_functions =
+        katana::analysis::discover_functions(control_in_slot_lines, control_in_slot_seeds);
+    const auto control_in_slot_program =
+        katana::ir::lower_program(control_in_slot_lines, control_in_slot_functions);
+    const auto& control_in_slot_block = control_in_slot_program.front().blocks.front();
+    require(control_in_slot_block.instructions.size() == 2u &&
+                control_in_slot_block.instructions.front().delay_slot.role ==
+                    katana::ir::DelaySlotRole::Owner &&
+                control_in_slot_block.instructions.back().operation ==
+                    katana::ir::Operation::Call &&
+                control_in_slot_block.instructions.back().delay_slot.role ==
+                    katana::ir::DelaySlotRole::Slot &&
+                control_in_slot_block.instructions.back().delay_slot.counterpart_address ==
+                    control_in_slot_base,
+            "Als Kontrollfluss dekodierter Delay Slot wurde als neuer Owner abgesenkt.");
+
     constexpr std::array<std::uint8_t, 8> dual_role_bytes = {
         0x09u, 0x00u, 0xFFu, 0x8Du, 0x1Cu, 0x31u, 0x09u, 0x00u};
     constexpr std::uint32_t dual_role_base = 0x10000000u;

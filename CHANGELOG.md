@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- Der erste kalte ABI-73-Produkt-export legte einen allgemeinen
+  Analysefehler offen: Endliche Werte aus `Mixed`-Datentabellen konnten
+  allein wegen zufaellig dekodierbarer Bytes als bewachte native
+  `Stored`-/`Returned`-Einstiege gelten. Solche Kandidaten durchlaufen nun
+  einen gecachten, begrenzten lokalen CFG-Strukturcheck, der unbekannte
+  Instruktionen, fehlende Delay Slots und Kontrollfluss im Delay Slot
+  fail-closed ablehnt. Die IR-Absenkung behandelt den tatsaechlichen
+  Delay-Slot-Kontext vor den Eigenschaften des Rohopcodes und baut direkte
+  Callee-Metadaten nur aus finalen Blockterminatoren neu auf. Der nach
+  419,5 Sekunden noch vor dem Hostcompiler beendete Lauf ist kein
+  Produktnachweis; Export, 600-Millionen-Gate und Sichtaufnahme bleiben
+  offen.
 - Quellstand `b01586a` schliesst die vereinbarten P0-Umbauten im Quellpfad ab:
   Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6, PlatformServices-ABI 13,
   Backend-Interface-ABI 12, Portprojektvertrag 62,

@@ -58,6 +58,17 @@ P0-Runde ist ein frischer ABI-73-Sonic-PAL-NativeDisc-Export mit
 Lauf sind weder Bootfortschritt noch 200 MHz oder ein neuer sichtbarer
 Meilenstein belegt.
 
+Der erste kalte ABI-73-Exportversuch benoetigte 419,5 Sekunden fuer die
+vollstaendige Analyse und stoppte danach vor dem Hostcompiler an einem
+faelschlich aus Datentabellen abgeleiteten bewachten AOT-Einstieg. Die
+allgemeine Korrektur prueft `Stored`-/`Returned`-Inventarkandidaten nun mit
+einem begrenzten lokalen CFG-Strukturvertrag, priorisiert echten
+Delay-Slot-Kontext und erzeugt Callee-Metadaten aus dem finalen IR-CFG neu.
+Der verpflichtende Sonic-Lauf bleibt bis zum fokussierten Build und einem
+erneuten Export offen. Die 419,5 Sekunden sind eine kalte Vollanalyse, kein
+Warmbuildwert; der noch fehlende persistente Analysecache bleibt daher ein
+eigener Buildpipeline-Punkt.
+
 ```text
 Runtime-ABI:                    73
 Block-ABI:                       5

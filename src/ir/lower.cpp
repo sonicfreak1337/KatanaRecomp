@@ -547,10 +547,14 @@ Instruction lower_instruction(const katana::sh4::DisassemblyLine& source) {
 
     result.target_address = source.target_address;
 
-    if (source.instruction.has_delay_slot) {
-        result.delay_slot = {DelaySlotRole::Owner, source.address + 2u};
-    } else if (source.is_delay_slot) {
+    // The execution context is authoritative when the raw opcode in a delay
+    // slot would itself decode as a delay-slot owner.  The same physical
+    // halfword may still be lowered as an owner through a separate normal-entry
+    // context, but it must remain a Slot in its owner's block.
+    if (source.is_delay_slot) {
         result.delay_slot = {DelaySlotRole::Slot, source.address - 2u};
+    } else if (source.instruction.has_delay_slot) {
+        result.delay_slot = {DelaySlotRole::Owner, source.address + 2u};
     }
     result.is_privileged = source.instruction.is_privileged;
     result.branch_register_relative =
@@ -1017,12 +1021,37 @@ struct LoweringContext {
         edges_by_instruction;
 };
 
+void rebuild_call_metadata(Function& function) {
+    function.direct_callees.clear();
+    function.indirect_call_sites.clear();
+    for (const auto& block : function.blocks) {
+        if (block.instructions.empty()) continue;
+        const auto* control = &block.instructions.back();
+        if (control->delay_slot.role == DelaySlotRole::Slot &&
+            block.instructions.size() >= 2u) {
+            control = &block.instructions[block.instructions.size() - 2u];
+        }
+        if (control->operation == Operation::Call && control->target_address) {
+            function.direct_callees.push_back(*control->target_address);
+        } else if (control->operation == Operation::CallRegister) {
+            function.indirect_call_sites.push_back(control->source_address);
+            function.direct_callees.insert(function.direct_callees.end(),
+                                            control->resolved_targets.begin(),
+                                            control->resolved_targets.end());
+        }
+    }
+    const auto canonicalize = [](std::vector<std::uint32_t>& values) {
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+    };
+    canonicalize(function.direct_callees);
+    canonicalize(function.indirect_call_sites);
+}
+
 Function lower_function(const LoweringContext& context,
                         const katana::analysis::FunctionInfo& function) {
     Function result;
     result.entry_address = function.entry_address;
-    result.direct_callees = function.direct_callees;
-    result.indirect_call_sites = function.indirect_call_sites;
 
     result.blocks.reserve(function.block_addresses.size());
     const std::unordered_set<std::uint32_t> function_blocks(function.block_addresses.begin(),
@@ -1073,6 +1102,7 @@ Function lower_function(const LoweringContext& context,
               [](const BasicBlock& left, const BasicBlock& right) {
                   return left.start_address < right.start_address;
               });
+    rebuild_call_metadata(result);
 
     return result;
 }
@@ -1305,28 +1335,6 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     auto program = lower_program(context, functions);
     for (const auto& supplemental : supplemental_functions) {
         auto supplemental_ir = lower_function(context, supplemental);
-        for (const auto& block : supplemental_ir.blocks) {
-            for (const auto& instruction : block.instructions) {
-                if (instruction.operation == Operation::Call && instruction.target_address)
-                    supplemental_ir.direct_callees.push_back(*instruction.target_address);
-                if (instruction.operation == Operation::CallRegister) {
-                    supplemental_ir.indirect_call_sites.push_back(instruction.source_address);
-                    supplemental_ir.direct_callees.insert(supplemental_ir.direct_callees.end(),
-                                                          instruction.resolved_targets.begin(),
-                                                          instruction.resolved_targets.end());
-                }
-            }
-        }
-        std::sort(supplemental_ir.direct_callees.begin(), supplemental_ir.direct_callees.end());
-        supplemental_ir.direct_callees.erase(std::unique(supplemental_ir.direct_callees.begin(),
-                                                         supplemental_ir.direct_callees.end()),
-                                             supplemental_ir.direct_callees.end());
-        std::sort(supplemental_ir.indirect_call_sites.begin(),
-                  supplemental_ir.indirect_call_sites.end());
-        supplemental_ir.indirect_call_sites.erase(
-            std::unique(supplemental_ir.indirect_call_sites.begin(),
-                        supplemental_ir.indirect_call_sites.end()),
-            supplemental_ir.indirect_call_sites.end());
         program.push_back(std::move(supplemental_ir));
     }
     std::sort(program.begin(), program.end(), [](const Function& left, const Function& right) {
