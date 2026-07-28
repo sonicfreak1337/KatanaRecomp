@@ -95,6 +95,9 @@ struct ControlFlowAnalysisResult {
     std::size_t unchanged_ingress_skips = 0u;
     std::size_t function_iteration_budget = 0u;
     bool function_budget_exhausted = false;
+    std::size_t raw_stored_code_inventory_candidates = 0u;
+    std::size_t raw_stored_code_inventory_budget = 0u;
+    bool raw_stored_code_inventory_truncated = false;
     std::size_t guarded_code_inventory_candidates = 0u;
     std::size_t guarded_code_inventory_budget = 0u;
     std::size_t guarded_code_shape_validation_work = 0u;
@@ -105,6 +108,16 @@ struct ControlFlowAnalysisResult {
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
     std::vector<SymbolicAddress> symbolic_addresses;
 };
+
+[[nodiscard]] constexpr bool
+guarded_aot_inventory_complete(
+    const ControlFlowAnalysisResult& analysis) noexcept {
+    return !analysis.function_budget_exhausted &&
+           !analysis.raw_stored_code_inventory_truncated &&
+           !analysis.candidate_inventory_truncated &&
+           !analysis.returned_table_scan_truncated &&
+           analysis.guarded_code_shape_budget_exceeded_candidates == 0u;
+}
 
 struct ControlFlowAnalysisProgress {
     std::string_view phase;

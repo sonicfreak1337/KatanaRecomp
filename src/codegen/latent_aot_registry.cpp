@@ -62,7 +62,7 @@ bool complete_native_graph(const katana::analysis::ControlFlowAnalysisResult& an
     if (std::any_of(analysis.recursive.diagnostics.begin(),
                     analysis.recursive.diagnostics.end(),
                     katana::analysis::analysis_diagnostic_blocks_codegen) ||
-        analysis.function_budget_exhausted)
+        !katana::analysis::guarded_aot_inventory_complete(analysis))
         return false;
     return std::none_of(
         analysis.indirect_control_flow.begin(),

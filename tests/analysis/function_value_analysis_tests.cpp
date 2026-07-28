@@ -490,6 +490,127 @@ conditional_shared_tail_values() {
 }
 
 katana::analysis::FunctionValueAnalysisResult
+multi_owner_inventory_start_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0xE470u); // mov #0x70,r4
+    put_u16(0x02u, 0xB00Du); // bsr 0x20
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x08u, 0x0009u);
+    put_u16(0x20u, 0x412Bu); // jmp @r1, candidate-only 0x40
+    put_u16(0x22u, 0x0009u);
+    put_u16(0x30u, 0xA006u); // owner A -> shared 0x40
+    put_u16(0x32u, 0x0009u);
+    put_u16(0x38u, 0xA002u); // owner B -> shared 0x40
+    put_u16(0x3Au, 0x0009u);
+    put_u16(0x40u, 0x2742u); // mov.l r4,@r7
+    put_u16(0x42u, 0x000Bu);
+    put_u16(0x44u, 0x0009u);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".multi-owner-inventory-start",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 4u> boundaries{{
+        {0x00u, 0x0Au},
+        {0x20u, 0x04u},
+        {0x30u, 0x16u},
+        {0x38u, 0x0Eu},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x20u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+parameterized_candidate_return_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xE460u); // mov #0x60,r4 (table)
+    put_u16(0x02u, 0xB00Du); // bsr 0x20
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x08u, 0x0009u);
+    put_u16(0x20u, 0x410Bu); // jsr @r1, candidate-only 0x40
+    put_u16(0x22u, 0x0009u);
+    put_u16(0x24u, 0x6C03u); // mov r0,r12
+    put_u16(0x26u, 0x63C2u); // mov.l @r12,r3
+    put_u16(0x28u, 0x000Bu);
+    put_u16(0x2Au, 0x0009u);
+    put_u16(0x40u, 0x6043u); // mov r4,r0
+    put_u16(0x42u, 0x000Bu);
+    put_u16(0x44u, 0x0009u);
+    put_u32(0x60u, 0x70u);
+    put_u32(0x64u, 1u);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.set_initial_snapshot_entry(0u);
+    image.add_segment({".parameterized-candidate-return",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u> boundaries{{
+        {0x00u, 0x0Au},
+        {0x20u, 0x0Cu},
+        {0x40u, 0x06u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x20u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
 object_field_tail_values(const bool overwrite_callback_from_object) {
     std::vector<std::uint8_t> bytes(0x80u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset,
@@ -645,6 +766,33 @@ int main() {
                          .candidate_inventory_truncated,
                 "Bedingter externer Shared-Tail verlor seinen "
                 "Callbackstore oder meldete ein falsches vollstaendiges Inventar.");
+
+        const auto multi_owner = multi_owner_inventory_start_values();
+        require(
+            has_stored_code_address(multi_owner, 0x70u) &&
+                !multi_owner.guarded_code_inventory
+                     .candidate_inventory_truncated,
+            "Ein Guarded-Inventareinstieg mit mehreren Funktionsownern "
+            "wurde verworfen oder faelschlich als trunciert gemeldet.");
+
+        const auto parameterized = parameterized_candidate_return_values();
+        const auto returned_table = std::find_if(
+            parameterized.guarded_code_inventory
+                .returned_code_address_tables.begin(),
+            parameterized.guarded_code_inventory
+                .returned_code_address_tables.end(),
+            [](const auto& candidate) {
+                return candidate.table_address == 0x60u;
+            });
+        require(
+            returned_table !=
+                    parameterized.guarded_code_inventory
+                        .returned_code_address_tables.end() &&
+                returned_table->target_addresses ==
+                    std::vector<std::uint32_t>{0x70u} &&
+                !parameterized.budget_exhausted,
+            "Begrenzter Candidate-Return-Walk verlor einen "
+            "parameterabhaengigen Returned-Table-Codepointer.");
     }
 
     {
@@ -969,9 +1117,14 @@ int main() {
         require(dispatch != incomplete_family.resolutions.end() &&
                     dispatch->guarded && !dispatch->complete &&
                     dispatch->evidence ==
-                        katana::analysis::ControlFlowEvidence::GuardedPartial,
+                        katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                    !incomplete_family.budget_exhausted &&
+                    incomplete_family.fixpoint_iterations <= 2u,
                 "Candidate-Call-Carrier erzeugte einen autoritativen CFG-Beweis "
-                "statt eines bewachten Inventory-Kandidaten.");
+                "oder trat statt des begrenzten Inventory-Passes in den "
+                "semantischen Summary-Fixpunkt ein (iterations=" +
+                    std::to_string(incomplete_family.fixpoint_iterations) +
+                    ").");
     }
 
     for (const auto isolated_harvest : {false, true}) {
@@ -1518,8 +1671,9 @@ int main() {
                 parameter_candidate_site->analysis_candidates ==
                     std::vector<std::uint32_t>{0x50u} &&
                 parameter_candidate_site->reason == "runtime-contract-function-memory" &&
-                parameter_candidate_site->evidence_call_sites == std::vector<std::uint32_t>{0x02u},
-            "Direkter Call propagierte seinen Parameterkandidaten nicht sicher zum Callee.");
+                parameter_candidate_site->evidence_call_sites.empty(),
+            "Direkter Call verlor seinen Parameterkandidaten oder uebertrug "
+            "Objektadress-Provenienz auf den geladenen Funktionswert.");
 
     auto unknown_caller_image = parameter_candidate_image;
     unknown_caller_image.add_entry_point(0x20u);
@@ -1589,8 +1743,9 @@ int main() {
                 indirect_parameter_site->evidence ==
                     katana::analysis::ControlFlowEvidence::RuntimeOnly &&
                 indirect_parameter_site->analysis_candidates == std::vector<std::uint32_t>{0x50u} &&
-                indirect_parameter_site->evidence_call_sites == std::vector<std::uint32_t>{0x04u},
-            "Bewachter indirekter Call propagierte seinen Parameterkandidaten nicht zum Callee.");
+                indirect_parameter_site->evidence_call_sites.empty(),
+            "Bewachter indirekter Call verlor seinen Parameterkandidaten oder "
+            "uebertrug Objektadress-Provenienz auf den geladenen Funktionswert.");
 
     std::vector<std::uint8_t> finite_index_bytes(0x38u, 0x09u);
     const std::array<std::uint8_t, 16u> finite_index_code{
@@ -1904,6 +2059,40 @@ int main() {
                               .target_addresses.size()) +
                 ", prefix=" +
                 std::to_string(prioritized_stored_prefix) + ").");
+
+        std::vector<
+            katana::analysis::detail::GuardedCodeInventoryPriorityTarget>
+            returned_table_pressure;
+        returned_table_pressure.reserve(inventory_budget + 1u);
+        for (std::size_t index = 0u; index < inventory_budget; ++index) {
+            returned_table_pressure.push_back({
+                static_cast<std::uint32_t>(0x80'000u + index * 4u),
+                katana::analysis::detail::
+                    GuardedCodeInventoryPriorityKind::
+                        TruncatedReturnedTable});
+        }
+        constexpr std::uint32_t direct_stored_callback = 0x60'000u;
+        returned_table_pressure.push_back({
+            direct_stored_callback,
+            katana::analysis::detail::
+                GuardedCodeInventoryPriorityKind::CompleteStored});
+        const auto pressure_order =
+            katana::analysis::detail::
+                guarded_code_inventory_priority_order(
+                    returned_table_pressure, 256u);
+        require(
+            pressure_order.size() == inventory_budget + 1u &&
+                pressure_order.front() == direct_stored_callback &&
+                std::find(pressure_order.begin(),
+                          pressure_order.begin() +
+                              static_cast<std::ptrdiff_t>(
+                                  inventory_budget),
+                          direct_stored_callback) !=
+                    pressure_order.begin() +
+                        static_cast<std::ptrdiff_t>(inventory_budget),
+            "Breite oder abgeschnittene Returned-Methodentabellen "
+            "verdraengten einen direkt gespeicherten Callback aus dem "
+            "Guarded-AOT-Inventar.");
     }
 
     std::cout << "KR-4713 interprozedurale Zielwertsummaries erfolgreich.\n";

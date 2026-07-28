@@ -40,6 +40,7 @@ endif()
 execute_process(
   COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
           --output "${fixture}/port" --target-name cli_game
+          --game-project "${fixture}/disc/product-gate.katana-game-project"
   RESULT_VARIABLE port_result
   OUTPUT_VARIABLE port_output
   ERROR_VARIABLE port_error
@@ -58,6 +59,97 @@ endif()
 if(NOT EXISTS "${game}")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR "Port-CLI hat kein ausfuehrbares Hosttarget erzeugt")
+endif()
+
+if(WIN32)
+  find_program(KATANA_TEST_POWERSHELL NAMES pwsh.exe powershell.exe REQUIRED)
+  set(gate_runner "${fixture}/port/run-product-gate.ps1")
+  set(gate_child_directory "${fixture}/gate child with spaces")
+  set(gate_child "${gate_child_directory}/gate child.exe")
+  set(gate_budget_file "${gate_child_directory}/observed budget.txt")
+  file(MAKE_DIRECTORY "${gate_child_directory}")
+  configure_file("${KATANA_FIXTURE_WRITER}" "${gate_child}" COPYONLY)
+  if(NOT EXISTS "${gate_runner}" OR NOT EXISTS "${gate_child}")
+    file(REMOVE_RECURSE "${fixture}")
+    message(FATAL_ERROR "Produktgate-Fixture konnte nicht vorbereitet werden")
+  endif()
+
+  set(gate_parent_budget_was_defined FALSE)
+  if(DEFINED ENV{KATANA_GUEST_CYCLE_BUDGET})
+    set(gate_parent_budget_was_defined TRUE)
+    set(gate_parent_budget "$ENV{KATANA_GUEST_CYCLE_BUDGET}")
+  endif()
+  set(ENV{KATANA_GUEST_CYCLE_BUDGET} "parent-review-budget")
+  set(ENV{KATANA_PRODUCT_GATE_CHILD_BUDGET_FILE} "${gate_budget_file}")
+
+  function(require_product_gate_child_exit expected_exit)
+    file(REMOVE "${gate_budget_file}")
+    set(ENV{KATANA_PRODUCT_GATE_CHILD_EXIT} "${expected_exit}")
+    execute_process(
+      COMMAND "${KATANA_TEST_POWERSHELL}" -NoProfile -NonInteractive
+              -ExecutionPolicy Bypass -File "${gate_runner}"
+              -Executable "${gate_child}" -WatchdogSeconds 10
+      RESULT_VARIABLE gate_child_result
+      OUTPUT_VARIABLE gate_child_output
+      ERROR_VARIABLE gate_child_error
+    )
+    if(NOT gate_child_result EQUAL expected_exit OR
+       NOT EXISTS "${gate_budget_file}")
+      file(REMOVE_RECURSE "${fixture}")
+      message(FATAL_ERROR
+        "Produktgate propagiert Child-Exit ${expected_exit} nicht: "
+        "${gate_child_output} ${gate_child_error}")
+    endif()
+    file(STRINGS "${gate_budget_file}" observed_gate_budget LIMIT_COUNT 1)
+    if(NOT observed_gate_budget STREQUAL "600000000" OR
+       NOT "$ENV{KATANA_GUEST_CYCLE_BUDGET}" STREQUAL "parent-review-budget")
+      file(REMOVE_RECURSE "${fixture}")
+      message(FATAL_ERROR
+        "Produktgate bindet das Gastbudget oder die Elternumgebung falsch")
+    endif()
+  endfunction()
+
+  foreach(gate_child_exit IN ITEMS 0 1 3)
+    require_product_gate_child_exit("${gate_child_exit}")
+  endforeach()
+
+  file(REMOVE "${gate_budget_file}")
+  set(ENV{KATANA_PRODUCT_GATE_CHILD_EXIT} "0")
+  set(ENV{KATANA_PRODUCT_GATE_CHILD_DELAY_SECONDS} "5")
+  execute_process(
+    COMMAND "${KATANA_TEST_POWERSHELL}" -NoProfile -NonInteractive
+            -ExecutionPolicy Bypass -File "${gate_runner}"
+            -Executable "${gate_child}" -WatchdogSeconds 1
+    RESULT_VARIABLE gate_watchdog_result
+    OUTPUT_VARIABLE gate_watchdog_output
+    ERROR_VARIABLE gate_watchdog_error
+  )
+  if(NOT gate_watchdog_result EQUAL 124 OR
+     NOT gate_watchdog_error MATCHES
+         "KATANA_PRODUCT_GATE status=host-watchdog-hang" OR
+     NOT "$ENV{KATANA_GUEST_CYCLE_BUDGET}" STREQUAL "parent-review-budget")
+    file(REMOVE_RECURSE "${fixture}")
+    message(FATAL_ERROR
+      "Produktgate-Watchdog liefert keinen stabilen Exit 124: "
+      "${gate_watchdog_output} ${gate_watchdog_error}")
+  endif()
+
+  unset(ENV{KATANA_PRODUCT_GATE_CHILD_EXIT})
+  unset(ENV{KATANA_PRODUCT_GATE_CHILD_DELAY_SECONDS})
+  unset(ENV{KATANA_PRODUCT_GATE_CHILD_BUDGET_FILE})
+  if(gate_parent_budget_was_defined)
+    set(ENV{KATANA_GUEST_CYCLE_BUDGET} "${gate_parent_budget}")
+  else()
+    unset(ENV{KATANA_GUEST_CYCLE_BUDGET})
+  endif()
+endif()
+
+set(product_game_command "${game}")
+if(WIN32)
+  set(product_game_command
+      "${KATANA_TEST_POWERSHELL}" -NoProfile -NonInteractive
+      -ExecutionPolicy Bypass -File "${gate_runner}"
+      -Executable "${game}" -WatchdogSeconds 10)
 endif()
 
 execute_process(
@@ -85,7 +177,7 @@ if(NOT install_result EQUAL 0 OR NOT install_output MATCHES "KATANA_DISC_INSTALL
 endif()
 
 execute_process(
-  COMMAND "${game}"
+  COMMAND ${product_game_command}
   RESULT_VARIABLE game_result
   OUTPUT_VARIABLE game_output
   ERROR_VARIABLE game_error
@@ -94,9 +186,12 @@ if(NOT game_result EQUAL 1 OR
    NOT game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
    NOT game_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
    NOT game_output MATCHES
-       "required_milestone=FirstVisibleGameFrame required_milestone_reached=0" OR
+       "status=early-exit-before-requested-budget" OR
+   NOT game_output MATCHES
+       "required_milestone=GameCodeProgressed required_milestone_reached=1" OR
    NOT game_output MATCHES "highest_milestone=GameCodeProgressed" OR
-   NOT game_output MATCHES "first_problem=required-milestone-not-reached")
+   NOT game_output MATCHES "requested_post_entry_cycles=600000000" OR
+   NOT game_output MATCHES "first_problem=none")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR "Porttarget startet nicht aus dem lokal installierten Cache: ${game_output} ${game_error}")
 endif()
@@ -109,7 +204,7 @@ execute_process(
 )
 # Bootstrap und drei Post-Entry-Bloecke werden zentral abgeschlossen; der
 # bewiesene interne Folgeblock bleibt im lokalen statischen AOT-Chaining.
-if(NOT generated_result EQUAL 1 OR
+if(NOT generated_result EQUAL 0 OR
    NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
    NOT generated_output MATCHES "KR_GUEST_PROGRAM_DISPATCHED" OR
    NOT generated_output MATCHES "KR_GUEST_PROGRAM_PROGRESSED" OR
@@ -120,7 +215,9 @@ if(NOT generated_result EQUAL 1 OR
    NOT generated_output MATCHES "executed_blocks=3 guest_cycle_contract=2" OR
    NOT generated_output MATCHES "post_entry_host_presented_frames=0" OR
    NOT generated_output MATCHES "post_entry_host_audio_submitted_buffers=0" OR
-   NOT generated_output MATCHES "first_problem=required-milestone-not-reached")
+   NOT generated_output MATCHES
+       "required_milestone=GameCodeProgressed required_milestone_reached=1" OR
+   NOT generated_output MATCHES "first_problem=none")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
     "Eigenstaendiger PackedDiscSource-Runtimepfad ist nicht lauffaehig (${generated_result}): "
@@ -137,13 +234,13 @@ execute_process(
 )
 unset(ENV{KATANA_PORT_CONTROLLER_TEST})
 unset(ENV{KATANA_PORT_IGNORE_FOCUS})
-if(NOT controller_result EQUAL 1 OR
+if(NOT controller_result EQUAL 0 OR
    NOT controller_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
    NOT controller_output MATCHES "silent_failures=0" OR
    NOT controller_output MATCHES "controller_changes=[1-9][0-9]*" OR
    NOT controller_output MATCHES "controller_samples=[1-9][0-9]*" OR
    NOT controller_output MATCHES "controller_contract=31" OR
-   NOT controller_output MATCHES "first_problem=required-milestone-not-reached")
+   NOT controller_output MATCHES "first_problem=none")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
     "Produkt-Controllervertrag erreicht Gamepad-Timeline und Maple nicht: "
@@ -218,6 +315,7 @@ file(WRITE "${port_build}/katana-incremental-marker" "keep-build-cache\n")
 execute_process(
   COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
           --output "${fixture}/port" --target-name cli_game
+          --game-project "${fixture}/disc/product-gate.katana-game-project"
   RESULT_VARIABLE incremental_port_result
   OUTPUT_VARIABLE incremental_port_output
   ERROR_VARIABLE incremental_port_error
@@ -241,6 +339,90 @@ if(NOT incremental_port_result EQUAL 0 OR NOT incremental_build_cache_match OR
     "Inkrementeller Portbuild verliert Buildcache oder lokalen Nutzercache: "
     "${incremental_port_output} ${incremental_port_error}")
 endif()
+
+function(require_whole_export_cache_miss case_name)
+  execute_process(
+    COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
+            --output "${fixture}/port" --target-name cli_game
+            --game-project "${fixture}/disc/product-gate.katana-game-project"
+    RESULT_VARIABLE cache_miss_result
+    OUTPUT_VARIABLE cache_miss_output
+    ERROR_VARIABLE cache_miss_error
+  )
+  if(NOT cache_miss_result EQUAL 0 OR
+     cache_miss_output MATCHES
+         "KATANA_PORT_SUBPHASE whole-program-analysis-ir-cache-hit" OR
+     NOT cache_miss_output MATCHES
+         "KATANA_PORT_SUBPHASE control-flow-analysis")
+    file(REMOVE_RECURSE "${fixture}")
+    message(FATAL_ERROR
+      "Whole-Export-Cache akzeptiert ${case_name} oder kann den Miss nicht reparieren: "
+      "${cache_miss_output} ${cache_miss_error}")
+  endif()
+endfunction()
+
+# Der Whole-Export-Hit ist nur gueltig, wenn das Codegen-Manifest, jede darin
+# aufgefuehrte Datei und das tatsaechliche Dateiset exakt erhalten sind.
+set(generated_manifest
+    "${port_workspace}/generated/.katana-generated-artifacts")
+set(generated_dispatch_header
+    "${port_workspace}/generated/include/runtime-dispatch-internal.hpp")
+set(generated_port_header
+    "${port_workspace}/generated/include/katana_port.hpp")
+set(injected_generated_header
+    "${port_workspace}/generated/include/cache-injected.hpp")
+set(injected_generated_source
+    "${port_workspace}/src/cache-injected.cpp")
+if(NOT EXISTS "${generated_manifest}" OR
+   NOT EXISTS "${generated_dispatch_header}" OR
+   NOT EXISTS "${generated_port_header}")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Whole-Export-Cache besitzt kein vollstaendiges generiertes Artefaktinventar")
+endif()
+file(SHA256 "${generated_dispatch_header}" generated_dispatch_header_identity)
+file(READ "${generated_manifest}" generated_manifest_content)
+
+file(APPEND "${generated_dispatch_header}" "\ncache-modified\n")
+require_whole_export_cache_miss("einen veraenderten Dispatchheader")
+file(SHA256 "${generated_dispatch_header}" restored_dispatch_header_identity)
+if(NOT restored_dispatch_header_identity STREQUAL
+       generated_dispatch_header_identity)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Neu-Export stellt einen veraenderten Dispatchheader nicht exakt wieder her")
+endif()
+
+file(REMOVE "${generated_port_header}")
+require_whole_export_cache_miss("einen fehlenden Portheader")
+if(NOT EXISTS "${generated_port_header}")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Neu-Export stellt einen fehlenden Portheader nicht wieder her")
+endif()
+
+file(WRITE "${injected_generated_header}" "injected cache artifact\n")
+file(WRITE "${injected_generated_source}" "injected cache source\n")
+require_whole_export_cache_miss("ein injiziertes include/- und src/-Artefakt")
+if(EXISTS "${injected_generated_header}" OR EXISTS "${injected_generated_source}")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Neu-Export entfernt ein nicht manifestiertes include/- oder src/-Artefakt nicht")
+endif()
+
+string(REPLACE "katana-codegen-artifacts-v1"
+               "katana-codegen-artifacts-v0"
+               invalid_generated_manifest
+               "${generated_manifest_content}")
+file(WRITE "${generated_manifest}" "${invalid_generated_manifest}")
+require_whole_export_cache_miss("ein veraendertes Artefaktmanifest")
+file(READ "${generated_manifest}" restored_generated_manifest_content)
+if(NOT restored_generated_manifest_content STREQUAL generated_manifest_content)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Neu-Export stellt das Artefaktmanifest nicht exakt wieder her")
+endif()
+
 execute_process(
   COMMAND "${game}" --install-disc "${fixture}/disc/disc.gdi"
   RESULT_VARIABLE reinstall_result
@@ -398,13 +580,21 @@ if(NOT unknown_install_result EQUAL 0)
     "Unknown-Target-Originaldisc-Installation fehlgeschlagen: "
     "${unknown_install_output} ${unknown_install_error}")
 endif()
+set(unknown_target_game_command "${unknown_target_game}")
+if(WIN32)
+  set(unknown_target_game_command
+      "${KATANA_TEST_POWERSHELL}" -NoProfile -NonInteractive
+      -ExecutionPolicy Bypass -File
+      "${fixture}/unknown-target-port/run-product-gate.ps1"
+      -Executable "${unknown_target_game}" -WatchdogSeconds 10)
+endif()
 execute_process(
-  COMMAND "${unknown_target_game}"
+  COMMAND ${unknown_target_game_command}
   RESULT_VARIABLE unknown_target_result
   OUTPUT_VARIABLE unknown_target_output
   ERROR_VARIABLE unknown_target_error
 )
-if(unknown_target_result EQUAL 0 OR
+if(NOT unknown_target_result EQUAL 1 OR
    NOT unknown_target_error MATCHES "KATANA_RUNTIME_DISPATCH_ERROR" OR
    NOT unknown_target_error MATCHES "\"error\":\"unknown-target\"" OR
    NOT unknown_target_error MATCHES "\"class\":\"runtime-only\"" OR
@@ -452,9 +642,9 @@ execute_process(
   OUTPUT_VARIABLE moved_output
   ERROR_VARIABLE moved_error
 )
-if(NOT moved_result EQUAL 1 OR
+if(NOT moved_result EQUAL 0 OR
    NOT moved_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
-   NOT moved_output MATCHES "first_problem=required-milestone-not-reached" OR
+   NOT moved_output MATCHES "first_problem=none" OR
    NOT EXISTS "${fixture}/disc/disc.gdi")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR

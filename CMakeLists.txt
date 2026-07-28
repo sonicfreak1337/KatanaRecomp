@@ -2442,7 +2442,7 @@ add_test(
 )
 set_tests_properties(
     katana-port-cli-tests
-    PROPERTIES TIMEOUT 300 RESOURCE_LOCK katana-external-port-build
+    PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
 )
 add_test(
     NAME katana-counted-loop-differential-tests

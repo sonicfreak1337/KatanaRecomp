@@ -3010,6 +3010,19 @@ std::string handwritten_main(
            "                  << admitted << '\\n';\n"
            "    }\n"
            "}\n"
+           "struct ProductTerminalTelemetry {\n"
+           "    std::uint64_t restored_guest_cycle = 0u;\n"
+           "    std::uint64_t start_guest_cycle = 0u;\n"
+           "    std::uint64_t final_guest_cycle = 0u;\n"
+           "    std::uint64_t requested_post_entry_cycles = 0u;\n"
+           "    std::uint64_t target_guest_cycle = 0u;\n"
+           "    std::uint64_t central_dispatch_baseline = 0u;\n"
+           "    std::uint32_t milestone_bits = 0u;\n"
+           "    double post_entry_host_seconds = 0.0;\n"
+           "    bool guest_program_started = false;\n"
+           "    bool product_budget_arm_failed = false;\n"
+           "    bool terminal_summary_emitted = false;\n"
+           "};\n"
            "class PortPlatformServices final : public katana::runtime::PlatformServices {\n"
            "  private:\n"
            "    enum class AtomicBatchCommitKind : std::uint8_t {\n"
@@ -3080,7 +3093,9 @@ std::string handwritten_main(
            "                         std::function<void()> product_entry_evidence_callback = {},\n"
            "                         std::function<void()> game_entry_callback = {},\n"
            "                         std::optional<std::uint64_t>\n"
-           "                             requested_post_entry_cycles = {})\n"
+           "                             requested_post_entry_cycles = {},\n"
+           "                         ProductTerminalTelemetry*\n"
+           "                             product_terminal_telemetry = nullptr)\n"
            "        : cpu_(cpu), state_(state), lifecycle_poll_(std::move(lifecycle_poll)),\n"
            "          guest_frame_poll_(std::move(guest_frame_poll)),\n"
            "          product_entry_evidence_callback_(\n"
@@ -3090,6 +3105,7 @@ std::string handwritten_main(
            "          replay_observations_(replay_log, state.scheduler.get()),\n"
            "          requested_post_entry_cycles_(requested_post_entry_cycles),\n"
            "          restored_guest_cycle_(state.scheduler->current_cycle()),\n"
+           "          product_terminal_telemetry_(product_terminal_telemetry),\n"
            "          eager_host_poll_(eager_host_poll),\n"
            "          runtime_probe_mode_(runtime_probe_mode),\n"
            "          local_block_chaining_enabled_([] {\n"
@@ -3168,8 +3184,42 @@ std::string handwritten_main(
            "#endif\n"
            "        cpu_.memory.attach_crash_capsule(crash_capsule_);\n"
            "        state_.scheduler->attach_crash_capsule(crash_capsule_);\n"
+           "        if (product_terminal_telemetry_ != nullptr) {\n"
+           "            product_terminal_telemetry_->restored_guest_cycle =\n"
+           "                restored_guest_cycle_;\n"
+           "            product_terminal_telemetry_->final_guest_cycle =\n"
+           "                restored_guest_cycle_;\n"
+           "            product_terminal_telemetry_->requested_post_entry_cycles =\n"
+           "                requested_post_entry_cycles_.value_or(0u);\n"
+           "        }\n"
            "    }\n"
            "    ~PortPlatformServices() override {\n"
+           "        if (product_terminal_telemetry_ != nullptr) {\n"
+           "            product_terminal_telemetry_->restored_guest_cycle =\n"
+           "                restored_guest_cycle_;\n"
+           "            product_terminal_telemetry_->start_guest_cycle =\n"
+           "                guest_program_entry_cycle_;\n"
+           "            product_terminal_telemetry_->final_guest_cycle =\n"
+           "                state_.scheduler ? state_.scheduler->current_cycle()\n"
+           "                                 : restored_guest_cycle_;\n"
+           "            product_terminal_telemetry_->requested_post_entry_cycles =\n"
+           "                requested_post_entry_cycles_.value_or(0u);\n"
+           "            product_terminal_telemetry_->target_guest_cycle =\n"
+           "                product_target_guest_cycle_.value_or(0u);\n"
+           "            product_terminal_telemetry_->product_budget_arm_failed =\n"
+           "                product_budget_arm_failed_;\n"
+           "            product_terminal_telemetry_->guest_program_started =\n"
+           "                guest_program_dispatched_;\n"
+           "            product_terminal_telemetry_->milestone_bits |=\n"
+           "                (guest_program_dispatched_ ? 1u << 0u : 0u) |\n"
+           "                (guest_program_progressed_ ? 1u << 1u : 0u);\n"
+           "            if (post_entry_host_started_) {\n"
+           "                product_terminal_telemetry_->post_entry_host_seconds =\n"
+           "                    std::chrono::duration<double>(\n"
+           "                        std::chrono::steady_clock::now() -\n"
+           "                        *post_entry_host_started_).count();\n"
+           "            }\n"
+           "        }\n"
            "        cpu_.memory.detach_crash_capsule(crash_capsule_);\n"
            "        if (state_.scheduler)\n"
            "            state_.scheduler->detach_crash_capsule(crash_capsule_);\n"
@@ -6145,6 +6195,7 @@ std::string handwritten_main(
            "    std::optional<std::chrono::steady_clock::time_point>\n"
            "        post_entry_host_started_;\n"
            "    std::uint64_t restored_guest_cycle_ = 0u;\n"
+           "    ProductTerminalTelemetry* product_terminal_telemetry_ = nullptr;\n"
            "    bool product_budget_arm_failed_ = false;\n"
            "    bool eager_host_poll_ = false;\n"
            "    bool runtime_probe_mode_ = false;\n"
@@ -6365,6 +6416,68 @@ std::string handwritten_main(
            "\n\n"
            "int main(const int argc, const char* const* argv) {\n"
            "    std::filesystem::path source;\n"
+           "    ProductTerminalTelemetry terminal_telemetry;\n"
+           "    auto emit_terminal_failure = [&]("
+           "std::string_view first_problem,\n"
+           "                                     std::uint32_t callsite = 0u,\n"
+           "                                     std::uint32_t target = 0u,\n"
+           "                                     std::uint32_t dispatch_error = 0u) {\n"
+           "        if (terminal_telemetry.terminal_summary_emitted) return;\n"
+           "        terminal_telemetry.terminal_summary_emitted = true;\n"
+           "        const auto& materialization = " +
+           entry_namespace +
+           "::runtime_materialization_status();\n"
+           "        const auto central_dispatches = " +
+           entry_namespace +
+           "::runtime_central_dispatch_count();\n"
+           "        const auto post_entry_dispatches =\n"
+           "            central_dispatches >= terminal_telemetry.central_dispatch_baseline\n"
+           "                ? central_dispatches -\n"
+           "                      terminal_telemetry.central_dispatch_baseline\n"
+           "                : 0u;\n"
+           "        const auto executed_post_entry_cycles =\n"
+           "            terminal_telemetry.guest_program_started &&\n"
+           "                    terminal_telemetry.final_guest_cycle >=\n"
+           "                        terminal_telemetry.start_guest_cycle\n"
+           "                ? terminal_telemetry.final_guest_cycle -\n"
+           "                      terminal_telemetry.start_guest_cycle\n"
+           "                : 0u;\n"
+           "        const auto post_entry_guest_mhz =\n"
+           "            terminal_telemetry.post_entry_host_seconds > 0.0\n"
+           "                ? static_cast<double>(executed_post_entry_cycles) /\n"
+           "                      terminal_telemetry.post_entry_host_seconds / 1'000'000.0\n"
+           "                : 0.0;\n"
+           "        std::cerr << \"KATANA_BRINGUP_RUN status=error\"\n"
+           "                  << \" restored_guest_cycle=\"\n"
+           "                  << terminal_telemetry.restored_guest_cycle\n"
+           "                  << \" start_guest_cycle=\"\n"
+           "                  << terminal_telemetry.start_guest_cycle\n"
+           "                  << \" final_guest_cycle=\"\n"
+           "                  << terminal_telemetry.final_guest_cycle\n"
+           "                  << \" requested_post_entry_cycles=\"\n"
+           "                  << terminal_telemetry.requested_post_entry_cycles\n"
+           "                  << \" executed_post_entry_cycles=\"\n"
+           "                  << executed_post_entry_cycles\n"
+           "                  << \" target_guest_cycle=\"\n"
+           "                  << terminal_telemetry.target_guest_cycle\n"
+           "                  << \" host_seconds=\"\n"
+           "                  << terminal_telemetry.post_entry_host_seconds\n"
+           "                  << \" post_entry_guest_mhz=\" << post_entry_guest_mhz\n"
+           "                  << \" milestone_bits=\"\n"
+           "                  << terminal_telemetry.milestone_bits\n"
+           "                  << \" post_entry_central_dispatches=\"\n"
+           "                  << post_entry_dispatches\n"
+           "                  << \" callsite=\" << callsite\n"
+           "                  << \" target=\" << target\n"
+           "                  << \" dispatch_error=\" << dispatch_error\n"
+           "                  << \" materializer_failure=\"\n"
+           "                  << materialization.first_failure\n"
+           "                  << \" materializer_target=\"\n"
+           "                  << materialization.first_failure_target\n"
+           "                  << \" product_budget_arm_failed=\"\n"
+           "                  << terminal_telemetry.product_budget_arm_failed\n"
+           "                  << \" first_problem=\" << first_problem << '\\n';\n"
+           "    };\n"
            "    try {\n"
            "        std::error_code executable_error;\n"
            "        auto executable = std::filesystem::weakly_canonical(argv[0], "
@@ -6380,6 +6493,8 @@ std::string handwritten_main(
            "                \"game-entry-handoff-runtime-probe-conflict\");\n"
            "        const auto configured_guest_cycle_budget =\n"
            "            katana::runtime::guest_cycle_budget_from_environment();\n"
+           "        terminal_telemetry.requested_post_entry_cycles =\n"
+           "            configured_guest_cycle_budget.value_or(0u);\n"
            "        validate_product_gate_environment(configured_guest_cycle_budget);\n"
            "        bool gdi_debug = false;\n"
            "        bool install_disc = false;\n"
@@ -6457,6 +6572,10 @@ std::string handwritten_main(
            "        auto state = katana::runtime::initialize_dreamcast_runtime(\n"
            "            cpu, boot, runtime_boot_config,\n"
            "            mutable_storage, console_profile);\n"
+           "        terminal_telemetry.restored_guest_cycle =\n"
+           "            state.scheduler->current_cycle();\n"
+           "        terminal_telemetry.final_guest_cycle =\n"
+           "            state.scheduler->current_cycle();\n"
            "        if (deterministic_runtime_probe && configured_guest_cycle_budget)\n"
            "            state.scheduler->set_guest_cycle_budget(\n"
            "                *configured_guest_cycle_budget);\n"
@@ -6919,6 +7038,7 @@ std::string handwritten_main(
            "                first_game_framebuffer_write = true;\n"
            "                first_game_framebuffer_write_cycle =\n"
            "                    state.scheduler->current_cycle();\n"
+           "                terminal_telemetry.milestone_bits |= 1u << 2u;\n"
            "                std::cout << \"KR_FIRST_GAME_FRAMEBUFFER_WRITE\\n\";\n"
            "            }\n"
            "            if (game_code_progressed && !first_game_ta_frame &&\n"
@@ -6926,6 +7046,7 @@ std::string handwritten_main(
            "                    katana::runtime::PvrGuestFrameProofSource::TaRender) {\n"
            "                first_game_ta_frame = true;\n"
            "                first_game_ta_frame_cycle = state.scheduler->current_cycle();\n"
+           "                terminal_telemetry.milestone_bits |= 1u << 3u;\n"
            "                std::cout << \"KR_FIRST_GAME_TA_FRAME\\n\";\n"
            "            }\n"
            "            if (katana::runtime::has_guest_frame_evidence_marker(\n"
@@ -6957,6 +7078,7 @@ std::string handwritten_main(
            "                first_visible_game_frame = true;\n"
            "                first_visible_game_frame_cycle =\n"
            "                    state.scheduler->current_cycle();\n"
+           "                terminal_telemetry.milestone_bits |= 1u << 4u;\n"
            "                std::cout << \"KR_FIRST_VISIBLE_GAME_FRAME\\n\";\n"
            "            } else if (result.proven_frame_presented &&\n"
            "                       (runtime_observer == nullptr ||\n"
@@ -6967,6 +7089,7 @@ std::string handwritten_main(
            "                first_ip_bin_visible_frame = true;\n"
            "                first_ip_bin_visible_frame_cycle =\n"
            "                    state.scheduler->current_cycle();\n"
+           "                terminal_telemetry.milestone_bits |= 1u << 6u;\n"
            "                std::cout << \"KR_FIRST_IP_BIN_VISIBLE_FRAME\\n\";\n"
            "            }\n"
            "        };\n"
@@ -7210,6 +7333,8 @@ std::string handwritten_main(
            "            // in the post-entry interval.\n"
            "            if (product_entry_evidence_baseline.central_dispatches != 0u)\n"
            "                --product_entry_evidence_baseline.central_dispatches;\n"
+           "            terminal_telemetry.central_dispatch_baseline =\n"
+           "                product_entry_evidence_baseline.central_dispatches;\n"
            "            product_entry_evidence_ready = true;\n"
            "        };\n"
            "        PortPlatformServices services(cpu, state, [&] {\n"
@@ -7222,7 +7347,7 @@ std::string handwritten_main(
            "        }, pump_guest_frame, !lifecycle_test.empty(), false, nullptr,\n"
            "           std::move(product_entry_evidence_callback),\n"
            "           std::move(game_entry_callback),\n"
-           "           configured_guest_cycle_budget);\n"
+           "           configured_guest_cycle_budget, &terminal_telemetry);\n"
            "        runtime_observer = &services;\n"
            "        services.observe_runtime_started();\n"
            "        auto report_progress = [&] {\n"
@@ -7661,6 +7786,7 @@ std::string handwritten_main(
            "                : result.guest_cycle_budget_reached\n"
            "                    ? \"guest-cycle-budget-reached-milestone-missed\"\n"
            "                    : \"early-exit-before-required-milestone\";\n"
+           "            terminal_telemetry.terminal_summary_emitted = true;\n"
            "            std::cout << (comparable_product_gate\n"
            "                              ? \"KATANA_PRODUCT_GATE\"\n"
            "                              : \"KATANA_BRINGUP_RUN\")\n"
@@ -7975,10 +8101,13 @@ std::string handwritten_main(
            "            std::cerr << evidence.last_gdrom_status[index];\n"
            "        }\n"
            "        std::cerr << \"]}\\n\";\n"
+           "        emit_terminal_failure(\"platform-lifecycle\", evidence.callsite,\n"
+           "                              evidence.return_address);\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::HostPacingException& error) {\n"
            "        std::cerr << \"KATANA_HOST_PACING_ERROR \" << error.serialize_json() << "
            "'\\n';\n"
+           "        emit_terminal_failure(\"host-pacing\");\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::StoreQueuePrefetchRejected& error) {\n"
            "        const auto& fault = error.fault();\n"
@@ -7989,6 +8118,9 @@ std::string handwritten_main(
            "                  << \" source_pc=\" << fault.instruction.source_pc\n"
            "                  << \" runtime_pc=\" << fault.instruction.runtime_pc\n"
            "                  << \" packet_class=\" << fault.packet_class << '\\n';\n"
+           "        emit_terminal_failure(\"store-queue-prefetch\",\n"
+           "                              fault.instruction.source_pc,\n"
+           "                              fault.target_address);\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::PvrRenderFailed& error) {\n"
            "        const auto& failure = error.failure();\n"
@@ -7999,16 +8131,25 @@ std::string handwritten_main(
            "                  << \" ta_packet_class=\" << failure.ta_packet_class\n"
            "                  << \" register_digest=\" << failure.register_digest\n"
            "                  << \" guest_cycle=\" << failure.guest_cycle << '\\n';\n"
+           "        emit_terminal_failure(\"pvr-render\");\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::IndirectDispatchError& error) {\n"
            "        std::cerr << \"KATANA_RUNTIME_DISPATCH_ERROR \"\n"
            "                  << error.metrics_json() << '\\n';\n"
            "        std::cerr << \"Portlauf fehlgeschlagen: \"\n"
            "                  << redact_source(error.what(), source) << '\\n';\n"
+           "        emit_terminal_failure(\n"
+           "            \"runtime-dispatch\", error.callsite(), error.target(),\n"
+           "            static_cast<std::uint32_t>(error.error()));\n"
            "        return 1;\n"
            "    } catch (const std::exception& error) {\n"
            "        std::cerr << \"Portlauf fehlgeschlagen: \"\n"
            "                  << redact_source(error.what(), source) << '\\n';\n"
+           "        emit_terminal_failure(\"runtime-exception\");\n"
+           "        return 1;\n"
+           "    } catch (...) {\n"
+           "        std::cerr << \"Portlauf fehlgeschlagen: unknown-runtime-error\\n\";\n"
+           "        emit_terminal_failure(\"unknown-runtime-error\");\n"
            "        return 1;\n"
            "    }\n"
            "}\n";
@@ -10209,27 +10350,38 @@ std::string root_cmake(const bool diagnostic_partial) {
 std::string product_gate_runner() {
     return "param(\n"
            "    [Parameter(Mandatory = $true)][string]$Executable,\n"
-           "    [ValidateRange(10, 3600)][int]$WatchdogSeconds = 120\n"
+           "    [ValidateRange(1, 3600)][int]$WatchdogSeconds = 120\n"
            ")\n"
            "$ErrorActionPreference = 'Stop'\n"
            "$resolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path\n"
-           "$previousBudget = $env:KATANA_GUEST_CYCLE_BUDGET\n"
-           "try {\n"
-           "    $env:KATANA_GUEST_CYCLE_BUDGET = '600000000'\n"
-           "    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()\n"
-           "    $startInfo.FileName = $resolvedExecutable\n"
-           "    $startInfo.UseShellExecute = $false\n"
-           "    $startInfo.CreateNoWindow = $true\n"
-           "    $process = [System.Diagnostics.Process]::Start($startInfo)\n"
-           "    if (-not $process.WaitForExit($WatchdogSeconds * 1000)) {\n"
-           "        Stop-Process -Id $process.Id -Force\n"
-           "        Write-Error 'KATANA_PRODUCT_GATE status=host-watchdog-hang'\n"
-           "        exit 124\n"
+           "$startInfo = [System.Diagnostics.ProcessStartInfo]::new()\n"
+           "$startInfo.FileName = $resolvedExecutable\n"
+           "$startInfo.UseShellExecute = $false\n"
+           "$startInfo.CreateNoWindow = $true\n"
+           "$startInfo.RedirectStandardOutput = $true\n"
+           "$startInfo.RedirectStandardError = $true\n"
+           "$startInfo.EnvironmentVariables['KATANA_GUEST_CYCLE_BUDGET'] = "
+           "'600000000'\n"
+           "$process = [System.Diagnostics.Process]::Start($startInfo)\n"
+           "$standardOutput = $process.StandardOutput.ReadToEndAsync()\n"
+           "$standardError = $process.StandardError.ReadToEndAsync()\n"
+           "$timedOut = -not $process.WaitForExit($WatchdogSeconds * 1000)\n"
+           "if ($timedOut) {\n"
+           "    try {\n"
+           "        if (-not $process.HasExited) { $process.Kill() }\n"
+           "    } catch [System.InvalidOperationException] {\n"
+           "        # Das Kind endete zwischen WaitForExit und Kill.\n"
            "    }\n"
-           "    exit $process.ExitCode\n"
-           "} finally {\n"
-           "    $env:KATANA_GUEST_CYCLE_BUDGET = $previousBudget\n"
-           "}\n";
+           "    $process.WaitForExit()\n"
+           "}\n"
+           "[Console]::Out.Write($standardOutput.GetAwaiter().GetResult())\n"
+           "[Console]::Error.Write($standardError.GetAwaiter().GetResult())\n"
+           "if ($timedOut) {\n"
+           "    [Console]::Error.WriteLine("
+           "'KATANA_PRODUCT_GATE status=host-watchdog-hang')\n"
+           "    exit 124\n"
+           "}\n"
+           "exit $process.ExitCode\n";
 }
 
 std::string port_cmake(const std::string& target_name) {
@@ -10294,9 +10446,10 @@ port_metadata(const PortExportOptions& options,
               const std::size_t boot_size,
               const bool direct_boot_executable,
               const std::string_view project_identity,
-              const std::span<const katana::analysis::IndirectControlFlowResolution> indirect,
+              const katana::analysis::ControlFlowAnalysisResult& analysis,
               const std::size_t latent_aot_module_count) {
-    const auto count = [indirect](const auto status) {
+    const auto& indirect = analysis.indirect_control_flow;
+    const auto count = [&indirect](const auto status) {
         return std::count_if(indirect.begin(), indirect.end(), [status](const auto& resolution) {
             return katana::analysis::control_flow_report_status(resolution) == status;
         });
@@ -10339,7 +10492,35 @@ port_metadata(const PortExportOptions& options,
            << ",\"runtime_only_control_flow\":"
            << count(katana::analysis::ControlFlowReportStatus::RuntimeOnly)
            << ",\"unresolved_control_flow\":"
-           << count(katana::analysis::ControlFlowReportStatus::Unresolved) << ",\"partitions\":[";
+           << count(katana::analysis::ControlFlowReportStatus::Unresolved)
+           << ",\"function_summary_iterations\":"
+           << analysis.function_summary_iterations
+           << ",\"function_iteration_budget\":"
+           << analysis.function_iteration_budget
+           << ",\"function_budget_exhausted\":"
+           << (analysis.function_budget_exhausted ? "true" : "false")
+           << ",\"raw_stored_code_inventory_candidates\":"
+           << analysis.raw_stored_code_inventory_candidates
+           << ",\"raw_stored_code_inventory_budget\":"
+           << analysis.raw_stored_code_inventory_budget
+           << ",\"raw_stored_code_inventory_truncated\":"
+           << (analysis.raw_stored_code_inventory_truncated ? "true"
+                                                            : "false")
+           << ",\"guarded_code_inventory_candidates\":"
+           << analysis.guarded_code_inventory_candidates
+           << ",\"guarded_code_inventory_budget\":"
+           << analysis.guarded_code_inventory_budget
+           << ",\"guarded_code_shape_validation_work\":"
+           << analysis.guarded_code_shape_validation_work
+           << ",\"guarded_code_shape_validation_work_budget\":"
+           << analysis.guarded_code_shape_validation_work_budget
+           << ",\"guarded_code_shape_budget_exceeded_candidates\":"
+           << analysis.guarded_code_shape_budget_exceeded_candidates
+           << ",\"candidate_inventory_truncated\":"
+           << (analysis.candidate_inventory_truncated ? "true" : "false")
+           << ",\"returned_table_scan_truncated\":"
+           << (analysis.returned_table_scan_truncated ? "true" : "false")
+           << ",\"partitions\":[";
     for (std::size_t index = 0u; index < partitions.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& partition = partitions[index];
@@ -10570,13 +10751,18 @@ static PortExportResult export_dreamcast_port_project_impl(
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
     if (!options.diagnostic_partial &&
-        (prepared.analysis.function_budget_exhausted ||
-         prepared.analysis.candidate_inventory_truncated ||
-         prepared.analysis.returned_table_scan_truncated)) {
+        !katana::analysis::guarded_aot_inventory_complete(
+            prepared.analysis)) {
         std::ostringstream reason;
         reason << "Portanalyse besitzt kein vollstaendiges Guarded-AOT-Inventar:"
                << " function_budget_exhausted="
                << prepared.analysis.function_budget_exhausted
+               << " raw_stored_candidates="
+               << prepared.analysis.raw_stored_code_inventory_candidates
+               << '/'
+               << prepared.analysis.raw_stored_code_inventory_budget
+               << " raw_stored_truncated="
+               << prepared.analysis.raw_stored_code_inventory_truncated
                << " candidate_inventory_truncated="
                << prepared.analysis.candidate_inventory_truncated
                << " returned_table_scan_truncated="
@@ -11118,7 +11304,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                                        prepared.boot_size,
                                        prepared.direct_boot_executable,
                                        prepared.project_identity,
-                                       prepared.analysis.indirect_control_flow,
+                                       prepared.analysis,
                                        latent_aot.modules.size())});
     if (options.game_project != nullptr)
         artifacts.push_back(

@@ -212,6 +212,36 @@ int main() {
                 "Shape-Budgetabbruch wurde als strukturell ungueltiger "
                 "vollstaendiger Inventarlauf verschluckt oder belegte das "
                 "Ergebnisbudget.");
+
+        katana::analysis::ControlFlowAnalysisResult completeness_contract;
+        require(katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Leerer Guarded-AOT-Inventarvertrag ist unvollstaendig.");
+        completeness_contract.function_budget_exhausted = true;
+        require(!katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Function-Budgetverlust blieb exportfaehig.");
+        completeness_contract.function_budget_exhausted = false;
+        completeness_contract.raw_stored_code_inventory_truncated = true;
+        require(!katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Rohes Store-Inventarbudget blieb exportfaehig.");
+        completeness_contract.raw_stored_code_inventory_truncated = false;
+        completeness_contract.candidate_inventory_truncated = true;
+        require(!katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Candidate-Inventarverlust blieb exportfaehig.");
+        completeness_contract.candidate_inventory_truncated = false;
+        completeness_contract.returned_table_scan_truncated = true;
+        require(!katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Returned-Table-Scanverlust blieb exportfaehig.");
+        completeness_contract.returned_table_scan_truncated = false;
+        completeness_contract
+            .guarded_code_shape_budget_exceeded_candidates = 1u;
+        require(!katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Direkter Shape-Budgetverlust blieb exportfaehig.");
     }
 
     auto jump_image = code_image(

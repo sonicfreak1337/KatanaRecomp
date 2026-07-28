@@ -46,6 +46,7 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -1319,10 +1320,14 @@ bool path_is_within(const std::filesystem::path& path,
            *relative.begin() != "..";
 }
 
-inline constexpr std::uint32_t port_export_cache_version = 4u;
+inline constexpr std::uint32_t port_export_cache_version = 6u;
 inline constexpr std::uint32_t port_ir_contract_version = 2u;
 inline constexpr std::string_view untrusted_katana_source_identity =
     "0000000000000000000000000000000000000000";
+inline constexpr std::string_view generated_artifact_manifest_name =
+    ".katana-generated-artifacts";
+inline constexpr std::string_view generated_artifact_manifest_header =
+    "katana-codegen-artifacts-v1";
 
 struct CachedPortExport {
     std::string key;
@@ -1339,6 +1344,199 @@ bool valid_cache_digest(const std::string_view value) noexcept {
                return std::isdigit(character) != 0 ||
                       (character >= 'a' && character <= 'f');
            });
+}
+
+bool valid_generated_artifact_relative_path(
+    const std::filesystem::path& relative,
+    const std::string_view source_text) {
+    const auto normalized = relative.lexically_normal();
+    if (normalized.empty() || normalized.is_absolute() ||
+        normalized.generic_string() != source_text ||
+        normalized.generic_string() == generated_artifact_manifest_name)
+        return false;
+    return std::none_of(
+        normalized.begin(), normalized.end(), [](const auto& component) {
+            return component == "." || component == "..";
+        });
+}
+
+std::optional<std::vector<std::filesystem::path>>
+read_generated_artifact_manifest(const std::filesystem::path& generated_root) {
+    const auto manifest = generated_root / generated_artifact_manifest_name;
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(manifest, status_error);
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status))
+        return std::nullopt;
+    std::ifstream input(manifest, std::ios::binary);
+    std::string line;
+    if (!input || !std::getline(input, line) ||
+        line != generated_artifact_manifest_header)
+        return std::nullopt;
+    std::vector<std::filesystem::path> listed;
+    std::string previous;
+    while (std::getline(input, line)) {
+        if (line.empty() ||
+            !valid_generated_artifact_relative_path(
+                std::filesystem::path(line), line) ||
+            (!previous.empty() && previous >= line))
+            return std::nullopt;
+        previous = line;
+        listed.emplace_back(line);
+    }
+    if (!input.eof()) return std::nullopt;
+    return listed;
+}
+
+std::optional<std::vector<std::filesystem::path>>
+collect_generated_artifact_files(const std::filesystem::path& generated_root) {
+    if (!safe_regular_port_directory_exists(
+            generated_root,
+            "Content-addressed Portcodegen-Verzeichnis"))
+        return std::nullopt;
+    std::vector<std::filesystem::path> files;
+    for (std::filesystem::recursive_directory_iterator iterator(generated_root), end;
+         iterator != end;
+         ++iterator) {
+        std::error_code status_error;
+        const auto status = iterator->symlink_status(status_error);
+        if (status_error || std::filesystem::is_symlink(status))
+            return std::nullopt;
+        if (std::filesystem::is_directory(status)) continue;
+        if (!std::filesystem::is_regular_file(status))
+            return std::nullopt;
+        const auto relative = iterator->path().lexically_relative(generated_root);
+        if (relative.empty() || relative.is_absolute() ||
+            *relative.begin() == "..")
+            return std::nullopt;
+        files.push_back(relative.lexically_normal());
+    }
+    std::sort(files.begin(), files.end(), [](const auto& left, const auto& right) {
+        return left.generic_string() < right.generic_string();
+    });
+    return files;
+}
+
+std::optional<std::vector<std::filesystem::path>>
+validated_generated_artifact_files(const std::filesystem::path& root) {
+    const auto generated_root = root / "generated";
+    const auto listed = read_generated_artifact_manifest(generated_root);
+    const auto actual = collect_generated_artifact_files(generated_root);
+    if (!listed || !actual) return std::nullopt;
+    auto expected = *listed;
+    expected.emplace_back(generated_artifact_manifest_name);
+    std::sort(
+        expected.begin(), expected.end(), [](const auto& left, const auto& right) {
+            return left.generic_string() < right.generic_string();
+        });
+    if (expected != *actual) return std::nullopt;
+    std::vector<std::filesystem::path> absolute_files;
+    absolute_files.reserve(actual->size());
+    for (const auto& relative : *actual)
+        absolute_files.push_back(generated_root / relative);
+    return absolute_files;
+}
+
+std::optional<std::vector<std::filesystem::path>>
+validated_generated_source_files(const std::filesystem::path& root) {
+    const auto source_root = root / "src";
+    const auto actual = collect_generated_artifact_files(source_root);
+    if (!actual) return std::nullopt;
+    const std::vector<std::filesystem::path> expected{"main.cpp"};
+    if (*actual != expected) return std::nullopt;
+    return std::vector<std::filesystem::path>{source_root / expected.front()};
+}
+
+void remove_invalid_generated_artifact_tree(
+    const std::filesystem::path& workspace) {
+    const auto normalized_workspace =
+        std::filesystem::absolute(workspace).lexically_normal();
+    const auto generated_root = (normalized_workspace / "generated").lexically_normal();
+    if (generated_root.parent_path() != normalized_workspace ||
+        generated_root.filename() != "generated")
+        throw std::runtime_error("Ungueltiger Portcodegen-Bereinigungspfad.");
+    if (!safe_regular_port_directory_exists(
+            generated_root,
+            "Ungueltige Portcodegen-Ausgabe"))
+        return;
+    std::error_code remove_error;
+    static_cast<void>(std::filesystem::remove_all(generated_root, remove_error));
+    if (remove_error)
+        throw std::runtime_error(
+            "Ungueltige Portcodegen-Ausgabe konnte nicht entfernt werden.");
+}
+
+void remove_invalid_generated_source_tree(
+    const std::filesystem::path& workspace) {
+    const auto normalized_workspace =
+        std::filesystem::absolute(workspace).lexically_normal();
+    const auto source_root = (normalized_workspace / "src").lexically_normal();
+    if (source_root.parent_path() != normalized_workspace ||
+        source_root.filename() != "src")
+        throw std::runtime_error("Ungueltiger Portquell-Bereinigungspfad.");
+    if (!safe_regular_port_directory_exists(
+            source_root,
+            "Ungueltige generierte Portquelle"))
+        return;
+    std::error_code remove_error;
+    static_cast<void>(std::filesystem::remove_all(source_root, remove_error));
+    if (remove_error)
+        throw std::runtime_error(
+            "Ungueltige generierte Portquelle konnte nicht entfernt werden.");
+}
+
+void reconcile_generated_artifacts_after_cache_miss(
+    const std::filesystem::path& workspace) {
+    const auto generated_root = workspace / "generated";
+    if (!safe_regular_port_directory_exists(
+            generated_root,
+            "Content-addressed Portcodegen-Verzeichnis"))
+        return;
+    const auto listed = read_generated_artifact_manifest(generated_root);
+    const auto actual = collect_generated_artifact_files(generated_root);
+    if (!listed || !actual) {
+        remove_invalid_generated_artifact_tree(workspace);
+        return;
+    }
+    auto expected = *listed;
+    expected.emplace_back(generated_artifact_manifest_name);
+    std::sort(
+        expected.begin(), expected.end(), [](const auto& left, const auto& right) {
+            return left.generic_string() < right.generic_string();
+        });
+    std::vector<std::filesystem::path> injected;
+    std::set_difference(actual->begin(),
+                        actual->end(),
+                        expected.begin(),
+                        expected.end(),
+                        std::back_inserter(injected),
+                        [](const auto& left, const auto& right) {
+                            return left.generic_string() <
+                                   right.generic_string();
+                        });
+    for (const auto& relative : injected) {
+        const auto target = (generated_root / relative).lexically_normal();
+        if (target.parent_path().empty() ||
+            !path_is_within(target, generated_root))
+            throw std::runtime_error(
+                "Injiziertes Portcodegen-Artefakt verlaesst das Ausgabeziel.");
+        std::error_code remove_error;
+        if (!std::filesystem::remove(target, remove_error) || remove_error)
+            throw std::runtime_error(
+                "Injiziertes Portcodegen-Artefakt konnte nicht entfernt werden.");
+    }
+}
+
+void reconcile_generated_sources_after_cache_miss(
+    const std::filesystem::path& workspace) {
+    const auto source_root = workspace / "src";
+    if (!safe_regular_port_directory_exists(
+            source_root,
+            "Content-addressed generierter Portquellordner"))
+        return;
+    if (!validated_generated_source_files(workspace))
+        remove_invalid_generated_source_tree(workspace);
 }
 
 std::optional<std::string>
@@ -1359,33 +1557,24 @@ port_codegen_tree_identity(const std::filesystem::path& root) {
             return std::nullopt;
         files.push_back(path);
     }
-    constexpr std::array<std::string_view, 2u> generated_directories{
-        "generated", "src"};
-    for (const auto relative : generated_directories) {
-        const auto directory = root / relative;
-        if (!safe_regular_port_directory_exists(
-                directory, "Content-addressed Portcodegen-Verzeichnis"))
-            return std::nullopt;
-        for (std::filesystem::recursive_directory_iterator iterator(directory), end;
-             iterator != end;
-             ++iterator) {
-            const auto status = iterator->symlink_status();
-            if (std::filesystem::is_symlink(status))
-                throw std::runtime_error(
-                    "Content-addressed Portcodegen-Ausgabe enthaelt einen symbolischen Link.");
-            if (std::filesystem::is_regular_file(status))
-                files.push_back(iterator->path());
-            else if (!std::filesystem::is_directory(status))
-                throw std::runtime_error(
-                    "Content-addressed Portcodegen-Ausgabe enthaelt einen unsicheren Eintrag.");
-        }
-    }
+    const auto generated_files =
+        validated_generated_artifact_files(root);
+    if (!generated_files) return std::nullopt;
+    files.insert(files.end(),
+                 generated_files->begin(),
+                 generated_files->end());
+    const auto generated_sources =
+        validated_generated_source_files(root);
+    if (!generated_sources) return std::nullopt;
+    files.insert(files.end(),
+                 generated_sources->begin(),
+                 generated_sources->end());
     std::sort(files.begin(), files.end(), [&root](const auto& left, const auto& right) {
         return left.lexically_relative(root).generic_string() <
                right.lexically_relative(root).generic_string();
     });
     std::ostringstream identity;
-    identity << "katana-port-codegen-tree-v1;";
+    identity << "katana-port-codegen-tree-v3;";
     for (const auto& file : files) {
         const auto relative = file.lexically_relative(root).generic_string();
         const auto provenance =
@@ -1897,6 +2086,8 @@ int export_port_project(const std::filesystem::path& source_path,
             }
         }
         if (!whole_export_cache_hit) {
+            reconcile_generated_artifacts_after_cache_miss(workspace);
+            reconcile_generated_sources_after_cache_miss(workspace);
             report =
                 boot_executable_artifact
                     ? katana::codegen::

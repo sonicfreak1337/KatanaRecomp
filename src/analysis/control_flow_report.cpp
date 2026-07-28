@@ -382,6 +382,13 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"function_iteration_budget\":" << analysis.function_iteration_budget
            << ",\"function_budget_exhausted\":"
            << (analysis.function_budget_exhausted ? "true" : "false")
+           << ",\"raw_stored_code_inventory_candidates\":"
+           << analysis.raw_stored_code_inventory_candidates
+           << ",\"raw_stored_code_inventory_budget\":"
+           << analysis.raw_stored_code_inventory_budget
+           << ",\"raw_stored_code_inventory_truncated\":"
+           << (analysis.raw_stored_code_inventory_truncated ? "true"
+                                                            : "false")
            << ",\"guarded_code_inventory_candidates\":"
            << analysis.guarded_code_inventory_candidates
            << ",\"guarded_code_inventory_budget\":"

@@ -34,6 +34,9 @@ namespace {
 
 constexpr std::size_t maximum_summary_values = 8u;
 constexpr std::size_t maximum_guarded_code_inventory = 1'024u;
+constexpr std::size_t maximum_raw_stored_code_candidates =
+    maximum_guarded_code_inventory * 4u;
+constexpr std::size_t reserved_returned_table_targets = 256u;
 constexpr std::size_t maximum_forwarded_store_contexts = 64u;
 constexpr std::size_t maximum_inventory_regions = maximum_guarded_code_inventory;
 constexpr std::size_t maximum_inventory_region_blocks = 256u;
@@ -205,6 +208,55 @@ void normalize(std::vector<std::uint32_t>& values) {
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
+} // namespace
+
+std::vector<std::uint32_t>
+detail::guarded_code_inventory_priority_order(
+    const std::span<const GuardedCodeInventoryPriorityTarget> candidates,
+    const std::size_t returned_table_reserve) {
+    std::array<std::vector<std::uint32_t>, 4u> by_kind;
+    for (const auto& candidate : candidates) {
+        by_kind[static_cast<std::size_t>(candidate.kind)].push_back(
+            candidate.target_address);
+    }
+    for (auto& targets : by_kind) normalize(targets);
+    const auto& complete_stored =
+        by_kind[static_cast<std::size_t>(
+            GuardedCodeInventoryPriorityKind::CompleteStored)];
+    const auto& incomplete_stored =
+        by_kind[static_cast<std::size_t>(
+            GuardedCodeInventoryPriorityKind::IncompleteStored)];
+    const auto& complete_returned =
+        by_kind[static_cast<std::size_t>(
+            GuardedCodeInventoryPriorityKind::CompleteReturnedTable)];
+    const auto& truncated_returned =
+        by_kind[static_cast<std::size_t>(
+            GuardedCodeInventoryPriorityKind::TruncatedReturnedTable)];
+    std::vector<std::uint32_t> ordered;
+    ordered.reserve(candidates.size());
+    std::unordered_set<std::uint32_t> seen;
+    seen.reserve(candidates.size());
+    const auto append = [&](const std::span<const std::uint32_t> targets,
+                            const std::size_t limit =
+                                std::numeric_limits<std::size_t>::max()) {
+        std::size_t inserted = 0u;
+        for (const auto target : targets) {
+            if (inserted >= limit) break;
+            if (!seen.insert(target).second) continue;
+            ordered.push_back(target);
+            ++inserted;
+        }
+    };
+    append(complete_returned, returned_table_reserve);
+    append(complete_stored);
+    append(complete_returned);
+    append(incomplete_stored);
+    append(truncated_returned);
+    return ordered;
+}
+
+namespace {
+
 class GuardedCodeInventoryCollector {
   public:
     explicit GuardedCodeInventoryCollector(
@@ -246,12 +298,11 @@ class GuardedCodeInventoryCollector {
                           return left.target_address < right.target_address;
                       return left.store_instruction_addresses <
                              right.store_instruction_addresses;
-                  });
+        });
         for (auto& candidate : candidates) {
-            if (defer_stored_admission_)
-                deferred_stored_candidates_.push_back(std::move(candidate));
-            else
-                collect_stored_candidate(std::move(candidate));
+            const auto complete_evidence = candidate.complete;
+            collect_stored_candidate(std::move(candidate),
+                                     complete_evidence);
         }
     }
 
@@ -272,12 +323,21 @@ class GuardedCodeInventoryCollector {
         if (!defer_stored_admission_ || destination.defer_stored_admission_)
             throw std::logic_error(
                 "Guarded-Code-Inventar besitzt einen ungueltigen Replay-Vertrag.");
-        for (auto& candidate : deferred_stored_candidates_)
-            destination.collect_stored_candidate(std::move(candidate));
+        for (auto& [target, candidate] : stored_candidates_) {
+            destination.collect_stored_candidate(
+                std::move(candidate),
+                complete_stored_targets_.contains(target));
+        }
         for (auto& [table_address, candidate] : returned_tables_) {
             static_cast<void>(table_address);
             destination.collect_returned_candidate(std::move(candidate));
         }
+        destination.candidate_inventory_truncated_ =
+            destination.candidate_inventory_truncated_ ||
+            candidate_inventory_truncated_;
+        destination.raw_stored_candidates_truncated_ =
+            destination.raw_stored_candidates_truncated_ ||
+            raw_stored_candidates_truncated_;
         destination.table_scan_truncated_ =
             destination.table_scan_truncated_ || table_scan_truncated_;
     }
@@ -287,17 +347,61 @@ class GuardedCodeInventoryCollector {
             throw std::logic_error(
                 "Deferred Guarded-Code-Inventar muss vor Finish zusammengefuehrt werden.");
         GuardedCodeInventory inventory;
-        inventory.returned_code_address_tables.reserve(returned_tables_.size());
-        // A returned method table has a concrete table base, load site,
-        // callsite and callee.  Admit that stronger inventory before broad
-        // forwarded-store observations compete for the same bounded native
-        // entry set.  The live table load remains authoritative at runtime.
         for (auto& [table_address, candidate] : returned_tables_) {
             static_cast<void>(table_address);
             normalize(candidate.target_addresses);
+        }
+
+        // Keep both evidence families represented.  A small concrete-table
+        // reserve prevents broad forwarded stores from evicting the Sonic-like
+        // method-table case, while admitting complete stores before the
+        // remaining table population guarantees that a table flood cannot
+        // erase every direct callback proof.
+        std::vector<detail::GuardedCodeInventoryPriorityTarget>
+            priority_candidates;
+        priority_candidates.reserve(stored_candidates_.size());
+        for (const auto& [target, candidate] : stored_candidates_) {
+            static_cast<void>(candidate);
+            priority_candidates.push_back({
+                target,
+                complete_stored_targets_.contains(target)
+                    ? detail::GuardedCodeInventoryPriorityKind::
+                          CompleteStored
+                    : detail::GuardedCodeInventoryPriorityKind::
+                          IncompleteStored});
+        }
+        for (const auto& [table_address, candidate] : returned_tables_) {
+            static_cast<void>(table_address);
+            for (const auto target : candidate.target_addresses)
+                priority_candidates.push_back({
+                    target,
+                    candidate.scan_truncated
+                        ? detail::GuardedCodeInventoryPriorityKind::
+                              TruncatedReturnedTable
+                        : detail::GuardedCodeInventoryPriorityKind::
+                              CompleteReturnedTable});
+        }
+        const auto priority_order =
+            detail::guarded_code_inventory_priority_order(
+                priority_candidates,
+                reserved_returned_table_targets);
+        for (const auto target : priority_order)
+            static_cast<void>(admit_candidate(target));
+
+        inventory.stored_code_addresses.reserve(stored_candidates_.size());
+        for (auto& [target, candidate] : stored_candidates_) {
+            if (!admitted_targets_.contains(target)) continue;
+            normalize(candidate.store_instruction_addresses);
+            normalize(candidate.evidence_call_sites);
+            normalize(candidate.evidence_callees);
+            inventory.stored_code_addresses.push_back(std::move(candidate));
+        }
+        inventory.returned_code_address_tables.reserve(returned_tables_.size());
+        for (auto& [table_address, candidate] : returned_tables_) {
+            static_cast<void>(table_address);
             std::erase_if(candidate.target_addresses,
                           [&](const auto target) {
-                              return !admit_candidate(target);
+                              return !admitted_targets_.contains(target);
                           });
             if (candidate.target_addresses.empty()) continue;
             normalize(candidate.load_instruction_addresses);
@@ -306,14 +410,11 @@ class GuardedCodeInventoryCollector {
             inventory.returned_code_address_tables.push_back(
                 std::move(candidate));
         }
-        inventory.stored_code_addresses.reserve(stored_candidates_.size());
-        for (auto& [target, candidate] : stored_candidates_) {
-            if (!admit_candidate(target)) continue;
-            normalize(candidate.store_instruction_addresses);
-            normalize(candidate.evidence_call_sites);
-            normalize(candidate.evidence_callees);
-            inventory.stored_code_addresses.push_back(std::move(candidate));
-        }
+        inventory.raw_stored_candidate_budget =
+            maximum_raw_stored_code_candidates;
+        inventory.raw_stored_candidate_count = stored_candidates_.size();
+        inventory.raw_stored_candidates_truncated =
+            raw_stored_candidates_truncated_;
         inventory.candidate_budget = maximum_guarded_code_inventory;
         inventory.candidate_count = admitted_targets_.size();
         inventory.candidate_inventory_truncated =
@@ -342,10 +443,43 @@ class GuardedCodeInventoryCollector {
         return status == detail::GuardedNativeEntryShapeStatus::Valid;
     }
 
-    void collect_stored_candidate(StoredCodeAddressCandidate candidate) {
+    void collect_stored_candidate(StoredCodeAddressCandidate candidate,
+                                  const bool complete_evidence) {
         candidate.guarded = true;
+        const auto target = candidate.target_address;
+        const auto existing = stored_candidates_.find(target);
+        if (existing == stored_candidates_.end() &&
+            stored_candidates_.size() >=
+                maximum_raw_stored_code_candidates) {
+            raw_stored_candidates_truncated_ = true;
+            candidate_inventory_truncated_ = true;
+            auto worst = stored_candidates_.end();
+            for (auto candidate_it = stored_candidates_.rbegin();
+                 candidate_it != stored_candidates_.rend();
+                 ++candidate_it) {
+                if (!complete_stored_targets_.contains(
+                        candidate_it->first)) {
+                    worst = std::prev(candidate_it.base());
+                    break;
+                }
+            }
+            if (complete_evidence) {
+                if (worst == stored_candidates_.end()) {
+                    worst = std::prev(stored_candidates_.end());
+                    if (target >= worst->first) return;
+                }
+            } else {
+                if (worst == stored_candidates_.end() ||
+                    target >= worst->first)
+                    return;
+            }
+            complete_stored_targets_.erase(worst->first);
+            stored_candidates_.erase(worst);
+        }
         const auto [stored, inserted] =
-            stored_candidates_.try_emplace(candidate.target_address, std::move(candidate));
+            stored_candidates_.try_emplace(target, std::move(candidate));
+        if (complete_evidence)
+            complete_stored_targets_.insert(target);
         if (inserted) return;
         auto& destination = stored->second;
         destination.complete = destination.complete && candidate.complete;
@@ -403,12 +537,13 @@ class GuardedCodeInventoryCollector {
 
     std::set<std::uint32_t> admitted_targets_;
     std::map<std::uint32_t, StoredCodeAddressCandidate> stored_candidates_;
+    std::set<std::uint32_t> complete_stored_targets_;
     std::map<std::uint32_t, ReturnedCodeAddressTableCandidate> returned_tables_;
     std::unordered_map<std::uint32_t, std::optional<JumpTableAnalysis>>
         stored_snapshot_tables_;
-    std::vector<StoredCodeAddressCandidate> deferred_stored_candidates_;
     detail::GuardedNativeEntryShapeCache* shape_cache_ = nullptr;
     bool defer_stored_admission_ = false;
+    bool raw_stored_candidates_truncated_ = false;
     bool candidate_inventory_truncated_ = false;
     bool table_scan_truncated_ = false;
 };
@@ -588,6 +723,29 @@ bool merge_state(AbstractState& destination,
     return changed;
 }
 
+void coalesce_call_arguments(
+    std::vector<FunctionEvaluation::CallArguments>& observations) {
+    std::sort(observations.begin(),
+              observations.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.call_site, left.callee) <
+                         std::tie(right.call_site, right.callee);
+              });
+    std::vector<FunctionEvaluation::CallArguments> merged;
+    merged.reserve(observations.size());
+    for (auto& observation : observations) {
+        if (merged.empty() ||
+            merged.back().call_site != observation.call_site ||
+            merged.back().callee != observation.callee) {
+            merged.push_back(std::move(observation));
+            continue;
+        }
+        static_cast<void>(
+            merge_state(merged.back().state, observation.state));
+    }
+    observations = std::move(merged);
+}
+
 constexpr std::uint16_t register_bit(const std::uint8_t index) {
     return static_cast<std::uint16_t>(1u << index);
 }
@@ -746,9 +904,10 @@ void load_memory_values(AbstractValue& destination,
     if (address_evidence != nullptr) {
         loaded.guarded = loaded.guarded || address_evidence->guarded;
         loaded.complete = loaded.complete && address_evidence->complete;
-        loaded.call_sites.insert(address_evidence->call_sites.begin(),
-                                 address_evidence->call_sites.end());
-        loaded.callees.insert(address_evidence->callees.begin(), address_evidence->callees.end());
+        // The address selects where a value is loaded from; it is not
+        // provenance for the loaded contents.  Code-pointer argument
+        // provenance is attached only when that value itself crosses a
+        // proven ABI boundary.
     }
     destination = std::move(loaded);
 }
@@ -792,9 +951,9 @@ void store_memory_values(AbstractState& state,
     auto stored = value;
     stored.guarded = true;
     stored.complete = stored.complete && address_evidence.complete;
-    stored.call_sites.insert(address_evidence.call_sites.begin(),
-                             address_evidence.call_sites.end());
-    stored.callees.insert(address_evidence.callees.begin(), address_evidence.callees.end());
+    // Destination-address provenance must not become provenance of the
+    // stored contents.  The source value already carries any legitimate
+    // code-pointer evidence.
     for (const auto address : addresses)
         state.memory_values[address] = stored;
     if (state.memory_values.size() > maximum_memory_values) state.memory_values.clear();
@@ -1545,7 +1704,9 @@ void apply_call(AbstractState& state,
                 const bool candidate_callees_complete,
                 const std::map<std::uint32_t, FunctionValueSummary>& summaries,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments,
-                const bool preserve_guarded_stack_inventory = false) {
+                const bool preserve_guarded_stack_inventory = false,
+                const std::map<std::uint32_t, FunctionValueSummary>*
+                    contextual_summaries = nullptr) {
     observe_callee_arguments(image,
                              state,
                              call_site,
@@ -1615,18 +1776,27 @@ void apply_call(AbstractState& state,
     bool returned_memory_initialized = false;
     std::map<std::uint32_t, AbstractValue> returned_memory;
     for (const auto candidate : callees) {
-        const auto summary = summaries.find(candidate);
-        if (summary == summaries.end()) {
+        const FunctionValueSummary* summary = nullptr;
+        if (contextual_summaries != nullptr) {
+            const auto contextual = contextual_summaries->find(candidate);
+            if (contextual != contextual_summaries->end())
+                summary = &contextual->second;
+        }
+        if (summary == nullptr) {
+            const auto global = summaries.find(candidate);
+            if (global != summaries.end()) summary = &global->second;
+        }
+        if (summary == nullptr) {
             returned_complete = false;
             returned_may_alias_stack = true;
             returned_memory_complete = false;
             continue;
         }
-        if (!summary->second.memory_complete) {
+        if (!summary->memory_complete) {
             returned_memory_complete = false;
         } else {
             std::map<std::uint32_t, AbstractValue> candidate_memory;
-            for (const auto& memory : summary->second.memory_values) {
+            for (const auto& memory : summary->memory_values) {
                 AbstractValue value;
                 value.known = !memory.values.empty();
                 value.guarded = memory.guarded || candidate_callees_guarded;
@@ -1654,7 +1824,7 @@ void apply_call(AbstractState& state,
                 }
             }
         }
-        const auto* returned = register_summary(summary->second, 0u);
+        const auto* returned = register_summary(*summary, 0u);
         if (returned == nullptr || returned->values.empty()) {
             returned_complete = false;
             returned_may_alias_stack = true;
@@ -2023,7 +2193,9 @@ FunctionEvaluation evaluate_function(
     const bool may_merge_stack_inventory = false,
     GuardedCodeInventoryCollector* const guarded_inventory_collector = nullptr,
     const std::optional<std::uint32_t> isolated_inventory_call_site =
-        std::nullopt) {
+        std::nullopt,
+    const std::map<std::uint32_t, FunctionValueSummary>*
+        contextual_summaries = nullptr) {
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
     if (!collect_resolutions)
@@ -2156,7 +2328,8 @@ FunctionEvaluation evaluate_function(
                            delayed_call->candidate_callees_complete,
                            summaries,
                            call_arguments,
-                           may_merge_stack_inventory);
+                           may_merge_stack_inventory,
+                           contextual_summaries);
                 delayed_call.reset();
             }
             if (delayed_tail_ingress.has_value()) {
@@ -2204,7 +2377,8 @@ FunctionEvaluation evaluate_function(
                                candidate_callees_complete,
                                summaries,
                                call_arguments,
-                               may_merge_stack_inventory);
+                               may_merge_stack_inventory,
+                               contextual_summaries);
             }
             if (!call &&
                 (line.instruction.control_flow ==
@@ -2249,6 +2423,13 @@ FunctionEvaluation evaluate_function(
                 pending.push_back(successor);
         }
     }
+
+    // A block can be revisited while its local input converges.  Publish one
+    // conservative observation per physical callsite/callee pair; exposing
+    // transient visits to the interprocedural worklist lets the same callsite
+    // alternately replace its callee input and can keep a recursive graph
+    // alive long after the local state has stabilized.
+    coalesce_call_arguments(evaluation.call_arguments);
 
     const std::array<std::uint8_t, 8u> summary_registers{0u, 8u, 9u, 10u, 11u, 12u, 13u, 14u};
     for (const auto register_index : summary_registers) {
@@ -2843,24 +3024,39 @@ detail::analyze_function_values_with_guarded_entry_cache(
     function_count = functions.size();
     result.strongly_connected_components = components.size();
     report_progress("functions-complete");
-    std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_callees;
-    indirect_callees.reserve(function_edges.size() +
-                              candidate_call_carriers.size());
+    // Candidate-only calls are an inventory input, not a proven member of the
+    // semantic call graph.  Feeding them into the summary fixpoint makes an
+    // incomplete live-target family recursively refine ordinary function
+    // inputs and summaries.  Apart from being unsound for the unknown family
+    // members, that can create a non-converging replacement cycle.  Keep the
+    // proven call graph for summaries and add the private carriers only to the
+    // bounded final inventory pass.
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
+        summary_indirect_callees;
+    summary_indirect_callees.reserve(function_edges.size());
     for (const auto& edge : function_edges) {
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
-        auto& candidates = indirect_callees[edge.instruction_address];
+        auto& candidates =
+            summary_indirect_callees[edge.instruction_address];
         candidates.targets.push_back(edge.target_address);
         const auto evidence = resolved_edge_evidence(edge);
         candidates.guarded = candidates.guarded || evidence != ControlFlowEvidence::ProvenComplete;
         candidates.complete = candidates.complete && control_flow_evidence_complete(evidence);
     }
+    for (auto& [call_site, candidates] : summary_indirect_callees) {
+        static_cast<void>(call_site);
+        normalize(candidates.targets);
+    }
+    auto inventory_indirect_callees = summary_indirect_callees;
+    inventory_indirect_callees.reserve(summary_indirect_callees.size() +
+                                       candidate_call_carriers.size());
     for (const auto& carrier : candidate_call_carriers) {
-        auto& candidates = indirect_callees[carrier.call_site];
+        auto& candidates = inventory_indirect_callees[carrier.call_site];
         candidates.targets.push_back(carrier.target);
         candidates.guarded = true;
         candidates.complete = false;
     }
-    for (auto& [call_site, candidates] : indirect_callees) {
+    for (auto& [call_site, candidates] : inventory_indirect_callees) {
         static_cast<void>(call_site);
         normalize(candidates.targets);
     }
@@ -2929,18 +3125,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto target = pending_inventory_regions.front();
         pending_inventory_regions.pop_front();
         const auto& target_owners = owners_for_block(target);
-        if (target_owners.size() > 1u) {
-            inventory_region_walk_truncated = true;
-            continue;
-        }
         const auto block_within_owner_domain =
             [&](const std::uint32_t address) {
                 const auto& owners = owners_for_block(address);
                 if (target_owners.empty())
                     return owners.empty();
-                return std::binary_search(owners.begin(),
-                                          owners.end(),
-                                          target_owners.front());
+                // A target shared by several discovered functions is still a
+                // valid inventory ingress.  Stay in the common shared tail
+                // while every original owner also owns the successor; a
+                // later owner-specific split becomes a separate region.
+                return std::includes(owners.begin(),
+                                     owners.end(),
+                                     target_owners.begin(),
+                                     target_owners.end());
             };
         std::deque<std::uint32_t> pending_blocks{target};
         std::unordered_set<std::uint32_t> visited_blocks;
@@ -2963,7 +3160,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
             visited_blocks.insert(block_address);
             const auto& control = controlling_line(*block->second);
             const auto flow = control.instruction.control_flow;
-            const auto indirect_call = indirect_callees.find(control.address);
+            const auto indirect_call =
+                inventory_indirect_callees.find(control.address);
             for (const auto successor : block->second->successors) {
                 const bool direct_call_target =
                     flow == katana::sh4::ControlFlowKind::Call &&
@@ -2971,7 +3169,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     successor == *control.target_address;
                 const bool indirect_call_target =
                     flow == katana::sh4::ControlFlowKind::IndirectCall &&
-                    indirect_call != indirect_callees.end() &&
+                    indirect_call != inventory_indirect_callees.end() &&
                     std::binary_search(indirect_call->second.targets.begin(),
                                        indirect_call->second.targets.end(),
                                        successor);
@@ -2989,9 +3187,17 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         {control.address, successor, true, true, true});
                     continue;
                 }
-                if (flow != katana::sh4::ControlFlowKind::UnconditionalBranch &&
-                    flow != katana::sh4::ControlFlowKind::IndirectBranch)
+                if (flow !=
+                        katana::sh4::ControlFlowKind::UnconditionalBranch &&
+                    flow != katana::sh4::ControlFlowKind::IndirectBranch) {
+                    // This is a real non-callee successor: ordinary
+                    // fallthrough, a call continuation, or another statically
+                    // known control-flow continuation.  An owner-domain split
+                    // must not make it disappear from the inventory walk.
+                    local_tail_ingresses.push_back(
+                        {control.address, successor, false, true, false});
                     continue;
+                }
                 if (control.target_address.has_value() &&
                     successor == *control.target_address) {
                     local_tail_ingresses.push_back(
@@ -3159,14 +3365,6 @@ detail::analyze_function_values_with_guarded_entry_cache(
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
     }
-    for (const auto& carrier : candidate_call_carriers) {
-        const auto owners = function_owners_by_control.find(carrier.call_site);
-        if (owners == function_owners_by_control.end()) continue;
-        auto& callers = callers_by_callee[carrier.target];
-        callers.insert(callers.end(),
-                       owners->second.begin(),
-                       owners->second.end());
-    }
     for (auto& [callee, callers] : callers_by_callee) {
         static_cast<void>(callee);
         normalize(callers);
@@ -3207,11 +3405,6 @@ detail::analyze_function_values_with_guarded_entry_cache(
         if (input == candidate_inputs.end()) continue;
         input->second.expected_call_sites.insert(edge.instruction_address);
     }
-    for (const auto& carrier : candidate_call_carriers) {
-        const auto input = candidate_inputs.find(carrier.target);
-        if (input == candidate_inputs.end()) continue;
-        input->second.expected_call_sites.insert(carrier.call_site);
-    }
     for (auto& [address, input] : candidate_inputs) {
         input.state.stack_offsets[15u] = 0;
         if (input.expected_call_sites.empty() ||
@@ -3250,7 +3443,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         auto evaluation = evaluate_function(image,
                                             *function->second,
                                             block_index,
-                                            indirect_callees,
+                                            summary_indirect_callees,
                                             no_tail_ingresses,
                                             summaries,
                                             candidate_inputs[address].state,
@@ -3324,6 +3517,31 @@ detail::analyze_function_values_with_guarded_entry_cache(
     const auto& final_function_by_address = std::as_const(function_by_address);
     const auto& final_inventory_region_by_address =
         std::as_const(inventory_region_by_address);
+    const auto candidate_call_pair_key =
+        [](const std::uint32_t call_site, const std::uint32_t callee) {
+            return (static_cast<std::uint64_t>(call_site) << 32u) |
+                   callee;
+        };
+    std::unordered_set<std::uint64_t> candidate_call_pairs;
+    std::unordered_set<std::uint32_t> candidate_call_owner_functions;
+    candidate_call_pairs.reserve(candidate_call_carriers.size());
+    for (const auto& carrier : candidate_call_carriers) {
+        const auto global_summary = summaries.find(carrier.target);
+        const auto* global_return =
+            global_summary == summaries.end()
+                ? nullptr
+                : register_summary(global_summary->second, 0u);
+        if (global_return != nullptr && global_return->complete &&
+            !global_return->values.empty())
+            continue;
+        candidate_call_pairs.insert(
+            candidate_call_pair_key(carrier.call_site, carrier.target));
+        const auto owners =
+            function_owners_by_control.find(carrier.call_site);
+        if (owners == function_owners_by_control.end()) continue;
+        candidate_call_owner_functions.insert(owners->second.begin(),
+                                              owners->second.end());
+    }
     const auto evaluate_resolution_function = [&](const std::size_t function_index) {
         ResolutionFunctionResult function_result;
         const auto* function = resolution_functions[function_index];
@@ -3331,7 +3549,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         function_result.evaluation = evaluate_function(image,
                                                        *function,
                                                        block_index,
-                                                       indirect_callees,
+                                                       inventory_indirect_callees,
                                                        tail_ingresses,
                                                        summaries,
                                                        input.state,
@@ -3441,7 +3659,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         image,
                         *forwarded.function,
                         block_index,
-                        indirect_callees,
+                        inventory_indirect_callees,
                         tail_ingresses,
                         summaries,
                         forwarded.input,
@@ -3457,6 +3675,96 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 if (!forwarded_contexts.empty())
                     function_result.inventory_walk_truncated = true;
             };
+        const auto harvest_contextual_candidate_returns = [&] {
+            if (!candidate_call_owner_functions.contains(
+                    function->entry_address))
+                return;
+            std::map<std::uint32_t, AbstractState> context_inputs;
+            std::map<std::uint32_t, FunctionValueSummary>
+                contextual_summaries;
+            std::map<std::uint32_t, std::set<std::uint32_t>>
+                context_callers;
+            std::deque<std::uint32_t> pending_contexts;
+            std::unordered_set<std::uint32_t> queued_contexts;
+            const auto enqueue_context =
+                [&](const std::uint32_t address) {
+                    if (queued_contexts.insert(address).second)
+                        pending_contexts.push_back(address);
+                };
+            context_inputs.emplace(function->entry_address, input.state);
+            enqueue_context(function->entry_address);
+            std::size_t contextual_evaluations = 0u;
+            while (!pending_contexts.empty() &&
+                   contextual_evaluations <
+                       maximum_forwarded_store_contexts) {
+                const auto address = pending_contexts.front();
+                pending_contexts.pop_front();
+                queued_contexts.erase(address);
+                const auto context_function =
+                    final_function_by_address.find(address);
+                const auto context_input = context_inputs.find(address);
+                if (context_function == final_function_by_address.end() ||
+                    context_input == context_inputs.end())
+                    continue;
+                ++contextual_evaluations;
+                auto context_evaluation = evaluate_function(
+                    image,
+                    *context_function->second,
+                    block_index,
+                    inventory_indirect_callees,
+                    tail_ingresses,
+                    summaries,
+                    context_input->second,
+                    false,
+                    true,
+                    &function_result.inventory,
+                    std::nullopt,
+                    &contextual_summaries);
+                const auto previous =
+                    contextual_summaries.find(address);
+                const bool summary_changed =
+                    previous == contextual_summaries.end() ||
+                    previous->second != context_evaluation.summary;
+                contextual_summaries[address] =
+                    std::move(context_evaluation.summary);
+                if (summary_changed) {
+                    const auto callers = context_callers.find(address);
+                    if (callers != context_callers.end()) {
+                        for (const auto caller : callers->second)
+                            enqueue_context(caller);
+                    }
+                }
+                for (auto& observation :
+                     context_evaluation.call_arguments) {
+                    if (!candidate_call_pairs.contains(
+                            candidate_call_pair_key(
+                                observation.call_site,
+                                observation.callee)))
+                        continue;
+                    if (!final_function_by_address.contains(
+                            observation.callee))
+                        continue;
+                    if (!context_inputs.contains(observation.callee) &&
+                        context_inputs.size() >=
+                            maximum_forwarded_store_contexts) {
+                        function_result.inventory_walk_truncated = true;
+                        continue;
+                    }
+                    context_callers[observation.callee].insert(address);
+                    const auto [stored, inserted] =
+                        context_inputs.try_emplace(
+                            observation.callee,
+                            std::move(observation.state));
+                    if (inserted ||
+                        merge_state(stored->second, observation.state))
+                        enqueue_context(observation.callee);
+                }
+            }
+            if (!pending_contexts.empty())
+                function_result.inventory_walk_truncated = true;
+        };
+        if (!result.budget_exhausted)
+            harvest_contextual_candidate_returns();
         if (!result.budget_exhausted)
             harvest_forwarded_inventory(function_result.evaluation,
                                         std::nullopt);
@@ -3471,7 +3779,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     evaluate_function(image,
                                       *function,
                                       block_index,
-                                      indirect_callees,
+                                      inventory_indirect_callees,
                                       tail_ingresses,
                                       summaries,
                                       isolated_store_input(call_site,

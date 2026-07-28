@@ -97,14 +97,39 @@ struct ReturnedCodeAddressTableCandidate {
 struct GuardedCodeInventory {
     std::vector<StoredCodeAddressCandidate> stored_code_addresses;
     std::vector<ReturnedCodeAddressTableCandidate> returned_code_address_tables;
+    std::size_t raw_stored_candidate_budget = 0u;
+    std::size_t raw_stored_candidate_count = 0u;
     std::size_t candidate_budget = 0u;
     std::size_t candidate_count = 0u;
     std::size_t shape_validation_work = 0u;
     std::size_t shape_validation_work_budget = 0u;
     std::size_t shape_budget_exceeded_candidates = 0u;
+    bool raw_stored_candidates_truncated = false;
     bool candidate_inventory_truncated = false;
     bool table_scan_truncated = false;
 };
+
+namespace detail {
+
+enum class GuardedCodeInventoryPriorityKind : std::uint8_t {
+    CompleteStored,
+    IncompleteStored,
+    CompleteReturnedTable,
+    TruncatedReturnedTable,
+};
+
+struct GuardedCodeInventoryPriorityTarget {
+    std::uint32_t target_address = 0u;
+    GuardedCodeInventoryPriorityKind kind =
+        GuardedCodeInventoryPriorityKind::IncompleteStored;
+};
+
+[[nodiscard]] std::vector<std::uint32_t>
+guarded_code_inventory_priority_order(
+    std::span<const GuardedCodeInventoryPriorityTarget> candidates,
+    std::size_t returned_table_reserve);
+
+} // namespace detail
 
 struct FunctionValueAnalysisResult {
     std::vector<FunctionValueSummary> summaries;

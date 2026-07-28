@@ -5,12 +5,14 @@
 #include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/executable_modules.hpp"
+#include "katana/runtime/game_project_artifact.hpp"
 #include "katana/runtime/indirect_dispatch.hpp"
 #include "katana/runtime/packed_disc.hpp"
 #include "katana/runtime/platform_services.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -24,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -654,6 +657,30 @@ int run_test(const int argc, char* argv[]) {
                                  ? FixtureProgram::UnknownDynamicTarget
                                  : FixtureProgram::Normal;
         write_fixture(directory, program);
+        if (std::string_view(argv[1]) == "--write-fixture") {
+            const auto boot = katana::runtime::load_dreamcast_runtime_boot(
+                directory / "disc.gdi");
+            const auto boot_identity =
+                std::string("sha256:") +
+                katana::io::sha256_bytes(std::string_view(
+                    reinterpret_cast<const char*>(boot.boot_file.data()),
+                    boot.boot_file.size()));
+            katana::runtime::GameProjectDefinition game_project;
+            game_project.project_id =
+                "katana.test.product-gate-early-exit";
+            game_project.project_version = "1";
+            game_project.identity = {
+                boot.content_identity,
+                boot.boot_file_name,
+                boot_identity};
+            game_project.required_product_milestone =
+                katana::runtime::RequiredProductMilestone::
+                    GameCodeProgressed;
+            static_cast<void>(
+                katana::runtime::GameProjectArtifact::write(
+                    directory / "product-gate.katana-game-project",
+                    game_project));
+        }
         if (std::string(argv[1]) == "--write-counted-loop-fixture" ||
             std::string(argv[1]) == "--write-counted-loop-on-chip-fixture") {
             const bool on_chip_counter =
@@ -3814,6 +3841,21 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("metadata/port-project.json")
                     .find("\"unbound_code_policy\":\"typed-materialization-error\"") !=
                 std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"function_budget_exhausted\":false") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"raw_stored_code_inventory_truncated\":false") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"candidate_inventory_truncated\":false") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"returned_table_scan_truncated\":false") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"guarded_code_shape_budget_exceeded_candidates\":0") !=
+                std::string::npos &&
             runtime_dispatch_shards.find("generated-block-8C010000") !=
                 std::string::npos &&
             runtime_dispatch_shards
@@ -4091,6 +4133,15 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp")
                     .find("KATANA_BRINGUP_RUN") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("emit_terminal_failure(\n"
+                          "            \"runtime-dispatch\", error.callsite(), "
+                          "error.target(),") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("materializer_failure=") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("post_entry_central_dispatches=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("KATANA_STATIC_AOT_ESCAPE_STATS") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
@@ -4128,12 +4179,16 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("source.parent_path().string()") ==
                 std::string::npos &&
             read_text(output / "run-product-gate.ps1")
-                    .find("KATANA_GUEST_CYCLE_BUDGET = '600000000'") !=
+                    .find("EnvironmentVariables['KATANA_GUEST_CYCLE_BUDGET'] = "
+                          "'600000000'") !=
                 std::string::npos &&
             read_text(output / "run-product-gate.ps1")
                     .find("UseShellExecute = $false") != std::string::npos &&
             read_text(output / "run-product-gate.ps1")
-                    .find("status=host-watchdog-hang") != std::string::npos,
+                    .find("status=host-watchdog-hang") != std::string::npos &&
+            read_text(output / "run-product-gate.ps1")
+                    .find("$env:KATANA_GUEST_CYCLE_BUDGET =") ==
+                std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     const auto product_entry_boundary =
         generated_main.find("void note_guest_program_entry() noexcept");
@@ -4850,6 +4905,28 @@ int run_test(const int argc, char* argv[]) {
 }
 
 int main(const int argc, char* argv[]) {
+    if (const auto* child_exit =
+            std::getenv("KATANA_PRODUCT_GATE_CHILD_EXIT");
+        child_exit != nullptr) {
+        if (const auto* budget_file =
+                std::getenv("KATANA_PRODUCT_GATE_CHILD_BUDGET_FILE");
+            budget_file != nullptr) {
+            std::ofstream output(budget_file, std::ios::binary | std::ios::trunc);
+            const auto* budget = std::getenv("KATANA_GUEST_CYCLE_BUDGET");
+            output << (budget != nullptr ? budget : "<unset>") << '\n';
+            if (!output) return EXIT_FAILURE;
+        }
+        if (const auto* delay =
+                std::getenv("KATANA_PRODUCT_GATE_CHILD_DELAY_SECONDS");
+            delay != nullptr) {
+            const auto seconds = std::string_view(delay) == "5" ? 5 : 0;
+            std::this_thread::sleep_for(std::chrono::seconds(seconds));
+        }
+        if (std::string_view(child_exit) == "0") return 0;
+        if (std::string_view(child_exit) == "1") return 1;
+        if (std::string_view(child_exit) == "3") return 3;
+        return EXIT_FAILURE;
+    }
     try {
         return run_test(argc, argv);
     } catch (const std::exception& error) {

@@ -1232,6 +1232,12 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.function_budget_exhausted = function_values.budget_exhausted;
         auto guarded_code_inventory =
             std::move(function_values.guarded_code_inventory);
+        analysis.raw_stored_code_inventory_candidates =
+            guarded_code_inventory.raw_stored_candidate_count;
+        analysis.raw_stored_code_inventory_budget =
+            guarded_code_inventory.raw_stored_candidate_budget;
+        analysis.raw_stored_code_inventory_truncated =
+            guarded_code_inventory.raw_stored_candidates_truncated;
         analysis.guarded_code_inventory_candidates =
             guarded_code_inventory.candidate_count;
         analysis.guarded_code_inventory_budget =
@@ -1249,6 +1255,14 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         final_guarded_code_inventory = guarded_code_inventory;
         analysis.function_value_summaries = std::move(function_values.summaries);
         report_progress("function-values-complete");
+        if (analysis.function_budget_exhausted) {
+            // The product export rejects this state.  Growing more outer
+            // seeds from a non-converged summary graph only restarts the same
+            // bounded analysis and can turn one typed failure into minutes of
+            // repeated work without making the inventory complete.
+            report_progress("function-values-budget-exhausted");
+            break;
+        }
         for (const auto& candidate :
              guarded_code_inventory.stored_code_addresses) {
             const std::array origins{FunctionOrigin::StoredCodeAddress};
