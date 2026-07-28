@@ -294,6 +294,23 @@ bool valid_game_project_sha256_identity(
         });
 }
 
+std::string_view required_product_milestone_name(
+    const RequiredProductMilestone milestone) noexcept {
+    switch (milestone) {
+    case RequiredProductMilestone::BootExecutableEntry:
+        return "BootExecutableEntry";
+    case RequiredProductMilestone::GameCodeProgressed:
+        return "GameCodeProgressed";
+    case RequiredProductMilestone::FirstGameFramebufferWrite:
+        return "FirstGameFramebufferWrite";
+    case RequiredProductMilestone::FirstTaFrame:
+        return "FirstTaFrame";
+    case RequiredProductMilestone::FirstVisibleGameFrame:
+        return "FirstVisibleGameFrame";
+    }
+    return "Invalid";
+}
+
 bool game_project_code_identity_matches(
     const GameProjectCodeIdentity& identity,
     const std::span<const std::uint8_t> bytes) noexcept {
@@ -360,6 +377,10 @@ void validate_game_project_definition(
     if (definition.project_version.empty())
         throw std::invalid_argument("game-project-version-empty");
     validate_identity_binding(definition.identity);
+    if (required_product_milestone_name(
+            definition.required_product_milestone) == "Invalid")
+        throw std::invalid_argument(
+            "game-project-required-product-milestone-invalid");
     if (definition.game_entry_handoff.has_value())
         validate_game_entry_binding(
             definition, *definition.game_entry_handoff);
@@ -655,7 +676,11 @@ std::string game_project_definition_identity(
              << definition.project_id << ':' << definition.project_version
              << ':' << definition.identity.content_identity << ':'
              << definition.identity.boot_file_name << ':'
-             << definition.identity.boot_byte_identity << ';';
+             << definition.identity.boot_byte_identity << ';'
+             << "required-product-milestone:"
+             << static_cast<unsigned>(
+                    definition.required_product_milestone)
+             << ';';
     for (const auto& function : definition.function_boundaries)
         material << "function:" << function.start << ':' << function.size << ':'
                  << function.symbol << ';';

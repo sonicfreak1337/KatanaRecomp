@@ -1078,9 +1078,16 @@ int run_test(const int argc, char* argv[]) {
     require(
         external_boundary_export.functions != 0u &&
             external_boundary_units.find(
-                "fn_8C010010_with_services") != std::string::npos &&
+                 "fn_8C010010_with_services") != std::string::npos &&
             external_boundary_sources.at("metadata/game-project.json")
                     .find("\"start\":2348875792,\"size\":2") !=
+                std::string::npos &&
+            external_boundary_sources.at("metadata/game-project.json")
+                    .find("\"schema\":\"katana-game-project-v3\"") !=
+                std::string::npos &&
+            external_boundary_sources.at("metadata/game-project.json")
+                    .find("\"required_product_milestone\":"
+                          "\"FirstVisibleGameFrame\"") !=
                 std::string::npos &&
             std::find(external_boundary_export.checkpoints.begin(),
                       external_boundary_export.checkpoints.end(),
@@ -1306,6 +1313,8 @@ int run_test(const int argc, char* argv[]) {
         private_boot.install_recipe.content_identity,
         private_boot.metadata.boot_file_name,
         direct_boot_byte_identity};
+    direct_boot_project.required_product_milestone =
+        katana::runtime::RequiredProductMilestone::FirstTaFrame;
     direct_boot_project.function_boundaries = external_boundaries;
     direct_boot_project.boot_config.emplace();
     katana::runtime::GameEntryHandoffBinding direct_boot_handoff;
@@ -1383,6 +1392,12 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 direct_boot_main.find(
                     "local_game_project_registration.emplace") !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    "RequiredProductMilestone::FirstTaFrame") !=
+                    std::string::npos &&
+                direct_boot_main.find(
+                    "local_definition.required_product_milestone") !=
                     std::string::npos &&
                 direct_boot_main.find(
                     "game-entry-handoff-game-project-not-registered") ==
@@ -3961,6 +3976,21 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp")
                     .find("milestone_bits=") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("requested_post_entry_cycles=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("executed_post_entry_cycles=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("post_entry_guest_mhz=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("try_set_guest_cycle_budget_after_current_cycle") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("guest-cycle-budget-reached-milestone-missed") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("KATANA_BRINGUP_RUN") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("KATANA_STATIC_AOT_ESCAPE_STATS") !=
@@ -3977,7 +4007,7 @@ int run_test(const int argc, char* argv[]) {
                     .find("retired_delta == 0u || new_exception ||") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("!services.guest_program_progressed()") != std::string::npos &&
+                    .find("const bool terminal_problem =") != std::string::npos &&
             normal_frame_proof < normal_runtime_dispatch &&
             read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
                 std::string::npos &&

@@ -278,6 +278,7 @@ serialize_definition(const GameProjectDefinition& definition) {
     writer.string(
         definition.identity.boot_byte_identity,
         artifact_maximum_identity_size);
+    writer.enumeration(definition.required_product_milestone);
 
     writer.u32(checked_count(definition.function_boundaries.size()));
     for (const auto& function : definition.function_boundaries) {
@@ -572,6 +573,8 @@ void GameProjectArtifact::rebuild_definition() {
     definition_.project_version = project_version_;
     definition_.identity = {
         content_identity_, boot_file_name_, boot_byte_identity_};
+    definition_.required_product_milestone =
+        required_product_milestone_;
     definition_.function_boundaries = function_boundaries_;
     definition_.jump_tables = jump_tables_;
     definition_.callback_tables = callback_tables_;
@@ -623,6 +626,8 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
     result->boot_file_name_ = reader.string(255u);
     result->boot_byte_identity_ =
         reader.string(artifact_maximum_identity_size);
+    result->required_product_milestone_ =
+        reader.enumeration<RequiredProductMilestone>();
 
     const auto function_count = reader.count();
     result->function_symbols_.reserve(function_count);

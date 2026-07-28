@@ -344,6 +344,17 @@ void EventScheduler::set_guest_cycle_budget(const std::optional<std::uint64_t> m
     guest_cycle_budget_ = maximum_cycle;
 }
 
+std::optional<std::uint64_t>
+EventScheduler::try_set_guest_cycle_budget_after_current_cycle(
+    const std::uint64_t guest_cycles) noexcept {
+    if (advance_in_progress_ || guest_cycle_budget_ || guest_cycles == 0u ||
+        guest_cycles >
+            std::numeric_limits<std::uint64_t>::max() - current_cycle_)
+        return std::nullopt;
+    guest_cycle_budget_ = current_cycle_ + guest_cycles;
+    return guest_cycle_budget_;
+}
+
 std::optional<std::uint64_t> EventScheduler::guest_cycle_budget() const noexcept {
     return guest_cycle_budget_;
 }

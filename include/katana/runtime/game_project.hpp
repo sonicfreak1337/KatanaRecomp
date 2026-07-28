@@ -16,7 +16,15 @@ namespace katana::runtime {
 
 class PlatformServices;
 
-inline constexpr std::uint32_t game_project_contract_version = 2u;
+inline constexpr std::uint32_t game_project_contract_version = 3u;
+
+enum class RequiredProductMilestone : std::uint8_t {
+    BootExecutableEntry,
+    GameCodeProgressed,
+    FirstGameFramebufferWrite,
+    FirstTaFrame,
+    FirstVisibleGameFrame
+};
 
 enum class GameProjectControlTransferKind : std::uint8_t {
     Jump,
@@ -133,6 +141,8 @@ struct GameProjectDefinition {
     std::string_view project_id;
     std::string_view project_version;
     GameProjectIdentityBinding identity;
+    RequiredProductMilestone required_product_milestone =
+        RequiredProductMilestone::FirstVisibleGameFrame;
     std::span<const GameProjectFunctionBoundary> function_boundaries;
     std::span<const GameProjectJumpTable> jump_tables;
     std::span<const GameProjectCallbackTable> callback_tables;
@@ -199,6 +209,8 @@ class GameProjectHookContractError final : public std::runtime_error {
 valid_game_project_hook_result(const GameProjectHookResult& result) noexcept;
 [[nodiscard]] bool
 valid_game_project_sha256_identity(std::string_view identity) noexcept;
+[[nodiscard]] std::string_view required_product_milestone_name(
+    RequiredProductMilestone milestone) noexcept;
 [[nodiscard]] bool game_project_code_identity_matches(
     const GameProjectCodeIdentity& identity,
     std::span<const std::uint8_t> bytes) noexcept;

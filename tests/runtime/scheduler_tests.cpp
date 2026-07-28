@@ -324,6 +324,30 @@ int main() {
                 throws<std::logic_error>([&] { bounded.set_guest_cycle_budget(11u); }),
             "Gastzyklusbudget kappt nicht exakt oder kann waehrend des Laufs mutieren.");
 
+    EventScheduler restored_budget;
+    restored_budget.restore_time_passive(415'233'270u);
+    const auto restored_target =
+        restored_budget.try_set_guest_cycle_budget_after_current_cycle(
+            600'000'000u);
+    require(restored_target == 1'015'233'270u &&
+                restored_budget.remaining_guest_cycles() == 600'000'000u &&
+                restored_budget.advance_to(
+                    std::numeric_limits<std::uint64_t>::max(), 0u)
+                        .guest_cycle == *restored_target &&
+                !restored_budget.try_set_guest_cycle_budget_after_current_cycle(
+                    1u) &&
+                !EventScheduler{}
+                     .try_set_guest_cycle_budget_after_current_cycle(0u),
+            "Post-Entry-Gastbudget ist nicht relativ, exakt oder einmalig.");
+
+    EventScheduler overflowing_budget;
+    overflowing_budget.restore_time_passive(
+        std::numeric_limits<std::uint64_t>::max() - 3u);
+    require(
+        !overflowing_budget.try_set_guest_cycle_budget_after_current_cycle(4u) &&
+            !overflowing_budget.guest_cycle_budget().has_value(),
+        "Post-Entry-Gastbudget akzeptiert 64-Bit-Ueberlauf.");
+
     std::cout << "KR-3101 Event-Scheduler erfolgreich.\n";
     return 0;
 }

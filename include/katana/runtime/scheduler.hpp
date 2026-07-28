@@ -126,6 +126,12 @@ class EventScheduler {
     void detach_crash_capsule(const CrashCapsule& capsule) noexcept;
     void attach_replay_log(SystemReplayLog& replay_log);
     void set_guest_cycle_budget(std::optional<std::uint64_t> maximum_cycle);
+    // Arms one immutable budget relative to the already elapsed guest time.
+    // Failure is reported without throwing so noexcept executable-entry
+    // callbacks can fail closed on zero, overflow or an existing budget.
+    [[nodiscard]] std::optional<std::uint64_t>
+    try_set_guest_cycle_budget_after_current_cycle(
+        std::uint64_t guest_cycles) noexcept;
     [[nodiscard]] std::optional<std::uint64_t> guest_cycle_budget() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t> remaining_guest_cycles() const noexcept;
 

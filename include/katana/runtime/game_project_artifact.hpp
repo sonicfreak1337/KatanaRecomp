@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t game_project_artifact_format_version = 1u;
+inline constexpr std::uint32_t game_project_artifact_format_version = 2u;
 inline constexpr std::uint64_t game_project_artifact_maximum_size =
     64u * 1024u * 1024u;
 
@@ -55,6 +55,8 @@ class GameProjectArtifact final {
     std::string content_identity_;
     std::string boot_file_name_;
     std::string boot_byte_identity_;
+    RequiredProductMilestone required_product_milestone_ =
+        RequiredProductMilestone::FirstVisibleGameFrame;
 
     std::vector<std::string> function_symbols_;
     std::vector<GameProjectFunctionBoundary> function_boundaries_;
