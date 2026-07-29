@@ -423,6 +423,37 @@ if(NOT restored_generated_manifest_content STREQUAL generated_manifest_content)
     "Neu-Export stellt das Artefaktmanifest nicht exakt wieder her")
 endif()
 
+# Die finale Distribution ist eine positive Dateiliste. Gemeinsam injizierte
+# Rootdateien, Bootsektoren und Trackabbilder duerfen weder durch einen
+# Whole-Export-Hit noch durch die inkrementelle Publish-Kopie gelangen.
+set(injected_root_files
+    "${port_workspace}/cache-injected-root.txt"
+    "${port_workspace}/IP.BIN"
+    "${port_workspace}/content/track03.bin")
+foreach(injected IN LISTS injected_root_files)
+  file(WRITE "${injected}" "synthetic distribution injection\n")
+endforeach()
+execute_process(
+  COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
+          --output "${fixture}/port" --target-name cli_game
+          --game-project "${fixture}/disc/product-gate.katana-game-project"
+  RESULT_VARIABLE injected_distribution_result
+  OUTPUT_VARIABLE injected_distribution_output
+  ERROR_VARIABLE injected_distribution_error
+)
+if(injected_distribution_result EQUAL 0 OR
+   NOT "${injected_distribution_error}" MATCHES
+       "nicht distributionsgebundene Datei" OR
+   EXISTS "${fixture}/port/cache-injected-root.txt" OR
+   EXISTS "${fixture}/port/IP.BIN" OR
+   EXISTS "${fixture}/port/content/track03.bin")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Distributions-Allowlist akzeptiert injizierte Root-/IP.BIN-/Trackdaten: "
+    "${injected_distribution_output} ${injected_distribution_error}")
+endif()
+file(REMOVE ${injected_root_files})
+
 execute_process(
   COMMAND "${game}" --install-disc "${fixture}/disc/disc.gdi"
   RESULT_VARIABLE reinstall_result

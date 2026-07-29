@@ -1260,59 +1260,6 @@ void require_optimized_msvc_relwithdebinfo(const std::filesystem::path& build_ro
 }
 #endif
 
-bool excluded_from_port_distribution(const std::filesystem::path& relative) {
-    if (relative.empty()) return false;
-    const auto top_level = relative.begin()->generic_string();
-    return top_level == "user-data" || top_level == ".katana-codegen-cache" ||
-           top_level == "build" ||
-           top_level.starts_with("build-");
-}
-
-void copy_port_tree_for_distribution(const std::filesystem::path& source,
-                                     const std::filesystem::path& destination) {
-    if (!safe_regular_port_directory_exists(source, "Portquelle")) return;
-    if (safe_regular_port_directory_exists(destination, "Portkopieziel"))
-        throw std::runtime_error("Portkopieziel existiert bereits.");
-    std::filesystem::create_directories(destination);
-    for (std::filesystem::recursive_directory_iterator iterator(source), end; iterator != end;
-         ++iterator) {
-        const auto relative = iterator->path().lexically_relative(source);
-        if (excluded_from_port_distribution(relative)) {
-            if (iterator->is_directory()) iterator.disable_recursion_pending();
-            continue;
-        }
-        const auto status = iterator->symlink_status();
-        if (std::filesystem::is_symlink(status))
-            throw std::runtime_error("Portquelle enthaelt einen symbolischen Link.");
-        if (iterator->path().extension() == ".katana-disc") {
-            if (iterator->is_directory()) iterator.disable_recursion_pending();
-            continue;
-        }
-        const auto target = destination / relative;
-        if (std::filesystem::is_directory(status)) {
-            std::filesystem::create_directories(target);
-            continue;
-        }
-        if (!std::filesystem::is_regular_file(status))
-            throw std::runtime_error("Portquelle enthaelt einen nicht regulaeren Eintrag.");
-        std::filesystem::create_directories(target.parent_path());
-        std::filesystem::copy_file(
-            iterator->path(), target, std::filesystem::copy_options::overwrite_existing);
-        std::error_code permission_error;
-        std::filesystem::permissions(target,
-                                     status.permissions(),
-                                     std::filesystem::perm_options::replace,
-                                     permission_error);
-        if (permission_error)
-            throw std::runtime_error("Portdateirechte konnten nicht uebernommen werden.");
-        std::error_code timestamp_error;
-        std::filesystem::last_write_time(
-            target, std::filesystem::last_write_time(iterator->path()), timestamp_error);
-        if (timestamp_error)
-            throw std::runtime_error("Portdatei-Zeitstempel konnte nicht uebernommen werden.");
-    }
-}
-
 bool path_is_within(const std::filesystem::path& path,
                     const std::filesystem::path& root) {
     const auto relative = path.lexically_relative(root);
@@ -1446,6 +1393,217 @@ validated_generated_source_files(const std::filesystem::path& root) {
     const std::vector<std::filesystem::path> expected{"main.cpp"};
     if (*actual != expected) return std::nullopt;
     return std::vector<std::filesystem::path>{source_root / expected.front()};
+}
+
+std::string read_port_distribution_text(
+    const std::filesystem::path& path,
+    const std::size_t maximum_size = 1024u * 1024u) {
+    std::error_code size_error;
+    const auto size = std::filesystem::file_size(path, size_error);
+    if (size_error || size > maximum_size)
+        throw std::runtime_error(
+            "Portdistributionsmanifest ist unlesbar oder zu gross.");
+    std::ifstream input(path, std::ios::binary);
+    std::string content(static_cast<std::size_t>(size), '\0');
+    if (!input)
+        throw std::runtime_error(
+            "Portdistributionsmanifest konnte nicht geoeffnet werden.");
+    if (!content.empty())
+        input.read(content.data(), static_cast<std::streamsize>(content.size()));
+    if (!input || input.peek() != std::char_traits<char>::eof())
+        throw std::runtime_error(
+            "Portdistributionsmanifest konnte nicht vollstaendig gelesen werden.");
+    return content;
+}
+
+std::string disc_install_manifest_document(
+    const katana::runtime::DiscInstallRecipe& recipe,
+    const std::string_view recipe_sha256,
+    const std::string_view executable_name,
+    const std::string_view executable_sha256) {
+    return "{\"schema\":\"katana-disc-install\",\"version\":1,"
+           "\"job_generation\":\"" +
+           recipe.job_generation + "\",\"content_identity\":\"" +
+           recipe.content_identity +
+           "\",\"artifacts\":[{\"role\":\"disc_install_recipe\",\"path\":"
+           "\"game.katana-install\",\"sha256\":\"" +
+           std::string(recipe_sha256) +
+           "\"},{\"role\":\"host_executable\",\"path\":\"../" +
+           std::string(executable_name) + "\",\"sha256\":\"" +
+           std::string(executable_sha256) + "\"}]}\n";
+}
+
+std::string runtime_dependency_manifest_document(
+    const katana::runtime::DiscInstallRecipe& recipe) {
+    return "{\"schema\":\"katana-runtime-dependencies\",\"version\":1,"
+           "\"linkage\":\"static\",\"job_generation\":\"" +
+           recipe.job_generation + "\",\"files\":[]}\n";
+}
+
+bool private_port_workspace_path(const std::filesystem::path& relative) {
+    if (relative.empty()) return false;
+    const auto top_level = relative.begin()->generic_string();
+    return top_level == "user-data" ||
+           top_level == ".katana-codegen-cache" ||
+           top_level == "build" || top_level.starts_with("build-");
+}
+
+void copy_validated_port_distribution(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination,
+    const std::string_view target_name,
+    const katana::runtime::DiscInstallRecipe& expected_recipe) {
+    if (!safe_regular_port_directory_exists(source, "Portquelle")) return;
+    if (safe_regular_port_directory_exists(destination, "Portkopieziel"))
+        throw std::runtime_error("Portkopieziel existiert bereits.");
+
+    std::vector<std::filesystem::path> allowed;
+    constexpr std::array<std::string_view, 7u> required_files{
+        "CMakeLists.txt",
+        ".gitignore",
+        "INSTALL_ORIGINAL_DISC.txt",
+        "run-product-gate.ps1",
+        "content/game.katana-install",
+        "content/game.katana-install.json",
+        "runtime/runtime-dependencies.json"};
+    for (const auto relative : required_files) {
+        allowed.emplace_back(relative);
+    }
+    auto executable_relative = std::filesystem::path(target_name);
+#ifdef _WIN32
+    executable_relative += ".exe";
+#endif
+    allowed.push_back(executable_relative);
+
+    const auto generated_files = validated_generated_artifact_files(source);
+    const auto generated_sources = validated_generated_source_files(source);
+    if (!generated_files || !generated_sources)
+        throw std::runtime_error(
+            "Portquelle besitzt kein exaktes generiertes Artefaktinventar.");
+    for (const auto& path : *generated_files)
+        allowed.push_back(path.lexically_relative(source));
+    for (const auto& path : *generated_sources)
+        allowed.push_back(path.lexically_relative(source));
+    std::sort(allowed.begin(), allowed.end(), [](const auto& left, const auto& right) {
+        return left.generic_string() < right.generic_string();
+    });
+    if (std::adjacent_find(allowed.begin(), allowed.end()) != allowed.end())
+        throw std::logic_error(
+            "Portdistributions-Allowlist enthaelt doppelte Pfade.");
+
+    for (const auto& relative : allowed) {
+        const auto path = source / relative;
+        std::error_code status_error;
+        const auto status = std::filesystem::symlink_status(path, status_error);
+        if (status_error || !std::filesystem::is_regular_file(status) ||
+            std::filesystem::is_symlink(status))
+            throw std::runtime_error(
+                "Portdistributionsdatei fehlt oder ist nicht regulaer: " +
+                relative.generic_string());
+    }
+
+    const auto recipe_path = source / "content" / "game.katana-install";
+    const auto actual_recipe =
+        katana::runtime::parse_disc_install_recipe(recipe_path);
+    if (katana::runtime::format_disc_install_recipe(actual_recipe) !=
+        katana::runtime::format_disc_install_recipe(expected_recipe))
+        throw std::runtime_error(
+            "Portdistributions-Recipe besitzt eine falsche Identitaet.");
+    const auto recipe_sha256 =
+        katana::io::capture_input_provenance(
+            "disc-install-recipe", recipe_path)
+            .sha256;
+    const auto executable_path = source / executable_relative;
+    const auto executable_sha256 =
+        katana::io::capture_input_provenance(
+            "host-executable", executable_path)
+            .sha256;
+    const auto expected_install_manifest =
+        disc_install_manifest_document(
+            expected_recipe,
+            recipe_sha256,
+            executable_relative.generic_string(),
+            executable_sha256);
+    if (read_port_distribution_text(
+            source / "content" / "game.katana-install.json") !=
+        expected_install_manifest)
+        throw std::runtime_error(
+            "Portdistributions-Installationsmanifest ist nicht exakt "
+            "an Recipe und Hostprogramm gebunden.");
+    if (read_port_distribution_text(
+            source / "runtime" / "runtime-dependencies.json") !=
+        runtime_dependency_manifest_document(expected_recipe))
+        throw std::runtime_error(
+            "Portdistributions-Runtimevertrag ist nicht die sichere "
+            "statische Dateiliste.");
+
+    for (std::filesystem::recursive_directory_iterator iterator(source), end;
+         iterator != end;
+         ++iterator) {
+        const auto relative =
+            iterator->path().lexically_relative(source).lexically_normal();
+        if (private_port_workspace_path(relative)) {
+            if (iterator->is_directory())
+                iterator.disable_recursion_pending();
+            continue;
+        }
+        std::error_code status_error;
+        const auto status = iterator->symlink_status(status_error);
+        if (status_error || std::filesystem::is_symlink(status))
+            throw std::runtime_error(
+                "Portquelle enthaelt einen unsicheren Dateisystemeintrag.");
+        if (std::filesystem::is_directory(status)) continue;
+        if (!std::filesystem::is_regular_file(status))
+            throw std::runtime_error(
+                "Portquelle enthaelt einen nicht regulaeren Eintrag.");
+        if (!std::binary_search(
+                allowed.begin(),
+                allowed.end(),
+                relative,
+                [](const auto& left, const auto& right) {
+                    return left.generic_string() < right.generic_string();
+                }))
+            throw std::runtime_error(
+                "Portquelle enthaelt eine nicht distributionsgebundene Datei: " +
+                relative.generic_string());
+    }
+
+    std::filesystem::create_directories(destination);
+    for (const auto& relative : allowed) {
+        const auto source_path = source / relative;
+        const auto target = destination / relative;
+        std::error_code status_error;
+        const auto status =
+            std::filesystem::symlink_status(source_path, status_error);
+        if (status_error || !std::filesystem::is_regular_file(status) ||
+            std::filesystem::is_symlink(status))
+            throw std::runtime_error(
+                "Portdistributionsdatei wurde waehrend des Publish "
+                "ungueltig: " +
+                relative.generic_string());
+        std::filesystem::create_directories(target.parent_path());
+        std::filesystem::copy_file(
+            source_path,
+            target,
+            std::filesystem::copy_options::overwrite_existing);
+        std::error_code permission_error;
+        std::filesystem::permissions(
+            target,
+            status.permissions(),
+            std::filesystem::perm_options::replace,
+            permission_error);
+        if (permission_error)
+            throw std::runtime_error(
+                "Portdateirechte konnten nicht uebernommen werden.");
+        std::error_code timestamp_error;
+        std::filesystem::last_write_time(
+            target,
+            std::filesystem::last_write_time(source_path),
+            timestamp_error);
+        if (timestamp_error)
+            throw std::runtime_error(
+                "Portdatei-Zeitstempel konnte nicht uebernommen werden.");
+    }
 }
 
 void remove_invalid_generated_artifact_tree(
@@ -2036,7 +2194,11 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::runtime_error("Altes Port-Publishing konnte nicht entfernt werden.");
     try {
         if (!safe_regular_port_directory_exists(workspace, "Port-Arbeitsverzeichnis"))
-            copy_port_tree_for_distribution(absolute_output, workspace);
+            copy_validated_port_distribution(
+                absolute_output,
+                workspace,
+                target_name,
+                *verified_install_recipe);
         katana::codegen::PortExportOptions export_options{
             target_name,
             KATANA_RECOMP_VERSION,
@@ -2251,31 +2413,29 @@ int export_port_project(const std::filesystem::path& source_path,
             katana::io::capture_input_provenance("host-executable", published_executable).sha256;
         const auto install_manifest = report.output_root / "content" / "game.katana-install.json";
         std::ofstream manifest(install_manifest, std::ios::binary | std::ios::trunc);
-        manifest << "{\"schema\":\"katana-disc-install\",\"version\":1,"
-                    "\"job_generation\":\""
-                 << recipe.job_generation << "\",\"content_identity\":\"" << recipe.content_identity
-                 << "\",\"artifacts\":["
-                 << "{\"role\":\"disc_install_recipe\",\"path\":\"game.katana-install\","
-                    "\"sha256\":\""
-                 << recipe_sha256 << "\"},{\"role\":\"host_executable\",\"path\":\"../"
-                 << published_executable.filename().generic_string() << "\",\"sha256\":\""
-                 << executable_sha256 << "\"}]}\n";
+        manifest << disc_install_manifest_document(
+            recipe,
+            recipe_sha256,
+            published_executable.filename().generic_string(),
+            executable_sha256);
         if (!manifest)
             throw std::runtime_error("Disc-Installationsmanifest konnte nicht finalisiert werden.");
         manifest.close();
         std::filesystem::create_directories(report.output_root / "runtime");
         std::ofstream runtime_manifest(report.output_root / "runtime" / "runtime-dependencies.json",
                                        std::ios::binary | std::ios::trunc);
-        runtime_manifest << "{\"schema\":\"katana-runtime-dependencies\",\"version\":1,"
-                            "\"linkage\":\"static\",\"job_generation\":\""
-                         << recipe.job_generation << "\",\"files\":[]}\n";
+        runtime_manifest << runtime_dependency_manifest_document(recipe);
         if (!runtime_manifest)
             throw std::runtime_error(
                 "Runtime-Abhaengigkeitsmanifest konnte nicht geschrieben werden.");
         runtime_manifest.close();
         std::filesystem::create_directories(report.output_root / "user-data");
         std::cout << "KATANA_PORT_PHASE package\n" << std::flush;
-        copy_port_tree_for_distribution(report.output_root, publish_stage);
+        copy_validated_port_distribution(
+            report.output_root,
+            publish_stage,
+            target_name,
+            recipe);
         std::filesystem::create_directories(publish_stage / "user-data");
         const auto stale = std::filesystem::path(absolute_output.string() + ".katana-stale-port");
         std::filesystem::remove_all(stale, cleanup_error);
