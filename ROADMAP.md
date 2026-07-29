@@ -43,12 +43,37 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
-letzte reale Produktevidenz: 60887f4 / ABI 74 / NativeDisc-v33
-aktueller Source-Head main:   20228a1 / Runtime-ABI 75 / Analyzer-ABI 9
-lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
+letzte reale Produktevidenz: 20228a1 / ABI 75 / NativeDisc-v33
+aktueller Runtime-Source:    4983bd1 / Runtime-ABI 77 / Analyzer-ABI 10
+lokaler Arbeitsbaum:         nur Roadmap-/Statussynchronisierung
 ```
 
-Der reale, erneut aus dem sauberen Main-Stand exportierte und mit der
+Der neueste reale ABI-75-NativeDisc-v33-Lauf praesentiert den PAL-Sega-
+Screen nach rund `2,03 s`, danach Grau und Schwarz. Er erreicht
+Gesamtzyklus `574.142.601` beziehungsweise `158.909.331` Post-Entry-Zyklen
+in `7,06442 s` (`22,4943 MHz` vorlaeufig) bei `16.396.296` zentralen
+Dispatches, drei PVR-Renderrequests und drei Completions, aber noch keiner
+TA-Geometrie und keinem sichtbaren Sonic-Screen. Der Lauf stoppt
+fail-closed bei `0x8C053C0A -> 0x8C900020`: Das Ziel ist ein vom Gast
+erzeugtes Runtime-Image und keine Bytekopie des zuvor angenommenen
+Discmoduls.
+
+`db9e721` fuehrt dafuer den generischen, extern hashgebundenen
+`RuntimeImage`-/`FixedAddress`-Vertrag ein. Der erste reale v36-Export
+identifizierte darin 224 statische Bloecke und brach vor dem Hostcompiler
+korrekt ab, weil genau ein legitimer geradliniger FPU-Block 132 Byte statt
+des anonymen 128-Byte-Runtimewritefensters umfasst. `4983bd1` trennt diese
+Vertraege: Ein FixedAddress-Preflight bindet Ziel, Quellblock, Groesse und
+SHA, snapshotet exakt, prueft Livebytes vor jeder Mutation und autorisiert
+erst danach exakt dieses Blockfenster. Fixed-Range-Loecher und
+Mehrdeutigkeiten bleiben terminal; alle ungebundenen Runtimewrites bleiben
+bei 128 Byte. Vorcompilierte native AOT-Bloecke haengen nicht mehr an
+Laufzeitanalysebudgets. Runtime-ABI 77 und Portprojektvertrag 67
+invalidieren alte Pakete und Exportcaches. Der 132-Byte-Vertrag sowie der
+reale Exportpfad sind fokussiert gruen und der Finalreview meldet keine
+P0/P1/P2-Funde; die neue Sonic-Produktevidenz steht unmittelbar aus.
+
+Der davor liegende reale, erneut aus dem sauberen Main-Stand exportierte und mit der
 privaten Originaldisc installierte ABI-74-NativeDisc-v33-Lauf praesentiert
 den PAL-Sega-Screen. Er passiert den frueheren fehlenden AOT-Einstieg
 `0x8C11088C -> 0x8C64784E` und stoppt erst bei Gesamtzyklus `573.987.074`
@@ -156,17 +181,26 @@ begrenzte Inventarregion. Erst ein neuer Export kann diese Reparatur
 abnehmen.
 
 ```text
-Runtime-ABI:                    75
+Runtime-ABI:                    77
 Block-ABI:                       5
-Analyzer-ABI:                    9
+Analyzer-ABI:                   10
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             65
+Portprojektvertrag:             67
 Native-AOT-Emissionsprofil:     13
 AOT-Partitionsschema:            5
 ```
 
 ### Reviewstatus vor dem naechsten Produktlauf
+
+Auf `4983bd1` sind zusaetzlich der vollstaendige manifestgebundene
+Whole-Export-Cache, priorisierte und roh begrenzte AOT-Inventare,
+FixedAddress-RuntimeImages sowie die zielgenaue Materialisierung von
+vorcompilierten Bloecken ueber 128 Byte reviewt. Der Finalreview der
+FixedAddress-Probe, Provenienz, Snapshotreihenfolge, Autorisierung,
+Generationen, ABI-/Cachebindung und Diagnosegrenze ist ohne P0/P1/P2.
+Der naechste Schritt ist genau ein sauberer Sonic-NativeDisc-Port und sein
+realer Produktlauf.
 
 Auf `24d6132` sind die konkret reviewten Vertraege fuer
 Carrieridentitaet, externe bedingte und normale Inventarnachfolger,

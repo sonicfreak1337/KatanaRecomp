@@ -5,13 +5,43 @@ Aktuelle interne Version: `v0.49.0`
 ## Evidenztrennung
 
 ```text
-letzte reale Produktevidenz: 60887f4 / ABI 74 / NativeDisc-v33
-aktueller Source-Head main:   20228a1 / Runtime-ABI 75 / Analyzer-ABI 9
-lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
-offene Produktabnahme:        PVR-Fixes d3b87a1/20228a1 noch nicht im Sonic-Port
+letzte reale Produktevidenz: 20228a1 / ABI 75 / NativeDisc-v33
+aktueller Runtime-Source:    4983bd1 / Runtime-ABI 77 / Analyzer-ABI 10
+lokaler Arbeitsbaum:         nur Roadmap-/Statussynchronisierung
+offene Produktabnahme:       FixedAddress-RuntimeImage 4983bd1 noch nicht im Sonic-Port
 ```
 
-Der letzte reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
+Der neueste reale ABI-75-NativeDisc-v33-Lauf zeigt nach rund `2,03 s`
+den PAL-Sega-Screen und endet danach grau/schwarz. Er erreicht
+Gesamtzyklus `574.142.601`, also `158.909.331` Post-Entry-Zyklen, in
+`7,06442 s` (`22,4943 MHz` vorlaeufig) bei `16.396.296` zentralen
+Dispatches. PVR meldet drei Requests und drei Completions, aber noch keine
+TA-Geometrie und keinen Sonic-Screen. Der terminale Fehler ist
+`byte-identity-mismatch` bei `0x8C053C0A -> 0x8C900020`.
+
+Die Diagnose belegt dort ein vom Gast aufgebautes Runtime-Image.
+`db9e721` bindet dessen externe, private Byteidentitaet allgemein an
+statische Source-Bloecke und FixedAddress-Runtimeziele. Der erste v36-
+Produkt-Export fand genau einen 132-Byte-Block unter 224 Imagebloecken und
+stoppte vor dem Hostcompiler, weil das bisherige 128-Byte-Limit nur fuer
+anonyme Runtimewrites gedacht war.
+
+`4983bd1` behebt diese Vertragsvermischung ohne Sonic-Adresse im Kern:
+FixedAddress-Ziele werden vorab auf exakten Quellblock, Groesse und
+Identitaet geprueft, exakt gesnapshotet und gehasht; erst danach werden
+Runtimewrite-Modul und Kontrolltransfer exakt fuer diesen Block
+veroeffentlicht. Hashfehler mutieren den Modulkatalog nicht,
+Fixed-Range-Loecher fallen weder in dynamischen Code noch in den
+Diagnoseinterpreter, und normale Runtimewrites bleiben bei 128 Byte.
+Vorcompilierte AOT-Bloecke umgehen nur irrelevante Laufzeitanalysebudgets;
+Block-, Byte- und Proofbudgets bleiben aktiv. Runtime-ABI 77 und
+Portprojektvertrag 67 binden den neuen Vertrag. Der bestehende
+Native-AOT-Test materialisiert den konkreten 132-Byte-Fall einschliesslich
+Hashfehler-vor-Mutation; der Portexporttest erzeugt denselben
+Groessenvertrag. Beide Tests und der Finalreview sind gruen. Der frische
+Sonic-Port und Lauf sind der naechste offene Schritt.
+
+Der davor liegende reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
 PAL-Sega-Screen und passiert das zuvor fehlende statische Ziel
 `0x8C11088C -> 0x8C64784E`. Er stoppt danach fail-closed bei Gesamtzyklus
 `573.987.074` beziehungsweise `158.753.804` Post-Entry-Zyklen an der
@@ -160,6 +190,17 @@ SonicAdventureRecomp
 KatanaRecomp und KatanaRuntime bleiben im selben Repository. Das konkrete Spielprojekt wird extern aufgebaut. Generischer Katana-Code darf keine Sonic-spezifischen Adresshacks oder Retailbytes enthalten.
 
 ## Reviewstatus
+
+Auf `4983bd1` ohne offene P0/P1/P2 reviewt:
+
+- vollstaendiger manifestgebundener Whole-Export-Cache;
+- evidencepriorisiertes, roh begrenztes AOT-Inventar;
+- externe identitaetsgebundene RuntimeImages ohne Retailbytes im Kern;
+- separate binder-only Sourceblocktabelle;
+- zielgenaue FixedAddress-Probe und exakte Materialisierung ueber 128 Byte;
+- Snapshot und SHA vor Modulmutation sowie exakte Autorisierung;
+- terminale Fixed-Range-Loecher und kein Diagnosefallback;
+- Runtime-/Port-ABI- und Cacheinvalidierung.
 
 Eingecheckt bis `24d6132`, neuer Sonic-Produktproof offen:
 
