@@ -1851,6 +1851,9 @@ void apply_call(AbstractState& state,
     // consumed exclusively by the two guarded inventory observers.
     bool returned_may_alias_stack = !candidate_callees_complete;
     bool returned_inventory_may_alias_stack = false;
+    bool returned_inventory_code_pointer = false;
+    bool returned_inventory_pc_relative_code_literal = true;
+    bool returned_inventory_provenance_initialized = false;
     bool returned_memory_complete = candidate_callees_complete;
     bool returned_memory_initialized = false;
     std::map<std::uint32_t, AbstractValue> returned_memory;
@@ -1920,6 +1923,18 @@ void apply_call(AbstractState& state,
             returned_may_alias_stack || returned->may_alias_stack;
         returned_inventory_may_alias_stack =
             returned_inventory_may_alias_stack || returned->may_alias_stack;
+        returned_inventory_code_pointer =
+            returned_inventory_code_pointer ||
+            returned->inventory_code_pointer;
+        if (!returned_inventory_provenance_initialized) {
+            returned_inventory_pc_relative_code_literal =
+                returned->inventory_pc_relative_code_literal;
+            returned_inventory_provenance_initialized = true;
+        } else {
+            returned_inventory_pc_relative_code_literal =
+                returned_inventory_pc_relative_code_literal &&
+                returned->inventory_pc_relative_code_literal;
+        }
         evidence_callees.insert(candidate);
         evidence_callees.insert(returned->evidence_callees.begin(),
                                 returned->evidence_callees.end());
@@ -1934,6 +1949,11 @@ void apply_call(AbstractState& state,
     state[0u].values = std::move(returned_values);
     state[0u].call_sites = {call_site};
     state[0u].callees = std::move(evidence_callees);
+    state[0u].inventory_code_pointer =
+        returned_inventory_code_pointer;
+    state[0u].inventory_pc_relative_code_literal =
+        returned_inventory_provenance_initialized &&
+        returned_inventory_pc_relative_code_literal;
     state.stack_may_alias[0u] = returned_may_alias_stack;
     state.inventory_stack_may_alias[0u] =
         returned_inventory_may_alias_stack;
@@ -2547,6 +2567,8 @@ FunctionEvaluation evaluate_function(
         }
         bool complete = !returns.empty();
         bool finite = !returns.empty();
+        bool inventory_code_pointer = false;
+        bool inventory_pc_relative_code_literal = !returns.empty();
         std::set<std::uint32_t> values;
         std::set<std::uint32_t> evidence;
         for (const auto& [return_site, state] : returns) {
@@ -2555,8 +2577,14 @@ FunctionEvaluation evaluate_function(
             if (!value.known || value.values.empty()) {
                 complete = false;
                 finite = false;
+                inventory_pc_relative_code_literal = false;
                 continue;
             }
+            inventory_code_pointer =
+                inventory_code_pointer || value.inventory_code_pointer;
+            inventory_pc_relative_code_literal =
+                inventory_pc_relative_code_literal &&
+                value.inventory_pc_relative_code_literal;
             if (!value.complete) complete = false;
             values.insert(value.values.begin(), value.values.end());
             evidence.insert(value.callees.begin(), value.callees.end());
@@ -2567,7 +2595,12 @@ FunctionEvaluation evaluate_function(
             finite = false;
         }
         summary.complete = complete;
-        if (finite) summary.values.assign(values.begin(), values.end());
+        if (finite) {
+            summary.values.assign(values.begin(), values.end());
+            summary.inventory_code_pointer = inventory_code_pointer;
+            summary.inventory_pc_relative_code_literal =
+                inventory_pc_relative_code_literal;
+        }
         summary.evidence_callees.assign(evidence.begin(), evidence.end());
         summary.reason = complete
                              ? (summary.values.size() == 1u ? "constant-return"
@@ -3288,7 +3321,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     // Crossing an owner boundary starts a separate ephemeral
                     // inventory region instead of silently truncating the walk.
                     local_tail_ingresses.push_back(
-                        {control.address, successor, true, true, true});
+                        {control.address, successor, true, true, false, false});
                     continue;
                 }
                 if (flow !=
@@ -3654,6 +3687,25 @@ detail::analyze_function_values_with_guarded_entry_cache(
             return (static_cast<std::uint64_t>(call_site) << 32u) |
                    callee;
         };
+    std::unordered_set<std::uint64_t> semantic_call_pairs;
+    semantic_call_pairs.reserve(function_edges.size() + blocks.size());
+    for (const auto& edge : function_edges) {
+        if (edge.kind != ResolvedControlFlowKind::Call) continue;
+        semantic_call_pairs.insert(
+            candidate_call_pair_key(edge.instruction_address,
+                                    edge.target_address));
+    }
+    for (const auto& block : blocks) {
+        if (block.lines.empty()) continue;
+        const auto& control = controlling_line(block);
+        if (control.instruction.control_flow !=
+                katana::sh4::ControlFlowKind::Call ||
+            !control.target_address.has_value())
+            continue;
+        semantic_call_pairs.insert(
+            candidate_call_pair_key(control.address,
+                                    *control.target_address));
+    }
     std::unordered_set<std::uint64_t> candidate_call_pairs;
     std::unordered_set<std::uint32_t> candidate_call_owner_functions;
     candidate_call_pairs.reserve(candidate_call_carriers.size());
@@ -3818,6 +3870,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 context_callers;
             std::deque<std::uint32_t> pending_contexts;
             std::unordered_set<std::uint32_t> queued_contexts;
+            std::unordered_set<std::uint32_t>
+                candidate_context_functions;
             const auto enqueue_context =
                 [&](const std::uint32_t address) {
                     if (queued_contexts.insert(address).second)
@@ -3868,10 +3922,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 }
                 for (auto& observation :
                      context_evaluation.call_arguments) {
-                    if (!candidate_call_pairs.contains(
-                            candidate_call_pair_key(
-                                observation.call_site,
-                                observation.callee)))
+                    const auto pair = candidate_call_pair_key(
+                        observation.call_site,
+                        observation.callee);
+                    const bool candidate_call =
+                        candidate_call_pairs.contains(pair);
+                    const bool contextual_helper_call =
+                        candidate_context_functions.contains(address) &&
+                        semantic_call_pairs.contains(pair);
+                    if (!candidate_call && !contextual_helper_call)
                         continue;
                     if (!final_function_by_address.contains(
                             observation.callee))
@@ -3883,6 +3942,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         continue;
                     }
                     context_callers[observation.callee].insert(address);
+                    candidate_context_functions.insert(
+                        observation.callee);
                     const auto [stored, inserted] =
                         context_inputs.try_emplace(
                             observation.callee,

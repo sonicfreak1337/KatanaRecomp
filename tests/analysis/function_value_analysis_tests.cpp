@@ -438,25 +438,36 @@ bool has_stored_code_address(
 
 katana::analysis::FunctionValueAnalysisResult
 conditional_shared_tail_values() {
-    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    std::vector<std::uint8_t> bytes(0x90u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset,
                                   const std::uint16_t value) {
         bytes[offset] = static_cast<std::uint8_t>(value);
         bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
     };
-    put_u16(0x00u, 0xE470u); // mov #0x70,r4 (callback)
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xE570u); // mov #0x70,r5 (initial carrier evidence)
     put_u16(0x02u, 0xB00Du); // bsr 0x20
     put_u16(0x04u, 0x0009u);
     put_u16(0x06u, 0x000Bu);
     put_u16(0x08u, 0x0009u);
     put_u16(0x20u, 0x412Bu); // jmp @r1 (candidate-only tail)
     put_u16(0x22u, 0x0009u);
-    put_u16(0x40u, 0x890Eu); // bt 0x60 (unknown condition)
-    put_u16(0x42u, 0x000Bu); // internal path without a store
-    put_u16(0x44u, 0x0009u);
-    put_u16(0x60u, 0x2742u); // external shared tail: mov.l r4,@r7
-    put_u16(0x62u, 0x000Bu);
-    put_u16(0x64u, 0x0009u);
+    put_u16(0x40u, 0xE500u); // clear carrier evidence before owner split
+    put_u16(0x42u, 0x890Du); // bt 0x60 (unknown condition)
+    put_u16(0x44u, 0x000Bu); // internal path without a store
+    put_u16(0x46u, 0x0009u);
+    put_u16(0x60u, 0x0722u); // external shared tail: stc vbr,r7
+    put_u16(0x62u, 0xD402u); // mov.l @(0x6C,pc),r4 -> callback 0x70
+    put_u16(0x64u, 0x2742u); // mov.l r4,@r7
+    put_u16(0x66u, 0x000Bu);
+    put_u16(0x68u, 0x0009u);
+    put_u32(0x6Cu, 0x70u);
     put_u16(0x70u, 0x000Bu);
     put_u16(0x72u, 0x0009u);
 
@@ -474,7 +485,7 @@ conditional_shared_tail_values() {
     constexpr std::array<katana::analysis::FunctionBoundary, 3u> boundaries{{
         {0x00u, 0x0Au},
         {0x20u, 0x04u},
-        {0x60u, 0x06u},
+        {0x60u, 0x0Au},
     }};
     const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
         {0x20u,
@@ -570,9 +581,13 @@ parameterized_candidate_return_values() {
     put_u16(0x26u, 0x63C2u); // mov.l @r12,r3
     put_u16(0x28u, 0x000Bu);
     put_u16(0x2Au, 0x0009u);
-    put_u16(0x40u, 0x6043u); // mov r4,r0
-    put_u16(0x42u, 0x000Bu);
-    put_u16(0x44u, 0x0009u);
+    put_u16(0x40u, 0xB006u); // bsr 0x50 (normal direct helper)
+    put_u16(0x42u, 0x0009u);
+    put_u16(0x44u, 0x000Bu);
+    put_u16(0x46u, 0x0009u);
+    put_u16(0x50u, 0x6043u); // helper: mov r4,r0
+    put_u16(0x52u, 0x000Bu);
+    put_u16(0x54u, 0x0009u);
     put_u32(0x60u, 0x70u);
     put_u32(0x64u, 1u);
     put_u16(0x70u, 0x000Bu);
@@ -592,10 +607,11 @@ parameterized_candidate_return_values() {
                        bytes});
     image.add_entry_point(0u);
     const auto lines = katana::sh4::disassemble(bytes, 0u);
-    constexpr std::array<katana::analysis::FunctionBoundary, 3u> boundaries{{
+    constexpr std::array<katana::analysis::FunctionBoundary, 4u> boundaries{{
         {0x00u, 0x0Au},
         {0x20u, 0x0Cu},
-        {0x40u, 0x06u},
+        {0x40u, 0x08u},
+        {0x50u, 0x06u},
     }};
     const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
         {0x20u,
@@ -743,6 +759,60 @@ candidate_call_stack_tail_values() {
         image, lines, boundaries, edges);
 }
 
+katana::analysis::FunctionValueAnalysisResult
+helper_returned_code_pointer_tail_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0xE470u); // mov #0x70,r4 (callback argument)
+    put_u16(0x02u, 0xB00Du); // bsr 0x20 (normal direct helper)
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x6403u); // mov r0,r4
+    put_u16(0x08u, 0x422Bu); // jmp @r2 (candidate-only registrar)
+    put_u16(0x0Au, 0x0009u);
+
+    put_u16(0x20u, 0x6043u); // helper: mov r4,r0
+    put_u16(0x22u, 0x000Bu);
+    put_u16(0x24u, 0x0009u);
+
+    put_u16(0x40u, 0x2742u); // registrar: mov.l r4,@r7
+    put_u16(0x42u, 0x000Bu);
+    put_u16(0x44u, 0x0009u);
+
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".helper-returned-code-pointer-tail",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x0Cu},
+        {0x20u, 0x06u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x08u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
 } // namespace
 
 int main() {
@@ -878,6 +948,12 @@ int main() {
                 "Candidate-only Call -> guarded Frame-Delta -> "
                 "Stackspill/Reload -> Candidate-Tail verlor einen explizit "
                 "uebergebenen Codepointer.");
+
+        const auto returned = helper_returned_code_pointer_tail_values();
+        require(
+            has_stored_code_address(returned, 0x70u),
+            "Normaler Helper-Return verlor explizite Codepointerprovenienz "
+            "vor einem Candidate-Tail-Registrar.");
     }
 
     std::vector<std::uint8_t> guarded_callee_bytes(0x26u, 0x09u);

@@ -21,6 +21,11 @@ struct FunctionRegisterValueSummary {
     bool guarded = false;
     bool abi_preserved = false;
     bool may_alias_stack = true;
+    // Inventory-only return provenance.  These fields never prove a static
+    // control-flow edge; they only preserve guarded native-entry evidence
+    // across an ordinary helper return.
+    bool inventory_code_pointer = false;
+    bool inventory_pc_relative_code_literal = false;
     std::vector<std::uint32_t> values;
     std::vector<std::uint32_t> return_sites;
     std::vector<std::uint32_t> evidence_callees;

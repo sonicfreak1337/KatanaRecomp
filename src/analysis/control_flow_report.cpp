@@ -786,6 +786,10 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                    << ",\"abi_preserved\":" << (value.abi_preserved ? "true" : "false")
                    << ",\"may_alias_stack\":"
                    << (value.may_alias_stack ? "true" : "false")
+                   << ",\"inventory_code_pointer\":"
+                   << (value.inventory_code_pointer ? "true" : "false")
+                   << ",\"inventory_pc_relative_code_literal\":"
+                   << (value.inventory_pc_relative_code_literal ? "true" : "false")
                    << ",\"reason\":" << katana::io::quote_json(value.reason) << ",\"values\":[";
             for (std::size_t item = 0u; item < value.values.size(); ++item) {
                 if (item != 0u) output << ',';
