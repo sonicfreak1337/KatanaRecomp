@@ -6,9 +6,9 @@ Aktuelle interne Version: `v0.49.0`
 
 ```text
 letzte reale Produktevidenz: 60887f4 / ABI 74 / NativeDisc-v33
-aktueller Source-Head main:   d3b87a1 / Analyzer-ABI 9 / Portvertrag 65
+aktueller Source-Head main:   20228a1 / Runtime-ABI 75 / Analyzer-ABI 9
 lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
-offene Produktabnahme:        PVR-Fix d3b87a1 noch nicht im Sonic-Port
+offene Produktabnahme:        PVR-Fixes d3b87a1/20228a1 noch nicht im Sonic-Port
 ```
 
 Der letzte reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
@@ -31,6 +31,19 @@ interpretiert; nur Parameter-Selection verwendet `3 + 2*SKIP`. Der
 fokussierte bestehende Renderertest passiert die neue Poison-Regression
 und die Shadow-Stride-Pruefung, bevor er spaeter an einer unabhaengigen
 bestehenden Direct-C888-Pruefung endet. Die Sonic-Produktabnahme steht aus.
+
+`20228a1` bindet auch die beiden Area-4-Direct-Texture-Pfade an ihre echten
+Systembusregister. Path 0 (`0x11`/`0x118`) folgt `SB_LMMODE0`, Path 1
+(`0x13`/`0x138`) folgt `SB_LMMODE1`; der Wert 0 waehlt Raw-/64-Bit-VRAM,
+der Wert 1 die projizierte 32-Bit-Sicht. Speicherwrites, Channel 2 und
+Renderer-Dirty-Evidenz teilen nun denselben live restaurierten Vertrag,
+waehrend Gastreads aus Area 4 fail-closed abgelehnt werden.
+Runtime-ABI 75 versioniert die geaenderte oeffentliche Signatur, das Enum
+und das Rendererlayout. `katana-pvr-ta-tests`,
+`katana-system-asic-tests` und der vollstaendige inkrementelle
+MSVC-`katana-recomp`-Build sind gruen. Der Renderer-Sammeltest passiert die
+neuen LMMODE-Pruefungen und endet erst am nachweislich bereits auf
+`60887f4` vorhandenen Direct-C888-Assert.
 
 `24d6132` schliesst die dazugehoerige allgemeine Analyseluecke: Der
 Inventargraph transportiert Candidate-Calls getrennt vom semantischen CFG,
@@ -777,12 +790,12 @@ Der aktuelle Stand behauptet nicht:
 ## Aktuelle Vertraege
 
 ```text
-Runtime-ABI:                    74
+Runtime-ABI:                    75
 Block-ABI:                       5
-Analyzer-ABI:                    8
+Analyzer-ABI:                    9
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             64
+Portprojektvertrag:             65
 GameEntryHandoff-Schema:         3
 GameEntryHandoff-Artefakt:       2
 GameEntry-Plattformzustand:       2

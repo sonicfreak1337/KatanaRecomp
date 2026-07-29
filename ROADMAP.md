@@ -44,7 +44,7 @@ Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
 letzte reale Produktevidenz: 60887f4 / ABI 74 / NativeDisc-v33
-aktueller Source-Head main:   d3b87a1 / Analyzer-ABI 9 / Portvertrag 65
+aktueller Source-Head main:   20228a1 / Runtime-ABI 75 / Analyzer-ABI 9
 lokaler Arbeitsbaum:          nur Roadmap-/Statussynchronisierung
 ```
 
@@ -67,6 +67,17 @@ bleiben im 64-Bit-Pfad. Zusaetzlich ist die Polaritaet von
 korrigiert. Die kleine bestehende Rendererregression vergiftet den
 numerisch gleichen Raw-Offset und passiert damit den zuvor fehlerhaften
 Readpfad. Die reale Sonic-Abnahme dieses Source-Fixes steht noch aus.
+
+`20228a1` schliesst den letzten im PVR-Review gefundenen allgemeinen
+Area-4-Vertrag. Die Fenster `0x11`/`0x118` sind Path 0 unter
+`SB_LMMODE0`, `0x13`/`0x138` Path 1 unter `SB_LMMODE1`; beide waehlen
+dynamisch zwischen Raw-/64-Bit- und projiziertem 32-Bit-VRAM. Channel 2,
+skalare Gastwrites und Renderer-Dirty-Evidenz verwenden dieselbe live
+restaurierbare Registerbelegung. Area-4-Gastreads scheitern fail-closed.
+Die oeffentliche Runtime-Signatur, das Channel-2-Enum und das
+Rendererlayout erfordern Runtime-ABI 75. TA- und System-ASIC-Vertraege
+sowie der vollstaendige inkrementelle MSVC-Katana-Build sind gruen; die
+reale Sonic-Abnahme bleibt gemeinsam mit `d3b87a1` offen.
 
 `24d6132` schliesst vor dem naechsten Produktlauf die offenen
 Reviewvertraege allgemein: Candidate-Calls nehmen am getrennten
@@ -145,7 +156,7 @@ begrenzte Inventarregion. Erst ein neuer Export kann diese Reparatur
 abnehmen.
 
 ```text
-Runtime-ABI:                    74
+Runtime-ABI:                    75
 Block-ABI:                       5
 Analyzer-ABI:                    9
 PlatformServices-ABI:           13

@@ -4,6 +4,16 @@
 
 ### Geaendert
 
+- `20228a1` macht die Area-4-Direct-Texture-Fenster vom echten
+  Systembuszustand abhaengig. `0x11`/`0x118` folgen `SB_LMMODE0`,
+  `0x13`/`0x138` folgen `SB_LMMODE1`; Wert 0 verwendet Raw-/64-Bit-VRAM,
+  Wert 1 die projizierte 32-Bit-Sicht. Channel 2, direkte Gastwrites und
+  Renderer-Dirty-Evidenz teilen denselben restaurierbaren Vertrag.
+  Area-4-Gastreads werden fail-closed abgelehnt. Runtime-ABI 75 bindet die
+  geaenderte oeffentliche Runtime-Signatur, das Channel-2-Enum und das
+  Rendererlayout. Die fokussierten TA-/System-ASIC-Vertraege und der
+  vollstaendige inkrementelle MSVC-Katana-Build sind gruen; die reale
+  Sonic-Abnahme steht aus.
 - `d3b87a1` korrigiert den PVR-Backgroundzugriff allgemein. Die durch
   `PARAM_BASE + ISP_BACKGND_T` adressierten ISP/TSP-Parameter und Vertices
   werden jetzt aus dem logischen 32-Bit-VRAM-Bereich in das gemeinsame
