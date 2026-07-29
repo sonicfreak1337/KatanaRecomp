@@ -10786,6 +10786,30 @@ port_metadata(const PortExportOptions& options,
            << analysis.guarded_code_inventory_candidates
            << ",\"guarded_code_inventory_budget\":"
            << analysis.guarded_code_inventory_budget
+           << ",\"guarded_code_inventory_candidate_budget_exhausted\":"
+           << (analysis.guarded_code_inventory_candidate_budget_exhausted ? "true" : "false")
+           << ",\"guarded_inventory_region_count\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_count
+           << ",\"guarded_inventory_region_budget\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_budget
+           << ",\"guarded_inventory_pending_region_count\":"
+           << analysis.guarded_code_inventory_walk.pending_inventory_region_count
+           << ",\"guarded_inventory_region_block_budget\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_block_budget
+           << ",\"guarded_inventory_region_block_limited_regions\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_block_limited_regions
+           << ",\"guarded_forwarded_store_context_budget\":"
+           << analysis.guarded_code_inventory_walk.forwarded_store_context_budget
+           << ",\"guarded_forwarded_store_context_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.forwarded_store_context_limited_functions
+           << ",\"guarded_contextual_return_context_budget\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_context_budget
+           << ",\"guarded_contextual_return_context_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_context_limited_functions
+           << ",\"guarded_contextual_return_evaluation_budget\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
+           << ",\"guarded_contextual_return_evaluation_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
            << ",\"guarded_code_shape_validation_work\":"
            << analysis.guarded_code_shape_validation_work
            << ",\"guarded_code_shape_validation_work_budget\":"
@@ -11127,6 +11151,30 @@ static PortExportResult export_dreamcast_port_project_impl(
                << " candidates="
                << prepared.analysis.guarded_code_inventory_candidates
                << '/' << prepared.analysis.guarded_code_inventory_budget
+               << " candidate_budget_exhausted="
+               << prepared.analysis.guarded_code_inventory_candidate_budget_exhausted
+               << " inventory_regions="
+               << prepared.analysis.guarded_code_inventory_walk.inventory_region_count
+               << '/'
+               << prepared.analysis.guarded_code_inventory_walk.inventory_region_budget
+               << " pending_inventory_regions="
+               << prepared.analysis.guarded_code_inventory_walk.pending_inventory_region_count
+               << " region_block_budget="
+               << prepared.analysis.guarded_code_inventory_walk.inventory_region_block_budget
+               << " region_block_limited="
+               << prepared.analysis.guarded_code_inventory_walk.inventory_region_block_limited_regions
+               << " forwarded_contexts="
+               << prepared.analysis.guarded_code_inventory_walk.forwarded_store_context_limited_functions
+               << '/'
+               << prepared.analysis.guarded_code_inventory_walk.forwarded_store_context_budget
+               << " contextual_return_contexts="
+               << prepared.analysis.guarded_code_inventory_walk.contextual_return_context_limited_functions
+               << '/'
+               << prepared.analysis.guarded_code_inventory_walk.contextual_return_context_budget
+               << " contextual_return_evaluations="
+               << prepared.analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
+               << '/'
+               << prepared.analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
                << " shape_budget_exceeded="
                << prepared.analysis
                       .guarded_code_shape_budget_exceeded_candidates

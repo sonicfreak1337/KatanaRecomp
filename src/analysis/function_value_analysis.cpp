@@ -38,6 +38,8 @@ constexpr std::size_t maximum_raw_stored_code_candidates =
     maximum_guarded_code_inventory * 4u;
 constexpr std::size_t reserved_returned_table_targets = 256u;
 constexpr std::size_t maximum_forwarded_store_contexts = 64u;
+constexpr std::size_t maximum_contextual_return_contexts = 64u;
+constexpr std::size_t maximum_contextual_return_evaluations = 64u;
 constexpr std::size_t maximum_inventory_regions = maximum_guarded_code_inventory;
 constexpr std::size_t maximum_inventory_region_blocks = 256u;
 constexpr std::size_t maximum_memory_values = 256u;
@@ -116,6 +118,10 @@ struct AbstractValue {
     // It is not a code-pointer proof by itself; a real call/tail ABI boundary
     // must still promote it.
     bool inventory_pc_relative_code_literal = false;
+    // Context-only candidate-return taint. It never proves a dispatch edge or
+    // a code pointer; it only keeps the bounded helper slice attached to the
+    // ABI values that originated at a guarded candidate call.
+    bool contextual_candidate_dependency = false;
     std::vector<std::uint32_t> values;
     std::set<std::uint32_t> call_sites;
     std::set<std::uint32_t> callees;
@@ -201,6 +207,8 @@ struct IndirectCalleeCandidates {
     bool requires_code_pointer = false;
     bool observes_abi_arguments = false;
 };
+using TailIngressMap =
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>;
 
 struct CandidateInput {
     AbstractState state;
@@ -212,6 +220,18 @@ struct CandidateInput {
 void normalize(std::vector<std::uint32_t>& values) {
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
+}
+[[nodiscard]] std::optional<IndirectCalleeCandidates>
+find_tail_ingress(const TailIngressMap& baseline,
+                  const TailIngressMap* const local,
+                  const std::uint32_t transfer_site) {
+    const auto baseline_ingress = baseline.find(transfer_site);
+    if (local != nullptr) {
+        const auto local_ingress = local->find(transfer_site);
+        if (local_ingress != local->end()) return local_ingress->second;
+    }
+    if (baseline_ingress == baseline.end()) return std::nullopt;
+    return baseline_ingress->second;
 }
 
 } // namespace
@@ -341,6 +361,8 @@ class GuardedCodeInventoryCollector {
         destination.candidate_inventory_truncated_ =
             destination.candidate_inventory_truncated_ ||
             candidate_inventory_truncated_;
+        destination.candidate_budget_exhausted_ =
+            destination.candidate_budget_exhausted_ || candidate_budget_exhausted_;
         destination.raw_stored_candidates_truncated_ =
             destination.raw_stored_candidates_truncated_ ||
             raw_stored_candidates_truncated_;
@@ -423,6 +445,7 @@ class GuardedCodeInventoryCollector {
             raw_stored_candidates_truncated_;
         inventory.candidate_budget = maximum_guarded_code_inventory;
         inventory.candidate_count = admitted_targets_.size();
+        inventory.candidate_budget_exhausted = candidate_budget_exhausted_;
         inventory.candidate_inventory_truncated =
             candidate_inventory_truncated_;
         if (shape_cache_ != nullptr) {
@@ -530,6 +553,7 @@ class GuardedCodeInventoryCollector {
     bool admit_candidate(const std::uint32_t target) {
         if (admitted_targets_.contains(target)) return true;
         if (admitted_targets_.size() >= maximum_guarded_code_inventory) {
+            candidate_budget_exhausted_ = true;
             candidate_inventory_truncated_ = true;
             return false;
         }
@@ -550,6 +574,7 @@ class GuardedCodeInventoryCollector {
     detail::GuardedNativeEntryShapeCache* shape_cache_ = nullptr;
     bool defer_stored_admission_ = false;
     bool raw_stored_candidates_truncated_ = false;
+    bool candidate_budget_exhausted_ = false;
     bool candidate_inventory_truncated_ = false;
     bool table_scan_truncated_ = false;
 };
@@ -561,6 +586,7 @@ void make_unknown(AbstractValue& value) {
     value.inventory_stack_derived = false;
     value.inventory_code_pointer = false;
     value.inventory_pc_relative_code_literal = false;
+    value.contextual_candidate_dependency = false;
     value.values.clear();
     value.call_sites.clear();
     value.callees.clear();
@@ -571,6 +597,7 @@ void make_unknown_preserving_provenance(AbstractValue& value) {
     const auto inventory_code_pointer = value.inventory_code_pointer;
     const auto inventory_pc_relative_code_literal =
         value.inventory_pc_relative_code_literal;
+    const auto contextual_candidate_dependency = value.contextual_candidate_dependency;
     auto call_sites = std::move(value.call_sites);
     auto callees = std::move(value.callees);
     make_unknown(value);
@@ -578,6 +605,7 @@ void make_unknown_preserving_provenance(AbstractValue& value) {
     value.inventory_code_pointer = inventory_code_pointer;
     value.inventory_pc_relative_code_literal =
         inventory_pc_relative_code_literal;
+    value.contextual_candidate_dependency = contextual_candidate_dependency;
     value.call_sites = std::move(call_sites);
     value.callees = std::move(callees);
 }
@@ -589,6 +617,7 @@ void set_value(AbstractValue& value, const std::uint32_t constant) {
     value.inventory_stack_derived = false;
     value.inventory_code_pointer = false;
     value.inventory_pc_relative_code_literal = false;
+    value.contextual_candidate_dependency = false;
     value.values = {constant};
     value.call_sites.clear();
     value.callees.clear();
@@ -602,6 +631,8 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     const bool inventory_pc_relative_code_literal =
         destination.inventory_pc_relative_code_literal &&
         source.inventory_pc_relative_code_literal;
+    const bool contextual_candidate_dependency =
+        destination.contextual_candidate_dependency || source.contextual_candidate_dependency;
     if (!destination.known || !source.known) {
         auto call_sites = destination.call_sites;
         call_sites.insert(source.call_sites.begin(), source.call_sites.end());
@@ -614,6 +645,8 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
                                  inventory_code_pointer ||
                              destination.inventory_pc_relative_code_literal !=
                                  inventory_pc_relative_code_literal ||
+                              destination.contextual_candidate_dependency !=
+                                  contextual_candidate_dependency ||
                              !destination.values.empty() ||
                              call_sites != destination.call_sites ||
                              callees != destination.callees;
@@ -624,6 +657,7 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         destination.inventory_code_pointer = inventory_code_pointer;
         destination.inventory_pc_relative_code_literal =
             inventory_pc_relative_code_literal;
+        destination.contextual_candidate_dependency = contextual_candidate_dependency;
         destination.values.clear();
         destination.call_sites = std::move(call_sites);
         destination.callees = std::move(callees);
@@ -651,6 +685,10 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         inventory_pc_relative_code_literal) {
         destination.inventory_pc_relative_code_literal =
             inventory_pc_relative_code_literal;
+        changed = true;
+    }
+    if (destination.contextual_candidate_dependency != contextual_candidate_dependency) {
+        destination.contextual_candidate_dependency = contextual_candidate_dependency;
         changed = true;
     }
     auto values = destination.values;
@@ -793,6 +831,8 @@ void apply_binary(AbstractValue& destination,
                   const katana::sh4::InstructionKind kind) {
     const bool inventory_stack_derived =
         destination.inventory_stack_derived || source.inventory_stack_derived;
+    const bool contextual_candidate_dependency =
+        destination.contextual_candidate_dependency || source.contextual_candidate_dependency;
     if (!destination.known || !source.known) {
         auto call_sites = destination.call_sites;
         call_sites.insert(source.call_sites.begin(), source.call_sites.end());
@@ -800,6 +840,7 @@ void apply_binary(AbstractValue& destination,
         callees.insert(source.callees.begin(), source.callees.end());
         make_unknown(destination);
         destination.inventory_stack_derived = inventory_stack_derived;
+        destination.contextual_candidate_dependency = contextual_candidate_dependency;
         destination.call_sites = std::move(call_sites);
         destination.callees = std::move(callees);
         return;
@@ -828,6 +869,7 @@ void apply_binary(AbstractValue& destination,
             default:
                 make_unknown(destination);
                 destination.inventory_stack_derived = inventory_stack_derived;
+                destination.contextual_candidate_dependency = contextual_candidate_dependency;
                 return;
             }
             if (values.size() > maximum_summary_values) {
@@ -835,6 +877,7 @@ void apply_binary(AbstractValue& destination,
                 make_unknown_preserving_provenance(destination);
                 destination.inventory_code_pointer = false;
                 destination.inventory_pc_relative_code_literal = false;
+                destination.contextual_candidate_dependency = contextual_candidate_dependency;
                 return;
             }
         }
@@ -846,6 +889,7 @@ void apply_binary(AbstractValue& destination,
     destination.inventory_stack_derived = inventory_stack_derived;
     destination.inventory_code_pointer = false;
     destination.inventory_pc_relative_code_literal = false;
+    destination.contextual_candidate_dependency = contextual_candidate_dependency;
 }
 
 template <typename Operation> void apply_unary(AbstractValue& value, Operation operation) {
@@ -1295,6 +1339,7 @@ void apply_transfer(AbstractState& state,
         state[instruction.destination_register].inventory_code_pointer = false;
         state[instruction.destination_register]
             .inventory_pc_relative_code_literal = false;
+        state[instruction.destination_register].contextual_candidate_dependency = false;
         state[instruction.destination_register].values = {0u, 1u};
         state[instruction.destination_register].call_sites.clear();
         state[instruction.destination_register].callees.clear();
@@ -1705,6 +1750,20 @@ void observe_callee_arguments(
             call_arguments->push_back({call_site, candidate, observation});
     }
 }
+// Contextual candidate summaries are only needed along ABI values that really
+// originated at the guarded candidate call. This is deliberately independent
+// of code-pointer provenance and cannot create an inventory entry by itself.
+void mark_contextual_candidate_abi_arguments(AbstractState& state) {
+    for (std::uint8_t index = 4u; index <= 7u; ++index)
+        state[index].contextual_candidate_dependency = true;
+}
+
+[[nodiscard]] bool has_contextual_candidate_abi_argument(const AbstractState& state) {
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        if (state[index].contextual_candidate_dependency) return true;
+    }
+    return false;
+}
 
 void observe_inventory_transfers(
     const katana::io::ExecutableImage& image,
@@ -1854,6 +1913,7 @@ void apply_call(AbstractState& state,
     bool returned_inventory_code_pointer = false;
     bool returned_inventory_pc_relative_code_literal = true;
     bool returned_inventory_provenance_initialized = false;
+    bool returned_contextual_candidate_dependency = false;
     bool returned_memory_complete = candidate_callees_complete;
     bool returned_memory_initialized = false;
     std::map<std::uint32_t, AbstractValue> returned_memory;
@@ -1935,6 +1995,8 @@ void apply_call(AbstractState& state,
                 returned_inventory_pc_relative_code_literal &&
                 returned->inventory_pc_relative_code_literal;
         }
+        returned_contextual_candidate_dependency =
+            returned_contextual_candidate_dependency || returned->contextual_candidate_dependency;
         evidence_callees.insert(candidate);
         evidence_callees.insert(returned->evidence_callees.begin(),
                                 returned->evidence_callees.end());
@@ -1954,6 +2016,7 @@ void apply_call(AbstractState& state,
     state[0u].inventory_pc_relative_code_literal =
         returned_inventory_provenance_initialized &&
         returned_inventory_pc_relative_code_literal;
+    state[0u].contextual_candidate_dependency = returned_contextual_candidate_dependency;
     state.stack_may_alias[0u] = returned_may_alias_stack;
     state.inventory_stack_may_alias[0u] =
         returned_inventory_may_alias_stack;
@@ -2294,7 +2357,8 @@ FunctionEvaluation evaluate_function(
     const std::optional<std::uint32_t> isolated_inventory_call_site =
         std::nullopt,
     const std::map<std::uint32_t, FunctionValueSummary>*
-        contextual_summaries = nullptr) {
+        contextual_summaries = nullptr,
+    const TailIngressMap* const local_tail_ingresses = nullptr) {
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
     if (!collect_resolutions)
@@ -2423,9 +2487,10 @@ FunctionEvaluation evaluate_function(
                 }
             }
             if (!call) {
-                const auto tail_ingress = tail_ingresses.find(line.address);
-                if (tail_ingress != tail_ingresses.end() &&
-                    tail_ingress->second.observes_abi_arguments)
+                const auto tail_ingress = find_tail_ingress(
+                    tail_ingresses, local_tail_ingresses, line.address);
+                if (tail_ingress.has_value() &&
+                    tail_ingress->observes_abi_arguments)
                     promote_tail_code_literal_arguments(
                         image, line.address, state);
                 apply_transfer(
@@ -2501,26 +2566,26 @@ FunctionEvaluation evaluate_function(
                      katana::sh4::ControlFlowKind::IndirectBranch ||
                  line.instruction.control_flow ==
                      katana::sh4::ControlFlowKind::ConditionalBranch)) {
-                const auto tail_ingress = tail_ingresses.find(line.address);
-                if (tail_ingress == tail_ingresses.end()) continue;
+                const auto tail_ingress = find_tail_ingress(
+                    tail_ingresses, local_tail_ingresses, line.address);
+                if (!tail_ingress.has_value()) continue;
                 if (line.instruction.has_delay_slot) {
                     delayed_tail_ingress = DelayedTailIngress{
                         line.address,
-                        tail_ingress->second.targets,
-                        tail_ingress->second.guarded,
-                        tail_ingress->second.complete,
-                        tail_ingress->second.requires_code_pointer,
-                        tail_ingress->second.observes_abi_arguments};
+                        tail_ingress->targets,
+                        tail_ingress->guarded,
+                        tail_ingress->complete,
+                        tail_ingress->requires_code_pointer,
+                        tail_ingress->observes_abi_arguments};
                 } else {
                     observe_inventory_transfers(image,
                                                 state,
                                                 line.address,
-                                                tail_ingress->second.targets,
-                                                tail_ingress->second.guarded,
-                                                tail_ingress->second.complete,
-                                                tail_ingress->second.requires_code_pointer,
-                                                tail_ingress->second
-                                                    .observes_abi_arguments,
+                                                tail_ingress->targets,
+                                                tail_ingress->guarded,
+                                                tail_ingress->complete,
+                                                tail_ingress->requires_code_pointer,
+                                                tail_ingress->observes_abi_arguments,
                                                 inventory_transfers);
                 }
             }
@@ -2569,11 +2634,14 @@ FunctionEvaluation evaluate_function(
         bool finite = !returns.empty();
         bool inventory_code_pointer = false;
         bool inventory_pc_relative_code_literal = !returns.empty();
+        bool contextual_candidate_dependency = false;
         std::set<std::uint32_t> values;
         std::set<std::uint32_t> evidence;
         for (const auto& [return_site, state] : returns) {
             static_cast<void>(return_site);
             const auto& value = state[register_index];
+            contextual_candidate_dependency =
+                contextual_candidate_dependency || value.contextual_candidate_dependency;
             if (!value.known || value.values.empty()) {
                 complete = false;
                 finite = false;
@@ -2595,6 +2663,7 @@ FunctionEvaluation evaluate_function(
             finite = false;
         }
         summary.complete = complete;
+        summary.contextual_candidate_dependency = contextual_candidate_dependency;
         if (finite) {
             summary.values.assign(values.begin(), values.end());
             summary.inventory_code_pointer = inventory_code_pointer;
@@ -3222,6 +3291,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         bool complete = false;
         bool requires_code_pointer = false;
         bool observes_abi_arguments = false;
+        std::uint32_t source_region = 0u;
     };
     struct InventoryRegion {
         FunctionInfo function;
@@ -3232,7 +3302,16 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::vector<InventoryRegionTailIngress> inventory_region_tail_ingresses;
     std::deque<std::uint32_t> pending_inventory_regions;
     std::unordered_set<std::uint32_t> queued_inventory_regions;
-    bool inventory_region_walk_truncated = false;
+    GuardedCodeInventoryWalkDiagnostics inventory_walk_diagnostics;
+    inventory_walk_diagnostics.inventory_region_budget = maximum_inventory_regions;
+    inventory_walk_diagnostics.inventory_region_block_budget =
+        maximum_inventory_region_blocks;
+    inventory_walk_diagnostics.forwarded_store_context_budget =
+        maximum_forwarded_store_contexts;
+    inventory_walk_diagnostics.contextual_return_context_budget =
+        maximum_contextual_return_contexts;
+    inventory_walk_diagnostics.contextual_return_evaluation_budget =
+        maximum_contextual_return_evaluations;
     const auto enqueue_inventory_region =
         [&](const std::uint32_t target) {
             if (!block_index.contains(target) ||
@@ -3357,8 +3436,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                      true});
             }
         }
-        if (region_budget_exhausted)
-            inventory_region_walk_truncated = true;
+        if (region_budget_exhausted) {
+            ++inventory_walk_diagnostics.inventory_region_block_limited_regions;
+        }
         if (visited_blocks.empty() || region_budget_exhausted)
             continue;
         InventoryRegion region;
@@ -3368,13 +3448,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                                visited_blocks.end());
         normalize(region.function.block_addresses);
         inventory_regions.push_back(std::move(region));
-        for (const auto& ingress : local_tail_ingresses) {
+        for (auto ingress : local_tail_ingresses) {
+            ingress.source_region = target;
             inventory_region_tail_ingresses.push_back(ingress);
             enqueue_inventory_region(ingress.target);
         }
     }
-    if (!pending_inventory_regions.empty())
-        inventory_region_walk_truncated = true;
+    inventory_walk_diagnostics.inventory_region_count = inventory_regions.size();
+    inventory_walk_diagnostics.pending_inventory_region_count =
+        pending_inventory_regions.size();
     std::unordered_map<std::uint32_t, const FunctionInfo*>
         inventory_region_by_address;
     inventory_region_by_address.reserve(inventory_regions.size());
@@ -3474,18 +3556,44 @@ detail::analyze_function_values_with_guarded_entry_cache(
                              true);
         }
     }
+    std::unordered_map<std::uint32_t, TailIngressMap>
+        inventory_region_tail_ingresses_by_entry;
+    inventory_region_tail_ingresses_by_entry.reserve(inventory_regions.size());
+    const auto add_region_tail_ingress =
+        [&inventory_region_by_address,
+         &inventory_region_tail_ingresses_by_entry](
+            const InventoryRegionTailIngress& source) {
+            if (!inventory_region_by_address.contains(source.source_region) ||
+                !inventory_region_by_address.contains(source.target))
+                return;
+            auto& regional = inventory_region_tail_ingresses_by_entry[source.source_region];
+            const auto [stored, inserted] =
+                regional.try_emplace(source.transfer_site);
+            auto& ingress = stored->second;
+            ingress.targets.push_back(source.target);
+            ingress.guarded = ingress.guarded || source.guarded;
+            ingress.complete =
+                inserted ? source.complete : ingress.complete && source.complete;
+            ingress.requires_code_pointer =
+                inserted ? source.requires_code_pointer
+                         : ingress.requires_code_pointer &&
+                               source.requires_code_pointer;
+            ingress.observes_abi_arguments =
+                ingress.observes_abi_arguments || source.observes_abi_arguments;
+        };
     for (const auto& ingress : inventory_region_tail_ingresses) {
-        const std::array target{ingress.target};
-        add_tail_ingress(ingress.transfer_site,
-                         target,
-                         ingress.guarded,
-                         ingress.complete,
-                         ingress.requires_code_pointer,
-                         ingress.observes_abi_arguments);
+        add_region_tail_ingress(ingress);
     }
     for (auto& [transfer_site, ingress] : tail_ingresses) {
         static_cast<void>(transfer_site);
         normalize(ingress.targets);
+    }
+    for (auto& [region_entry, regional] : inventory_region_tail_ingresses_by_entry) {
+        static_cast<void>(region_entry);
+        for (auto& [transfer_site, ingress] : regional) {
+            static_cast<void>(transfer_site);
+            normalize(ingress.targets);
+        }
     }
     std::unordered_set<std::uint32_t> functions_with_inventory_tail;
     for (const auto& [transfer_site, ingress] : tail_ingresses) {
@@ -3676,12 +3784,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
     struct ResolutionFunctionResult {
         FunctionEvaluation evaluation;
         GuardedCodeInventoryCollector inventory{true};
-        bool inventory_walk_truncated = false;
+        GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
     };
     const auto& final_candidate_inputs = std::as_const(candidate_inputs);
     const auto& final_function_by_address = std::as_const(function_by_address);
     const auto& final_inventory_region_by_address =
         std::as_const(inventory_region_by_address);
+    const auto& final_inventory_region_tail_ingresses_by_entry =
+        std::as_const(inventory_region_tail_ingresses_by_entry);
     const auto candidate_call_pair_key =
         [](const std::uint32_t call_site, const std::uint32_t callee) {
             return (static_cast<std::uint64_t>(call_site) << 32u) |
@@ -3706,6 +3816,16 @@ detail::analyze_function_values_with_guarded_entry_cache(
             candidate_call_pair_key(control.address,
                                     *control.target_address));
     }
+    const auto requires_contextual_return =
+        [&summaries](const std::uint32_t address) {
+            const auto global_summary = summaries.find(address);
+            const auto* global_return =
+                global_summary == summaries.end()
+                    ? nullptr
+                    : register_summary(global_summary->second, 0u);
+            return global_return == nullptr || !global_return->complete ||
+                   global_return->values.empty();
+        };
     std::unordered_set<std::uint64_t> candidate_call_pairs;
     std::unordered_set<std::uint32_t> candidate_call_owner_functions;
     candidate_call_pairs.reserve(candidate_call_carriers.size());
@@ -3728,6 +3848,12 @@ detail::analyze_function_values_with_guarded_entry_cache(
     }
     const auto evaluate_resolution_function = [&](const std::size_t function_index) {
         ResolutionFunctionResult function_result;
+        function_result.walk_diagnostics.forwarded_store_context_budget =
+            maximum_forwarded_store_contexts;
+        function_result.walk_diagnostics.contextual_return_context_budget =
+            maximum_contextual_return_contexts;
+        function_result.walk_diagnostics.contextual_return_evaluation_budget =
+            maximum_contextual_return_evaluations;
         const auto* function = resolution_functions[function_index];
         const auto& input = final_candidate_inputs.at(function->entry_address);
         function_result.evaluation = evaluate_function(image,
@@ -3740,10 +3866,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                                        true,
                                                        false,
                                                        &function_result.inventory);
-        std::size_t forwarded_context_count = 0u;
         const auto harvest_forwarded_inventory =
             [&](const FunctionEvaluation& seed,
                 const std::optional<std::uint32_t> root_call_site) {
+                std::size_t forwarded_context_count = 0u;
                 struct ForwardedStoreContext {
                     const FunctionInfo* function = nullptr;
                     std::uint32_t target = 0u;
@@ -3766,14 +3892,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                 visited_forwarded_contexts.end(),
                                 [&](const auto& visited) {
                                     return visited.target == target &&
-                                           visited.ingress_site == ingress_site &&
                                            visited.tail == tail &&
                                            visited.input == forwarded_input;
                                 }))
                             return;
                         if (forwarded_context_count + forwarded_contexts.size() >=
                             maximum_forwarded_store_contexts) {
-                            function_result.inventory_walk_truncated = true;
+                            function_result.walk_diagnostics.forwarded_store_context_limited_functions = 1u;
                             return;
                         }
                         visited_forwarded_contexts.push_back(
@@ -3839,6 +3964,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     auto forwarded = std::move(forwarded_contexts.front());
                     forwarded_contexts.pop_front();
                     ++forwarded_context_count;
+                    const TailIngressMap* local_tail_ingresses = nullptr;
+                    if (forwarded.tail) {
+                        const auto local =
+                            final_inventory_region_tail_ingresses_by_entry.find(forwarded.target);
+                        if (local != final_inventory_region_tail_ingresses_by_entry.end())
+                            local_tail_ingresses = &local->second;
+                    }
                     auto forwarded_evaluation = evaluate_function(
                         image,
                         *forwarded.function,
@@ -3850,14 +3982,16 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         false,
                         true,
                         &function_result.inventory,
-                        root_call_site);
+                        root_call_site,
+                        nullptr,
+                        local_tail_ingresses);
                     for (const auto& nested : forwarded_evaluation.call_arguments)
                         enqueue_call(nested);
                     for (const auto& nested : forwarded_evaluation.inventory_transfers)
                         enqueue_tail(nested);
                 }
                 if (!forwarded_contexts.empty())
-                    function_result.inventory_walk_truncated = true;
+                    function_result.walk_diagnostics.forwarded_store_context_limited_functions = 1u;
             };
         const auto harvest_contextual_candidate_returns = [&] {
             if (!candidate_call_owner_functions.contains(
@@ -3882,7 +4016,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             std::size_t contextual_evaluations = 0u;
             while (!pending_contexts.empty() &&
                    contextual_evaluations <
-                       maximum_forwarded_store_contexts) {
+                       maximum_contextual_return_evaluations) {
                 const auto address = pending_contexts.front();
                 pending_contexts.pop_front();
                 queued_contexts.erase(address);
@@ -3929,7 +4063,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         candidate_call_pairs.contains(pair);
                     const bool contextual_helper_call =
                         candidate_context_functions.contains(address) &&
-                        semantic_call_pairs.contains(pair);
+                        semantic_call_pairs.contains(pair) &&
+                        has_contextual_candidate_abi_argument(observation.state) &&
+                        requires_contextual_return(observation.callee);
                     if (!candidate_call && !contextual_helper_call)
                         continue;
                     if (!final_function_by_address.contains(
@@ -3937,24 +4073,27 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         continue;
                     if (!context_inputs.contains(observation.callee) &&
                         context_inputs.size() >=
-                            maximum_forwarded_store_contexts) {
-                        function_result.inventory_walk_truncated = true;
+                            maximum_contextual_return_contexts) {
+                        function_result.walk_diagnostics.contextual_return_context_limited_functions = 1u;
                         continue;
                     }
+                    auto callee_context_input = observation.state;
+                    if (candidate_call)
+                        mark_contextual_candidate_abi_arguments(callee_context_input);
                     context_callers[observation.callee].insert(address);
                     candidate_context_functions.insert(
                         observation.callee);
                     const auto [stored, inserted] =
                         context_inputs.try_emplace(
                             observation.callee,
-                            std::move(observation.state));
+                            callee_context_input);
                     if (inserted ||
-                        merge_state(stored->second, observation.state))
+                        merge_state(stored->second, callee_context_input))
                         enqueue_context(observation.callee);
                 }
             }
             if (!pending_contexts.empty())
-                function_result.inventory_walk_truncated = true;
+                function_result.walk_diagnostics.contextual_return_evaluation_limited_functions = 1u;
         };
         if (!result.budget_exhausted)
             harvest_contextual_candidate_returns();
@@ -4028,11 +4167,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
         }
     }
 
-    bool inventory_walk_truncated = inventory_region_walk_truncated;
     for (auto& function_result : function_results) {
         auto resolved = std::move(*function_result);
-        inventory_walk_truncated =
-            inventory_walk_truncated || resolved.inventory_walk_truncated;
+        inventory_walk_diagnostics.forwarded_store_context_limited_functions +=
+            resolved.walk_diagnostics.forwarded_store_context_limited_functions;
+        inventory_walk_diagnostics.contextual_return_context_limited_functions +=
+            resolved.walk_diagnostics.contextual_return_context_limited_functions;
+        inventory_walk_diagnostics.contextual_return_evaluation_limited_functions +=
+            resolved.walk_diagnostics.contextual_return_evaluation_limited_functions;
         resolution_count += resolved.evaluation.resolutions.size();
         result.resolutions.insert(
             result.resolutions.end(),
@@ -4045,9 +4187,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             report_progress("resolution-progress");
     }
     result.guarded_code_inventory = guarded_inventory_collector.finish();
-    result.guarded_code_inventory.candidate_inventory_truncated =
-        result.guarded_code_inventory.candidate_inventory_truncated ||
-        inventory_walk_truncated;
+    result.guarded_code_inventory.walk_diagnostics = inventory_walk_diagnostics;
     std::sort(result.resolutions.begin(),
               result.resolutions.end(),
               [](const auto& left, const auto& right) {

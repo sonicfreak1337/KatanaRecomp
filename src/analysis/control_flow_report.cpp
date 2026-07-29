@@ -395,6 +395,30 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << analysis.guarded_code_inventory_candidates
            << ",\"guarded_code_inventory_budget\":"
            << analysis.guarded_code_inventory_budget
+           << ",\"guarded_code_inventory_candidate_budget_exhausted\":"
+           << (analysis.guarded_code_inventory_candidate_budget_exhausted ? "true" : "false")
+           << ",\"guarded_inventory_region_count\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_count
+           << ",\"guarded_inventory_region_budget\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_budget
+           << ",\"guarded_inventory_pending_region_count\":"
+           << analysis.guarded_code_inventory_walk.pending_inventory_region_count
+           << ",\"guarded_inventory_region_block_budget\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_block_budget
+           << ",\"guarded_inventory_region_block_limited_regions\":"
+           << analysis.guarded_code_inventory_walk.inventory_region_block_limited_regions
+           << ",\"guarded_forwarded_store_context_budget\":"
+           << analysis.guarded_code_inventory_walk.forwarded_store_context_budget
+           << ",\"guarded_forwarded_store_context_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.forwarded_store_context_limited_functions
+           << ",\"guarded_contextual_return_context_budget\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_context_budget
+           << ",\"guarded_contextual_return_context_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_context_limited_functions
+           << ",\"guarded_contextual_return_evaluation_budget\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
+           << ",\"guarded_contextual_return_evaluation_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
            << ",\"guarded_code_shape_validation_work\":"
            << analysis.guarded_code_shape_validation_work
            << ",\"guarded_code_shape_validation_work_budget\":"

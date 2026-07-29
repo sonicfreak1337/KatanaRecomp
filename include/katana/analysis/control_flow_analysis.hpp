@@ -130,6 +130,8 @@ struct ControlFlowAnalysisResult {
     bool raw_stored_code_inventory_truncated = false;
     std::size_t guarded_code_inventory_candidates = 0u;
     std::size_t guarded_code_inventory_budget = 0u;
+    bool guarded_code_inventory_candidate_budget_exhausted = false;
+    GuardedCodeInventoryWalkDiagnostics guarded_code_inventory_walk;
     std::size_t guarded_code_shape_validation_work = 0u;
     std::size_t guarded_code_shape_validation_work_budget = 0u;
     std::size_t guarded_code_shape_budget_exceeded_candidates = 0u;
@@ -144,6 +146,8 @@ guarded_aot_inventory_complete(
     const ControlFlowAnalysisResult& analysis) noexcept {
     return !analysis.function_budget_exhausted &&
            !analysis.raw_stored_code_inventory_truncated &&
+           !analysis.guarded_code_inventory_candidate_budget_exhausted &&
+           !analysis.guarded_code_inventory_walk.truncated() &&
            !analysis.candidate_inventory_truncated &&
            !analysis.returned_table_scan_truncated &&
            analysis.guarded_code_shape_budget_exceeded_candidates == 0u &&

@@ -1348,6 +1348,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             guarded_code_inventory.candidate_count;
         analysis.guarded_code_inventory_budget =
             guarded_code_inventory.candidate_budget;
+        analysis.guarded_code_inventory_candidate_budget_exhausted =
+            guarded_code_inventory.candidate_budget_exhausted;
+        analysis.guarded_code_inventory_walk =
+            guarded_code_inventory.walk_diagnostics;
         analysis.guarded_code_shape_validation_work =
             guarded_code_inventory.shape_validation_work;
         analysis.guarded_code_shape_validation_work_budget =

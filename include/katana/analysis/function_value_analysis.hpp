@@ -26,6 +26,10 @@ struct FunctionRegisterValueSummary {
     // across an ordinary helper return.
     bool inventory_code_pointer = false;
     bool inventory_pc_relative_code_literal = false;
+    // Internal candidate-return slice dependency. It is not control-flow or
+    // code-pointer evidence; it only decides whether a direct helper needs a
+    // contextual summary instead of its already authoritative global summary.
+    bool contextual_candidate_dependency = false;
     std::vector<std::uint32_t> values;
     std::vector<std::uint32_t> return_sites;
     std::vector<std::uint32_t> evidence_callees;
@@ -95,6 +99,34 @@ struct ReturnedCodeAddressTableCandidate {
     bool operator==(const ReturnedCodeAddressTableCandidate&) const = default;
 };
 
+// Bounded inventory walks have several independent resource contracts. Keep
+// their terminal evidence separate: an otherwise small candidate inventory
+// must not be reported as if the 1,024-entry collector itself overflowed.
+// Counts describe unique bounded units, never individual rejected attempts.
+struct GuardedCodeInventoryWalkDiagnostics {
+    std::size_t inventory_region_count = 0u;
+    std::size_t inventory_region_budget = 0u;
+    std::size_t pending_inventory_region_count = 0u;
+    std::size_t inventory_region_block_budget = 0u;
+    std::size_t inventory_region_block_limited_regions = 0u;
+    std::size_t forwarded_store_context_budget = 0u;
+    std::size_t forwarded_store_context_limited_functions = 0u;
+    std::size_t contextual_return_context_budget = 0u;
+    std::size_t contextual_return_context_limited_functions = 0u;
+    std::size_t contextual_return_evaluation_budget = 0u;
+    std::size_t contextual_return_evaluation_limited_functions = 0u;
+
+    [[nodiscard]] constexpr bool truncated() const noexcept {
+        return pending_inventory_region_count != 0u ||
+               inventory_region_block_limited_regions != 0u ||
+               forwarded_store_context_limited_functions != 0u ||
+               contextual_return_context_limited_functions != 0u ||
+               contextual_return_evaluation_limited_functions != 0u;
+    }
+
+    bool operator==(const GuardedCodeInventoryWalkDiagnostics&) const = default;
+};
+
 // A larger, separately bounded native-code inventory channel.  Its entries
 // never become fixed CFG edges; the live runtime value remains authoritative.
 // The ordinary abstract-value domain intentionally retains its much smaller
@@ -110,8 +142,10 @@ struct GuardedCodeInventory {
     std::size_t shape_validation_work_budget = 0u;
     std::size_t shape_budget_exceeded_candidates = 0u;
     bool raw_stored_candidates_truncated = false;
+    bool candidate_budget_exhausted = false;
     bool candidate_inventory_truncated = false;
     bool table_scan_truncated = false;
+    GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
 };
 
 namespace detail {

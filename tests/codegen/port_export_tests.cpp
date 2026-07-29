@@ -3962,6 +3962,12 @@ int run_test(const int argc, char* argv[]) {
                     .find("\"candidate_inventory_truncated\":false") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
+                    .find("\"guarded_code_inventory_candidate_budget_exhausted\":false") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"guarded_forwarded_store_context_limited_functions\":0") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
                     .find("\"returned_table_scan_truncated\":false") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")

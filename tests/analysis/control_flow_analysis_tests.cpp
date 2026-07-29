@@ -242,6 +242,10 @@ int main() {
                     completeness_contract),
                 "Rohes Store-Inventarbudget blieb exportfaehig.");
         completeness_contract.raw_stored_code_inventory_truncated = false;
+        completeness_contract.guarded_code_inventory_walk
+            .forwarded_store_context_limited_functions = 1u;
+        require(!katana::analysis::guarded_aot_inventory_complete(completeness_contract),
+                "Forwarding-Walkverlust blieb exportfaehig.");
         completeness_contract.candidate_inventory_truncated = true;
         require(!katana::analysis::guarded_aot_inventory_complete(
                     completeness_contract),
