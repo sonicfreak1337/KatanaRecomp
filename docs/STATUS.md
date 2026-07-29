@@ -6,9 +6,9 @@ Aktuelle interne Version: `v0.49.0`
 
 ```text
 letzte reale Produktevidenz: d645d20 / ABI 77 / NativeDisc-v37
-aktueller Runtime-Source:    d645d20 / Runtime-ABI 77 / Analyzer-ABI 10
-lokaler Arbeitsbaum:         nur Roadmap-/Statussynchronisierung
-offene Produktabnahme:       Maple-/VMU-Erkennung nach sichtbarem Spielhinweis
+aktueller Runtime-Source:    2f2d3b4 / Runtime-ABI 78 / Analyzer-ABI 10
+lokaler Arbeitsbaum:         sauber; ABI-78-Sonic-Produktproof ausstehend
+offene Produktabnahme:       VMU-Erkennung und naechster sichtbarer Sonic-Screen
 ```
 
 Der aktuelle ABI-77-NativeDisc-v37-Lauf erreicht erstmals das vollstaendige
@@ -63,6 +63,21 @@ NativeDisc-v37 exportiert `2.902` Funktionen in `69` Partitionen und
 materialisiert das gebundene Runtime-Image im echten Produkt ohne Fehler.
 Der naechste offene Schritt ist die allgemeine Maple-/VMU-Erkennung hinter
 dem sichtbaren Spielhinweis; Sonic-Adressen bleiben aus dem Kern.
+
+`2f2d3b4` behebt die konkrete Ursache allgemein. Der Maple-Hauptperipherie-
+Sender bildet Port und angeschlossene Subunits ab (`0x21` fuer Controller A
+mit VMU A1), statt den Requestempfaenger `0x20` als Antwortsender zu
+duplizieren. Die VMU stellt Media-Info, Blockread, vierphasiges Blockwrite
+und Sync mit einem atomaren 512-Byte-Commit bereit. Ausstehende
+Schreibphasen sind serialisierter gastseitiger Geraetezustand und werden im
+Product-Handoff wiederhergestellt; installierte Savebytes, Dirtyzustand und
+Hostschreibschutz bleiben weiterhin Zielautoritaet. Eine erstmalig
+quelllose VMU wird deterministisch mit dem Standardlayout fuer 256 Bloecke
+und 200 Datenbloecke formatiert, ohne vorhandene oder importierte
+Arbeitskopien zu ersetzen. Runtime-ABI 78 und Maple-State-Vertrag 2 binden
+die Aenderung. Die drei fokussierten Maple-/VMU-/Persistenztests,
+`katana-recomp`, `diff --check` und der abschliessende kombinierte Review
+sind sauber; der reale ABI-78-Sonic-Nachweis steht noch aus.
 
 Der davor liegende reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
 PAL-Sega-Screen und passiert das zuvor fehlende statische Ziel
@@ -568,7 +583,10 @@ Maple-/VMU-Zustand, MMIO, DMA und Ereignisrehydrierung sind in
 Lauf byteidentisch. Das beweist noch kein allgemeines, rollbackfreies
 Produktprofil. Der aktuelle `KR-4970`-Source-Vertrag behandelt installierte
 VMU-/Flash-Working-Copies als autoritativ und trennt Product-Handoff von
-verlustfreier Diagnose; sein realer ABI-74-Nachweis steht noch aus.
+verlustfreier Diagnose. `2f2d3b4` ergaenzt die echte Maple-
+Subunitadressierung, den FT1-Speichervertrag, serialisierte Schreibphasen
+und ein formatiertes quellloses Standardmedium. Sein realer ABI-78-Nachweis
+steht noch aus.
 
 ## PVR-/Frame-Stand
 
@@ -781,10 +799,9 @@ Im realen ABI-77-v37-Produktproof bestaetigt:
 KR-4966 korrektes relatives Post-Entry-Gate
 
 Naechster Schritt:
-allgemein klaeren, warum der NativeDisc-v37-Lauf zwar den Sonic-
-Speicherkartenhinweis praesentiert, aber `controller_contract=0`, keine
-Controller-Samples und keine erkannte VMU meldet; danach denselben
-Produktpfad bis zum naechsten sichtbaren Sonic-Meilenstein ausfuehren
+einen frischen ABI-78-NativeDisc-Port aus `2f2d3b4` bauen, die private
+Originaldisc installieren und exakt einen 600-Millionen-Post-Entry-Lauf
+bis zum naechsten sichtbaren Sonic-Meilenstein ausfuehren
 
 Weiterhin quellseitig vorhanden, separater DirectBoot-Produktproof offen:
 KR-4967 strikter globaler Prepare-/Commitvertrag
@@ -883,7 +900,7 @@ Der aktuelle Stand behauptet nicht:
 ## Aktuelle Vertraege
 
 ```text
-Runtime-ABI:                    77
+Runtime-ABI:                    78
 Block-ABI:                       5
 Analyzer-ABI:                   10
 PlatformServices-ABI:           13

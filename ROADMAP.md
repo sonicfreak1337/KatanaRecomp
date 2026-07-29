@@ -44,8 +44,8 @@ Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
 letzte reale Produktevidenz: d645d20 / ABI 77 / NativeDisc-v37
-aktueller Runtime-Source:    d645d20 / Runtime-ABI 77 / Analyzer-ABI 10
-lokaler Arbeitsbaum:         nur Roadmap-/Statussynchronisierung
+aktueller Runtime-Source:    2f2d3b4 / Runtime-ABI 78 / Analyzer-ABI 10
+lokaler Arbeitsbaum:         sauber; ABI-78-Sonic-Produktproof ausstehend
 ```
 
 Der aktuelle ABI-77-NativeDisc-v37-Lauf erreicht erstmals das vollstaendige
@@ -60,6 +60,23 @@ Runtime-Materialisierungen, `0` Interpreter-Materialisierungen und
 `first_problem=none`. Die naechste reale Bootgrenze ist die
 Maple-/VMU-Erkennung; `controller_contract=0`, keine Controller-Samples und
 der sichtbare Spielhinweis begrenzen die aktuelle Untersuchung.
+
+`2f2d3b4` schliesst die daraus allgemein abgeleitete Maple-/VMU-Ursache.
+Die Antwort des Hauptgeraets meldet bei angeschlossener VMU nun die echte
+Port-/Subunitmaske `0x21` statt erneut nur den Requestempfaenger `0x20`;
+Subunitantworten und alle vier Ports behalten ihre eigenen Adressbits.
+Die VMU implementiert den FT1-Speichervertrag mit Media-Info, Blockread,
+vier geordneten 128-Byte-Schreibphasen und abschliessendem Sync. Halb
+geschriebene Bloecke sind als gastseitiger Geraetezustand in Diagnose- und
+Product-Handoff gebunden, waehrend installierte Savebytes, Dirtyzustand und
+Hostschreibschutz autoritativ bleiben. Eine neue quelllose VMU erhaelt ein
+deterministisches 128-KiB-Standarddateisystem; bestehende oder importierte
+Arbeitskopien werden nicht ersetzt. Runtime-ABI 78 und Maple-State-Vertrag
+2 invalidieren alte Runtimepakete. Die drei direkt betroffenen
+Maple-/VMU-/Persistenztests, `katana-recomp`, `diff --check` und der
+abschliessende kombinierte Review sind ohne offenen P0/P1/P2. Ob Sonic den
+Speicherkartenhinweis damit real verlaesst, ist erst durch den naechsten
+frischen NativeDisc-Produktlauf belegt.
 
 `db9e721` fuehrt dafuer den generischen, extern hashgebundenen
 `RuntimeImage`-/`FixedAddress`-Vertrag ein. Der erste reale v36-Export
@@ -186,7 +203,7 @@ begrenzte Inventarregion. Erst ein neuer Export kann diese Reparatur
 abnehmen.
 
 ```text
-Runtime-ABI:                    77
+Runtime-ABI:                    78
 Block-ABI:                       5
 Analyzer-ABI:                   10
 PlatformServices-ABI:           13
@@ -205,8 +222,9 @@ vorcompilierten Bloecken ueber 128 Byte reviewt. Der Finalreview der
 FixedAddress-Probe, Provenienz, Snapshotreihenfolge, Autorisierung,
 Generationen, ABI-/Cachebindung und Diagnosegrenze ist ohne P0/P1/P2.
 Der Produktproof ist mit NativeDisc-v37 erbracht. Der naechste Schritt ist
-die allgemeine Maple-/VMU-Ursache hinter dem sichtbaren
-Speicherkartenhinweis; titelbezogene Sonderfaelle bleiben ausgeschlossen.
+ein frischer ABI-78-NativeDisc-Lauf, der die allgemeine Maple-/VMU-
+Korrektur bis zum naechsten sichtbaren Sonic-Meilenstein prueft;
+titelbezogene Sonderfaelle bleiben ausgeschlossen.
 
 Auf `24d6132` sind die konkret reviewten Vertraege fuer
 Carrieridentitaet, externe bedingte und normale Inventarnachfolger,
