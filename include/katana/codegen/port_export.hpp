@@ -2,6 +2,7 @@
 
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/build_contract.hpp"
+#include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/partition.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/io/input_provenance.hpp"
@@ -57,6 +58,9 @@ struct PortExportOptions {
     // are rejected.
     std::span<const GameProjectRuntimeImagePayload>
         game_project_runtime_image_payloads;
+    // Export-time-only, hash-bound native entries for exact disc modules.
+    // The caller owns the descriptors; they contain no source bytes or paths.
+    std::span<const LatentAotEntryHint> latent_aot_entry_hints;
 };
 
 struct PortExportResult {

@@ -50,11 +50,41 @@ create_native_video_output(const NativeVideoConfig& config = {});
 [[nodiscard]] bool present_guest_frame_proof(NativeVideoOutput& output,
                                              const PvrGuestFrameProof& proof);
 
+enum class GuestFramePresentedSource : std::uint8_t { None, Scanout, GuestProof };
+
+[[nodiscard]] constexpr const char*
+guest_frame_presented_source_name(const GuestFramePresentedSource source) noexcept {
+    switch (source) {
+    case GuestFramePresentedSource::None:
+        return "none";
+    case GuestFramePresentedSource::Scanout:
+        return "scanout";
+    case GuestFramePresentedSource::GuestProof:
+        return "guest-proof";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] constexpr const char*
+guest_frame_proof_source_name(const PvrGuestFrameProofSource source) noexcept {
+    switch (source) {
+    case PvrGuestFrameProofSource::TaRender:
+        return "ta-render";
+    case PvrGuestFrameProofSource::DirectFramebuffer:
+        return "direct-framebuffer";
+    }
+    return "unknown";
+}
+
 struct GuestFramePumpResult {
     bool guest_frame_proven = false;
     bool frame_presented = false;
     bool proven_frame_presented = false;
     std::optional<PvrGuestFrameProofSource> proof_source;
+    GuestFramePresentedSource presented_source = GuestFramePresentedSource::None;
+    std::optional<PvrGuestFrameProofSource> presented_proof_source;
+    std::uint64_t presented_nonblack_pixels = 0u;
+    std::uint64_t presented_pixel_count = 0u;
     std::uint64_t render_generation = 0u;
     std::uint64_t write_generation_first = 0u;
     std::uint64_t write_generation_last = 0u;

@@ -25,6 +25,7 @@ namespace katana::codegen {
 namespace {
 
 constexpr std::uint32_t iso_sector_size = 2048u;
+constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
 
 struct DiscFileCandidate {
     std::string path;
@@ -34,7 +35,77 @@ struct DiscFileCandidate {
     std::uint64_t disc_byte_offset = 0u;
     std::vector<std::uint8_t> bytes;
     std::string byte_identity;
+    std::vector<std::uint32_t> entry_offsets;
+    std::vector<std::uint32_t> explicit_entry_offsets;
 };
+
+bool valid_sha256_identity(const std::string_view identity) noexcept {
+    constexpr std::string_view prefix{"sha256:"};
+    if (identity.size() != prefix.size() + 64u || !identity.starts_with(prefix))
+        return false;
+    for (const auto character : identity.substr(prefix.size())) {
+        if (!((character >= '0' && character <= '9') ||
+              (character >= 'a' && character <= 'f')))
+            return false;
+    }
+    return true;
+}
+
+bool valid_entry_hint(const LatentAotEntryHint& hint) noexcept {
+    return valid_sha256_identity(hint.byte_identity) && hint.byte_size >= 4u &&
+           (hint.byte_size & 3u) == 0u &&
+           (hint.module_relative_offset & 1u) == 0u &&
+           hint.module_relative_offset <= hint.byte_size - 2u;
+}
+
+bool entry_hint_less(const LatentAotEntryHint& left,
+                     const LatentAotEntryHint& right) noexcept {
+    if (left.byte_identity != right.byte_identity)
+        return left.byte_identity < right.byte_identity;
+    if (left.disc_byte_offset != right.disc_byte_offset)
+        return left.disc_byte_offset < right.disc_byte_offset;
+    if (left.byte_size != right.byte_size) return left.byte_size < right.byte_size;
+    return left.module_relative_offset < right.module_relative_offset;
+}
+
+std::vector<LatentAotEntryHint>
+normalize_entry_hints(const std::span<const LatentAotEntryHint> entry_hints) {
+    if (entry_hints.size() > maximum_latent_aot_entry_hints)
+        throw std::invalid_argument("latent-aot-entry-hint-budget");
+    std::vector<LatentAotEntryHint> normalized(entry_hints.begin(), entry_hints.end());
+    if (std::any_of(normalized.begin(), normalized.end(),
+                    [](const auto& hint) { return !valid_entry_hint(hint); }))
+        throw std::invalid_argument("latent-aot-entry-hint-invalid");
+    std::sort(normalized.begin(), normalized.end(), entry_hint_less);
+    normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+    return normalized;
+}
+
+bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept {
+    if (candidate.entry_offsets.empty() || candidate.entry_offsets.front() != 0u ||
+        !std::is_sorted(candidate.entry_offsets.begin(), candidate.entry_offsets.end()) ||
+        std::adjacent_find(candidate.entry_offsets.begin(), candidate.entry_offsets.end()) !=
+            candidate.entry_offsets.end() ||
+        !std::is_sorted(candidate.explicit_entry_offsets.begin(),
+                        candidate.explicit_entry_offsets.end()) ||
+        std::adjacent_find(candidate.explicit_entry_offsets.begin(),
+                           candidate.explicit_entry_offsets.end()) !=
+            candidate.explicit_entry_offsets.end())
+        return false;
+    const auto valid_offset = [&candidate](const std::uint32_t offset) {
+        return (offset & 1u) == 0u &&
+               static_cast<std::uint64_t>(offset) + 2u <= candidate.bytes.size();
+    };
+    return std::all_of(candidate.entry_offsets.begin(), candidate.entry_offsets.end(),
+                       valid_offset) &&
+           std::all_of(candidate.explicit_entry_offsets.begin(),
+                       candidate.explicit_entry_offsets.end(),
+                       [&](const auto offset) {
+                           return valid_offset(offset) &&
+                                  std::binary_search(candidate.entry_offsets.begin(),
+                                                     candidate.entry_offsets.end(), offset);
+                       });
+}
 
 class AnalysisBudgetExceeded final : public std::runtime_error {
   public:
@@ -200,23 +271,28 @@ bool physical_overlap(const LatentAotOccupiedRange left,
 std::optional<PreparedLatentAotModule>
 analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& options) {
     try {
-        if (candidate.bytes.size() < 4u || (candidate.bytes.size() & 3u) != 0u)
+        if (candidate.bytes.size() < 4u || (candidate.bytes.size() & 3u) != 0u ||
+            !valid_candidate_entry_offsets(candidate))
             return std::nullopt;
-        const auto first_opcode = static_cast<std::uint16_t>(
-            static_cast<std::uint16_t>(candidate.bytes[0]) |
-            static_cast<std::uint16_t>(
-                static_cast<std::uint16_t>(candidate.bytes[1]) << 8u));
-        if (!katana::sh4::decode(first_opcode).is_known()) return std::nullopt;
+        const auto opcode_at = [&candidate](const std::uint32_t offset) {
+            return static_cast<std::uint16_t>(
+                static_cast<std::uint16_t>(candidate.bytes[offset]) |
+                static_cast<std::uint16_t>(
+                    static_cast<std::uint16_t>(candidate.bytes[offset + 1u]) << 8u));
+        };
+        if (!katana::sh4::decode(opcode_at(0u)).is_known()) return std::nullopt;
+        if (std::any_of(candidate.explicit_entry_offsets.begin(),
+                        candidate.explicit_entry_offsets.end(),
+                        [&](const auto offset) {
+                            return !katana::sh4::decode(opcode_at(offset)).is_known();
+                        }))
+            return std::nullopt;
         bool early_control_flow = false;
         const auto entry_scan = std::min(
             options.maximum_entry_scan_instructions, candidate.bytes.size() / 2u);
         for (std::size_t instruction = 0u; instruction < entry_scan; ++instruction) {
-            const auto offset = instruction * 2u;
-            const auto opcode = static_cast<std::uint16_t>(
-                static_cast<std::uint16_t>(candidate.bytes[offset]) |
-                static_cast<std::uint16_t>(
-                    static_cast<std::uint16_t>(candidate.bytes[offset + 1u]) << 8u));
-            const auto decoded = katana::sh4::decode(opcode);
+            const auto offset = static_cast<std::uint32_t>(instruction * 2u);
+            const auto decoded = katana::sh4::decode(opcode_at(offset));
             if (!decoded.is_known()) break;
             if (decoded.changes_control_flow()) {
                 early_control_flow = true;
@@ -240,7 +316,8 @@ analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& 
         segment.source_kind = katana::io::ImageSourceKind::DiscModule;
         segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
         image.add_segment(std::move(segment));
-        image.add_entry_point(candidate.source_address);
+        for (const auto offset : candidate.entry_offsets)
+            image.add_entry_point(candidate.source_address + offset);
 
         const auto analysis = katana::analysis::analyze_control_flow(
             image,
@@ -290,18 +367,29 @@ analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& 
                 }
             }
         }
+        for (const auto offset : candidate.entry_offsets) {
+            const auto entry_address = candidate.source_address + offset;
+            const auto emitted = std::any_of(
+                program.begin(), program.end(), [&](const auto& function) {
+                    return std::any_of(function.blocks.begin(), function.blocks.end(),
+                                       [&](const auto& block) {
+                                           return block.start_address == entry_address;
+                                       });
+                });
+            if (!emitted) return std::nullopt;
+        }
         return PreparedLatentAotModule{
             "latent-aot-" + candidate.byte_identity.substr(7u),
             std::move(candidate.byte_identity),
             candidate.disc_byte_offset,
             candidate.size,
             candidate.source_address,
+            std::move(candidate.entry_offsets),
             std::move(program)};
     } catch (const std::exception&) {
         return std::nullopt;
     }
 }
-
 } // namespace
 
 bool latent_aot_program_is_relocation_closed(
@@ -319,7 +407,8 @@ LatentAotDiscovery discover_latent_aot_modules(
     const std::uint32_t extent_lba_bias,
     const std::span<const std::string> excluded_byte_identities,
     const LatentAotDiscoveryOptions& options,
-    const std::span<const LatentAotOccupiedRange> occupied_source_ranges) {
+    const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+    const std::span<const LatentAotEntryHint> entry_hints) {
     if (!source || options.maximum_directory_entries == 0u ||
         options.maximum_directory_bytes == 0u ||
         options.maximum_directory_bytes >
@@ -341,6 +430,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                     occupied_source_ranges.end(),
                     [](const auto range) { return !valid_linear_physical_range(range); }))
         throw std::invalid_argument("Latente AOT-Discovery besitzt ungueltige belegte Ranges.");
+    const auto normalized_entry_hints = normalize_entry_hints(entry_hints);
+    std::vector<bool> matched_entry_hints(normalized_entry_hints.size(), false);
 
     katana::runtime::Iso9660Filesystem filesystem(
         source, iso_sector_size, volume_start_lba, extent_lba_bias);
@@ -398,6 +489,8 @@ LatentAotDiscovery discover_latent_aot_modules(
     LatentAotDiscovery result;
     std::vector<DiscFileCandidate> candidates;
     candidates.reserve(std::min(files.size(), options.maximum_candidate_files));
+    std::vector<bool> candidates_have_explicit_entries;
+    candidates_have_explicit_entries.reserve(candidates.capacity());
     std::set<std::string> known_identities(excluded_byte_identities.begin(),
                                            excluded_byte_identities.end());
     auto next_source = options.source_address_begin;
@@ -430,6 +523,27 @@ LatentAotDiscovery discover_latent_aot_modules(
             ++result.duplicate_files;
             continue;
         }
+        std::vector<std::size_t> matching_entry_hints;
+        std::vector<std::uint32_t> explicit_entry_offsets;
+        for (std::size_t hint_index = 0u; hint_index < normalized_entry_hints.size();
+             ++hint_index) {
+            const auto& hint = normalized_entry_hints[hint_index];
+            if (hint.byte_identity == byte_identity &&
+                hint.disc_byte_offset == disc_byte_offset && hint.byte_size == entry.size) {
+                matching_entry_hints.push_back(hint_index);
+                explicit_entry_offsets.push_back(hint.module_relative_offset);
+            }
+        }
+        std::sort(explicit_entry_offsets.begin(), explicit_entry_offsets.end());
+        explicit_entry_offsets.erase(
+            std::unique(explicit_entry_offsets.begin(), explicit_entry_offsets.end()),
+            explicit_entry_offsets.end());
+        std::vector<std::uint32_t> entry_offsets{0u};
+        entry_offsets.insert(entry_offsets.end(), explicit_entry_offsets.begin(),
+                             explicit_entry_offsets.end());
+        std::sort(entry_offsets.begin(), entry_offsets.end());
+        entry_offsets.erase(std::unique(entry_offsets.begin(), entry_offsets.end()),
+                            entry_offsets.end());
         bool placed = false;
         next_source = align_up(next_source, 4096u);
         while (static_cast<std::uint64_t>(next_source) + bytes.size() <=
@@ -454,10 +568,19 @@ LatentAotDiscovery discover_latent_aot_modules(
                               next_source,
                               disc_byte_offset,
                               std::move(bytes),
-                              std::move(byte_identity)});
+                              std::move(byte_identity),
+                              std::move(entry_offsets),
+                              std::move(explicit_entry_offsets)});
+        for (const auto hint_index : matching_entry_hints)
+            matched_entry_hints[hint_index] = true;
+        candidates_have_explicit_entries.push_back(!matching_entry_hints.empty());
         occupied.push_back({next_source, entry.size});
         next_source = static_cast<std::uint32_t>(source_end);
     }
+
+    if (std::any_of(matched_entry_hints.begin(), matched_entry_hints.end(),
+                    [](const bool matched) { return !matched; }))
+        throw std::runtime_error("latent-aot-entry-hint-unmatched");
 
     std::vector<std::optional<PreparedLatentAotModule>> analyzed(candidates.size());
     std::atomic_size_t next_candidate = 0u;
@@ -476,11 +599,15 @@ LatentAotDiscovery discover_latent_aot_modules(
         }));
     }
     for (auto& worker : workers) worker.get();
-    for (auto& candidate : analyzed) {
+    for (std::size_t index = 0u; index < analyzed.size(); ++index) {
+        auto& candidate = analyzed[index];
         if (candidate)
             result.modules.push_back(std::move(*candidate));
-        else
+        else {
+            if (candidates_have_explicit_entries[index])
+                throw std::runtime_error("latent-aot-entry-hint-analysis-rejected");
             ++result.rejected_files;
+        }
     }
     return result;
 }

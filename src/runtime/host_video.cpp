@@ -99,11 +99,7 @@ class Win32VideoOutput final : public NativeVideoOutput {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
-        if (!pending_error_.empty()) {
-            const auto error = std::move(pending_error_);
-            pending_error_.clear();
-            throw std::runtime_error(error);
-        }
+        throw_pending_paint_failure();
     }
 
     std::vector<NativeHostEvent> drain_events() override {
@@ -148,8 +144,16 @@ class Win32VideoOutput final : public NativeVideoOutput {
             bgra_[offset + 2u] = frame.rgba[offset];
             bgra_[offset + 3u] = frame.rgba[offset + 3u];
         }
-        ++presented_frames_;
-        InvalidateRect(window_, nullptr, FALSE);
+        if (submitted_frame_serial_ == std::numeric_limits<std::uint64_t>::max()) {
+            submitted_frame_serial_ = 1u;
+            painted_frame_serial_ = 0u;
+        } else {
+            ++submitted_frame_serial_;
+        }
+        if (InvalidateRect(window_, nullptr, FALSE) == FALSE) {
+            record_paint_failure(PaintFailure::InvalidateRect);
+            return;
+        }
         if (visible_) UpdateWindow(window_);
     }
 
@@ -171,6 +175,56 @@ class Win32VideoOutput final : public NativeVideoOutput {
     }
 
   private:
+    enum class PaintFailure : std::uint8_t {
+        None,
+        InvalidateRect,
+        BeginPaint,
+        FillRect,
+        StretchDibitsGdiError,
+        StretchDibitsNoScanlines,
+        StretchDibitsPartialScanlines,
+        EndPaint,
+    };
+
+    [[nodiscard]] static const char* paint_failure_name(const PaintFailure failure) noexcept {
+        switch (failure) {
+        case PaintFailure::None:
+            return "none";
+        case PaintFailure::InvalidateRect:
+            return "invalidate-rect";
+        case PaintFailure::BeginPaint:
+            return "begin-paint";
+        case PaintFailure::FillRect:
+            return "fill-rect";
+        case PaintFailure::StretchDibitsGdiError:
+            return "stretch-dibits-gdi-error";
+        case PaintFailure::StretchDibitsNoScanlines:
+            return "stretch-dibits-zero-scanlines";
+        case PaintFailure::StretchDibitsPartialScanlines:
+            return "stretch-dibits-partial-scanlines";
+        case PaintFailure::EndPaint:
+            return "end-paint";
+        }
+        return "unknown";
+    }
+
+    void record_paint_failure(const PaintFailure failure) noexcept {
+        if (paint_failure_ != PaintFailure::None) return;
+        paint_failure_ = failure;
+        paint_failure_last_error_ = GetLastError();
+    }
+
+    void throw_pending_paint_failure() {
+        if (paint_failure_ == PaintFailure::None) return;
+        const auto failure = paint_failure_;
+        const auto last_error = paint_failure_last_error_;
+        paint_failure_ = PaintFailure::None;
+        paint_failure_last_error_ = ERROR_SUCCESS;
+        throw std::runtime_error(std::string("native-video-paint-") +
+                                 paint_failure_name(failure) +
+                                 " win32-error=" + std::to_string(last_error));
+    }
+
     static LRESULT CALLBACK window_proc(const HWND window,
                                         const UINT message,
                                         const WPARAM wparam,
@@ -219,13 +273,16 @@ class Win32VideoOutput final : public NativeVideoOutput {
             PAINTSTRUCT paint{};
             const auto dc = BeginPaint(window, &paint);
             if (dc == nullptr) {
-                pending_error_ = "Natives Videofenster konnte nicht gezeichnet werden.";
+                record_paint_failure(PaintFailure::BeginPaint);
                 return 0;
             }
+            bool paint_succeeded = true;
+            bool submitted_frame_drawn = false;
             RECT client{};
             GetClientRect(window, &client);
             if (FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH))) == 0) {
-                pending_error_ = "Natives Videofenster konnte nicht gezeichnet werden.";
+                record_paint_failure(PaintFailure::FillRect);
+                paint_succeeded = false;
             }
             if (!bgra_.empty() && client_width_ != 0u && client_height_ != 0u) {
                 const auto scale = std::min(static_cast<double>(client_width_) / frame_width_,
@@ -241,23 +298,42 @@ class Win32VideoOutput final : public NativeVideoOutput {
                 bitmap.bmiHeader.biPlanes = 1u;
                 bitmap.bmiHeader.biBitCount = 32u;
                 bitmap.bmiHeader.biCompression = BI_RGB;
-                if (StretchDIBits(dc,
-                                  x,
-                                  y,
-                                  width,
-                                  height,
-                                  0,
-                                  0,
-                                  static_cast<int>(frame_width_),
-                                  static_cast<int>(frame_height_),
-                                  bgra_.data(),
-                                  &bitmap,
-                                  DIB_RGB_COLORS,
-                                  SRCCOPY) == GDI_ERROR) {
-                    pending_error_ = "Nativer Videoframe konnte nicht praesentiert werden.";
+                SetLastError(ERROR_SUCCESS);
+                const auto copied_scanlines = StretchDIBits(dc,
+                                                            x,
+                                                            y,
+                                                            width,
+                                                            height,
+                                                            0,
+                                                            0,
+                                                            static_cast<int>(frame_width_),
+                                                            static_cast<int>(frame_height_),
+                                                            bgra_.data(),
+                                                            &bitmap,
+                                                            DIB_RGB_COLORS,
+                                                            SRCCOPY);
+                if (copied_scanlines == GDI_ERROR) {
+                    record_paint_failure(PaintFailure::StretchDibitsGdiError);
+                    paint_succeeded = false;
+                } else if (copied_scanlines == 0) {
+                    record_paint_failure(PaintFailure::StretchDibitsNoScanlines);
+                    paint_succeeded = false;
+                } else if (copied_scanlines != static_cast<int>(frame_height_)) {
+                    record_paint_failure(PaintFailure::StretchDibitsPartialScanlines);
+                    paint_succeeded = false;
+                } else {
+                    submitted_frame_drawn = true;
                 }
             }
-            EndPaint(window, &paint);
+            if (EndPaint(window, &paint) == FALSE) {
+                record_paint_failure(PaintFailure::EndPaint);
+                paint_succeeded = false;
+            }
+            if (paint_succeeded && submitted_frame_drawn &&
+                submitted_frame_serial_ != painted_frame_serial_) {
+                painted_frame_serial_ = submitted_frame_serial_;
+                ++presented_frames_;
+            }
             return 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -296,13 +372,16 @@ class Win32VideoOutput final : public NativeVideoOutput {
     HWND window_ = nullptr;
     std::vector<std::uint8_t> bgra_;
     std::vector<NativeHostEvent> events_;
-    std::string pending_error_;
     std::uint32_t frame_width_ = 0u;
     std::uint32_t frame_height_ = 0u;
     std::uint32_t client_width_ = 0u;
     std::uint32_t client_height_ = 0u;
+    std::uint64_t submitted_frame_serial_ = 0u;
+    std::uint64_t painted_frame_serial_ = 0u;
     std::uint64_t presented_frames_ = 0u;
     std::uint64_t next_event_sequence_ = 1u;
+    PaintFailure paint_failure_ = PaintFailure::None;
+    DWORD paint_failure_last_error_ = ERROR_SUCCESS;
     bool visible_ = false;
     bool close_requested_ = false;
 };
@@ -398,6 +477,32 @@ bool GuestFrameEvidenceTracker::bootstrap_scanout_seen() const noexcept {
     return bootstrap_scanout_seen_;
 }
 
+namespace {
+
+std::uint64_t nonblack_pixel_count(const PvrFrame& frame) noexcept {
+    std::uint64_t result = 0u;
+    for (std::size_t offset = 0u; offset + 3u < frame.rgba.size(); offset += 4u) {
+        if (frame.rgba[offset] != 0u || frame.rgba[offset + 1u] != 0u ||
+            frame.rgba[offset + 2u] != 0u) {
+            ++result;
+        }
+    }
+    return result;
+}
+
+void describe_selected_frame(GuestFramePumpResult& result,
+                             const PvrFrame& frame,
+                             const GuestFramePresentedSource source,
+                             const std::optional<PvrGuestFrameProofSource> proof_source =
+                                 std::nullopt) noexcept {
+    result.presented_source = source;
+    result.presented_proof_source = proof_source;
+    result.presented_pixel_count = static_cast<std::uint64_t>(frame.rgba.size() / 4u);
+    result.presented_nonblack_pixels = nonblack_pixel_count(frame);
+}
+
+} // namespace
+
 GuestFramePumpResult pump_guest_frame_proof(PvrSoftwareRenderer& renderer,
                                             NativeVideoOutput* const output) {
     auto proof = renderer.take_guest_frame_proof();
@@ -410,12 +515,24 @@ GuestFramePumpResult pump_guest_frame_proof(PvrSoftwareRenderer& renderer,
         result.write_generation_first = proof->write_generation_first;
         result.write_generation_last = proof->write_generation_last;
     }
-    if (output != nullptr) {
-        if (scanout) {
+    if (scanout) {
+        // The scanout is newer than a simultaneously queued proof. Preserve that
+        // physical presentation ordering instead of reviving a stale proof.
+        result.presented_source = GuestFramePresentedSource::Scanout;
+        if (output != nullptr) {
+            describe_selected_frame(result, *scanout, GuestFramePresentedSource::Scanout);
             const auto presented_before = output->presented_frames();
             output->present(*scanout);
             result.frame_presented = output->presented_frames() > presented_before;
-        } else if (proof) {
+        }
+    } else if (proof) {
+        result.presented_source = GuestFramePresentedSource::GuestProof;
+        result.presented_proof_source = proof->source;
+        if (output != nullptr) {
+            describe_selected_frame(result,
+                                    proof->frame,
+                                    GuestFramePresentedSource::GuestProof,
+                                    proof->source);
             result.frame_presented = present_guest_frame_proof(*output, *proof);
             result.proven_frame_presented = result.frame_presented;
         }

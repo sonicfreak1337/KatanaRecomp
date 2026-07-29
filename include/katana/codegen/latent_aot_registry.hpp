@@ -12,6 +12,18 @@
 
 namespace katana::codegen {
 
+// A local, export-time-only request for a native entry in an exact disc module.
+// The offset is meaningful only for the exact byte identity and logical disc
+// location; it is never inferred from mutable runtime memory.
+struct LatentAotEntryHint {
+    std::string byte_identity;
+    std::uint64_t disc_byte_offset = 0u;
+    std::uint32_t byte_size = 0u;
+    std::uint32_t module_relative_offset = 0u;
+
+    [[nodiscard]] bool operator==(const LatentAotEntryHint&) const = default;
+};
+
 struct LatentAotDiscoveryOptions {
     std::size_t maximum_directory_entries = 4096u;
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;
@@ -46,6 +58,10 @@ struct PreparedLatentAotModule {
     std::uint64_t disc_byte_offset = 0u;
     std::uint32_t byte_size = 0u;
     std::uint32_t source_address = 0u;
+    // Includes the conventional module entry at offset zero and every accepted
+    // hash-bound explicit entry. The exporter must require a native source
+    // block for every listed offset before publishing a loaded-module template.
+    std::vector<std::uint32_t> entry_offsets;
     std::vector<katana::ir::Function> program;
 };
 
@@ -71,6 +87,7 @@ struct LatentAotDiscovery {
     std::uint32_t extent_lba_bias,
     std::span<const std::string> excluded_byte_identities = {},
     const LatentAotDiscoveryOptions& options = {},
-    std::span<const LatentAotOccupiedRange> occupied_source_ranges = {});
+    std::span<const LatentAotOccupiedRange> occupied_source_ranges = {},
+    std::span<const LatentAotEntryHint> entry_hints = {});
 
 } // namespace katana::codegen

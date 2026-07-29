@@ -39,6 +39,13 @@ constexpr std::size_t maximum_raw_stored_code_candidates =
 constexpr std::size_t reserved_returned_table_targets = 256u;
 constexpr std::size_t maximum_abi_stack_argument_slots = 64u;
 constexpr std::size_t maximum_forwarded_store_contexts = 64u;
+// Semantic contexts, their distinct isolated roots and re-evaluations are
+// independently bounded. Any loss is reported through the existing forwarding
+// truncation contract and blocks a product export.
+constexpr std::size_t maximum_forwarded_store_context_root_call_sites =
+    maximum_forwarded_store_contexts;
+constexpr std::size_t maximum_forwarded_store_context_evaluations =
+    maximum_forwarded_store_contexts;
 constexpr std::size_t maximum_contextual_return_contexts = 64u;
 constexpr std::size_t maximum_contextual_return_evaluations = 64u;
 constexpr std::size_t maximum_inventory_regions = maximum_guarded_code_inventory;
@@ -152,6 +159,11 @@ struct AbstractState {
     // constant displacement.  It is deliberately not part of the public value
     // summaries and must never create a fixed control-flow edge.
     std::array<bool, 16u> inventory_vbr_relative{};
+    // Inventory-only provenance for a pointer/reference path seeded by a
+    // finite PC-relative storage address. It is neither a non-stack proof nor
+    // code-pointer provenance for a loaded value; it only permits direct
+    // PC-relative callback-literal stores as guarded inventory candidates.
+    std::array<bool, 16u> inventory_fixed_storage_reference{};
     std::map<std::int32_t, AbstractValue> stack_values;
     std::map<std::uint32_t, AbstractValue> memory_values;
 
@@ -183,6 +195,79 @@ struct AbstractState {
 
     bool operator==(const AbstractState&) const = default;
 };
+
+[[nodiscard]] bool same_abstract_value_semantics(const AbstractValue& left,
+                                                 const AbstractValue& right) {
+    return left.known == right.known && left.guarded == right.guarded &&
+           left.complete == right.complete &&
+           left.inventory_stack_derived == right.inventory_stack_derived &&
+           left.inventory_code_pointer == right.inventory_code_pointer &&
+           left.inventory_pc_relative_code_literal ==
+               right.inventory_pc_relative_code_literal &&
+           left.inventory_code_pointer_values == right.inventory_code_pointer_values &&
+           left.inventory_pc_relative_code_literal_values ==
+               right.inventory_pc_relative_code_literal_values &&
+           left.contextual_candidate_dependency ==
+               right.contextual_candidate_dependency &&
+           left.values == right.values;
+}
+
+[[nodiscard]] bool same_abstract_state_semantics(const AbstractState& left,
+                                                 const AbstractState& right) {
+    if (left.stack_offsets != right.stack_offsets ||
+        left.stack_may_alias != right.stack_may_alias ||
+        left.inventory_stack_may_alias != right.inventory_stack_may_alias ||
+        left.inventory_vbr_relative != right.inventory_vbr_relative ||
+        left.inventory_fixed_storage_reference !=
+            right.inventory_fixed_storage_reference ||
+        left.stack_values.size() != right.stack_values.size() ||
+        left.memory_values.size() != right.memory_values.size())
+        return false;
+    for (std::size_t index = 0u; index < left.registers.size(); ++index) {
+        if (!same_abstract_value_semantics(left.registers[index],
+                                           right.registers[index]))
+            return false;
+    }
+    const auto equal_values = [](const auto& first, const auto& second) {
+        auto first_it = first.begin();
+        auto second_it = second.begin();
+        while (first_it != first.end()) {
+            if (first_it->first != second_it->first ||
+                !same_abstract_value_semantics(first_it->second,
+                                                second_it->second))
+                return false;
+            ++first_it;
+            ++second_it;
+        }
+        return true;
+    };
+    return equal_values(left.stack_values, right.stack_values) &&
+           equal_values(left.memory_values, right.memory_values);
+}
+
+bool merge_forwarded_provenance_only(AbstractState& destination,
+                                     const AbstractState& source) {
+    if (!same_abstract_state_semantics(destination, source))
+        throw std::logic_error(
+            "Forwarded-Store-Kontexte besitzen unterschiedliche Semantik.");
+    bool changed = false;
+    const auto merge_value_provenance = [&changed](AbstractValue& target,
+                                                    const AbstractValue& input) {
+        const auto call_site_count = target.call_sites.size();
+        const auto callee_count = target.callees.size();
+        target.call_sites.insert(input.call_sites.begin(), input.call_sites.end());
+        target.callees.insert(input.callees.begin(), input.callees.end());
+        changed = changed || target.call_sites.size() != call_site_count ||
+                  target.callees.size() != callee_count;
+    };
+    for (std::size_t index = 0u; index < destination.registers.size(); ++index)
+        merge_value_provenance(destination.registers[index], source.registers[index]);
+    for (auto& [slot, value] : destination.stack_values)
+        merge_value_provenance(value, source.stack_values.at(slot));
+    for (auto& [address, value] : destination.memory_values)
+        merge_value_provenance(value, source.memory_values.at(address));
+    return changed;
+}
 
 struct FunctionEvaluation {
     FunctionValueSummary summary;
@@ -775,6 +860,9 @@ bool merge_state(AbstractState& destination,
         const auto merged_inventory_vbr_relative =
             destination.inventory_vbr_relative[index] &&
             source.inventory_vbr_relative[index];
+        const auto merged_inventory_fixed_storage_reference =
+            destination.inventory_fixed_storage_reference[index] &&
+            source.inventory_fixed_storage_reference[index];
         if (destination.stack_offsets[index] != source.stack_offsets[index]) {
             if (destination.stack_offsets[index].has_value()) changed = true;
             destination.stack_offsets[index].reset();
@@ -793,6 +881,12 @@ bool merge_state(AbstractState& destination,
             merged_inventory_vbr_relative) {
             destination.inventory_vbr_relative[index] =
                 merged_inventory_vbr_relative;
+            changed = true;
+        }
+        if (destination.inventory_fixed_storage_reference[index] !=
+            merged_inventory_fixed_storage_reference) {
+            destination.inventory_fixed_storage_reference[index] =
+                merged_inventory_fixed_storage_reference;
             changed = true;
         }
     }
@@ -877,6 +971,7 @@ void clear_written(AbstractState& state, const katana::sh4::DecodedInstruction& 
             state.stack_may_alias[index] = true;
             state.inventory_stack_may_alias[index] = true;
             state.inventory_vbr_relative[index] = false;
+            state.inventory_fixed_storage_reference[index] = false;
         }
     }
 }
@@ -1238,10 +1333,16 @@ void apply_transfer(AbstractState& state,
         state.inventory_vbr_relative[instruction.source_register];
     const auto incoming_destination_vbr_relative =
         state.inventory_vbr_relative[instruction.destination_register];
+    const auto incoming_source_fixed_storage_reference =
+        state.inventory_fixed_storage_reference[instruction.source_register];
+    const auto incoming_destination_fixed_storage_reference =
+        state.inventory_fixed_storage_reference[instruction.destination_register];
     const auto written_registers = general_register_write_mask(instruction);
     for (std::uint8_t index = 0u; index < state.size(); ++index) {
-        if ((written_registers & register_bit(index)) != 0u)
+        if ((written_registers & register_bit(index)) != 0u) {
             state.inventory_vbr_relative[index] = false;
+            state.inventory_fixed_storage_reference[index] = false;
+        }
     }
     switch (instruction.kind) {
     case katana::sh4::InstructionKind::Nop:
@@ -1266,11 +1367,15 @@ void apply_transfer(AbstractState& state,
             state.inventory_stack_may_alias[instruction.source_register];
         state.inventory_vbr_relative[instruction.destination_register] =
             incoming_source_vbr_relative;
+        state.inventory_fixed_storage_reference[instruction.destination_register] =
+            incoming_source_fixed_storage_reference;
         return;
     case katana::sh4::InstructionKind::AddImmediate:
         adjust_stack_offset(state, instruction.destination_register, instruction.immediate);
         state.inventory_vbr_relative[instruction.destination_register] =
             incoming_destination_vbr_relative;
+        state.inventory_fixed_storage_reference[instruction.destination_register] =
+            incoming_destination_fixed_storage_reference;
         return;
     case katana::sh4::InstructionKind::AddRegister:
     case katana::sh4::InstructionKind::SubRegister:
@@ -1431,6 +1536,7 @@ void apply_transfer(AbstractState& state,
         state.stack_offsets[0u].reset();
         state.stack_may_alias[0u] = false;
         state.inventory_stack_may_alias[0u] = false;
+        state.inventory_fixed_storage_reference[0u] = true;
         return;
     case katana::sh4::InstructionKind::MovWordLoadPcRelative:
     case katana::sh4::InstructionKind::MovLongLoadPcRelative: {
@@ -1457,6 +1563,11 @@ void apply_transfer(AbstractState& state,
             !state[instruction.destination_register].known;
         state.inventory_stack_may_alias[instruction.destination_register] =
             !state[instruction.destination_register].known;
+        state.inventory_fixed_storage_reference[instruction.destination_register] =
+            width == 4u && state[instruction.destination_register].known &&
+            !state[instruction.destination_register].values.empty() &&
+            state[instruction.destination_register].values.size() <=
+                maximum_summary_values;
         return;
     }
     case katana::sh4::InstructionKind::MovByteStore:
@@ -1492,6 +1603,8 @@ void apply_transfer(AbstractState& state,
             state, instruction.destination_register, -static_cast<std::int32_t>(width));
         state.inventory_vbr_relative[instruction.destination_register] =
             incoming_destination_vbr_relative;
+        state.inventory_fixed_storage_reference[instruction.destination_register] =
+            incoming_destination_fixed_storage_reference;
         const auto offset = stack_slot(state, instruction.destination_register);
         store_stack_value(state,
                           offset,
@@ -1556,6 +1669,8 @@ void apply_transfer(AbstractState& state,
         state.stack_offsets[instruction.destination_register].reset();
         state.stack_may_alias[instruction.destination_register] = true;
         state.inventory_stack_may_alias[instruction.destination_register] = true;
+        state.inventory_fixed_storage_reference[instruction.destination_register] =
+            width == 4u && incoming_source_fixed_storage_reference;
         return;
     }
     case katana::sh4::InstructionKind::MovByteLoadPostIncrement:
@@ -1581,11 +1696,15 @@ void apply_transfer(AbstractState& state,
         state.stack_offsets[instruction.destination_register].reset();
         state.stack_may_alias[instruction.destination_register] = true;
         state.inventory_stack_may_alias[instruction.destination_register] = true;
+        state.inventory_fixed_storage_reference[instruction.destination_register] =
+            width == 4u && incoming_source_fixed_storage_reference;
         if (instruction.source_register != instruction.destination_register) {
             adjust_stack_offset(
                 state, instruction.source_register, static_cast<std::int32_t>(width));
             state.inventory_vbr_relative[instruction.source_register] =
                 incoming_source_vbr_relative;
+            state.inventory_fixed_storage_reference[instruction.source_register] =
+                incoming_source_fixed_storage_reference;
         }
         return;
     }
@@ -1615,6 +1734,8 @@ void apply_transfer(AbstractState& state,
         state.stack_offsets[instruction.destination_register].reset();
         state.stack_may_alias[instruction.destination_register] = true;
         state.inventory_stack_may_alias[instruction.destination_register] = true;
+        state.inventory_fixed_storage_reference[instruction.destination_register] =
+            width == 4u && incoming_source_fixed_storage_reference;
         return;
     }
     case katana::sh4::InstructionKind::MovByteStoreR0Indexed:
@@ -1695,6 +1816,8 @@ void apply_transfer(AbstractState& state,
         adjust_stack_offset(state, instruction.source_register, 4);
         state.inventory_vbr_relative[instruction.source_register] =
             incoming_source_vbr_relative;
+        state.inventory_fixed_storage_reference[instruction.source_register] =
+            incoming_source_fixed_storage_reference;
         return;
     case katana::sh4::InstructionKind::StoreSpecialRegister:
         clear_written(state, instruction);
@@ -2006,6 +2129,7 @@ void apply_call(AbstractState& state,
             state.stack_may_alias[index] = true;
             state.inventory_stack_may_alias[index] = true;
             state.inventory_vbr_relative[index] = false;
+            state.inventory_fixed_storage_reference[index] = false;
         }
         state[15u].inventory_stack_derived = true;
         state.stack_values.clear();
@@ -2038,9 +2162,12 @@ void apply_call(AbstractState& state,
         state.inventory_stack_may_alias[index] = true;
     for (std::uint8_t index = 0u; index <= 7u; ++index)
         state.inventory_vbr_relative[index] = false;
+    for (std::uint8_t index = 0u; index <= 7u; ++index)
+        state.inventory_fixed_storage_reference[index] = false;
     make_unknown(state[15u]);
     state[15u].inventory_stack_derived = true;
     state.inventory_vbr_relative[15u] = false;
+    state.inventory_fixed_storage_reference[15u] = false;
     std::vector<std::uint32_t> callees;
     if (callee.has_value())
         callees.push_back(*callee);
@@ -2164,6 +2291,7 @@ void apply_call(AbstractState& state,
     state.inventory_stack_may_alias[0u] =
         returned_inventory_may_alias_stack;
     state.inventory_vbr_relative[0u] = false;
+    state.inventory_fixed_storage_reference[0u] = false;
 }
 
 const katana::sh4::DisassemblyLine& controlling_line(const BasicBlock& block) {
@@ -2207,6 +2335,7 @@ void observe_stored_code_addresses(
     bool stack_derived = false;
     bool vbr_relative_destination = false;
     bool destination_proven_non_stack = false;
+    bool fixed_storage_destination = false;
     std::vector<std::uint32_t> effective_destinations;
     std::set<std::uint32_t> evidence_call_sites;
     std::set<std::uint32_t> evidence_callees;
@@ -2229,6 +2358,8 @@ void observe_stored_code_addresses(
             state.inventory_vbr_relative[instruction.destination_register];
         destination_proven_non_stack =
             !state.inventory_stack_may_alias[instruction.destination_register];
+        fixed_storage_destination =
+            state.inventory_fixed_storage_reference[instruction.destination_register];
         effective_destinations = displaced_addresses(
             state[instruction.destination_register], 0u);
         stack_based =
@@ -2247,6 +2378,8 @@ void observe_stored_code_addresses(
             state.inventory_vbr_relative[instruction.destination_register];
         destination_proven_non_stack =
             !state.inventory_stack_may_alias[instruction.destination_register];
+        fixed_storage_destination =
+            state.inventory_fixed_storage_reference[instruction.destination_register];
         effective_destinations = displaced_addresses(
             state[instruction.destination_register],
             static_cast<std::uint32_t>(-4));
@@ -2266,6 +2399,8 @@ void observe_stored_code_addresses(
             state.inventory_vbr_relative[instruction.destination_register];
         destination_proven_non_stack =
             !state.inventory_stack_may_alias[instruction.destination_register];
+        fixed_storage_destination =
+            state.inventory_fixed_storage_reference[instruction.destination_register];
         effective_destinations = displaced_addresses(
             state[instruction.destination_register],
             static_cast<std::uint32_t>(instruction.displacement));
@@ -2325,7 +2460,15 @@ void observe_stored_code_addresses(
     const bool forwarded_code_pointer_store =
         allow_forwarded_unknown_object_store && !stack_derived &&
         !value.inventory_code_pointer_values.empty() && finite_value(value);
-    if (stack_based && !forwarded_code_pointer_store) return;
+    // Fixed PC-relative storage does not prove the loaded pointer is non-stack.
+    // It only allows a direct PC-relative callback literal to be inventoried as
+    // GuardedPartial; no table scan or fixed CFG edge is created from this path.
+    const bool fixed_storage_literal_store =
+        fixed_storage_destination && !stack_derived && finite_value(value) &&
+        std::any_of(value.values.begin(), value.values.end(), [&](const auto candidate) {
+            return has_inventory_pc_relative_code_literal_value(value, candidate);
+        });
+    if (stack_based && !forwarded_code_pointer_store && !fixed_storage_literal_store) return;
 
     include_provenance(value);
     if (!finite_value(value))
@@ -2345,7 +2488,8 @@ void observe_stored_code_addresses(
     const bool persistent_destination = finite_resolved_non_stack_destination ||
                                         vbr_relative_destination ||
                                         (destination_proven_non_stack && !stack_derived);
-    if (!persistent_destination && !forwarded_code_pointer_store)
+    if (!persistent_destination && !forwarded_code_pointer_store &&
+        !fixed_storage_literal_store)
         return;
 
     std::vector<std::uint32_t> validated_candidates;
@@ -2358,8 +2502,8 @@ void observe_stored_code_addresses(
             // A direct PC-relative literal is still a bounded guarded AOT
             // candidate when its image slot is writable. The live store/load
             // remains authoritative; completeness must not erase the entry.
-            (persistent_destination &&
-             has_inventory_pc_relative_code_literal_value(value, candidate));
+             ((persistent_destination || fixed_storage_literal_store) &&
+              has_inventory_pc_relative_code_literal_value(value, candidate));
         const bool scan_stored_table = finite_resolved_non_stack_destination;
         bool table_candidate = false;
         if (scan_stored_table) {
@@ -2521,8 +2665,7 @@ FunctionEvaluation evaluate_function(
     const bool collect_resolutions,
     const bool may_merge_stack_inventory = false,
     GuardedCodeInventoryCollector* const guarded_inventory_collector = nullptr,
-    const std::optional<std::uint32_t> isolated_inventory_call_site =
-        std::nullopt,
+    const std::set<std::uint32_t>* const isolated_inventory_call_sites = nullptr,
     const std::map<std::uint32_t, FunctionValueSummary>*
         contextual_summaries = nullptr,
     const TailIngressMap* const local_tail_ingresses = nullptr,
@@ -2635,17 +2778,20 @@ FunctionEvaluation evaluate_function(
                     may_merge_stack_inventory,
                     *guarded_inventory_collector,
                     stored_candidates);
-                if (isolated_inventory_call_site.has_value()) {
+                if (isolated_inventory_call_sites != nullptr) {
                     for (auto& candidate : stored_candidates) {
                         candidate.complete = false;
                         candidate.guarded = true;
-                        candidate.evidence_call_sites.push_back(
-                            *isolated_inventory_call_site);
+                        candidate.evidence_call_sites.insert(
+                            candidate.evidence_call_sites.end(),
+                            isolated_inventory_call_sites->begin(),
+                            isolated_inventory_call_sites->end());
                     }
+
                 }
                 guarded_inventory_collector->collect(
                     std::move(stored_candidates));
-                if (!isolated_inventory_call_site.has_value()) {
+                if (isolated_inventory_call_sites == nullptr) {
                     std::vector<ReturnedCodeAddressTableCandidate>
                         returned_tables;
                     observe_returned_code_address_tables(
@@ -2931,6 +3077,7 @@ bool merge_candidate_input(CandidateInput& destination,
         bool inventory_may_alias_stack = false;
         bool inventory_stack_derived = false;
         bool inventory_vbr_relative = true;
+        bool inventory_fixed_storage_reference = true;
         std::optional<std::int32_t> stack_offset;
         std::set<std::uint32_t> inventory_code_pointer_values;
         std::set<std::uint32_t> inventory_pc_relative_code_literal_values;
@@ -2957,6 +3104,9 @@ bool merge_candidate_input(CandidateInput& destination,
             inventory_vbr_relative =
                 inventory_vbr_relative &&
                 call_observation.inventory_vbr_relative[index];
+            inventory_fixed_storage_reference =
+                inventory_fixed_storage_reference &&
+                call_observation.inventory_fixed_storage_reference[index];
             const auto rebased_stack_offset =
                 callee_relative_stack_offset(call_observation, index);
             if (first_stack_provenance) {
@@ -2999,6 +3149,8 @@ bool merge_candidate_input(CandidateInput& destination,
             inventory_may_alias_stack;
         merged.inventory_vbr_relative[index] =
             inventory_vbr_relative;
+        merged.inventory_fixed_storage_reference[index] =
+            inventory_fixed_storage_reference;
         if (may_alias_stack && exact_stack_provenance)
             merged.stack_offsets[index] = stack_offset;
         else
@@ -3114,22 +3266,486 @@ bool guarded_inventory_store_instruction(
     }
 }
 
-bool function_contains_guarded_inventory_store(
+// The guarded inventory's forwarding walk is only useful for a function whose
+// incoming ABI value can actually reach the source operand of a persistent
+// long store. A syntactic "contains mov.l store" test is much too broad: it
+// turns ordinary object/data stores throughout the call graph into callback
+// registrar candidates and exhausts the bounded isolated-context walk.
+//
+// This deliberately small, value-shape-only pass is not a second value
+// analysis. It tracks ABI arguments through register moves and stack
+// spill/reload patterns, plus direct helper calls whose result may depend on a
+// forwarded ABI argument. Unknown memory loads do not inherit the taint, the
+// same contract used by the real inventory collector. If stack tracking is
+// lost, the pass becomes conservative for subsequent stack loads rather than
+// hiding a possible callback path.
+constexpr std::uint8_t abi_stack_argument_taint = 1u << 4u;
+constexpr std::uint8_t abi_argument_taint_mask =
+    (abi_stack_argument_taint << 1u) - 1u;
+
+struct AbiPersistentStoreFlowState {
+    std::array<std::uint8_t, 16u> register_taints{};
+    std::array<std::optional<std::int32_t>, 16u> stack_offsets{};
+    std::array<bool, 16u> stack_derived{};
+    std::map<std::int32_t, std::uint8_t> stack_taints;
+    bool stack_tracking_lost = false;
+
+    bool operator==(const AbiPersistentStoreFlowState&) const = default;
+};
+
+[[nodiscard]] std::optional<std::int32_t>
+abi_stack_slot(const AbiPersistentStoreFlowState& state,
+               const std::uint8_t base_register,
+               const std::int32_t displacement = 0) {
+    if (!state.stack_derived[base_register] ||
+        !state.stack_offsets[base_register].has_value())
+        return std::nullopt;
+    const auto slot = static_cast<std::int64_t>(*state.stack_offsets[base_register]) +
+                      static_cast<std::int64_t>(displacement);
+    if (slot < -maximum_stack_distance || slot > maximum_stack_distance)
+        return std::nullopt;
+    return static_cast<std::int32_t>(slot);
+}
+
+void adjust_abi_stack_offset(AbiPersistentStoreFlowState& state,
+                             const std::uint8_t register_index,
+                             const std::int32_t delta) {
+    if (!state.stack_derived[register_index] ||
+        !state.stack_offsets[register_index].has_value())
+        return;
+    const auto adjusted =
+        static_cast<std::int64_t>(*state.stack_offsets[register_index]) + delta;
+    if (adjusted < -maximum_stack_distance || adjusted > maximum_stack_distance) {
+        state.stack_offsets[register_index].reset();
+        return;
+    }
+    state.stack_offsets[register_index] = static_cast<std::int32_t>(adjusted);
+}
+
+void clear_abi_flow_register(AbiPersistentStoreFlowState& state,
+                             const std::uint8_t register_index) {
+    state.register_taints[register_index] = 0u;
+    state.stack_offsets[register_index].reset();
+    state.stack_derived[register_index] = false;
+}
+
+[[nodiscard]] std::uint8_t
+abi_stack_load_taint(const AbiPersistentStoreFlowState& state,
+                     const std::optional<std::int32_t> slot) {
+    if (!slot.has_value())
+        return state.stack_tracking_lost ? abi_argument_taint_mask : 0u;
+    if (const auto stored = state.stack_taints.find(*slot);
+        stored != state.stack_taints.end())
+        return stored->second;
+    // At function entry, non-negative slots are incoming ABI stack arguments;
+    // negative slots are local storage until a tracked store defines them.
+    return *slot >= 0 ? abi_stack_argument_taint : 0u;
+}
+
+void store_abi_stack_taint(AbiPersistentStoreFlowState& state,
+                           const std::optional<std::int32_t> slot,
+                           const std::uint8_t taint) {
+    if (!slot.has_value()) {
+        state.stack_tracking_lost = true;
+        return;
+    }
+    if (!state.stack_taints.contains(*slot) &&
+        state.stack_taints.size() >= maximum_abi_stack_argument_slots) {
+        state.stack_tracking_lost = true;
+        return;
+    }
+    state.stack_taints[*slot] = taint;
+}
+
+[[nodiscard]] std::uint8_t
+abi_outgoing_stack_argument_taint(const AbiPersistentStoreFlowState& state) {
+    if (state.stack_tracking_lost) return abi_argument_taint_mask;
+    auto taint = std::uint8_t{0u};
+    const auto stack_base = state.stack_offsets[15u];
+    if (!stack_base.has_value()) return abi_stack_argument_taint;
+    for (const auto& [slot, value] : state.stack_taints) {
+        // At a call boundary, outgoing stack arguments begin at the current
+        // stack pointer.  This also preserves a caller's unmaterialized
+        // incoming fifth-or-later argument when the frame is reused.
+        if (slot >= *stack_base)
+            taint = static_cast<std::uint8_t>(taint | value);
+    }
+    // A non-materialized incoming stack argument has no stack_taints entry.
+    // It can still be passed through unchanged at this call boundary.
+    return static_cast<std::uint8_t>(
+        (taint | abi_stack_argument_taint) & abi_argument_taint_mask);
+}
+
+[[nodiscard]] bool merge_abi_persistent_store_flow_state(
+    AbiPersistentStoreFlowState& destination,
+    const AbiPersistentStoreFlowState& source) {
+    bool changed = false;
+    for (std::size_t index = 0u; index < destination.register_taints.size(); ++index) {
+        const auto merged_taint = static_cast<std::uint8_t>(
+            destination.register_taints[index] | source.register_taints[index]);
+        if (merged_taint != destination.register_taints[index]) {
+            destination.register_taints[index] = merged_taint;
+            changed = true;
+        }
+        const auto merged_stack_derived =
+            destination.stack_derived[index] && source.stack_derived[index];
+        if (merged_stack_derived != destination.stack_derived[index]) {
+            destination.stack_derived[index] = merged_stack_derived;
+            changed = true;
+        }
+        if (destination.stack_offsets[index] != source.stack_offsets[index] &&
+            destination.stack_offsets[index].has_value()) {
+            destination.stack_offsets[index].reset();
+            changed = true;
+        }
+    }
+    std::set<std::int32_t> slots;
+    for (const auto& [slot, value] : destination.stack_taints) {
+        static_cast<void>(value);
+        slots.insert(slot);
+    }
+    for (const auto& [slot, value] : source.stack_taints) {
+        static_cast<void>(value);
+        slots.insert(slot);
+    }
+    for (const auto slot : slots) {
+        const auto destination_value = destination.stack_taints.find(slot);
+        const auto source_value = source.stack_taints.find(slot);
+        auto merged = std::uint8_t{0u};
+        if (destination_value != destination.stack_taints.end())
+            merged = static_cast<std::uint8_t>(merged | destination_value->second);
+        else if (slot >= 0)
+            merged = static_cast<std::uint8_t>(merged | abi_stack_argument_taint);
+        if (source_value != source.stack_taints.end())
+            merged = static_cast<std::uint8_t>(merged | source_value->second);
+        else if (slot >= 0)
+            merged = static_cast<std::uint8_t>(merged | abi_stack_argument_taint);
+        if (destination_value == destination.stack_taints.end() ||
+            destination_value->second != merged) {
+            destination.stack_taints[slot] = merged;
+            changed = true;
+        }
+    }
+    if (source.stack_tracking_lost && !destination.stack_tracking_lost) {
+        destination.stack_tracking_lost = true;
+        changed = true;
+    }
+    return changed;
+}
+
+// A local, syntactically non-stack store reached by the bounded ABI taint flow.
+// It is deliberately a potential GuardedPartial sink, never a CFG edge.  The
+// value mask is relative to this function's SuperH C ABI inputs; stack-tainted
+// sites remain recorded for reachability but are not eligible for the direct
+// register-only shortcut below.
+struct AbiPersistentStoreSite {
+    std::uint32_t store_instruction_address = 0u;
+    std::uint8_t value_sources = 0u;
+
+    bool operator==(const AbiPersistentStoreSite&) const = default;
+};
+
+void normalize_abi_persistent_store_sites(
+    std::vector<AbiPersistentStoreSite>& sites) {
+    std::sort(sites.begin(), sites.end(), [](const auto& left, const auto& right) {
+        return left.store_instruction_address < right.store_instruction_address;
+    });
+    std::vector<AbiPersistentStoreSite> normalized;
+    normalized.reserve(sites.size());
+    for (const auto& site : sites) {
+        if (site.value_sources == 0u) continue;
+        if (!normalized.empty() &&
+            normalized.back().store_instruction_address ==
+                site.store_instruction_address) {
+            normalized.back().value_sources = static_cast<std::uint8_t>(
+                normalized.back().value_sources | site.value_sources);
+            continue;
+        }
+        normalized.push_back(site);
+    }
+    sites = std::move(normalized);
+}
+
+struct AbiPersistentStoreSignature {
+    // A return mask is complete only when every reached exit is an RTS path.
+    // Incomplete/external exits deliberately keep the conservative top mask.
+    bool return_sources_complete = false;
+    std::uint8_t returned_r0_sources = abi_argument_taint_mask;
+    std::uint8_t persistent_store_sources = 0u;
+    std::vector<AbiPersistentStoreSite> local_persistent_store_sites;
+};
+
+using AbiReturnSourceMap = std::unordered_map<std::uint32_t, std::uint8_t>;
+using AbiPersistentStoreSourceMap =
+    std::unordered_map<std::uint32_t, std::uint8_t>;
+using AbiPersistentStoreSiteMap =
+    std::unordered_map<std::uint32_t, std::vector<AbiPersistentStoreSite>>;
+
+[[nodiscard]] std::uint8_t compose_abi_return_taint(
+    const AbiPersistentStoreFlowState& state,
+    const std::uint8_t return_sources) {
+    auto result = std::uint8_t{0u};
+    for (std::uint8_t index = 0u; index < 4u; ++index) {
+        if ((return_sources & static_cast<std::uint8_t>(1u << index)) != 0u)
+            result = static_cast<std::uint8_t>(
+                result | state.register_taints[4u + index]);
+    }
+    if ((return_sources & abi_stack_argument_taint) != 0u)
+        result = static_cast<std::uint8_t>(
+            result | abi_outgoing_stack_argument_taint(state));
+    return static_cast<std::uint8_t>(result & abi_argument_taint_mask);
+}
+
+// Returns the ABI-source mask written by the current instruction to a
+// syntactically persistent long-store destination. The dataflow itself remains
+// deliberately smaller than the value analysis: it follows only forms that
+// preserve a callback value without dereferencing arbitrary object memory.
+[[nodiscard]] std::uint8_t apply_abi_persistent_store_flow(
+    AbiPersistentStoreFlowState& state,
+    const katana::sh4::DisassemblyLine& line) {
+    using K = katana::sh4::InstructionKind;
+    const auto& instruction = line.instruction;
+    const auto source_taint = state.register_taints[instruction.source_register];
+    const auto persistent_store = [&](const bool destination_is_stack) {
+        return destination_is_stack ? std::uint8_t{0u} : source_taint;
+    };
+    const auto stack_store = [&](const std::uint8_t base,
+                                 const std::int32_t displacement = 0) {
+        const auto slot = abi_stack_slot(state, base, displacement);
+        if (state.stack_derived[base]) store_abi_stack_taint(state, slot, source_taint);
+        return persistent_store(state.stack_derived[base]);
+    };
+    switch (instruction.kind) {
+    case K::MovRegister:
+        state.register_taints[instruction.destination_register] = source_taint;
+        state.stack_offsets[instruction.destination_register] =
+            state.stack_offsets[instruction.source_register];
+        state.stack_derived[instruction.destination_register] =
+            state.stack_derived[instruction.source_register];
+        return std::uint8_t{0u};
+    case K::AddImmediate:
+        if (state.stack_derived[instruction.destination_register])
+            adjust_abi_stack_offset(
+                state, instruction.destination_register, instruction.immediate);
+        else if (instruction.immediate != 0)
+            clear_abi_flow_register(state, instruction.destination_register);
+        return std::uint8_t{0u};
+    case K::MovLongStore:
+        return stack_store(instruction.destination_register);
+    case K::MovLongStorePreDecrement:
+        if (state.stack_derived[instruction.destination_register])
+            adjust_abi_stack_offset(state, instruction.destination_register, -4);
+        return stack_store(instruction.destination_register);
+    case K::MovLongStoreDisplacement:
+        return stack_store(instruction.destination_register, instruction.displacement);
+    case K::MovLongStoreR0Indexed: {
+        const auto destination_is_stack = state.stack_derived[0u] ||
+                                          state.stack_derived[instruction.destination_register];
+        return persistent_store(destination_is_stack);
+    }
+    case K::MovLongStoreGbrDisplacement:
+        return source_taint;
+    case K::MovLongLoad:
+    case K::MovLongLoadDisplacement:
+    case K::MovLongLoadPostIncrement: {
+        const auto base = instruction.source_register;
+        const auto displacement = instruction.kind == K::MovLongLoadDisplacement
+                                      ? instruction.displacement
+                                      : 0;
+        const auto taint = static_cast<std::uint8_t>(
+            state.stack_derived[base]
+                ? abi_stack_load_taint(state, abi_stack_slot(state, base, displacement))
+                : 0u);
+        clear_abi_flow_register(state, instruction.destination_register);
+        state.register_taints[instruction.destination_register] = taint;
+        if (instruction.kind == K::MovLongLoadPostIncrement &&
+            instruction.source_register != instruction.destination_register)
+            adjust_abi_stack_offset(state, instruction.source_register, 4);
+        return std::uint8_t{0u};
+    }
+    case K::MovLongLoadR0Indexed:
+    case K::MovLongLoadGbrDisplacement:
+    case K::MovLongLoadPcRelative:
+    case K::MovWordLoadPcRelative:
+    case K::MoveAddressPcRelative:
+    case K::MovImmediate:
+        clear_abi_flow_register(state, instruction.destination_register);
+        return std::uint8_t{0u};
+    default: {
+        const auto written_registers = general_register_write_mask(instruction);
+        for (std::uint8_t index = 0u; index < state.register_taints.size(); ++index) {
+            if ((written_registers & register_bit(index)) != 0u)
+                clear_abi_flow_register(state, index);
+        }
+        return std::uint8_t{0u};
+    }
+    }
+}
+
+[[nodiscard]] AbiPersistentStoreSignature
+analyze_abi_persistent_store_signature(
+    const FunctionInfo& function,
+    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
+    const AbiReturnSourceMap* const return_sources = nullptr,
+    const AbiPersistentStoreSourceMap* const persistent_store_sources = nullptr,
+    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>* const
+        inventory_indirect_callees = nullptr) {
+    std::unordered_set<std::uint32_t> members;
+    members.reserve(function.block_addresses.size());
+    members.insert(function.block_addresses.begin(), function.block_addresses.end());
+    if (!members.contains(function.entry_address)) return {};
+
+    AbiPersistentStoreFlowState entry;
+    for (std::uint8_t index = 4u; index <= 7u; ++index)
+        entry.register_taints[index] = static_cast<std::uint8_t>(1u << (index - 4u));
+    entry.stack_offsets[15u] = 0;
+    entry.stack_derived[15u] = true;
+
+    std::unordered_map<std::uint32_t, AbiPersistentStoreFlowState> inputs;
+    inputs.reserve(function.block_addresses.size());
+    std::deque<std::uint32_t> pending;
+    std::unordered_set<std::uint32_t> queued;
+    queued.reserve(function.block_addresses.size());
+    inputs.emplace(function.entry_address, entry);
+    pending.push_back(function.entry_address);
+    queued.insert(function.entry_address);
+    AbiPersistentStoreSignature signature;
+    signature.returned_r0_sources = 0u;
+    bool saw_return = false;
+    bool unknown_return_path = false;
+
+    struct DelayedCall {
+        std::optional<std::uint32_t> return_callee;
+        std::vector<std::uint32_t> inventory_callees;
+    };
+    const auto apply_call_return =
+        [&](AbiPersistentStoreFlowState& state,
+            const std::optional<std::uint32_t> callee) {
+            auto source_mask = abi_argument_taint_mask;
+            if (callee.has_value() && return_sources != nullptr) {
+                if (const auto found = return_sources->find(*callee);
+                    found != return_sources->end())
+                    source_mask = found->second;
+            }
+            const auto returned_taint = compose_abi_return_taint(state, source_mask);
+            for (std::uint8_t index = 0u; index <= 7u; ++index)
+                clear_abi_flow_register(state, index);
+            state.register_taints[0u] = returned_taint;
+        };
+    const auto observe_inventory_callee_persistent_store =
+        [&](const AbiPersistentStoreFlowState& state,
+            const std::vector<std::uint32_t>& callees) {
+            if (persistent_store_sources == nullptr) return;
+            for (const auto callee : callees) {
+                const auto found = persistent_store_sources->find(callee);
+                if (found == persistent_store_sources->end() || found->second == 0u)
+                    continue;
+                signature.persistent_store_sources = static_cast<std::uint8_t>(
+                    signature.persistent_store_sources |
+                    compose_abi_return_taint(state, found->second));
+            }
+        };
+
+    while (!pending.empty()) {
+        const auto address = pending.front();
+        pending.pop_front();
+        queued.erase(address);
+        const auto block = blocks.find(address);
+        if (block == blocks.end()) continue;
+        auto state = inputs.at(address);
+        std::optional<DelayedCall> delayed_call;
+        for (const auto& line : block->second->lines) {
+            const auto local_store_sources =
+                apply_abi_persistent_store_flow(state, line);
+            signature.persistent_store_sources = static_cast<std::uint8_t>(
+                signature.persistent_store_sources | local_store_sources);
+            if (local_store_sources != 0u) {
+                signature.local_persistent_store_sites.push_back(
+                    {line.address, local_store_sources});
+            }
+            // The delay slot writes the actual outgoing ABI arguments. Sample
+            // the inventory-only store slice after it, before the call return
+            // clobbers the caller-visible registers.
+            if (delayed_call.has_value()) {
+                observe_inventory_callee_persistent_store(
+                    state, delayed_call->inventory_callees);
+                apply_call_return(state, delayed_call->return_callee);
+                delayed_call.reset();
+            }
+            const auto call =
+                line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
+                line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
+            if (call) {
+                const auto return_callee =
+                    line.instruction.control_flow == katana::sh4::ControlFlowKind::Call
+                        ? line.target_address
+                        : std::optional<std::uint32_t>{};
+                std::vector<std::uint32_t> inventory_callees;
+                if (return_callee.has_value()) {
+                    inventory_callees.push_back(*return_callee);
+                } else if (inventory_indirect_callees != nullptr) {
+                    if (const auto candidates =
+                            inventory_indirect_callees->find(line.address);
+                        candidates != inventory_indirect_callees->end())
+                        inventory_callees = candidates->second.targets;
+                }
+                if (line.instruction.has_delay_slot) {
+                    delayed_call =
+                        DelayedCall{return_callee, std::move(inventory_callees)};
+                } else {
+                    observe_inventory_callee_persistent_store(state,
+                                                              inventory_callees);
+                    apply_call_return(state, return_callee);
+                }
+            }
+        }
+        const auto& control = controlling_line(*block->second);
+        // SH-4 executes the delay slot before publishing a return value.
+        // Sampling after the complete block also keeps `rts; mov r4,r0`
+        // visible to the interprocedural ABI-return summary.
+        if (control.instruction.kind == katana::sh4::InstructionKind::Rts) {
+            saw_return = true;
+            signature.returned_r0_sources = static_cast<std::uint8_t>(
+                signature.returned_r0_sources | state.register_taints[0u]);
+        } else {
+            bool has_internal_successor = false;
+            for (const auto successor : block->second->successors) {
+                if (members.contains(successor)) {
+                    has_internal_successor = true;
+                    continue;
+                }
+                // Direct and indirect call targets leave the caller's function
+                // only temporarily. Every other external successor is a tail,
+                // exception or unknown exit and cannot narrow a return mask.
+                if (control.instruction.control_flow !=
+                        katana::sh4::ControlFlowKind::Call &&
+                    control.instruction.control_flow !=
+                        katana::sh4::ControlFlowKind::IndirectCall)
+                    unknown_return_path = true;
+            }
+            if (!has_internal_successor) unknown_return_path = true;
+        }
+        for (const auto successor : block->second->successors) {
+            if (!members.contains(successor)) continue;
+            const auto [input, inserted] = inputs.emplace(successor, state);
+            const auto merged = !inserted &&
+                                merge_abi_persistent_store_flow_state(input->second, state);
+            if ((inserted || merged) && queued.insert(successor).second)
+                pending.push_back(successor);
+        }
+    }
+    signature.return_sources_complete = saw_return && !unknown_return_path;
+    if (!signature.return_sources_complete)
+        signature.returned_r0_sources = abi_argument_taint_mask;
+    normalize_abi_persistent_store_sites(signature.local_persistent_store_sites);
+    return signature;
+}
+
+[[nodiscard]] bool function_forwards_abi_argument_to_persistent_inventory_store(
     const FunctionInfo& function,
     const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
-    for (const auto block_address : function.block_addresses) {
-        const auto block = blocks.find(block_address);
-        if (block == blocks.end()) continue;
-        if (std::any_of(
-                block->second->lines.begin(),
-                block->second->lines.end(),
-                [](const auto& line) {
-                    return guarded_inventory_store_instruction(
-                        line.instruction.kind);
-                }))
-            return true;
-    }
-    return false;
+    return analyze_abi_persistent_store_signature(function, blocks)
+               .persistent_store_sources != 0u;
 }
 
 bool function_contains_non_stack_inventory_store_shape(
@@ -3151,8 +3767,316 @@ bool function_contains_non_stack_inventory_store_shape(
     return false;
 }
 
+constexpr std::uint8_t abi_entry_register_mask = 0x0Fu;
+
+[[nodiscard]] constexpr std::uint8_t
+abi_entry_register_bit(const std::uint8_t register_index) {
+    return register_index >= 4u && register_index <= 7u
+               ? static_cast<std::uint8_t>(1u << (register_index - 4u))
+               : 0u;
+}
+
+[[nodiscard]] constexpr std::uint8_t
+abi_entry_register_bits(const std::uint16_t general_register_mask) {
+    auto result = std::uint8_t{0u};
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        if ((general_register_mask & register_bit(index)) != 0u)
+            result = static_cast<std::uint8_t>(result | abi_entry_register_bit(index));
+    }
+    return result;
+}
+
+// This intentionally only returns an exact mask for instructions whose general
+// register operands are fully known here. Any omitted or uncertain form returns
+// nullopt and therefore retains every entry ABI register.
+[[nodiscard]] std::optional<std::uint16_t>
+known_general_register_read_mask(const katana::sh4::DecodedInstruction& instruction) {
+    using K = katana::sh4::InstructionKind;
+    switch (instruction.kind) {
+    case K::Nop:
+    case K::Rts:
+    case K::MovImmediate:
+    case K::MoveT:
+    case K::MovWordLoadPcRelative:
+    case K::MovLongLoadPcRelative:
+    case K::MoveAddressPcRelative:
+    case K::StoreSpecialRegister:
+    case K::ClearMac:
+    case K::DivideInitializeUnsigned:
+    case K::ClearS:
+    case K::SetS:
+    case K::ClearT:
+    case K::SetT:
+    case K::Bra:
+    case K::Bsr:
+    case K::Bt:
+    case K::Bf:
+    case K::BtS:
+    case K::BfS:
+    case K::Fldi0:
+    case K::Fldi1:
+    case K::Flds:
+    case K::Fsts:
+    case K::Fabs:
+    case K::Fadd:
+    case K::FcmpEqual:
+    case K::FcmpGreater:
+    case K::Fdiv:
+    case K::FloatFromFpul:
+    case K::Fmac:
+    case K::Fmul:
+    case K::Fneg:
+    case K::Fsqrt:
+    case K::Fsrra:
+    case K::Fsca:
+    case K::Fipr:
+    case K::Ftrv:
+    case K::Fsub:
+    case K::Ftrc:
+    case K::FcnvDoubleToSingle:
+    case K::FcnvSingleToDouble:
+    case K::Frchg:
+    case K::Fschg:
+        return std::uint16_t{0u};
+
+    case K::MovRegister:
+    case K::NegateRegister:
+    case K::NotRegister:
+    case K::NegateWithCarry:
+    case K::ExtendUnsignedByte:
+    case K::ExtendUnsignedWord:
+    case K::ExtendSignedByte:
+    case K::ExtendSignedWord:
+    case K::SwapBytes:
+    case K::SwapWords:
+    case K::MovByteLoad:
+    case K::MovWordLoad:
+    case K::MovLongLoad:
+    case K::MovByteLoadPostIncrement:
+    case K::MovWordLoadPostIncrement:
+    case K::MovLongLoadPostIncrement:
+    case K::MovByteLoadDisplacement:
+    case K::MovWordLoadDisplacement:
+    case K::MovLongLoadDisplacement:
+    case K::LoadSpecialRegister:
+    case K::LoadSpecialRegisterPostIncrement:
+    case K::FmovLoad:
+    case K::FmovLoadPostIncrement:
+        return register_bit(instruction.source_register);
+
+    case K::AddImmediate:
+    case K::DecrementAndTest:
+    case K::ShiftLogicalLeftOne:
+    case K::ShiftLogicalRightOne:
+    case K::ShiftArithmeticLeftOne:
+    case K::ShiftArithmeticRightOne:
+    case K::ShiftLogicalLeftTwo:
+    case K::ShiftLogicalLeftEight:
+    case K::ShiftLogicalLeftSixteen:
+    case K::ShiftLogicalRightTwo:
+    case K::ShiftLogicalRightEight:
+    case K::ShiftLogicalRightSixteen:
+    case K::RotateLeft:
+    case K::RotateRight:
+    case K::RotateLeftThroughT:
+    case K::RotateRightThroughT:
+    case K::ComparePositiveOrZero:
+    case K::ComparePositive:
+    case K::TestAndSetByte:
+    case K::StoreSpecialRegisterPreDecrement:
+        return register_bit(instruction.destination_register);
+
+    case K::AddRegister:
+    case K::SubRegister:
+    case K::AddWithCarry:
+    case K::AddWithOverflow:
+    case K::SubWithCarry:
+    case K::SubWithOverflow:
+    case K::ExtractMiddle:
+    case K::ShiftArithmeticDynamic:
+    case K::ShiftLogicalDynamic:
+    case K::MultiplyLong:
+    case K::MultiplySignedWord:
+    case K::MultiplyUnsignedWord:
+    case K::DoubleMultiplySignedLong:
+    case K::DoubleMultiplyUnsignedLong:
+    case K::MultiplyAccumulateWord:
+    case K::MultiplyAccumulateLong:
+    case K::DivideInitializeSigned:
+    case K::DivideStep:
+    case K::AndRegister:
+    case K::OrRegister:
+    case K::XorRegister:
+    case K::CompareEqualRegister:
+    case K::CompareHigherOrSame:
+    case K::CompareGreaterOrEqual:
+    case K::CompareHigher:
+    case K::CompareGreaterThan:
+    case K::CompareString:
+    case K::TestRegister:
+    case K::MovByteStore:
+    case K::MovWordStore:
+    case K::MovLongStore:
+    case K::MovByteStorePreDecrement:
+    case K::MovWordStorePreDecrement:
+    case K::MovLongStorePreDecrement:
+    case K::MovByteStoreDisplacement:
+    case K::MovWordStoreDisplacement:
+    case K::MovLongStoreDisplacement:
+        return static_cast<std::uint16_t>(register_bit(instruction.source_register) |
+                                          register_bit(instruction.destination_register));
+
+    case K::AndImmediate:
+    case K::OrImmediate:
+    case K::XorImmediate:
+    case K::CompareEqualImmediate:
+    case K::TestImmediate:
+    case K::TestByteImmediate:
+    case K::AndByteImmediate:
+    case K::XorByteImmediate:
+    case K::OrByteImmediate:
+        return register_bit(0u);
+
+    case K::MovByteStoreR0Indexed:
+    case K::MovWordStoreR0Indexed:
+    case K::MovLongStoreR0Indexed:
+        return static_cast<std::uint16_t>(register_bit(0u) |
+                                          register_bit(instruction.source_register) |
+                                          register_bit(instruction.destination_register));
+
+    case K::MovByteLoadR0Indexed:
+    case K::MovWordLoadR0Indexed:
+    case K::MovLongLoadR0Indexed:
+    case K::FmovLoadR0Indexed:
+        return static_cast<std::uint16_t>(register_bit(0u) |
+                                          register_bit(instruction.source_register));
+
+    case K::MovByteStoreGbrDisplacement:
+    case K::MovWordStoreGbrDisplacement:
+    case K::MovLongStoreGbrDisplacement:
+    case K::MovByteLoadGbrDisplacement:
+    case K::MovWordLoadGbrDisplacement:
+    case K::MovLongLoadGbrDisplacement:
+        return register_bit(instruction.source_register);
+
+    case K::Braf:
+    case K::Bsrf:
+    case K::Jmp:
+    case K::Jsr:
+        return register_bit(instruction.branch_register);
+
+    case K::Unknown:
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::uint8_t entry_abi_read_before_def_mask(
+    const FunctionInfo& function,
+    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    std::unordered_set<std::uint32_t> members;
+    members.reserve(function.block_addresses.size());
+    members.insert(function.block_addresses.begin(), function.block_addresses.end());
+    if (!members.contains(function.entry_address)) return abi_entry_register_mask;
+
+    std::unordered_map<std::uint32_t, std::uint8_t> incoming_definitions;
+    incoming_definitions.reserve(function.block_addresses.size());
+    std::deque<std::uint32_t> pending;
+    std::unordered_set<std::uint32_t> queued;
+    queued.reserve(function.block_addresses.size());
+    incoming_definitions.emplace(function.entry_address, std::uint8_t{0u});
+    pending.push_back(function.entry_address);
+    queued.insert(function.entry_address);
+    auto reads = std::uint8_t{0u};
+
+    const auto retain_undefined_entry_arguments =
+        [&](const std::uint8_t definitions) {
+            reads = static_cast<std::uint8_t>(
+                reads | (abi_entry_register_mask & static_cast<std::uint8_t>(~definitions)));
+        };
+    while (!pending.empty()) {
+        const auto address = pending.front();
+        pending.pop_front();
+        queued.erase(address);
+        const auto block = blocks.find(address);
+        if (block == blocks.end() || block->second->lines.empty())
+            return abi_entry_register_mask;
+        auto definitions = incoming_definitions.at(address);
+        for (const auto& line : block->second->lines) {
+            const auto instruction_reads = known_general_register_read_mask(line.instruction);
+            if (!instruction_reads.has_value()) return abi_entry_register_mask;
+            reads = static_cast<std::uint8_t>(
+                reads | (abi_entry_register_bits(*instruction_reads) &
+                         static_cast<std::uint8_t>(~definitions)));
+            definitions = static_cast<std::uint8_t>(
+                definitions | abi_entry_register_bits(
+                                  general_register_write_mask(line.instruction)));
+            if (reads == abi_entry_register_mask) return reads;
+        }
+
+        const auto& control = controlling_line(*block->second);
+        const auto& instruction = control.instruction;
+        const auto control_position = std::find_if(
+            block->second->lines.begin(), block->second->lines.end(),
+            [&control](const auto& line) { return line.address == control.address; });
+        const auto paired_delay_slot =
+            !instruction.has_delay_slot ||
+            (control_position != block->second->lines.end() &&
+             std::next(control_position) != block->second->lines.end() &&
+             std::next(control_position)->is_delay_slot &&
+             std::next(control_position)->address == control.address + 2u);
+        if (!paired_delay_slot) return abi_entry_register_mask;
+
+        const auto internal_successor =
+            [&members](const std::uint32_t successor) { return members.contains(successor); };
+        const auto has_external_successor =
+            std::any_of(block->second->successors.begin(), block->second->successors.end(),
+                        [&internal_successor](const auto successor) {
+                            return !internal_successor(successor);
+                        });
+        switch (instruction.control_flow) {
+        case katana::sh4::ControlFlowKind::Call:
+        case katana::sh4::ControlFlowKind::IndirectCall:
+        case katana::sh4::ControlFlowKind::IndirectBranch:
+        case katana::sh4::ControlFlowKind::Trap:
+        case katana::sh4::ControlFlowKind::ExceptionReturn:
+        case katana::sh4::ControlFlowKind::Halt:
+            retain_undefined_entry_arguments(definitions);
+            definitions = abi_entry_register_mask;
+            break;
+        case katana::sh4::ControlFlowKind::UnconditionalBranch:
+        case katana::sh4::ControlFlowKind::ConditionalBranch:
+            if (block->second->has_indirect_successor || has_external_successor ||
+                block->second->successors.empty())
+                retain_undefined_entry_arguments(definitions);
+            break;
+        case katana::sh4::ControlFlowKind::Return:
+            break;
+        case katana::sh4::ControlFlowKind::None:
+            if (block->second->has_indirect_successor || block->second->successors.empty())
+                retain_undefined_entry_arguments(definitions);
+            break;
+        }
+        if (reads == abi_entry_register_mask) return reads;
+        for (const auto successor : block->second->successors) {
+            if (!members.contains(successor)) continue;
+            const auto [stored, inserted] = incoming_definitions.emplace(successor, definitions);
+            const auto merged = !inserted &&
+                                stored->second != static_cast<std::uint8_t>(
+                                                      stored->second & definitions);
+            if (merged)
+                stored->second = static_cast<std::uint8_t>(stored->second & definitions);
+            if ((inserted || merged) && queued.insert(successor).second)
+                pending.push_back(successor);
+        }
+    }
+    return reads;
+}
+
 AbstractState isolated_store_input(const std::uint32_t call_site,
-                                   const AbstractState& observation) {
+                                   const AbstractState& observation,
+                                   const std::uint8_t entry_read_mask =
+                                       abi_entry_register_mask) {
     AbstractState input;
     input.stack_offsets[15u] = 0;
     for (std::uint8_t index = 4u; index <= 7u; ++index) {
@@ -3167,6 +4091,8 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
             observation.inventory_stack_may_alias[index];
         input.inventory_vbr_relative[index] =
             observation.inventory_vbr_relative[index];
+        input.inventory_fixed_storage_reference[index] =
+            observation.inventory_fixed_storage_reference[index];
         if (input[index].values.size() > maximum_summary_values)
             make_unknown_preserving_provenance(input[index]);
     }
@@ -3178,6 +4104,20 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
         value.call_sites.insert(call_site);
         if (value.values.size() > maximum_summary_values)
             make_unknown_preserving_provenance(value);
+    }
+    // This is deliberately post-admission canonicalization. The caller has
+    // already proved that an isolated harvest is required using the original
+    // observation; only ABI registers proven dead before their first read are
+    // erased. Stack and memory inputs stay intact for store destinations and
+    // returned-table observations.
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        if ((entry_read_mask & abi_entry_register_bit(index)) != 0u) continue;
+        input[index] = AbstractValue{};
+        input.stack_offsets[index].reset();
+        input.stack_may_alias[index] = true;
+        input.inventory_stack_may_alias[index] = true;
+        input.inventory_vbr_relative[index] = false;
+        input.inventory_fixed_storage_reference[index] = false;
     }
     return input;
 }
@@ -3759,12 +4699,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 *region->second,
                 block_index))
             continue;
+        // A region with a local PC-relative callback literal still needs an
+        // ingress even when no ABI value reaches its store. Only demand and
+        // promote ABI code-pointer evidence when the region actually forwards
+        // an incoming ABI argument to a persistent store.
+        const auto forwards_abi_argument =
+            function_forwards_abi_argument_to_persistent_inventory_store(
+                *region->second, block_index);
         add_tail_ingress(transfer_site,
                          candidates.targets,
                          candidates.guarded,
                          candidates.complete,
-                         true,
-                         true);
+                         forwards_abi_argument,
+                         forwards_abi_argument);
     }
     for (const auto& function : functions) {
         for (const auto block_address : function.block_addresses) {
@@ -3840,14 +4787,6 @@ detail::analyze_function_values_with_guarded_entry_cache(
             normalize(ingress.targets);
         }
     }
-    std::unordered_set<std::uint32_t> functions_with_inventory_tail;
-    for (const auto& [transfer_site, ingress] : tail_ingresses) {
-        const auto owners = function_owners_by_control.find(transfer_site);
-        if (owners == function_owners_by_control.end())
-            continue;
-        functions_with_inventory_tail.insert(owners->second.begin(),
-                                             owners->second.end());
-    }
     const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
         no_tail_ingresses;
     std::map<std::uint32_t, FunctionValueSummary> summaries;
@@ -3869,6 +4808,212 @@ detail::analyze_function_values_with_guarded_entry_cache(
         static_cast<void>(callee);
         normalize(callers);
     }
+
+    // A direct helper is only treated as forwarding an ABI value when its own
+    // bounded signature proves that a formal register or stack argument can
+    // reach R0. Unknown and indirect calls remain conservative; this removes
+    // the old "every helper returns every argument" fan-out without inventing
+    // a fixed guest control-flow edge.
+    //
+    // The return lattice starts at top and only narrows. A missing RTS or an
+    // external/tail exit remains top, so the pruning pass never hides a
+    // possible callback route merely because a function's return shape is not
+    // statically complete.
+    AbiReturnSourceMap abi_return_sources;
+    std::unordered_map<std::uint32_t, std::uint8_t>
+        abi_persistent_store_sources;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        abi_return_callers_by_callee;
+    abi_return_sources.reserve(functions.size());
+    abi_persistent_store_sources.reserve(functions.size());
+    abi_return_callers_by_callee.reserve(functions.size());
+    for (const auto& function : functions) {
+        abi_return_sources.emplace(function.entry_address, abi_argument_taint_mask);
+        abi_persistent_store_sources.emplace(function.entry_address, std::uint8_t{0u});
+        for (const auto block_address : function.block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end() || block->second->lines.empty())
+                continue;
+            const auto& control = controlling_line(*block->second);
+            if (control.instruction.control_flow !=
+                    katana::sh4::ControlFlowKind::Call ||
+                !control.target_address.has_value() ||
+                !function_by_address.contains(*control.target_address))
+                continue;
+            abi_return_callers_by_callee[*control.target_address].push_back(
+                function.entry_address);
+        }
+    }
+    for (auto& [callee, callers] : abi_return_callers_by_callee) {
+        static_cast<void>(callee);
+        normalize(callers);
+    }
+    std::deque<std::uint32_t> pending_abi_signatures;
+    std::unordered_set<std::uint32_t> queued_abi_signatures;
+    queued_abi_signatures.reserve(functions.size());
+    for (const auto& function : functions) {
+        pending_abi_signatures.push_back(function.entry_address);
+        queued_abi_signatures.insert(function.entry_address);
+    }
+    std::size_t abi_signature_iterations = 0u;
+    while (!pending_abi_signatures.empty()) {
+        if (abi_signature_iterations >= maximum_fixpoint_iterations) {
+            result.budget_exhausted = true;
+            break;
+        }
+        ++abi_signature_iterations;
+        const auto address = pending_abi_signatures.front();
+        pending_abi_signatures.pop_front();
+        queued_abi_signatures.erase(address);
+        const auto function = function_by_address.find(address);
+        if (function == function_by_address.end()) continue;
+        const auto signature = analyze_abi_persistent_store_signature(
+            *function->second, block_index, &abi_return_sources);
+        auto& returned_sources = abi_return_sources.at(address);
+        const auto narrowed_returned_sources = static_cast<std::uint8_t>(
+            returned_sources & signature.returned_r0_sources);
+        if (narrowed_returned_sources == returned_sources) continue;
+        returned_sources = narrowed_returned_sources;
+        const auto callers = abi_return_callers_by_callee.find(address);
+        if (callers == abi_return_callers_by_callee.end()) continue;
+        for (const auto caller : callers->second) {
+            if (queued_abi_signatures.insert(caller).second)
+                pending_abi_signatures.push_back(caller);
+        }
+    }
+    // Keep direct local sites separate from the broader forwarding mask.  The
+    // later fast harvest may use only these sites: helper, guarded-indirect and
+    // tail propagation remains on the existing full-context path until it has
+    // its own exact contract.
+    AbiPersistentStoreSiteMap direct_local_persistent_store_sites;
+    direct_local_persistent_store_sites.reserve(functions.size());
+    for (const auto& function : functions) {
+        auto signature = analyze_abi_persistent_store_signature(
+            function, block_index, &abi_return_sources);
+        if (signature.local_persistent_store_sites.empty()) continue;
+        direct_local_persistent_store_sites.emplace(
+            function.entry_address,
+            std::move(signature.local_persistent_store_sites));
+    }
+
+    // The store slice uses the same inventory-only indirect-call candidates as
+    // the final guarded-AOT pass, but keeps them out of ordinary summaries and
+    // the semantic call graph. A target narrowing therefore requeues every
+    // direct or guarded inventory caller without inventing a fixed CFG edge.
+    auto abi_store_callers_by_callee = callers_by_callee;
+    for (const auto& [call_site, candidates] : inventory_indirect_callees) {
+        const auto owners = function_owners_by_control.find(call_site);
+        if (owners == function_owners_by_control.end()) continue;
+        for (const auto target : candidates.targets) {
+            auto& callers = abi_store_callers_by_callee[target];
+            callers.insert(callers.end(), owners->second.begin(), owners->second.end());
+        }
+    }
+    for (auto& [callee, callers] : abi_store_callers_by_callee) {
+        static_cast<void>(callee);
+        normalize(callers);
+    }
+
+    // Persistent-store source masks form a separate positive fixed point over
+    // direct and inventory-only guarded calls. A callee mask is projected
+    // through the caller's current ABI flow state, so a wrapper contributes
+    // only the original formal arguments which can reach a persistent callback
+    // store. Tail transfers stay outside this slice and remain conservative.
+    if (!result.budget_exhausted) {
+        std::deque<std::uint32_t> pending_abi_store_signatures;
+        std::unordered_set<std::uint32_t> queued_abi_store_signatures;
+        queued_abi_store_signatures.reserve(functions.size());
+        for (const auto& function : functions) {
+            pending_abi_store_signatures.push_back(function.entry_address);
+            queued_abi_store_signatures.insert(function.entry_address);
+        }
+        std::size_t abi_store_signature_iterations = 0u;
+        while (!pending_abi_store_signatures.empty()) {
+            if (abi_store_signature_iterations >= maximum_fixpoint_iterations) {
+                result.budget_exhausted = true;
+                break;
+            }
+            ++abi_store_signature_iterations;
+            const auto address = pending_abi_store_signatures.front();
+            pending_abi_store_signatures.pop_front();
+            queued_abi_store_signatures.erase(address);
+            const auto function = function_by_address.find(address);
+            if (function == function_by_address.end()) continue;
+            const auto signature = analyze_abi_persistent_store_signature(
+                *function->second,
+                block_index,
+                &abi_return_sources,
+                &abi_persistent_store_sources,
+                &inventory_indirect_callees);
+            auto& persistent_sources = abi_persistent_store_sources.at(address);
+            const auto expanded_sources = static_cast<std::uint8_t>(
+                persistent_sources | signature.persistent_store_sources);
+            if (expanded_sources == persistent_sources) continue;
+            persistent_sources = expanded_sources;
+            const auto callers = abi_store_callers_by_callee.find(address);
+            if (callers == abi_store_callers_by_callee.end()) continue;
+            for (const auto caller : callers->second) {
+                if (queued_abi_store_signatures.insert(caller).second)
+                    pending_abi_store_signatures.push_back(caller);
+            }
+        }
+    }
+
+    // Tail ingress itself is a control-flow contract, not proof that every
+    // caller needs an isolated callback inventory harvest. Restrict that
+    // expensive path to a guarded carrier or a target which can actually move
+    // an incoming ABI value into a persistent store. This is intentionally
+    // evaluated after the return-signature fixpoint so ordinary helper tails
+    // cannot reintroduce the conservative pre-fixpoint fan-out.
+    std::unordered_set<std::uint32_t>
+        functions_with_guarded_abi_inventory_tail;
+    functions_with_guarded_abi_inventory_tail.reserve(functions.size());
+    std::unordered_set<std::uint32_t> candidate_tail_carrier_sites;
+    candidate_tail_carrier_sites.reserve(candidate_tail_carriers.size());
+    for (const auto& carrier : candidate_tail_carriers)
+        candidate_tail_carrier_sites.insert(carrier.transfer_site);
+    std::unordered_map<std::uint32_t, bool> tail_target_abi_store_cache;
+    tail_target_abi_store_cache.reserve(inventory_region_by_address.size());
+    const auto tail_target_forwards_abi_to_persistent_store =
+        [&](const std::uint32_t target) {
+            if (const auto cached = tail_target_abi_store_cache.find(target);
+                cached != tail_target_abi_store_cache.end())
+                return cached->second;
+            bool forwards = false;
+            if (const auto function = abi_persistent_store_sources.find(target);
+                function != abi_persistent_store_sources.end())
+                forwards = function->second != 0u;
+            if (const auto region = inventory_region_by_address.find(target);
+                region != inventory_region_by_address.end()) {
+                const auto signature = analyze_abi_persistent_store_signature(
+                    *region->second,
+                    block_index,
+                    &abi_return_sources,
+                    &abi_persistent_store_sources,
+                    &inventory_indirect_callees);
+                forwards = forwards || signature.persistent_store_sources != 0u;
+            }
+            tail_target_abi_store_cache.emplace(target, forwards);
+            return forwards;
+        };
+    if (!result.budget_exhausted) {
+        for (const auto& [transfer_site, ingress] : tail_ingresses) {
+            auto requires_isolated_harvest =
+                candidate_tail_carrier_sites.contains(transfer_site);
+            if (!requires_isolated_harvest) {
+                requires_isolated_harvest = std::any_of(
+                    ingress.targets.begin(),
+                    ingress.targets.end(),
+                    tail_target_forwards_abi_to_persistent_store);
+            }
+            if (!requires_isolated_harvest) continue;
+            const auto owners = function_owners_by_control.find(transfer_site);
+            if (owners == function_owners_by_control.end()) continue;
+            functions_with_guarded_abi_inventory_tail.insert(
+                owners->second.begin(), owners->second.end());
+        }
+    }
+
     // Candidate call carriers are private inventory transport, not semantic
     // call-graph edges.  They still have to participate in the inventory-only
     // backwards reachability walk or a wrapper which merely forwards a
@@ -3895,10 +5040,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
             pending_inventory_reachability.push_back(address);
     };
     for (const auto& function : functions) {
-        if (!function_contains_guarded_inventory_store(function, block_index)) continue;
+        // Only functions that can carry an incoming ABI value into a persistent
+        // long store are roots for the expensive isolated forwarding walk.
+        // This preserves real register/stack callback registrars while keeping
+        // unrelated object/data stores out of the guarded AOT inventory slice.
+        if (abi_persistent_store_sources.at(function.entry_address) == 0u)
+            continue;
         add_inventory_sink(function.entry_address);
     }
-    for (const auto function : functions_with_inventory_tail)
+    for (const auto function : functions_with_guarded_abi_inventory_tail)
         add_inventory_sink(function);
     while (!pending_inventory_reachability.empty()) {
         const auto callee = pending_inventory_reachability.front();
@@ -3908,6 +5058,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
         for (const auto caller : callers->second) {
             add_inventory_sink(caller);
         }
+    }
+    // The expensive isolated forwarding pass can canonicalize only ABI inputs
+    // proven dead before their first use. Build this once for ordinary targets;
+    // guarded tail owners deliberately keep their full input state.
+    std::unordered_map<std::uint32_t, std::uint8_t> ordinary_forwarded_entry_read_masks;
+    ordinary_forwarded_entry_read_masks.reserve(
+        functions_reaching_guarded_inventory_sink.size());
+    for (const auto address : functions_reaching_guarded_inventory_sink) {
+        if (functions_with_guarded_abi_inventory_tail.contains(address)) continue;
+        const auto function = function_by_address.find(address);
+        if (function == function_by_address.end()) continue;
+        ordinary_forwarded_entry_read_masks.emplace(
+            address, entry_abi_read_before_def_mask(*function->second, block_index));
     }
     for (const auto& line : lines) {
         if (line.instruction.control_flow != katana::sh4::ControlFlowKind::Call ||
@@ -3968,7 +5131,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                             false,
                                             false,
                                             nullptr,
-                                            std::nullopt,
+                                            nullptr,
                                             nullptr,
                                             nullptr,
                                             &inventory_walk_diagnostics);
@@ -4032,14 +5195,31 @@ detail::analyze_function_values_with_guarded_entry_cache(
                   return left->entry_address < right->entry_address;
               });
 
+    struct ForwardedStoreContext {
+        const FunctionInfo* function = nullptr;
+        std::uint32_t target = 0u;
+        bool tail = false;
+        bool isolated = false;
+        AbstractState input;
+        std::set<std::uint32_t> root_call_sites;
+        bool evaluated = false;
+        bool evaluation_dirty = true;
+        std::size_t evaluation_count = 0u;
+        std::vector<FunctionEvaluation::CallArguments> call_arguments;
+        std::vector<FunctionEvaluation::InventoryTransfer> inventory_transfers;
+    };
     struct ResolutionFunctionResult {
         FunctionEvaluation evaluation;
         GuardedCodeInventoryCollector inventory{true};
         GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
-        std::size_t forwarded_store_contexts_consumed = 0u;
+        std::vector<ForwardedStoreContext> forwarded_store_contexts;
+        std::deque<std::size_t> pending_forwarded_store_contexts;
+        std::vector<bool> forwarded_store_context_queued;
     };
     const auto& final_candidate_inputs = std::as_const(candidate_inputs);
     const auto& final_function_by_address = std::as_const(function_by_address);
+    const auto& final_direct_local_persistent_store_sites =
+        std::as_const(direct_local_persistent_store_sites);
     const auto& final_inventory_region_by_address =
         std::as_const(inventory_region_by_address);
     const auto& final_inventory_region_tail_ingresses_by_entry =
@@ -4110,6 +5290,32 @@ detail::analyze_function_values_with_guarded_entry_cache(
             maximum_abi_stack_argument_slots;
         const auto* function = resolution_functions[function_index];
         const auto& input = final_candidate_inputs.at(function->entry_address);
+        const auto record_forwarded_store_limit =
+            [&](const ForwardedStoreContextLimitReason reason,
+                const std::uint32_t target,
+                const bool tail,
+                const bool isolated,
+                const std::set<std::uint32_t>& root_call_sites,
+                const std::size_t context_count,
+                const std::size_t root_call_site_count,
+                const std::size_t evaluation_count) {
+                auto& diagnostics = function_result.walk_diagnostics
+                                        .forwarded_store_context_limit_diagnostics;
+                if (!diagnostics.empty()) return;
+                ForwardedStoreContextLimitDiagnostic diagnostic;
+                diagnostic.owner_entry = function->entry_address;
+                diagnostic.target = target;
+                diagnostic.exemplar_root_call_site = root_call_sites.empty()
+                                                        ? 0u
+                                                        : *root_call_sites.begin();
+                diagnostic.context_count = context_count;
+                diagnostic.root_call_site_count = root_call_site_count;
+                diagnostic.evaluation_count = evaluation_count;
+                diagnostic.tail = tail;
+                diagnostic.isolated = isolated;
+                diagnostic.reason = reason;
+                diagnostics.push_back(diagnostic);
+            };
         function_result.evaluation = evaluate_function(image,
                                                        *function,
                                                        block_index,
@@ -4120,138 +5326,335 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                                        true,
                                                        false,
                                                         &function_result.inventory,
-                                                        std::nullopt,
+                                                        nullptr,
                                                         nullptr,
                                                         nullptr,
                                                         &function_result.walk_diagnostics);
-        const auto harvest_forwarded_inventory =
-            [&](const FunctionEvaluation& seed,
-                const std::optional<std::uint32_t> root_call_site) {
-                struct ForwardedStoreContext {
-                    const FunctionInfo* function = nullptr;
-                    std::uint32_t target = 0u;
-                    std::uint32_t ingress_site = 0u;
-                    bool tail = false;
-                    AbstractState input;
-                };
-                std::deque<ForwardedStoreContext> forwarded_contexts;
-                std::vector<ForwardedStoreContext>
-                    visited_forwarded_contexts;
-                visited_forwarded_contexts.reserve(maximum_forwarded_store_contexts);
-                const auto enqueue_context =
-                    [&](const FunctionInfo* target_function,
-                        const std::uint32_t target,
-                        const std::uint32_t ingress_site,
-                        const bool tail,
-                        AbstractState forwarded_input) {
-                        if (std::any_of(
-                                visited_forwarded_contexts.begin(),
-                                visited_forwarded_contexts.end(),
-                                [&](const auto& visited) {
-                                    return visited.target == target &&
-                                           visited.tail == tail &&
-                                           visited.input == forwarded_input;
-                                }))
-                            return;
-                        if (function_result.forwarded_store_contexts_consumed +
-                                forwarded_contexts.size() >=
-                            maximum_forwarded_store_contexts) {
-                            function_result.walk_diagnostics.forwarded_store_context_limited_functions = 1u;
+        const auto enqueue_forwarded_context =
+            [&](const FunctionInfo* target_function,
+                const std::uint32_t target,
+                const bool tail,
+                const bool isolated,
+                AbstractState forwarded_input,
+                const std::set<std::uint32_t>& root_call_sites) {
+                const auto existing = std::find_if(
+                    function_result.forwarded_store_contexts.begin(),
+                    function_result.forwarded_store_contexts.end(),
+                    [&](const auto& context) {
+                        return context.target == target && context.tail == tail &&
+                               context.isolated == isolated &&
+                               same_abstract_state_semantics(context.input,
+                                                             forwarded_input);
+                    });
+                if (existing != function_result.forwarded_store_contexts.end()) {
+                    const auto index = static_cast<std::size_t>(
+                        std::distance(function_result.forwarded_store_contexts.begin(),
+                                      existing));
+                    auto& context = function_result.forwarded_store_contexts[index];
+                    auto additional_roots = std::size_t{0u};
+                    if (isolated) {
+                        for (const auto root : root_call_sites) {
+                            if (!context.root_call_sites.contains(root))
+                                ++additional_roots;
+                        }
+                        if (context.root_call_sites.size() + additional_roots >
+                            maximum_forwarded_store_context_root_call_sites) {
+                            function_result.walk_diagnostics
+                                .forwarded_store_context_limited_functions = 1u;
+                            record_forwarded_store_limit(
+                                ForwardedStoreContextLimitReason::RootCallSites,
+                                context.target,
+                                context.tail,
+                                context.isolated,
+                                root_call_sites,
+                                function_result.forwarded_store_contexts.size(),
+                                context.root_call_sites.size() + additional_roots,
+                                context.evaluation_count);
                             return;
                         }
-                        visited_forwarded_contexts.push_back(
-                            {target_function,
-                             target,
-                             ingress_site,
-                             tail,
-                             forwarded_input});
-                        forwarded_contexts.push_back(
-                            {target_function,
-                             target,
-                             ingress_site,
-                             tail,
-                             std::move(forwarded_input)});
-                    };
-                const auto enqueue_call =
-                    [&](const FunctionEvaluation::CallArguments& forwarded) {
-                        const auto forwarded_function =
-                            final_function_by_address.find(forwarded.callee);
-                        const auto forwarded_input =
-                            final_candidate_inputs.find(forwarded.callee);
-                        if (forwarded_function == final_function_by_address.end() ||
-                            forwarded_input == final_candidate_inputs.end() ||
-                            !functions_reaching_guarded_inventory_sink.contains(
-                                forwarded.callee) ||
-                            !requires_forwarded_isolated_store_harvest(
-                                image,
-                                forwarded.state,
-                                forwarded_input->second.state))
-                            return;
-                        enqueue_context(
-                            forwarded_function->second,
-                            forwarded.callee,
-                            forwarded.call_site,
-                            false,
-                            isolated_store_input(forwarded.call_site,
-                                                 forwarded.state));
-                    };
-                const auto enqueue_tail =
-                    [&](const FunctionEvaluation::InventoryTransfer& forwarded) {
-                        const auto region =
-                            final_inventory_region_by_address.find(forwarded.target);
-                        if (region == final_inventory_region_by_address.end())
-                            return;
-                        enqueue_context(region->second,
-                                        forwarded.target,
-                                        forwarded.transfer_site,
-                                        true,
-                                        tail_store_input(forwarded.state));
-                    };
-                for (const auto& forwarded : seed.call_arguments)
-                    enqueue_call(forwarded);
-                for (const auto& forwarded : seed.inventory_transfers)
-                    enqueue_tail(forwarded);
-
-                // This is an inventory-only walk.  Calls retain the existing
-                // isolated ABI contract, while terminal jumps preserve the
-                // complete post-delay state in an owner-bounded ephemeral
-                // region.  Neither path contributes summaries or CFG edges.
-                while (!forwarded_contexts.empty() &&
-                       function_result.forwarded_store_contexts_consumed <
-                           maximum_forwarded_store_contexts) {
-                    auto forwarded = std::move(forwarded_contexts.front());
-                    forwarded_contexts.pop_front();
-                    ++function_result.forwarded_store_contexts_consumed;
-                    const TailIngressMap* local_tail_ingresses = nullptr;
-                    if (forwarded.tail) {
-                        const auto local =
-                            final_inventory_region_tail_ingresses_by_entry.find(forwarded.target);
-                        if (local != final_inventory_region_tail_ingresses_by_entry.end())
-                            local_tail_ingresses = &local->second;
                     }
-                    auto forwarded_evaluation = evaluate_function(
-                        image,
-                        *forwarded.function,
-                        block_index,
-                        inventory_indirect_callees,
-                        tail_ingresses,
-                        summaries,
-                        forwarded.input,
-                        false,
-                        true,
-                        &function_result.inventory,
-                        root_call_site,
-                        nullptr,
-                         local_tail_ingresses,
-                         &function_result.walk_diagnostics);
-                    for (const auto& nested : forwarded_evaluation.call_arguments)
-                        enqueue_call(nested);
-                    for (const auto& nested : forwarded_evaluation.inventory_transfers)
-                        enqueue_tail(nested);
+                    const auto provenance_changed = merge_forwarded_provenance_only(
+                        context.input, forwarded_input);
+                    bool roots_changed = false;
+                    if (isolated) {
+                        const auto root_count = context.root_call_sites.size();
+                        context.root_call_sites.insert(root_call_sites.begin(),
+                                                       root_call_sites.end());
+                        roots_changed = context.root_call_sites.size() != root_count;
+                    }
+                    if (provenance_changed || roots_changed)
+                        context.evaluation_dirty = true;
+                    if (context.evaluation_dirty &&
+                        !function_result.forwarded_store_context_queued[index]) {
+                        function_result.pending_forwarded_store_contexts.push_back(index);
+                        function_result.forwarded_store_context_queued[index] = true;
+                    }
+                    return;
                 }
-                if (!forwarded_contexts.empty())
-                    function_result.walk_diagnostics.forwarded_store_context_limited_functions = 1u;
+                if (function_result.forwarded_store_contexts.size() >=
+                    maximum_forwarded_store_contexts) {
+                    function_result.walk_diagnostics
+                        .forwarded_store_context_limited_functions = 1u;
+                    record_forwarded_store_limit(
+                        ForwardedStoreContextLimitReason::ContextCount,
+                        target,
+                        tail,
+                        isolated,
+                        root_call_sites,
+                        function_result.forwarded_store_contexts.size(),
+                        root_call_sites.size(),
+                        0u);
+                    return;
+                }
+                if (isolated && root_call_sites.size() >
+                                    maximum_forwarded_store_context_root_call_sites) {
+                    function_result.walk_diagnostics
+                        .forwarded_store_context_limited_functions = 1u;
+                    record_forwarded_store_limit(
+                        ForwardedStoreContextLimitReason::RootCallSites,
+                        target,
+                        tail,
+                        isolated,
+                        root_call_sites,
+                        function_result.forwarded_store_contexts.size(),
+                        root_call_sites.size(),
+                        0u);
+                    return;
+                }
+                ForwardedStoreContext context;
+                context.function = target_function;
+                context.target = target;
+                context.tail = tail;
+                context.isolated = isolated;
+                context.input = std::move(forwarded_input);
+                if (isolated)
+                    context.root_call_sites = root_call_sites;
+                function_result.forwarded_store_contexts.push_back(std::move(context));
+                function_result.pending_forwarded_store_contexts.push_back(
+                    function_result.forwarded_store_contexts.size() - 1u);
+                function_result.forwarded_store_context_queued.push_back(true);
             };
+        // A direct call into a function with an exact local ABI store site can
+        // inventory the already proven code-pointer argument at that site
+        // without materializing a whole callee context.  This deliberately
+        // excludes stack sources, tables, guarded indirect calls, helper
+        // propagation and tails; those retain the full conservative walk.
+        const auto harvest_direct_local_persistent_store =
+            [&](const FunctionEvaluation::CallArguments& forwarded) {
+                if (!semantic_call_pairs.contains(
+                        candidate_call_pair_key(forwarded.call_site,
+                                                forwarded.callee)))
+                    return false;
+                const auto sites = final_direct_local_persistent_store_sites.find(
+                    forwarded.callee);
+                if (sites == final_direct_local_persistent_store_sites.end() ||
+                    sites->second.empty())
+                    return false;
+                auto source_mask = std::uint8_t{0u};
+                for (const auto& site : sites->second)
+                    source_mask = static_cast<std::uint8_t>(
+                        source_mask | site.value_sources);
+                bool has_relevant_code_pointer = false;
+                for (std::uint8_t index = 4u; index <= 7u; ++index) {
+                    if ((source_mask & abi_entry_register_bit(index)) == 0u)
+                        continue;
+                    if (!forwarded.state[index].inventory_code_pointer_values.empty()) {
+                        has_relevant_code_pointer = true;
+                        break;
+                    }
+                }
+                // A code pointer in an argument that cannot reach any local
+                // persistent store does not require an isolated store walk.
+                if (!has_relevant_code_pointer) return true;
+                if ((source_mask & abi_stack_argument_taint) != 0u) return false;
+
+                std::vector<StoredCodeAddressCandidate> candidates;
+                for (const auto& site : sites->second) {
+                    // The summary carries no individual stack-slot identity;
+                    // keep every such site on the old exact-context path.
+                    if ((site.value_sources & abi_stack_argument_taint) != 0u)
+                        return false;
+                    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+                        if ((site.value_sources & abi_entry_register_bit(index)) == 0u)
+                            continue;
+                        const auto& value = forwarded.state[index];
+                        for (const auto candidate : value.inventory_code_pointer_values) {
+                            const auto validation = validate_decode_candidate(image, candidate);
+                            if (!validation.valid()) return false;
+                            // A concrete code address can also be a pointer-table
+                            // base. Preserve the existing table observer for that
+                            // case rather than treating arbitrary code bytes as a
+                            // direct callback store.
+                            if (function_result.inventory
+                                    .stored_snapshot_table(image,
+                                                          forwarded.call_site,
+                                                          candidate)
+                                    .has_value())
+                                return false;
+                            StoredCodeAddressCandidate observation;
+                            observation.target_address = validation.resolved_address;
+                            observation.complete = false;
+                            observation.guarded = true;
+                            observation.store_instruction_addresses = {
+                                site.store_instruction_address};
+                            observation.evidence_call_sites.assign(
+                                value.call_sites.begin(), value.call_sites.end());
+                            observation.evidence_call_sites.push_back(
+                                forwarded.call_site);
+                            observation.evidence_callees.assign(
+                                value.callees.begin(), value.callees.end());
+                            observation.evidence_callees.push_back(forwarded.callee);
+                            candidates.push_back(std::move(observation));
+                        }
+                    }
+                }
+                function_result.inventory.collect(std::move(candidates));
+                return true;
+            };
+        const auto enqueue_forwarded_call =
+            [&](const FunctionEvaluation::CallArguments& forwarded,
+                const bool isolated,
+                const std::set<std::uint32_t>& root_call_sites) {
+                const auto forwarded_function =
+                    final_function_by_address.find(forwarded.callee);
+                const auto forwarded_input =
+                    final_candidate_inputs.find(forwarded.callee);
+                if (forwarded_function == final_function_by_address.end() ||
+                    forwarded_input == final_candidate_inputs.end() ||
+                    !functions_reaching_guarded_inventory_sink.contains(
+                        forwarded.callee))
+                    return;
+                // A zero source slice proves that this ordinary call cannot
+                // forward any ABI argument into a persistent callback store.
+                // Guarded tail owners retain the full conservative path.
+                const auto guarded_tail_owner =
+                    functions_with_guarded_abi_inventory_tail.contains(
+                        forwarded.callee);
+                if (!guarded_tail_owner) {
+                    const auto sources =
+                        abi_persistent_store_sources.find(forwarded.callee);
+                    if (sources == abi_persistent_store_sources.end() ||
+                        sources->second == 0u)
+                        return;
+                    if (harvest_direct_local_persistent_store(forwarded)) return;
+                }
+                if (!requires_forwarded_isolated_store_harvest(
+                        image,
+                        forwarded.state,
+                        forwarded_input->second.state))
+                    return;
+                // Admission intentionally observes the complete caller state.
+                // Only then may the ordinary callee's dead ABI entries be
+                // canonicalized. Tail owners never take this reduced input.
+                auto entry_read_mask = abi_entry_register_mask;
+                if (!guarded_tail_owner) {
+                    if (const auto mask = ordinary_forwarded_entry_read_masks.find(
+                            forwarded.callee);
+                        mask != ordinary_forwarded_entry_read_masks.end())
+                        entry_read_mask = mask->second;
+                }
+                enqueue_forwarded_context(
+                    forwarded_function->second,
+                    forwarded.callee,
+                    false,
+                    isolated,
+                    isolated_store_input(forwarded.call_site,
+                                         forwarded.state,
+                                         entry_read_mask),
+                    root_call_sites);
+            };
+        const auto enqueue_forwarded_tail =
+            [&](const FunctionEvaluation::InventoryTransfer& forwarded,
+                const bool isolated,
+                const std::set<std::uint32_t>& root_call_sites) {
+                const auto region =
+                    final_inventory_region_by_address.find(forwarded.target);
+                if (region == final_inventory_region_by_address.end()) return;
+                enqueue_forwarded_context(region->second,
+                                          forwarded.target,
+                                          true,
+                                          isolated,
+                                          tail_store_input(forwarded.state),
+                                          root_call_sites);
+            };
+        const auto seed_forwarded_inventory =
+            [&](const FunctionEvaluation& seed,
+                const bool isolated,
+                const std::set<std::uint32_t>& root_call_sites) {
+                for (const auto& forwarded : seed.call_arguments)
+                    enqueue_forwarded_call(forwarded, isolated, root_call_sites);
+                for (const auto& forwarded : seed.inventory_transfers)
+                    enqueue_forwarded_tail(forwarded, isolated, root_call_sites);
+            };
+        const auto drain_forwarded_inventory = [&] {
+            while (!function_result.pending_forwarded_store_contexts.empty()) {
+                const auto index =
+                    function_result.pending_forwarded_store_contexts.front();
+                function_result.pending_forwarded_store_contexts.pop_front();
+                function_result.forwarded_store_context_queued[index] = false;
+                auto& context = function_result.forwarded_store_contexts[index];
+                if (context.evaluated && !context.evaluation_dirty) continue;
+                if (context.evaluation_count >=
+                    maximum_forwarded_store_context_evaluations) {
+                    function_result.walk_diagnostics
+                        .forwarded_store_context_limited_functions = 1u;
+                    record_forwarded_store_limit(
+                        ForwardedStoreContextLimitReason::ReevaluationCount,
+                        context.target,
+                        context.tail,
+                        context.isolated,
+                        context.root_call_sites,
+                        function_result.forwarded_store_contexts.size(),
+                        context.root_call_sites.size(),
+                        context.evaluation_count);
+                    continue;
+                }
+                ++context.evaluation_count;
+                const auto root_call_sites = context.root_call_sites;
+                const TailIngressMap* local_tail_ingresses = nullptr;
+                if (context.tail) {
+                    const auto local =
+                        final_inventory_region_tail_ingresses_by_entry.find(
+                            context.target);
+                    if (local !=
+                        final_inventory_region_tail_ingresses_by_entry.end())
+                        local_tail_ingresses = &local->second;
+                }
+                auto forwarded_evaluation = evaluate_function(
+                    image,
+                    *context.function,
+                    block_index,
+                    inventory_indirect_callees,
+                    tail_ingresses,
+                    summaries,
+                    context.input,
+                    false,
+                    true,
+                    &function_result.inventory,
+                    context.isolated ? &root_call_sites : nullptr,
+                    nullptr,
+                    local_tail_ingresses,
+                    &function_result.walk_diagnostics);
+                context.evaluated = true;
+                context.evaluation_dirty = false;
+                context.call_arguments =
+                    std::move(forwarded_evaluation.call_arguments);
+                context.inventory_transfers =
+                    std::move(forwarded_evaluation.inventory_transfers);
+                const auto propagated_root_call_sites = context.root_call_sites;
+                const auto context_isolated = context.isolated;
+                const auto call_arguments = context.call_arguments;
+                const auto inventory_transfers = context.inventory_transfers;
+                for (const auto& forwarded : call_arguments)
+                    enqueue_forwarded_call(forwarded,
+                                           context_isolated,
+                                           propagated_root_call_sites);
+                for (const auto& forwarded : inventory_transfers)
+                    enqueue_forwarded_tail(forwarded,
+                                           context_isolated,
+                                           propagated_root_call_sites);
+            }
+        };
         const auto harvest_contextual_candidate_returns = [&] {
             if (!candidate_call_owner_functions.contains(
                     function->entry_address))
@@ -4297,7 +5700,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     false,
                     true,
                     &function_result.inventory,
-                    std::nullopt,
+                    nullptr,
                      &contextual_summaries,
                      nullptr,
                      &function_result.walk_diagnostics);
@@ -4358,16 +5761,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
         };
         if (!result.budget_exhausted)
             harvest_contextual_candidate_returns();
+        const std::set<std::uint32_t> no_forwarded_root_call_sites;
         if (!result.budget_exhausted)
-            harvest_forwarded_inventory(function_result.evaluation,
-                                        std::nullopt);
+            seed_forwarded_inventory(function_result.evaluation,
+                                     false,
+                                     no_forwarded_root_call_sites);
         if (!result.budget_exhausted &&
             functions_reaching_guarded_inventory_sink.contains(
                 function->entry_address)) {
             for (const auto& [call_site, observation] : input.observations) {
-                if (!functions_with_inventory_tail.contains(function->entry_address) &&
+                if (!functions_with_guarded_abi_inventory_tail.contains(function->entry_address) &&
                     !requires_isolated_store_harvest(input, call_site, observation))
                     continue;
+                const std::set<std::uint32_t> root_call_sites{call_site};
                 auto isolated_evaluation =
                     evaluate_function(image,
                                       *function,
@@ -4380,17 +5786,20 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                       false,
                                       true,
                                       &function_result.inventory,
-                                       call_site,
-                                       nullptr,
-                                       nullptr,
-                                       &function_result.walk_diagnostics);
-                harvest_forwarded_inventory(isolated_evaluation,
-                                            call_site);
+                                      &root_call_sites,
+                                      nullptr,
+                                      nullptr,
+                                      &function_result.walk_diagnostics);
+                seed_forwarded_inventory(isolated_evaluation,
+                                         true,
+                                         root_call_sites);
                 if (function_result.walk_diagnostics
                         .forwarded_store_context_limited_functions != 0u)
                     break;
             }
         }
+        if (!result.budget_exhausted)
+            drain_forwarded_inventory();
         return function_result;
     };
 
@@ -4436,8 +5845,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
 
     for (auto& function_result : function_results) {
         auto resolved = std::move(*function_result);
+
         inventory_walk_diagnostics.forwarded_store_context_limited_functions +=
             resolved.walk_diagnostics.forwarded_store_context_limited_functions;
+        inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.insert(
+            inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.end(),
+            std::make_move_iterator(
+                resolved.walk_diagnostics.forwarded_store_context_limit_diagnostics.begin()),
+            std::make_move_iterator(
+                resolved.walk_diagnostics.forwarded_store_context_limit_diagnostics.end()));
         inventory_walk_diagnostics.contextual_return_context_limited_functions +=
             resolved.walk_diagnostics.contextual_return_context_limited_functions;
         inventory_walk_diagnostics.contextual_return_evaluation_limited_functions +=
@@ -4454,6 +5870,34 @@ detail::analyze_function_values_with_guarded_entry_cache(
         if (completed_functions <= 16u || completed_functions % 128u == 0u ||
             completed_functions == functions.size())
             report_progress("resolution-progress");
+    }
+    std::sort(
+        inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.begin(),
+        inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.owner_entry,
+                            left.target,
+                            left.reason,
+                            left.tail,
+                            left.isolated,
+                            left.exemplar_root_call_site) <
+                   std::tie(right.owner_entry,
+                            right.target,
+                            right.reason,
+                            right.tail,
+                            right.isolated,
+                            right.exemplar_root_call_site);
+        });
+    inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.erase(
+        std::unique(
+            inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.begin(),
+            inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.end()),
+        inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.end());
+    constexpr std::size_t maximum_forwarded_store_limit_diagnostics = 16u;
+    if (inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.size() >
+        maximum_forwarded_store_limit_diagnostics) {
+        inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.resize(
+            maximum_forwarded_store_limit_diagnostics);
     }
     result.guarded_code_inventory = guarded_inventory_collector.finish();
     result.guarded_code_inventory.walk_diagnostics = inventory_walk_diagnostics;

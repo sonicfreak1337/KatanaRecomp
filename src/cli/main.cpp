@@ -12,6 +12,7 @@
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/cache.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
+#include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/native_aot_profile.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/codegen/probe.hpp"
@@ -1290,7 +1291,7 @@ bool path_is_within(const std::filesystem::path& path,
     return true;
 }
 
-inline constexpr std::uint32_t port_export_cache_version = 6u;
+inline constexpr std::uint32_t port_export_cache_version = 7u;
 inline constexpr std::uint32_t port_ir_contract_version = 2u;
 inline constexpr std::string_view untrusted_katana_source_identity =
     "0000000000000000000000000000000000000000";
@@ -1787,6 +1788,7 @@ std::string port_export_cache_key(
     const std::string_view console_profile,
     const std::string_view game_project_identity,
     const std::string_view game_entry_handoff_artifact_identity,
+    const std::string_view latent_aot_entry_hint_identity,
     const katana::codegen::PartitionOptions& partition_options = {}) {
     std::ostringstream identity;
     const auto append = [&identity](const auto& value) {
@@ -1810,6 +1812,7 @@ std::string port_export_cache_key(
     append(console_profile);
     append(game_project_identity);
     append(game_entry_handoff_artifact_identity);
+    append(latent_aot_entry_hint_identity);
     append(partition_options.maximum_functions);
     append(partition_options.maximum_instructions);
     append(KATANA_RECOMP_VERSION);
@@ -1983,6 +1986,152 @@ int extract_boot_executable_artifact(
 using RuntimeImagePayloadArgument =
     std::pair<std::string, std::filesystem::path>;
 
+using LatentAotEntryHintArgument = katana::codegen::LatentAotEntryHint;
+
+constexpr std::uint64_t latent_aot_entry_disc_sector_size = 2048u;
+constexpr std::size_t maximum_latent_aot_entry_hint_arguments = 1024u;
+
+bool valid_latent_aot_entry_identity(const std::string_view identity) noexcept {
+    constexpr std::string_view prefix{"sha256:"};
+    if (identity.size() != prefix.size() + 64u || !identity.starts_with(prefix))
+        return false;
+    const auto digest = identity.substr(prefix.size());
+    return std::all_of(digest.begin(), digest.end(), [](const char character) {
+        return (character >= '0' && character <= '9') ||
+               (character >= 'a' && character <= 'f');
+    });
+}
+
+bool valid_latent_aot_entry_hint(
+    const LatentAotEntryHintArgument& hint) noexcept {
+    return valid_latent_aot_entry_identity(hint.byte_identity) &&
+           (hint.disc_byte_offset % latent_aot_entry_disc_sector_size) == 0u &&
+           hint.byte_size != 0u && (hint.byte_size & 3u) == 0u &&
+           (hint.module_relative_offset & 1u) == 0u &&
+           hint.module_relative_offset <= hint.byte_size - 2u &&
+           hint.disc_byte_offset <=
+               std::numeric_limits<std::uint64_t>::max() - hint.byte_size;
+}
+
+std::uint64_t parse_latent_aot_entry_integer(const std::string_view text,
+                                             const std::string_view field_name) {
+    auto digits = text;
+    std::uint64_t base = 10u;
+    if (digits.starts_with("0x")) {
+        digits.remove_prefix(2u);
+        base = 16u;
+    }
+    if (digits.empty())
+        throw std::invalid_argument(
+            "--latent-aot-entry besitzt kein " + std::string(field_name) + ".");
+    std::uint64_t value = 0u;
+    for (const auto character : digits) {
+        std::uint64_t digit = 0u;
+        if (character >= '0' && character <= '9')
+            digit = static_cast<std::uint64_t>(character - '0');
+        else if (base == 16u && character >= 'a' && character <= 'f')
+            digit = static_cast<std::uint64_t>(character - 'a' + 10u);
+        else if (base == 16u && character >= 'A' && character <= 'F')
+            digit = static_cast<std::uint64_t>(character - 'A' + 10u);
+        else
+            throw std::invalid_argument(
+                "--latent-aot-entry besitzt ein ungueltiges " +
+                std::string(field_name) + ".");
+        if (digit >= base ||
+            value > (std::numeric_limits<std::uint64_t>::max() - digit) / base)
+            throw std::invalid_argument(
+                "--latent-aot-entry besitzt ein zu grosses " +
+                std::string(field_name) + ".");
+        value = value * base + digit;
+    }
+    return value;
+}
+
+LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view text) {
+    const auto at = text.find('@');
+    if (at == std::string_view::npos || at == 0u ||
+        text.find('@', at + 1u) != std::string_view::npos)
+        throw std::invalid_argument(
+            "--latent-aot-entry erwartet "
+            "sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
+            "<module-relative-offset>.");
+    const auto identity = text.substr(0u, at);
+    const auto fields = text.substr(at + 1u);
+    const auto first_separator = fields.find(':');
+    const auto second_separator =
+        first_separator == std::string_view::npos
+            ? std::string_view::npos
+            : fields.find(':', first_separator + 1u);
+    if (first_separator == 0u || second_separator == std::string_view::npos ||
+        second_separator == first_separator + 1u ||
+        second_separator + 1u >= fields.size() ||
+        fields.find(':', second_separator + 1u) != std::string_view::npos ||
+        !valid_latent_aot_entry_identity(identity))
+        throw std::invalid_argument(
+            "--latent-aot-entry erwartet "
+            "sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
+            "<module-relative-offset>.");
+    const auto disc_byte_offset = parse_latent_aot_entry_integer(
+        fields.substr(0u, first_separator), "Disc-Byteoffset");
+    const auto byte_size = parse_latent_aot_entry_integer(
+        fields.substr(first_separator + 1u, second_separator - first_separator - 1u),
+        "Modulgroesse");
+    const auto module_relative_offset = parse_latent_aot_entry_integer(
+        fields.substr(second_separator + 1u), "Modulentryoffset");
+    if ((disc_byte_offset % latent_aot_entry_disc_sector_size) != 0u ||
+        byte_size == 0u || byte_size > std::numeric_limits<std::uint32_t>::max() ||
+        (byte_size & 3u) != 0u ||
+        module_relative_offset > std::numeric_limits<std::uint32_t>::max() ||
+        (module_relative_offset & 1u) != 0u ||
+        module_relative_offset + 2u > byte_size ||
+        disc_byte_offset > std::numeric_limits<std::uint64_t>::max() - byte_size)
+        throw std::invalid_argument(
+            "--latent-aot-entry besitzt eine ungueltige Modulbindung.");
+    return {std::string(identity),
+            disc_byte_offset,
+            static_cast<std::uint32_t>(byte_size),
+            static_cast<std::uint32_t>(module_relative_offset)};
+}
+
+bool latent_aot_entry_hint_less(const LatentAotEntryHintArgument& left,
+                                const LatentAotEntryHintArgument& right) noexcept {
+    if (left.byte_identity != right.byte_identity)
+        return left.byte_identity < right.byte_identity;
+    if (left.disc_byte_offset != right.disc_byte_offset)
+        return left.disc_byte_offset < right.disc_byte_offset;
+    if (left.byte_size != right.byte_size) return left.byte_size < right.byte_size;
+    return left.module_relative_offset < right.module_relative_offset;
+}
+
+std::vector<LatentAotEntryHintArgument> normalize_latent_aot_entry_hints(
+    std::vector<LatentAotEntryHintArgument> hints) {
+    if (hints.size() > maximum_latent_aot_entry_hint_arguments)
+        throw std::invalid_argument("--latent-aot-entry ueberschreitet das Hintbudget.");
+    if (std::any_of(hints.begin(), hints.end(),
+                    [](const auto& hint) {
+                        return !valid_latent_aot_entry_hint(hint);
+                    }))
+        throw std::invalid_argument(
+            "--latent-aot-entry besitzt eine ungueltige Modulbindung.");
+    std::sort(hints.begin(), hints.end(), latent_aot_entry_hint_less);
+    hints.erase(std::unique(hints.begin(), hints.end()), hints.end());
+    return hints;
+}
+
+std::string latent_aot_entry_hint_identity(
+    const std::vector<LatentAotEntryHintArgument>& hints) {
+    std::ostringstream identity;
+    append_port_export_cache_field(identity, "katana-latent-aot-entry-hints-v1");
+    for (const auto& hint : hints) {
+        append_port_export_cache_field(identity, hint.byte_identity);
+        append_port_export_cache_field(identity, std::to_string(hint.disc_byte_offset));
+        append_port_export_cache_field(identity, std::to_string(hint.byte_size));
+        append_port_export_cache_field(
+            identity, std::to_string(hint.module_relative_offset));
+    }
+    return katana::io::sha256_bytes(identity.str());
+}
+
 std::vector<std::uint8_t> load_runtime_image_payload(
     const std::filesystem::path& path,
     const std::uint32_t expected_size,
@@ -2051,7 +2200,16 @@ int export_port_project(const std::filesystem::path& source_path,
                         const std::optional<std::filesystem::path>&
                             game_entry_handoff_path = std::nullopt,
                         const std::vector<RuntimeImagePayloadArgument>&
-                            runtime_image_payload_arguments = {}) {
+                            runtime_image_payload_arguments = {},
+                        const std::vector<LatentAotEntryHintArgument>&
+                            latent_aot_entry_hints = {}) {
+    const auto normalized_latent_aot_entry_hints =
+        normalize_latent_aot_entry_hints(latent_aot_entry_hints);
+    if (!normalized_latent_aot_entry_hints.empty() &&
+        (diagnostic_partial || boot_executable_artifact))
+        throw std::invalid_argument(
+            "--latent-aot-entry ist ausschliesslich fuer vollstaendige "
+            "NativeDisc-Produktports erlaubt.");
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_binding = discover_runtime_binding_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
@@ -2322,6 +2480,8 @@ int export_port_project(const std::filesystem::path& source_path,
         verified_game_entry_handoff
             ? verified_game_entry_handoff->artifact_identity()
             : std::string{};
+    const auto latent_aot_hint_identity =
+        latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints);
     if (whole_export_cache_enabled)
         whole_export_cache_key = port_export_cache_key(
             whole_export_source_kind,
@@ -2333,7 +2493,8 @@ int export_port_project(const std::filesystem::path& source_path,
             diagnostic_partial,
             console_profile,
             game_project_identity,
-            handoff_artifact_identity);
+            handoff_artifact_identity,
+            latent_aot_hint_identity);
     std::error_code cleanup_error;
     if (safe_regular_port_directory_exists(publish_stage, "Altes Port-Publishing"))
         std::filesystem::remove_all(publish_stage, cleanup_error);
@@ -2363,6 +2524,8 @@ int export_port_project(const std::filesystem::path& source_path,
                 : nullptr;
         export_options.game_project_runtime_image_payloads =
             runtime_image_payloads;
+        export_options.latent_aot_entry_hints =
+            normalized_latent_aot_entry_hints;
         katana::codegen::PortExportResult report;
         bool whole_export_cache_hit = false;
         if (whole_export_cache_key) {
@@ -2657,7 +2820,10 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
               "[--game-project <Descriptor-Artefakt>] "
-              "[--runtime-image-payload <Image-ID>=<private-Datei>]...\n"
+              "[--runtime-image-payload <Image-ID>=<private-Datei>] "
+              "[--latent-aot-entry "
+              "<sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
+              "<module-relative-offset>>]...\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <...>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
@@ -2850,6 +3016,8 @@ int main(const int argc, char* argv[]) {
             std::optional<std::filesystem::path> game_project_path;
             std::vector<RuntimeImagePayloadArgument>
                 runtime_image_payload_arguments;
+            std::vector<LatentAotEntryHintArgument>
+                latent_aot_entry_hints;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             for (std::size_t argument = 3u; argument < static_cast<std::size_t>(argc);
@@ -2890,11 +3058,17 @@ int main(const int argc, char* argv[]) {
                         std::string(binding.substr(0u, separator)),
                         std::filesystem::path(
                             std::string(binding.substr(separator + 1u))));
+                } else if (option == "--latent-aot-entry" &&
+                           port_command == "port") {
+                    latent_aot_entry_hints.push_back(
+                        parse_latent_aot_entry_hint(argv[argument + 1u]));
                 } else {
                     throw std::invalid_argument(
                         "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
                 }
             }
+            latent_aot_entry_hints =
+                normalize_latent_aot_entry_hints(std::move(latent_aot_entry_hints));
             if (!output_path.has_value() || !target_name.has_value()) {
                 throw std::invalid_argument(
                     "port erwartet --output und --target-name jeweils genau einmal.");
@@ -2907,7 +3081,8 @@ int main(const int argc, char* argv[]) {
                                        boot_executable_artifact,
                                        game_project_path,
                                        game_entry_handoff_path,
-                                       runtime_image_payload_arguments);
+                                       runtime_image_payload_arguments,
+                                       latent_aot_entry_hints);
         }
 
         if ((argc == 3 || argc == 4) &&

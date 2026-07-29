@@ -101,6 +101,30 @@ struct ReturnedCodeAddressTableCandidate {
     bool operator==(const ReturnedCodeAddressTableCandidate&) const = default;
 };
 
+enum class ForwardedStoreContextLimitReason : std::uint8_t {
+    RootCallSites,
+    ContextCount,
+    ReevaluationCount,
+};
+
+// One bounded terminal capsule per resolution owner. It is analysis-only and
+// exists solely to explain a fail-closed export; it never participates in the
+// runtime product path or in candidate selection.
+struct ForwardedStoreContextLimitDiagnostic {
+    std::uint32_t owner_entry = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t exemplar_root_call_site = 0u;
+    std::size_t context_count = 0u;
+    std::size_t root_call_site_count = 0u;
+    std::size_t evaluation_count = 0u;
+    bool tail = false;
+    bool isolated = false;
+    ForwardedStoreContextLimitReason reason =
+        ForwardedStoreContextLimitReason::ContextCount;
+
+    bool operator==(const ForwardedStoreContextLimitDiagnostic&) const = default;
+};
+
 // Bounded inventory walks have several independent resource contracts. Keep
 // their terminal evidence separate: an otherwise small candidate inventory
 // must not be reported as if the 1,024-entry collector itself overflowed.
@@ -113,6 +137,8 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t inventory_region_block_limited_regions = 0u;
     std::size_t forwarded_store_context_budget = 0u;
     std::size_t forwarded_store_context_limited_functions = 0u;
+    std::vector<ForwardedStoreContextLimitDiagnostic>
+        forwarded_store_context_limit_diagnostics;
     std::size_t contextual_return_context_budget = 0u;
     std::size_t contextual_return_context_limited_functions = 0u;
     std::size_t contextual_return_evaluation_budget = 0u;
