@@ -208,6 +208,106 @@ NativeAotTemplateBinder::NativeAotTemplateBinder(
     }
 }
 
+BlockMaterializationProbe
+NativeAotTemplateBinder::fixed_block_materialization_probe(
+    const std::uint32_t target,
+    const std::uint32_t physical_origin) const noexcept {
+    BlockMaterializationProbe result;
+    std::size_t matching_ranges = 0u;
+    for (std::size_t definition_index = 0u;
+         definition_index < templates_.size();
+         ++definition_index) {
+        const auto& definition = templates_[definition_index];
+        if (definition.destination !=
+                NativeAotTemplateDestination::FixedAddress ||
+            definition.extent == 0u ||
+            !contains(target,
+                      definition.fixed_runtime_start,
+                      definition.extent))
+            continue;
+        ++matching_ranges;
+        if (matching_ranges != 1u ||
+            (target & 1u) != 0u ||
+            physical_origin != canonical_physical_address(target) ||
+            !fixed_block_identities_valid_[definition_index] ||
+            definition.extent > maximum_fixed_template_extent ||
+            (definition.source_start & 3u) != 0u ||
+            (definition.fixed_runtime_start & 3u) != 0u ||
+            (definition.extent & 3u) != 0u ||
+            !definition.source_module_id.empty() ||
+            !definition.expected_source_identity.empty() ||
+            definition.destination_vbr_delta != 0 ||
+            !definition.expected_runtime_content_identity.empty() ||
+            !definition.expected_runtime_byte_identity.empty() ||
+            !definition.patches.empty() ||
+            !definition.mutable_ranges.empty() ||
+            definition.validation_mode !=
+                NativeAotTemplateValidationMode::RuntimeBlock ||
+            !direct_mapped_alias_range(
+                definition.source_start, definition.extent) ||
+            !direct_mapped_alias_range(
+                definition.fixed_runtime_start, definition.extent) ||
+            !linear_physical_range(
+                definition.source_start, definition.extent)) {
+            result.kind = BlockMaterializationProbeKind::Rejected;
+            result.rejection_failure =
+                MaterializationFailure::AotTemplateMismatch;
+            continue;
+        }
+
+        const auto offset = target - definition.fixed_runtime_start;
+        const auto identity = std::lower_bound(
+            definition.block_identities.begin(),
+            definition.block_identities.end(),
+            offset,
+            [](const auto& candidate, const std::uint32_t value) {
+                return candidate.source_offset < value;
+            });
+        if (identity == definition.block_identities.end() ||
+            identity->source_offset != offset) {
+            result.kind = BlockMaterializationProbeKind::Rejected;
+            result.rejection_failure = MaterializationFailure::MissingAot;
+            continue;
+        }
+        if (fixed_source_blocks_ == nullptr) {
+            result.kind = BlockMaterializationProbeKind::Rejected;
+            result.rejection_failure = MaterializationFailure::MissingAot;
+            continue;
+        }
+        const auto source_address = definition.source_start + offset;
+        const auto source_handle =
+            fixed_source_blocks_->lookup(source_address, {});
+        if (!source_handle.has_value()) {
+            result.kind = BlockMaterializationProbeKind::Rejected;
+            result.rejection_failure = MaterializationFailure::MissingAot;
+            continue;
+        }
+        const auto source_block =
+            fixed_source_blocks_->resolve(*source_handle);
+        if (!source_block.has_value() ||
+            source_block->get().runtime_registered ||
+            source_block->get().aot_template.has_value() ||
+            source_block->get().function == nullptr ||
+            source_block->get().physical_origin !=
+                canonical_physical_address(source_address) ||
+            source_block->get().size != identity->size) {
+            result.kind = BlockMaterializationProbeKind::Rejected;
+            result.rejection_failure = MaterializationFailure::MissingAot;
+            continue;
+        }
+        result.kind = BlockMaterializationProbeKind::IdentityBound;
+        result.required_bytes = identity->size;
+        result.rejection_failure = MaterializationFailure::None;
+    }
+    if (matching_ranges > 1u) {
+        result.kind = BlockMaterializationProbeKind::Rejected;
+        result.required_bytes = 0u;
+        result.rejection_failure =
+            MaterializationFailure::AotTemplateMismatch;
+    }
+    return result;
+}
+
 NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     const std::uint32_t target,
     const std::uint32_t physical_origin,

@@ -497,6 +497,25 @@ int main() {
             fixed_dispatch_blocks,
             fixed_templates,
             &fixed_blocks);
+        const auto fixed_probe =
+            fixed_binder.fixed_block_materialization_probe(
+                fixed_runtime + fixed_offset,
+                canonical_physical_address(
+                    fixed_runtime + fixed_offset));
+        const auto fixed_hole_probe =
+            fixed_binder.fixed_block_materialization_probe(
+                fixed_runtime,
+                canonical_physical_address(fixed_runtime));
+        require(
+            fixed_probe.kind ==
+                    BlockMaterializationProbeKind::IdentityBound &&
+                fixed_probe.required_bytes == 2u &&
+                fixed_hole_probe.kind ==
+                    BlockMaterializationProbeKind::Rejected &&
+                fixed_hole_probe.rejection_failure ==
+                    MaterializationFailure::MissingAot,
+            "FixedAddress-Preflight verlor die exakte Blockgroesse "
+            "oder liess ein ungebundenes Ziel dynamisch durch.");
         const auto fixed_bound = fixed_binder.bind(
             fixed_runtime + fixed_offset,
             canonical_physical_address(fixed_runtime + fixed_offset),
@@ -520,6 +539,149 @@ int main() {
                     fixed_source + fixed_offset, {}).has_value(),
                 "FixedAddress-Quellblock wurde in die Gastdispatch-Tabelle "
                 "veroeffentlicht.");
+
+        constexpr std::uint32_t wide_fixed_source =
+            0x88004000u;
+        constexpr std::uint32_t wide_fixed_runtime =
+            0x80006000u;
+        constexpr std::uint32_t wide_fixed_size = 132u;
+        std::vector<std::uint8_t> wide_fixed_bytes(
+            wide_fixed_size, 0u);
+        for (std::uint32_t offset = 0u;
+             offset < wide_fixed_size;
+             offset += 2u)
+            wide_fixed_bytes[offset] = 0x09u;
+        wide_fixed_bytes[wide_fixed_size - 4u] = 0x0Bu;
+        const auto wide_fixed_physical =
+            canonical_physical_address(wide_fixed_runtime);
+        cpu.memory.write_bytes(wide_fixed_physical,
+                               wide_fixed_bytes,
+                               CodeWriteSource::Cpu);
+        ExecutableModuleCatalog wide_fixed_modules;
+        wide_fixed_modules.record_runtime_write(
+            wide_fixed_physical,
+            wide_fixed_bytes.size(),
+            CodeWriteSource::Cpu,
+            true);
+        RuntimeBlockTable wide_fixed_source_blocks;
+        static_cast<void>(wide_fixed_source_blocks.register_static(
+            {wide_fixed_source,
+             canonical_physical_address(wide_fixed_source),
+             wide_fixed_size,
+             BlockEndKind::Return,
+             {},
+             native_template_block,
+             "synthetic-wide-fixed-aot-source"}));
+        RuntimeBlockTable wide_fixed_dispatch_blocks;
+        const auto wide_fixed_identity =
+            "sha256:" + katana::io::sha256_bytes(
+                            std::string_view(
+                                reinterpret_cast<const char*>(
+                                    wide_fixed_bytes.data()),
+                                wide_fixed_bytes.size()));
+        const std::array wide_fixed_templates{NativeAotTemplate{
+            {},
+            {},
+            wide_fixed_source,
+            wide_fixed_size,
+            0,
+            {},
+            NativeAotTemplateDestination::FixedAddress,
+            {},
+            {},
+            {},
+            wide_fixed_runtime,
+            {{0u, wide_fixed_size, wide_fixed_identity}},
+            NativeAotTemplateValidationMode::RuntimeBlock}};
+        NativeAotTemplateBinder wide_fixed_binder(
+            cpu,
+            wide_fixed_modules,
+            wide_fixed_dispatch_blocks,
+            wide_fixed_templates,
+            &wide_fixed_source_blocks);
+        BlockMaterializationPolicy wide_fixed_policy;
+        wide_fixed_policy.enabled = true;
+        wide_fixed_policy.max_blocks = 4u;
+        wide_fixed_policy.max_bytes = 512u;
+        DemandBlockMaterializer wide_fixed_materializer(
+            wide_fixed_modules,
+            wide_fixed_dispatch_blocks,
+            nullptr,
+            wide_fixed_policy,
+            [&wide_fixed_binder](
+                const std::uint32_t target,
+                const std::uint32_t physical_origin,
+                const std::span<const std::uint8_t> bytes,
+                const BlockVariantKey& variant) {
+                return std::move(
+                    wide_fixed_binder
+                        .bind(target,
+                              physical_origin,
+                              bytes,
+                              variant)
+                        .candidate);
+            },
+            [&wide_fixed_binder](
+                const std::uint32_t target,
+                const std::uint32_t physical_origin,
+                const BlockVariantKey&) {
+                return wide_fixed_binder
+                    .fixed_block_materialization_probe(
+                        target, physical_origin);
+            });
+        auto wide_fixed_corrupt = wide_fixed_bytes;
+        wide_fixed_corrupt.front() ^= 0x01u;
+        cpu.memory.write_bytes(wide_fixed_physical,
+                               wide_fixed_corrupt,
+                               CodeWriteSource::Cpu);
+        wide_fixed_modules.record_runtime_write(
+            wide_fixed_physical,
+            wide_fixed_corrupt.size(),
+            CodeWriteSource::Cpu,
+            true);
+        const auto wide_fixed_rejected =
+            wide_fixed_materializer.try_materialize(
+                cpu,
+                wide_fixed_runtime,
+                wide_fixed_physical,
+                {},
+                0x8000000Eu);
+        require(
+            !wide_fixed_rejected.has_value() &&
+                wide_fixed_modules.resolve(
+                    wide_fixed_physical, 2u) == nullptr,
+            "FixedAddress-Hashfehler veraenderte den "
+            "Runtimewrite-Modulkatalog vor der Ablehnung.");
+        cpu.memory.write_bytes(wide_fixed_physical,
+                               wide_fixed_bytes,
+                               CodeWriteSource::Cpu);
+        wide_fixed_modules.record_runtime_write(
+            wide_fixed_physical,
+            wide_fixed_bytes.size(),
+            CodeWriteSource::Cpu,
+            true);
+        const auto wide_fixed_handle =
+            wide_fixed_materializer.try_materialize(
+                cpu,
+                wide_fixed_runtime,
+                wide_fixed_physical,
+                {},
+                0x80000010u);
+        const auto wide_fixed_module =
+            wide_fixed_modules.resolve(
+                wide_fixed_physical, wide_fixed_size);
+        require(
+            wide_fixed_handle.has_value() &&
+                wide_fixed_module != nullptr &&
+                wide_fixed_module->bytes.size() ==
+                    wide_fixed_size &&
+                wide_fixed_dispatch_blocks.active(
+                    *wide_fixed_handle) &&
+                wide_fixed_materializer.metrics()
+                        .materialized_bytes ==
+                    wide_fixed_size,
+            "Exakt gehashter FixedAddress-AOT-Block ueber 128 "
+            "Byte wurde nicht zielgenau materialisiert.");
 
         auto fixed_mutated = latent_bytes;
         fixed_mutated[fixed_offset] ^= 0x01u;

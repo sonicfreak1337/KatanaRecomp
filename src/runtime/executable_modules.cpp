@@ -1340,6 +1340,38 @@ void ExecutableModuleCatalog::record_runtime_write_batch(
     }
 }
 
+bool ExecutableModuleCatalog::runtime_write_provenance_covers(
+    const std::uint32_t address,
+    const std::uint32_t size) const noexcept {
+    if (size == 0u ||
+        static_cast<std::uint64_t>(address) + size >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::uint32_t>::max()) +
+                1u)
+        return false;
+    const auto physical = canonical_physical_address(address);
+    if (static_cast<std::uint64_t>(physical) + size >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::uint32_t>::max()) +
+                1u ||
+        canonical_physical_address(address + size - 1u) !=
+            physical + size - 1u)
+        return false;
+    for (std::uint32_t offset = 0u; offset < size; ++offset) {
+        const auto candidate = physical + offset;
+        const auto page =
+            candidate & ~(runtime_write_page_size - 1u);
+        const auto found = runtime_write_pages_.find(page);
+        if (found == runtime_write_pages_.end())
+            return false;
+        const auto page_offset = candidate - page;
+        if ((found->second.written[page_offset / 64u] &
+             (std::uint64_t{1u} << (page_offset % 64u))) == 0u)
+            return false;
+    }
+    return true;
+}
+
 bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,
                                                     const std::uint32_t address,
                                                     const std::uint32_t maximum_bytes) {
@@ -1525,9 +1557,12 @@ DemandBlockMaterializer::DemandBlockMaterializer(ExecutableModuleCatalog& module
                                                  RuntimeBlockTable& blocks,
                                                  ExecutableCodeTracker* tracker,
                                                  BlockMaterializationPolicy policy,
-                                                 BlockMaterializeCallback callback)
+                                                 BlockMaterializeCallback callback,
+                                                 BlockMaterializationProbeCallback
+                                                     probe_callback)
     : modules_(modules), blocks_(blocks), tracker_(tracker), policy_(policy),
-      callback_(std::move(callback)) {
+      callback_(std::move(callback)),
+      probe_callback_(std::move(probe_callback)) {
     if (policy_.enabled &&
         (!callback_ || policy_.max_blocks == 0u || policy_.max_bytes == 0u ||
          policy_.max_guest_cycles == 0u || policy_.max_instructions == 0u ||
@@ -1615,66 +1650,206 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         return std::nullopt;
     }
     const auto physical_target = canonical_physical_address(physical_origin);
-    if (!cpu.memory.contains(physical_target, 2u)) {
-        fail(MaterializationFailure::Uncommitted, target);
-        return std::nullopt;
-    }
-    auto* module = modules_.resolve_for_materialization(physical_target, 2u);
-    if (module == nullptr) {
-        if (!modules_.promote_runtime_write(cpu.memory, physical_target)) {
-            fail(MaterializationFailure::UnknownSource, target);
-            return std::nullopt;
-        }
-        module = modules_.resolve_for_materialization(physical_target, 2u);
-    } else if (module->id.starts_with(runtime_write_module_id_prefix) &&
-               module->source_identity == runtime_write_module_source_identity) {
-        static_cast<void>(modules_.promote_runtime_write(cpu.memory, physical_target));
-        module = modules_.resolve_for_materialization(physical_target, 2u);
-    }
-    if (module->control_transfer_promotion_allowed ||
-        !module->materializable(physical_target, 2u)) {
-        const auto rejected_owner_had_permission = module->executable_permission;
-        if (!modules_.authorize_control_transfer(physical_target)) {
-            fail(rejected_owner_had_permission ? MaterializationFailure::ProvenNonCode
-                                               : MaterializationFailure::PermissionDenied,
+    BlockMaterializationProbe materialization_probe;
+    if (probe_callback_) {
+        materialization_probe =
+            probe_callback_(target, physical_target, variant);
+        if (materialization_probe.kind ==
+            BlockMaterializationProbeKind::Rejected) {
+            fail(materialization_probe.rejection_failure ==
+                         MaterializationFailure::None
+                     ? MaterializationFailure::AotTemplateMismatch
+                     : materialization_probe.rejection_failure,
                  target);
             return std::nullopt;
         }
     }
-    module = modules_.resolve_for_materialization(physical_target, 2u);
-    if (module == nullptr || !module->materializable(physical_target, 2u)) {
-        fail(MaterializationFailure::ProvenNonCode, target);
+    const auto identity_bound =
+        materialization_probe.kind ==
+        BlockMaterializationProbeKind::IdentityBound;
+    const auto promotion_window =
+        identity_bound
+            ? materialization_probe.required_bytes
+            : runtime_write_promotion_maximum_bytes;
+    if (identity_bound &&
+        (promotion_window < 2u || (promotion_window & 1u) != 0u ||
+         promotion_window > policy_.max_memory_bytes ||
+         promotion_window > policy_.max_bytes)) {
+        fail(promotion_window < 2u ||
+                     (promotion_window & 1u) != 0u
+                 ? MaterializationFailure::InvalidBlock
+                 : MaterializationFailure::BudgetExhausted,
+             target);
         return std::nullopt;
     }
     if (metrics_.materializations >= policy_.max_blocks ||
-        metrics_.materializations >= policy_.max_materializations_per_run ||
-        metrics_.materialized_bytes >= policy_.max_bytes) {
+        metrics_.materializations >=
+            policy_.max_materializations_per_run ||
+        metrics_.materialized_bytes >= policy_.max_bytes ||
+        (identity_bound &&
+         promotion_window >
+             policy_.max_bytes - metrics_.materialized_bytes)) {
         fail(MaterializationFailure::BudgetExhausted, target);
+        return std::nullopt;
+    }
+    if (!cpu.memory.contains(
+            physical_target,
+            identity_bound ? promotion_window : 2u)) {
+        fail(MaterializationFailure::Uncommitted, target);
+        return std::nullopt;
+    }
+
+    std::optional<MaterializedBlockCandidate> prebound_candidate;
+    std::vector<std::uint8_t> prebound_snapshot;
+    std::uint64_t prebound_elapsed_ms = 0u;
+    if (identity_bound) {
+        if (!modules_.runtime_write_provenance_covers(
+                physical_target, promotion_window)) {
+            fail(MaterializationFailure::UnknownSource, target);
+            return std::nullopt;
+        }
+        prebound_snapshot.resize(promotion_window);
+        for (std::uint32_t current = 0u;
+             current < promotion_window;
+             ++current)
+            prebound_snapshot[current] =
+                cpu.memory.read_u8(physical_target + current);
+        std::optional<std::chrono::steady_clock::time_point> started;
+        if (!policy_.deterministic_no_host_time)
+            started = std::chrono::steady_clock::now();
+        prebound_candidate =
+            callback_(target,
+                      physical_target,
+                      prebound_snapshot,
+                      variant);
+        if (started) {
+            prebound_elapsed_ms = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - *started)
+                    .count());
+        }
+        const auto& candidate = *prebound_candidate;
+        if (!candidate.decode_candidate_validated) {
+            fail(candidate.rejection_failure ==
+                         MaterializationFailure::None
+                     ? MaterializationFailure::AotTemplateMismatch
+                     : candidate.rejection_failure,
+                 target);
+            return std::nullopt;
+        }
+        if (candidate.interpreter_backed ||
+            !candidate.bounded_analysis_complete ||
+            !candidate.ir_verified ||
+            !candidate.code_generated ||
+            !candidate.block.aot_template.has_value() ||
+            candidate.block.virtual_start != target ||
+            candidate.block.physical_origin != physical_target ||
+            candidate.block.size != promotion_window ||
+            candidate.block.variant != variant ||
+            candidate.block.function == nullptr ||
+            candidate.block.provenance.empty()) {
+            fail(MaterializationFailure::InvalidBlock, target);
+            return std::nullopt;
+        }
+        for (std::uint32_t current = 0u;
+             current < promotion_window;
+             ++current) {
+            if (cpu.memory.read_u8(physical_target + current) !=
+                prebound_snapshot[current]) {
+                fail(MaterializationFailure::ByteIdentityMismatch,
+                     target);
+                return std::nullopt;
+            }
+        }
+    }
+
+    auto* module =
+        modules_.resolve_for_materialization(physical_target, 2u);
+    if (module == nullptr) {
+        if (!modules_.promote_runtime_write(
+                cpu.memory, physical_target, promotion_window)) {
+            fail(MaterializationFailure::UnknownSource, target);
+            return std::nullopt;
+        }
+        module =
+            modules_.resolve_for_materialization(physical_target, 2u);
+    } else if (module->id.starts_with(
+                   runtime_write_module_id_prefix) &&
+               module->source_identity ==
+                   runtime_write_module_source_identity) {
+        static_cast<void>(modules_.promote_runtime_write(
+            cpu.memory, physical_target, promotion_window));
+        module =
+            modules_.resolve_for_materialization(physical_target, 2u);
+    }
+    if (module == nullptr) {
+        fail(MaterializationFailure::UnknownSource, target);
+        return std::nullopt;
+    }
+    if (module->control_transfer_promotion_allowed ||
+        !module->materializable(physical_target, 2u)) {
+        const auto rejected_owner_had_permission =
+            module->executable_permission;
+        if (!modules_.authorize_control_transfer(
+                physical_target, promotion_window)) {
+            fail(rejected_owner_had_permission
+                     ? MaterializationFailure::ProvenNonCode
+                     : MaterializationFailure::PermissionDenied,
+                 target);
+            return std::nullopt;
+        }
+    }
+    module =
+        modules_.resolve_for_materialization(physical_target, 2u);
+    if (module == nullptr ||
+        !module->materializable(
+            physical_target,
+            identity_bound ? promotion_window : 2u)) {
+        fail(MaterializationFailure::ProvenNonCode, target);
         return std::nullopt;
     }
     const auto module_id = module->id;
     const auto source_identity = module->source_identity;
     const auto module_generation = module->generation;
-    const auto relocation_generation = module->relocation_generation;
-    const auto snapshot_size = std::min<std::size_t>(
-        module->active_extent_remaining(physical_target),
-        static_cast<std::size_t>(policy_.max_bytes - metrics_.materialized_bytes));
-    if (snapshot_size < 2u || snapshot_size > policy_.max_memory_bytes) {
+    const auto relocation_generation =
+        module->relocation_generation;
+    const auto snapshot_size =
+        identity_bound
+            ? static_cast<std::size_t>(promotion_window)
+            : std::min<std::size_t>(
+                  module->active_extent_remaining(physical_target),
+                  static_cast<std::size_t>(
+                      policy_.max_bytes -
+                      metrics_.materialized_bytes));
+    if (snapshot_size < 2u ||
+        snapshot_size > policy_.max_memory_bytes) {
         fail(MaterializationFailure::BudgetExhausted, target);
         return std::nullopt;
     }
-    std::vector<std::uint8_t> snapshot(snapshot_size);
-    for (std::size_t current = 0u; current < snapshot.size(); ++current)
-        snapshot[current] =
-            cpu.memory.read_u8(physical_target + static_cast<std::uint32_t>(current));
+    auto snapshot = identity_bound
+                        ? std::move(prebound_snapshot)
+                        : std::vector<std::uint8_t>(snapshot_size);
+    if (!identity_bound) {
+        for (std::size_t current = 0u;
+             current < snapshot.size();
+             ++current)
+            snapshot[current] = cpu.memory.read_u8(
+                physical_target +
+                static_cast<std::uint32_t>(current));
+    }
     const auto target_module_bytes_match = modules_.validate_bytes_at(
         cpu.memory, physical_target, physical_target, snapshot.size());
     std::optional<std::chrono::steady_clock::time_point> started;
-    if (!policy_.deterministic_no_host_time) {
+    if (!identity_bound &&
+        !policy_.deterministic_no_host_time) {
         started = std::chrono::steady_clock::now();
     }
-    auto candidate = callback_(target, physical_target, snapshot, variant);
-    std::uint64_t elapsed_ms = 0u;
+    auto candidate =
+        identity_bound
+            ? std::move(*prebound_candidate)
+            : callback_(
+                  target, physical_target, snapshot, variant);
+    std::uint64_t elapsed_ms = prebound_elapsed_ms;
     if (started) {
         elapsed_ms =
             static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1711,12 +1886,15 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::CodeGenerationFailed, target);
         return std::nullopt;
     }
-    if (candidate.guest_cycles > policy_.max_guest_cycles ||
-        candidate.instructions > policy_.max_instructions ||
-        candidate.recursive_seeds > policy_.max_recursive_seeds ||
-        (!policy_.deterministic_no_host_time &&
-         std::max(elapsed_ms, candidate.analysis_time_ms) > policy_.max_analysis_time_ms) ||
-        candidate.peak_memory_bytes > policy_.max_memory_bytes) {
+    if (!validated_native_aot_candidate &&
+        (candidate.guest_cycles > policy_.max_guest_cycles ||
+         candidate.instructions > policy_.max_instructions ||
+         candidate.recursive_seeds > policy_.max_recursive_seeds ||
+         (!policy_.deterministic_no_host_time &&
+          std::max(elapsed_ms, candidate.analysis_time_ms) >
+              policy_.max_analysis_time_ms) ||
+         candidate.peak_memory_bytes >
+             policy_.max_memory_bytes)) {
         fail(MaterializationFailure::BudgetExhausted, target);
         return std::nullopt;
     }

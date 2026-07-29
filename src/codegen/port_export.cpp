@@ -8710,12 +8710,6 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                     throw std::runtime_error(
                         "Game-Project-Runtime-Block verlaesst sein "
                         "identitaetsgebundenes Image.");
-                if (block.size >
-                    katana::runtime::
-                        runtime_write_promotion_maximum_bytes)
-                    throw std::runtime_error(
-                        "Game-Project-Runtime-Block ueberschreitet das "
-                        "gebundene Runtimewrite-Promotionfenster.");
                 const auto offset =
                     block.address - runtime_image.source_start;
                 const auto bytes = std::string_view(
@@ -10304,10 +10298,16 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             << "           const std::uint32_t physical_origin,\n"
             << "           const std::span<const std::uint8_t> bytes,\n"
             << "           const katana::runtime::BlockVariantKey& variant) {\n"
-            << "            auto native = native_aot_binder.bind(\n"
-            << "                target, physical_origin, bytes, variant);\n"
-            << "            if (native) return std::move(native.candidate);\n"
-            << "            katana::runtime::MaterializedBlockCandidate candidate;\n"
+             << "            auto native = native_aot_binder.bind(\n"
+             << "                target, physical_origin, bytes, variant);\n"
+             << "            if (native) return std::move(native.candidate);\n"
+             << "            if (native_aot_binder."
+                "fixed_block_materialization_probe(\n"
+             << "                    target, physical_origin).kind !=\n"
+             << "                katana::runtime::"
+                "BlockMaterializationProbeKind::None)\n"
+             << "                return std::move(native.candidate);\n"
+             << "            katana::runtime::MaterializedBlockCandidate candidate;\n"
             << "            if (bytes.size() < 2u) return candidate;\n"
             << "            const auto opcode = static_cast<std::uint16_t>(bytes[0]) |\n"
             << "                static_cast<std::uint16_t>(bytes[1] << 8u);\n"
@@ -10333,10 +10333,17 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             << "            candidate.interpreter_backed = true;\n"
             << "            candidate.bounded_analysis_complete = false;\n"
             << "            candidate.ir_verified = false;\n"
-            << "            candidate.code_generated = false;\n"
-            << "            candidate.guest_cycles = candidate.instructions;\n"
-            << "            return candidate;\n"
-            << "        });\n";
+             << "            candidate.code_generated = false;\n"
+             << "            candidate.guest_cycles = candidate.instructions;\n"
+             << "            return candidate;\n"
+             << "        },\n"
+             << "        [&native_aot_binder](const std::uint32_t target,\n"
+             << "           const std::uint32_t physical_origin,\n"
+             << "           const katana::runtime::BlockVariantKey&) {\n"
+             << "            return native_aot_binder."
+                "fixed_block_materialization_probe(\n"
+             << "                target, physical_origin);\n"
+             << "        });\n";
     } else {
         output << "    // Product ports execute only statically generated native/AOT blocks.\n"
                << "    // Runtime copies bind only to analysis-proven, pre-generated native code.\n"
@@ -10353,10 +10360,17 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                << "           const std::uint32_t physical_origin,\n"
                << "           const std::span<const std::uint8_t> bytes,\n"
                << "           const katana::runtime::BlockVariantKey& variant) {\n"
-               << "            return std::move(\n"
-               << "                native_aot_binder.bind(\n"
-               << "                    target, physical_origin, bytes, variant).candidate);\n"
-               << "        });\n";
+                << "            return std::move(\n"
+                << "                native_aot_binder.bind(\n"
+                << "                    target, physical_origin, bytes, variant).candidate);\n"
+                << "        },\n"
+                << "        [&native_aot_binder](const std::uint32_t target,\n"
+                << "           const std::uint32_t physical_origin,\n"
+                << "           const katana::runtime::BlockVariantKey&) {\n"
+                << "            return native_aot_binder."
+                   "fixed_block_materialization_probe(\n"
+                << "                target, physical_origin);\n"
+                << "        });\n";
     }
     output << "    last_materialization_status = {};\n"
            << "    const auto capture_materialization_status = [&] {\n"

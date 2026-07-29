@@ -92,6 +92,13 @@ class NativeAotTemplateBinder final {
          std::uint32_t physical_origin,
          std::span<const std::uint8_t> target_suffix,
          const BlockVariantKey& variant) const;
+    // Identifies an exact precompiled FixedAddress entry before anonymous
+    // runtime-write capture. Targets inside a fixed range without an exact
+    // block identity are rejected instead of falling through to dynamic code.
+    [[nodiscard]] BlockMaterializationProbe
+    fixed_block_materialization_probe(
+        std::uint32_t target,
+        std::uint32_t physical_origin) const noexcept;
 
   private:
     CpuState& cpu_;

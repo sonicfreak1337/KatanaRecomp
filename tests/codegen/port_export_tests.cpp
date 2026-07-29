@@ -1077,12 +1077,19 @@ int run_test(const int argc, char* argv[]) {
             katana::platform::dreamcast_disc_boot_address + 0x10u,
             2u,
             "external_exact_padding"}};
-    constexpr std::array<std::uint8_t, 8u> external_runtime_image_bytes{
-        0x00u, 0xB0u, // bsr 0x89000004
-        0x09u, 0x00u, // nop (delay slot)
-        0x0Bu, 0x00u, // rts
-        0x09u, 0x00u  // nop (delay slot)
-    };
+    constexpr auto external_runtime_image_bytes = [] {
+        // Keep one legitimate straight-line FixedAddress block larger than
+        // the anonymous 128-byte default. The generated binder must request
+        // only this exact identity-bound window instead of splitting native AOT.
+        std::array<std::uint8_t, 136u> bytes{};
+        for (std::size_t offset = 0u; offset < bytes.size(); offset += 2u)
+            bytes[offset] = 0x09u; // nop
+        bytes[0u] = 0x00u;
+        bytes[1u] = 0xB0u; // bsr 0x89000004
+        bytes[132u] = 0x0Bu;
+        bytes[133u] = 0x00u; // rts
+        return bytes;
+    }();
     constexpr std::array<std::uint32_t, 2u>
         external_runtime_image_entries{0u, 4u};
     const auto external_runtime_image_identity =
@@ -1143,6 +1150,9 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             external_boundary_dispatch.find(
                 "materialization_policy.enabled = true") !=
+                std::string::npos &&
+            external_boundary_dispatch.find(
+                "fixed_block_materialization_probe") !=
                 std::string::npos &&
             external_boundary_dispatch.find(
                 "&fixed_source_table") != std::string::npos &&

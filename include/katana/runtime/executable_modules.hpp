@@ -20,8 +20,8 @@
 namespace katana::runtime {
 
 // Anonymous guest-write provenance is deliberately admitted in a small,
-// bounded window. Product exporters must reject a precompiled RuntimeBlock
-// larger than this until a wider identity-bound promotion contract exists.
+// bounded window. A larger precompiled block must request an exact
+// identity-bound window through the materializer callback.
 inline constexpr std::uint32_t runtime_write_promotion_maximum_bytes = 128u;
 
 class IndirectDispatchMetrics;
@@ -229,6 +229,9 @@ class ExecutableModuleCatalog final {
         std::span<const ExecutableModuleActiveExtent> extents,
         std::vector<std::uint32_t>* inserted_pages = nullptr);
     void unindex_active_extents(const ExecutableModule& module) noexcept;
+    [[nodiscard]] bool runtime_write_provenance_covers(
+        std::uint32_t address,
+        std::uint32_t size) const noexcept;
     void unindex_active_extents(std::uint32_t guest_start,
                                 std::span<const ExecutableModuleActiveExtent> extents) noexcept;
     [[nodiscard]] bool active_extent_index_may_overlap(std::uint32_t physical_begin,
@@ -326,14 +329,31 @@ struct BlockMaterializationEvent {
 
 using BlockMaterializeCallback = std::function<MaterializedBlockCandidate(
     std::uint32_t, std::uint32_t, std::span<const std::uint8_t>, const BlockVariantKey&)>;
+enum class BlockMaterializationProbeKind : std::uint8_t {
+    None,
+    IdentityBound,
+    Rejected
+};
+struct BlockMaterializationProbe {
+    BlockMaterializationProbeKind kind =
+        BlockMaterializationProbeKind::None;
+    std::uint32_t required_bytes = 0u;
+    MaterializationFailure rejection_failure =
+        MaterializationFailure::None;
+};
+using BlockMaterializationProbeCallback =
+    std::function<BlockMaterializationProbe(
+        std::uint32_t, std::uint32_t, const BlockVariantKey&)>;
 
 class DemandBlockMaterializer final {
   public:
     DemandBlockMaterializer(ExecutableModuleCatalog& modules,
-                            RuntimeBlockTable& blocks,
-                            ExecutableCodeTracker* tracker,
-                            BlockMaterializationPolicy policy,
-                            BlockMaterializeCallback callback);
+                             RuntimeBlockTable& blocks,
+                             ExecutableCodeTracker* tracker,
+                             BlockMaterializationPolicy policy,
+                             BlockMaterializeCallback callback,
+                             BlockMaterializationProbeCallback
+                                 probe_callback = {});
     [[nodiscard]] std::optional<RuntimeBlockHandle> try_materialize(CpuState& cpu,
                                                                     std::uint32_t target,
                                                                     std::uint32_t physical_origin,
@@ -367,6 +387,7 @@ class DemandBlockMaterializer final {
     ExecutableCodeTracker* tracker_ = nullptr;
     BlockMaterializationPolicy policy_;
     BlockMaterializeCallback callback_;
+    BlockMaterializationProbeCallback probe_callback_;
     BlockMaterializationMetrics metrics_;
     MaterializationFailure last_failure_ = MaterializationFailure::None;
     std::uint64_t next_event_sequence_ = 1u;
