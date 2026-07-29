@@ -23,6 +23,8 @@ if(NOT writer_result EQUAL 0)
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR "Synthetische Portfixture fehlgeschlagen: ${writer_error}")
 endif()
+set(runtime_image_payload_binding
+    "product-gate-runtime-image=${fixture}/disc/product-gate-runtime-image.bin")
 
 execute_process(
   COMMAND "${KATANA_CLI}" disc-audit "${fixture}/disc/disc.gdi" --json
@@ -41,6 +43,7 @@ execute_process(
   COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
           --output "${fixture}/port" --target-name cli_game
           --game-project "${fixture}/disc/product-gate.katana-game-project"
+          --runtime-image-payload "${runtime_image_payload_binding}"
   RESULT_VARIABLE port_result
   OUTPUT_VARIABLE port_output
   ERROR_VARIABLE port_error
@@ -316,6 +319,7 @@ execute_process(
   COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
           --output "${fixture}/port" --target-name cli_game
           --game-project "${fixture}/disc/product-gate.katana-game-project"
+          --runtime-image-payload "${runtime_image_payload_binding}"
   RESULT_VARIABLE incremental_port_result
   OUTPUT_VARIABLE incremental_port_output
   ERROR_VARIABLE incremental_port_error
@@ -345,6 +349,7 @@ function(require_whole_export_cache_miss case_name)
     COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
             --output "${fixture}/port" --target-name cli_game
             --game-project "${fixture}/disc/product-gate.katana-game-project"
+            --runtime-image-payload "${runtime_image_payload_binding}"
     RESULT_VARIABLE cache_miss_result
     OUTPUT_VARIABLE cache_miss_output
     ERROR_VARIABLE cache_miss_error
@@ -437,6 +442,7 @@ execute_process(
   COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
           --output "${fixture}/port" --target-name cli_game
           --game-project "${fixture}/disc/product-gate.katana-game-project"
+          --runtime-image-payload "${runtime_image_payload_binding}"
   RESULT_VARIABLE injected_distribution_result
   OUTPUT_VARIABLE injected_distribution_output
   ERROR_VARIABLE injected_distribution_error

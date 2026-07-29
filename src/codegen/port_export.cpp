@@ -208,9 +208,19 @@ void apply_game_project_symbols(
 
 void apply_game_project_runtime_images(
     katana::io::ExecutableImage& image,
-    const katana::runtime::GameProjectDefinition& definition) {
+    const katana::runtime::GameProjectDefinition& definition,
+    const std::span<const GameProjectRuntimeImagePayload> payloads) {
     std::size_t index = 0u;
     for (const auto& runtime_image : definition.runtime_images) {
+        const auto payload = std::find_if(
+            payloads.begin(),
+            payloads.end(),
+            [&](const auto& candidate) {
+                return candidate.image_id == runtime_image.image_id;
+            });
+        if (payload == payloads.end())
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-missing");
         const auto source_physical =
             static_cast<std::uint64_t>(
                 runtime_image.source_start & 0x1FFFFFFFu);
@@ -218,7 +228,7 @@ void apply_game_project_runtime_images(
             static_cast<std::uint64_t>(
                 runtime_image.runtime_start & 0x1FFFFFFFu);
         const auto image_size =
-            static_cast<std::uint64_t>(runtime_image.bytes.size());
+            static_cast<std::uint64_t>(runtime_image.byte_size);
         for (const auto& existing : image.segments()) {
             if (existing.virtual_address >= 0xE0000000u)
                 continue;
@@ -246,7 +256,7 @@ void apply_game_project_runtime_images(
             ".game-project-runtime-image-" + std::to_string(index++),
             runtime_image.source_start,
             0u,
-            runtime_image.bytes.size(),
+            runtime_image.byte_size,
             katana::io::SegmentKind::Mixed,
             // This is an analysis snapshot of guest-written RAM, not an
             // immutable module. Keeping it writable prevents value analysis
@@ -254,7 +264,7 @@ void apply_game_project_runtime_images(
             // into unconditional CFG facts. RuntimeBlock hashes validate only
             // the exact instruction bytes entered by the native binder.
             {true, true, true},
-            {runtime_image.bytes.begin(), runtime_image.bytes.end()}};
+            {payload->bytes.begin(), payload->bytes.end()}};
         segment.source_kind = katana::io::ImageSourceKind::RuntimeMemory;
         segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
         segment.local_source_name = std::string(runtime_image.image_id);
@@ -262,7 +272,7 @@ void apply_game_project_runtime_images(
         image.add_address_alias(
             {runtime_image.source_start,
              runtime_image.runtime_start,
-             static_cast<std::uint32_t>(runtime_image.bytes.size())});
+             runtime_image.byte_size});
         for (const auto offset : runtime_image.entry_offsets)
             image.add_entry_point(runtime_image.source_start + offset);
     }
@@ -377,7 +387,8 @@ std::span<const std::uint8_t> game_project_image_bytes(
 
 void validate_game_project_image_contract(
     const katana::runtime::GameProjectDefinition& definition,
-    const katana::io::ExecutableImage& image) {
+    const katana::io::ExecutableImage& image,
+    const std::span<const GameProjectRuntimeImagePayload> payloads) {
     for (const auto& function : definition.function_boundaries) {
         const auto resolved =
             image.resolve_segment_address(function.start, function.size);
@@ -439,12 +450,21 @@ void validate_game_project_image_contract(
                 "Executable-Image ueberein.");
     }
     for (const auto& runtime_image : definition.runtime_images) {
+        const auto payload = std::find_if(
+            payloads.begin(),
+            payloads.end(),
+            [&](const auto& candidate) {
+                return candidate.image_id == runtime_image.image_id;
+            });
+        if (payload == payloads.end())
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-missing");
         const auto bytes = game_project_image_bytes(
-            image, runtime_image.source_start, runtime_image.bytes.size());
+            image, runtime_image.source_start, runtime_image.byte_size);
         if (!std::equal(bytes.begin(),
                         bytes.end(),
-                        runtime_image.bytes.begin(),
-                        runtime_image.bytes.end()))
+                        payload->bytes.begin(),
+                        payload->bytes.end()))
             throw std::invalid_argument(
                 "Game-Project-Runtime-Image stimmt nicht mit seinen "
                 "exportierten Analysebytes ueberein.");
@@ -8697,9 +8717,13 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
              external_game_project->runtime_images) {
             RuntimeImageTemplateEmission emission;
             emission.image = &runtime_image;
+            const auto runtime_image_bytes = game_project_image_bytes(
+                image,
+                runtime_image.source_start,
+                runtime_image.byte_size);
             const auto source_end =
                 static_cast<std::uint64_t>(runtime_image.source_start) +
-                runtime_image.bytes.size();
+                runtime_image.byte_size;
             for (const auto& block : dispatch_blocks) {
                 if (block.address < runtime_image.source_start ||
                     block.address >= source_end)
@@ -8714,7 +8738,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                     block.address - runtime_image.source_start;
                 const auto bytes = std::string_view(
                     reinterpret_cast<const char*>(
-                        runtime_image.bytes.data() + offset),
+                        runtime_image_bytes.data() + offset),
                     block.size);
                 emission.block_identities.push_back(
                     {offset,
@@ -10262,7 +10286,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         // while each executable runtime entry carries its own exact byte hash.
         output << "        {{}, {}, 0x"
                << symbol(runtime_image.source_start) << "u, "
-               << runtime_image.bytes.size()
+               << runtime_image.byte_size
                << "u, 0, {}, "
                   "katana::runtime::NativeAotTemplateDestination::FixedAddress, "
                   "{}, {}, {}, 0x"
@@ -10938,6 +10962,52 @@ latent_aot_occupied_ranges(const PreparedPortProgram& prepared) {
 
 } // namespace
 
+void validate_game_project_runtime_image_payloads(
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const std::span<const GameProjectRuntimeImagePayload> payloads) {
+    if (game_project == nullptr) {
+        if (!payloads.empty())
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-without-project");
+        return;
+    }
+    katana::runtime::validate_game_project_definition(*game_project);
+
+    std::unordered_set<std::string_view> payload_ids;
+    payload_ids.reserve(payloads.size());
+    for (const auto& payload : payloads) {
+        if (payload.image_id.empty())
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-id-empty");
+        if (!payload_ids.insert(payload.image_id).second)
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-id-duplicate");
+        const auto descriptor = std::find_if(
+            game_project->runtime_images.begin(),
+            game_project->runtime_images.end(),
+            [&](const auto& candidate) {
+                return candidate.image_id == payload.image_id;
+            });
+        if (descriptor == game_project->runtime_images.end())
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-extra");
+        if (payload.bytes.size() != descriptor->byte_size)
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-size-mismatch");
+        const auto digest = katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(payload.bytes.data()),
+            payload.bytes.size()));
+        if (descriptor->byte_identity != std::string("sha256:") + digest)
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-byte-identity-mismatch");
+    }
+    for (const auto& descriptor : game_project->runtime_images) {
+        if (!payload_ids.contains(descriptor.image_id))
+            throw std::invalid_argument(
+                "game-project-runtime-image-payload-missing");
+    }
+}
+
 void preserve_local_port_user_data(const std::filesystem::path& previous_root,
                                    const std::filesystem::path& published_root) {
     const auto previous = previous_root / "user-data";
@@ -11091,10 +11161,12 @@ static PortExportResult export_dreamcast_port_project_impl(
                                                  {},
                                                  occupied);
     }
+    validate_game_project_runtime_image_payloads(
+        options.game_project,
+        options.game_project_runtime_image_payloads);
     if (options.game_project != nullptr) {
         report_progress(options, "game-project-validation");
         const auto& game_project = *options.game_project;
-        katana::runtime::validate_game_project_definition(game_project);
         if (game_project.game_entry_handoff.has_value()) {
             if (!prepared.direct_boot_executable)
                 throw std::invalid_argument(
@@ -11107,7 +11179,10 @@ static PortExportResult export_dreamcast_port_project_impl(
                     "Game-Entry-Handoff-Konsolenprofil passt nicht zum "
                     "Produktport.");
         }
-        validate_game_project_image_contract(game_project, prepared.image);
+        validate_game_project_image_contract(
+            game_project,
+            prepared.image,
+            options.game_project_runtime_image_payloads);
         if (!disc_context.has_value())
             throw std::invalid_argument(
                 "Game-Project-Export braucht eine validierte Disc- oder "
@@ -11238,7 +11313,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                 [&](const auto& runtime_image) {
                     const auto begin =
                         static_cast<std::uint64_t>(runtime_image.source_start);
-                    const auto end = begin + runtime_image.bytes.size();
+                    const auto end = begin + runtime_image.byte_size;
                     return address >= begin &&
                            static_cast<std::uint64_t>(address) < end;
                 });
@@ -11804,11 +11879,18 @@ PortExportResult export_dreamcast_port_project(
         disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
     std::optional<katana::analysis::AnalysisOverrides>
         game_project_overrides;
+    validate_game_project_runtime_image_payloads(
+        options.game_project,
+        options.game_project_runtime_image_payloads);
     if (options.game_project != nullptr) {
-        katana::runtime::validate_game_project_definition(
-            *options.game_project);
-        apply_game_project_runtime_images(image, *options.game_project);
-        validate_game_project_image_contract(*options.game_project, image);
+        apply_game_project_runtime_images(
+            image,
+            *options.game_project,
+            options.game_project_runtime_image_payloads);
+        validate_game_project_image_contract(
+            *options.game_project,
+            image,
+            options.game_project_runtime_image_payloads);
         apply_game_project_symbols(image, *options.game_project);
         game_project_overrides =
             game_project_analysis_overrides(*options.game_project, image);
@@ -11902,11 +11984,18 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         katana::platform::make_dreamcast_boot_executable(artifact);
     std::optional<katana::analysis::AnalysisOverrides>
         game_project_overrides;
+    validate_game_project_runtime_image_payloads(
+        options.game_project,
+        options.game_project_runtime_image_payloads);
     if (options.game_project != nullptr) {
-        katana::runtime::validate_game_project_definition(
-            *options.game_project);
-        apply_game_project_runtime_images(image, *options.game_project);
-        validate_game_project_image_contract(*options.game_project, image);
+        apply_game_project_runtime_images(
+            image,
+            *options.game_project,
+            options.game_project_runtime_image_payloads);
+        validate_game_project_image_contract(
+            *options.game_project,
+            image,
+            options.game_project_runtime_image_payloads);
         apply_game_project_symbols(image, *options.game_project);
         game_project_overrides =
             game_project_analysis_overrides(*options.game_project, image);

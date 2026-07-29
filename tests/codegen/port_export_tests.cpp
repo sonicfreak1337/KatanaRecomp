@@ -676,6 +676,33 @@ int run_test(const int argc, char* argv[]) {
             game_project.required_product_milestone =
                 katana::runtime::RequiredProductMilestone::
                     GameCodeProgressed;
+            const std::array<std::uint8_t, 8u>
+                runtime_image_bytes{
+                    0x09u, 0x00u, 0x0Bu, 0x00u,
+                    0x09u, 0x00u, 0x09u, 0x00u};
+            const std::array<std::uint32_t, 1u>
+                runtime_image_entries{0u};
+            const auto runtime_image_identity =
+                std::string("sha256:") +
+                katana::io::sha256_bytes(std::string_view(
+                    reinterpret_cast<const char*>(
+                        runtime_image_bytes.data()),
+                    runtime_image_bytes.size()));
+            const std::array runtime_images{
+                katana::runtime::GameProjectRuntimeImage{
+                    "product-gate-runtime-image",
+                    runtime_image_identity,
+                    0x89000000u,
+                    0x8C900000u,
+                    static_cast<std::uint32_t>(
+                        runtime_image_bytes.size()),
+                    runtime_image_entries}};
+            game_project.runtime_images = runtime_images;
+            write_binary(
+                directory / "product-gate-runtime-image.bin",
+                std::vector<std::uint8_t>(
+                    runtime_image_bytes.begin(),
+                    runtime_image_bytes.end()));
             static_cast<void>(
                 katana::runtime::GameProjectArtifact::write(
                     directory / "product-gate.katana-game-project",
@@ -1104,8 +1131,13 @@ int run_test(const int argc, char* argv[]) {
             external_runtime_image_identity,
             0x89000000u,
             0x8C900000u,
-            external_runtime_image_bytes,
+            static_cast<std::uint32_t>(
+                external_runtime_image_bytes.size()),
             external_runtime_image_entries}};
+    const std::array external_runtime_image_payloads{
+        GameProjectRuntimeImagePayload{
+            "external-runtime-image",
+            external_runtime_image_bytes}};
     katana::runtime::GameProjectDefinition external_boundary_project;
     external_boundary_project.project_id =
         "katana.test.external-function-boundary";
@@ -1118,9 +1150,32 @@ int run_test(const int argc, char* argv[]) {
         external_boundaries;
     external_boundary_project.runtime_images =
         external_runtime_images;
+    require_failure<std::invalid_argument>(
+        [&] {
+            validate_game_project_runtime_image_payloads(
+                &external_boundary_project,
+                {});
+        },
+        "Descriptor-only Runtime-Image wird ohne privaten Payload akzeptiert.");
+    auto mismatched_runtime_image_bytes =
+        external_runtime_image_bytes;
+    mismatched_runtime_image_bytes[8u] ^= 0x01u;
+    const std::array mismatched_runtime_image_payloads{
+        GameProjectRuntimeImagePayload{
+            "external-runtime-image",
+            mismatched_runtime_image_bytes}};
+    require_failure<std::invalid_argument>(
+        [&] {
+            validate_game_project_runtime_image_payloads(
+                &external_boundary_project,
+                mismatched_runtime_image_payloads);
+        },
+        "Runtime-Image-Payload mit falscher Byteidentitaet wird akzeptiert.");
     auto external_boundary_options = options;
     external_boundary_options.game_project =
         &external_boundary_project;
+    external_boundary_options.game_project_runtime_image_payloads =
+        external_runtime_image_payloads;
     const auto external_boundary_output =
         fixture.root / "external-boundary-port";
     const auto external_boundary_export =

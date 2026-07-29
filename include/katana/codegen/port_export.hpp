@@ -29,6 +29,15 @@ inline constexpr std::uint32_t port_metadata_cache_schema_version = 1u;
 
 using PortExportProgressCallback = void (*)(std::string_view phase);
 
+// Private export-time payload for one descriptor-only game-project runtime
+// image. The caller owns both the identifier and bytes for the complete
+// export call. Payload bytes are validated but never copied into the external
+// game-project artifact or generated port distribution.
+struct GameProjectRuntimeImagePayload {
+    std::string_view image_id;
+    std::span<const std::uint8_t> bytes;
+};
+
 struct PortExportOptions {
     std::string target_name;
     std::string tool_version;
@@ -43,6 +52,11 @@ struct PortExportOptions {
     // Optional external, identity-bound game project. The caller owns the
     // definition and all referenced spans for the complete export call.
     const katana::runtime::GameProjectDefinition* game_project = nullptr;
+    // Exact private payloads for descriptor-only runtime images. Every
+    // descriptor requires one uniquely identified payload and extra payloads
+    // are rejected.
+    std::span<const GameProjectRuntimeImagePayload>
+        game_project_runtime_image_payloads;
 };
 
 struct PortExportResult {
@@ -79,6 +93,13 @@ struct PreparedPortProgram {
     // NativeDiscBoot/firmware-mode mapping.
     bool direct_boot_executable = false;
 };
+
+// Validates the one-to-one descriptor/payload binding, including identifier,
+// byte count and SHA-256. This is public so the CLI can reject an invalid
+// private provider before admitting a whole-export cache hit.
+void validate_game_project_runtime_image_payloads(
+    const katana::runtime::GameProjectDefinition* game_project,
+    std::span<const GameProjectRuntimeImagePayload> payloads);
 
 [[nodiscard]] PortExportResult
 export_dreamcast_port_project(const PreparedPortProgram& prepared,

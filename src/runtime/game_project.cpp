@@ -581,33 +581,27 @@ void validate_game_project_definition(
     runtime_image_source_ranges.reserve(definition.runtime_images.size());
     runtime_image_runtime_ranges.reserve(definition.runtime_images.size());
     for (const auto& image : definition.runtime_images) {
-        if (image.image_id.empty())
+        if (image.image_id.empty() ||
+            image.image_id.find('=') != std::string_view::npos)
             throw std::invalid_argument(
-                "game-project-runtime-image-id-empty");
+                "game-project-runtime-image-id-invalid");
         if (!valid_game_project_sha256_identity(image.byte_identity))
             throw std::invalid_argument(
                 "game-project-runtime-image-byte-identity-invalid");
-        if (image.bytes.empty() ||
-            image.bytes.size() > maximum_runtime_image_size ||
-            (image.bytes.size() & 3u) != 0u ||
+        if (image.byte_size == 0u ||
+            image.byte_size > maximum_runtime_image_size ||
+            (image.byte_size & 3u) != 0u ||
             (image.source_start & 3u) != 0u ||
             (image.runtime_start & 3u) != 0u ||
-            !direct_mapped_range(image.source_start, image.bytes.size()) ||
-            !direct_mapped_range(image.runtime_start, image.bytes.size()))
+            !direct_mapped_range(image.source_start, image.byte_size) ||
+            !direct_mapped_range(image.runtime_start, image.byte_size))
             throw std::invalid_argument(
                 "game-project-runtime-image-range-invalid");
-        if (image.bytes.size() >
+        if (image.byte_size >
             maximum_runtime_image_total_size - runtime_image_total_size)
             throw std::invalid_argument(
                 "game-project-runtime-images-total-size-invalid");
-        runtime_image_total_size += image.bytes.size();
-
-        const auto digest = katana::io::sha256_bytes(std::string_view(
-            reinterpret_cast<const char*>(image.bytes.data()),
-            image.bytes.size()));
-        if (image.byte_identity != std::string("sha256:") + digest)
-            throw std::invalid_argument(
-                "game-project-runtime-image-byte-identity-mismatch");
+        runtime_image_total_size += image.byte_size;
 
         std::uint32_t previous_entry = 0u;
         bool first_entry = true;
@@ -616,7 +610,7 @@ void validate_game_project_definition(
             throw std::invalid_argument(
                 "game-project-runtime-image-entry-count-invalid");
         for (const auto entry : image.entry_offsets) {
-            if ((entry & 1u) != 0u || entry >= image.bytes.size() ||
+            if ((entry & 1u) != 0u || entry >= image.byte_size ||
                 (!first_entry && entry <= previous_entry))
                 throw std::invalid_argument(
                     "game-project-runtime-image-entry-offset-invalid");
@@ -631,11 +625,11 @@ void validate_game_project_definition(
         runtime_image_ids.push_back(image.image_id);
         runtime_image_source_ranges.push_back(
             {source_physical, static_cast<std::uint64_t>(source_physical) +
-                                  image.bytes.size()});
+                                  image.byte_size});
         runtime_image_runtime_ranges.push_back(
             {runtime_physical,
              static_cast<std::uint64_t>(runtime_physical) +
-                 image.bytes.size()});
+                 image.byte_size});
     }
     std::sort(runtime_image_ids.begin(), runtime_image_ids.end());
     if (std::adjacent_find(
@@ -856,7 +850,7 @@ std::string game_project_definition_identity(
         material << "runtime-image:" << image.image_id.size() << ':'
                  << image.image_id << ':' << image.byte_identity << ':'
                  << image.source_start << ':' << image.runtime_start << ':'
-                 << image.bytes.size() << ':' << image.entry_offsets.size()
+                 << image.byte_size << ':' << image.entry_offsets.size()
                  << ':';
         for (const auto entry : image.entry_offsets)
             material << entry << ',';

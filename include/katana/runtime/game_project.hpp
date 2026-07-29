@@ -16,7 +16,7 @@ namespace katana::runtime {
 
 class PlatformServices;
 
-inline constexpr std::uint32_t game_project_contract_version = 4u;
+inline constexpr std::uint32_t game_project_contract_version = 5u;
 
 enum class RequiredProductMilestone : std::uint8_t {
     BootExecutableEntry,
@@ -127,16 +127,18 @@ struct GameProjectCodeIdentity {
     std::string_view byte_identity;
 };
 
-// Identity-bound external runtime image. The source range describes the
-// linked image address while runtime_start describes the direct-mapped guest
-// destination. Runtime entry points are offsets into bytes and never inferred
-// from mutable guest memory.
+// Identity-bound external runtime-image descriptor. The source range
+// describes the linked image address while runtime_start describes the
+// direct-mapped guest destination. Retail bytes are supplied privately to the
+// exporter and are never owned by this persistent project contract. Runtime
+// entry points are offsets into byte_size and never inferred from mutable
+// guest memory.
 struct GameProjectRuntimeImage {
     std::string_view image_id;
     std::string_view byte_identity;
     std::uint32_t source_start = 0u;
     std::uint32_t runtime_start = 0u;
-    std::span<const std::uint8_t> bytes;
+    std::uint32_t byte_size = 0u;
     std::span<const std::uint32_t> entry_offsets;
 };
 

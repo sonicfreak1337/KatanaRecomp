@@ -357,9 +357,8 @@ serialize_definition(const GameProjectDefinition& definition) {
         writer.u32(image.source_start);
         writer.u32(image.runtime_start);
         writer.u32(checked_count(
-            image.bytes.size(),
+            image.byte_size,
             artifact_maximum_runtime_image_size));
-        writer.raw(image.bytes);
         writer.u32(checked_count(
             image.entry_offsets.size(),
             artifact_maximum_runtime_image_entries));
@@ -580,7 +579,6 @@ void GameProjectArtifact::rebuild_definition() {
         code_identity_values_.size() != code_identities_.size() ||
         runtime_image_ids_.size() != runtime_images_.size() ||
         runtime_image_byte_identities_.size() != runtime_images_.size() ||
-        runtime_image_bytes_.size() != runtime_images_.size() ||
         runtime_image_entry_offsets_.size() != runtime_images_.size())
         artifact_error("Game-project artifact ownership is inconsistent.");
 
@@ -601,7 +599,6 @@ void GameProjectArtifact::rebuild_definition() {
         runtime_images_[index].image_id = runtime_image_ids_[index];
         runtime_images_[index].byte_identity =
             runtime_image_byte_identities_[index];
-        runtime_images_[index].bytes = runtime_image_bytes_[index];
         runtime_images_[index].entry_offsets =
             runtime_image_entry_offsets_[index];
     }
@@ -761,7 +758,6 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
     result->runtime_image_ids_.reserve(runtime_image_count);
     result->runtime_image_byte_identities_.reserve(
         runtime_image_count);
-    result->runtime_image_bytes_.reserve(runtime_image_count);
     result->runtime_image_entry_offsets_.reserve(
         runtime_image_count);
     result->runtime_images_.reserve(runtime_image_count);
@@ -775,17 +771,14 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
             reader.string(artifact_maximum_identity_size));
         image.source_start = reader.u32();
         image.runtime_start = reader.u32();
-        const auto byte_count =
+        image.byte_size =
             reader.count(artifact_maximum_runtime_image_size);
-        if (byte_count >
+        if (image.byte_size >
             artifact_maximum_runtime_image_total_size -
                 runtime_image_total_size)
             artifact_error(
                 "Game-project artifact runtime images exceed their total size limit.");
-        runtime_image_total_size += byte_count;
-        const auto image_bytes = reader.take(byte_count);
-        result->runtime_image_bytes_.emplace_back(
-            image_bytes.begin(), image_bytes.end());
+        runtime_image_total_size += image.byte_size;
         const auto entry_count =
             reader.count(artifact_maximum_runtime_image_entries);
         auto& entry_offsets =

@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -159,8 +160,11 @@ int main() {
             "Ein Continue-Hook darf den bereits validierten Gast-PC nicht "
             "unter dem Dispatcher veraendern.");
 
-    const std::array<std::uint8_t, 8u> runtime_image_bytes{
-        0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+    const std::array<std::uint8_t, 32u> runtime_image_bytes{
+        'K', 'A', 'T', 'A', 'N', 'A', '-', 'R',
+        'E', 'T', 'A', 'I', 'L', '-', 'P', 'A',
+        'Y', 'L', 'O', 'A', 'D', '-', 'N', 'O',
+        'T', '-', 'P', 'U', 'B', 'L', 'I', 'C'};
     const std::array<std::uint32_t, 2u> runtime_image_entries{0u, 4u};
     const auto runtime_image_hash =
         std::string("sha256:") + io::sha256_bytes(std::string_view(
@@ -172,7 +176,7 @@ int main() {
             runtime_image_hash,
             0x8C1E5300u,
             0x8C900000u,
-            runtime_image_bytes,
+            static_cast<std::uint32_t>(runtime_image_bytes.size()),
             runtime_image_entries}};
     runtime::GameProjectDefinition artifact_project;
     artifact_project.project_id = "runtime-image-artifact-regression";
@@ -183,7 +187,7 @@ int main() {
         runtime::game_project_definition_identity(artifact_project);
     const auto artifact_path =
         std::filesystem::temp_directory_path() /
-        "katana-v4-runtime-image.katana-game-project";
+        "katana-v5-runtime-image.katana-game-project";
     const auto artifact =
         runtime::GameProjectArtifact::write(artifact_path, artifact_project);
     const auto& roundtrip_images = artifact->definition().runtime_images;
@@ -194,11 +198,9 @@ int main() {
                     runtime_image_hash &&
                 roundtrip_images.front().source_start == 0x8C1E5300u &&
                 roundtrip_images.front().runtime_start == 0x8C900000u &&
-                std::equal(
-                    roundtrip_images.front().bytes.begin(),
-                    roundtrip_images.front().bytes.end(),
-                    runtime_image_bytes.begin(),
-                    runtime_image_bytes.end()) &&
+                roundtrip_images.front().byte_size ==
+                    static_cast<std::uint32_t>(
+                        runtime_image_bytes.size()) &&
                 std::equal(
                     roundtrip_images.front().entry_offsets.begin(),
                     roundtrip_images.front().entry_offsets.end(),
@@ -206,20 +208,41 @@ int main() {
                     runtime_image_entries.end()) &&
                 runtime::game_project_definition_identity(
                     artifact->definition()) == definition_identity,
-            "Runtime-Image verliert Bytes, Entries oder v4-Identitaet beim "
+            "Runtime-Image verliert Groesse, Entries oder v5-Identitaet beim "
             "Artifact-Roundtrip.");
+    std::ifstream artifact_input(artifact_path, std::ios::binary);
+    require(static_cast<bool>(artifact_input),
+            "Runtime-Image-Artifact kann nicht erneut gelesen werden.");
+    const std::string artifact_bytes{
+        std::istreambuf_iterator<char>(artifact_input),
+        std::istreambuf_iterator<char>()};
+    const std::string private_runtime_image(
+        reinterpret_cast<const char*>(runtime_image_bytes.data()),
+        runtime_image_bytes.size());
+    require(artifact_bytes.find(private_runtime_image) == std::string::npos,
+            "Runtime-Image-Artifact serialisiert private Retailbytes.");
+    artifact_input.close();
     std::filesystem::remove(artifact_path);
 
-    auto mismatched_runtime_image = runtime_images.front();
-    mismatched_runtime_image.byte_identity =
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-    const std::array mismatched_runtime_images{mismatched_runtime_image};
-    artifact_project.runtime_images = mismatched_runtime_images;
+    auto invalid_runtime_image = runtime_images.front();
+    invalid_runtime_image.byte_size = 0u;
+    const std::array invalid_runtime_images{invalid_runtime_image};
+    artifact_project.runtime_images = invalid_runtime_images;
     require(throws<std::invalid_argument>([&] {
                 runtime::validate_game_project_definition(
                     artifact_project);
             }),
-            "Runtime-Image mit falscher Byteidentitaet wird akzeptiert.");
+            "Runtime-Image ohne deklarierte Bytelaenge wird akzeptiert.");
+
+    auto ambiguous_runtime_image = runtime_images.front();
+    ambiguous_runtime_image.image_id = "runtime=image";
+    const std::array ambiguous_runtime_images{ambiguous_runtime_image};
+    artifact_project.runtime_images = ambiguous_runtime_images;
+    require(throws<std::invalid_argument>([&] {
+                runtime::validate_game_project_definition(
+                    artifact_project);
+            }),
+            "Runtime-Image-ID darf das CLI-Trennzeichen nicht enthalten.");
 
     std::cout << "BIOS-freier Dreamcast-Homebrew-Boot erfolgreich.\n";
 }

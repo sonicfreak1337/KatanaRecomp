@@ -54,6 +54,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -1262,9 +1263,31 @@ void require_optimized_msvc_relwithdebinfo(const std::filesystem::path& build_ro
 
 bool path_is_within(const std::filesystem::path& path,
                     const std::filesystem::path& root) {
-    const auto relative = path.lexically_relative(root);
-    return !relative.empty() && !relative.is_absolute() &&
-           *relative.begin() != "..";
+    const auto normalized_path = path.lexically_normal();
+    const auto normalized_root = root.lexically_normal();
+    if (normalized_path.empty() || normalized_root.empty())
+        return false;
+    auto path_component = normalized_path.begin();
+    auto root_component = normalized_root.begin();
+    for (; root_component != normalized_root.end();
+         ++root_component, ++path_component) {
+        if (path_component == normalized_path.end())
+            return false;
+#ifdef _WIN32
+        const auto left = path_component->native();
+        const auto right = root_component->native();
+        if (CompareStringOrdinal(left.c_str(),
+                                 static_cast<int>(left.size()),
+                                 right.c_str(),
+                                 static_cast<int>(right.size()),
+                                 TRUE) != CSTR_EQUAL)
+            return false;
+#else
+        if (*path_component != *root_component)
+            return false;
+#endif
+    }
+    return true;
 }
 
 inline constexpr std::uint32_t port_export_cache_version = 6u;
@@ -1957,6 +1980,66 @@ int extract_boot_executable_artifact(
     return 0;
 }
 
+using RuntimeImagePayloadArgument =
+    std::pair<std::string, std::filesystem::path>;
+
+std::vector<std::uint8_t> load_runtime_image_payload(
+    const std::filesystem::path& path,
+    const std::uint32_t expected_size,
+    const std::filesystem::path& source_root) {
+    if (path.empty() || expected_size == 0u)
+        throw std::invalid_argument(
+            "Runtime-Image-Payloadpfad oder erwartete Groesse ist leer.");
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(path, status_error);
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status))
+        throw std::invalid_argument(
+            "Runtime-Image-Payload muss eine regulaere Nicht-Symlink-Datei sein.");
+    const auto canonical =
+        std::filesystem::canonical(path, status_error);
+    if (status_error)
+        throw std::invalid_argument(
+            "Runtime-Image-Payloadpfad kann nicht kanonisiert werden.");
+    if (!source_root.empty() &&
+        path_is_within(
+            canonical,
+            std::filesystem::canonical(source_root)))
+        throw std::invalid_argument(
+            "Private Runtime-Image-Payloadbytes duerfen nicht im "
+            "KatanaRecomp-Quellbaum liegen.");
+    if (std::filesystem::file_size(canonical, status_error) !=
+            expected_size ||
+        status_error)
+        throw std::invalid_argument(
+            "Runtime-Image-Payloadgroesse passt nicht zum Deskriptor.");
+    std::ifstream input(canonical, std::ios::binary | std::ios::ate);
+    if (!input || input.tellg() !=
+                      static_cast<std::streamoff>(expected_size))
+        throw std::runtime_error(
+            "Runtime-Image-Payload kann nicht stabil geoeffnet werden.");
+    std::vector<std::uint8_t> bytes(expected_size);
+    input.seekg(0, std::ios::beg);
+    input.read(
+        reinterpret_cast<char*>(bytes.data()),
+        static_cast<std::streamsize>(bytes.size()));
+    if (!input)
+        throw std::runtime_error(
+            "Runtime-Image-Payload kann nicht gelesen werden.");
+    input.close();
+    const auto final_status =
+        std::filesystem::symlink_status(canonical, status_error);
+    if (status_error || !std::filesystem::is_regular_file(final_status) ||
+        std::filesystem::is_symlink(final_status) ||
+        std::filesystem::file_size(canonical, status_error) !=
+            expected_size ||
+        status_error)
+        throw std::runtime_error(
+            "Runtime-Image-Payload wurde waehrend des Lesens veraendert.");
+    return bytes;
+}
+
 int export_port_project(const std::filesystem::path& source_path,
                         const std::filesystem::path& output_path,
                         const std::string& target_name,
@@ -1966,7 +2049,9 @@ int export_port_project(const std::filesystem::path& source_path,
                         const std::optional<std::filesystem::path>&
                             game_project_path = std::nullopt,
                         const std::optional<std::filesystem::path>&
-                            game_entry_handoff_path = std::nullopt) {
+                            game_entry_handoff_path = std::nullopt,
+                        const std::vector<RuntimeImagePayloadArgument>&
+                            runtime_image_payload_arguments = {}) {
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_binding = discover_runtime_binding_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
@@ -2011,6 +2096,10 @@ int export_port_project(const std::filesystem::path& source_path,
         verified_game_project;
     std::optional<katana::runtime::GameProjectDefinition>
         resolved_game_project;
+    std::vector<std::vector<std::uint8_t>>
+        runtime_image_payload_storage;
+    std::vector<katana::codegen::GameProjectRuntimeImagePayload>
+        runtime_image_payloads;
     std::optional<std::string> whole_export_cache_key;
     std::string whole_export_source_kind;
     std::uint32_t whole_export_source_contract_version = 0u;
@@ -2027,6 +2116,11 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--game-entry-handoff ist ausschliesslich fuer "
             "port-executable-Produktports erlaubt.");
+    if (!runtime_image_payload_arguments.empty() &&
+        (!game_project_path.has_value() || diagnostic_partial))
+        throw std::invalid_argument(
+            "--runtime-image-payload braucht einen vollstaendigen "
+            "Produktport mit --game-project.");
     std::cout << "KATANA_PORT_PHASE analysis-codegen\n";
     if (!whole_export_cache_enabled)
         std::cout
@@ -2161,6 +2255,59 @@ int export_port_project(const std::filesystem::path& source_path,
             throw std::invalid_argument(
                 "Game-project artifact passt nicht exakt zum Produktport.");
     }
+    runtime_image_payload_storage.reserve(
+        runtime_image_payload_arguments.size());
+    for (std::size_t index = 0u;
+         index < runtime_image_payload_arguments.size();
+         ++index) {
+        const auto& [image_id, payload_path] =
+            runtime_image_payload_arguments[index];
+        if (image_id.empty())
+            throw std::invalid_argument(
+                "--runtime-image-payload besitzt keine Image-ID.");
+        if (std::any_of(
+                runtime_image_payload_arguments.begin(),
+                runtime_image_payload_arguments.begin() +
+                    static_cast<std::ptrdiff_t>(index),
+                [&](const auto& previous) {
+                    return previous.first == image_id;
+                }))
+            throw std::invalid_argument(
+                "--runtime-image-payload wurde fuer dieselbe Image-ID "
+                "mehrfach angegeben.");
+        if (!resolved_game_project.has_value())
+            throw std::invalid_argument(
+                "--runtime-image-payload besitzt kein Game-Project.");
+        const auto descriptor = std::find_if(
+            resolved_game_project->runtime_images.begin(),
+            resolved_game_project->runtime_images.end(),
+            [&](const auto& candidate) {
+                return candidate.image_id == image_id;
+            });
+        if (descriptor ==
+            resolved_game_project->runtime_images.end())
+            throw std::invalid_argument(
+                "--runtime-image-payload verweist auf keine deklarierte "
+                "Runtime-Image-ID.");
+        runtime_image_payload_storage.push_back(
+            load_runtime_image_payload(
+                payload_path,
+                descriptor->byte_size,
+                source_root));
+    }
+    runtime_image_payloads.reserve(
+        runtime_image_payload_arguments.size());
+    for (std::size_t index = 0u;
+         index < runtime_image_payload_arguments.size();
+         ++index)
+        runtime_image_payloads.push_back(
+            {runtime_image_payload_arguments[index].first,
+             runtime_image_payload_storage[index]});
+    katana::codegen::validate_game_project_runtime_image_payloads(
+        resolved_game_project.has_value()
+            ? &*resolved_game_project
+            : nullptr,
+        runtime_image_payloads);
     const auto game_project_definition_identity =
         resolved_game_project.has_value()
             ? katana::runtime::game_project_definition_identity(
@@ -2214,6 +2361,8 @@ int export_port_project(const std::filesystem::path& source_path,
             resolved_game_project.has_value()
                 ? &*resolved_game_project
                 : nullptr;
+        export_options.game_project_runtime_image_payloads =
+            runtime_image_payloads;
         katana::codegen::PortExportResult report;
         bool whole_export_cache_hit = false;
         if (whole_export_cache_key) {
@@ -2507,12 +2656,14 @@ void print_usage(std::ostream& output) {
               "<privater-Ordner>\n"
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
-              "[--game-project <privates-Artefakt>]\n"
+              "[--game-project <Descriptor-Artefakt>] "
+              "[--runtime-image-payload <Image-ID>=<private-Datei>]...\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <...>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
               "--target-name <Name> [--console-profile <...>] "
-              "[--game-project <privates-Artefakt>] "
+              "[--game-project <Descriptor-Artefakt>] "
+              "[--runtime-image-payload <Image-ID>=<private-Datei>]... "
               "[--game-entry-handoff <privates-Artefakt>]\n"
            << "  katana-recomp probe-port-executable <boot.katana-executable> --output "
               "<Ordner> --target-name <Name> [--console-profile <...>]\n\n"
@@ -2682,7 +2833,7 @@ int main(const int argc, char* argv[]) {
 
         const auto port_command =
             argc >= 2 ? std::string_view(argv[1]) : std::string_view{};
-        if (argc >= 7 && argc <= 13 && (argc & 1) == 1 &&
+        if (argc >= 7 && (argc & 1) == 1 &&
             (port_command == "port" || port_command == "probe-port" ||
              port_command == "port-executable" ||
              port_command == "probe-port-executable")) {
@@ -2697,6 +2848,8 @@ int main(const int argc, char* argv[]) {
             std::optional<std::filesystem::path>
                 game_entry_handoff_path;
             std::optional<std::filesystem::path> game_project_path;
+            std::vector<RuntimeImagePayloadArgument>
+                runtime_image_payload_arguments;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             for (std::size_t argument = 3u; argument < static_cast<std::size_t>(argc);
@@ -2720,6 +2873,23 @@ int main(const int argc, char* argv[]) {
                            !game_project_path.has_value()) {
                     game_project_path =
                         std::filesystem::path(argv[argument + 1u]);
+                } else if (
+                    option == "--runtime-image-payload" &&
+                    (port_command == "port" ||
+                     port_command == "port-executable")) {
+                    const std::string_view binding =
+                        argv[argument + 1u];
+                    const auto separator = binding.find('=');
+                    if (separator == 0u ||
+                        separator == std::string_view::npos ||
+                        separator + 1u >= binding.size())
+                        throw std::invalid_argument(
+                            "--runtime-image-payload erwartet "
+                            "<Image-ID>=<private-Datei>.");
+                    runtime_image_payload_arguments.emplace_back(
+                        std::string(binding.substr(0u, separator)),
+                        std::filesystem::path(
+                            std::string(binding.substr(separator + 1u))));
                 } else {
                     throw std::invalid_argument(
                         "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
@@ -2736,7 +2906,8 @@ int main(const int argc, char* argv[]) {
                                        console_profile,
                                        boot_executable_artifact,
                                        game_project_path,
-                                       game_entry_handoff_path);
+                                       game_entry_handoff_path,
+                                       runtime_image_payload_arguments);
         }
 
         if ((argc == 3 || argc == 4) &&
