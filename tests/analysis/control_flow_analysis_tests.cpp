@@ -546,7 +546,7 @@ int main() {
             "Gespeicherter Codepointer erreichte das native IR-Inventar nicht.");
 
     const auto tail_registered_callback_image = [] {
-        std::vector<std::uint8_t> bytes(0x90u, 0x09u);
+        std::vector<std::uint8_t> bytes(0xD0u, 0x09u);
         const auto put_u32 = [&bytes](const std::size_t offset, const std::uint32_t value) {
             bytes[offset] = static_cast<std::uint8_t>(value);
             bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
@@ -608,6 +608,31 @@ int main() {
         bytes[0x82u] = 0x09u;
         bytes[0x83u] = 0x00u; // nop (delay)
 
+        bytes[0x90u] = 0x03u;
+        bytes[0x91u] = 0xD4u; // mov.l @(0xA0,pc),r4 -> callback 0xB0
+        bytes[0x92u] = 0x04u;
+        bytes[0x93u] = 0xD2u; // mov.l @(0xA4,pc),r2 -> registrar 0xC0
+        bytes[0x94u] = 0x2Bu;
+        bytes[0x95u] = 0x42u; // jmp @r2
+        bytes[0x96u] = 0x09u;
+        bytes[0x97u] = 0x00u; // nop (delay)
+        put_u32(0xA0u, 0xB0u);
+        put_u32(0xA4u, 0xC0u);
+
+        bytes[0xB0u] = 0x0Bu;
+        bytes[0xB1u] = 0x00u; // direct tail argument callback: rts
+        bytes[0xB2u] = 0x09u;
+        bytes[0xB3u] = 0x00u; // nop (delay)
+
+        bytes[0xC0u] = 0x62u;
+        bytes[0xC1u] = 0x62u; // mov.l @r6,r2 (runtime object)
+        bytes[0xC2u] = 0x42u;
+        bytes[0xC3u] = 0x22u; // mov.l r4,@r2
+        bytes[0xC4u] = 0x0Bu;
+        bytes[0xC5u] = 0x00u; // rts
+        bytes[0xC6u] = 0x09u;
+        bytes[0xC7u] = 0x00u; // nop (delay)
+
         katana::io::ExecutableImage image;
         image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
         image.set_initial_snapshot_policy(
@@ -623,6 +648,7 @@ int main() {
                            katana::io::ImageLoadPhase::Initial,
                            "synthetic-tail-registered-callback"});
         image.add_entry_point(0u);
+        image.add_entry_point(0x90u);
         return image;
     };
     const auto tail_registered_callback =
@@ -642,6 +668,31 @@ int main() {
                 has_instruction(tail_registered_callback, 0x70u) &&
                 has_instruction(tail_registered_callback, 0x80u),
             "Callbackprovenienz ging ueber einen terminalen Tail-Jump verloren.");
+    const auto* direct_tail_argument =
+        find_function(tail_registered_callback, 0xB0u);
+    const auto direct_tail_transfer = std::find_if(
+        tail_registered_callback.indirect_control_flow.begin(),
+        tail_registered_callback.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x94u;
+        });
+    require(
+        direct_tail_argument != nullptr &&
+            direct_tail_argument->origins ==
+                std::vector{
+                    katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+            direct_tail_argument->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedPartial &&
+            direct_tail_transfer !=
+                tail_registered_callback.indirect_control_flow.end() &&
+            direct_tail_transfer->evidence ==
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            direct_tail_transfer->targets.empty() &&
+            direct_tail_transfer->analysis_candidates ==
+                std::vector<std::uint32_t>{0xC0u},
+        "Direkt vor einem Candidate-Tail geladener ABI-Codepointer wurde "
+        "nicht bis zum Registrarstore inventarisiert oder der Live-Tail "
+        "wurde als feste CFG-Kante eingefroren.");
     require(tail_transfer != tail_registered_callback.indirect_control_flow.end() &&
                 tail_transfer->kind == katana::analysis::IndirectControlFlowKind::Jump &&
                 tail_transfer->status == katana::analysis::ResolutionStatus::Unresolved &&

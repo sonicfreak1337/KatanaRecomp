@@ -111,6 +111,11 @@ struct AbstractValue {
     // boundary as a finite, decode-valid address.  Generic call-site
     // provenance is deliberately not strong enough for this purpose.
     bool inventory_code_pointer = false;
+    // Inventory-only evidence that this value came from a 32-bit PC-relative
+    // image literal and already denoted a decode-valid native-code candidate.
+    // It is not a code-pointer proof by itself; a real call/tail ABI boundary
+    // must still promote it.
+    bool inventory_pc_relative_code_literal = false;
     std::vector<std::uint32_t> values;
     std::set<std::uint32_t> call_sites;
     std::set<std::uint32_t> callees;
@@ -194,6 +199,7 @@ struct IndirectCalleeCandidates {
     bool guarded = false;
     bool complete = true;
     bool requires_code_pointer = false;
+    bool observes_abi_arguments = false;
 };
 
 struct CandidateInput {
@@ -554,6 +560,7 @@ void make_unknown(AbstractValue& value) {
     value.complete = false;
     value.inventory_stack_derived = false;
     value.inventory_code_pointer = false;
+    value.inventory_pc_relative_code_literal = false;
     value.values.clear();
     value.call_sites.clear();
     value.callees.clear();
@@ -562,11 +569,15 @@ void make_unknown(AbstractValue& value) {
 void make_unknown_preserving_provenance(AbstractValue& value) {
     const auto inventory_stack_derived = value.inventory_stack_derived;
     const auto inventory_code_pointer = value.inventory_code_pointer;
+    const auto inventory_pc_relative_code_literal =
+        value.inventory_pc_relative_code_literal;
     auto call_sites = std::move(value.call_sites);
     auto callees = std::move(value.callees);
     make_unknown(value);
     value.inventory_stack_derived = inventory_stack_derived;
     value.inventory_code_pointer = inventory_code_pointer;
+    value.inventory_pc_relative_code_literal =
+        inventory_pc_relative_code_literal;
     value.call_sites = std::move(call_sites);
     value.callees = std::move(callees);
 }
@@ -577,6 +588,7 @@ void set_value(AbstractValue& value, const std::uint32_t constant) {
     value.complete = true;
     value.inventory_stack_derived = false;
     value.inventory_code_pointer = false;
+    value.inventory_pc_relative_code_literal = false;
     value.values = {constant};
     value.call_sites.clear();
     value.callees.clear();
@@ -587,6 +599,9 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         destination.inventory_stack_derived || source.inventory_stack_derived;
     const bool inventory_code_pointer =
         destination.inventory_code_pointer || source.inventory_code_pointer;
+    const bool inventory_pc_relative_code_literal =
+        destination.inventory_pc_relative_code_literal &&
+        source.inventory_pc_relative_code_literal;
     if (!destination.known || !source.known) {
         auto call_sites = destination.call_sites;
         call_sites.insert(source.call_sites.begin(), source.call_sites.end());
@@ -597,6 +612,8 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
                                  inventory_stack_derived ||
                              destination.inventory_code_pointer !=
                                  inventory_code_pointer ||
+                             destination.inventory_pc_relative_code_literal !=
+                                 inventory_pc_relative_code_literal ||
                              !destination.values.empty() ||
                              call_sites != destination.call_sites ||
                              callees != destination.callees;
@@ -605,6 +622,8 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         destination.complete = false;
         destination.inventory_stack_derived = inventory_stack_derived;
         destination.inventory_code_pointer = inventory_code_pointer;
+        destination.inventory_pc_relative_code_literal =
+            inventory_pc_relative_code_literal;
         destination.values.clear();
         destination.call_sites = std::move(call_sites);
         destination.callees = std::move(callees);
@@ -626,6 +645,12 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     }
     if (destination.inventory_code_pointer != inventory_code_pointer) {
         destination.inventory_code_pointer = inventory_code_pointer;
+        changed = true;
+    }
+    if (destination.inventory_pc_relative_code_literal !=
+        inventory_pc_relative_code_literal) {
+        destination.inventory_pc_relative_code_literal =
+            inventory_pc_relative_code_literal;
         changed = true;
     }
     auto values = destination.values;
@@ -809,6 +834,7 @@ void apply_binary(AbstractValue& destination,
                 destination.inventory_stack_derived = inventory_stack_derived;
                 make_unknown_preserving_provenance(destination);
                 destination.inventory_code_pointer = false;
+                destination.inventory_pc_relative_code_literal = false;
                 return;
             }
         }
@@ -819,10 +845,12 @@ void apply_binary(AbstractValue& destination,
     destination.complete = destination.complete && source.complete;
     destination.inventory_stack_derived = inventory_stack_derived;
     destination.inventory_code_pointer = false;
+    destination.inventory_pc_relative_code_literal = false;
 }
 
 template <typename Operation> void apply_unary(AbstractValue& value, Operation operation) {
     value.inventory_code_pointer = false;
+    value.inventory_pc_relative_code_literal = false;
     if (!value.known) return;
     for (auto& candidate : value.values)
         candidate = operation(candidate);
@@ -1033,6 +1061,7 @@ void adjust_stack_offset(AbstractState& state,
                          const std::uint8_t register_index,
                          const std::int32_t delta) {
     state[register_index].inventory_code_pointer = false;
+    state[register_index].inventory_pc_relative_code_literal = false;
     if (state.stack_offsets[register_index].has_value()) {
         const auto adjusted =
             static_cast<std::int64_t>(*state.stack_offsets[register_index]) + delta;
@@ -1264,6 +1293,8 @@ void apply_transfer(AbstractState& state,
         state[instruction.destination_register].complete = true;
         state[instruction.destination_register].inventory_stack_derived = false;
         state[instruction.destination_register].inventory_code_pointer = false;
+        state[instruction.destination_register]
+            .inventory_pc_relative_code_literal = false;
         state[instruction.destination_register].values = {0u, 1u};
         state[instruction.destination_register].call_sites.clear();
         state[instruction.destination_register].callees.clear();
@@ -1289,6 +1320,13 @@ void apply_transfer(AbstractState& state,
                            {base + static_cast<std::uint32_t>(instruction.displacement)},
                            width,
                            image);
+        auto& loaded = state[instruction.destination_register];
+        loaded.inventory_pc_relative_code_literal =
+            width == 4u && loaded.known && !loaded.values.empty() &&
+            loaded.values.size() <= maximum_summary_values &&
+            std::ranges::all_of(loaded.values, [&](const auto candidate) {
+                return validate_decode_candidate(image, candidate).valid();
+            });
         state.stack_offsets[instruction.destination_register].reset();
         state.stack_may_alias[instruction.destination_register] =
             !state[instruction.destination_register].known;
@@ -1592,6 +1630,46 @@ const FunctionRegisterValueSummary* register_summary(const FunctionValueSummary&
     return found == summary.registers.end() ? nullptr : &*found;
 }
 
+void mark_observed_code_pointer_arguments(
+    const katana::io::ExecutableImage& image,
+    AbstractState& observation) {
+    // This provenance belongs to the value passed in an ABI argument register,
+    // not to an address used to load that value.  Loads deliberately do not
+    // inherit it from their address operand.
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        auto& value = observation[index];
+        if (!value.known || value.values.empty() ||
+            value.values.size() > maximum_summary_values ||
+            !std::ranges::all_of(value.values, [&](const auto candidate) {
+                return validate_decode_candidate(image, candidate).valid();
+            }))
+            continue;
+        value.inventory_code_pointer = true;
+    }
+}
+
+void promote_tail_code_literal_arguments(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t transfer_site,
+    AbstractState& observation) {
+    // A directly loaded PC-relative image literal is substantially narrower
+    // evidence than an arbitrary decode-looking object field.  Promote only
+    // that provenance when the control-flow inventory has independently
+    // established a real tail-call ABI boundary.
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        auto& value = observation[index];
+        if (!value.inventory_pc_relative_code_literal || !value.known ||
+            value.values.empty() ||
+            value.values.size() > maximum_summary_values ||
+            !std::ranges::all_of(value.values, [&](const auto candidate) {
+                return validate_decode_candidate(image, candidate).valid();
+            }))
+            continue;
+        value.inventory_code_pointer = true;
+        value.call_sites.insert(transfer_site);
+    }
+}
+
 void observe_callee_arguments(
     const katana::io::ExecutableImage& image,
     const AbstractState& state,
@@ -1607,19 +1685,7 @@ void observe_callee_arguments(
     observation.inventory_stack_may_alias = state.inventory_stack_may_alias;
     observation.inventory_vbr_relative = state.inventory_vbr_relative;
     observation.memory_values = state.memory_values;
-    // This provenance belongs to the value passed in an ABI argument register,
-    // not to an address used to load that value.  Loads deliberately do not
-    // inherit it from their address operand.
-    for (std::uint8_t index = 4u; index <= 7u; ++index) {
-        auto& value = observation[index];
-        if (!value.known || value.values.empty() ||
-            value.values.size() > maximum_summary_values ||
-            !std::ranges::all_of(value.values, [&](const auto candidate) {
-                return validate_decode_candidate(image, candidate).valid();
-            }))
-            continue;
-        value.inventory_code_pointer = true;
-    }
+    mark_observed_code_pointer_arguments(image, observation);
     // Caller-local stack slots are not part of callee ingress.  Keeping
     // them in observations only deep-copied irrelevant state and could
     // requeue a callee when the effective merged input was unchanged.
@@ -1648,9 +1714,13 @@ void observe_inventory_transfers(
     const bool guarded,
     const bool complete,
     const bool requires_code_pointer,
+    const bool observes_abi_arguments,
     std::vector<FunctionEvaluation::InventoryTransfer>* const transfers) {
     if (transfers == nullptr || candidate_callees.empty()) return;
     auto observation = state;
+    if (observes_abi_arguments)
+        promote_tail_code_literal_arguments(
+            image, transfer_site, observation);
     bool found_code_pointer = false;
     const auto observe_code_pointer = [&](const AbstractValue& value) {
         if (!value.inventory_code_pointer || !value.known ||
@@ -2254,6 +2324,7 @@ FunctionEvaluation evaluate_function(
             bool candidate_callees_guarded = true;
             bool candidate_callees_complete = false;
             bool requires_code_pointer = false;
+            bool observes_abi_arguments = false;
         };
         std::optional<DelayedTailIngress> delayed_tail_ingress;
         for (const auto& line : block->second->lines) {
@@ -2331,9 +2402,15 @@ FunctionEvaluation evaluate_function(
                         std::move(returned_tables));
                 }
             }
-            if (!call)
+            if (!call) {
+                const auto tail_ingress = tail_ingresses.find(line.address);
+                if (tail_ingress != tail_ingresses.end() &&
+                    tail_ingress->second.observes_abi_arguments)
+                    promote_tail_code_literal_arguments(
+                        image, line.address, state);
                 apply_transfer(
                     state, line, image, may_merge_stack_inventory);
+            }
             if (delayed_call.has_value()) {
                 apply_call(state,
                            image,
@@ -2357,6 +2434,7 @@ FunctionEvaluation evaluate_function(
                     delayed_tail_ingress->candidate_callees_guarded,
                     delayed_tail_ingress->candidate_callees_complete,
                     delayed_tail_ingress->requires_code_pointer,
+                    delayed_tail_ingress->observes_abi_arguments,
                     inventory_transfers);
                 delayed_tail_ingress.reset();
             }
@@ -2411,7 +2489,8 @@ FunctionEvaluation evaluate_function(
                         tail_ingress->second.targets,
                         tail_ingress->second.guarded,
                         tail_ingress->second.complete,
-                        tail_ingress->second.requires_code_pointer};
+                        tail_ingress->second.requires_code_pointer,
+                        tail_ingress->second.observes_abi_arguments};
                 } else {
                     observe_inventory_transfers(image,
                                                 state,
@@ -2420,6 +2499,8 @@ FunctionEvaluation evaluate_function(
                                                 tail_ingress->second.guarded,
                                                 tail_ingress->second.complete,
                                                 tail_ingress->second.requires_code_pointer,
+                                                tail_ingress->second
+                                                    .observes_abi_arguments,
                                                 inventory_transfers);
                 }
             }
@@ -2571,6 +2652,7 @@ bool merge_candidate_input(CandidateInput& destination,
         bool inventory_may_alias_stack = false;
         bool inventory_stack_derived = false;
         bool inventory_code_pointer = false;
+        bool inventory_pc_relative_code_literal = true;
         bool inventory_vbr_relative = true;
         std::optional<std::int32_t> stack_offset;
         std::set<std::uint32_t> call_sites;
@@ -2589,6 +2671,9 @@ bool merge_candidate_input(CandidateInput& destination,
                 inventory_stack_derived || source.inventory_stack_derived;
             inventory_code_pointer =
                 inventory_code_pointer || source.inventory_code_pointer;
+            inventory_pc_relative_code_literal =
+                inventory_pc_relative_code_literal &&
+                source.inventory_pc_relative_code_literal;
             inventory_vbr_relative =
                 inventory_vbr_relative &&
                 call_observation.inventory_vbr_relative[index];
@@ -2622,6 +2707,8 @@ bool merge_candidate_input(CandidateInput& destination,
         if (!all_known || first) make_unknown(target);
         target.inventory_stack_derived = inventory_stack_derived;
         target.inventory_code_pointer = inventory_code_pointer;
+        target.inventory_pc_relative_code_literal =
+            inventory_pc_relative_code_literal;
         target.call_sites = std::move(call_sites);
         target.callees = std::move(callees);
         merged.stack_may_alias[index] = may_alias_stack;
@@ -3101,6 +3188,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         bool guarded = true;
         bool complete = false;
         bool requires_code_pointer = false;
+        bool observes_abi_arguments = false;
     };
     struct InventoryRegion {
         FunctionInfo function;
@@ -3217,7 +3305,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 if (control.target_address.has_value() &&
                     successor == *control.target_address) {
                     local_tail_ingresses.push_back(
-                        {control.address, successor, false, true});
+                        {control.address, successor, false, true, false, true});
                     continue;
                 }
                 const auto candidates =
@@ -3231,7 +3319,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     {control.address,
                      successor,
                      candidates->second.guarded,
-                     candidates->second.complete});
+                     candidates->second.complete,
+                     false,
+                     true});
             }
         }
         if (region_budget_exhausted)
@@ -3269,7 +3359,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                        const std::span<const std::uint32_t> targets,
                                        const bool guarded,
                                        const bool complete,
-                                       const bool requires_code_pointer = false) {
+                                       const bool requires_code_pointer = false,
+                                       const bool observes_abi_arguments = false) {
         if (targets.empty()) return;
         auto accepted = std::vector<std::uint32_t>{};
         accepted.reserve(targets.size());
@@ -3288,10 +3379,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
             inserted ? requires_code_pointer
                      : ingress.requires_code_pointer &&
                            requires_code_pointer;
+        ingress.observes_abi_arguments =
+            ingress.observes_abi_arguments || observes_abi_arguments;
     };
     for (const auto& carrier : candidate_tail_carriers) {
         const std::array target{carrier.target};
-        add_tail_ingress(carrier.transfer_site, target, true, false, true);
+        add_tail_ingress(
+            carrier.transfer_site, target, true, false, true, true);
     }
     for (const auto& [transfer_site, candidates] : indirect_jump_candidates) {
         if (!candidates.guarded || candidates.complete ||
@@ -3309,6 +3403,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                          candidates.targets,
                          candidates.guarded,
                          candidates.complete,
+                         true,
                          true);
     }
     for (const auto& function : functions) {
@@ -3325,7 +3420,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                    function.tail_jump_targets.end(),
                                    *control.target_address)) {
                 const std::array target{*control.target_address};
-                add_tail_ingress(control.address, target, false, true);
+                add_tail_ingress(
+                    control.address, target, false, true, false, true);
             }
             const auto candidates = indirect_jump_candidates.find(control.address);
             if (candidates == indirect_jump_candidates.end()) continue;
@@ -3340,7 +3436,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
             add_tail_ingress(control.address,
                              tail_targets,
                              candidates->second.guarded,
-                             candidates->second.complete);
+                             candidates->second.complete,
+                             false,
+                             true);
         }
     }
     for (const auto& ingress : inventory_region_tail_ingresses) {
@@ -3349,7 +3447,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                          target,
                          ingress.guarded,
                          ingress.complete,
-                         ingress.requires_code_pointer);
+                         ingress.requires_code_pointer,
+                         ingress.observes_abi_arguments);
     }
     for (auto& [transfer_site, ingress] : tail_ingresses) {
         static_cast<void>(transfer_site);

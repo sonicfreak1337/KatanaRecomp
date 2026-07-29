@@ -1,13 +1,14 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag in Quellstand `cb5fb47` ist Version
-`8`. Der Gesamtvertrag dieses Stands verwendet Runtime-ABI 74, Block-ABI 5,
-PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 64,
-Native-AOT-Emissionsprofil 13 und Portpartitionsschema 5. Die reviewten
-Inventar-, Provenienz-, Budget- und Exportvollstaendigkeitsumbauten sind im
-Quellpfad abgeschlossen; der frische ABI-74-Sonic-NativeDisc-Produktnachweis
-ueber 600 Millionen
-Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus.
+Der aktuelle oeffentliche Analyzervertrag ist Version `11`. Der Gesamtvertrag
+dieses Stands verwendet Runtime-ABI 78, Block-ABI 5,
+PlatformServices-ABI 13, Backend-Interface-ABI 12 und Portprojektvertrag 67.
+Analyzer-ABI 11 bindet die engere Provenienz fuer 32-Bit-PC-relative
+Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
+bewachten Codepointerargument machen. Normale Objektfeldloads und bedingte
+Owner-Uebergaenge erhalten diesen Beweis nicht. Damit invalidieren Analyse-,
+IR-, Codegen- und Whole-Export-Caches den alten Bestand, der solche direkt vor
+einem Tail-Registrar geladenen Callbacks noch verlor.
 
 Seine kanonische Quelle ist `KATANA_ANALYZER_ABI_VERSION` in
 `cmake/KatanaVersions.cmake`. CMake uebernimmt den Wert in:
