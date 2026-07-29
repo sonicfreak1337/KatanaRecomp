@@ -48,6 +48,22 @@ int main() {
     auto input =
         std::make_shared<ReplayInputBackend>(std::vector<ControllerState>(16u, state));
     maple->attach(0u, 0u, std::make_shared<MapleControllerDevice>(input));
+    auto vmu = std::make_shared<MapleVmuDevice>();
+    maple->attach(0u, 1u, vmu);
+    require(maple->response_sender_address(0u, 0u) == 0x21u &&
+                maple->response_sender_address(0u, 1u) == 0x01u,
+            "Maple-Hauptgeraet oder Subunit besitzen eine falsche Antwortadresse.");
+    MapleBus port_one_bus;
+    port_one_bus.attach(
+        1u,
+        0u,
+        std::make_shared<MapleControllerDevice>(
+            std::make_shared<ReplayInputBackend>(
+                std::vector<ControllerState>(1u))));
+    port_one_bus.attach(1u, 1u, std::make_shared<MapleVmuDevice>());
+    require(port_one_bus.response_sender_address(1u, 0u) == 0x61u &&
+                port_one_bus.response_sender_address(1u, 1u) == 0x41u,
+            "Maple-Antwortadresse verliert die Portbits.");
     std::uint64_t completions = 0u;
     const auto controller = map_dreamcast_maple_controller(
         memory, scheduler, maple, MapleDmaTiming{10u}, [&] { ++completions; });
@@ -76,7 +92,7 @@ int main() {
                     MapleDmaEventPublicationError::None &&
                 controller->event_publication_failure_count() == 0u,
             "Maple-DMA schliesst nicht einmalig mit Zaehlern und Status ab.");
-    require(memory.read_u32(response) == 0x03200008u &&
+    require(memory.read_u32(response) == 0x03210008u &&
                 memory.read_u32(response + 4u) == 0x01000000u &&
                 (memory.read_u32(response + 8u) &
                  static_cast<std::uint16_t>(ControllerButton::A)) == 0u,
@@ -101,8 +117,8 @@ int main() {
         if (event.address != response && event.address != second_response) return;
         if (multi_response_notifications++ == 0u) {
             first_notification_saw_complete_batch =
-                memory.read_u32(response) == 0x03200008u &&
-                memory.read_u32(second_response) == 0x03200008u;
+                memory.read_u32(response) == 0x03210008u &&
+                memory.read_u32(second_response) == 0x03210008u;
         }
     });
     const auto completions_before_multi_response = completions;
@@ -115,8 +131,8 @@ int main() {
     memory.clear_guest_write_observer();
     require(controller->state() == MapleDmaState::Completed &&
                 completions == completions_before_multi_response + 1u &&
-                memory.read_u32(response) == 0x03200008u &&
-                memory.read_u32(second_response) == 0x03200008u &&
+                memory.read_u32(response) == 0x03210008u &&
+                memory.read_u32(second_response) == 0x03210008u &&
                 controller->transferred_word_count() == 18u &&
                 multi_response_notifications == 2u &&
                 first_notification_saw_complete_batch,
@@ -482,8 +498,26 @@ int main() {
             "Naechste Maple-DMA-Transaktion sieht nicht den letzten gastzeitgebundenen Zustand.");
     }
 
-    maple->attach(0u, 1u, std::make_shared<MapleVmuDevice>());
-    auto persistence_bound = snapshot_dreamcast_maple_state(*maple, *controller);
+    std::vector<std::uint32_t> staged_write(
+        2u + 128u / sizeof(std::uint32_t), 0xA5A5A5A5u);
+    staged_write[0] = vmu_memory_function;
+    staged_write[1] = 7u;
+    require(maple
+                    ->exchange(
+                        0u,
+                        1u,
+                        {MapleCommand::BlockWrite, std::move(staged_write)})
+                    .code == MapleResponseCode::Ack,
+            "Maple-Serialisierungstest kann keine VMU-Schreibphase vormerken.");
+    const auto staged_state =
+        snapshot_dreamcast_maple_state(*maple, *controller);
+    const auto decoded_staged_state =
+        decode_dreamcast_maple_state(
+            encode_dreamcast_maple_state(staged_state));
+    require(decoded_staged_state == staged_state,
+            "Maple-Handoff serialisiert eine VMU-Schreibphase nicht verlustfrei.");
+
+    auto persistence_bound = staged_state;
     persistence_bound.controller.completion_event.reset();
     persistence_bound.controller.completion_event_rehydration_pending = false;
     persistence_bound.controller.pending_responses = {

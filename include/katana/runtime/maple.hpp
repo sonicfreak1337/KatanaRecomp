@@ -20,15 +20,20 @@ inline constexpr std::size_t maple_units_per_port = 6u;
 enum class MapleCommand : std::uint8_t {
     DeviceRequest = 0x01u,
     GetCondition = 0x09u,
+    GetMemoryInformation = 0x0Au,
     BlockRead = 0x0Bu,
-    BlockWrite = 0x0Cu
+    BlockWrite = 0x0Cu,
+    BlockSync = 0x0Du,
+    GetLastError = BlockSync
 };
 
 enum class MapleResponseCode : std::uint8_t {
     DeviceInfo = 0x05u,
     DataTransfer = 0x08u,
     Ack = 0x07u,
-    UnknownCommand = 0xFEu
+    FileError = 0xFBu,
+    UnknownCommand = 0xFDu,
+    FunctionNotSupported = 0xFEu
 };
 
 struct MapleRequest {
@@ -114,6 +119,18 @@ class MapleControllerDevice final : public MapleDevice {
 inline constexpr std::size_t vmu_block_size = 512u;
 inline constexpr std::size_t vmu_block_count = 256u;
 inline constexpr std::size_t vmu_storage_size = vmu_block_size * vmu_block_count;
+inline constexpr std::uint32_t vmu_memory_function = 0x02000000u;
+
+struct MapleVmuPendingWrite {
+    std::array<std::uint8_t, vmu_block_size> bytes{};
+    std::uint16_t block = 0u;
+    std::uint8_t partition = 0u;
+    // The next phase accepted by the device. A live transaction has consumed
+    // one through four strictly ordered 128-byte phases.
+    std::uint8_t next_phase = 0u;
+
+    [[nodiscard]] bool operator==(const MapleVmuPendingWrite&) const = default;
+};
 
 struct MapleVmuSnapshot {
     std::size_t size = 0u;
@@ -133,6 +150,7 @@ struct MapleVmuStateSnapshot {
     bool write_protected = false;
     bool working_copy_dirty = false;
     bool persistent_working_copy = false;
+    std::optional<MapleVmuPendingWrite> pending_write;
 
     [[nodiscard]] bool operator==(const MapleVmuStateSnapshot&) const = default;
 };
@@ -155,7 +173,9 @@ class PreparedMapleVmuStateRestore final {
     bool write_protected_ = false;
     bool replace_working_copy_ = false;
     bool replace_write_protection_ = false;
+    bool replace_pending_write_ = false;
     std::vector<std::uint8_t> working_;
+    std::optional<MapleVmuPendingWrite> pending_write_;
     std::optional<PreparedPersistentImageRestore> persistent_;
 };
 
@@ -181,11 +201,14 @@ class MapleVmuDevice final : public MapleDevice {
     void restore_state(const MapleVmuStateSnapshot& state);
 
   private:
+    [[nodiscard]] MapleResponse memory_information(const MapleRequest& request) const;
     [[nodiscard]] MapleResponse read_block(const MapleRequest& request) const;
     [[nodiscard]] MapleResponse write_block(const MapleRequest& request);
+    [[nodiscard]] MapleResponse sync_block(const MapleRequest& request);
     std::vector<std::uint8_t> source_;
     std::vector<std::uint8_t> working_;
     std::shared_ptr<PersistentImage> persistent_image_;
+    std::optional<MapleVmuPendingWrite> pending_write_;
     bool write_protected_ = false;
 };
 
@@ -273,6 +296,10 @@ class MapleBus final {
     explicit MapleBus(std::function<void()> completion_observer = {});
     void attach(std::uint8_t port, std::uint8_t unit, std::shared_ptr<MapleDevice> device);
     [[nodiscard]] bool attached(std::uint8_t port, std::uint8_t unit) const;
+    // The high bits identify the physical port. A main peripheral advertises
+    // every attached sub-peripheral; a sub-peripheral uses only its unit bit.
+    [[nodiscard]] std::uint8_t
+    response_sender_address(std::uint8_t port, std::uint8_t unit) const;
     [[nodiscard]] MapleResponse
     exchange(std::uint8_t port, std::uint8_t unit, const MapleRequest& request);
     [[nodiscard]] MapleResponse exchange_at(std::uint8_t port,

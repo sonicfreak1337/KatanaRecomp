@@ -308,6 +308,66 @@ void seed_erased_dreamcast_flash(PersistentImage& image, const DreamcastRegion r
     image.write(0x1FFC0u, bitmap);
 }
 
+std::vector<std::uint8_t> make_formatted_standard_vmu() {
+    constexpr std::size_t data_block_count = 200u;
+    constexpr std::size_t directory_last_block = 241u;
+    constexpr std::size_t directory_first_block = 253u;
+    constexpr std::size_t fat_block = 254u;
+    constexpr std::size_t root_block = 255u;
+    constexpr std::uint16_t fat_end = 0xFFFAu;
+    constexpr std::uint16_t fat_free = 0xFFFCu;
+
+    std::vector<std::uint8_t> image(vmu_storage_size, 0xFFu);
+    const auto block_offset = [](const std::size_t block) {
+        return block * vmu_block_size;
+    };
+    const auto put_u16 = [&image](const std::size_t offset, const std::uint16_t value) {
+        image[offset] = static_cast<std::uint8_t>(value);
+        image[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+
+    // Empty directory entries use file type zero. The remaining data area
+    // stays in its erased flash state.
+    std::fill(image.begin() + static_cast<std::ptrdiff_t>(block_offset(directory_last_block)),
+              image.begin() +
+                  static_cast<std::ptrdiff_t>(block_offset(directory_first_block + 1u)),
+              std::uint8_t{0u});
+
+    const auto fat_offset = block_offset(fat_block);
+    for (std::size_t block = 0u; block < directory_last_block; ++block)
+        put_u16(fat_offset + block * 2u, fat_free);
+    put_u16(fat_offset + directory_last_block * 2u, fat_end);
+    for (std::size_t block = directory_last_block + 1u;
+         block <= directory_first_block;
+         ++block)
+        put_u16(fat_offset + block * 2u,
+                static_cast<std::uint16_t>(block - 1u));
+    put_u16(fat_offset + fat_block * 2u, fat_end);
+    put_u16(fat_offset + root_block * 2u, fat_end);
+
+    const auto root_offset = block_offset(root_block);
+    std::fill(image.begin() + static_cast<std::ptrdiff_t>(root_offset),
+              image.begin() + static_cast<std::ptrdiff_t>(root_offset + vmu_block_size),
+              std::uint8_t{0u});
+    std::fill_n(
+        image.begin() + static_cast<std::ptrdiff_t>(root_offset), 16u, std::uint8_t{0x55u});
+    // Fixed, valid BCD date keeps source-less project creation reproducible:
+    // 2000-01-01 00:00:00, Saturday (Monday == 0).
+    constexpr std::array<std::uint8_t, 8u> timestamp{
+        0x20u, 0x00u, 0x01u, 0x01u, 0x00u, 0x00u, 0x00u, 0x05u};
+    std::copy(timestamp.begin(), timestamp.end(), image.begin() +
+                                                       static_cast<std::ptrdiff_t>(
+                                                           root_offset + 0x30u));
+    put_u16(root_offset + 0x46u, static_cast<std::uint16_t>(fat_block));
+    put_u16(root_offset + 0x48u, 1u);
+    put_u16(root_offset + 0x4Au, static_cast<std::uint16_t>(directory_first_block));
+    put_u16(root_offset + 0x4Cu,
+            static_cast<std::uint16_t>(directory_first_block - directory_last_block + 1u));
+    put_u16(root_offset + 0x4Eu, 0u);
+    put_u16(root_offset + 0x50u, static_cast<std::uint16_t>(data_block_count));
+    return image;
+}
+
 std::optional<std::filesystem::path> environment_path(const char* name) {
 #ifdef _WIN32
     char* raw_value = nullptr;
@@ -401,11 +461,16 @@ DreamcastMutableStorage::open(DreamcastMutableStorageConfig config) {
                                         dreamcast_flash_size,
                                         0xFFu});
     seed_erased_dreamcast_flash(*flash, config.region);
+    auto initial_vmu =
+        config.vmu_source
+            ? std::optional<std::vector<std::uint8_t>>{}
+            : std::optional<std::vector<std::uint8_t>>{make_formatted_standard_vmu()};
     auto vmu = PersistentImage::open({"dreamcast-vmu",
                                       std::move(config.vmu_source),
                                       root / "vmu-a1.katana-work",
                                       vmu_storage_size,
-                                      0xFFu});
+                                      0xFFu,
+                                      std::move(initial_vmu)});
     return std::shared_ptr<DreamcastMutableStorage>(
         new DreamcastMutableStorage(std::move(flash), std::move(vmu)));
 }

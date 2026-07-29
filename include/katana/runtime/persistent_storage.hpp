@@ -30,6 +30,9 @@ struct PersistentImageConfig {
     std::filesystem::path working_path;
     std::size_t expected_size = 0u;
     std::uint8_t erased_value = 0xFFu;
+    // Used only when neither a source nor an existing primary/recovery
+    // working copy exists. The source identity remains the erased image.
+    std::optional<std::vector<std::uint8_t>> source_less_initial_working_copy;
 };
 
 class PersistentImage;

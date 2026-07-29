@@ -15,7 +15,7 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t maple_mmio_physical_base = 0x005F6C00u;
 inline constexpr std::uint32_t maple_mmio_register_size = 0x100u;
-inline constexpr std::uint32_t dreamcast_maple_state_contract_version = 1u;
+inline constexpr std::uint32_t dreamcast_maple_state_contract_version = 2u;
 inline constexpr std::uint32_t dreamcast_maple_dma_event_channel = 0u;
 inline constexpr std::uint64_t dreamcast_maple_dma_event_token_v1 = 0u;
 

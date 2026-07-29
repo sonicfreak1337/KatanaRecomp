@@ -246,7 +246,13 @@ void validate_bus_snapshot_shape(const MapleBusStateSnapshot& state) {
             if (vmu->source_image.size() != vmu_storage_size ||
                 vmu->working_image.size() != vmu_storage_size ||
                 (!vmu->persistent_working_copy &&
-                 vmu->working_copy_dirty))
+                 vmu->working_copy_dirty) ||
+                (vmu->pending_write &&
+                 (vmu->write_protected ||
+                  vmu->pending_write->block >= vmu_block_count ||
+                  vmu->pending_write->partition != 0u ||
+                  vmu->pending_write->next_phase == 0u ||
+                  vmu->pending_write->next_phase > 4u)))
                 throw std::invalid_argument(
                     "Maple-Bus-Handoff besitzt einen ungueltigen VMU-Zustand.");
         }
@@ -749,7 +755,9 @@ void DreamcastMapleController::start_dma() {
                     const auto response_header =
                         static_cast<std::uint32_t>(response.code) |
                         (static_cast<std::uint32_t>(sender) << 8u) |
-                        (static_cast<std::uint32_t>(recipient) << 16u) |
+                        (static_cast<std::uint32_t>(
+                             bus_->response_sender_address(port, unit))
+                         << 16u) |
                         (static_cast<std::uint32_t>(response.payload.size()) << 24u);
                     output.reserve(response.payload.size() + 1u);
                     output.push_back(response_header);
@@ -1169,6 +1177,7 @@ void encode_bus_state(MapleStateWriter& writer,
             if (vmu.write_protected) flags |= 1u;
             if (vmu.working_copy_dirty) flags |= 2u;
             if (vmu.persistent_working_copy) flags |= 4u;
+            if (vmu.pending_write) flags |= 8u;
             writer.u8(flags);
             writer.u32(checked_u32_size(
                 vmu.source_image.size(),
@@ -1178,6 +1187,12 @@ void encode_bus_state(MapleStateWriter& writer,
                 vmu.working_image.size(),
                 "Maple-Handoff-VMU-Arbeitsabbild ist zu gross."));
             writer.raw(vmu.working_image);
+            if (vmu.pending_write) {
+                writer.u32(vmu.pending_write->block);
+                writer.u8(vmu.pending_write->partition);
+                writer.u8(vmu.pending_write->next_phase);
+                writer.raw(vmu.pending_write->bytes);
+            }
         }
     }
 
@@ -1220,7 +1235,7 @@ MapleBusStateSnapshot decode_bus_state(MapleStateReader& reader) {
         } else if (kind == 2u) {
             MapleVmuStateSnapshot vmu;
             const auto flags = reader.u8();
-            if ((flags & ~std::uint8_t{7u}) != 0u)
+            if ((flags & ~std::uint8_t{15u}) != 0u)
                 throw std::invalid_argument(
                     "Maple-Handoff-VMU besitzt ungueltige Flags.");
             vmu.write_protected = (flags & 1u) != 0u;
@@ -1236,6 +1251,20 @@ MapleBusStateSnapshot decode_bus_state(MapleStateReader& reader) {
                 throw std::invalid_argument(
                     "Maple-Handoff-VMU-Arbeitsabbild besitzt nicht 128 KiB.");
             vmu.working_image = reader.raw(working_size);
+            if ((flags & 8u) != 0u) {
+                MapleVmuPendingWrite pending;
+                const auto block = reader.u32();
+                if (block >= vmu_block_count)
+                    throw std::invalid_argument(
+                        "Maple-Handoff-VMU-Schreibphase besitzt einen "
+                        "ungueltigen Block.");
+                pending.block = static_cast<std::uint16_t>(block);
+                pending.partition = reader.u8();
+                pending.next_phase = reader.u8();
+                const auto bytes = reader.raw(pending.bytes.size());
+                std::copy(bytes.begin(), bytes.end(), pending.bytes.begin());
+                vmu.pending_write = std::move(pending);
+            }
             peripheral.state = std::move(vmu);
         } else {
             throw std::invalid_argument(

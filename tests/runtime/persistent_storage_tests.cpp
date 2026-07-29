@@ -176,6 +176,14 @@ int main() {
     pal_config.region = DreamcastRegion::Europe;
     auto pal_storage = DreamcastMutableStorage::open(pal_config);
     const auto& pal_flash = pal_storage->flash_image();
+    const auto& pal_vmu = pal_storage->vmu_image();
+    constexpr auto vmu_root_offset = 255u * vmu_block_size;
+    constexpr auto vmu_fat_offset = 254u * vmu_block_size;
+    const auto vmu_u16 = [](const PersistentImage& image, const std::size_t offset) {
+        return static_cast<std::uint16_t>(
+            image.read_byte(offset) |
+            static_cast<std::uint16_t>(image.read_byte(offset + 1u)) << 8u);
+    };
     require(pal_flash->read_byte(0x1A000u) == '0' && pal_flash->read_byte(0x1A001u) == '0' &&
                 pal_flash->read_byte(0x1A002u) == '2' && pal_flash->read_byte(0x1A003u) == '1' &&
                 pal_flash->read_byte(0x1A004u) == '1' && pal_flash->read_byte(0x1A005u) == 'D' &&
@@ -184,6 +192,21 @@ int main() {
                 pal_flash->read_byte(0x1FFC0u) == 0x7Fu &&
                 pal_flash->source_byte(0x1A000u) == 0xFFu,
             "Erstes PAL-Portprofil erzeugt kein gueltiges, quellgetrenntes Europa-Flash.");
+    require(pal_vmu->recovery() == PersistentImageRecovery::CreatedFromSource &&
+                pal_vmu->read_byte(vmu_root_offset) == 0x55u &&
+                pal_vmu->read_byte(vmu_root_offset + 0x0Fu) == 0x55u &&
+                vmu_u16(*pal_vmu, vmu_root_offset + 0x46u) == 254u &&
+                vmu_u16(*pal_vmu, vmu_root_offset + 0x48u) == 1u &&
+                vmu_u16(*pal_vmu, vmu_root_offset + 0x4Au) == 253u &&
+                vmu_u16(*pal_vmu, vmu_root_offset + 0x4Cu) == 13u &&
+                vmu_u16(*pal_vmu, vmu_root_offset + 0x50u) == 200u &&
+                vmu_u16(*pal_vmu, vmu_fat_offset) == 0xFFFCu &&
+                vmu_u16(*pal_vmu, vmu_fat_offset + 200u * 2u) == 0xFFFCu &&
+                vmu_u16(*pal_vmu, vmu_fat_offset + 241u * 2u) == 0xFFFAu &&
+                vmu_u16(*pal_vmu, vmu_fat_offset + 253u * 2u) == 252u &&
+                pal_vmu->read_byte(241u * vmu_block_size) == 0u &&
+                pal_vmu->source_byte(vmu_root_offset) == 0xFFu && !pal_vmu->dirty(),
+            "Neue quelllose VMU besitzt kein deterministisches Standarddateisystem.");
     require(dreamcast_region_for_console_profile(DreamcastConsoleProfile::EuropePal) ==
                     DreamcastRegion::Europe &&
                 dreamcast_region_for_console_profile(
@@ -192,18 +215,40 @@ int main() {
                 dreamcast_region_for_console_profile(DreamcastConsoleProfile::JapanNtsc) ==
                     DreamcastRegion::Japan,
             "Explizite Konsolenprofile waehlen keine deterministische Dreamcast-Region.");
+    pal_vmu->write_byte(7u, 0x42u);
     pal_storage->save();
     pal_storage = DreamcastMutableStorage::open(pal_config);
-    require(pal_storage->flash_image()->read_byte(0x1A002u) == '2',
-            "Gespeichertes PAL-Flashprofil wird beim Neustart nicht erhalten.");
+    require(pal_storage->flash_image()->read_byte(0x1A002u) == '2' &&
+                pal_storage->vmu_image()->read_byte(7u) == 0x42u,
+            "Gespeichertes PAL-Flashprofil oder VMU-Nutzerdaten werden beim Neustart ersetzt.");
+
+    const auto imported_vmu_path = root / "imported-vmu.bin";
+    std::vector<std::uint8_t> imported_vmu(vmu_storage_size, 0xFFu);
+    write_file(imported_vmu_path, imported_vmu);
+    auto imported_config = pal_config;
+    imported_config.project_identity = std::string(64u, 'b');
+    imported_config.vmu_source = imported_vmu_path;
+    auto imported_storage = DreamcastMutableStorage::open(std::move(imported_config));
+    require(imported_storage->vmu_image()->read_byte(vmu_root_offset) == 0xFFu &&
+                imported_storage->vmu_image()->source_byte(vmu_root_offset) == 0xFFu,
+            "Explizit importierte VMU wird durch die quelllose Standardformatierung ersetzt.");
 
     const auto vmu_working = root / "vmu.katana-work";
     auto vmu_image = PersistentImage::open(
         {"dreamcast-vmu", std::nullopt, vmu_working, vmu_storage_size, 0xFFu});
     MapleVmuDevice vmu(vmu_image);
-    std::vector<std::uint32_t> payload(1u + vmu_block_size / 4u, 0xA5A5A5A5u);
-    payload[0] = 1u;
-    require(vmu.transact({MapleCommand::BlockWrite, payload}).code == MapleResponseCode::Ack &&
+    for (std::uint8_t phase = 0u; phase < 4u; ++phase) {
+        std::vector<std::uint32_t> payload(2u + 128u / sizeof(std::uint32_t),
+                                           0xA5A5A5A5u);
+        payload[0] = vmu_memory_function;
+        payload[1] = 1u | (static_cast<std::uint32_t>(phase) << 16u);
+        require(vmu.transact({MapleCommand::BlockWrite, std::move(payload)}).code ==
+                    MapleResponseCode::Ack,
+                "VMU-Blockwrite lehnt eine geordnete Speicherphase ab.");
+    }
+    require(vmu.transact(
+                    {MapleCommand::BlockSync, {vmu_memory_function, 1u | (4u << 16u)}})
+                    .code == MapleResponseCode::Ack &&
                 vmu.persistent_working_copy() && vmu.working_copy_dirty(),
             "VMU-Blockwrite markiert die persistente Arbeitskopie nicht dirty.");
     vmu.save_working_copy();

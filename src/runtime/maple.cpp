@@ -10,6 +10,43 @@
 
 namespace katana::runtime {
 namespace {
+constexpr std::uint32_t vmu_error_invalid_partition = 0x01000000u;
+constexpr std::uint32_t vmu_error_invalid_phase = 0x02000000u;
+constexpr std::uint32_t vmu_error_invalid_block = 0x04000000u;
+constexpr std::uint32_t vmu_error_write_failure = 0x08000000u;
+constexpr std::uint32_t vmu_error_invalid_length = 0x10000000u;
+constexpr std::size_t vmu_write_phase_size = 128u;
+constexpr std::size_t vmu_write_phase_words = vmu_write_phase_size / sizeof(std::uint32_t);
+constexpr std::uint8_t vmu_write_phase_count =
+    static_cast<std::uint8_t>(vmu_block_size / vmu_write_phase_size);
+
+struct VmuLocation {
+    std::uint16_t block = 0u;
+    std::uint8_t phase = 0u;
+    std::uint8_t partition = 0u;
+};
+
+VmuLocation decode_vmu_location(const std::uint32_t value) noexcept {
+    return {
+        static_cast<std::uint16_t>(value),
+        static_cast<std::uint8_t>(value >> 16u),
+        static_cast<std::uint8_t>(value >> 24u),
+    };
+}
+
+MapleResponse vmu_file_error(const std::uint32_t error) {
+    return {MapleResponseCode::FileError, {error}};
+}
+
+MapleResponse vmu_function_error() {
+    return {MapleResponseCode::FunctionNotSupported, {}};
+}
+
+bool valid_pending_write(const MapleVmuPendingWrite& pending) noexcept {
+    return pending.block < vmu_block_count && pending.partition == 0u &&
+           pending.next_phase >= 1u && pending.next_phase <= vmu_write_phase_count;
+}
+
 std::vector<std::uint32_t> device_info_payload(const std::uint32_t functions,
                                                const std::uint32_t definition,
                                                const std::string_view name,
@@ -132,32 +169,74 @@ MapleVmuDevice::MapleVmuDevice(std::shared_ptr<PersistentImage> image)
 }
 
 MapleResponse MapleVmuDevice::transact(const MapleRequest& request) {
-    constexpr std::uint32_t memory_function = 0x02000000u;
     switch (request.command) {
     case MapleCommand::DeviceRequest:
         return {
             MapleResponseCode::DeviceInfo,
-            device_info_payload(memory_function, 0x00410F00u, "Visual Memory", 0x007Cu, 0x0082u)};
+            device_info_payload(
+                vmu_memory_function, 0x00410F00u, "Visual Memory", 0x007Cu, 0x0082u)};
+    case MapleCommand::GetMemoryInformation:
+        return memory_information(request);
     case MapleCommand::BlockRead:
         return read_block(request);
     case MapleCommand::BlockWrite:
         return write_block(request);
+    case MapleCommand::BlockSync:
+        return sync_block(request);
     default:
         return {MapleResponseCode::UnknownCommand, {}};
     }
 }
 
+MapleResponse MapleVmuDevice::memory_information(const MapleRequest& request) const {
+    if (request.payload.empty() || request.payload[0] != vmu_memory_function)
+        return vmu_function_error();
+    if (request.payload.size() != 2u)
+        return vmu_file_error(vmu_error_invalid_length);
+
+    const auto location = decode_vmu_location(request.payload[1]);
+    if (location.partition != 0u)
+        return vmu_file_error(vmu_error_invalid_partition);
+    if (location.phase != 0u)
+        return vmu_file_error(vmu_error_invalid_phase);
+    if (location.block != 0u)
+        return vmu_file_error(vmu_error_invalid_block);
+
+    // Standard 128-KiB VMU media descriptor in Maple host-word order.
+    return {
+        MapleResponseCode::DataTransfer,
+        {
+            vmu_memory_function,
+            0x000000FFu, // last block FF, partition 0
+            0x00FE00FFu, // root/system FF, FAT FE
+            0x00FD0001u, // one FAT block, directory begins at FD
+            0x0000000Du, // thirteen directory blocks, icon 0
+            0x001F00C8u, // save area begins at C8 and spans 31 blocks
+            0x00800000u, // execution area begins at 0 and spans 128 blocks
+        },
+    };
+}
+
 MapleResponse MapleVmuDevice::read_block(const MapleRequest& request) const {
-    constexpr std::uint32_t memory_function = 0x02000000u;
-    if (request.payload.size() != 1u || request.payload[0] >= vmu_block_count) {
-        throw std::out_of_range("Ungueltige VMU-Blockleseanfrage.");
-    }
-    const auto block = static_cast<std::size_t>(request.payload[0]);
+    if (request.payload.empty() || request.payload[0] != vmu_memory_function)
+        return vmu_function_error();
+    if (request.payload.size() != 2u)
+        return vmu_file_error(vmu_error_invalid_length);
+
+    const auto location = decode_vmu_location(request.payload[1]);
+    if (location.partition != 0u)
+        return vmu_file_error(vmu_error_invalid_partition);
+    if (location.phase != 0u)
+        return vmu_file_error(vmu_error_invalid_phase);
+    if (location.block >= vmu_block_count)
+        return vmu_file_error(vmu_error_invalid_block);
+
+    const auto block = static_cast<std::size_t>(location.block);
     const auto start = block * vmu_block_size;
     std::vector<std::uint32_t> payload;
     payload.reserve(2u + vmu_block_size / 4u);
-    payload.push_back(memory_function);
-    payload.push_back(static_cast<std::uint32_t>(block));
+    payload.push_back(vmu_memory_function);
+    payload.push_back(request.payload[1]);
     const auto bytes =
         persistent_image_ ? persistent_image_->bytes() : std::span<const std::uint8_t>(working_);
     for (std::size_t offset = 0u; offset < vmu_block_size; offset += 4u) {
@@ -170,29 +249,112 @@ MapleResponse MapleVmuDevice::read_block(const MapleRequest& request) const {
 }
 
 MapleResponse MapleVmuDevice::write_block(const MapleRequest& request) {
-    constexpr std::size_t words_per_block = vmu_block_size / 4u;
-    if (request.payload.size() != 1u + words_per_block || request.payload[0] >= vmu_block_count) {
-        throw std::invalid_argument("Ungueltige VMU-Blockschreibanfrage.");
+    if (request.payload.empty() || request.payload[0] != vmu_memory_function)
+        return vmu_function_error();
+    if (request.payload.size() != 2u + vmu_write_phase_words) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_length);
+    }
+
+    const auto location = decode_vmu_location(request.payload[1]);
+    if (location.partition != 0u) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_partition);
+    }
+    if (location.block >= vmu_block_count) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_block);
+    }
+    if (location.phase >= vmu_write_phase_count) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_phase);
     }
     if (write_protected_) {
-        throw std::runtime_error("VMU ist schreibgeschuetzt.");
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_write_failure);
     }
-    const auto start = static_cast<std::size_t>(request.payload[0]) * vmu_block_size;
-    for (std::size_t word_index = 0u; word_index < words_per_block; ++word_index) {
-        const auto word = request.payload[word_index + 1u];
+
+    if (location.phase == 0u) {
+        pending_write_.emplace();
+        pending_write_->block = location.block;
+        pending_write_->partition = location.partition;
+    } else if (!pending_write_ ||
+               pending_write_->block != location.block ||
+               pending_write_->partition != location.partition ||
+               pending_write_->next_phase != location.phase) {
+        const auto error =
+            pending_write_ && pending_write_->block != location.block
+                ? vmu_error_invalid_block
+                : vmu_error_invalid_phase;
+        pending_write_.reset();
+        return vmu_file_error(error);
+    }
+
+    const auto phase_offset =
+        static_cast<std::size_t>(location.phase) * vmu_write_phase_size;
+    for (std::size_t word_index = 0u; word_index < vmu_write_phase_words; ++word_index) {
+        const auto word = request.payload[word_index + 2u];
         for (std::size_t byte = 0u; byte < 4u; ++byte) {
-            const auto offset = start + word_index * 4u + byte;
-            const auto value = static_cast<std::uint8_t>(word >> (byte * 8u));
-            if (persistent_image_)
-                persistent_image_->write_byte(offset, value);
-            else
-                working_[offset] = value;
+            pending_write_->bytes[phase_offset + word_index * 4u + byte] =
+                static_cast<std::uint8_t>(word >> (byte * 8u));
         }
     }
+    pending_write_->next_phase =
+        static_cast<std::uint8_t>(location.phase + 1u);
+    return {MapleResponseCode::Ack, {}};
+}
+
+MapleResponse MapleVmuDevice::sync_block(const MapleRequest& request) {
+    if (request.payload.empty() || request.payload[0] != vmu_memory_function)
+        return vmu_function_error();
+    if (request.payload.size() != 2u) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_length);
+    }
+
+    const auto location = decode_vmu_location(request.payload[1]);
+    if (location.partition != 0u) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_partition);
+    }
+    if (location.block >= vmu_block_count) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_block);
+    }
+    if (location.phase != vmu_write_phase_count) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_phase);
+    }
+    if (!pending_write_) return vmu_file_error(vmu_error_invalid_phase);
+    if (pending_write_->block != location.block) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_block);
+    }
+    if (pending_write_->partition != location.partition ||
+        pending_write_->next_phase != vmu_write_phase_count) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_invalid_phase);
+    }
+    if (write_protected_) {
+        pending_write_.reset();
+        return vmu_file_error(vmu_error_write_failure);
+    }
+
+    const auto start =
+        static_cast<std::size_t>(pending_write_->block) * vmu_block_size;
+    if (persistent_image_) {
+        persistent_image_->write(start, pending_write_->bytes);
+    } else {
+        std::copy(pending_write_->bytes.begin(),
+                  pending_write_->bytes.end(),
+                  working_.begin() + static_cast<std::ptrdiff_t>(start));
+    }
+    pending_write_.reset();
     return {MapleResponseCode::Ack, {}};
 }
 
 void MapleVmuDevice::set_write_protected(const bool value) noexcept {
+    if (value) pending_write_.reset();
     write_protected_ = value;
 }
 bool MapleVmuDevice::write_protected() const noexcept {
@@ -238,6 +400,7 @@ MapleVmuStateSnapshot MapleVmuDevice::state_snapshot() const {
     result.write_protected = write_protected_;
     result.working_copy_dirty = working_copy_dirty();
     result.persistent_working_copy = persistent_working_copy();
+    result.pending_write = pending_write_;
     return result;
 }
 
@@ -257,6 +420,10 @@ PreparedMapleVmuStateRestore MapleVmuDevice::prepare_state_restore(
     if (!state.persistent_working_copy && state.working_copy_dirty)
         throw std::invalid_argument(
             "Nichtpersistente VMU darf keinen persistenten Dirty-Zustand tragen.");
+    if (state.pending_write &&
+        (state.write_protected || !valid_pending_write(*state.pending_write)))
+        throw std::invalid_argument(
+            "VMU-Handoff besitzt eine ungueltige ausstehende Schreibphase.");
 
     PreparedMapleVmuStateRestore prepared;
     prepared.owner_ = this;
@@ -268,10 +435,20 @@ PreparedMapleVmuStateRestore MapleVmuDevice::prepare_state_restore(
         prepared.write_protected_ = state.write_protected;
         prepared.replace_write_protection_ = true;
         prepared.replace_working_copy_ = true;
+        prepared.replace_pending_write_ = true;
+        prepared.pending_write_ = state.pending_write;
         break;
     case PersistenceHandoffPolicy::ProductPreserveTarget:
         // VMU bytes, dirty state and host write protection belong to the
-        // installed target, not to the bootstrap capture.
+        // installed target, not to the bootstrap capture. A phased Maple
+        // write is guest-visible device progress, however, and must replace
+        // any unrelated target transaction.
+        if (state.pending_write && write_protected_)
+            throw std::invalid_argument(
+                "VMU-Produkt-Handoff kann eine ausstehende Schreibphase "
+                "nicht in ein schreibgeschuetztes Ziel uebernehmen.");
+        prepared.replace_pending_write_ = true;
+        prepared.pending_write_ = state.pending_write;
         break;
     default:
         throw std::invalid_argument("Unbekannte Persistenz-Handoff-Policy.");
@@ -315,6 +492,8 @@ void MapleVmuDevice::commit_prepared_state_restore(
     }
     if (prepared.replace_write_protection_)
         write_protected_ = prepared.write_protected_;
+    if (prepared.replace_pending_write_)
+        pending_write_ = std::move(prepared.pending_write_);
 }
 
 void MapleVmuDevice::restore_state(const MapleVmuStateSnapshot& state) {
@@ -345,6 +524,28 @@ void MapleBus::attach(const std::uint8_t port,
 
 bool MapleBus::attached(const std::uint8_t port, const std::uint8_t unit) const {
     return static_cast<bool>(devices_[slot(port, unit)]);
+}
+
+std::uint8_t MapleBus::response_sender_address(const std::uint8_t port,
+                                               const std::uint8_t unit) const {
+    if (!devices_[slot(port, unit)]) {
+        throw std::runtime_error(
+            "Ein nicht angeschlossenes Maple-Geraet besitzt keine Antwortadresse.");
+    }
+    const auto port_address =
+        static_cast<std::uint8_t>(port << 6u);
+    if (unit != 0u)
+        return static_cast<std::uint8_t>(
+            port_address | (std::uint8_t{1u} << (unit - 1u)));
+
+    std::uint8_t address =
+        static_cast<std::uint8_t>(port_address | 0x20u);
+    for (std::uint8_t subunit = 1u; subunit < maple_units_per_port; ++subunit) {
+        if (devices_[slot(port, subunit)])
+            address |= static_cast<std::uint8_t>(
+                std::uint8_t{1u} << (subunit - 1u));
+    }
+    return address;
 }
 
 MapleResponse

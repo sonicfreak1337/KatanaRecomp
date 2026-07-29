@@ -210,6 +210,11 @@ std::shared_ptr<PersistentImage> PersistentImage::open(PersistentImageConfig con
 PersistentImage::PersistentImage(PersistentImageConfig config) : config_(std::move(config)) {
     if (!stable_kind(config_.kind) || config_.working_path.empty() || config_.expected_size == 0u)
         throw std::invalid_argument("Persistente Arbeitskopienkonfiguration ist unvollstaendig.");
+    if (config_.source_less_initial_working_copy &&
+        (config_.source_path ||
+         config_.source_less_initial_working_copy->size() != config_.expected_size))
+        throw std::invalid_argument(
+            "Initiale Arbeitskopie ist nur fuer eine quelllose Neuinitialisierung gueltig.");
     config_.working_path = std::filesystem::absolute(config_.working_path).lexically_normal();
     recovery_path_ = config_.working_path;
     recovery_path_ += ".recovery";
@@ -239,6 +244,7 @@ void PersistentImage::load() {
         try {
             working_ = decode_container(config_, source_sha256_, config_.working_path);
             recovery_ = PersistentImageRecovery::LoadedPrimary;
+            config_.source_less_initial_working_copy.reset();
             return;
         } catch (...) {
             if (!std::filesystem::exists(recovery_path_)) throw;
@@ -248,9 +254,14 @@ void PersistentImage::load() {
         working_ = decode_container(config_, source_sha256_, recovery_path_);
         recovery_ = PersistentImageRecovery::RestoredRecovery;
         publish(false);
+        config_.source_less_initial_working_copy.reset();
         return;
     }
-    working_ = source_;
+    if (config_.source_less_initial_working_copy)
+        working_ = std::move(*config_.source_less_initial_working_copy);
+    else
+        working_ = source_;
+    config_.source_less_initial_working_copy.reset();
     recovery_ = PersistentImageRecovery::CreatedFromSource;
     publish(false);
 }
