@@ -3923,6 +3923,8 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_RUNTIME_PREFIX \"\" CACHE PATH") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
+                    .find("unset(KatanaRecomp_DIR CACHE)") != std::string::npos &&
+            read_text(output / "CMakeLists.txt")
                     .find("find_package(KatanaRecomp CONFIG REQUIRED PATHS "
                           "\"${KATANA_RUNTIME_PREFIX}\" NO_DEFAULT_PATH)") !=
                 std::string::npos &&

@@ -10309,6 +10309,7 @@ std::string root_cmake(const bool diagnostic_partial) {
            "  set(KATANA_PORT_SOURCE_RUNTIME_TARGET katana_runtime_core)\n"
            "endif()\n"
            "if(NOT KATANA_RUNTIME_PREFIX STREQUAL \"\")\n"
+           "  unset(KatanaRecomp_DIR CACHE)\n"
            "  find_package(KatanaRecomp CONFIG REQUIRED "
            "PATHS \"${KATANA_RUNTIME_PREFIX}\" NO_DEFAULT_PATH)\n"
            "  if(TARGET \"${KATANA_PORT_NAMESPACED_RUNTIME_TARGET}\")\n"
