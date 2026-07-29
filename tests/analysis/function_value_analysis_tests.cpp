@@ -627,6 +627,82 @@ parameterized_candidate_return_values() {
 }
 
 katana::analysis::FunctionValueAnalysisResult
+contextual_dereference_return_values() {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xE460u); // object pointer -> r4
+    put_u16(0x02u, 0xB00Du); // bsr owner 0x20
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x08u, 0x0009u);
+
+    put_u16(0x20u, 0x410Bu); // guarded candidate-only call -> 0x40
+    put_u16(0x22u, 0x0009u);
+    put_u16(0x24u, 0x6C03u); // owner consumes returned table
+    put_u16(0x26u, 0x63C2u); // mov.l @r12,r3
+    put_u16(0x28u, 0x000Bu);
+    put_u16(0x2Au, 0x0009u);
+
+    put_u16(0x40u, 0x6442u); // candidate: mov.l @r4,r4
+    put_u16(0x42u, 0xB005u); // bsr helper 0x50
+    put_u16(0x44u, 0x0009u);
+    put_u16(0x46u, 0x000Bu);
+    put_u16(0x48u, 0x0009u);
+
+    put_u16(0x50u, 0x6042u); // helper: mov.l @r4,r0
+    put_u16(0x52u, 0x000Bu);
+    put_u16(0x54u, 0x0009u);
+
+    put_u32(0x60u, 0x70u); // object field -> helper context
+    put_u32(0x70u, 0x80u); // helper return -> callback table
+    put_u32(0x80u, 0x90u); // table handler
+    put_u32(0x84u, 1u);
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.set_initial_snapshot_entry(0u);
+    image.add_segment({".contextual-dereference-return",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 4u> boundaries{{
+        {0x00u, 0x0Au},
+        {0x20u, 0x0Cu},
+        {0x40u, 0x0Au},
+        {0x50u, 0x06u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x20u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries, edges);
+}
+katana::analysis::FunctionValueAnalysisResult
 object_field_tail_values(const bool overwrite_callback_from_object) {
     std::vector<std::uint8_t> bytes(0x80u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset,
@@ -813,6 +889,267 @@ helper_returned_code_pointer_tail_values() {
         image, lines, boundaries, edges);
 }
 
+katana::analysis::FunctionValueAnalysisResult direct_literal_global_store_values() {
+    std::vector<std::uint8_t> bytes(0x40u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset, const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD403u); // callback literal 0x30 -> r4
+    put_u16(0x02u, 0xD504u); // persistent global 0x20 -> r5
+    put_u16(0x04u, 0x2542u); // mov.l r4,@r5
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x08u, 0x0009u);
+    put_u32(0x10u, 0x30u);
+    put_u32(0x14u, 0x20u);
+    put_u16(0x30u, 0x000Bu);
+    put_u16(0x32u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".direct-literal-global-store",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u> boundaries{{
+        {0x00u, 0x0Au},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult mixed_literal_scalar_store_values() {
+    std::vector<std::uint8_t> bytes(0x40u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset, const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0x8902u); // bt 0x08, unknown T
+    put_u16(0x02u, 0xD404u); // literal 0x30 -> r4
+    put_u16(0x04u, 0xA002u); // bra 0x0C
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0xE434u); // decode-valid scalar, no literal provenance
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0xD503u); // persistent global 0x20 -> r5
+    put_u16(0x0Eu, 0x2542u); // mov.l r4,@r5
+    put_u16(0x10u, 0x000Bu);
+    put_u16(0x12u, 0x0009u);
+    put_u32(0x14u, 0x30u);
+    put_u32(0x1Cu, 0x20u);
+    put_u16(0x30u, 0x000Bu);
+    put_u16(0x32u, 0x0009u);
+    put_u16(0x34u, 0x000Bu);
+    put_u16(0x36u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".mixed-literal-scalar-store",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u> boundaries{{
+        {0x00u, 0x14u},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult fifth_stack_callback_values() {
+    std::vector<std::uint8_t> bytes(0x70u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset, const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD004u); // callback literal 0x50 -> r0
+    put_u16(0x02u, 0x61F3u); // mov r15,r1
+    put_u16(0x04u, 0x71FCu); // add #-4,r1
+    put_u16(0x06u, 0xD204u); // local literal 0x54 -> r2
+    put_u16(0x08u, 0x2122u); // caller local r2 -> [sp-4]
+    put_u16(0x0Au, 0x2F02u); // fifth ABI argument r0 -> [sp]
+    put_u16(0x0Cu, 0xB010u); // bsr 0x30
+    put_u16(0x0Eu, 0x0009u);
+    put_u16(0x10u, 0x000Bu);
+    put_u16(0x12u, 0x0009u);
+    put_u32(0x14u, 0x50u);
+    put_u32(0x18u, 0x54u);
+
+    put_u16(0x30u, 0x64F2u); // mov.l @r15,r4
+    put_u16(0x32u, 0x61F3u); // mov r15,r1
+    put_u16(0x34u, 0x71FCu); // add #-4,r1
+    put_u16(0x36u, 0x6612u); // mov.l @r1,r6
+    put_u16(0x38u, 0xD503u); // global A 0x60 -> r5
+    put_u16(0x3Au, 0x2542u); // callback r4 -> global A
+    put_u16(0x3Cu, 0xD503u); // global B 0x64 -> r5
+    put_u16(0x3Eu, 0x2562u); // caller-local r6 -> global B
+    put_u16(0x40u, 0x000Bu);
+    put_u16(0x42u, 0x0009u);
+    put_u32(0x48u, 0x60u);
+    put_u32(0x4Cu, 0x64u);
+    put_u16(0x50u, 0x000Bu);
+    put_u16(0x52u, 0x0009u);
+    put_u16(0x54u, 0x000Bu);
+    put_u16(0x56u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".fifth-stack-callback",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x14u},
+        {0x30u, 0x14u},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult fifth_stack_callback_tail_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset, const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD005u); // fifth callback literal 0x70 -> r0
+    put_u16(0x02u, 0x2F02u); // r0 -> caller [sp]
+    put_u16(0x04u, 0x410Bu); // jsr @r1 (candidate-only wrapper)
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0x000Bu);
+    put_u16(0x0Au, 0x0009u);
+    put_u32(0x18u, 0x70u);
+
+    put_u16(0x20u, 0x65F2u); // wrapper: mov.l @r15,r5
+    put_u16(0x22u, 0x422Bu); // jmp @r2 (candidate-only tail)
+    put_u16(0x24u, 0x0009u);
+
+    put_u16(0x40u, 0xD704u); // persistent global 0x5C -> r7
+    put_u16(0x42u, 0x2752u); // tail registrar stores r5
+    put_u16(0x44u, 0x000Bu);
+    put_u16(0x46u, 0x0009u);
+    put_u32(0x54u, 0x5Cu);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".fifth-stack-callback-tail",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x0Cu},
+        {0x20u, 0x06u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u> edges{{
+        {0x04u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x22u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult helper_mixed_return_store_values() {
+    std::vector<std::uint8_t> bytes(0x70u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset, const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xB00Eu); // bsr 0x20
+    put_u16(0x02u, 0x0009u);
+    put_u16(0x04u, 0x6403u); // mov r0,r4
+    put_u16(0x06u, 0xD504u); // persistent global 0x38 -> r5
+    put_u16(0x08u, 0x2542u); // mov.l r4,@r5
+    put_u16(0x0Au, 0x000Bu);
+    put_u16(0x0Cu, 0x0009u);
+    put_u32(0x18u, 0x38u);
+
+    put_u16(0x20u, 0x8902u); // bt 0x28, unknown T
+    put_u16(0x22u, 0xD003u); // literal 0x60 -> r0
+    put_u16(0x24u, 0xA002u); // bra 0x2C
+    put_u16(0x26u, 0x0009u);
+    put_u16(0x28u, 0xE064u); // decode-valid scalar, no literal provenance
+    put_u16(0x2Au, 0x0009u);
+    put_u16(0x2Cu, 0x000Bu);
+    put_u16(0x2Eu, 0x0009u);
+    put_u32(0x30u, 0x60u);
+    put_u16(0x60u, 0x000Bu);
+    put_u16(0x62u, 0x0009u);
+    put_u16(0x64u, 0x000Bu);
+    put_u16(0x66u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".helper-mixed-return-store",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<std::uint32_t, 2u> entries{{0x00u, 0x20u}};
+    return katana::analysis::analyze_function_values(image, lines, entries);
+}
+
 } // namespace
 
 int main() {
@@ -931,7 +1268,14 @@ int main() {
                 !parameterized.budget_exhausted,
             "Begrenzter Candidate-Return-Walk verlor einen "
             "parameterabhaengigen Returned-Table-Codepointer.");
-    }
+        const auto contextual = contextual_dereference_return_values();
+        const auto* contextual_table = returned_table_candidate(contextual, 0x80u);
+        require(contextual_table != nullptr &&
+                    contextual_table->target_addresses ==
+                        std::vector<std::uint32_t>{0x90u} &&
+                    !contextual.budget_exhausted,
+                "Kontexttaint ging beim Pointer-Dereferenzieren vor dem "
+                "direkten Helper-Return verloren.");    }
 
     {
         const auto direct_argument = object_field_tail_values(false);
@@ -954,6 +1298,36 @@ int main() {
             has_stored_code_address(returned, 0x70u),
             "Normaler Helper-Return verlor explizite Codepointerprovenienz "
             "vor einem Candidate-Tail-Registrar.");
+    }
+
+    {
+        const auto direct_literal = direct_literal_global_store_values();
+        require(has_stored_code_address(direct_literal, 0x30u),
+                "Ein direkter PC-Literal-Callbackstore ohne ABI-Grenze verlor "
+                "seinen Guarded-AOT-Eintrag.");
+
+        const auto mixed = mixed_literal_scalar_store_values();
+        require(has_stored_code_address(mixed, 0x30u) &&
+                    !has_stored_code_address(mixed, 0x34u),
+                "Wertgenaue Literalprovenienz vermischte Callback und "
+                "decode-validen Scalar vor dem persistenten Store.");
+
+        const auto fifth_argument = fifth_stack_callback_values();
+        require(has_stored_code_address(fifth_argument, 0x50u) &&
+                    !has_stored_code_address(fifth_argument, 0x54u),
+                "Fuenftes ABI-Stackargument oder Caller-lokaler Negativslot "
+                "wurde falsch in den Callee transferiert.");
+
+        const auto fifth_argument_tail = fifth_stack_callback_tail_values();
+        require(has_stored_code_address(fifth_argument_tail, 0x70u),
+                "Fuenftes ABI-Stackargument verlor seinen Codepointer durch "
+                "einen bewachten Tail-Wrapper.");
+
+        const auto helper_mixed = helper_mixed_return_store_values();
+        require(has_stored_code_address(helper_mixed, 0x60u) &&
+                    !has_stored_code_address(helper_mixed, 0x64u),
+                "Gemischte Helper-Rueckgabe verlor wertgenaue "
+                "PC-Literalprovenienz oder inventarisierte den Scalar.");
     }
 
     std::vector<std::uint8_t> guarded_callee_bytes(0x26u, 0x09u);

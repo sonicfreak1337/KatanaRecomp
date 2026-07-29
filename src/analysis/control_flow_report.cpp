@@ -419,6 +419,10 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
            << ",\"guarded_contextual_return_evaluation_limited_functions\":"
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
+           << ",\"guarded_abi_stack_argument_slot_budget\":"
+           << analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
+           << ",\"guarded_abi_stack_argument_projection_truncated_functions\":"
+           << analysis.guarded_code_inventory_walk.abi_stack_argument_projection_truncated_functions
            << ",\"guarded_code_shape_validation_work\":"
            << analysis.guarded_code_shape_validation_work
            << ",\"guarded_code_shape_validation_work_budget\":"

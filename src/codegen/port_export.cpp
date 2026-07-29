@@ -10810,6 +10810,10 @@ port_metadata(const PortExportOptions& options,
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
            << ",\"guarded_contextual_return_evaluation_limited_functions\":"
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
+           << ",\"guarded_abi_stack_argument_slot_budget\":"
+           << analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
+           << ",\"guarded_abi_stack_argument_projection_truncated_functions\":"
+           << analysis.guarded_code_inventory_walk.abi_stack_argument_projection_truncated_functions
            << ",\"guarded_code_shape_validation_work\":"
            << analysis.guarded_code_shape_validation_work
            << ",\"guarded_code_shape_validation_work_budget\":"
@@ -11175,6 +11179,10 @@ static PortExportResult export_dreamcast_port_project_impl(
                << prepared.analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
                << '/'
                << prepared.analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
+               << " abi_stack_argument_projection_truncated="
+               << prepared.analysis.guarded_code_inventory_walk
+                      .abi_stack_argument_projection_truncated_functions
+               << '/' << prepared.analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
                << " shape_budget_exceeded="
                << prepared.analysis
                       .guarded_code_shape_budget_exceeded_candidates

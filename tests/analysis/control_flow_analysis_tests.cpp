@@ -246,6 +246,14 @@ int main() {
             .forwarded_store_context_limited_functions = 1u;
         require(!katana::analysis::guarded_aot_inventory_complete(completeness_contract),
                 "Forwarding-Walkverlust blieb exportfaehig.");
+        completeness_contract.guarded_code_inventory_walk
+            .forwarded_store_context_limited_functions = 0u;
+        completeness_contract.guarded_code_inventory_walk
+            .abi_stack_argument_projection_truncated_functions = 1u;
+        require(!katana::analysis::guarded_aot_inventory_complete(completeness_contract),
+                "ABI-Stackargumentverlust blieb exportfaehig.");
+        completeness_contract.guarded_code_inventory_walk
+            .abi_stack_argument_projection_truncated_functions = 0u;
         completeness_contract.candidate_inventory_truncated = true;
         require(!katana::analysis::guarded_aot_inventory_complete(
                     completeness_contract),

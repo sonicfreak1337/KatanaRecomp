@@ -37,6 +37,7 @@ constexpr std::size_t maximum_guarded_code_inventory = 1'024u;
 constexpr std::size_t maximum_raw_stored_code_candidates =
     maximum_guarded_code_inventory * 4u;
 constexpr std::size_t reserved_returned_table_targets = 256u;
+constexpr std::size_t maximum_abi_stack_argument_slots = 64u;
 constexpr std::size_t maximum_forwarded_store_contexts = 64u;
 constexpr std::size_t maximum_contextual_return_contexts = 64u;
 constexpr std::size_t maximum_contextual_return_evaluations = 64u;
@@ -118,6 +119,8 @@ struct AbstractValue {
     // It is not a code-pointer proof by itself; a real call/tail ABI boundary
     // must still promote it.
     bool inventory_pc_relative_code_literal = false;
+    std::vector<std::uint32_t> inventory_code_pointer_values;
+    std::vector<std::uint32_t> inventory_pc_relative_code_literal_values;
     // Context-only candidate-return taint. It never proves a dispatch edge or
     // a code pointer; it only keeps the bounded helper slice attached to the
     // ABI values that originated at a guarded candidate call.
@@ -221,6 +224,44 @@ void normalize(std::vector<std::uint32_t>& values) {
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
+
+void synchronize_inventory_provenance(AbstractValue& value) {
+    const auto restrict_to_finite_values = [&](std::vector<std::uint32_t>& provenance) {
+        normalize(provenance);
+        std::erase_if(provenance, [&](const auto candidate) {
+            return !value.known ||
+                   !std::binary_search(value.values.begin(), value.values.end(), candidate);
+        });
+    };
+    restrict_to_finite_values(value.inventory_code_pointer_values);
+    restrict_to_finite_values(value.inventory_pc_relative_code_literal_values);
+    value.inventory_code_pointer = !value.inventory_code_pointer_values.empty();
+    value.inventory_pc_relative_code_literal =
+        !value.inventory_pc_relative_code_literal_values.empty();
+}
+
+[[nodiscard]] bool has_inventory_code_pointer_value(const AbstractValue& value,
+                                                     const std::uint32_t candidate) {
+    return std::binary_search(value.inventory_code_pointer_values.begin(),
+                              value.inventory_code_pointer_values.end(),
+                              candidate);
+}
+
+[[nodiscard]] bool has_inventory_pc_relative_code_literal_value(
+    const AbstractValue& value, const std::uint32_t candidate) {
+    return std::binary_search(value.inventory_pc_relative_code_literal_values.begin(),
+                              value.inventory_pc_relative_code_literal_values.end(),
+                              candidate);
+}
+
+void mark_inventory_code_pointer_values(AbstractValue& value,
+                                        const std::span<const std::uint32_t> candidates) {
+    value.inventory_code_pointer_values.insert(value.inventory_code_pointer_values.end(),
+                                               candidates.begin(),
+                                               candidates.end());
+    synchronize_inventory_provenance(value);
+}
+
 [[nodiscard]] std::optional<IndirectCalleeCandidates>
 find_tail_ingress(const TailIngressMap& baseline,
                   const TailIngressMap* const local,
@@ -586,6 +627,8 @@ void make_unknown(AbstractValue& value) {
     value.inventory_stack_derived = false;
     value.inventory_code_pointer = false;
     value.inventory_pc_relative_code_literal = false;
+    value.inventory_code_pointer_values.clear();
+    value.inventory_pc_relative_code_literal_values.clear();
     value.contextual_candidate_dependency = false;
     value.values.clear();
     value.call_sites.clear();
@@ -594,17 +637,11 @@ void make_unknown(AbstractValue& value) {
 
 void make_unknown_preserving_provenance(AbstractValue& value) {
     const auto inventory_stack_derived = value.inventory_stack_derived;
-    const auto inventory_code_pointer = value.inventory_code_pointer;
-    const auto inventory_pc_relative_code_literal =
-        value.inventory_pc_relative_code_literal;
     const auto contextual_candidate_dependency = value.contextual_candidate_dependency;
     auto call_sites = std::move(value.call_sites);
     auto callees = std::move(value.callees);
     make_unknown(value);
     value.inventory_stack_derived = inventory_stack_derived;
-    value.inventory_code_pointer = inventory_code_pointer;
-    value.inventory_pc_relative_code_literal =
-        inventory_pc_relative_code_literal;
     value.contextual_candidate_dependency = contextual_candidate_dependency;
     value.call_sites = std::move(call_sites);
     value.callees = std::move(callees);
@@ -617,6 +654,8 @@ void set_value(AbstractValue& value, const std::uint32_t constant) {
     value.inventory_stack_derived = false;
     value.inventory_code_pointer = false;
     value.inventory_pc_relative_code_literal = false;
+    value.inventory_code_pointer_values.clear();
+    value.inventory_pc_relative_code_literal_values.clear();
     value.contextual_candidate_dependency = false;
     value.values = {constant};
     value.call_sites.clear();
@@ -626,11 +665,6 @@ void set_value(AbstractValue& value, const std::uint32_t constant) {
 bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     const bool inventory_stack_derived =
         destination.inventory_stack_derived || source.inventory_stack_derived;
-    const bool inventory_code_pointer =
-        destination.inventory_code_pointer || source.inventory_code_pointer;
-    const bool inventory_pc_relative_code_literal =
-        destination.inventory_pc_relative_code_literal &&
-        source.inventory_pc_relative_code_literal;
     const bool contextual_candidate_dependency =
         destination.contextual_candidate_dependency || source.contextual_candidate_dependency;
     if (!destination.known || !source.known) {
@@ -641,12 +675,12 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         const bool changed = destination.known || destination.guarded || destination.complete ||
                              destination.inventory_stack_derived !=
                                  inventory_stack_derived ||
-                             destination.inventory_code_pointer !=
-                                 inventory_code_pointer ||
-                             destination.inventory_pc_relative_code_literal !=
-                                 inventory_pc_relative_code_literal ||
-                              destination.contextual_candidate_dependency !=
-                                  contextual_candidate_dependency ||
+                             destination.inventory_code_pointer ||
+                             destination.inventory_pc_relative_code_literal ||
+                             !destination.inventory_code_pointer_values.empty() ||
+                             !destination.inventory_pc_relative_code_literal_values.empty() ||
+                             destination.contextual_candidate_dependency !=
+                                 contextual_candidate_dependency ||
                              !destination.values.empty() ||
                              call_sites != destination.call_sites ||
                              callees != destination.callees;
@@ -654,9 +688,10 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         destination.guarded = false;
         destination.complete = false;
         destination.inventory_stack_derived = inventory_stack_derived;
-        destination.inventory_code_pointer = inventory_code_pointer;
-        destination.inventory_pc_relative_code_literal =
-            inventory_pc_relative_code_literal;
+        destination.inventory_code_pointer = false;
+        destination.inventory_pc_relative_code_literal = false;
+        destination.inventory_code_pointer_values.clear();
+        destination.inventory_pc_relative_code_literal_values.clear();
         destination.contextual_candidate_dependency = contextual_candidate_dependency;
         destination.values.clear();
         destination.call_sites = std::move(call_sites);
@@ -677,16 +712,6 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         destination.inventory_stack_derived = inventory_stack_derived;
         changed = true;
     }
-    if (destination.inventory_code_pointer != inventory_code_pointer) {
-        destination.inventory_code_pointer = inventory_code_pointer;
-        changed = true;
-    }
-    if (destination.inventory_pc_relative_code_literal !=
-        inventory_pc_relative_code_literal) {
-        destination.inventory_pc_relative_code_literal =
-            inventory_pc_relative_code_literal;
-        changed = true;
-    }
     if (destination.contextual_candidate_dependency != contextual_candidate_dependency) {
         destination.contextual_candidate_dependency = contextual_candidate_dependency;
         changed = true;
@@ -702,6 +727,36 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         destination.values = std::move(values);
         changed = true;
     }
+    auto code_pointer_values = destination.inventory_code_pointer_values;
+    code_pointer_values.insert(code_pointer_values.end(),
+                               source.inventory_code_pointer_values.begin(),
+                               source.inventory_code_pointer_values.end());
+    auto pc_relative_code_literal_values =
+        destination.inventory_pc_relative_code_literal_values;
+    pc_relative_code_literal_values.insert(
+        pc_relative_code_literal_values.end(),
+        source.inventory_pc_relative_code_literal_values.begin(),
+        source.inventory_pc_relative_code_literal_values.end());
+    normalize(code_pointer_values);
+    normalize(pc_relative_code_literal_values);
+    if (code_pointer_values != destination.inventory_code_pointer_values) {
+        destination.inventory_code_pointer_values = std::move(code_pointer_values);
+        changed = true;
+    }
+    if (pc_relative_code_literal_values !=
+        destination.inventory_pc_relative_code_literal_values) {
+        destination.inventory_pc_relative_code_literal_values =
+            std::move(pc_relative_code_literal_values);
+        changed = true;
+    }
+    const auto inventory_code_pointer = destination.inventory_code_pointer;
+    const auto inventory_pc_relative_code_literal =
+        destination.inventory_pc_relative_code_literal;
+    synchronize_inventory_provenance(destination);
+    changed = changed ||
+              destination.inventory_code_pointer != inventory_code_pointer ||
+              destination.inventory_pc_relative_code_literal !=
+                  inventory_pc_relative_code_literal;
     return changed;
 }
 
@@ -889,12 +944,16 @@ void apply_binary(AbstractValue& destination,
     destination.inventory_stack_derived = inventory_stack_derived;
     destination.inventory_code_pointer = false;
     destination.inventory_pc_relative_code_literal = false;
+    destination.inventory_code_pointer_values.clear();
+    destination.inventory_pc_relative_code_literal_values.clear();
     destination.contextual_candidate_dependency = contextual_candidate_dependency;
 }
 
 template <typename Operation> void apply_unary(AbstractValue& value, Operation operation) {
     value.inventory_code_pointer = false;
     value.inventory_pc_relative_code_literal = false;
+    value.inventory_code_pointer_values.clear();
+    value.inventory_pc_relative_code_literal_values.clear();
     if (!value.known) return;
     for (auto& candidate : value.values)
         candidate = operation(candidate);
@@ -943,8 +1002,15 @@ void load_memory_values(AbstractValue& destination,
                         const std::size_t width,
                         const katana::io::ExecutableImage& image,
                         const AbstractValue* address_evidence = nullptr) {
+    // Capture this before a same-register load mutates its destination. The
+    // taint selects only the bounded contextual helper slice; it is not
+    // code-pointer provenance and never proves a control-flow edge.
+    const bool address_contextual_dependency =
+        address_evidence != nullptr &&
+        address_evidence->contextual_candidate_dependency;
     if (addresses.empty()) {
         make_unknown(destination);
+        destination.contextual_candidate_dependency = address_contextual_dependency;
         return;
     }
     AbstractValue loaded;
@@ -962,6 +1028,7 @@ void load_memory_values(AbstractValue& destination,
             const auto image_value = read_image_value(image, address, width);
             if (!image_value.has_value()) {
                 make_unknown(destination);
+                destination.contextual_candidate_dependency = address_contextual_dependency;
                 return;
             }
             set_value(value, image_value->value);
@@ -973,6 +1040,7 @@ void load_memory_values(AbstractValue& destination,
             first = false;
         } else if (merge_value(loaded, value) && !loaded.known) {
             make_unknown(destination);
+            destination.contextual_candidate_dependency = address_contextual_dependency;
             return;
         }
     }
@@ -982,7 +1050,12 @@ void load_memory_values(AbstractValue& destination,
         // The address selects where a value is loaded from; it is not
         // provenance for the loaded contents.  Code-pointer argument
         // provenance is attached only when that value itself crosses a
-        // proven ABI boundary.
+        // proven ABI boundary. Context-only candidate taint is distinct:
+        // it follows a dereference so the bounded helper slice retains its
+        // relevant ABI dependency, without creating code-pointer evidence.
+        loaded.contextual_candidate_dependency =
+            loaded.contextual_candidate_dependency ||
+            address_contextual_dependency;
     }
     destination = std::move(loaded);
 }
@@ -1106,6 +1179,8 @@ void adjust_stack_offset(AbstractState& state,
                          const std::int32_t delta) {
     state[register_index].inventory_code_pointer = false;
     state[register_index].inventory_pc_relative_code_literal = false;
+    state[register_index].inventory_code_pointer_values.clear();
+    state[register_index].inventory_pc_relative_code_literal_values.clear();
     if (state.stack_offsets[register_index].has_value()) {
         const auto adjusted =
             static_cast<std::int64_t>(*state.stack_offsets[register_index]) + delta;
@@ -1339,6 +1414,8 @@ void apply_transfer(AbstractState& state,
         state[instruction.destination_register].inventory_code_pointer = false;
         state[instruction.destination_register]
             .inventory_pc_relative_code_literal = false;
+        state[instruction.destination_register].inventory_code_pointer_values.clear();
+        state[instruction.destination_register].inventory_pc_relative_code_literal_values.clear();
         state[instruction.destination_register].contextual_candidate_dependency = false;
         state[instruction.destination_register].values = {0u, 1u};
         state[instruction.destination_register].call_sites.clear();
@@ -1366,12 +1443,15 @@ void apply_transfer(AbstractState& state,
                            width,
                            image);
         auto& loaded = state[instruction.destination_register];
-        loaded.inventory_pc_relative_code_literal =
-            width == 4u && loaded.known && !loaded.values.empty() &&
-            loaded.values.size() <= maximum_summary_values &&
-            std::ranges::all_of(loaded.values, [&](const auto candidate) {
-                return validate_decode_candidate(image, candidate).valid();
-            });
+        loaded.inventory_pc_relative_code_literal_values.clear();
+        if (width == 4u && loaded.known &&
+            loaded.values.size() <= maximum_summary_values) {
+            for (const auto candidate : loaded.values) {
+                if (validate_decode_candidate(image, candidate).valid())
+                    loaded.inventory_pc_relative_code_literal_values.push_back(candidate);
+            }
+        }
+        synchronize_inventory_provenance(loaded);
         state.stack_offsets[instruction.destination_register].reset();
         state.stack_may_alias[instruction.destination_register] =
             !state[instruction.destination_register].known;
@@ -1638,6 +1718,9 @@ void apply_transfer(AbstractState& state,
         auto evidence = state[0u];
         evidence.guarded = evidence.guarded || state[instruction.source_register].guarded;
         evidence.complete = evidence.complete && state[instruction.source_register].complete;
+        evidence.contextual_candidate_dependency =
+            state[0u].contextual_candidate_dependency ||
+            state[instruction.source_register].contextual_candidate_dependency;
         evidence.call_sites.insert(state[instruction.source_register].call_sites.begin(),
                                    state[instruction.source_register].call_sites.end());
         evidence.callees.insert(state[instruction.source_register].callees.begin(),
@@ -1675,21 +1758,73 @@ const FunctionRegisterValueSummary* register_summary(const FunctionValueSummary&
     return found == summary.registers.end() ? nullptr : &*found;
 }
 
+AbstractState make_callee_abi_input(
+    const AbstractState& caller,
+    const std::uint32_t call_site,
+    GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics) {
+    auto input = caller;
+    input.stack_values.clear();
+    const auto caller_sp = caller.stack_offsets[15u];
+    for (std::uint8_t index = 0u; index < 15u; ++index) {
+        const auto register_offset = caller.stack_offsets[index];
+        if (!register_offset.has_value() || !caller_sp.has_value()) {
+            input.stack_offsets[index].reset();
+            continue;
+        }
+        const auto relative = static_cast<std::int64_t>(*register_offset) -
+                              static_cast<std::int64_t>(*caller_sp);
+        if (relative < -maximum_stack_distance || relative > maximum_stack_distance)
+            input.stack_offsets[index].reset();
+        else
+            input.stack_offsets[index] = static_cast<std::int32_t>(relative);
+    }
+    input.stack_offsets[15u] = 0;
+    if (!caller_sp.has_value()) return input;
+
+    std::size_t projected_slots = 0u;
+    for (const auto& [slot, source] : caller.stack_values) {
+        const auto relative = static_cast<std::int64_t>(slot) -
+                              static_cast<std::int64_t>(*caller_sp);
+        // Only outgoing, word-aligned caller slots are part of the callee ABI.
+        // Negative offsets are caller locals/spills and must never become a
+        // callee argument by accident.
+        if (relative < 0 || relative > maximum_stack_distance ||
+            (relative & 3) != 0)
+            continue;
+        if (projected_slots >= maximum_abi_stack_argument_slots) {
+            if (walk_diagnostics != nullptr)
+                ++walk_diagnostics->abi_stack_argument_projection_truncated_functions;
+            break;
+        }
+        auto value = source;
+        value.call_sites.insert(call_site);
+        input.stack_values.emplace(static_cast<std::int32_t>(relative),
+                                   std::move(value));
+        ++projected_slots;
+    }
+    return input;
+}
+
 void mark_observed_code_pointer_arguments(
     const katana::io::ExecutableImage& image,
     AbstractState& observation) {
     // This provenance belongs to the value passed in an ABI argument register,
     // not to an address used to load that value.  Loads deliberately do not
     // inherit it from their address operand.
-    for (std::uint8_t index = 4u; index <= 7u; ++index) {
-        auto& value = observation[index];
+    const auto mark_argument = [&](AbstractValue& value) {
         if (!value.known || value.values.empty() ||
             value.values.size() > maximum_summary_values ||
             !std::ranges::all_of(value.values, [&](const auto candidate) {
                 return validate_decode_candidate(image, candidate).valid();
             }))
-            continue;
-        value.inventory_code_pointer = true;
+            return;
+        mark_inventory_code_pointer_values(value, value.values);
+    };
+    for (std::uint8_t index = 4u; index <= 7u; ++index)
+        mark_argument(observation[index]);
+    for (auto& [slot, value] : observation.stack_values) {
+        static_cast<void>(slot);
+        mark_argument(value);
     }
 }
 
@@ -1701,17 +1836,23 @@ void promote_tail_code_literal_arguments(
     // evidence than an arbitrary decode-looking object field.  Promote only
     // that provenance when the control-flow inventory has independently
     // established a real tail-call ABI boundary.
-    for (std::uint8_t index = 4u; index <= 7u; ++index) {
-        auto& value = observation[index];
-        if (!value.inventory_pc_relative_code_literal || !value.known ||
-            value.values.empty() ||
-            value.values.size() > maximum_summary_values ||
-            !std::ranges::all_of(value.values, [&](const auto candidate) {
-                return validate_decode_candidate(image, candidate).valid();
-            }))
-            continue;
-        value.inventory_code_pointer = true;
+    const auto promote_argument = [&](AbstractValue& value) {
+        if (!value.known || value.values.size() > maximum_summary_values)
+            return;
+        std::vector<std::uint32_t> promoted;
+        for (const auto candidate : value.inventory_pc_relative_code_literal_values) {
+            if (validate_decode_candidate(image, candidate).valid())
+                promoted.push_back(candidate);
+        }
+        if (promoted.empty()) return;
+        mark_inventory_code_pointer_values(value, promoted);
         value.call_sites.insert(transfer_site);
+    };
+    for (std::uint8_t index = 4u; index <= 7u; ++index)
+        promote_argument(observation[index]);
+    for (auto& [slot, value] : observation.stack_values) {
+        static_cast<void>(slot);
+        promote_argument(value);
     }
 }
 
@@ -1721,22 +1862,18 @@ void observe_callee_arguments(
     const std::uint32_t call_site,
     const std::span<const std::uint32_t> candidate_callees,
     const bool candidate_callees_guarded,
-    std::vector<FunctionEvaluation::CallArguments>* const call_arguments) {
+    std::vector<FunctionEvaluation::CallArguments>* const call_arguments,
+    GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics) {
     if (call_arguments == nullptr || candidate_callees.empty()) return;
-    AbstractState observation;
-    observation.registers = state.registers;
-    observation.stack_offsets = state.stack_offsets;
-    observation.stack_may_alias = state.stack_may_alias;
-    observation.inventory_stack_may_alias = state.inventory_stack_may_alias;
-    observation.inventory_vbr_relative = state.inventory_vbr_relative;
-    observation.memory_values = state.memory_values;
+    auto observation = make_callee_abi_input(state, call_site, walk_diagnostics);
     mark_observed_code_pointer_arguments(image, observation);
-    // Caller-local stack slots are not part of callee ingress.  Keeping
-    // them in observations only deep-copied irrelevant state and could
-    // requeue a callee when the effective merged input was unchanged.
     if (candidate_callees_guarded) {
         for (auto& value : observation)
             value.guarded = true;
+        for (auto& [slot, value] : observation.stack_values) {
+            static_cast<void>(slot);
+            value.guarded = true;
+        }
         for (auto& [address, value] : observation.memory_values) {
             static_cast<void>(address);
             value.guarded = true;
@@ -1756,11 +1893,19 @@ void observe_callee_arguments(
 void mark_contextual_candidate_abi_arguments(AbstractState& state) {
     for (std::uint8_t index = 4u; index <= 7u; ++index)
         state[index].contextual_candidate_dependency = true;
+    for (auto& [slot, value] : state.stack_values) {
+        static_cast<void>(slot);
+        value.contextual_candidate_dependency = true;
+    }
 }
 
 [[nodiscard]] bool has_contextual_candidate_abi_argument(const AbstractState& state) {
     for (std::uint8_t index = 4u; index <= 7u; ++index) {
         if (state[index].contextual_candidate_dependency) return true;
+    }
+    for (const auto& [slot, value] : state.stack_values) {
+        static_cast<void>(slot);
+        if (value.contextual_candidate_dependency) return true;
     }
     return false;
 }
@@ -1774,22 +1919,23 @@ void observe_inventory_transfers(
     const bool complete,
     const bool requires_code_pointer,
     const bool observes_abi_arguments,
-    std::vector<FunctionEvaluation::InventoryTransfer>* const transfers) {
+    std::vector<FunctionEvaluation::InventoryTransfer>* const transfers,
+    GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics) {
     if (transfers == nullptr || candidate_callees.empty()) return;
-    auto observation = state;
+    auto observation = make_callee_abi_input(state, transfer_site, walk_diagnostics);
     if (observes_abi_arguments)
         promote_tail_code_literal_arguments(
             image, transfer_site, observation);
     bool found_code_pointer = false;
     const auto observe_code_pointer = [&](const AbstractValue& value) {
-        if (!value.inventory_code_pointer || !value.known ||
-            value.values.empty() ||
-            value.values.size() > maximum_summary_values ||
-            !std::ranges::all_of(value.values, [&](const auto candidate) {
-                return validate_decode_candidate(image, candidate).valid();
-            }))
+        if (!value.known || value.values.size() > maximum_summary_values)
             return;
-        found_code_pointer = true;
+        found_code_pointer = std::any_of(
+            value.inventory_code_pointer_values.begin(),
+            value.inventory_code_pointer_values.end(),
+            [&](const auto candidate) {
+                return validate_decode_candidate(image, candidate).valid();
+            }) || found_code_pointer;
     };
     for (const auto& value : observation)
         observe_code_pointer(value);
@@ -1844,13 +1990,15 @@ void apply_call(AbstractState& state,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments,
                 const bool preserve_guarded_stack_inventory = false,
                 const std::map<std::uint32_t, FunctionValueSummary>*
-                    contextual_summaries = nullptr) {
+                    contextual_summaries = nullptr,
+                GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics = nullptr) {
     observe_callee_arguments(image,
                              state,
                              call_site,
                              candidate_callees,
                              candidate_callees_guarded,
-                             call_arguments);
+                             call_arguments,
+                             walk_diagnostics);
     if (image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC) {
         for (std::size_t index = 0u; index < state.size(); ++index) {
             make_unknown(state[index]);
@@ -1910,9 +2058,8 @@ void apply_call(AbstractState& state,
     // consumed exclusively by the two guarded inventory observers.
     bool returned_may_alias_stack = !candidate_callees_complete;
     bool returned_inventory_may_alias_stack = false;
-    bool returned_inventory_code_pointer = false;
-    bool returned_inventory_pc_relative_code_literal = true;
-    bool returned_inventory_provenance_initialized = false;
+    std::vector<std::uint32_t> returned_inventory_code_pointer_values;
+    std::vector<std::uint32_t> returned_inventory_pc_relative_code_literal_values;
     bool returned_contextual_candidate_dependency = false;
     bool returned_memory_complete = candidate_callees_complete;
     bool returned_memory_initialized = false;
@@ -1983,18 +2130,14 @@ void apply_call(AbstractState& state,
             returned_may_alias_stack || returned->may_alias_stack;
         returned_inventory_may_alias_stack =
             returned_inventory_may_alias_stack || returned->may_alias_stack;
-        returned_inventory_code_pointer =
-            returned_inventory_code_pointer ||
-            returned->inventory_code_pointer;
-        if (!returned_inventory_provenance_initialized) {
-            returned_inventory_pc_relative_code_literal =
-                returned->inventory_pc_relative_code_literal;
-            returned_inventory_provenance_initialized = true;
-        } else {
-            returned_inventory_pc_relative_code_literal =
-                returned_inventory_pc_relative_code_literal &&
-                returned->inventory_pc_relative_code_literal;
-        }
+        returned_inventory_code_pointer_values.insert(
+            returned_inventory_code_pointer_values.end(),
+            returned->inventory_code_pointer_values.begin(),
+            returned->inventory_code_pointer_values.end());
+        returned_inventory_pc_relative_code_literal_values.insert(
+            returned_inventory_pc_relative_code_literal_values.end(),
+            returned->inventory_pc_relative_code_literal_values.begin(),
+            returned->inventory_pc_relative_code_literal_values.end());
         returned_contextual_candidate_dependency =
             returned_contextual_candidate_dependency || returned->contextual_candidate_dependency;
         evidence_callees.insert(candidate);
@@ -2011,11 +2154,11 @@ void apply_call(AbstractState& state,
     state[0u].values = std::move(returned_values);
     state[0u].call_sites = {call_site};
     state[0u].callees = std::move(evidence_callees);
-    state[0u].inventory_code_pointer =
-        returned_inventory_code_pointer;
-    state[0u].inventory_pc_relative_code_literal =
-        returned_inventory_provenance_initialized &&
-        returned_inventory_pc_relative_code_literal;
+    state[0u].inventory_code_pointer_values =
+        std::move(returned_inventory_code_pointer_values);
+    state[0u].inventory_pc_relative_code_literal_values =
+        std::move(returned_inventory_pc_relative_code_literal_values);
+    synchronize_inventory_provenance(state[0u]);
     state[0u].contextual_candidate_dependency = returned_contextual_candidate_dependency;
     state.stack_may_alias[0u] = returned_may_alias_stack;
     state.inventory_stack_may_alias[0u] =
@@ -2181,7 +2324,7 @@ void observe_stored_code_addresses(
     const auto& value = state[instruction.source_register];
     const bool forwarded_code_pointer_store =
         allow_forwarded_unknown_object_store && !stack_derived &&
-        value.inventory_code_pointer && finite_value(value);
+        !value.inventory_code_pointer_values.empty() && finite_value(value);
     if (stack_based && !forwarded_code_pointer_store) return;
 
     include_provenance(value);
@@ -2195,10 +2338,14 @@ void observe_stored_code_addresses(
             [&](const auto address) {
                 return image.resolve_segment_address(address, 4u).has_value();
             });
-    const bool direct_code_pointer_provenance =
-        !evidence_call_sites.empty() || vbr_relative_destination;
-    if (!direct_code_pointer_provenance &&
-        !finite_resolved_non_stack_destination)
+    // A finite physical address is ideal, but a value-widened destination can
+    // remain provably outside the caller stack (for example an object argument
+    // plus a bounded field offset). It is a guarded inventory sink, never a
+    // fixed edge, so retain that narrow non-stack proof as well.
+    const bool persistent_destination = finite_resolved_non_stack_destination ||
+                                        vbr_relative_destination ||
+                                        (destination_proven_non_stack && !stack_derived);
+    if (!persistent_destination && !forwarded_code_pointer_store)
         return;
 
     std::vector<std::uint32_t> validated_candidates;
@@ -2206,37 +2353,45 @@ void observe_stored_code_addresses(
     bool all_candidates_valid = true;
     for (const auto candidate : value.values) {
         const auto validation = validate_decode_candidate(image, candidate);
-        const bool scan_stored_table =
-            finite_resolved_non_stack_destination &&
-            (!direct_code_pointer_provenance || !validation.valid());
+        const bool direct_candidate =
+            has_inventory_code_pointer_value(value, candidate) ||
+            // A direct PC-relative literal is still a bounded guarded AOT
+            // candidate when its image slot is writable. The live store/load
+            // remains authoritative; completeness must not erase the entry.
+            (persistent_destination &&
+             has_inventory_pc_relative_code_literal_value(value, candidate));
+        const bool scan_stored_table = finite_resolved_non_stack_destination;
+        bool table_candidate = false;
         if (scan_stored_table) {
             const auto& table =
                 guarded_inventory_collector.stored_snapshot_table(
                     image, line.address, candidate);
-            if (!table.has_value()) {
-                if (!validation.valid()) all_candidates_valid = false;
-                continue;
+            if (table.has_value()) {
+                table_candidate = true;
+                for (const auto& entry : table->entries) {
+                    StoredCodeAddressCandidate observation;
+                    observation.target_address = entry.target;
+                    observation.complete = false;
+                    observation.guarded = true;
+                    observation.store_instruction_addresses = {line.address};
+                    observation.evidence_call_sites.assign(
+                        evidence_call_sites.begin(), evidence_call_sites.end());
+                    observation.evidence_callees.assign(
+                        evidence_callees.begin(), evidence_callees.end());
+                    candidates.push_back(std::move(observation));
+                }
             }
-            for (const auto& entry : table->entries) {
-                StoredCodeAddressCandidate observation;
-                observation.target_address = entry.target;
-                observation.complete = false;
-                observation.guarded = true;
-                observation.store_instruction_addresses = {line.address};
-                observation.evidence_call_sites.assign(
-                    evidence_call_sites.begin(), evidence_call_sites.end());
-                observation.evidence_callees.assign(
-                    evidence_callees.begin(), evidence_callees.end());
-                candidates.push_back(std::move(observation));
-            }
-            if (!direct_code_pointer_provenance) continue;
+        }
+        if (!direct_candidate) {
+            if (!table_candidate && !validation.valid())
+                all_candidates_valid = false;
+            continue;
         }
         if (!validation.valid()) {
             all_candidates_valid = false;
             continue;
         }
-        if (direct_code_pointer_provenance)
-            validated_candidates.push_back(validation.resolved_address);
+        validated_candidates.push_back(validation.resolved_address);
     }
     normalize(validated_candidates);
     const bool complete = value.complete && all_candidates_valid;
@@ -2262,18 +2417,29 @@ void observe_returned_code_address_tables(
     const AbstractState& state,
     std::vector<ReturnedCodeAddressTableCandidate>& candidates) {
     using K = katana::sh4::InstructionKind;
+    const auto static_image_pointer = [&](const AbstractValue& pointer) {
+        return pointer.known && !pointer.values.empty() &&
+               pointer.values.size() <= maximum_summary_values &&
+               std::ranges::all_of(pointer.values, [&](const auto address) {
+                   return image.resolve_segment_address(address, 4u).has_value();
+               });
+    };
     AbstractValue effective_address;
     switch (line.instruction.kind) {
     case K::MovLongLoad:
     case K::MovLongLoadPostIncrement: {
         const auto base_register = line.instruction.source_register;
-        if (state.inventory_stack_may_alias[base_register]) return;
+        if (state.inventory_stack_may_alias[base_register] &&
+            !static_image_pointer(state[base_register]))
+            return;
         effective_address = state[base_register];
         break;
     }
     case K::MovLongLoadDisplacement: {
         const auto base_register = line.instruction.source_register;
-        if (state.inventory_stack_may_alias[base_register]) return;
+        if (state.inventory_stack_may_alias[base_register] &&
+            !static_image_pointer(state[base_register]))
+            return;
         effective_address = state[base_register];
         if (effective_address.known) {
             effective_address.values =
@@ -2285,9 +2451,6 @@ void observe_returned_code_address_tables(
     }
     case K::MovLongLoadR0Indexed: {
         const auto base_register = line.instruction.source_register;
-        if (state.inventory_stack_may_alias[0u] ||
-            state.inventory_stack_may_alias[base_register])
-            return;
         const auto& index = state[0u];
         const auto& base = state[base_register];
         effective_address.known = index.known && base.known;
@@ -2300,6 +2463,10 @@ void observe_returned_code_address_tables(
         effective_address.callees.insert(base.callees.begin(),
                                          base.callees.end());
         effective_address.values = indexed_addresses(index, base, base_register == 0u);
+        if ((state.inventory_stack_may_alias[0u] ||
+             state.inventory_stack_may_alias[base_register]) &&
+            !static_image_pointer(effective_address))
+            return;
         break;
     }
     default:
@@ -2358,7 +2525,8 @@ FunctionEvaluation evaluate_function(
         std::nullopt,
     const std::map<std::uint32_t, FunctionValueSummary>*
         contextual_summaries = nullptr,
-    const TailIngressMap* const local_tail_ingresses = nullptr) {
+    const TailIngressMap* const local_tail_ingresses = nullptr,
+    GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics = nullptr) {
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
     if (!collect_resolutions)
@@ -2507,7 +2675,8 @@ FunctionEvaluation evaluate_function(
                            summaries,
                            call_arguments,
                            may_merge_stack_inventory,
-                           contextual_summaries);
+                            contextual_summaries,
+                            walk_diagnostics);
                 delayed_call.reset();
             }
             if (delayed_tail_ingress.has_value()) {
@@ -2520,7 +2689,8 @@ FunctionEvaluation evaluate_function(
                     delayed_tail_ingress->candidate_callees_complete,
                     delayed_tail_ingress->requires_code_pointer,
                     delayed_tail_ingress->observes_abi_arguments,
-                    inventory_transfers);
+                    inventory_transfers,
+                    walk_diagnostics);
                 delayed_tail_ingress.reset();
             }
             if (call) {
@@ -2557,7 +2727,8 @@ FunctionEvaluation evaluate_function(
                                summaries,
                                call_arguments,
                                may_merge_stack_inventory,
-                               contextual_summaries);
+                                contextual_summaries,
+                                walk_diagnostics);
             }
             if (!call &&
                 (line.instruction.control_flow ==
@@ -2586,7 +2757,8 @@ FunctionEvaluation evaluate_function(
                                                 tail_ingress->complete,
                                                 tail_ingress->requires_code_pointer,
                                                 tail_ingress->observes_abi_arguments,
-                                                inventory_transfers);
+                                                 inventory_transfers,
+                                                 walk_diagnostics);
                 }
             }
         }
@@ -2632,8 +2804,8 @@ FunctionEvaluation evaluate_function(
         }
         bool complete = !returns.empty();
         bool finite = !returns.empty();
-        bool inventory_code_pointer = false;
-        bool inventory_pc_relative_code_literal = !returns.empty();
+        std::set<std::uint32_t> inventory_code_pointer_values;
+        std::set<std::uint32_t> inventory_pc_relative_code_literal_values;
         bool contextual_candidate_dependency = false;
         std::set<std::uint32_t> values;
         std::set<std::uint32_t> evidence;
@@ -2645,14 +2817,14 @@ FunctionEvaluation evaluate_function(
             if (!value.known || value.values.empty()) {
                 complete = false;
                 finite = false;
-                inventory_pc_relative_code_literal = false;
                 continue;
             }
-            inventory_code_pointer =
-                inventory_code_pointer || value.inventory_code_pointer;
-            inventory_pc_relative_code_literal =
-                inventory_pc_relative_code_literal &&
-                value.inventory_pc_relative_code_literal;
+            inventory_code_pointer_values.insert(
+                value.inventory_code_pointer_values.begin(),
+                value.inventory_code_pointer_values.end());
+            inventory_pc_relative_code_literal_values.insert(
+                value.inventory_pc_relative_code_literal_values.begin(),
+                value.inventory_pc_relative_code_literal_values.end());
             if (!value.complete) complete = false;
             values.insert(value.values.begin(), value.values.end());
             evidence.insert(value.callees.begin(), value.callees.end());
@@ -2666,9 +2838,14 @@ FunctionEvaluation evaluate_function(
         summary.contextual_candidate_dependency = contextual_candidate_dependency;
         if (finite) {
             summary.values.assign(values.begin(), values.end());
-            summary.inventory_code_pointer = inventory_code_pointer;
+            summary.inventory_code_pointer_values.assign(
+                inventory_code_pointer_values.begin(), inventory_code_pointer_values.end());
+            summary.inventory_pc_relative_code_literal_values.assign(
+                inventory_pc_relative_code_literal_values.begin(),
+                inventory_pc_relative_code_literal_values.end());
+            summary.inventory_code_pointer = !summary.inventory_code_pointer_values.empty();
             summary.inventory_pc_relative_code_literal =
-                inventory_pc_relative_code_literal;
+                !summary.inventory_pc_relative_code_literal_values.empty();
         }
         summary.evidence_callees.assign(evidence.begin(), evidence.end());
         summary.reason = complete
@@ -2753,10 +2930,10 @@ bool merge_candidate_input(CandidateInput& destination,
         bool may_alias_stack = false;
         bool inventory_may_alias_stack = false;
         bool inventory_stack_derived = false;
-        bool inventory_code_pointer = false;
-        bool inventory_pc_relative_code_literal = true;
         bool inventory_vbr_relative = true;
         std::optional<std::int32_t> stack_offset;
+        std::set<std::uint32_t> inventory_code_pointer_values;
+        std::set<std::uint32_t> inventory_pc_relative_code_literal_values;
         std::set<std::uint32_t> call_sites;
         std::set<std::uint32_t> callees;
         for (const auto call_site : destination.expected_call_sites) {
@@ -2771,11 +2948,12 @@ bool merge_candidate_input(CandidateInput& destination,
                 call_observation.inventory_stack_may_alias[index];
             inventory_stack_derived =
                 inventory_stack_derived || source.inventory_stack_derived;
-            inventory_code_pointer =
-                inventory_code_pointer || source.inventory_code_pointer;
-            inventory_pc_relative_code_literal =
-                inventory_pc_relative_code_literal &&
-                source.inventory_pc_relative_code_literal;
+            inventory_code_pointer_values.insert(
+                source.inventory_code_pointer_values.begin(),
+                source.inventory_code_pointer_values.end());
+            inventory_pc_relative_code_literal_values.insert(
+                source.inventory_pc_relative_code_literal_values.begin(),
+                source.inventory_pc_relative_code_literal_values.end());
             inventory_vbr_relative =
                 inventory_vbr_relative &&
                 call_observation.inventory_vbr_relative[index];
@@ -2808,9 +2986,12 @@ bool merge_candidate_input(CandidateInput& destination,
         }
         if (!all_known || first) make_unknown(target);
         target.inventory_stack_derived = inventory_stack_derived;
-        target.inventory_code_pointer = inventory_code_pointer;
-        target.inventory_pc_relative_code_literal =
-            inventory_pc_relative_code_literal;
+        target.inventory_code_pointer_values.assign(
+            inventory_code_pointer_values.begin(), inventory_code_pointer_values.end());
+        target.inventory_pc_relative_code_literal_values.assign(
+            inventory_pc_relative_code_literal_values.begin(),
+            inventory_pc_relative_code_literal_values.end());
+        synchronize_inventory_provenance(target);
         target.call_sites = std::move(call_sites);
         target.callees = std::move(callees);
         merged.stack_may_alias[index] = may_alias_stack;
@@ -2848,6 +3029,30 @@ bool merge_candidate_input(CandidateInput& destination,
             ++value;
         }
     }
+    merged.stack_values = destination.observations.at(first_call_site).stack_values;
+    for (auto value = merged.stack_values.begin(); value != merged.stack_values.end();) {
+        bool retained = true;
+        for (const auto call_site : destination.expected_call_sites) {
+            if (call_site == first_call_site) continue;
+            const auto& source_values = destination.observations.at(call_site).stack_values;
+            const auto source = source_values.find(value->first);
+            if (source == source_values.end()) {
+                retained = false;
+                break;
+            }
+            merge_value(value->second, source->second);
+            if (!value->second.known) {
+                retained = false;
+                break;
+            }
+        }
+        if (!retained)
+            value = merged.stack_values.erase(value);
+        else {
+            value->second.guarded = true;
+            ++value;
+        }
+    }
     const bool changed = destination.state != merged;
     destination.state = std::move(merged);
     return changed;
@@ -2875,6 +3080,19 @@ bool requires_isolated_store_harvest(
                             return std::find(
                                        merged.values.begin(), merged.values.end(), value) ==
                                    merged.values.end();
+                        }))
+            return true;
+    }
+    for (const auto& [slot, observed] : observation.stack_values) {
+        if (!observed.known || observed.values.empty()) continue;
+        const auto merged = input.state.stack_values.find(slot);
+        if (merged == input.state.stack_values.end() || !merged->second.known ||
+            std::any_of(observed.values.begin(),
+                        observed.values.end(),
+                        [&](const auto value) {
+                            return std::find(merged->second.values.begin(),
+                                             merged->second.values.end(),
+                                             value) == merged->second.values.end();
                         }))
             return true;
     }
@@ -2952,6 +3170,15 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
         if (input[index].values.size() > maximum_summary_values)
             make_unknown_preserving_provenance(input[index]);
     }
+    input.stack_values = observation.stack_values;
+    for (auto& [slot, value] : input.stack_values) {
+        static_cast<void>(slot);
+        value.complete = false;
+        value.guarded = value.known;
+        value.call_sites.insert(call_site);
+        if (value.values.size() > maximum_summary_values)
+            make_unknown_preserving_provenance(value);
+    }
     return input;
 }
 
@@ -2988,14 +3215,30 @@ bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage
         const auto& observed = observation[index];
         if (!observed.known || observed.values.empty() ||
             observed.values.size() > maximum_summary_values ||
-            !observed.inventory_code_pointer)
+            observed.inventory_code_pointer_values.empty())
             continue;
         const auto& merged = merged_input[index];
-        for (const auto value : observed.values) {
+        for (const auto value : observed.inventory_code_pointer_values) {
             if (!validate_decode_candidate(image, value).valid()) continue;
             if (!merged.known ||
                 std::find(merged.values.begin(), merged.values.end(), value) ==
                     merged.values.end())
+                return true;
+        }
+    }
+    for (const auto& [slot, observed] : observation.stack_values) {
+        static_cast<void>(slot);
+        if (!observed.known || observed.values.empty() ||
+            observed.values.size() > maximum_summary_values ||
+            observed.inventory_code_pointer_values.empty())
+            continue;
+        const auto merged = merged_input.stack_values.find(slot);
+        for (const auto value : observed.inventory_code_pointer_values) {
+            if (!validate_decode_candidate(image, value).valid()) continue;
+            if (merged == merged_input.stack_values.end() || !merged->second.known ||
+                std::find(merged->second.values.begin(),
+                          merged->second.values.end(),
+                          value) == merged->second.values.end())
                 return true;
         }
     }
@@ -3312,6 +3555,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         maximum_contextual_return_contexts;
     inventory_walk_diagnostics.contextual_return_evaluation_budget =
         maximum_contextual_return_evaluations;
+    inventory_walk_diagnostics.abi_stack_argument_slot_budget =
+        maximum_abi_stack_argument_slots;
     const auto enqueue_inventory_region =
         [&](const std::uint32_t target) {
             if (!block_index.contains(target) ||
@@ -3720,7 +3965,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                             no_tail_ingresses,
                                             summaries,
                                             candidate_inputs[address].state,
-                                            false);
+                                            false,
+                                            false,
+                                            nullptr,
+                                            std::nullopt,
+                                            nullptr,
+                                            nullptr,
+                                            &inventory_walk_diagnostics);
         if (sampled_iteration) report_progress("fixpoint-evaluate-complete");
         auto& previous = summaries[address];
         if (previous != evaluation.summary) {
@@ -3785,6 +4036,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         FunctionEvaluation evaluation;
         GuardedCodeInventoryCollector inventory{true};
         GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
+        std::size_t forwarded_store_contexts_consumed = 0u;
     };
     const auto& final_candidate_inputs = std::as_const(candidate_inputs);
     const auto& final_function_by_address = std::as_const(function_by_address);
@@ -3854,6 +4106,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
             maximum_contextual_return_contexts;
         function_result.walk_diagnostics.contextual_return_evaluation_budget =
             maximum_contextual_return_evaluations;
+        function_result.walk_diagnostics.abi_stack_argument_slot_budget =
+            maximum_abi_stack_argument_slots;
         const auto* function = resolution_functions[function_index];
         const auto& input = final_candidate_inputs.at(function->entry_address);
         function_result.evaluation = evaluate_function(image,
@@ -3865,11 +4119,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                                        input.state,
                                                        true,
                                                        false,
-                                                       &function_result.inventory);
+                                                        &function_result.inventory,
+                                                        std::nullopt,
+                                                        nullptr,
+                                                        nullptr,
+                                                        &function_result.walk_diagnostics);
         const auto harvest_forwarded_inventory =
             [&](const FunctionEvaluation& seed,
                 const std::optional<std::uint32_t> root_call_site) {
-                std::size_t forwarded_context_count = 0u;
                 struct ForwardedStoreContext {
                     const FunctionInfo* function = nullptr;
                     std::uint32_t target = 0u;
@@ -3896,7 +4153,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                            visited.input == forwarded_input;
                                 }))
                             return;
-                        if (forwarded_context_count + forwarded_contexts.size() >=
+                        if (function_result.forwarded_store_contexts_consumed +
+                                forwarded_contexts.size() >=
                             maximum_forwarded_store_contexts) {
                             function_result.walk_diagnostics.forwarded_store_context_limited_functions = 1u;
                             return;
@@ -3959,11 +4217,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 // complete post-delay state in an owner-bounded ephemeral
                 // region.  Neither path contributes summaries or CFG edges.
                 while (!forwarded_contexts.empty() &&
-                       forwarded_context_count <
+                       function_result.forwarded_store_contexts_consumed <
                            maximum_forwarded_store_contexts) {
                     auto forwarded = std::move(forwarded_contexts.front());
                     forwarded_contexts.pop_front();
-                    ++forwarded_context_count;
+                    ++function_result.forwarded_store_contexts_consumed;
                     const TailIngressMap* local_tail_ingresses = nullptr;
                     if (forwarded.tail) {
                         const auto local =
@@ -3984,7 +4242,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         &function_result.inventory,
                         root_call_site,
                         nullptr,
-                        local_tail_ingresses);
+                         local_tail_ingresses,
+                         &function_result.walk_diagnostics);
                     for (const auto& nested : forwarded_evaluation.call_arguments)
                         enqueue_call(nested);
                     for (const auto& nested : forwarded_evaluation.inventory_transfers)
@@ -4039,7 +4298,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     true,
                     &function_result.inventory,
                     std::nullopt,
-                    &contextual_summaries);
+                     &contextual_summaries,
+                     nullptr,
+                     &function_result.walk_diagnostics);
                 const auto previous =
                     contextual_summaries.find(address);
                 const bool summary_changed =
@@ -4119,9 +4380,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                       false,
                                       true,
                                       &function_result.inventory,
-                                      call_site);
+                                       call_site,
+                                       nullptr,
+                                       nullptr,
+                                       &function_result.walk_diagnostics);
                 harvest_forwarded_inventory(isolated_evaluation,
                                             call_site);
+                if (function_result.walk_diagnostics
+                        .forwarded_store_context_limited_functions != 0u)
+                    break;
             }
         }
         return function_result;
@@ -4175,6 +4442,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
             resolved.walk_diagnostics.contextual_return_context_limited_functions;
         inventory_walk_diagnostics.contextual_return_evaluation_limited_functions +=
             resolved.walk_diagnostics.contextual_return_evaluation_limited_functions;
+        inventory_walk_diagnostics.abi_stack_argument_projection_truncated_functions +=
+            resolved.walk_diagnostics.abi_stack_argument_projection_truncated_functions;
         resolution_count += resolved.evaluation.resolutions.size();
         result.resolutions.insert(
             result.resolutions.end(),

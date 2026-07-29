@@ -3968,6 +3968,9 @@ int run_test(const int argc, char* argv[]) {
                     .find("\"guarded_forwarded_store_context_limited_functions\":0") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
+                    .find("\"guarded_abi_stack_argument_projection_truncated_functions\":0") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
                     .find("\"returned_table_scan_truncated\":false") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")

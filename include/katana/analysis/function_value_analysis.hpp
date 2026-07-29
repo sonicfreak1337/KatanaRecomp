@@ -26,6 +26,8 @@ struct FunctionRegisterValueSummary {
     // across an ordinary helper return.
     bool inventory_code_pointer = false;
     bool inventory_pc_relative_code_literal = false;
+    std::vector<std::uint32_t> inventory_code_pointer_values;
+    std::vector<std::uint32_t> inventory_pc_relative_code_literal_values;
     // Internal candidate-return slice dependency. It is not control-flow or
     // code-pointer evidence; it only decides whether a direct helper needs a
     // contextual summary instead of its already authoritative global summary.
@@ -115,13 +117,16 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t contextual_return_context_limited_functions = 0u;
     std::size_t contextual_return_evaluation_budget = 0u;
     std::size_t contextual_return_evaluation_limited_functions = 0u;
+    std::size_t abi_stack_argument_slot_budget = 0u;
+    std::size_t abi_stack_argument_projection_truncated_functions = 0u;
 
     [[nodiscard]] constexpr bool truncated() const noexcept {
         return pending_inventory_region_count != 0u ||
                inventory_region_block_limited_regions != 0u ||
                forwarded_store_context_limited_functions != 0u ||
                contextual_return_context_limited_functions != 0u ||
-               contextual_return_evaluation_limited_functions != 0u;
+               contextual_return_evaluation_limited_functions != 0u ||
+               abi_stack_argument_projection_truncated_functions != 0u;
     }
 
     bool operator==(const GuardedCodeInventoryWalkDiagnostics&) const = default;
