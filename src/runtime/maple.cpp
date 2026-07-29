@@ -28,9 +28,11 @@ struct VmuLocation {
 
 VmuLocation decode_vmu_location(const std::uint32_t value) noexcept {
     return {
-        static_cast<std::uint16_t>(value),
-        static_cast<std::uint8_t>(value >> 16u),
-        static_cast<std::uint8_t>(value >> 24u),
+        static_cast<std::uint16_t>(
+            ((value >> 24u) & 0xFFu) |
+            (((value >> 16u) & 0xFFu) << 8u)),
+        static_cast<std::uint8_t>(value >> 8u),
+        static_cast<std::uint8_t>(value),
     };
 }
 

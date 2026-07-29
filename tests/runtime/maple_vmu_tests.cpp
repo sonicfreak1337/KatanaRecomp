@@ -35,9 +35,10 @@ int main() {
     const auto location = [](const std::uint16_t block,
                              const std::uint8_t phase = 0u,
                              const std::uint8_t partition = 0u) {
-        return static_cast<std::uint32_t>(block) |
-               (static_cast<std::uint32_t>(phase) << 16u) |
-               (static_cast<std::uint32_t>(partition) << 24u);
+        return static_cast<std::uint32_t>(partition) |
+               (static_cast<std::uint32_t>(phase) << 8u) |
+               (static_cast<std::uint32_t>(block & 0xFFu) << 24u) |
+               (static_cast<std::uint32_t>(block >> 8u) << 16u);
     };
     const auto write_phase = [&](const std::uint16_t block,
                                  const std::uint8_t phase,

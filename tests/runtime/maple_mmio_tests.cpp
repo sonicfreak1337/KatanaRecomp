@@ -1,6 +1,7 @@
 #include "katana/runtime/maple_mmio.hpp"
 #include "katana/runtime/host_input.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -141,6 +142,49 @@ int main() {
                 multi_response_notifications == 2u &&
                 first_notification_saw_complete_batch,
             "Maple-Mehrantwort-DMA macht zwischen Antwortbeobachtern einen Teilzustand sichtbar.");
+
+    const auto swap_word = [](const std::uint32_t value) {
+        return ((value & 0x000000FFu) << 24u) |
+               ((value & 0x0000FF00u) << 8u) |
+               ((value & 0x00FF0000u) >> 8u) |
+               ((value & 0xFF000000u) >> 24u);
+    };
+    const auto read_vmu_block_one = [&](const std::uint32_t msb_select,
+                                        const std::uint32_t response_address) {
+        constexpr std::uint32_t descriptor = 0x80000002u;
+        constexpr std::uint32_t header = 0x0200010Bu;
+        constexpr std::uint32_t block_one = 0x01000000u;
+        const auto host_word = [&](const std::uint32_t value) {
+            return msb_select == 0u ? swap_word(value) : value;
+        };
+        memory.write_u32(0x005F6CE8u, msb_select);
+        memory.write_u32(table, descriptor);
+        memory.write_u32(table + 4u, response_address);
+        memory.write_u32(table + 8u, host_word(header));
+        memory.write_u32(table + 12u, host_word(vmu_memory_function));
+        memory.write_u32(table + 16u, host_word(block_one));
+        memory.write_u32(response_address, 0u);
+        memory.write_u32(response_address + 4u, 0u);
+        memory.write_u32(response_address + 8u, 0u);
+        memory.write_u32(0x005F6C04u, table);
+        memory.write_u32(0x005F6C10u, 0u);
+        memory.write_u32(0x005F6C14u, 1u);
+        memory.write_u32(0x005F6C18u, 1u);
+        static_cast<void>(scheduler.advance_by(1340u, 1u));
+        return std::array{
+            host_word(memory.read_u32(response_address)),
+            host_word(memory.read_u32(response_address + 4u)),
+            host_word(memory.read_u32(response_address + 8u)),
+        };
+    };
+    const auto vmu_msb_response = read_vmu_block_one(1u, 0x0C003000u);
+    const auto vmu_lsb_response = read_vmu_block_one(0u, 0x0C004000u);
+    require(vmu_msb_response[0] == 0x82010008u &&
+                vmu_msb_response[1] == vmu_memory_function &&
+                vmu_msb_response[2] == 0x01000000u &&
+                vmu_lsb_response == vmu_msb_response,
+            "Maple-DMA dekodiert VMU-Block 1 oder MSBSEL nicht im Dreamcast-Wortlayout.");
+    memory.write_u32(0x005F6CE8u, 1u);
 
     const std::vector<std::uint8_t> admitted_bytes{0x10u, 0x20u, 0x30u, 0x40u};
     const std::vector<std::uint8_t> rejected_bytes{0x50u, 0x60u, 0x70u, 0x80u};
@@ -508,7 +552,7 @@ int main() {
     std::vector<std::uint32_t> staged_write(
         2u + 128u / sizeof(std::uint32_t), 0xA5A5A5A5u);
     staged_write[0] = vmu_memory_function;
-    staged_write[1] = 7u;
+    staged_write[1] = 0x07000000u;
     require(maple
                     ->exchange(
                         0u,

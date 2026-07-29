@@ -241,13 +241,15 @@ int main() {
         std::vector<std::uint32_t> payload(2u + 128u / sizeof(std::uint32_t),
                                            0xA5A5A5A5u);
         payload[0] = vmu_memory_function;
-        payload[1] = 1u | (static_cast<std::uint32_t>(phase) << 16u);
+        payload[1] = 0x01000000u |
+                     (static_cast<std::uint32_t>(phase) << 8u);
         require(vmu.transact({MapleCommand::BlockWrite, std::move(payload)}).code ==
                     MapleResponseCode::Ack,
                 "VMU-Blockwrite lehnt eine geordnete Speicherphase ab.");
     }
     require(vmu.transact(
-                    {MapleCommand::BlockSync, {vmu_memory_function, 1u | (4u << 16u)}})
+                    {MapleCommand::BlockSync,
+                     {vmu_memory_function, 0x01000400u}})
                     .code == MapleResponseCode::Ack &&
                 vmu.persistent_working_copy() && vmu.working_copy_dirty(),
             "VMU-Blockwrite markiert die persistente Arbeitskopie nicht dirty.");
