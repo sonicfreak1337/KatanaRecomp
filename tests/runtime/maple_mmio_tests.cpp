@@ -67,6 +67,10 @@ int main() {
     std::uint64_t completions = 0u;
     const auto controller = map_dreamcast_maple_controller(
         memory, scheduler, maple, MapleDmaTiming{10u}, [&] { ++completions; });
+    // MDAPRO stores the first permitted 1-MiB page in bits 8..14 and
+    // the final page in bits 0..6. This asymmetric window covers all
+    // 16 MiB of Dreamcast main RAM.
+    memory.write_u32(0x005F6C8Cu, 0x6155404Fu);
 
     constexpr std::uint32_t table = 0x0C001000u;
     constexpr std::uint32_t response = 0x0C002000u;
@@ -172,7 +176,7 @@ int main() {
                 memory.read_u32(0x005F6C84u) == 0u,
             "Maple-System-, MSB- oder Statusregister besitzen falsche Semantik.");
     memory.write_u32(0x005F6C8Cu, 0x12340000u);
-    memory.write_u32(0x005F6C8Cu, 0x61557F00u);
+    memory.write_u32(0x005F6C8Cu, 0x6155007Fu);
     require(throws([&] { static_cast<void>(memory.read_u32(0x005F6C8Cu)); }) &&
                 throws([&] { memory.write_u32(0x005F6C84u, 1u); }) &&
                 throws([&] { static_cast<void>(memory.read_u32(0x005F6C00u)); }) &&
@@ -228,7 +232,7 @@ int main() {
             "Hardwaregetriggerter Maple-Gastfehler divergiert vom Softwaretriggervertrag.");
 
     memory.write_u32(0x005F6C14u, 0u);
-    memory.write_u32(0x005F6C8Cu, 0x61557F00u);
+    memory.write_u32(0x005F6C8Cu, 0x6155007Fu);
     memory.write_u32(table, 0x80000001u);
     memory.write_u32(table + 4u, response);
     memory.write_u32(table + 8u, request_header);
@@ -271,7 +275,7 @@ int main() {
             "aus dem Schedulercallback aus.");
 
     memory.write_u32(0x005F6C14u, 0u);
-    memory.write_u32(0x005F6C8Cu, 0x61557F00u);
+    memory.write_u32(0x005F6C8Cu, 0x6155007Fu);
     memory.write_u32(0x005F6C04u, table);
     memory.write_u32(0x005F6C10u, 1u);
     memory.write_u32(0x005F6C14u, 1u);
@@ -284,6 +288,7 @@ int main() {
                 scheduler.pending_event_count() == 0u,
             "Maple-Reset entfernt einen geArmed Transfer nicht.");
 
+    memory.write_u32(0x005F6C8Cu, 0x6155007Fu);
     for (std::uint32_t index = 0u; index < 4u; ++index)
         memory.write_u32(response + index * 4u, 0xEEEEEEEEu);
     memory.write_u32(0x005F6C04u, table);
@@ -357,6 +362,7 @@ int main() {
                 throw std::runtime_error(
                     "synthetischer Maple-ASIC-Publikationsfehler");
             });
+        publication_memory.write_u32(0x005F6C8Cu, 0x6155007Fu);
 
         constexpr std::uint32_t publication_table = 0x0C003000u;
         constexpr std::uint32_t publication_response = 0x0C004000u;
@@ -444,6 +450,7 @@ int main() {
             timeline_scheduler,
             timeline_bus,
             MapleDmaTiming{10u});
+        timeline_memory.write_u32(0x005F6C8Cu, 0x6155007Fu);
 
         constexpr std::uint32_t timeline_table = 0x0C005000u;
         constexpr std::uint32_t timeline_first_response = 0x0C006000u;
@@ -511,6 +518,25 @@ int main() {
             "Maple-Serialisierungstest kann keine VMU-Schreibphase vormerken.");
     const auto staged_state =
         snapshot_dreamcast_maple_state(*maple, *controller);
+    auto asymmetric_restore = staged_state.controller;
+    asymmetric_restore.completion_event.reset();
+    asymmetric_restore.completion_event_rehydration_pending = false;
+    asymmetric_restore.pending_responses = {
+        {response, {0x01200008u, 0x02000000u, 0xA5A5A5A5u}}};
+    asymmetric_restore.enabled = 1u;
+    asymmetric_restore.active = 1u;
+    asymmetric_restore.state = MapleDmaState::Active;
+    asymmetric_restore.error = MapleDmaError::None;
+    asymmetric_restore.error_address.reset();
+    asymmetric_restore.address_protect = 0x404Fu;
+    controller->validate_state_restore(asymmetric_restore);
+    asymmetric_restore.address_protect = 0x4F40u;
+    require(
+        throws([&] {
+            controller->validate_state_restore(asymmetric_restore);
+        }),
+        "Maple-Handoff vertauscht Start und Ende des asymmetrischen "
+        "MDAPRO-Schutzfensters.");
     const auto decoded_staged_state =
         decode_dreamcast_maple_state(
             encode_dreamcast_maple_state(staged_state));

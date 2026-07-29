@@ -39,6 +39,21 @@ std::uint32_t swap_word(const std::uint32_t value) noexcept {
            ((value & 0x00FF0000u) >> 8u) | ((value & 0xFF000000u) >> 24u);
 }
 
+bool maple_protected_system_range(const std::uint32_t address_protect,
+                                  const std::uint32_t address,
+                                  const std::size_t size) noexcept {
+    if (size == 0u) return false;
+    const auto start_page = (address_protect >> 8u) & 0x7Fu;
+    const auto end_page = address_protect & 0x7Fu;
+    if (start_page > end_page) return false;
+    const auto bottom = (start_page << 20u) | 0x08000000u;
+    const auto top = (end_page << 20u) | 0x080FFFFFu;
+    const auto physical = address & 0x1FFFFFFFu;
+    if (size - 1u > std::numeric_limits<std::uint32_t>::max() - physical) return false;
+    const auto end = physical + static_cast<std::uint32_t>(size - 1u);
+    return physical >= bottom && end <= top;
+}
+
 std::uint32_t checked_address_add(const std::uint32_t address, const std::size_t bytes) {
     if (bytes > std::numeric_limits<std::uint32_t>::max() - address)
         throw MapleDmaFault(
@@ -502,24 +517,11 @@ void DreamcastMapleController::validate_state_restore(
         throw std::invalid_argument(
             "Maple-DMA-Handoff passt nicht zum Runtime-Timingvertrag.");
 
-    const auto bottom =
-        ((state.address_protect & 0x7Fu) << 20u) | 0x08000000u;
-    const auto top =
-        (((state.address_protect >> 8u) & 0x7Fu) << 20u) |
-        0x080FFFFFu;
     for (const auto& response : state.pending_responses) {
         const auto byte_count =
             response.words.size() * sizeof(std::uint32_t);
-        const auto physical =
-            response.destination & 0x1FFFFFFFu;
-        if (byte_count == 0u ||
-            byte_count - 1u >
-                std::numeric_limits<std::uint32_t>::max() - physical)
-            throw std::invalid_argument(
-                "Maple-DMA-Handoff-Antwortbereich laeuft ueber.");
-        const auto end =
-            physical + static_cast<std::uint32_t>(byte_count - 1u);
-        if (physical < bottom || end > top ||
+        if (!maple_protected_system_range(
+                state.address_protect, response.destination, byte_count) ||
             !memory_.contains(response.destination, byte_count) ||
             !memory_.is_writable_linear_range(
                 response.destination, byte_count))
@@ -640,13 +642,8 @@ bool DreamcastMapleController::event_rehydration_pending() const noexcept {
 
 bool DreamcastMapleController::protected_address(const std::uint32_t address,
                                                  const std::size_t size) const noexcept {
-    if (size == 0u) return false;
-    const auto bottom = ((address_protect_ & 0x7Fu) << 20u) | 0x08000000u;
-    const auto top = (((address_protect_ >> 8u) & 0x7Fu) << 20u) | 0x080FFFFFu;
-    const auto physical = address & 0x1FFFFFFFu;
-    if (size - 1u > std::numeric_limits<std::uint32_t>::max() - physical) return false;
-    const auto end = physical + static_cast<std::uint32_t>(size - 1u);
-    return physical >= bottom && end <= top && memory_.contains(address, size);
+    return maple_protected_system_range(address_protect_, address, size) &&
+           memory_.contains(address, size);
 }
 
 std::pair<std::uint8_t, std::uint8_t>
