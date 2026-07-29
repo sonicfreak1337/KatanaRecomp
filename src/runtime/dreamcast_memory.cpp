@@ -99,6 +99,19 @@ class TaVramMemoryDevice final : public MemoryDevice {
             "Der Area-4-TA-VRAM-Pfad ist ein schreibbarer Hardwarepfad.");
     }
 
+    void validate_write(const std::uint32_t offset,
+                        const std::size_t size,
+                        const CodeWriteSource source) const override {
+        const auto admitted_origin =
+            source == CodeWriteSource::Dma ||
+            source == CodeWriteSource::StoreQueue;
+        if (!admitted_origin || size != 32u || (offset & 31u) != 0u) {
+            throw std::invalid_argument(
+                "Der Area-4-TA-VRAM-Pfad akzeptiert nur ausgerichtete "
+                "32-Byte-DMA- oder Store-Queue-Schreibpakete.");
+        }
+    }
+
     void write_u8(const std::uint32_t offset, const std::uint8_t value) override {
         backing_->write_u8(backing_offset(offset), value);
     }

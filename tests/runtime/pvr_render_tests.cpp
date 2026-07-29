@@ -781,8 +781,12 @@ int main() {
             dreamcast_vram_32bit_to_linear_offset(path0_logical);
         area4_system_bus->write(
             system_bus_register::TextureMemoryMode0, 1u);
-        area4_memory.write_u32(
-            0x11000000u + path0_logical, 0x11223344u);
+        std::array<std::uint8_t, 32u> area4_packet{
+            0x44u, 0x33u, 0x22u, 0x11u};
+        area4_memory.write_bytes(
+            0x11000000u + path0_logical,
+            area4_packet,
+            CodeWriteSource::Dma);
         const auto path0_dirty = area4_renderer.snapshot();
         require(is_dirty(path0_dirty, path0_projected) &&
                     !is_dirty(path0_dirty, path0_raw),
@@ -796,8 +800,14 @@ int main() {
             dreamcast_vram_32bit_to_linear_offset(path1_logical);
         area4_system_bus->write(
             system_bus_register::TextureMemoryMode1, 0u);
-        area4_memory.write_u32(
-            0x13000000u + path1_logical, 0x55667788u);
+        area4_packet[0u] = 0x88u;
+        area4_packet[1u] = 0x77u;
+        area4_packet[2u] = 0x66u;
+        area4_packet[3u] = 0x55u;
+        area4_memory.write_bytes(
+            0x13000000u + path1_logical,
+            area4_packet,
+            CodeWriteSource::Dma);
         const auto path1_dirty = area4_renderer.snapshot();
         require(is_dirty(path1_dirty, path1_raw) &&
                     !is_dirty(path1_dirty, path1_projected),

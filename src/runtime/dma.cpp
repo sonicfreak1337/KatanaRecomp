@@ -761,16 +761,21 @@ bool Sh4Dmac::transfer_one(const std::size_t index, const std::size_t size) noex
             memory_.write_u32(
                 value.destination, memory_.read_u32(value.source), CodeWriteSource::Dma);
         } else {
-            std::array<std::uint32_t, 8u> words{};
+            std::array<std::uint8_t, 32u> bytes{};
             const auto word_count = size / 4u;
             for (std::size_t word = 0u; word < word_count; ++word) {
                 const auto offset = static_cast<std::uint32_t>(word * 4u);
-                words[word] = memory_.read_u32(value.source + offset);
+                const auto word_value =
+                    memory_.read_u32(value.source + offset);
+                for (std::size_t byte = 0u; byte < sizeof(word_value); ++byte)
+                    bytes[word * sizeof(word_value) + byte] =
+                        static_cast<std::uint8_t>(
+                            word_value >> (byte * 8u));
             }
-            for (std::size_t word = 0u; word < word_count; ++word) {
-                const auto offset = static_cast<std::uint32_t>(word * 4u);
-                memory_.write_u32(value.destination + offset, words[word], CodeWriteSource::Dma);
-            }
+            memory_.write_bytes(
+                value.destination,
+                std::span<const std::uint8_t>(bytes).first(size),
+                CodeWriteSource::Dma);
         }
     } catch (const std::exception&) {
         set_fault(index, DmaFaultReason::MemoryAccess, size);

@@ -1,6 +1,7 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/dma.hpp"
 #include "katana/runtime/pvr.hpp"
+#include "katana/runtime/store_queue.hpp"
 #include "katana/runtime/system_asic.hpp"
 
 #include <algorithm>
@@ -145,6 +146,15 @@ int main() {
         map_dreamcast_ta_vram_aliases(
             direct_memory, direct_vram, direct_system_bus);
         Sh4Dmac direct_dmac(direct_scheduler, direct_memory, DmaTiming{1u});
+        const auto backing_offset =
+            [](const std::uint32_t address,
+               const bool uses_32bit_path) {
+                const auto logical = address & 0x007FFFFFu;
+                return uses_32bit_path
+                           ? dreamcast_vram_32bit_to_linear_offset(
+                                 logical)
+                           : logical;
+            };
         const auto run_direct_transfer =
             [&](const std::uint32_t source_offset,
                 const PvrChannel2DestinationPlan& plan,
@@ -175,12 +185,9 @@ int main() {
                 for (std::uint32_t offset = 0u;
                      offset < static_cast<std::uint32_t>(plan.byte_count);
                      offset += 4u) {
-                    const auto logical =
-                        (plan.initial_address & 0x007FFFFFu) + offset;
-                    const auto backing =
-                        uses_32bit_path
-                            ? dreamcast_vram_32bit_to_linear_offset(logical)
-                            : logical;
+                    const auto backing = backing_offset(
+                        plan.initial_address + offset,
+                        uses_32bit_path);
                     matches = matches &&
                               direct_vram->read_u32(backing) ==
                                   pattern + offset;
@@ -193,6 +200,64 @@ int main() {
                     "Mehrteiliger Direct-Texture-Transfer erreicht sein "
                     "fortschreitendes VRAM-Ziel nicht.");
             };
+        const auto run_store_queue_transfer =
+            [&](Sh4StoreQueues& queues,
+                const std::uint32_t source_address,
+                const std::uint32_t target_address,
+                const std::uint32_t pattern,
+                const bool uses_32bit_path) {
+                const auto queue =
+                    (source_address >> 5u) & 1u;
+                queues.write_qacr(queue, 0x10u);
+                for (std::uint32_t offset = 0u;
+                     offset < 32u;
+                     offset += 4u)
+                    queues.write_p4(
+                        source_address + offset,
+                        pattern + offset,
+                        MemoryAccessWidth::Word);
+                require(
+                    queues.prefetch(source_address) &&
+                        queues.transfer_count() != 0u,
+                    "Store Queue erreicht den Area-4-VRAM-Pfad nicht.");
+                bool matches = true;
+                for (std::uint32_t offset = 0u;
+                     offset < 32u;
+                     offset += 4u)
+                    matches =
+                        matches &&
+                        direct_vram->read_u32(
+                            backing_offset(
+                                target_address + offset,
+                                uses_32bit_path)) ==
+                            pattern + offset;
+                require(
+                    matches,
+                    "Area-4-Store-Queue-Paket erreicht nicht den "
+                    "durch LMMODE gewaehlten VRAM-Pfad.");
+            };
+        const std::array<std::uint8_t, 32u> scalar_packet{};
+        require(
+            throws<MemoryAccessError>([&] {
+                direct_memory.write_u8(
+                    0x11000100u, 0x11u);
+            }) &&
+                throws<MemoryAccessError>([&] {
+                    direct_memory.write_u16(
+                        0x11000100u, 0x2211u);
+                }) &&
+                throws<MemoryAccessError>([&] {
+                    direct_memory.write_u32(
+                        0x11000100u, 0x44332211u);
+                }) &&
+                throws<MemoryAccessError>([&] {
+                    direct_memory.write_bytes(
+                        0x11000100u,
+                        scalar_packet,
+                        CodeWriteSource::Cpu);
+                }),
+            "Area-4-TA-VRAM akzeptiert einen skalaren oder "
+            "CPU-originierenden Schreibzugriff.");
         direct_system_bus->write(
             system_bus_register::TextureMemoryMode0, 1u);
         run_direct_transfer(
@@ -207,6 +272,23 @@ int main() {
             plan_pvr_channel2_destination(0x13000400u, 64u),
             0x32000000u,
             false);
+        Sh4StoreQueues direct_queues(direct_memory);
+        direct_system_bus->write(
+            system_bus_register::TextureMemoryMode0, 0u);
+        run_store_queue_transfer(
+            direct_queues,
+            0xE1000600u,
+            0x11000600u,
+            0x11060000u,
+            false);
+        direct_system_bus->write(
+            system_bus_register::TextureMemoryMode1, 1u);
+        run_store_queue_transfer(
+            direct_queues,
+            0xE3000820u,
+            0x13000820u,
+            0x13080000u,
+            true);
         require(throws<std::runtime_error>(
                     [&] {
                         static_cast<void>(

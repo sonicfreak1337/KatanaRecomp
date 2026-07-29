@@ -275,6 +275,10 @@ std::uint32_t MemoryDevice::read_u32(const std::uint32_t offset) const {
            (static_cast<std::uint32_t>(read_u8(offset + 3u)) << 24u);
 }
 
+void MemoryDevice::validate_write(const std::uint32_t,
+                                  const std::size_t,
+                                  const CodeWriteSource) const {}
+
 void MemoryDevice::write_u16(const std::uint32_t offset, const std::uint16_t value) {
     require_device_access(size(), offset, MemoryAccessWidth::Halfword);
     write_u8(offset, static_cast<std::uint8_t>(value & 0xFFu));
@@ -1426,6 +1430,14 @@ void Memory::write_u8_at(const std::uint32_t address,
                          const CodeWriteSource source) {
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Byte);
     const auto offset = region_offset(mapped.info, address);
+    mmio_boundary(mapped.info,
+                  address,
+                  MemoryAccessWidth::Byte,
+                  MemoryAccessOperation::Write,
+                  [&] {
+                      mapped.device->validate_write(
+                          offset, sizeof(value), source);
+                  });
     bool observer_changed = true;
     bool sink_changed = true;
     if (mapped.linear != nullptr &&
@@ -1486,6 +1498,14 @@ void Memory::write_u16_at(const std::uint32_t address,
                           const CodeWriteSource source) {
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Halfword);
     const auto offset = region_offset(mapped.info, address);
+    mmio_boundary(mapped.info,
+                  address,
+                  MemoryAccessWidth::Halfword,
+                  MemoryAccessOperation::Write,
+                  [&] {
+                      mapped.device->validate_write(
+                          offset, sizeof(value), source);
+                  });
     bool observer_changed = true;
     bool sink_changed = true;
     if (mapped.linear != nullptr &&
@@ -1546,6 +1566,14 @@ void Memory::write_u32_at(const std::uint32_t address,
                           const CodeWriteSource source) {
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Word);
     const auto offset = region_offset(mapped.info, address);
+    mmio_boundary(mapped.info,
+                  address,
+                  MemoryAccessWidth::Word,
+                  MemoryAccessOperation::Write,
+                  [&] {
+                      mapped.device->validate_write(
+                          offset, sizeof(value), source);
+                  });
     bool observer_changed = true;
     bool sink_changed = true;
     if (mapped.linear != nullptr &&
@@ -2356,6 +2384,28 @@ void Memory::write_bytes_at(const std::uint32_t address,
         if (diagnostic_changed_bytes)
             diagnostic_changed_bytes->set(index, sink_byte_changed);
         changed = changed || observer_byte_changed;
+    }
+
+    for (std::size_t begin = 0u; begin < pending.size();) {
+        const auto* const mapped = pending[begin].mapped;
+        auto end = begin + 1u;
+        while (end < pending.size() &&
+               pending[end].mapped == mapped &&
+               pending[end].offset ==
+                   pending[begin].offset +
+                       static_cast<std::uint32_t>(end - begin))
+            ++end;
+        mmio_boundary(mapped->info,
+                      address + static_cast<std::uint32_t>(begin),
+                      MemoryAccessWidth::Byte,
+                      MemoryAccessOperation::Write,
+                      [&] {
+                          mapped->device->validate_write(
+                              pending[begin].offset,
+                              end - begin,
+                              source);
+                      });
+        begin = end;
     }
 
     std::size_t committed = 0u;

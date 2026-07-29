@@ -129,6 +129,11 @@ class MemoryDevice {
     [[nodiscard]] virtual std::uint8_t read_u8(std::uint32_t offset) const = 0;
     [[nodiscard]] virtual std::uint16_t read_u16(std::uint32_t offset) const;
     [[nodiscard]] virtual std::uint32_t read_u32(std::uint32_t offset) const;
+    // Performs an origin- and width-aware admission check without changing
+    // device state. Devices with no special write contract allow every write.
+    virtual void validate_write(std::uint32_t offset,
+                                std::size_t size,
+                                CodeWriteSource source) const;
     virtual void write_u8(std::uint32_t offset, std::uint8_t value) = 0;
     virtual void write_u16(std::uint32_t offset, std::uint16_t value);
     virtual void write_u32(std::uint32_t offset, std::uint32_t value);
