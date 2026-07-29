@@ -5,19 +5,39 @@ Aktuelle interne Version: `v0.49.0`
 ## Evidenztrennung
 
 ```text
-letzte reale Produktevidenz: 20228a1 / ABI 75 / NativeDisc-v33
-aktueller Runtime-Source:    4983bd1 / Runtime-ABI 77 / Analyzer-ABI 10
+letzte reale Produktevidenz: d645d20 / ABI 77 / NativeDisc-v37
+aktueller Runtime-Source:    d645d20 / Runtime-ABI 77 / Analyzer-ABI 10
 lokaler Arbeitsbaum:         nur Roadmap-/Statussynchronisierung
-offene Produktabnahme:       FixedAddress-RuntimeImage 4983bd1 noch nicht im Sonic-Port
+offene Produktabnahme:       Maple-/VMU-Erkennung nach sichtbarem Spielhinweis
 ```
 
-Der neueste reale ABI-75-NativeDisc-v33-Lauf zeigt nach rund `2,03 s`
-den PAL-Sega-Screen und endet danach grau/schwarz. Er erreicht
-Gesamtzyklus `574.142.601`, also `158.909.331` Post-Entry-Zyklen, in
-`7,06442 s` (`22,4943 MHz` vorlaeufig) bei `16.396.296` zentralen
-Dispatches. PVR meldet drei Requests und drei Completions, aber noch keine
-TA-Geometrie und keinen Sonic-Screen. Der terminale Fehler ist
-`byte-identity-mismatch` bei `0x8C053C0A -> 0x8C900020`.
+Der aktuelle ABI-77-NativeDisc-v37-Lauf erreicht erstmals das vollstaendige
+relative Produktgate:
+
+```text
+Startzyklus:                     415.233.270
+Ziel-/Endzyklus:               1.015.233.270
+Post-Entry-Gastzyklen:           600.000.000 / 600.000.000
+Hostzeit:                            20,2117 s
+effektive Gastgeschwindigkeit:       29,6858 MHz
+Zentraldispatches:               66.212.631
+Gastzyklen je Zentraldispatch:          9,06
+PVR Requests / Completions:           112 / 112
+Host-Presents:                         121
+native Materialisierungen:             56
+Interpreter-Materialisierungen:         0
+erstes Problem:                       none
+```
+
+Die reale Fensteraufnahme zeigt zuerst den PAL-Sega-Screen und danach einen
+Sonic-eigenen Speicherkartenhinweis: `Memory card not ready. The game
+cannot be saved. To save game files, insert a memory card into the
+controller.` Damit sind der historische Guarded-AOT-Blocker, die
+v33-Grenze, die PVR-Abbruchgrenze und `0x8C900020` passiert. Der
+Capture-Harness meldet nur deshalb einen vorzeitigen Aufnahmeabschluss,
+weil der Produktprozess das vollstaendige Budget bereits nach 23,6 s
+Gesamtlaufzeit vor dem auf 36 s gesetzten Capture-Ende regulaer beendet.
+Massgeblich ist `KATANA_PRODUCT_GATE` mit exakt vollstaendiger Gastarbeit.
 
 Die Diagnose belegt dort ein vom Gast aufgebautes Runtime-Image.
 `db9e721` bindet dessen externe, private Byteidentitaet allgemein an
@@ -38,8 +58,11 @@ Block-, Byte- und Proofbudgets bleiben aktiv. Runtime-ABI 77 und
 Portprojektvertrag 67 binden den neuen Vertrag. Der bestehende
 Native-AOT-Test materialisiert den konkreten 132-Byte-Fall einschliesslich
 Hashfehler-vor-Mutation; der Portexporttest erzeugt denselben
-Groessenvertrag. Beide Tests und der Finalreview sind gruen. Der frische
-Sonic-Port und Lauf sind der naechste offene Schritt.
+Groessenvertrag. Beide Tests und der Finalreview sind gruen.
+NativeDisc-v37 exportiert `2.902` Funktionen in `69` Partitionen und
+materialisiert das gebundene Runtime-Image im echten Produkt ohne Fehler.
+Der naechste offene Schritt ist die allgemeine Maple-/VMU-Erkennung hinter
+dem sichtbaren Spielhinweis; Sonic-Adressen bleiben aus dem Kern.
 
 Der davor liegende reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
 PAL-Sega-Screen und passiert das zuvor fehlende statische Ziel
@@ -640,6 +663,22 @@ eine kleine Laufzeitverbesserung,
 ersetzt aber weder die v24-Baseline noch den relativen 600-Millionen-
 Performancebenchmark.
 
+Der ABI-77-v37-Lauf ist nun der erste korrekte relative
+600-Millionen-Produktbenchmark:
+
+```text
+600.000.000 Post-Entry-Gastzyklen
+20,2117 s Hostzeit
+29,6858 MHz
+66.212.631 Zentraldispatches
+9,06 Gastzyklen pro Zentraldispatch
+```
+
+Die funktionale Abdeckung reicht damit erstmals bis zu einem sichtbaren
+Sonic-Spielhinweis. Performance bleibt dennoch ein harter Produktblocker:
+Funktion-/Return-/Partition-Escapes erzeugen weiterhin mehr als 66
+Millionen zentrale Dispatches.
+
 Das Ziel ist:
 
 ```text
@@ -686,6 +725,9 @@ historischer frischer Export:    169,3 s
 v33 kalter ABI-73-Export:        711,2 s
 v33 unveraenderter Hostbuild:    0,200236 s
 v33 identischer Voll-Warmexport: Cachemiss, nach 124 s beendet
+v37 kalter Export plus Build:    381 s
+v37 Funktionen / Partitionen:    2.902 / 69
+v37 Produkt-EXE:                 156.044.800 Bytes
 ```
 
 Beim konservativen Cleanup wurden `16.467.100.969` Bytes eindeutig
@@ -708,7 +750,7 @@ Offen bleiben:
 
 - Runtime-only-Rebuild plus Relink
 - Hook-only-Build im externen Spielprojekt
-- kalter Gesamtbuild des korrigierten ABI-74-Stands
+- kalter Gesamtbuild des ABI-77-Stands weiter unter 381 s reduzieren
 - erfolgreicher manifestgebundener Whole-Export-Warmhit
 - schmalerer AOT-ABI-Header
 - weniger generische Produkt-/Testlogik in der erzeugten `main.cpp`
@@ -723,18 +765,20 @@ KR-4971 RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel
   [abgeschlossen]
 
 KR-4972 Hashgebundene Shared-Callback-/Thunk-AOT-Coverage
-  [AOT-Vertrag vorhanden; Summary-/Inventarfix lokal, Produktproof offen]
+  [abgeschlossen; ABI-77-v37 passiert alle bekannten AOT-Grenzen]
 
-Parallel im Source implementiert, Produktproof offen:
+Im realen ABI-77-v37-Produktproof bestaetigt:
 KR-4966 korrektes relatives Post-Entry-Gate
-KR-4967 strikter globaler Prepare-/Commitvertrag
-KR-4970 allgemeines rollbackfreies Save-/VMU-Produktprofil
 
 Naechster Schritt:
-lokale Analyse-, Inventar-, Terminalreport- und Cachekorrekturen reviewen,
-fokussiert bauen und auf main einchecken; danach genau einen frischen
-ABI-74-Sonic-NativeDisc-Port exportieren, installieren, 600 Millionen
-Post-Entry-Gastzyklen ausfuehren und sichtbar aufnehmen
+allgemein klaeren, warum der NativeDisc-v37-Lauf zwar den Sonic-
+Speicherkartenhinweis praesentiert, aber `controller_contract=0`, keine
+Controller-Samples und keine erkannte VMU meldet; danach denselben
+Produktpfad bis zum naechsten sichtbaren Sonic-Meilenstein ausfuehren
+
+Weiterhin quellseitig vorhanden, separater DirectBoot-Produktproof offen:
+KR-4967 strikter globaler Prepare-/Commitvertrag
+KR-4970 allgemeines rollbackfreies Save-/VMU-Produktprofil
 
 Danach weiterhin offen:
 KR-4953 Doppel-Capture und Inspect-/Verify-CLI
@@ -775,16 +819,16 @@ Ergebnis:
 - identischer typisierter Fehler bei `553.990.562` Gastzyklen
 - 15 reale Fensteraufnahmen schwarz
 
-### Lauf A4 - aktueller P0-Produktproof [ausstehend]
+### Lauf A4 - ABI-77-NativeDisc-v37 [ausgefuehrt]
 
-- lokale Reviewkorrekturen reviewen, fokussiert bauen und einchecken
-- genau einen frischen ABI-74-MSVC-NativeDisc-Port daraus exportieren
-- private Original-GDI ueber den echten Produktinstaller installieren
-- exakt 600 Millionen Post-Entry-Gastzyklen mit grossem Hostwatchdog
-  ausfuehren
-- separaten Sichtlauf aufnehmen und den hoechsten realen Screen klassifizieren
-- belegen, ob `0x8C64784E` und die v33-Grenze `0x8C0101F2` passiert werden,
-  oder den naechsten typisierten Produktblocker dokumentieren
+- Finalreview ohne P0/P1/P2 und Source `d645d20`
+- genau ein frischer MSVC-NativeDisc-Port
+- private PAL-GDI ueber den Produktinstaller installiert
+- exakt `600.000.000` Post-Entry-Gastzyklen ausgefuehrt
+- `20,2117 s`, `29,6858 MHz`, `66.212.631` Zentraldispatches
+- PAL-Sega-Screen und danach sichtbarer Sonic-Speicherkartenhinweis
+- alle bekannten AOT-/PVR-Grenzen passiert, `first_problem=none`
+- `56` native und `0` Interpreter-Materialisierungen
 
 ### Lauf B - nach KR-4966 und KR-4967
 
@@ -811,15 +855,13 @@ Zwischen diesen Laeufen sind keine Vollsuiten vorgesehen. Ein kleiner bestehende
 
 Der aktuelle Stand behauptet nicht:
 
-- dass Sonic Adventure bootet
+- dass Sonic Adventure bereits ueber den Speicherkartenhinweis hinaus bootet
 - dass NativeDisc und DirectBoot normativ paritaetisch sind
 - dass der Sega-Screen im DirectBoot erwartet wird
 - dass Maple der aktuelle Soundblocker ist
 - dass AICA allein die Ursache ist
 - dass der Completion-Writer oder der Flagwechsel direkt beobachtet wurde
-- dass die zwei technischen Direct-Frames bereits sichtbar praesentiert wurden
-- dass der implementierte Shared-Callback-/Thunk-AOT-Source-Vertrag den
-  historischen Sonic-Blocker im echten ABI-74-Produkt bereits passiert
+- dass eine VMU oder ein Controller im aktuellen Produktlauf erkannt wird
 - dass die gemeldeten 119,64 MHz einen Performancegewinn darstellen
 - dass die provisorischen 26,3008 MHz bis zum v28-Fehler eine
   600-Millionen-Performanceabnahme darstellen
@@ -831,12 +873,12 @@ Der aktuelle Stand behauptet nicht:
 ## Aktuelle Vertraege
 
 ```text
-Runtime-ABI:                    75
+Runtime-ABI:                    77
 Block-ABI:                       5
-Analyzer-ABI:                    9
+Analyzer-ABI:                   10
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             65
+Portprojektvertrag:             67
 GameEntryHandoff-Schema:         3
 GameEntryHandoff-Artefakt:       2
 GameEntry-Plattformzustand:       2

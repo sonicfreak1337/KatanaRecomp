@@ -43,20 +43,23 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
-letzte reale Produktevidenz: 20228a1 / ABI 75 / NativeDisc-v33
-aktueller Runtime-Source:    4983bd1 / Runtime-ABI 77 / Analyzer-ABI 10
+letzte reale Produktevidenz: d645d20 / ABI 77 / NativeDisc-v37
+aktueller Runtime-Source:    d645d20 / Runtime-ABI 77 / Analyzer-ABI 10
 lokaler Arbeitsbaum:         nur Roadmap-/Statussynchronisierung
 ```
 
-Der neueste reale ABI-75-NativeDisc-v33-Lauf praesentiert den PAL-Sega-
-Screen nach rund `2,03 s`, danach Grau und Schwarz. Er erreicht
-Gesamtzyklus `574.142.601` beziehungsweise `158.909.331` Post-Entry-Zyklen
-in `7,06442 s` (`22,4943 MHz` vorlaeufig) bei `16.396.296` zentralen
-Dispatches, drei PVR-Renderrequests und drei Completions, aber noch keiner
-TA-Geometrie und keinem sichtbaren Sonic-Screen. Der Lauf stoppt
-fail-closed bei `0x8C053C0A -> 0x8C900020`: Das Ziel ist ein vom Gast
-erzeugtes Runtime-Image und keine Bytekopie des zuvor angenommenen
-Discmoduls.
+Der aktuelle ABI-77-NativeDisc-v37-Lauf erreicht erstmals das vollstaendige
+relative Produktgate: `600.000.000` Post-Entry-Gastzyklen in `20,2117 s`,
+also `29,6858 MHz`, bei `66.212.631` zentralen Dispatches. Er praesentiert
+real zuerst den PAL-Sega-Screen und danach einen Sonic-eigenen
+Speicherkartenhinweis: `Memory card not ready ... insert a memory card into
+the controller.` Damit sind der historische Guarded-AOT-Blocker, die
+v33-Grenze und das FixedAddress-Ziel `0x8C900020` passiert. Es gibt `112`
+PVR-Renderrequests und -Completions, `121` Host-Presents, `56` native
+Runtime-Materialisierungen, `0` Interpreter-Materialisierungen und
+`first_problem=none`. Die naechste reale Bootgrenze ist die
+Maple-/VMU-Erkennung; `controller_contract=0`, keine Controller-Samples und
+der sichtbare Spielhinweis begrenzen die aktuelle Untersuchung.
 
 `db9e721` fuehrt dafuer den generischen, extern hashgebundenen
 `RuntimeImage`-/`FixedAddress`-Vertrag ein. Der erste reale v36-Export
@@ -71,7 +74,9 @@ bei 128 Byte. Vorcompilierte native AOT-Bloecke haengen nicht mehr an
 Laufzeitanalysebudgets. Runtime-ABI 77 und Portprojektvertrag 67
 invalidieren alte Pakete und Exportcaches. Der 132-Byte-Vertrag sowie der
 reale Exportpfad sind fokussiert gruen und der Finalreview meldet keine
-P0/P1/P2-Funde; die neue Sonic-Produktevidenz steht unmittelbar aus.
+P0/P1/P2-Funde. NativeDisc-v37 exportiert und baut daraus erfolgreich
+`2.902` Funktionen in `69` Partitionen; der reale Lauf materialisiert das
+Runtime-Image vollstaendig und erreicht ohne AOT-Fehler das Produktbudget.
 
 Der davor liegende reale, erneut aus dem sauberen Main-Stand exportierte und mit der
 privaten Originaldisc installierte ABI-74-NativeDisc-v33-Lauf praesentiert
@@ -199,8 +204,9 @@ FixedAddress-RuntimeImages sowie die zielgenaue Materialisierung von
 vorcompilierten Bloecken ueber 128 Byte reviewt. Der Finalreview der
 FixedAddress-Probe, Provenienz, Snapshotreihenfolge, Autorisierung,
 Generationen, ABI-/Cachebindung und Diagnosegrenze ist ohne P0/P1/P2.
-Der naechste Schritt ist genau ein sauberer Sonic-NativeDisc-Port und sein
-realer Produktlauf.
+Der Produktproof ist mit NativeDisc-v37 erbracht. Der naechste Schritt ist
+die allgemeine Maple-/VMU-Ursache hinter dem sichtbaren
+Speicherkartenhinweis; titelbezogene Sonderfaelle bleiben ausgeschlossen.
 
 Auf `24d6132` sind die konkret reviewten Vertraege fuer
 Carrieridentitaet, externe bedingte und normale Inventarnachfolger,
@@ -817,8 +823,11 @@ Der eingecheckte Quellstand `cb5fb47` enthaelt weiterhin:
 - blockweise direkte Haupt-RAM-Schreibbatches mit korrekter Invalidierungs-
   und Fallbackgrenze.
 
-Die reale Wirkung auf Zentraldispatches und effektive Gast-MHz ist bis zum
-frischen ABI-74-Produktlauf unbekannt. Danach bleiben als Performancearbeit
+Der erste vergleichbare v37-Produktlauf misst `600.000.000` Post-Entry-
+Gastzyklen in `20,2117 s`, also `29,6858 MHz`, bei `66.212.631`
+Zentraldispatches beziehungsweise nur `9,06` Gastzyklen je Dispatch. Die
+funktionale AOT-Abdeckung ist damit stark verbessert, der Hotpath bleibt
+aber weit vom 200-MHz-Ziel entfernt. Als Performancearbeit bleiben
 insbesondere:
 
 - verbleibende Function-AOT-Escapes anhand
@@ -882,17 +891,28 @@ Ergebnis:
 - 15 reale Fensteraufnahmen schwarz; `sega_seen=false`
 - der damalige KR-4972-Exportvertrag blieb offen
 
-### Produktlauf A4 - aktueller P0-Produktproof [ausstehend]
+### Produktlauf A4 - ABI-77-NativeDisc-v37 [ausgefuehrt]
 
-Nach Review, fokussiertem Build und Commit `cb5fb47` der Analyse-, Inventar-,
-Terminalreport- und Cachekorrekturen wird genau ein frischer
-ABI-74-MSVC-NativeDisc-Port erzeugt, mit der privaten Original-GDI
-installiert und fuer exakt 600 Millionen Post-Entry-Gastzyklen ausgefuehrt.
-Ein separater Sichtlauf klassifiziert den hoechsten realen Bildschirm. Erst
-dieser Lauf entscheidet, ob sowohl der historische
-`0x8C11088C -> 0x8C64784E`-Blocker als auch die v33-Grenze
-`0x8C65EA06 -> 0x8C0101F2` passiert werden, welcher neue erste Fehler
-vorliegt und welche effektive Gast-MHz der neue Hotpath erreicht.
+Der aus `d645d20` erzeugte MSVC-Bring-up-Port wurde ueber den echten
+Produktinstaller mit der privaten PAL-GDI installiert und sichtbar bis zum
+relativen 600-Millionen-Gate ausgefuehrt.
+
+Ergebnis:
+
+- `600.000.000 / 600.000.000` Post-Entry-Gastzyklen erreicht;
+- `20,2117 s`, `29,6858 MHz`, `66.212.631` Zentraldispatches;
+- PAL-Sega-Screen real sichtbar;
+- hoechster realer Screen ist der Sonic-Speicherkartenhinweis
+  `Memory card not ready ...`;
+- `112` PVR-Renderrequests und -Completions, `121` Host-Presents;
+- `56` native Materialisierungen, `0` Interpreter-Materialisierungen;
+- `first_problem=none`; alle frueheren AOT-/PVR-Abbruchgrenzen passiert.
+
+Der Capture-Harness endete nach dem regulaeren Produktbudget vor seinem
+36-Sekunden-Aufnahmeende und lieferte deshalb selbst Exitcode 1. Der
+Produktprozess meldete dagegen korrekt `KATANA_PRODUCT_GATE` mit exakt
+vollstaendiger Gastarbeit. Die aktuelle Funktionsgrenze ist die
+Maple-/VMU-Erkennung, nicht mehr AOT oder PVR.
 
 ### Produktlauf B - nach KR-4967 bis KR-4970
 
@@ -949,6 +969,7 @@ Kleine vorhandene Vertragstests duerfen angepasst werden, wenn eine schwer sicht
 - Haupt-Executable erzeugt Direct-FB- oder TA-Ausgabe
 - aktiver Scanout liest den erzeugten Bereich
 - Host praesentiert den Frame
+- erreicht mit NativeDisc-v37: sichtbarer Sonic-Speicherkartenhinweis
 
 ### B3 - Echtzeit
 
