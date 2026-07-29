@@ -107,6 +107,116 @@ int main() {
     require(std::string(relocation_kind_name(RelocationKind::PcRelative32)) == "pc-relative32",
             "Relocation-Name ist instabil.");
 
+    ExecutableImage runtime_image;
+    runtime_image.add_segment({"runtime-source",
+                               0x89000000u,
+                               0u,
+                               0x20u,
+                               SegmentKind::Mixed,
+                               {true, true, true},
+                               {0x10u,
+                                0x00u,
+                                0x90u,
+                                0x8Cu,
+                                0x09u,
+                                0x00u,
+                                0x0Bu,
+                                0x00u,
+                                0x09u,
+                                0x00u,
+                                0x0Bu,
+                                0x00u,
+                                0x09u,
+                                0x00u,
+                                0x0Bu,
+                                0x00u,
+                                0x09u,
+                                0x00u,
+                                0x0Bu,
+                                0x00u,
+                                0x09u,
+                                0x00u,
+                                0x0Bu,
+                                0x00u,
+                                0x09u,
+                                0x00u,
+                                0x0Bu,
+                                0x00u,
+                                0x09u,
+                                0x00u,
+                                0x0Bu,
+                                0x00u}});
+    runtime_image.set_address_model(
+        ImageAddressModel::Sh4DirectMapped);
+    runtime_image.add_address_alias({0x89000000u, 0x8C900000u, 0x20u});
+    const auto embedded_runtime_pointer = runtime_image.read_u32_le(0x89000000u);
+    require(embedded_runtime_pointer == 0x8C900010u &&
+                runtime_image.resolve_segment_address(embedded_runtime_pointer, 2u) ==
+                    0x89000010u &&
+                runtime_image.resolve_segment_address(0x89000010u, 2u) == 0x89000010u &&
+                runtime_image.address_aliases().size() == 1u,
+            "Runtime-Adressalias wird nicht stabil auf seine Analysequelle normalisiert.");
+    require_throws<std::invalid_argument>(
+        [&runtime_image] {
+            runtime_image.add_address_alias({0x89000010u, 0x8CA00000u, 0x10u});
+        },
+        "Ein ueberlappender Alias-Quellbereich wurde akzeptiert.");
+    require_throws<std::invalid_argument>(
+        [&runtime_image] {
+            runtime_image.add_address_alias({0x89000000u, 0x8C900010u, 0x10u});
+        },
+        "Ein ueberlappender Alias-Runtimebereich wurde akzeptiert.");
+    require_throws<std::invalid_argument>(
+        [&runtime_image] {
+            runtime_image.add_address_alias({0x89000000u, 0x8D000000u, 0u});
+        },
+        "Ein leerer Image-Adressalias wurde akzeptiert.");
+    require_throws<std::out_of_range>(
+        [&runtime_image] {
+            runtime_image.add_address_alias({0x89000000u, 0xFFFFFFF0u, 0x20u});
+        },
+        "Ein Runtime-Adressalias mit Wraparound wurde akzeptiert.");
+
+    ExecutableImage ambiguous_alias;
+    ambiguous_alias.add_segment(
+        {"alias-source",
+         0x89000000u,
+         0u,
+         4u,
+         SegmentKind::Mixed,
+         {true, true, true},
+         {0x09u, 0x00u, 0x0Bu, 0x00u}});
+    ambiguous_alias.add_segment(
+        {"direct-owner",
+         0x8C900000u,
+         0u,
+         4u,
+         SegmentKind::Code,
+         {true, false, true},
+         {0x09u, 0x00u, 0x0Bu, 0x00u}});
+    ambiguous_alias.add_address_alias(
+        {0x89000000u, 0xAC900000u, 4u});
+    require_throws<std::invalid_argument>(
+        [&ambiguous_alias] {
+            ambiguous_alias.set_address_model(
+                ImageAddressModel::Sh4DirectMapped);
+        },
+        "Ein Runtime-Alias durfte beim Modellwechsel einen vorhandenen "
+        "P1/P2-Segmentowner ueberschatten.");
+
+    ExecutableImage ambiguous_segment;
+    ambiguous_segment.set_address_model(
+        ImageAddressModel::Sh4DirectMapped);
+    ambiguous_segment.add_segment(code_segment());
+    require_throws<std::invalid_argument>(
+        [&ambiguous_segment] {
+            auto p2_alias = code_segment();
+            p2_alias.name = "physical-alias";
+            p2_alias.virtual_address = 0xAC010000u;
+            ambiguous_segment.add_segment(std::move(p2_alias));
+        },
+        "Physisch mehrdeutige P1/P2-Segmente wurden akzeptiert.");
+
     ExecutableImage top;
     top.add_segment({"top", 0xFFFFFFFFu, 0u, 1u, SegmentKind::Unknown, {}, {0u}});
     require(top.segments()[0].end_address() == 0x100000000ull,

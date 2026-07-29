@@ -55,6 +55,16 @@ struct NativeAotTemplateMutableRange {
     [[nodiscard]] bool operator==(const NativeAotTemplateMutableRange&) const noexcept = default;
 };
 
+enum class NativeAotTemplateValidationMode : std::uint8_t {
+    // Retain and track the complete source-backed template. This is the
+    // conservative contract used by VBR copies and loaded disc modules.
+    SourceModule,
+    // Retain and track only the exact runtime block whose bytes were proven by
+    // an export-time block identity. The surrounding runtime payload is not a
+    // source-module dependency.
+    RuntimeBlock
+};
+
 [[nodiscard]] bool native_aot_mutable_ranges_valid(
     std::span<const NativeAotTemplateMutableRange> ranges,
     std::uint32_t extent) noexcept;
@@ -76,6 +86,8 @@ struct RuntimeAotTemplateContract {
     // block backed by the template as well.
     std::uint32_t validation_extent = 0u;
     std::vector<NativeAotTemplateMutableRange> mutable_ranges;
+    NativeAotTemplateValidationMode validation_mode =
+        NativeAotTemplateValidationMode::SourceModule;
 
     [[nodiscard]] bool operator==(const RuntimeAotTemplateContract&) const noexcept = default;
 };

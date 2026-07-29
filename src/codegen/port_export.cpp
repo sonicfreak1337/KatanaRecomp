@@ -147,6 +147,7 @@ katana::runtime::GameProjectDefinition game_project_runtime_definition(
     runtime_definition.mid_function_hooks = {};
     runtime_definition.symbols = {};
     runtime_definition.code_identities = {};
+    runtime_definition.runtime_images = {};
     return runtime_definition;
 }
 
@@ -202,6 +203,68 @@ void apply_game_project_symbols(
              symbol.size,
              kind,
              katana::io::SymbolBinding::Weak});
+    }
+}
+
+void apply_game_project_runtime_images(
+    katana::io::ExecutableImage& image,
+    const katana::runtime::GameProjectDefinition& definition) {
+    std::size_t index = 0u;
+    for (const auto& runtime_image : definition.runtime_images) {
+        const auto source_physical =
+            static_cast<std::uint64_t>(
+                runtime_image.source_start & 0x1FFFFFFFu);
+        const auto runtime_physical =
+            static_cast<std::uint64_t>(
+                runtime_image.runtime_start & 0x1FFFFFFFu);
+        const auto image_size =
+            static_cast<std::uint64_t>(runtime_image.bytes.size());
+        for (const auto& existing : image.segments()) {
+            if (existing.virtual_address >= 0xE0000000u)
+                continue;
+            const auto existing_physical =
+                static_cast<std::uint64_t>(
+                    existing.virtual_address & 0x1FFFFFFFu);
+            const auto existing_end =
+                existing_physical + existing.memory_size;
+            if (existing_end > 0x20000000ull)
+                throw std::invalid_argument(
+                    "Executable-Image-Segment besitzt keinen linearen "
+                    "physischen Bereich fuer ein Runtime-Image.");
+            const auto overlaps_existing =
+                [&](const std::uint64_t begin) {
+                    return begin < existing_end &&
+                           existing_physical < begin + image_size;
+                };
+            if (overlaps_existing(source_physical) ||
+                overlaps_existing(runtime_physical))
+                throw std::invalid_argument(
+                    "Game-Project-Runtime-Image kollidiert physisch mit "
+                    "bereits analysiertem Executable-Code.");
+        }
+        katana::io::ImageSegment segment{
+            ".game-project-runtime-image-" + std::to_string(index++),
+            runtime_image.source_start,
+            0u,
+            runtime_image.bytes.size(),
+            katana::io::SegmentKind::Mixed,
+            // This is an analysis snapshot of guest-written RAM, not an
+            // immutable module. Keeping it writable prevents value analysis
+            // from turning mutable PC-relative literals or loaded pointers
+            // into unconditional CFG facts. RuntimeBlock hashes validate only
+            // the exact instruction bytes entered by the native binder.
+            {true, true, true},
+            {runtime_image.bytes.begin(), runtime_image.bytes.end()}};
+        segment.source_kind = katana::io::ImageSourceKind::RuntimeMemory;
+        segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
+        segment.local_source_name = std::string(runtime_image.image_id);
+        image.add_segment(std::move(segment));
+        image.add_address_alias(
+            {runtime_image.source_start,
+             runtime_image.runtime_start,
+             static_cast<std::uint32_t>(runtime_image.bytes.size())});
+        for (const auto offset : runtime_image.entry_offsets)
+            image.add_entry_point(runtime_image.source_start + offset);
     }
 }
 
@@ -375,12 +438,40 @@ void validate_game_project_image_contract(
                 "Game-Project-Codeidentitaet stimmt nicht mit dem "
                 "Executable-Image ueberein.");
     }
+    for (const auto& runtime_image : definition.runtime_images) {
+        const auto bytes = game_project_image_bytes(
+            image, runtime_image.source_start, runtime_image.bytes.size());
+        if (!std::equal(bytes.begin(),
+                        bytes.end(),
+                        runtime_image.bytes.begin(),
+                        runtime_image.bytes.end()))
+            throw std::invalid_argument(
+                "Game-Project-Runtime-Image stimmt nicht mit seinen "
+                "exportierten Analysebytes ueberein.");
+        for (const auto entry_offset : runtime_image.entry_offsets) {
+            const auto source_entry =
+                runtime_image.source_start + entry_offset;
+            const auto runtime_entry =
+                runtime_image.runtime_start + entry_offset;
+            const auto resolved =
+                image.resolve_segment_address(runtime_entry, 2u);
+            const auto* segment =
+                resolved.has_value()
+                    ? image.find_segment(*resolved, 2u)
+                    : nullptr;
+            if (resolved != source_entry || segment == nullptr ||
+                !segment->permissions.executable)
+                throw std::invalid_argument(
+                    "Game-Project-Runtime-Entry besitzt keinen eindeutigen "
+                    "Analyseadressalias.");
+        }
+    }
 }
 
 std::string game_project_metadata(
     const katana::runtime::GameProjectDefinition& definition) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-game-project-v3\",\"contract_version\":"
+    output << "{\"schema\":\"katana-game-project-v4\",\"contract_version\":"
            << definition.contract_version << ",\"project_id\":"
            << katana::io::quote_json(definition.project_id)
            << ",\"project_version\":"
@@ -399,6 +490,7 @@ std::string game_project_metadata(
            << katana::io::quote_json(
                   katana::runtime::required_product_milestone_name(
                       definition.required_product_milestone))
+           << ",\"runtime_images\":" << definition.runtime_images.size()
            << ",\"direct_boot_configured\":"
            << (definition.boot_config.has_value() ? "true" : "false")
            << ",\"game_entry_handoff\":";
@@ -8589,6 +8681,83 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               [](const auto& left, const auto& right) { return left.address < right.address; });
     if (dispatch_blocks.empty())
         throw std::runtime_error("Runtime-Dispatch besitzt keine generierten Bloecke.");
+    struct RuntimeImageTemplateEmission {
+        const katana::runtime::GameProjectRuntimeImage* image = nullptr;
+        std::vector<katana::runtime::NativeAotTemplateBlockIdentity>
+            block_identities;
+    };
+    std::vector<RuntimeImageTemplateEmission> runtime_image_templates;
+    std::unordered_set<std::uint32_t> runtime_image_source_blocks;
+    std::size_t runtime_image_block_identity_count = 0u;
+    std::uint64_t runtime_image_block_identity_bytes = 0u;
+    if (external_game_project != nullptr) {
+        runtime_image_templates.reserve(
+            external_game_project->runtime_images.size());
+        for (const auto& runtime_image :
+             external_game_project->runtime_images) {
+            RuntimeImageTemplateEmission emission;
+            emission.image = &runtime_image;
+            const auto source_end =
+                static_cast<std::uint64_t>(runtime_image.source_start) +
+                runtime_image.bytes.size();
+            for (const auto& block : dispatch_blocks) {
+                if (block.address < runtime_image.source_start ||
+                    block.address >= source_end)
+                    continue;
+                const auto block_end =
+                    static_cast<std::uint64_t>(block.address) + block.size;
+                if (block_end > source_end)
+                    throw std::runtime_error(
+                        "Game-Project-Runtime-Block verlaesst sein "
+                        "identitaetsgebundenes Image.");
+                if (block.size >
+                    katana::runtime::
+                        runtime_write_promotion_maximum_bytes)
+                    throw std::runtime_error(
+                        "Game-Project-Runtime-Block ueberschreitet das "
+                        "gebundene Runtimewrite-Promotionfenster.");
+                const auto offset =
+                    block.address - runtime_image.source_start;
+                const auto bytes = std::string_view(
+                    reinterpret_cast<const char*>(
+                        runtime_image.bytes.data() + offset),
+                    block.size);
+                emission.block_identities.push_back(
+                    {offset,
+                     block.size,
+                     "sha256:" + katana::io::sha256_bytes(bytes)});
+                runtime_image_source_blocks.insert(block.address);
+                if (runtime_image_block_identity_count >= 65'536u ||
+                    block.size >
+                        64u * 1024u * 1024u -
+                            runtime_image_block_identity_bytes)
+                    throw std::runtime_error(
+                        "Game-Project-Runtime-Images ueberschreiten das "
+                        "globale FixedAddress-Materialisierungsbudget.");
+                ++runtime_image_block_identity_count;
+                runtime_image_block_identity_bytes += block.size;
+            }
+            for (const auto entry_offset :
+                 runtime_image.entry_offsets) {
+                const auto entry =
+                    runtime_image.source_start + entry_offset;
+                if (!emitted_blocks.contains(entry))
+                    throw std::runtime_error(
+                        "Game-Project-Runtime-Entry besitzt keinen "
+                        "emittierten nativen AOT-Block bei 0x" +
+                        symbol(entry) + ".");
+            }
+            if (emission.block_identities.empty())
+                throw std::runtime_error(
+                    "Game-Project-Runtime-Image besitzt keinen emittierten "
+                    "nativen AOT-Block.");
+            if (emission.block_identities.size() > 65'536u)
+                throw std::runtime_error(
+                    "Game-Project-Runtime-Image ueberschreitet das "
+                    "FixedAddress-AOT-Blockbudget.");
+            runtime_image_templates.push_back(std::move(emission));
+        }
+    }
     require_guarded_aot_program_entries(
         program, guarded_aot_entries, "runtime-static-registry");
     for (const auto& native_template : native_templates) {
@@ -8766,7 +8935,9 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     for (std::size_t shard = 0u; shard < shard_count; ++shard) {
         const auto suffix = shard_symbol(shard);
         internal_header << "void append_static_blocks_shard_" << suffix
-                        << "(std::vector<katana::runtime::RuntimeBlock>& blocks);\n"
+                        << "(std::vector<katana::runtime::RuntimeBlock>& blocks, "
+                           "std::vector<katana::runtime::RuntimeBlock>& "
+                           "fixed_source_blocks);\n"
                         << "void register_executable_blocks_shard_" << suffix
                         << "(const katana::runtime::RuntimeBlockTable& table, "
                            "katana::runtime::PlatformServices& services);\n";
@@ -8797,11 +8968,17 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         }
         shard_output << "namespace runtime_dispatch_detail {\n"
                      << "void append_static_blocks_shard_" << suffix
-                     << "(std::vector<katana::runtime::RuntimeBlock>& blocks) {\n";
+                     << "(std::vector<katana::runtime::RuntimeBlock>& blocks, "
+                        "std::vector<katana::runtime::RuntimeBlock>& "
+                        "fixed_source_blocks) {\n";
         for (auto index = begin; index < end; ++index) {
             const auto& block = dispatch_blocks[index];
             const auto address = symbol(block.address);
-            shard_output << "    append_static_block(blocks, 0x" << address << "u, " << block.size
+            shard_output << "    append_static_block("
+                         << (runtime_image_source_blocks.contains(block.address)
+                                 ? "fixed_source_blocks"
+                                 : "blocks")
+                         << ", 0x" << address << "u, " << block.size
                          << "u, katana::runtime::BlockEndKind::" << block.end_kind
                          << ", &fn_" << symbol(block.owner)
                          << "_runtime_entry, \"generated-block-"
@@ -8813,6 +8990,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                         "katana::runtime::PlatformServices& services) {\n";
         for (auto index = begin; index < end; ++index) {
             const auto& block = dispatch_blocks[index];
+            if (runtime_image_source_blocks.contains(block.address))
+                continue;
             const auto address = symbol(block.address);
             shard_output << "    register_executable_block(table, services, 0x" << address << "u, "
                          << block.size
@@ -9961,12 +10140,21 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     output << "    table.bind_code_tracker(\n"
            << "        services.executable_code_tracker(),\n"
            << "        katana::runtime::StaticAotInvalidationContract::Coordinated);\n";
-    output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n";
-    output << "    static_blocks.reserve(" << emitted_blocks.size() << "u);\n";
+    output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n"
+           << "    std::vector<katana::runtime::RuntimeBlock> "
+              "fixed_source_blocks;\n";
+    output << "    static_blocks.reserve("
+           << emitted_blocks.size() - runtime_image_source_blocks.size()
+           << "u);\n"
+           << "    fixed_source_blocks.reserve("
+           << runtime_image_source_blocks.size() << "u);\n";
     for (std::size_t shard = 0u; shard < shard_count; ++shard)
         output << "    runtime_dispatch_detail::append_static_blocks_shard_" << shard_symbol(shard)
-               << "(static_blocks);\n";
-    output << "    static_cast<void>(table.register_static_bulk(std::move(static_blocks)));\n";
+               << "(static_blocks, fixed_source_blocks);\n";
+    output << "    static_cast<void>(table.register_static_bulk(std::move(static_blocks)));\n"
+           << "    katana::runtime::RuntimeBlockTable fixed_source_table;\n"
+           << "    static_cast<void>(fixed_source_table.register_static_bulk(\n"
+              "        std::move(fixed_source_blocks)));\n";
     for (std::size_t shard = 0u; shard < shard_count; ++shard)
         output << "    runtime_dispatch_detail::register_executable_blocks_shard_"
                << shard_symbol(shard) << "(table, services);\n";
@@ -10035,11 +10223,20 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             output << "}},";
         }
         output << "}, katana::runtime::NativeAotTemplateDestination::"
-               << (native_template.destination ==
-                           katana::runtime::NativeAotTemplateDestination::
-                               VbrRelative
-                       ? "VbrRelative"
-                       : "LoadedModule")
+               << [&] {
+                      switch (native_template.destination) {
+                      case katana::runtime::NativeAotTemplateDestination::
+                          VbrRelative:
+                          return "VbrRelative";
+                      case katana::runtime::NativeAotTemplateDestination::
+                          LoadedModule:
+                          return "LoadedModule";
+                      case katana::runtime::NativeAotTemplateDestination::
+                          FixedAddress:
+                          return "FixedAddress";
+                      }
+                      return "VbrRelative";
+                  }()
                << ", "
                << katana::io::quote_json(
                       native_template.expected_runtime_content_identity)
@@ -10049,14 +10246,50 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                << ", {";
         for (const auto& range : native_template.mutable_ranges)
             output << "{" << range.offset << "u," << range.size << "u},";
-        output << "}},\n";
+        output << "}, 0x" << symbol(native_template.fixed_runtime_start)
+               << "u, {";
+        for (const auto& identity : native_template.block_identities)
+            output << "{" << identity.source_offset << "u,"
+                   << identity.size << "u,"
+                   << katana::io::quote_json(identity.sha256) << "},";
+        output << "}, katana::runtime::NativeAotTemplateValidationMode::"
+               << (native_template.validation_mode ==
+                           katana::runtime::NativeAotTemplateValidationMode::
+                               RuntimeBlock
+                       ? "RuntimeBlock"
+                       : "SourceModule")
+               << "},\n";
+    }
+    for (const auto& template_emission :
+         runtime_image_templates) {
+        const auto& runtime_image = *template_emission.image;
+        // FixedAddress deliberately has no runtime source-module lineage.
+        // The external image identity remains bound by the export definition,
+        // while each executable runtime entry carries its own exact byte hash.
+        output << "        {{}, {}, 0x"
+               << symbol(runtime_image.source_start) << "u, "
+               << runtime_image.bytes.size()
+               << "u, 0, {}, "
+                  "katana::runtime::NativeAotTemplateDestination::FixedAddress, "
+                  "{}, {}, {}, 0x"
+               << symbol(runtime_image.runtime_start) << "u, {";
+        for (const auto& identity :
+             template_emission.block_identities)
+            output << "{" << identity.source_offset << "u,"
+                   << identity.size << "u,"
+                   << katana::io::quote_json(identity.sha256) << "},";
+        output << "}, "
+                  "katana::runtime::NativeAotTemplateValidationMode::RuntimeBlock},\n";
     }
     output << "    };\n"
            << "    katana::runtime::NativeAotTemplateBinder native_aot_binder(\n"
-           << "        cpu, *modules, table, native_aot_templates);\n"
+           << "        cpu, *modules, table, native_aot_templates,\n"
+              "        &fixed_source_table);\n"
            << "    katana::runtime::BlockMaterializationPolicy materialization_policy;\n"
            << "    materialization_policy.max_blocks = 65536u;\n"
            << "    materialization_policy.max_bytes = 64u * 1024u * 1024u;\n"
+           << "    materialization_policy.max_memory_bytes = "
+              "64u * 1024u * 1024u;\n"
            << "    materialization_policy.max_materializations_per_run = 65536u;\n"
            << "    if (const auto* probe = std::getenv(\"KATANA_RUNTIME_PROBE\");\n"
               "        probe != nullptr && std::string_view(probe) == \"deterministic-v1\")\n"
@@ -10108,7 +10341,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         output << "    // Product ports execute only statically generated native/AOT blocks.\n"
                << "    // Runtime copies bind only to analysis-proven, pre-generated native code.\n"
                << "    materialization_policy.enabled = "
-               << (native_templates.empty() && latent_modules.empty() ? "false" : "true") << ";\n"
+               << (native_templates.empty() && latent_modules.empty() &&
+                           runtime_image_templates.empty()
+                       ? "false"
+                       : "true")
+               << ";\n"
                << "    katana::runtime::DemandBlockMaterializer materializer(\n"
                << "        *modules, table, services.executable_code_tracker(),\n"
                << "        materialization_policy,\n"
@@ -10658,11 +10895,18 @@ DiscExportContext prepare_disc_export_context(
 std::vector<LatentAotOccupiedRange>
 latent_aot_occupied_ranges(const PreparedPortProgram& prepared) {
     std::vector<LatentAotOccupiedRange> result;
-    result.reserve(prepared.image.segments().size() + prepared.program.size() * 2u);
+    result.reserve(prepared.image.segments().size() +
+                   prepared.image.address_aliases().size() +
+                   prepared.program.size() * 2u);
     for (const auto& segment : prepared.image.segments()) {
         if (segment.memory_size != 0u)
             result.push_back({segment.virtual_address, segment.memory_size});
     }
+    // A runtime alias has no second ImageSegment by design, but its physical
+    // destination is occupied executable state. Latent AOT source placement
+    // must not claim it before the FixedAddress binder receives control.
+    for (const auto& alias : prepared.image.address_aliases())
+        result.push_back({alias.runtime_start, alias.size});
     for (const auto& function : prepared.program) {
         result.push_back({function.entry_address, 2u});
         for (const auto& block : function.blocks) {
@@ -10970,6 +11214,40 @@ static PortExportResult export_dreamcast_port_project_impl(
         for (const auto& hook : options.game_project->mid_function_hooks)
             external_hook_entries.insert(hook.instruction_address);
     }
+    const auto is_runtime_image_source_address =
+        [&](const std::uint32_t address) {
+            if (options.game_project == nullptr)
+                return false;
+            return std::any_of(
+                options.game_project->runtime_images.begin(),
+                options.game_project->runtime_images.end(),
+                [&](const auto& runtime_image) {
+                    const auto begin =
+                        static_cast<std::uint64_t>(runtime_image.source_start);
+                    const auto end = begin + runtime_image.bytes.size();
+                    return address >= begin &&
+                           static_cast<std::uint64_t>(address) < end;
+                });
+        };
+    // Runtime-image bytes remain writable guest state. Every native entry into
+    // such an image must cross the central dispatcher so the FixedAddress
+    // binder can validate that exact live block before execution. Mark both
+    // the blocks and their owners: a shared/mixed owner must not provide an
+    // unchecked direct-call or native-label route into a runtime image.
+    std::unordered_set<std::uint32_t> runtime_image_architectural_boundaries;
+    for (const auto& function : emitted_program) {
+        bool owns_runtime_image_block = false;
+        for (const auto& block : function.blocks) {
+            if (!is_runtime_image_source_address(block.start_address))
+                continue;
+            runtime_image_architectural_boundaries.insert(
+                block.start_address);
+            owns_runtime_image_block = true;
+        }
+        if (owns_runtime_image_block)
+            runtime_image_architectural_boundaries.insert(
+                function.entry_address);
+    }
 
     // Runtime-only analysis candidates are not promoted to static CFG edges:
     // writable callback slots remain authoritative. A singleton candidate can
@@ -11025,13 +11303,19 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::vector<NativeAotBlockOwnerEntry> partition_native_block_owners;
         std::vector<std::uint32_t> partition_architectural_boundaries;
         for (const auto& function : functions) {
+            if (runtime_image_architectural_boundaries.contains(
+                    function.entry_address))
+                partition_architectural_boundaries.push_back(
+                    function.entry_address);
             for (const auto callee : function.direct_callees) {
                 if (!local_function_entries.contains(callee) &&
                     emitted_function_entries.contains(callee))
                     external_callees.push_back(callee);
             }
             for (const auto& block : function.blocks) {
-                if (external_hook_entries.contains(block.start_address))
+                if (external_hook_entries.contains(block.start_address) ||
+                    runtime_image_architectural_boundaries.contains(
+                        block.start_address))
                     partition_architectural_boundaries.push_back(
                         block.start_address);
                 for (const auto& instruction : block.instructions) {
@@ -11062,7 +11346,8 @@ static PortExportResult export_dreamcast_port_project_impl(
             std::unique(external_callees.begin(), external_callees.end()),
             external_callees.end());
         for (const auto callee : external_callees) {
-            if (external_hook_entries.contains(callee))
+            if (external_hook_entries.contains(callee) ||
+                runtime_image_architectural_boundaries.contains(callee))
                 partition_architectural_boundaries.push_back(callee);
         }
         std::sort(partition_guarded_native_calls.begin(),
@@ -11508,6 +11793,7 @@ PortExportResult export_dreamcast_port_project(
     if (options.game_project != nullptr) {
         katana::runtime::validate_game_project_definition(
             *options.game_project);
+        apply_game_project_runtime_images(image, *options.game_project);
         validate_game_project_image_contract(*options.game_project, image);
         apply_game_project_symbols(image, *options.game_project);
         game_project_overrides =
@@ -11605,6 +11891,7 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
     if (options.game_project != nullptr) {
         katana::runtime::validate_game_project_definition(
             *options.game_project);
+        apply_game_project_runtime_images(image, *options.game_project);
         validate_game_project_image_contract(*options.game_project, image);
         apply_game_project_symbols(image, *options.game_project);
         game_project_overrides =

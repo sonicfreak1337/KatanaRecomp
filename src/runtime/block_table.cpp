@@ -138,17 +138,26 @@ bool compatible_physical_overlap(const RuntimeBlock& left, const RuntimeBlock& r
 
 std::uint32_t validation_physical_start(const RuntimeBlock& block) noexcept {
     if (!block.aot_template) return block.physical_origin;
+    if (block.aot_template->validation_mode ==
+        NativeAotTemplateValidationMode::RuntimeBlock)
+        return block.physical_origin;
     return block.physical_origin -
            (block.virtual_start - block.aot_template->mapping.runtime_start);
 }
 
 std::uint32_t validation_extent(const RuntimeBlock& block) noexcept {
-    return block.aot_template ? block.aot_template->validation_extent : block.size;
+    if (!block.aot_template) return block.size;
+    return block.aot_template->validation_mode ==
+                   NativeAotTemplateValidationMode::RuntimeBlock
+               ? block.size
+               : block.aot_template->validation_extent;
 }
 
 std::span<const NativeAotTemplateMutableRange>
 validation_mutable_ranges(const RuntimeBlock& block) noexcept {
-    return block.aot_template
+    return block.aot_template &&
+                   block.aot_template->validation_mode ==
+                       NativeAotTemplateValidationMode::SourceModule
                ? std::span<const NativeAotTemplateMutableRange>(
                      block.aot_template->mutable_ranges)
                : std::span<const NativeAotTemplateMutableRange>{};
@@ -247,7 +256,8 @@ std::string stable_runtime_block_identity(const RuntimeBlock& block) {
         const auto& contract = *block.aot_template;
         out << std::hex << "-ts" << std::setw(8) << contract.mapping.source_start << "-tr"
             << std::setw(8) << contract.mapping.runtime_start << std::dec << "-te"
-            << contract.mapping.extent << "-tv" << contract.validation_extent;
+            << contract.mapping.extent << "-tv" << contract.validation_extent << "-tmv"
+            << static_cast<unsigned>(contract.validation_mode);
         for (const auto range : contract.mutable_ranges)
             out << "-tm" << range.offset << "x" << range.size;
     }
@@ -412,12 +422,19 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
         }
         const auto& contract = *block.aot_template;
         validate_code_address_mapping(contract.mapping);
+        const auto source_module_validation =
+            contract.validation_mode ==
+            NativeAotTemplateValidationMode::SourceModule;
         if (contract.validation_extent == 0u ||
-            contract.validation_extent < contract.mapping.extent ||
+            (source_module_validation &&
+             contract.validation_extent < contract.mapping.extent) ||
+            (!source_module_validation &&
+             (contract.validation_extent != block.size ||
+              !contract.mutable_ranges.empty())) ||
             !native_aot_mutable_ranges_valid(contract.mutable_ranges,
                                              contract.validation_extent)) {
             throw std::invalid_argument(
-                "AOT-Templatevalidierung muss den vollstaendigen Mappingbereich abdecken: " +
+                "AOT-Templatevalidierung besitzt keinen konsistenten Proofbereich: " +
                 block.provenance);
         }
         const auto mapping_runtime_end =
@@ -433,11 +450,20 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
                 "AOT-Templateblock kann seinen physischen Validierungsanfang nicht darstellen: " +
                 block.provenance);
         }
-        const auto validation_start = block.physical_origin - block_offset;
+        const auto validation_start =
+            source_module_validation ? block.physical_origin - block_offset
+                                     : block.physical_origin;
+        const auto source_validation_start =
+            static_cast<std::uint64_t>(contract.mapping.source_start) +
+            (source_module_validation ? 0u : block_offset);
+        const auto runtime_validation_start =
+            static_cast<std::uint64_t>(
+                source_module_validation ? contract.mapping.runtime_start
+                                         : block.virtual_start);
         const auto source_validation_end =
-            static_cast<std::uint64_t>(contract.mapping.source_start) + contract.validation_extent;
+            source_validation_start + contract.validation_extent;
         const auto runtime_validation_end =
-            static_cast<std::uint64_t>(contract.mapping.runtime_start) + contract.validation_extent;
+            runtime_validation_start + contract.validation_extent;
         const auto validation_end =
             static_cast<std::uint64_t>(validation_start) + contract.validation_extent;
         if (source_validation_end >
@@ -454,13 +480,17 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
         const auto directly_aliased =
             canonical_physical_address(block.virtual_start) == block.physical_origin;
         if (directly_aliased &&
-            canonical_physical_address(contract.mapping.runtime_start + validation_last_offset) !=
+            canonical_physical_address(
+                static_cast<std::uint32_t>(runtime_validation_start) +
+                validation_last_offset) !=
                 validation_start + validation_last_offset) {
             throw std::invalid_argument(
                 "AOT-Templatevalidierung kreuzt eine nicht zusammenhaengende Aliasgrenze: " +
                 block.provenance);
         }
-        if (static_cast<std::uint64_t>(block_offset) + block.size > contract.validation_extent) {
+        if (source_module_validation &&
+            static_cast<std::uint64_t>(block_offset) + block.size >
+                contract.validation_extent) {
             throw std::invalid_argument(
                 "AOT-Templatevalidierung deckt die Runtimeblockbytes nicht ab: " +
                 block.provenance);

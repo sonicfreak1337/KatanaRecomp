@@ -33,6 +33,12 @@ constexpr std::uint32_t artifact_maximum_entries = 1'000'000u;
 constexpr std::uint32_t artifact_maximum_templates = 65'536u;
 constexpr std::uint32_t artifact_maximum_string_size = 4096u;
 constexpr std::uint32_t artifact_maximum_identity_size = 128u;
+constexpr std::uint32_t artifact_maximum_runtime_image_size =
+    16u * 1024u * 1024u;
+constexpr std::uint32_t artifact_maximum_runtime_image_total_size =
+    64u * 1024u * 1024u;
+constexpr std::uint32_t artifact_maximum_runtime_image_entries =
+    65'536u;
 constexpr std::size_t artifact_sha256_size = 64u;
 constexpr std::string_view sha256_prefix = "sha256:";
 
@@ -342,6 +348,25 @@ serialize_definition(const GameProjectDefinition& definition) {
         }
     }
 
+    writer.u32(checked_count(definition.runtime_images.size()));
+    for (const auto& image : definition.runtime_images) {
+        writer.string(image.image_id);
+        writer.string(
+            image.byte_identity,
+            artifact_maximum_identity_size);
+        writer.u32(image.source_start);
+        writer.u32(image.runtime_start);
+        writer.u32(checked_count(
+            image.bytes.size(),
+            artifact_maximum_runtime_image_size));
+        writer.raw(image.bytes);
+        writer.u32(checked_count(
+            image.entry_offsets.size(),
+            artifact_maximum_runtime_image_entries));
+        for (const auto entry : image.entry_offsets)
+            writer.u32(entry);
+    }
+
     writer.u32(checked_count(definition.symbols.size()));
     for (const auto& symbol : definition.symbols) {
         writer.u32(symbol.address);
@@ -552,7 +577,11 @@ void atomic_replace(const std::filesystem::path& source,
 void GameProjectArtifact::rebuild_definition() {
     if (function_symbols_.size() != function_boundaries_.size() ||
         symbol_names_.size() != symbols_.size() ||
-        code_identity_values_.size() != code_identities_.size())
+        code_identity_values_.size() != code_identities_.size() ||
+        runtime_image_ids_.size() != runtime_images_.size() ||
+        runtime_image_byte_identities_.size() != runtime_images_.size() ||
+        runtime_image_bytes_.size() != runtime_images_.size() ||
+        runtime_image_entry_offsets_.size() != runtime_images_.size())
         artifact_error("Game-project artifact ownership is inconsistent.");
 
     for (std::size_t index = 0u;
@@ -566,6 +595,16 @@ void GameProjectArtifact::rebuild_definition() {
          ++index)
         code_identities_[index].byte_identity =
             code_identity_values_[index];
+    for (std::size_t index = 0u;
+         index < runtime_images_.size();
+         ++index) {
+        runtime_images_[index].image_id = runtime_image_ids_[index];
+        runtime_images_[index].byte_identity =
+            runtime_image_byte_identities_[index];
+        runtime_images_[index].bytes = runtime_image_bytes_[index];
+        runtime_images_[index].entry_offsets =
+            runtime_image_entry_offsets_[index];
+    }
 
     definition_ = {};
     definition_.contract_version = contract_version_;
@@ -581,6 +620,7 @@ void GameProjectArtifact::rebuild_definition() {
     definition_.runtime_code_templates = runtime_code_templates_;
     definition_.symbols = symbols_;
     definition_.code_identities = code_identities_;
+    definition_.runtime_images = runtime_images_;
     definition_.boot_config = boot_config_;
     validate_game_project_definition(definition_);
 }
@@ -715,6 +755,47 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
                 {reader.u32(), reader.u32()});
         result->runtime_code_templates_.push_back(
             std::move(native_template));
+    }
+
+    const auto runtime_image_count = reader.count();
+    result->runtime_image_ids_.reserve(runtime_image_count);
+    result->runtime_image_byte_identities_.reserve(
+        runtime_image_count);
+    result->runtime_image_bytes_.reserve(runtime_image_count);
+    result->runtime_image_entry_offsets_.reserve(
+        runtime_image_count);
+    result->runtime_images_.reserve(runtime_image_count);
+    std::uint32_t runtime_image_total_size = 0u;
+    for (std::uint32_t index = 0u;
+         index < runtime_image_count;
+         ++index) {
+        GameProjectRuntimeImage image;
+        result->runtime_image_ids_.push_back(reader.string());
+        result->runtime_image_byte_identities_.push_back(
+            reader.string(artifact_maximum_identity_size));
+        image.source_start = reader.u32();
+        image.runtime_start = reader.u32();
+        const auto byte_count =
+            reader.count(artifact_maximum_runtime_image_size);
+        if (byte_count >
+            artifact_maximum_runtime_image_total_size -
+                runtime_image_total_size)
+            artifact_error(
+                "Game-project artifact runtime images exceed their total size limit.");
+        runtime_image_total_size += byte_count;
+        const auto image_bytes = reader.take(byte_count);
+        result->runtime_image_bytes_.emplace_back(
+            image_bytes.begin(), image_bytes.end());
+        const auto entry_count =
+            reader.count(artifact_maximum_runtime_image_entries);
+        auto& entry_offsets =
+            result->runtime_image_entry_offsets_.emplace_back();
+        entry_offsets.reserve(entry_count);
+        for (std::uint32_t entry_index = 0u;
+             entry_index < entry_count;
+             ++entry_index)
+            entry_offsets.push_back(reader.u32());
+        result->runtime_images_.push_back(image);
     }
 
     const auto symbol_count = reader.count();

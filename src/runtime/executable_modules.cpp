@@ -1786,7 +1786,15 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         const auto mapping_end =
             static_cast<std::uint64_t>(contract.mapping.runtime_start) + contract.mapping.extent;
         const auto block_end = static_cast<std::uint64_t>(block.virtual_start) + block.size;
-        if (contract.validation_extent < contract.mapping.extent ||
+        const auto source_module_validation =
+            contract.validation_mode ==
+            NativeAotTemplateValidationMode::SourceModule;
+        if (contract.validation_extent == 0u ||
+            (source_module_validation &&
+             contract.validation_extent < contract.mapping.extent) ||
+            (!source_module_validation &&
+             (contract.validation_extent != block.size ||
+              !contract.mutable_ranges.empty())) ||
             !native_aot_mutable_ranges_valid(contract.mutable_ranges,
                                              contract.validation_extent) ||
             block.virtual_start < contract.mapping.runtime_start || block_end > mapping_end) {
@@ -1794,12 +1802,17 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
             return std::nullopt;
         }
         const auto block_offset = block.virtual_start - contract.mapping.runtime_start;
-        if (block_offset > physical_target ||
+        const auto source_validation_start =
             static_cast<std::uint64_t>(contract.mapping.source_start) +
-                    contract.validation_extent >
+            (source_module_validation ? 0u : block_offset);
+        const auto runtime_validation_start =
+            static_cast<std::uint64_t>(
+                source_module_validation ? contract.mapping.runtime_start
+                                         : block.virtual_start);
+        if (block_offset > physical_target ||
+            source_validation_start + contract.validation_extent >
                 static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u ||
-            static_cast<std::uint64_t>(contract.mapping.runtime_start) +
-                    contract.validation_extent >
+            runtime_validation_start + contract.validation_extent >
                 static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
             fail(MaterializationFailure::InvalidBlock, target);
             return std::nullopt;
@@ -1808,15 +1821,21 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
             fail(MaterializationFailure::BudgetExhausted, target);
             return std::nullopt;
         }
-        validation_physical_address = physical_target - block_offset;
+        validation_physical_address =
+            source_module_validation ? physical_target - block_offset
+                                     : physical_target;
         validation_size = contract.validation_extent;
-        validation_mutable_ranges = contract.mutable_ranges;
-        validation_module_address = contract.mapping.source_start;
-        validation_block_module_address = contract.mapping.source_start + block_offset;
+        if (source_module_validation) {
+            validation_mutable_ranges = contract.mutable_ranges;
+            validation_module_address = contract.mapping.source_start;
+            validation_block_module_address =
+                contract.mapping.source_start + block_offset;
+        }
         const auto validation_last_offset = validation_size - 1u;
         if (canonical_physical_address(block.virtual_start) == physical_target &&
-            canonical_physical_address(contract.mapping.runtime_start +
-                                       validation_last_offset) !=
+            canonical_physical_address(
+                static_cast<std::uint32_t>(runtime_validation_start) +
+                validation_last_offset) !=
                 validation_physical_address + validation_last_offset) {
             fail(MaterializationFailure::InvalidBlock, target);
             return std::nullopt;
@@ -1827,26 +1846,30 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
             fail(MaterializationFailure::Uncommitted, target);
             return std::nullopt;
         }
-        // The binder may explicitly allow patched pointer/literal words inside
-        // the template.  Such words are removed from the module's active
-        // extents, so resolve only the proven native entry here; the full live
-        // range is protected by the snapshot below.
-        const auto* source_module =
-            modules_.resolve_for_materialization(
-                validation_block_module_address, block.size);
-        if (source_module == nullptr ||
-            !source_module->materializable(validation_block_module_address, block.size)) {
-            fail(MaterializationFailure::AotTemplateMismatch, target);
-            return std::nullopt;
-        }
-        validation_module_id = source_module->id;
-        validation_source_identity = source_module->source_identity;
-        validation_module_generation = source_module->generation;
-        validation_relocation_generation = source_module->relocation_generation;
-        validation_snapshot.resize(validation_size);
-        for (std::uint32_t current = 0u; current < validation_size; ++current) {
-            validation_snapshot[current] =
-                cpu.memory.read_u8(validation_physical_address + current);
+        if (source_module_validation) {
+            // The binder may explicitly allow patched pointer/literal words
+            // inside the template. Such words are removed from the module's
+            // active extents, so resolve only the proven native entry here; the
+            // full live range is protected by the snapshot below.
+            const auto* source_module =
+                modules_.resolve_for_materialization(
+                    validation_block_module_address, block.size);
+            if (source_module == nullptr ||
+                !source_module->materializable(
+                    validation_block_module_address, block.size)) {
+                fail(MaterializationFailure::AotTemplateMismatch, target);
+                return std::nullopt;
+            }
+            validation_module_id = source_module->id;
+            validation_source_identity = source_module->source_identity;
+            validation_module_generation = source_module->generation;
+            validation_relocation_generation =
+                source_module->relocation_generation;
+            validation_snapshot.resize(validation_size);
+            for (std::uint32_t current = 0u; current < validation_size; ++current) {
+                validation_snapshot[current] =
+                    cpu.memory.read_u8(validation_physical_address + current);
+            }
         }
     }
 

@@ -837,9 +837,12 @@ struct ImageValue {
 std::optional<ImageValue> read_image_value(const katana::io::ExecutableImage& image,
                                            const std::uint32_t address,
                                            const std::size_t width) {
-    const auto* segment = image.find_segment(address, width);
+    const auto resolved = image.resolve_segment_address(address, width);
+    if (!resolved.has_value()) return std::nullopt;
+    const auto source_address = *resolved;
+    const auto* segment = image.find_segment(source_address, width);
     if (segment == nullptr || !segment->permissions.readable) return std::nullopt;
-    const auto offset = segment->byte_offset(address);
+    const auto offset = segment->byte_offset(source_address);
     if (!offset.has_value() || *offset > segment->bytes.size() ||
         width > segment->bytes.size() - *offset)
         return std::nullopt;
@@ -854,7 +857,7 @@ std::optional<ImageValue> read_image_value(const katana::io::ExecutableImage& im
             static_cast<std::int16_t>(katana::io::read_u16_le(segment->bytes, *offset))));
         break;
     case 4u:
-        value = image.read_u32_le(address);
+        value = image.read_u32_le(source_address);
         break;
     default:
         return std::nullopt;

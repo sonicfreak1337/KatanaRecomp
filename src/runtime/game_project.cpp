@@ -10,12 +10,18 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace katana::runtime {
 namespace {
 
 constexpr std::uint64_t guest_address_space_size =
     static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
+constexpr std::size_t maximum_runtime_image_size =
+    16u * 1024u * 1024u;
+constexpr std::size_t maximum_runtime_image_total_size =
+    64u * 1024u * 1024u;
+constexpr std::size_t maximum_runtime_image_entries = 65'536u;
 
 std::atomic<const GameProjectBindings*> active_bindings = nullptr;
 
@@ -29,6 +35,23 @@ bool valid_range(const std::uint32_t start,
     return size != 0u && alignment != 0u &&
            (start & (alignment - 1u)) == 0u &&
            size <= guest_address_space_size - start;
+}
+
+bool direct_mapped_range(const std::uint32_t start,
+                         const std::size_t size) noexcept {
+    if (size == 0u ||
+        size > guest_address_space_size - static_cast<std::uint64_t>(start))
+        return false;
+    const auto final =
+        start + static_cast<std::uint32_t>(size - 1u);
+    const auto segment = start & 0xE0000000u;
+    return (segment == 0x80000000u || segment == 0xA0000000u) &&
+           (final & 0xE0000000u) == segment;
+}
+
+std::uint32_t direct_mapped_physical(
+    const std::uint32_t address) noexcept {
+    return address & 0x1FFFFFFFu;
 }
 
 std::uint32_t table_entry_width(const GameProjectTableEncoding encoding) {
@@ -459,6 +482,16 @@ void validate_game_project_definition(
             throw std::invalid_argument(
                 "game-project-runtime-template-destination-invalid");
         }
+        // FixedAddress templates are derived by the exporter from
+        // GameProjectRuntimeImage. Legacy VBR/Loaded artifact records do not
+        // serialize these trailing proof fields and must not silently lose
+        // caller-provided semantics during a round trip.
+        if (definition_template.fixed_runtime_start != 0u ||
+            !definition_template.block_identities.empty() ||
+            definition_template.validation_mode !=
+                NativeAotTemplateValidationMode::SourceModule)
+            throw std::invalid_argument(
+                "game-project-runtime-template-fixed-fields-invalid");
         if (definition_template.source_module_id.empty() ||
             definition_template.expected_source_identity.empty() ||
             definition_template.extent == 0u ||
@@ -534,6 +567,112 @@ void validate_game_project_definition(
                 throw std::invalid_argument(
                     "game-project-runtime-template-mutable-patch-overlap");
         }
+    }
+
+    struct RuntimeImageRange {
+        std::uint32_t physical_start = 0u;
+        std::uint64_t physical_end = 0u;
+    };
+    std::size_t runtime_image_total_size = 0u;
+    std::vector<std::string_view> runtime_image_ids;
+    std::vector<RuntimeImageRange> runtime_image_source_ranges;
+    std::vector<RuntimeImageRange> runtime_image_runtime_ranges;
+    runtime_image_ids.reserve(definition.runtime_images.size());
+    runtime_image_source_ranges.reserve(definition.runtime_images.size());
+    runtime_image_runtime_ranges.reserve(definition.runtime_images.size());
+    for (const auto& image : definition.runtime_images) {
+        if (image.image_id.empty())
+            throw std::invalid_argument(
+                "game-project-runtime-image-id-empty");
+        if (!valid_game_project_sha256_identity(image.byte_identity))
+            throw std::invalid_argument(
+                "game-project-runtime-image-byte-identity-invalid");
+        if (image.bytes.empty() ||
+            image.bytes.size() > maximum_runtime_image_size ||
+            (image.bytes.size() & 3u) != 0u ||
+            (image.source_start & 3u) != 0u ||
+            (image.runtime_start & 3u) != 0u ||
+            !direct_mapped_range(image.source_start, image.bytes.size()) ||
+            !direct_mapped_range(image.runtime_start, image.bytes.size()))
+            throw std::invalid_argument(
+                "game-project-runtime-image-range-invalid");
+        if (image.bytes.size() >
+            maximum_runtime_image_total_size - runtime_image_total_size)
+            throw std::invalid_argument(
+                "game-project-runtime-images-total-size-invalid");
+        runtime_image_total_size += image.bytes.size();
+
+        const auto digest = katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(image.bytes.data()),
+            image.bytes.size()));
+        if (image.byte_identity != std::string("sha256:") + digest)
+            throw std::invalid_argument(
+                "game-project-runtime-image-byte-identity-mismatch");
+
+        std::uint32_t previous_entry = 0u;
+        bool first_entry = true;
+        if (image.entry_offsets.empty() ||
+            image.entry_offsets.size() > maximum_runtime_image_entries)
+            throw std::invalid_argument(
+                "game-project-runtime-image-entry-count-invalid");
+        for (const auto entry : image.entry_offsets) {
+            if ((entry & 1u) != 0u || entry >= image.bytes.size() ||
+                (!first_entry && entry <= previous_entry))
+                throw std::invalid_argument(
+                    "game-project-runtime-image-entry-offset-invalid");
+            previous_entry = entry;
+            first_entry = false;
+        }
+
+        const auto source_physical =
+            direct_mapped_physical(image.source_start);
+        const auto runtime_physical =
+            direct_mapped_physical(image.runtime_start);
+        runtime_image_ids.push_back(image.image_id);
+        runtime_image_source_ranges.push_back(
+            {source_physical, static_cast<std::uint64_t>(source_physical) +
+                                  image.bytes.size()});
+        runtime_image_runtime_ranges.push_back(
+            {runtime_physical,
+             static_cast<std::uint64_t>(runtime_physical) +
+                 image.bytes.size()});
+    }
+    std::sort(runtime_image_ids.begin(), runtime_image_ids.end());
+    if (std::adjacent_find(
+            runtime_image_ids.begin(), runtime_image_ids.end()) !=
+        runtime_image_ids.end())
+        throw std::invalid_argument(
+            "game-project-runtime-image-id-duplicate");
+    const auto require_nonoverlapping_runtime_image_ranges =
+        [](auto& ranges, const char* error) {
+            std::sort(
+                ranges.begin(),
+                ranges.end(),
+                [](const auto& left, const auto& right) {
+                    return left.physical_start < right.physical_start;
+                });
+            for (std::size_t index = 1u; index < ranges.size(); ++index) {
+                if (ranges[index].physical_start <
+                    ranges[index - 1u].physical_end)
+                    throw std::invalid_argument(error);
+            }
+        };
+    require_nonoverlapping_runtime_image_ranges(
+        runtime_image_source_ranges,
+        "game-project-runtime-image-source-ranges-overlap");
+    require_nonoverlapping_runtime_image_ranges(
+        runtime_image_runtime_ranges,
+        "game-project-runtime-image-runtime-ranges-overlap");
+    for (const auto source : runtime_image_source_ranges) {
+        if (std::any_of(
+                runtime_image_runtime_ranges.begin(),
+                runtime_image_runtime_ranges.end(),
+                [&](const auto runtime) {
+                    return source.physical_start < runtime.physical_end &&
+                           runtime.physical_start < source.physical_end;
+                }))
+            throw std::invalid_argument(
+                "game-project-runtime-image-source-runtime-ranges-alias");
     }
 
     require_strictly_sorted(
@@ -712,6 +851,16 @@ std::string game_project_definition_identity(
         }
         for (const auto& range : native_template.mutable_ranges)
             material << "mutable:" << range.offset << ':' << range.size << ';';
+    }
+    for (const auto& image : definition.runtime_images) {
+        material << "runtime-image:" << image.image_id.size() << ':'
+                 << image.image_id << ':' << image.byte_identity << ':'
+                 << image.source_start << ':' << image.runtime_start << ':'
+                 << image.bytes.size() << ':' << image.entry_offsets.size()
+                 << ':';
+        for (const auto entry : image.entry_offsets)
+            material << entry << ',';
+        material << ';';
     }
     for (const auto& function : definition.function_overrides)
         material << "override:" << function.function_address << ':'

@@ -56,6 +56,15 @@ struct ImageRelocation {
     std::optional<std::uint32_t> applied_value;
 };
 
+// Maps a runtime-visible address range back to the separate source range whose
+// bytes are analyzed statically. This is intentionally an analysis-only alias:
+// it does not add another executable segment or change the stored image bytes.
+struct ImageAddressAlias {
+    std::uint32_t source_start = 0;
+    std::uint32_t runtime_start = 0;
+    std::uint64_t size = 0;
+};
+
 struct SegmentPermissions {
     bool readable = false;
     bool writable = false;
@@ -93,16 +102,18 @@ class ExecutableImage {
     void add_entry_point(std::uint32_t address);
     void add_symbol(ImageSymbol symbol);
     void add_relocation(ImageRelocation relocation);
+    void add_address_alias(ImageAddressAlias alias);
     void set_guest_call_abi(GuestCallAbi abi) noexcept;
     void set_initial_snapshot_policy(InitialSnapshotPolicy policy) noexcept;
     void set_initial_snapshot_entry(std::uint32_t address) noexcept;
-    void set_address_model(ImageAddressModel model) noexcept;
+    void set_address_model(ImageAddressModel model);
 
     [[nodiscard]] const std::filesystem::path& source_path() const noexcept;
     [[nodiscard]] std::span<const ImageSegment> segments() const noexcept;
     [[nodiscard]] std::span<const std::uint32_t> entry_points() const noexcept;
     [[nodiscard]] std::span<const ImageSymbol> symbols() const noexcept;
     [[nodiscard]] std::span<const ImageRelocation> relocations() const noexcept;
+    [[nodiscard]] std::span<const ImageAddressAlias> address_aliases() const noexcept;
     [[nodiscard]] GuestCallAbi guest_call_abi() const noexcept;
     [[nodiscard]] InitialSnapshotPolicy initial_snapshot_policy() const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> initial_snapshot_entry() const noexcept;
@@ -121,6 +132,7 @@ class ExecutableImage {
     std::vector<std::uint32_t> entry_points_;
     std::vector<ImageSymbol> symbols_;
     std::vector<ImageRelocation> relocations_;
+    std::vector<ImageAddressAlias> address_aliases_;
     GuestCallAbi guest_call_abi_ = GuestCallAbi::Unknown;
     InitialSnapshotPolicy initial_snapshot_policy_ = InitialSnapshotPolicy::ImmutableOnly;
     std::optional<std::uint32_t> initial_snapshot_entry_;

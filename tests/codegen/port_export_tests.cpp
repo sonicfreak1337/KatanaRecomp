@@ -1077,6 +1077,28 @@ int run_test(const int argc, char* argv[]) {
             katana::platform::dreamcast_disc_boot_address + 0x10u,
             2u,
             "external_exact_padding"}};
+    constexpr std::array<std::uint8_t, 8u> external_runtime_image_bytes{
+        0x00u, 0xB0u, // bsr 0x89000004
+        0x09u, 0x00u, // nop (delay slot)
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop (delay slot)
+    };
+    constexpr std::array<std::uint32_t, 2u>
+        external_runtime_image_entries{0u, 4u};
+    const auto external_runtime_image_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                external_runtime_image_bytes.data()),
+            external_runtime_image_bytes.size()));
+    const std::array external_runtime_images{
+        katana::runtime::GameProjectRuntimeImage{
+            "external-runtime-image",
+            external_runtime_image_identity,
+            0x89000000u,
+            0x8C900000u,
+            external_runtime_image_bytes,
+            external_runtime_image_entries}};
     katana::runtime::GameProjectDefinition external_boundary_project;
     external_boundary_project.project_id =
         "katana.test.external-function-boundary";
@@ -1087,6 +1109,8 @@ int run_test(const int argc, char* argv[]) {
         external_boundary_boot_identity};
     external_boundary_project.function_boundaries =
         external_boundaries;
+    external_boundary_project.runtime_images =
+        external_runtime_images;
     auto external_boundary_options = options;
     external_boundary_options.game_project =
         &external_boundary_project;
@@ -1099,18 +1123,40 @@ int run_test(const int argc, char* argv[]) {
     const auto external_boundary_sources =
         snapshot(external_boundary_output / "generated");
     std::string external_boundary_units;
+    std::string external_boundary_dispatch_shards;
     for (const auto& [path, content] : external_boundary_sources)
         if (path.starts_with("code/unit-"))
             external_boundary_units += content;
+        else if (path.starts_with("code/runtime-dispatch-shard-"))
+            external_boundary_dispatch_shards += content;
+    const auto& external_boundary_dispatch =
+        external_boundary_sources.at("code/runtime-dispatch.cpp");
     require(
         external_boundary_export.functions != 0u &&
             external_boundary_units.find(
                  "fn_8C010010_runtime_entry") != std::string::npos &&
+            external_boundary_units.find(
+                "static_cast<void>(fn_89000004_runtime_entry(cpu, context));") ==
+                std::string::npos &&
+            external_boundary_dispatch.find(
+                "NativeAotTemplateDestination::FixedAddress") !=
+                std::string::npos &&
+            external_boundary_dispatch.find(
+                "materialization_policy.enabled = true") !=
+                std::string::npos &&
+            external_boundary_dispatch.find(
+                "&fixed_source_table") != std::string::npos &&
+            external_boundary_dispatch_shards.find(
+                "append_static_block(fixed_source_blocks, 0x89000000u") !=
+                std::string::npos &&
+            external_boundary_dispatch_shards.find(
+                "register_executable_block(table, services, 0x89000000u") ==
+                std::string::npos &&
             external_boundary_sources.at("metadata/game-project.json")
                     .find("\"start\":2348875792,\"size\":2") !=
                 std::string::npos &&
             external_boundary_sources.at("metadata/game-project.json")
-                    .find("\"schema\":\"katana-game-project-v3\"") !=
+                    .find("\"schema\":\"katana-game-project-v4\"") !=
                 std::string::npos &&
             external_boundary_sources.at("metadata/game-project.json")
                     .find("\"required_product_milestone\":"
@@ -1121,7 +1167,7 @@ int run_test(const int argc, char* argv[]) {
                       "external-game-project-identity-validated") !=
                 external_boundary_export.checkpoints.end(),
         "GameProjectFunctionBoundary verliert Groesse oder nativen AOT-Seed "
-        "im echten Portexportvertrag.");
+        "oder RuntimeImage umgeht den validierenden FixedAddress-Vertrag.");
 
     const auto stored_unknown_disc_root = fixture.root / "stored-unknown-disc";
     write_stored_unknown_candidate_fixture(stored_unknown_disc_root);
@@ -4787,7 +4833,8 @@ int run_test(const int argc, char* argv[]) {
     const auto& shard_one = shard_sources.at("code/runtime-dispatch-shard-00001.cpp");
     require(!shard_sources.contains("code/runtime-dispatch-shard-00002.cpp") &&
                 shard_core.find(
-                    "append_static_blocks_shard_00001(static_blocks)") !=
+                    "append_static_blocks_shard_00001(static_blocks, "
+                    "fixed_source_blocks)") !=
                     std::string::npos &&
                 shard_zero.find("append_static_block(blocks, 0x8C0103FEu") !=
                     std::string::npos &&

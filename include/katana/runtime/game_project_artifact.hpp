@@ -10,9 +10,9 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t game_project_artifact_format_version = 2u;
+inline constexpr std::uint32_t game_project_artifact_format_version = 3u;
 inline constexpr std::uint64_t game_project_artifact_maximum_size =
-    64u * 1024u * 1024u;
+    96u * 1024u * 1024u;
 
 // Owns every string and array referenced by definition(). The artifact is a
 // data-only external project descriptor: executable callback pointers and a
@@ -67,6 +67,11 @@ class GameProjectArtifact final {
     std::vector<GameProjectSymbol> symbols_;
     std::vector<std::string> code_identity_values_;
     std::vector<GameProjectCodeIdentity> code_identities_;
+    std::vector<std::string> runtime_image_ids_;
+    std::vector<std::string> runtime_image_byte_identities_;
+    std::vector<std::vector<std::uint8_t>> runtime_image_bytes_;
+    std::vector<std::vector<std::uint32_t>> runtime_image_entry_offsets_;
+    std::vector<GameProjectRuntimeImage> runtime_images_;
     std::optional<DreamcastRuntimeBootConfig> boot_config_;
 
     GameProjectDefinition definition_;

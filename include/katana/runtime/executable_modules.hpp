@@ -19,6 +19,11 @@
 
 namespace katana::runtime {
 
+// Anonymous guest-write provenance is deliberately admitted in a small,
+// bounded window. Product exporters must reject a precompiled RuntimeBlock
+// larger than this until a wider identity-bound promotion contract exists.
+inline constexpr std::uint32_t runtime_write_promotion_maximum_bytes = 128u;
+
 class IndirectDispatchMetrics;
 class ExecutableDiscLoadTransactionCoordinator;
 
@@ -164,7 +169,8 @@ class ExecutableModuleCatalog final {
     [[nodiscard]] bool may_overlap_active_extent(std::uint32_t address,
                                                  std::size_t size) const noexcept;
     [[nodiscard]] bool authorize_control_transfer(std::uint32_t address,
-                                                  std::uint32_t maximum_bytes = 128u);
+                                                  std::uint32_t maximum_bytes =
+                                                      runtime_write_promotion_maximum_bytes);
     void record_runtime_write(std::uint32_t address,
                               std::size_t size,
                               CodeWriteSource source,
@@ -180,7 +186,8 @@ class ExecutableModuleCatalog final {
         std::span<const GuestWriteEvent> events) noexcept;
     [[nodiscard]] bool promote_runtime_write(const Memory& memory,
                                              std::uint32_t address,
-                                             std::uint32_t maximum_bytes = 128u);
+                                             std::uint32_t maximum_bytes =
+                                                 runtime_write_promotion_maximum_bytes);
     [[nodiscard]] bool
     validate_bytes(const Memory& memory, std::uint32_t address, std::size_t width) const;
     [[nodiscard]] bool validate_bytes_at(const Memory& memory,

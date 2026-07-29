@@ -21,7 +21,14 @@ struct NativeAotTemplatePatch {
 
 enum class NativeAotTemplateDestination : std::uint8_t {
     VbrRelative,
-    LoadedModule
+    LoadedModule,
+    FixedAddress
+};
+
+struct NativeAotTemplateBlockIdentity {
+    std::uint32_t source_offset = 0u;
+    std::uint32_t size = 0u;
+    std::string sha256;
 };
 
 // Describes proof metadata only. VbrRelative templates name their immutable source
@@ -39,6 +46,10 @@ struct NativeAotTemplate {
     std::string expected_runtime_content_identity;
     std::string expected_runtime_byte_identity;
     std::vector<NativeAotTemplateMutableRange> mutable_ranges;
+    std::uint32_t fixed_runtime_start = 0u;
+    std::vector<NativeAotTemplateBlockIdentity> block_identities;
+    NativeAotTemplateValidationMode validation_mode =
+        NativeAotTemplateValidationMode::SourceModule;
 };
 
 enum class NativeAotTemplateBindFailure : std::uint8_t {
@@ -72,7 +83,9 @@ class NativeAotTemplateBinder final {
     NativeAotTemplateBinder(CpuState& cpu,
                             const ExecutableModuleCatalog& modules,
                             const RuntimeBlockTable& blocks,
-                            std::span<const NativeAotTemplate> templates) noexcept;
+                            std::span<const NativeAotTemplate> templates,
+                            const RuntimeBlockTable* fixed_source_blocks =
+                                nullptr);
 
     [[nodiscard]] NativeAotTemplateBindResult
     bind(std::uint32_t target,
@@ -85,6 +98,8 @@ class NativeAotTemplateBinder final {
     const ExecutableModuleCatalog& modules_;
     const RuntimeBlockTable& blocks_;
     std::span<const NativeAotTemplate> templates_;
+    const RuntimeBlockTable* fixed_source_blocks_ = nullptr;
+    std::vector<std::uint8_t> fixed_block_identities_valid_;
 };
 
 [[nodiscard]] const char*

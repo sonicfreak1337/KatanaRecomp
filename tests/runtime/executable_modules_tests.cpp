@@ -216,6 +216,80 @@ void native_aot_template_materialization_regression() {
     cpu.memory.write_u8(0x2028u, template_bytes[40]);
     cpu.memory.write_u8(0x202Cu, template_bytes[44]);
 
+    RuntimeBlockTable exact_blocks;
+    ExecutableCodeTracker exact_tracker;
+    exact_blocks.bind_code_tracker(&exact_tracker);
+    DemandBlockMaterializer exact_materializer(
+        modules,
+        exact_blocks,
+        &exact_tracker,
+        {true, 4u, 128u},
+        [](const std::uint32_t target,
+           const std::uint32_t,
+           const std::span<const std::uint8_t> snapshot,
+           const BlockVariantKey& requested_variant) {
+            RuntimeBlock runtime_block{
+                target,
+                target,
+                4u,
+                BlockEndKind::Return,
+                requested_variant,
+                block,
+                "native-aot-runtime-block",
+                false,
+                RuntimeAotTemplateContract{
+                    {0x1000u, 0x2000u, 56u},
+                    4u,
+                    {},
+                    NativeAotTemplateValidationMode::RuntimeBlock}};
+            return MaterializedBlockCandidate{std::move(runtime_block),
+                                              snapshot.size() >= 4u,
+                                              false,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              2u,
+                                              1u,
+                                              1u,
+                                              4u};
+        });
+    const auto exact_handle =
+        exact_materializer.try_materialize(cpu, 0x2030u, 0x2030u, {}, 0x88u);
+    require(exact_handle.has_value() && exact_tracker.blocks().size() == 1u &&
+                exact_tracker.blocks()[0].block.physical_start == 0x2030u &&
+                exact_tracker.blocks()[0].block.size == 4u &&
+                exact_tracker.blocks()[0].block.origin ==
+                    ExecutableBlockOrigin::RomRamCopy &&
+                exact_materializer.validate_for_dispatch(
+                    cpu, *exact_handle, 0x2030u, 0x2030u),
+            "RuntimeBlock-AOT trackt nicht exakt den bewiesenen Runtimeblock.");
+
+    cpu.memory.write_u8(0x202Cu, static_cast<std::uint8_t>(template_bytes[44] ^ 0x5Au));
+    const auto outside_exact_write =
+        exact_tracker.observe_write(0x202Cu, 1u, CodeWriteSource::Cpu);
+    require(outside_exact_write.invalidated_blocks.empty() &&
+                exact_blocks.erase_overlapping_physical(0x202Cu, 1u) == 0u &&
+                exact_materializer.validate_for_dispatch(
+                    cpu, *exact_handle, 0x2030u, 0x2030u),
+            "RuntimeBlock-AOT wurde durch einen Write ausserhalb seines exakten Proofs "
+            "invalidiert.");
+    cpu.memory.write_u8(0x202Cu, template_bytes[44]);
+
+    cpu.memory.write_u8(0x2030u, static_cast<std::uint8_t>(template_bytes[48] ^ 0xA5u));
+    require(!exact_materializer.validate_for_dispatch(
+                cpu, *exact_handle, 0x2030u, 0x2030u) &&
+                exact_materializer.last_failure() ==
+                    MaterializationFailure::AotTemplateMismatch,
+            "Mutation innerhalb des exakten RuntimeBlock-Proofs blieb unsichtbar.");
+    const auto inside_exact_write =
+        exact_tracker.observe_write(0x2030u, 1u, CodeWriteSource::Cpu);
+    require(inside_exact_write.invalidated_blocks.size() == 1u &&
+                exact_blocks.erase_overlapping_physical(0x2030u, 1u) == 1u,
+            "Mutation innerhalb des RuntimeBlock-Proofs invalidierte Tracker/"
+            "Blocktabelle nicht.");
+    cpu.memory.write_u8(0x2030u, template_bytes[48]);
+
     RuntimeBlockTable rejected_blocks;
     DemandBlockMaterializer rejected(
         modules,

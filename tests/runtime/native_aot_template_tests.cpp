@@ -455,6 +455,117 @@ int main() {
                     missing_block.failure == NativeAotTemplateBindFailure::MissingAot,
                 "Nicht vorab kompilierter Moduleinstieg erzeugte keinen Missing-AOT-Fehler.");
 
+        constexpr std::uint32_t fixed_source = 0x88002000u;
+        constexpr std::uint32_t fixed_runtime = 0x80004000u;
+        constexpr std::uint32_t fixed_offset = 4u;
+        cpu.memory.write_bytes(canonical_physical_address(fixed_runtime),
+                               latent_bytes,
+                               CodeWriteSource::Copy);
+        RuntimeBlockTable fixed_blocks;
+        static_cast<void>(fixed_blocks.register_static(
+            {fixed_source + fixed_offset,
+             canonical_physical_address(fixed_source + fixed_offset),
+             2u,
+             BlockEndKind::Return,
+             {},
+             native_template_block,
+             "synthetic-fixed-aot-source"}));
+        const auto fixed_block_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(
+                                latent_bytes.data() + fixed_offset),
+                            2u));
+        const std::array fixed_templates{NativeAotTemplate{
+            {},
+            {},
+            fixed_source,
+            static_cast<std::uint32_t>(latent_bytes.size()),
+            0,
+            {},
+            NativeAotTemplateDestination::FixedAddress,
+            {},
+            {},
+            {},
+            fixed_runtime,
+            {{fixed_offset, 2u, fixed_block_identity}},
+            NativeAotTemplateValidationMode::RuntimeBlock}};
+        RuntimeBlockTable fixed_dispatch_blocks;
+        fixed_dispatch_blocks.seal_static();
+        NativeAotTemplateBinder fixed_binder(
+            cpu,
+            latent_modules,
+            fixed_dispatch_blocks,
+            fixed_templates,
+            &fixed_blocks);
+        const auto fixed_bound = fixed_binder.bind(
+            fixed_runtime + fixed_offset,
+            canonical_physical_address(fixed_runtime + fixed_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(fixed_offset),
+            BlockVariantKey{11u, 12u, 13u, 14u, 15u});
+        require(fixed_bound &&
+                    fixed_bound.candidate.block.function == native_template_block &&
+                    fixed_bound.candidate.block.physical_origin ==
+                        canonical_physical_address(fixed_runtime + fixed_offset) &&
+                    fixed_bound.candidate.block.aot_template ==
+                        RuntimeAotTemplateContract{
+                            {fixed_source,
+                             fixed_runtime,
+                             static_cast<std::uint32_t>(latent_bytes.size())},
+                            2u,
+                            {},
+                            NativeAotTemplateValidationMode::RuntimeBlock},
+                "FixedAddress-AOT wurde nicht ohne Modul-/Contentlineage an den exakt "
+                "gehashten Runtimeblock gebunden.");
+        require(!fixed_dispatch_blocks.lookup(
+                    fixed_source + fixed_offset, {}).has_value(),
+                "FixedAddress-Quellblock wurde in die Gastdispatch-Tabelle "
+                "veroeffentlicht.");
+
+        auto fixed_mutated = latent_bytes;
+        fixed_mutated[fixed_offset] ^= 0x01u;
+        cpu.memory.write_bytes(canonical_physical_address(fixed_runtime),
+                               fixed_mutated,
+                               CodeWriteSource::Cpu);
+        const auto fixed_hash_rejected = fixed_binder.bind(
+            fixed_runtime + fixed_offset,
+            canonical_physical_address(fixed_runtime + fixed_offset),
+            std::span<const std::uint8_t>(fixed_mutated).subspan(fixed_offset),
+            {});
+        require(!fixed_hash_rejected &&
+                    fixed_hash_rejected.failure ==
+                        NativeAotTemplateBindFailure::RuntimeBytesMismatch,
+                "FixedAddress-AOT akzeptierte Runtimeblockbytes mit falschem SHA-256.");
+        cpu.memory.write_bytes(canonical_physical_address(fixed_runtime),
+                               latent_bytes,
+                               CodeWriteSource::Copy);
+
+        constexpr std::uint32_t anonymous_runtime = 0x80005000u;
+        ExecutableModuleCatalog anonymous_modules;
+        ExecutableModule anonymous_module;
+        anonymous_module.id = "guest-runtime-write-fixed-contract-fixture";
+        anonymous_module.source_identity = "guest-runtime-write-v1";
+        anonymous_module.guest_start =
+            canonical_physical_address(anonymous_runtime);
+        anonymous_module.bytes = latent_bytes;
+        anonymous_modules.publish(std::move(anonymous_module));
+        cpu.memory.write_bytes(canonical_physical_address(anonymous_runtime),
+                               latent_bytes,
+                               CodeWriteSource::Copy);
+        NativeAotTemplateBinder anonymous_binder(
+            cpu, anonymous_modules, latent_blocks, latent_templates);
+        const auto anonymous_without_fixed = anonymous_binder.bind(
+            anonymous_runtime + latent_offset,
+            canonical_physical_address(anonymous_runtime + latent_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
+            {});
+        require(!anonymous_without_fixed &&
+                    anonymous_without_fixed.failure ==
+                        NativeAotTemplateBindFailure::NoMatchingDestination &&
+                    anonymous_without_fixed.candidate.rejection_failure ==
+                        MaterializationFailure::MissingAot,
+                "Anonymer Runtimewrite ohne FixedAddress-Vertrag wurde als Content-/"
+                "Bytemismatch statt Missing-AOT klassifiziert.");
+
         std::cout << "Native AOT-Templatebindung erfolgreich.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
