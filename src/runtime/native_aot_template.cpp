@@ -585,10 +585,10 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
 
     const auto offset = block_offset;
     const auto source_address = mapping.source_start + offset;
+    if (fixed_destination && fixed_source_blocks_ == nullptr)
+        return reject(NativeAotTemplateBindFailure::MissingAot);
     const auto& source_blocks =
-        fixed_destination && fixed_source_blocks_ != nullptr
-            ? *fixed_source_blocks_
-            : blocks_;
+        fixed_destination ? *fixed_source_blocks_ : blocks_;
     const auto source_handle = source_blocks.lookup(source_address, {});
     const auto destination_requires_precompiled_entry =
         loaded_destination || fixed_destination;

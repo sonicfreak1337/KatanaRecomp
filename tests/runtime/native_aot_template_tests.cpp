@@ -17,12 +17,21 @@ namespace {
 
 using namespace katana::runtime;
 
+constexpr std::uint32_t fixed_execution_marker = 0xF17EDA07u;
+
 BlockExit native_template_block(CpuState&, BlockExecutionContext&) {
     return {};
 }
 
 BlockExit native_handler_block(CpuState&, BlockExecutionContext&) {
     return {};
+}
+
+BlockExit fixed_execution_block(CpuState& cpu, BlockExecutionContext&) {
+    cpu.r[7] = fixed_execution_marker;
+    BlockExit result;
+    result.kind = BlockEndKind::Return;
+    return result;
 }
 
 void require(const bool condition, const std::string& message) {
@@ -539,6 +548,31 @@ int main() {
                     fixed_source + fixed_offset, {}).has_value(),
                 "FixedAddress-Quellblock wurde in die Gastdispatch-Tabelle "
                 "veroeffentlicht.");
+        RuntimeBlockTable fixed_fallback_blocks;
+        static_cast<void>(fixed_fallback_blocks.register_static(
+            {fixed_source + fixed_offset,
+             canonical_physical_address(fixed_source + fixed_offset),
+             2u,
+             BlockEndKind::Return,
+             {},
+             native_template_block,
+             "synthetic-fixed-fallback-source"}));
+        NativeAotTemplateBinder fixed_without_source_catalog(
+            cpu,
+            latent_modules,
+            fixed_fallback_blocks,
+            fixed_templates);
+        const auto fixed_without_source = fixed_without_source_catalog.bind(
+            fixed_runtime + fixed_offset,
+            canonical_physical_address(fixed_runtime + fixed_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(fixed_offset),
+            {});
+        require(
+            !fixed_without_source &&
+                fixed_without_source.failure ==
+                    NativeAotTemplateBindFailure::MissingAot,
+            "FixedAddress-AOT fiel ohne separaten Quellkatalog auf die "
+            "Gastdispatch-Tabelle zurueck.");
 
         constexpr std::uint32_t wide_fixed_source =
             0x88004000u;
@@ -570,7 +604,7 @@ int main() {
              wide_fixed_size,
              BlockEndKind::Return,
              {},
-             native_template_block,
+             fixed_execution_block,
              "synthetic-wide-fixed-aot-source"}));
         RuntimeBlockTable wide_fixed_dispatch_blocks;
         const auto wide_fixed_identity =
@@ -682,6 +716,24 @@ int main() {
                     wide_fixed_size,
             "Exakt gehashter FixedAddress-AOT-Block ueber 128 "
             "Byte wurde nicht zielgenau materialisiert.");
+        const auto wide_fixed_resolved =
+            wide_fixed_dispatch_blocks.resolve(*wide_fixed_handle);
+        require(
+            wide_fixed_resolved.has_value() &&
+                wide_fixed_resolved->get().function ==
+                    fixed_execution_block,
+            "Materialisierter FixedAddress-Block besitzt keinen "
+            "ausfuehrbaren nativen Funktionszeiger.");
+        cpu.r[7] = 0u;
+        BlockExecutionContext wide_fixed_context{};
+        const auto wide_fixed_exit =
+            wide_fixed_resolved->get().function(
+                cpu, wide_fixed_context);
+        require(
+            cpu.r[7] == fixed_execution_marker &&
+                wide_fixed_exit.kind == BlockEndKind::Return,
+            "Materialisierter FixedAddress-Block wurde nicht ueber "
+            "seinen aufgeloesten nativen Funktionszeiger ausgefuehrt.");
 
         auto fixed_mutated = latent_bytes;
         fixed_mutated[fixed_offset] ^= 0x01u;
