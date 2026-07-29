@@ -746,6 +746,16 @@ Nach der finalen v28-Abnahme wurden der ersetzte v27-Port und
 `.katana-port-work-e0e2126c4352`, Bootartefakt, Handoff, private GDI und
 installierter Disc-Cache erhalten; die Entfernung ist nicht rueckgaengig.
 
+Nach dem erfolgreichen NativeDisc-v37-Gate wurden der ersetzte v33-Port,
+zwei gescheiterte Exportworkspaces, SDK v27 bis v36, alte
+Spielprojekt-Builds und alte beziehungsweise doppelte private Artefakte
+entfernt. Das gab `11.207.660.888` weitere Bytes frei. Erhalten und
+verifiziert sind v37-Port samt installiertem Disc-Cache, v37-SDK, aktueller
+Exportworkspace, v37-Spielprojektartefakt, kanonischer
+64-KiB-Runtimecapture und private Originaldisc. Die entfernten generierbaren
+Artefakte sind nur durch Neuaufbau beziehungsweise Neuinstallation
+wiederherstellbar.
+
 Offen bleiben:
 
 - Runtime-only-Rebuild plus Relink

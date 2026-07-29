@@ -444,6 +444,15 @@ Erhalten bleiben ausschliesslich v28,
 `.katana-port-work-e0e2126c4352`, Bootartefakt, Handoff, private GDI und
 installierter Disc-Cache; die Entfernung ist nicht rueckgaengig.
 
+Nach dem erfolgreichen NativeDisc-v37-Produktgate wurden der ersetzte
+v33-Port, zwei gescheiterte Exportworkspaces, SDK v27 bis v36, alte
+Spielprojekt-Builds und alte beziehungsweise doppelte private Artefakte
+entfernt. Das gab `11.207.660.888` weitere Bytes frei. Erhalten und
+verifiziert sind v37-Port samt installiertem Disc-Cache, v37-SDK, aktueller
+Exportworkspace, v37-Spielprojektartefakt, kanonischer
+64-KiB-Runtimecapture und private Originaldisc. Der entfernte Bestand ist
+nur durch Neuaufbau beziehungsweise Neuinstallation wiederherstellbar.
+
 ### Historische DirectBoot-v30-Produktevidenz fuer KR-4972
 
 Die allgemeine Funktionswertanalyse verfolgt Callback-Provenienz jetzt ueber
