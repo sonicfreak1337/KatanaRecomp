@@ -2,20 +2,23 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller P0-Quellstand: `b01586a`. Die allgemeinen Quellvertraege fuer
-`KR-4972`, `KR-4966`, `KR-4967` und `KR-4970` sind implementiert. Eine
-frische Sonic-PAL-Produktabnahme dieses Stands steht noch aus; insbesondere
-sind weder ein erfolgreicher 600-Millionen-Post-Entry-Lauf noch ein neuer
-sichtbarer Meilenstein oder ein Performancegewinn behauptet.
+Aktueller P0-Quellstand: `a9cf938`. Der reale ABI-78-NativeDisc-Pfad zeigt
+den Sega-Lizenzscreen der PAL-Disc und endet danach auf einem weissen Screen;
+der PAL-50-/60-Hz-Auswahlbildschirm ist noch nicht erreicht. Der letzte Lauf
+stoppte bei `0x8C647B38 -> 0x8C010F0E` an einem typisierten `missing-aot`.
+Der allgemeine Analyzer-ABI-11-Quellfix inventarisiert dieses direkt vor
+einem bewachten Tail-Registrar geladene Callbackliteral, ohne den
+Livepointer als feste CFG-Kante einzufrieren. Sein frischer
+Sonic-Produktnachweis steht noch aus.
 
 ```text
-Runtime-ABI:                    73
+Runtime-ABI:                    78
 Block-ABI:                       5
-Analyzer-ABI:                    6
+Analyzer-ABI:                   11
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             62
-Native-AOT-Emissionsprofil:     11
+Portprojektvertrag:             67
+Native-AOT-Emissionsprofil:     13
 AOT-Partitionsschema:            5
 ```
 

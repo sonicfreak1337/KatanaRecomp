@@ -5,14 +5,14 @@ Aktuelle interne Version: `v0.49.0`
 ## Evidenztrennung
 
 ```text
-letzte reale Produktevidenz: 0001538 / ABI 78 / NativeDisc-current
-aktueller Runtime-Source:    b064ee8 / Runtime-ABI 78 / Analyzer-ABI 10
-lokaler Arbeitsbaum:         sauber; MDAPRO-Sonic-Produktproof ausstehend
-offene Produktabnahme:       erste erfolgreiche Maple-DMA und naechster Sonic-Screen
+letzte reale Produktevidenz: b064ee8 Runtime-Relink / ABI 78 / NativeDisc-current
+aktueller Source:            a9cf938 / Runtime-ABI 78 / Analyzer-ABI 11
+hoechster sichtbarer Screen: Sega-Lizenzscreen; danach weiss
+offene Produktabnahme:       PAL-50-/60-Hz-Auswahl und 600M-Post-Entry-Gate
 ```
 
-Der aktuelle ABI-78-NativeDisc-Lauf erreicht das vollstaendige relative
-Produktgate:
+Der vorherige ABI-78-NativeDisc-Lauf erreichte noch das vollstaendige
+relative Produktgate:
 
 ```text
 Startzyklus:                     415.233.270
@@ -29,12 +29,41 @@ Interpreter-Materialisierungen:         0
 erstes Problem:                       none
 ```
 
-Die reale ABI-78-Fensteraufnahme zeigt zuerst den PAL-Sega-Screen und danach
-weiterhin einen
+Diese historische ABI-78-Fensteraufnahme zeigt zuerst den
+Sega-Lizenzscreen der PAL-Disc und danach einen
 Sonic-eigenen Speicherkartenhinweis: `Memory card not ready. The game
 cannot be saved. To save game files, insert a memory card into the
 controller.` Massgeblich ist `KATANA_PRODUCT_GATE` mit exakt vollstaendiger
 Gastarbeit.
+
+Der anschliessende Runtime-only-Relink von `b064ee8` passiert die
+vertauschte Maple-DMA-Schutzfensterdekodierung und erreicht einen neuen,
+typisierten AOT-Blocker:
+
+```text
+Gesamtzyklus:                    557.991.327
+Post-Entry-Gastzyklen:           142.758.057 / 600.000.000
+Hostzeit:                              4,98722 s
+effektive Abbruchrate:                28,6248 MHz
+Post-Entry-Zentraldispatches:     14.408.160
+erster Fehler:                    missing-aot / runtime-only tail-jump
+Callsite -> Ziel:                 0x8C647B38 -> 0x8C010F0E
+hoechster sichtbarer Screen:      Sega-Lizenzscreen; danach weiss
+PAL-50-/60-Hz-Auswahl:            nicht erreicht
+```
+
+`a9cf938` schliesst die zugrunde liegende allgemeine Analyseluecke.
+Ein decode-valides 32-Bit-PC-relatives Literal besitzt nun eine eigene
+Inventarprovenienz und darf nur an einer echten Call-/Tail-ABI-Grenze zum
+Codepointerargument werden. Gewoehnliche Objektfeldloads und bedingte
+Owner-Uebergaenge erhalten diesen Beweis nicht. Das Callbackziel wird
+dadurch als `StoredCodeAddress/GuardedPartial` fuer statisches AOT
+inventarisiert; der indirekte Live-Tail bleibt `RuntimeOnly` und wird nicht
+als feste CFG-Kante erfunden. Analyzer-ABI 11 invalidiert den alten
+Analyse-/Exportbestand. Beide betroffenen bestehenden Regressionstargets
+und `katana-recomp` sind gruen; zwei unabhaengige Finalreviews melden keine
+P0/P1-Funde. Ein frischer Analyzer-ABI-11-Sonic-Export und Produktlauf
+stehen noch aus.
 
 Die Diagnose belegt dort ein vom Gast aufgebautes Runtime-Image.
 `db9e721` bindet dessen externe, private Byteidentitaet allgemein an
@@ -91,7 +120,7 @@ Restorepfad sowie das invertierte Fenster ab. Fokustest, Runtime-Build,
 Produktabnahme des Fixes steht noch aus.
 
 Der davor liegende reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
-PAL-Sega-Screen und passiert das zuvor fehlende statische Ziel
+Sega-Lizenzscreen der PAL-Disc und passiert das zuvor fehlende statische Ziel
 `0x8C11088C -> 0x8C64784E`. Er stoppt danach fail-closed bei Gesamtzyklus
 `573.987.074` beziehungsweise `158.753.804` Post-Entry-Zyklen an der
 PVR-Meldung `PVR-Hintergrundvertex ist kleiner als sein ISP/TSP-Format`.
@@ -865,7 +894,8 @@ Ergebnis:
 - private PAL-GDI ueber den Produktinstaller installiert
 - exakt `600.000.000` Post-Entry-Gastzyklen ausgefuehrt
 - `20,2117 s`, `29,6858 MHz`, `66.212.631` Zentraldispatches
-- PAL-Sega-Screen und danach sichtbarer Sonic-Speicherkartenhinweis
+- Sega-Lizenzscreen der PAL-Disc und danach sichtbarer
+  Sonic-Speicherkartenhinweis
 - alle bekannten AOT-/PVR-Grenzen passiert, `first_problem=none`
 - `56` native und `0` Interpreter-Materialisierungen
 
@@ -914,7 +944,7 @@ Der aktuelle Stand behauptet nicht:
 ```text
 Runtime-ABI:                    78
 Block-ABI:                       5
-Analyzer-ABI:                   10
+Analyzer-ABI:                   11
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             67

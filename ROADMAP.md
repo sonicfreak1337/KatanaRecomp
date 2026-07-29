@@ -43,46 +43,45 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
-letzte reale Produktevidenz: 0001538 / ABI 78 / NativeDisc-current
-aktueller Runtime-Source:    b064ee8 / Runtime-ABI 78 / Analyzer-ABI 10
-lokaler Arbeitsbaum:         sauber; MDAPRO-Sonic-Produktproof ausstehend
+letzte reale Produktevidenz: b064ee8 Runtime-Relink / ABI 78 / NativeDisc-current
+aktueller Source:            a9cf938 / Runtime-ABI 78 / Analyzer-ABI 11
+naechste Produktabnahme:     frischer Analyzer-ABI-11-NativeDisc-Export
 ```
 
-Der aktuelle ABI-78-NativeDisc-Lauf erreicht das vollstaendige relative
-Produktgate: `600.000.000` Post-Entry-Gastzyklen in `20,355 s`, also
-`29,4768 MHz`, bei `66.212.631` zentralen Dispatches. Er praesentiert
-real zuerst den PAL-Sega-Screen und danach einen Sonic-eigenen
-Speicherkartenhinweis: `Memory card not ready ... insert a memory card into
-the controller.` Es gibt `112` PVR-Renderrequests und -Completions, `121`
-Host-Presents und `first_problem=none`.
+Der Runtime-only-Relink von `b064ee8` beweist die korrigierte
+Maple-DMA-Schutzfensterreihenfolge im echten NativeDisc-Pfad. Der sichtbare
+Lauf erreicht den Sega-Lizenzscreen der PAL-Disc und danach einen weissen
+beziehungsweise leeren Screen. Er erreicht **nicht** den
+PAL-50-/60-Hz-Auswahlbildschirm und endet vorzeitig am naechsten typisierten
+AOT-Fehler:
 
-`2f2d3b4` schliesst die daraus allgemein abgeleitete Maple-/VMU-Ursache.
-Die Antwort des Hauptgeraets meldet bei angeschlossener VMU nun die echte
-Port-/Subunitmaske `0x21` statt erneut nur den Requestempfaenger `0x20`;
-Subunitantworten und alle vier Ports behalten ihre eigenen Adressbits.
-Die VMU implementiert den FT1-Speichervertrag mit Media-Info, Blockread,
-vier geordneten 128-Byte-Schreibphasen und abschliessendem Sync. Halb
-geschriebene Bloecke sind als gastseitiger Geraetezustand in Diagnose- und
-Product-Handoff gebunden, waehrend installierte Savebytes, Dirtyzustand und
-Hostschreibschutz autoritativ bleiben. Eine neue quelllose VMU erhaelt ein
-deterministisches 128-KiB-Standarddateisystem; bestehende oder importierte
-Arbeitskopien werden nicht ersetzt. Runtime-ABI 78 und Maple-State-Vertrag
-2 invalidieren alte Runtimepakete. Die drei direkt betroffenen
-Maple-/VMU-/Persistenztests, `katana-recomp`, `diff --check` und der
-abschliessende kombinierte Review sind ohne offenen P0/P1/P2. Ob Sonic den
-Speicherkartenhinweis damit real verlaesst, war damit noch nicht belegt.
+```text
+Gesamtzyklus:                    557.991.327
+Post-Entry-Gastzyklen:           142.758.057 / 600.000.000
+Hostzeit:                              4,98722 s
+effektive Abbruchrate:                28,6248 MHz
+Post-Entry-Zentraldispatches:     14.408.160
+erster Fehler:                    missing-aot / runtime-only tail-jump
+Callsite -> Ziel:                 0x8C647B38 -> 0x8C010F0E
+hoechster sichtbarer Screen:      Sega-Lizenzscreen; danach weiss
+PAL-Auswahl:                      nicht erreicht
+```
 
-Die terminale ABI-78-Diagnose erklaert diese Grenze jetzt ohne Titelhack:
-alle `23` gestarteten Maple-DMAs endeten vor dem ersten Deskriptor als
-`ProtectedRange`; deshalb blieb die Transaktionshistorie leer. Sonic
-programmiert `SB_MDAPRO=0x404F`, also die physische RAM-Spanne
-`0x0C000000..0x0CFFFFFF`. Katana dekodierte die beiden Siebenbitfelder
-vertauscht. `b064ee8` verwendet fuer Live-DMA und Handoff-Validator denselben
-fail-closed Rangevertrag: Bits 8..14 sind die erste, Bits 0..6 die letzte
-1-MiB-Seite. Der bestehende Maple-MMIO-Test prueft den asymmetrischen Live-
-und Restorefall sowie das invertierte Fenster; Runtime-Build, Fokustest,
-`diff --check` und Finalreview sind sauber. Der naechste Schritt ist ein
-Runtime-only-Relink des bestehenden Ports und genau ein neues Produktgate.
+Die allgemeine Ursache liegt vor der spaeteren Callbackdispatchstelle:
+Ein 32-Bit-PC-relatives, decode-valide Callbackliteral wird unmittelbar als
+ABI-Argument an einen bewachten Tail-Registrar uebergeben. Die bisherige
+Inventarprovenienz markierte Codepointer an Candidate-Calls, aber nicht an
+dieser echten Tail-ABI-Grenze. `a9cf938` fuehrt dafuer eine getrennte,
+konservative Literalprovenienz ein. Nur echte Call-/Tail-ABI-Grenzen duerfen
+sie zum Codepointerargument promoten; normale Objektfeldloads und externe
+bedingte Owner-Uebergaenge duerfen das nicht. Der Livepointer bleibt
+`RuntimeOnly` und autoritativ, waehrend das Ziel als
+`StoredCodeAddress/GuardedPartial` einen statischen AOT-Einstieg erhaelt.
+Analyzer-ABI 11 invalidiert alte Analyse-, IR-, Codegen- und
+Whole-Export-Caches. Die vorhandene Objektfeld-Negativregression und die
+erweiterte Sonic-artige Kontrollflussregression sind gruen; zwei
+unabhaengige Finalreviews melden keine P0/P1-Funde. Der reale
+Analyzer-ABI-11-Produktnachweis steht noch aus.
 
 `db9e721` fuehrt dafuer den generischen, extern hashgebundenen
 `RuntimeImage`-/`FixedAddress`-Vertrag ein. Der erste reale v36-Export
@@ -103,7 +102,7 @@ Runtime-Image vollstaendig und erreicht ohne AOT-Fehler das Produktbudget.
 
 Der davor liegende reale, erneut aus dem sauberen Main-Stand exportierte und mit der
 privaten Originaldisc installierte ABI-74-NativeDisc-v33-Lauf praesentiert
-den PAL-Sega-Screen. Er passiert den frueheren fehlenden AOT-Einstieg
+den Sega-Lizenzscreen der PAL-Disc. Er passiert den frueheren fehlenden AOT-Einstieg
 `0x8C11088C -> 0x8C64784E` und stoppt erst bei Gesamtzyklus `573.987.074`
 fail-closed an einer ungueltigen PVR-Background-Parameterdekodierung.
 Ausgefuehrt wurden `158.753.804` Post-Entry-Zyklen in `6,87382 s`,
@@ -211,7 +210,7 @@ abnehmen.
 ```text
 Runtime-ABI:                    78
 Block-ABI:                       5
-Analyzer-ABI:                   10
+Analyzer-ABI:                   11
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             67
@@ -934,7 +933,7 @@ Ergebnis:
 
 - `600.000.000 / 600.000.000` Post-Entry-Gastzyklen erreicht;
 - `20,2117 s`, `29,6858 MHz`, `66.212.631` Zentraldispatches;
-- PAL-Sega-Screen real sichtbar;
+- Sega-Lizenzscreen der PAL-Disc real sichtbar;
 - hoechster realer Screen ist der Sonic-Speicherkartenhinweis
   `Memory card not ready ...`;
 - `112` PVR-Renderrequests und -Completions, `121` Host-Presents;
