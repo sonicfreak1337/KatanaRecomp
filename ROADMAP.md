@@ -43,23 +43,18 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
-letzte reale Produktevidenz: d645d20 / ABI 77 / NativeDisc-v37
-aktueller Runtime-Source:    2f2d3b4 / Runtime-ABI 78 / Analyzer-ABI 10
-lokaler Arbeitsbaum:         sauber; ABI-78-Sonic-Produktproof ausstehend
+letzte reale Produktevidenz: 0001538 / ABI 78 / NativeDisc-current
+aktueller Runtime-Source:    b064ee8 / Runtime-ABI 78 / Analyzer-ABI 10
+lokaler Arbeitsbaum:         sauber; MDAPRO-Sonic-Produktproof ausstehend
 ```
 
-Der aktuelle ABI-77-NativeDisc-v37-Lauf erreicht erstmals das vollstaendige
-relative Produktgate: `600.000.000` Post-Entry-Gastzyklen in `20,2117 s`,
-also `29,6858 MHz`, bei `66.212.631` zentralen Dispatches. Er praesentiert
+Der aktuelle ABI-78-NativeDisc-Lauf erreicht das vollstaendige relative
+Produktgate: `600.000.000` Post-Entry-Gastzyklen in `20,355 s`, also
+`29,4768 MHz`, bei `66.212.631` zentralen Dispatches. Er praesentiert
 real zuerst den PAL-Sega-Screen und danach einen Sonic-eigenen
 Speicherkartenhinweis: `Memory card not ready ... insert a memory card into
-the controller.` Damit sind der historische Guarded-AOT-Blocker, die
-v33-Grenze und das FixedAddress-Ziel `0x8C900020` passiert. Es gibt `112`
-PVR-Renderrequests und -Completions, `121` Host-Presents, `56` native
-Runtime-Materialisierungen, `0` Interpreter-Materialisierungen und
-`first_problem=none`. Die naechste reale Bootgrenze ist die
-Maple-/VMU-Erkennung; `controller_contract=0`, keine Controller-Samples und
-der sichtbare Spielhinweis begrenzen die aktuelle Untersuchung.
+the controller.` Es gibt `112` PVR-Renderrequests und -Completions, `121`
+Host-Presents und `first_problem=none`.
 
 `2f2d3b4` schliesst die daraus allgemein abgeleitete Maple-/VMU-Ursache.
 Die Antwort des Hauptgeraets meldet bei angeschlossener VMU nun die echte
@@ -75,8 +70,19 @@ Arbeitskopien werden nicht ersetzt. Runtime-ABI 78 und Maple-State-Vertrag
 2 invalidieren alte Runtimepakete. Die drei direkt betroffenen
 Maple-/VMU-/Persistenztests, `katana-recomp`, `diff --check` und der
 abschliessende kombinierte Review sind ohne offenen P0/P1/P2. Ob Sonic den
-Speicherkartenhinweis damit real verlaesst, ist erst durch den naechsten
-frischen NativeDisc-Produktlauf belegt.
+Speicherkartenhinweis damit real verlaesst, war damit noch nicht belegt.
+
+Die terminale ABI-78-Diagnose erklaert diese Grenze jetzt ohne Titelhack:
+alle `23` gestarteten Maple-DMAs endeten vor dem ersten Deskriptor als
+`ProtectedRange`; deshalb blieb die Transaktionshistorie leer. Sonic
+programmiert `SB_MDAPRO=0x404F`, also die physische RAM-Spanne
+`0x0C000000..0x0CFFFFFF`. Katana dekodierte die beiden Siebenbitfelder
+vertauscht. `b064ee8` verwendet fuer Live-DMA und Handoff-Validator denselben
+fail-closed Rangevertrag: Bits 8..14 sind die erste, Bits 0..6 die letzte
+1-MiB-Seite. Der bestehende Maple-MMIO-Test prueft den asymmetrischen Live-
+und Restorefall sowie das invertierte Fenster; Runtime-Build, Fokustest,
+`diff --check` und Finalreview sind sauber. Der naechste Schritt ist ein
+Runtime-only-Relink des bestehenden Ports und genau ein neues Produktgate.
 
 `db9e721` fuehrt dafuer den generischen, extern hashgebundenen
 `RuntimeImage`-/`FixedAddress`-Vertrag ein. Der erste reale v36-Export

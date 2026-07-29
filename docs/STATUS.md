@@ -5,21 +5,21 @@ Aktuelle interne Version: `v0.49.0`
 ## Evidenztrennung
 
 ```text
-letzte reale Produktevidenz: d645d20 / ABI 77 / NativeDisc-v37
-aktueller Runtime-Source:    2f2d3b4 / Runtime-ABI 78 / Analyzer-ABI 10
-lokaler Arbeitsbaum:         sauber; ABI-78-Sonic-Produktproof ausstehend
-offene Produktabnahme:       VMU-Erkennung und naechster sichtbarer Sonic-Screen
+letzte reale Produktevidenz: 0001538 / ABI 78 / NativeDisc-current
+aktueller Runtime-Source:    b064ee8 / Runtime-ABI 78 / Analyzer-ABI 10
+lokaler Arbeitsbaum:         sauber; MDAPRO-Sonic-Produktproof ausstehend
+offene Produktabnahme:       erste erfolgreiche Maple-DMA und naechster Sonic-Screen
 ```
 
-Der aktuelle ABI-77-NativeDisc-v37-Lauf erreicht erstmals das vollstaendige
-relative Produktgate:
+Der aktuelle ABI-78-NativeDisc-Lauf erreicht das vollstaendige relative
+Produktgate:
 
 ```text
 Startzyklus:                     415.233.270
 Ziel-/Endzyklus:               1.015.233.270
 Post-Entry-Gastzyklen:           600.000.000 / 600.000.000
-Hostzeit:                            20,2117 s
-effektive Gastgeschwindigkeit:       29,6858 MHz
+Hostzeit:                            20,3550 s
+effektive Gastgeschwindigkeit:       29,4768 MHz
 Zentraldispatches:               66.212.631
 Gastzyklen je Zentraldispatch:          9,06
 PVR Requests / Completions:           112 / 112
@@ -29,15 +29,12 @@ Interpreter-Materialisierungen:         0
 erstes Problem:                       none
 ```
 
-Die reale Fensteraufnahme zeigt zuerst den PAL-Sega-Screen und danach einen
+Die reale ABI-78-Fensteraufnahme zeigt zuerst den PAL-Sega-Screen und danach
+weiterhin einen
 Sonic-eigenen Speicherkartenhinweis: `Memory card not ready. The game
 cannot be saved. To save game files, insert a memory card into the
-controller.` Damit sind der historische Guarded-AOT-Blocker, die
-v33-Grenze, die PVR-Abbruchgrenze und `0x8C900020` passiert. Der
-Capture-Harness meldet nur deshalb einen vorzeitigen Aufnahmeabschluss,
-weil der Produktprozess das vollstaendige Budget bereits nach 23,6 s
-Gesamtlaufzeit vor dem auf 36 s gesetzten Capture-Ende regulaer beendet.
-Massgeblich ist `KATANA_PRODUCT_GATE` mit exakt vollstaendiger Gastarbeit.
+controller.` Massgeblich ist `KATANA_PRODUCT_GATE` mit exakt vollstaendiger
+Gastarbeit.
 
 Die Diagnose belegt dort ein vom Gast aufgebautes Runtime-Image.
 `db9e721` bindet dessen externe, private Byteidentitaet allgemein an
@@ -77,7 +74,21 @@ und 200 Datenbloecke formatiert, ohne vorhandene oder importierte
 Arbeitskopien zu ersetzen. Runtime-ABI 78 und Maple-State-Vertrag 2 binden
 die Aenderung. Die drei fokussierten Maple-/VMU-/Persistenztests,
 `katana-recomp`, `diff --check` und der abschliessende kombinierte Review
-sind sauber; der reale ABI-78-Sonic-Nachweis steht noch aus.
+sind sauber.
+
+Die anschliessende terminale ABI-78-Diagnose belegt den naechsten
+allgemeinen Blocker. Sonic startete `23` Maple-DMAs; alle endeten vor dem
+ersten Deskriptor mit `MapleDmaError::ProtectedRange`, weshalb die
+Transaktionshistorie leer blieb. Das programmierte
+`SB_MDAPRO=0x404F` beschreibt die physische RAM-Spanne
+`0x0C000000..0x0CFFFFFF`. Katana interpretierte die beiden
+Siebenbit-Seitenfelder im Livepfad und im Handoff-Validator in umgekehrter
+Reihenfolge. `b064ee8` vereinigt beide Pfade in einem fail-closed Helper:
+Bits 8..14 sind die erste, Bits 0..6 die letzte 1-MiB-Seite. Der vorhandene
+Maple-MMIO-Test deckt Sonics asymmetrisches Fenster im Live- und
+Restorepfad sowie das invertierte Fenster ab. Fokustest, Runtime-Build,
+`diff --check` und unabhaengiger Finalreview sind sauber; die reale
+Produktabnahme des Fixes steht noch aus.
 
 Der davor liegende reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
 PAL-Sega-Screen und passiert das zuvor fehlende statische Ziel
@@ -799,9 +810,10 @@ Im realen ABI-77-v37-Produktproof bestaetigt:
 KR-4966 korrektes relatives Post-Entry-Gate
 
 Naechster Schritt:
-einen frischen ABI-78-NativeDisc-Port aus `2f2d3b4` bauen, die private
-Originaldisc installieren und exakt einen 600-Millionen-Post-Entry-Lauf
-bis zum naechsten sichtbaren Sonic-Meilenstein ausfuehren
+den bestehenden ABI-78-NativeDisc-Port nur gegen Runtime `b064ee8`
+relinken und exakt einen 600-Millionen-Post-Entry-Lauf bis zur ersten
+erfolgreichen Maple-DMA beziehungsweise zum naechsten sichtbaren
+Sonic-Meilenstein ausfuehren
 
 Weiterhin quellseitig vorhanden, separater DirectBoot-Produktproof offen:
 KR-4967 strikter globaler Prepare-/Commitvertrag
