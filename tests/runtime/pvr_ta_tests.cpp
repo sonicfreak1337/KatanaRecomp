@@ -1,6 +1,7 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/dma.hpp"
 #include "katana/runtime/pvr.hpp"
+#include "katana/runtime/system_asic.hpp"
 
 #include <algorithm>
 #include <array>
@@ -95,21 +96,24 @@ int main() {
     require(yuv_destination.kind == PvrChannel2DestinationKind::YuvConverter &&
                 !yuv_destination.destination_progresses(),
             "YUV-Fenster wird nicht als festes Channel-2-Geraeteziel erkannt.");
-    const auto direct64_destination =
+    const auto direct_path0_destination =
         plan_pvr_channel2_destination(0x11FFFFC0u, 64u);
-    const auto direct32_destination =
+    const auto direct_path1_destination =
         plan_pvr_channel2_destination(0x13000400u, 96u);
-    require(direct64_destination.kind ==
-                    PvrChannel2DestinationKind::DirectTexture64 &&
-                direct64_destination.destination_progresses() &&
-                direct64_destination.destination_for_unit(0u) == 0x11FFFFC0u &&
-                direct64_destination.destination_for_unit(1u) == 0x11FFFFE0u &&
-                direct32_destination.kind ==
-                    PvrChannel2DestinationKind::DirectTexture32 &&
-                direct32_destination.destination_for_unit(2u) == 0x13000440u,
+    require(direct_path0_destination.kind ==
+                    PvrChannel2DestinationKind::DirectTexturePath0 &&
+                direct_path0_destination.destination_progresses() &&
+                direct_path0_destination.destination_for_unit(0u) == 0x11FFFFC0u &&
+                direct_path0_destination.destination_for_unit(1u) == 0x11FFFFE0u &&
+                direct_path1_destination.kind ==
+                    PvrChannel2DestinationKind::DirectTexturePath1 &&
+                direct_path1_destination.destination_for_unit(2u) == 0x13000440u,
             "Direct-Texture-Ziele 0x11/0x13 schreiten nicht je 32-Byte-Einheit fort.");
     require(throws<std::out_of_range>(
-                [&] { static_cast<void>(direct64_destination.destination_for_unit(2u)); }) &&
+                [&] {
+                    static_cast<void>(
+                        direct_path0_destination.destination_for_unit(2u));
+                }) &&
                 throws<std::out_of_range>([&] {
                     static_cast<void>(
                         plan_pvr_channel2_destination(0x11FFFFE0u, 64u));
@@ -134,14 +138,18 @@ int main() {
         Memory direct_memory(0u);
         auto direct_source = std::make_shared<LinearMemoryDevice>(128u);
         auto direct_vram = std::make_shared<LinearMemoryDevice>(dreamcast_vram_size);
+        auto direct_system_bus = std::make_shared<DreamcastSystemBusControl>();
+        direct_system_bus->reset();
         direct_memory.map_region(
             "synthetic-channel2-source", 0x0C000000u, direct_source);
-        map_dreamcast_ta_vram_aliases(direct_memory, direct_vram);
+        map_dreamcast_ta_vram_aliases(
+            direct_memory, direct_vram, direct_system_bus);
         Sh4Dmac direct_dmac(direct_scheduler, direct_memory, DmaTiming{1u});
         const auto run_direct_transfer =
             [&](const std::uint32_t source_offset,
                 const PvrChannel2DestinationPlan& plan,
-                const std::uint32_t pattern) {
+                const std::uint32_t pattern,
+                const bool uses_32bit_path) {
                 direct_dmac.reset();
                 for (std::uint32_t offset = 0u;
                      offset < static_cast<std::uint32_t>(plan.byte_count);
@@ -166,11 +174,17 @@ int main() {
                 bool matches = true;
                 for (std::uint32_t offset = 0u;
                      offset < static_cast<std::uint32_t>(plan.byte_count);
-                     offset += 4u)
-                    matches =
-                        matches &&
-                        direct_memory.read_u32(plan.initial_address + offset) ==
-                            pattern + offset;
+                     offset += 4u) {
+                    const auto logical =
+                        (plan.initial_address & 0x007FFFFFu) + offset;
+                    const auto backing =
+                        uses_32bit_path
+                            ? dreamcast_vram_32bit_to_linear_offset(logical)
+                            : logical;
+                    matches = matches &&
+                              direct_vram->read_u32(backing) ==
+                                  pattern + offset;
+                }
                 require(
                     matches &&
                         direct_dmac.destination(2u) ==
@@ -179,14 +193,26 @@ int main() {
                     "Mehrteiliger Direct-Texture-Transfer erreicht sein "
                     "fortschreitendes VRAM-Ziel nicht.");
             };
+        direct_system_bus->write(
+            system_bus_register::TextureMemoryMode0, 1u);
         run_direct_transfer(
             0u,
             plan_pvr_channel2_destination(0x11000200u, 64u),
-            0x64000000u);
+            0x64000000u,
+            true);
+        direct_system_bus->write(
+            system_bus_register::TextureMemoryMode1, 0u);
         run_direct_transfer(
             64u,
             plan_pvr_channel2_destination(0x13000400u, 64u),
-            0x32000000u);
+            0x32000000u,
+            false);
+        require(throws<std::runtime_error>(
+                    [&] {
+                        static_cast<void>(
+                            direct_memory.read_u32(0x11000200u));
+                    }),
+                "Der Area-4-TA-VRAM-Schreibpfad akzeptiert einen Lesezugriff.");
     }
 
     TileAccelerator ta;

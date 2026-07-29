@@ -1,6 +1,7 @@
 #include "katana/runtime/pvr.hpp"
 
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/system_asic.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -2877,8 +2878,8 @@ void PvrTaFifo::reset() noexcept {
 }
 
 bool PvrChannel2DestinationPlan::destination_progresses() const noexcept {
-    return kind == PvrChannel2DestinationKind::DirectTexture64 ||
-           kind == PvrChannel2DestinationKind::DirectTexture32;
+    return kind == PvrChannel2DestinationKind::DirectTexturePath0 ||
+           kind == PvrChannel2DestinationKind::DirectTexturePath1;
 }
 
 std::uint32_t
@@ -2917,18 +2918,18 @@ plan_pvr_channel2_destination(const std::uint32_t destination,
                    : PvrChannel2DestinationKind::YuvConverter;
         break;
     case 0x11000000u:
-        kind = PvrChannel2DestinationKind::DirectTexture64;
+        kind = PvrChannel2DestinationKind::DirectTexturePath0;
         break;
     case 0x13000000u:
-        kind = PvrChannel2DestinationKind::DirectTexture32;
+        kind = PvrChannel2DestinationKind::DirectTexturePath1;
         break;
     default:
         throw std::out_of_range(
             "PVR-Channel-2-Ziel liegt ausserhalb der Area-4-PVR-Fenster.");
     }
 
-    if (kind == PvrChannel2DestinationKind::DirectTexture64 ||
-        kind == PvrChannel2DestinationKind::DirectTexture32) {
+    if (kind == PvrChannel2DestinationKind::DirectTexturePath0 ||
+        kind == PvrChannel2DestinationKind::DirectTexturePath1) {
         const auto end = static_cast<std::uint64_t>(destination) + byte_count;
         const auto window_end = static_cast<std::uint64_t>(window) +
                                 direct_texture_window_size;
@@ -4054,6 +4055,11 @@ void PvrSoftwareRenderer::set_guest_memory_access_memory(Memory* const memory) n
     guest_memory_access_memory_ = memory;
 }
 
+void PvrSoftwareRenderer::set_texture_memory_mode_control(
+    const DreamcastSystemBusControl* const system_bus_control) noexcept {
+    texture_memory_mode_control_ = system_bus_control;
+}
+
 void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,
                                              const std::size_t size,
                                              const bool bytes_changed) {
@@ -4123,10 +4129,16 @@ void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,
     };
     for (const auto base : dreamcast_vram_64bit_physical_bases) mark_mapping(base, false);
     for (const auto base : dreamcast_vram_32bit_physical_bases) mark_mapping(base, true);
-    mark_mapping(0x11000000u, false);
-    mark_mapping(0x11800000u, false);
-    mark_mapping(0x13000000u, true);
-    mark_mapping(0x13800000u, true);
+    const auto path0_uses_32bit =
+        texture_memory_mode_control_ != nullptr &&
+        texture_memory_mode_control_->texture_memory_mode0_uses_32bit_path();
+    const auto path1_uses_32bit =
+        texture_memory_mode_control_ != nullptr &&
+        texture_memory_mode_control_->texture_memory_mode1_uses_32bit_path();
+    mark_mapping(0x11000000u, path0_uses_32bit);
+    mark_mapping(0x11800000u, path0_uses_32bit);
+    mark_mapping(0x13000000u, path1_uses_32bit);
+    mark_mapping(0x13800000u, path1_uses_32bit);
     if (!direct_vram) return;
     const auto generation = next_direct_write_generation_;
     if (next_direct_write_generation_ != std::numeric_limits<std::uint64_t>::max())

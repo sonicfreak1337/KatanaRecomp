@@ -186,6 +186,14 @@ bool DreamcastSystemBusControl::aica_write_buffer_empty() const noexcept {
     return (registers_[FifoStatus / 4u] & 1u) == 0u;
 }
 
+bool DreamcastSystemBusControl::texture_memory_mode0_uses_32bit_path() const noexcept {
+    return (registers_[TextureMemoryMode0 / 4u] & 1u) != 0u;
+}
+
+bool DreamcastSystemBusControl::texture_memory_mode1_uses_32bit_path() const noexcept {
+    return (registers_[TextureMemoryMode1 / 4u] & 1u) != 0u;
+}
+
 DreamcastSystemBusSnapshot DreamcastSystemBusControl::snapshot() const noexcept {
     DreamcastSystemBusSnapshot result;
     result.registers = registers_;

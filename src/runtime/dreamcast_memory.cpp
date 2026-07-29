@@ -1,5 +1,7 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 
+#include "katana/runtime/system_asic.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -66,6 +68,82 @@ class Vram32BitMemoryDevice final : public MemoryDevice {
 
   private:
     std::shared_ptr<LinearMemoryDevice> backing_;
+};
+
+enum class TaVramPath : std::uint8_t { Path0, Path1 };
+
+class TaVramMemoryDevice final : public MemoryDevice {
+  public:
+    TaVramMemoryDevice(std::shared_ptr<LinearMemoryDevice> backing,
+                       std::shared_ptr<DreamcastSystemBusControl> system_bus_control,
+                       const TaVramPath path)
+        : backing_(std::move(backing)),
+          system_bus_control_(std::move(system_bus_control)),
+          path_(path) {
+        if (!backing_ || backing_->size() != dreamcast_vram_size) {
+            throw std::invalid_argument(
+                "Der Area-4-VRAM-Pfad braucht ein 8-MiB-VRAM-Backing.");
+        }
+        if (!system_bus_control_) {
+            throw std::invalid_argument(
+                "Der Area-4-VRAM-Pfad braucht die Systembus-LMMODE-Register.");
+        }
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept override {
+        return backing_->size();
+    }
+
+    [[nodiscard]] std::uint8_t read_u8(const std::uint32_t) const override {
+        throw std::runtime_error(
+            "Der Area-4-TA-VRAM-Pfad ist ein schreibbarer Hardwarepfad.");
+    }
+
+    void write_u8(const std::uint32_t offset, const std::uint8_t value) override {
+        backing_->write_u8(backing_offset(offset), value);
+    }
+
+    [[nodiscard]] LinearMemoryProjection
+    linear_projection(const std::uint32_t offset,
+                      const MemoryAccessWidth width) const noexcept override {
+        const auto byte_count = static_cast<std::uint8_t>(width);
+        if (offset > size() || byte_count > size() - offset) return {};
+
+        const auto projected = uses_32bit_path();
+        LinearMemoryProjection projection;
+        projection.backing = backing_.get();
+        projection.byte_count = byte_count;
+        projection.contiguous = true;
+        for (std::uint8_t index = 0u; index < byte_count; ++index) {
+            projection.byte_offsets[index] =
+                projected
+                    ? dreamcast_vram_32bit_to_linear_offset(offset + index)
+                    : offset + index;
+            if (index != 0u &&
+                projection.byte_offsets[index] !=
+                    projection.byte_offsets[index - 1u] + 1u) {
+                projection.contiguous = false;
+            }
+        }
+        return projection;
+    }
+
+  private:
+    [[nodiscard]] bool uses_32bit_path() const noexcept {
+        return path_ == TaVramPath::Path0
+                   ? system_bus_control_->texture_memory_mode0_uses_32bit_path()
+                   : system_bus_control_->texture_memory_mode1_uses_32bit_path();
+    }
+
+    [[nodiscard]] std::uint32_t backing_offset(const std::uint32_t offset) const noexcept {
+        return uses_32bit_path()
+                   ? dreamcast_vram_32bit_to_linear_offset(offset)
+                   : offset;
+    }
+
+    std::shared_ptr<LinearMemoryDevice> backing_;
+    std::shared_ptr<DreamcastSystemBusControl> system_bus_control_;
+    TaVramPath path_ = TaVramPath::Path0;
 };
 
 std::uint32_t main_ram_alias_base(const std::uint32_t area_base, const std::size_t mirror_index) {
@@ -469,26 +547,35 @@ std::shared_ptr<LinearMemoryDevice> map_dreamcast_vram(Memory& memory) {
 }
 
 void map_dreamcast_ta_vram_aliases(Memory& memory,
-                                    const std::shared_ptr<LinearMemoryDevice>& vram) {
+                                    const std::shared_ptr<LinearMemoryDevice>& vram,
+                                    const std::shared_ptr<DreamcastSystemBusControl>&
+                                        system_bus_control) {
     if (!vram || vram->size() != dreamcast_vram_size) {
         throw std::invalid_argument("Die TA-VRAM-Aliase brauchen das gemeinsame 8-MiB-VRAM.");
     }
-    auto path_32bit = std::make_shared<Vram32BitMemoryDevice>(vram);
+    if (!system_bus_control) {
+        throw std::invalid_argument(
+            "Die TA-VRAM-Aliase brauchen die Systembus-LMMODE-Register.");
+    }
+    auto path0 = std::make_shared<TaVramMemoryDevice>(
+        vram, system_bus_control, TaVramPath::Path0);
+    auto path1 = std::make_shared<TaVramMemoryDevice>(
+        vram, system_bus_control, TaVramPath::Path1);
     std::vector<PendingMapping> mappings;
     mappings.reserve(dreamcast_direct_segment_bases.size() * 4u);
     for (const auto segment_base : dreamcast_direct_segment_bases) {
-        const auto base_64bit = segment_base + 0x11000000u;
-        const auto mirror_64bit = segment_base + 0x11800000u;
-        const auto base_32bit = segment_base + 0x13000000u;
-        const auto mirror_32bit = segment_base + 0x13800000u;
+        const auto path0_base = segment_base + 0x11000000u;
+        const auto path0_mirror = segment_base + 0x11800000u;
+        const auto path1_base = segment_base + 0x13000000u;
+        const auto path1_mirror = segment_base + 0x13800000u;
         mappings.push_back(PendingMapping{
-            "dreamcast-ta-vram-64bit-" + hex_address(base_64bit), base_64bit, vram});
+            "dreamcast-ta-vram-path0-" + hex_address(path0_base), path0_base, path0});
         mappings.push_back(PendingMapping{
-            "dreamcast-ta-vram-64bit-" + hex_address(mirror_64bit), mirror_64bit, vram});
+            "dreamcast-ta-vram-path0-" + hex_address(path0_mirror), path0_mirror, path0});
         mappings.push_back(PendingMapping{
-            "dreamcast-ta-vram-32bit-" + hex_address(base_32bit), base_32bit, path_32bit});
+            "dreamcast-ta-vram-path1-" + hex_address(path1_base), path1_base, path1});
         mappings.push_back(PendingMapping{
-            "dreamcast-ta-vram-32bit-" + hex_address(mirror_32bit), mirror_32bit, path_32bit});
+            "dreamcast-ta-vram-path1-" + hex_address(path1_mirror), path1_mirror, path1});
     }
     map_all(memory, std::move(mappings));
 }

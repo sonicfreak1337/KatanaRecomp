@@ -88,6 +88,8 @@ class DreamcastSystemBusControl final {
     void reset() noexcept;
     [[nodiscard]] std::uint64_t system_reset_requests() const noexcept;
     [[nodiscard]] bool aica_write_buffer_empty() const noexcept;
+    [[nodiscard]] bool texture_memory_mode0_uses_32bit_path() const noexcept;
+    [[nodiscard]] bool texture_memory_mode1_uses_32bit_path() const noexcept;
     [[nodiscard]] DreamcastSystemBusSnapshot snapshot() const noexcept;
     void validate_state_restore(const DreamcastSystemBusSnapshot& state) const;
     void restore_state_passive(const DreamcastSystemBusSnapshot& state);

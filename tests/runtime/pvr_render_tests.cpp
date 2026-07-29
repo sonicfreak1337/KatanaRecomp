@@ -1,5 +1,6 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/pvr.hpp"
+#include "katana/runtime/system_asic.hpp"
 
 #include <algorithm>
 #include <array>
@@ -750,6 +751,59 @@ int main() {
     require(software.metrics().frames == before_accumulation + 1u &&
                 read_fb_u32(vram, 0x2000u) == 0u,
             "Sekundaer-Akkumulationsquelle wird nicht im produktiven Renderer ausgewertet.");
+
+    {
+        Memory area4_memory(0u);
+        const auto area4_vram = map_dreamcast_vram(area4_memory);
+        auto area4_system_bus = std::make_shared<DreamcastSystemBusControl>();
+        area4_system_bus->reset();
+        map_dreamcast_ta_vram_aliases(
+            area4_memory, area4_vram, area4_system_bus);
+        PvrSoftwareRenderer area4_renderer;
+        area4_renderer.set_texture_memory_mode_control(
+            area4_system_bus.get());
+        area4_memory.set_guest_write_observer(
+            [&](const GuestWriteEvent& event) {
+                area4_renderer.observe_vram_write(
+                    event.address, event.size, event.bytes_changed);
+            });
+        const auto is_dirty =
+            [](const PvrSoftwareRendererSnapshot& state,
+               const std::uint32_t backing) {
+                return !state.direct_dirty_words.empty() &&
+                       (state.direct_dirty_words[backing / 64u] &
+                        (std::uint64_t{1u} << (backing & 63u))) != 0u;
+            };
+
+        constexpr std::uint32_t path0_logical = 0x00000100u;
+        constexpr std::uint32_t path0_raw = path0_logical;
+        constexpr std::uint32_t path0_projected =
+            dreamcast_vram_32bit_to_linear_offset(path0_logical);
+        area4_system_bus->write(
+            system_bus_register::TextureMemoryMode0, 1u);
+        area4_memory.write_u32(
+            0x11000000u + path0_logical, 0x11223344u);
+        const auto path0_dirty = area4_renderer.snapshot();
+        require(is_dirty(path0_dirty, path0_projected) &&
+                    !is_dirty(path0_dirty, path0_raw),
+                "SB_LMMODE0 projiziert die Path-0-Dirty-Evidenz nicht in "
+                "den 32-Bit-VRAM-Pfad.");
+
+        area4_renderer.reset_guest_frame_evidence(area4_vram->bytes());
+        constexpr std::uint32_t path1_logical = 0x00000300u;
+        constexpr std::uint32_t path1_raw = path1_logical;
+        constexpr std::uint32_t path1_projected =
+            dreamcast_vram_32bit_to_linear_offset(path1_logical);
+        area4_system_bus->write(
+            system_bus_register::TextureMemoryMode1, 0u);
+        area4_memory.write_u32(
+            0x13000000u + path1_logical, 0x55667788u);
+        const auto path1_dirty = area4_renderer.snapshot();
+        require(is_dirty(path1_dirty, path1_raw) &&
+                    !is_dirty(path1_dirty, path1_projected),
+                "SB_LMMODE1 haelt die Path-1-Dirty-Evidenz nicht im "
+                "64-Bit-VRAM-Pfad.");
+    }
 
     {
         EventScheduler direct_scheduler;

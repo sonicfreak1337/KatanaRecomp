@@ -13,6 +13,8 @@
 
 namespace katana::runtime {
 
+class DreamcastSystemBusControl;
+
 inline constexpr std::size_t dreamcast_main_ram_size = 0x01000000u;
 inline constexpr std::size_t dreamcast_main_ram_mirrors_per_area = 4u;
 inline constexpr std::size_t dreamcast_vram_size = 0x00800000u;
@@ -149,7 +151,9 @@ inline constexpr std::size_t dreamcast_flash_alias_count = dreamcast_direct_segm
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice> map_dreamcast_vram(Memory& memory);
 
 void map_dreamcast_ta_vram_aliases(Memory& memory,
-                                    const std::shared_ptr<LinearMemoryDevice>& vram);
+                                    const std::shared_ptr<LinearMemoryDevice>& vram,
+                                    const std::shared_ptr<DreamcastSystemBusControl>&
+                                        system_bus_control);
 
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice> map_dreamcast_aica_ram(Memory& memory);
 

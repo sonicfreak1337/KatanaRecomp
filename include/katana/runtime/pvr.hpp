@@ -21,6 +21,8 @@
 
 namespace katana::runtime {
 
+class DreamcastSystemBusControl;
+
 inline constexpr std::uint32_t pvr_register_physical_base = 0x005F8000u;
 // The normal register bank is followed by the 128-entry fog table at 0x200 and
 // the 1024-entry palette RAM at 0x1000. They are part of the same PVR MMIO
@@ -689,8 +691,8 @@ inline constexpr std::size_t pvr_channel2_transfer_unit_size = 32u;
 enum class PvrChannel2DestinationKind : std::uint8_t {
     TaFifo,
     YuvConverter,
-    DirectTexture64,
-    DirectTexture32,
+    DirectTexturePath0,
+    DirectTexturePath1,
 };
 
 struct PvrChannel2DestinationPlan {
@@ -872,6 +874,8 @@ class PvrSoftwareRenderer final {
                 LinearMemoryDevice& vram,
                 std::uint64_t render_generation);
     void set_guest_memory_access_memory(Memory* memory) noexcept;
+    void set_texture_memory_mode_control(
+        const DreamcastSystemBusControl* system_bus_control) noexcept;
     void observe_vram_write(std::uint32_t address,
                             std::size_t size,
                             bool bytes_changed = true);
@@ -906,6 +910,7 @@ class PvrSoftwareRenderer final {
     std::size_t direct_dirty_byte_count_ = 0u;
     std::vector<std::uint8_t> direct_vram_shadow_;
     Memory* guest_memory_access_memory_ = nullptr;
+    const DreamcastSystemBusControl* texture_memory_mode_control_ = nullptr;
     bool direct_vram_shadow_valid_ = true;
     std::optional<PvrGuestFrameProof> queued_guest_frame_proof_;
     // Host presentation is deliberately independent from guest-frame evidence.

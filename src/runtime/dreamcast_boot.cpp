@@ -768,6 +768,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
     });
     state.pvr_renderer = std::make_shared<PvrSoftwareRenderer>();
     state.pvr_renderer->set_guest_memory_access_memory(&cpu.memory);
+    state.pvr_renderer->set_texture_memory_mode_control(
+        state.system_bus_control.get());
     state.pvr_registers = map_pvr_registers(
         cpu.memory,
         *state.scheduler,
@@ -815,7 +817,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
                               yuv_mirror,
                               state.pvr_yuv_converter);
     }
-    map_dreamcast_ta_vram_aliases(cpu.memory, state.vram);
+    map_dreamcast_ta_vram_aliases(
+        cpu.memory, state.vram, state.system_bus_control);
     const auto ta_fifo = std::weak_ptr<PvrTaFifo>(state.pvr_ta_fifo);
     const auto pvr_registers = std::weak_ptr<PvrRegisterFile>(state.pvr_registers);
     const auto pvr_renderer = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
