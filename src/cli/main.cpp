@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -62,6 +63,10 @@
 #define NOMINMAX
 #include <windows.h>
 #undef CompareString
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -1203,6 +1208,76 @@ bool safe_regular_port_directory_exists(const std::filesystem::path& root,
     return true;
 }
 
+class ExclusivePortExportLock final {
+  public:
+    explicit ExclusivePortExportLock(const std::filesystem::path& workspace)
+        : lock_path_(workspace.string() + ".lock") {
+        std::filesystem::create_directories(lock_path_.parent_path());
+#ifdef _WIN32
+        handle_ = CreateFileW(lock_path_.c_str(),
+                              GENERIC_READ | GENERIC_WRITE,
+                              0u,
+                              nullptr,
+                              OPEN_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                              nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            const auto error = GetLastError();
+            if (error == ERROR_SHARING_VIOLATION ||
+                error == ERROR_LOCK_VIOLATION)
+                throw std::runtime_error(
+                    "Port-Exportpfad wird bereits von einem "
+                    "anderen Export verwendet.");
+            throw std::runtime_error(
+                "Port-Exportpfad-Sperre konnte nicht geoeffnet werden.");
+        }
+#else
+        auto flags = O_CREAT | O_RDWR;
+#ifdef O_CLOEXEC
+        flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+        flags |= O_NOFOLLOW;
+#endif
+        descriptor_ = ::open(lock_path_.c_str(), flags, 0600);
+        if (descriptor_ < 0)
+            throw std::runtime_error(
+                "Port-Exportpfad-Sperre konnte nicht geoeffnet werden.");
+        if (::flock(descriptor_, LOCK_EX | LOCK_NB) != 0) {
+            const auto error = errno;
+            static_cast<void>(::close(descriptor_));
+            descriptor_ = -1;
+            if (error == EWOULDBLOCK || error == EAGAIN)
+                throw std::runtime_error(
+                    "Port-Exportpfad wird bereits von einem "
+                    "anderen Export verwendet.");
+            throw std::runtime_error(
+                "Port-Exportpfad-Sperre konnte nicht aktiviert werden.");
+        }
+#endif
+    }
+
+    ~ExclusivePortExportLock() {
+#ifdef _WIN32
+        if (handle_ != INVALID_HANDLE_VALUE)
+            static_cast<void>(CloseHandle(handle_));
+#else
+        if (descriptor_ >= 0) static_cast<void>(::close(descriptor_));
+#endif
+    }
+
+    ExclusivePortExportLock(const ExclusivePortExportLock&) = delete;
+    ExclusivePortExportLock& operator=(const ExclusivePortExportLock&) = delete;
+
+  private:
+    std::filesystem::path lock_path_;
+#ifdef _WIN32
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    int descriptor_ = -1;
+#endif
+};
+
 void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
                                          const std::filesystem::path& build_root) {
     const auto normalized_port = std::filesystem::absolute(port_root).lexically_normal();
@@ -1777,6 +1852,20 @@ std::string port_export_recipe_identity(
         katana::runtime::format_disc_install_recipe(recipe));
 }
 
+std::string port_export_workspace_key(
+    const std::string_view source_kind,
+    const katana::runtime::DiscInstallRecipe& recipe,
+    const std::string_view target_name) {
+    std::ostringstream identity;
+    append_port_export_cache_field(identity, "katana-port-workspace");
+    append_port_export_cache_field(identity, "1");
+    append_port_export_cache_field(identity, source_kind);
+    append_port_export_cache_field(identity, recipe.content_identity);
+    append_port_export_cache_field(identity, recipe.boot_sha256);
+    append_port_export_cache_field(identity, target_name);
+    return katana::io::sha256_bytes(identity.str());
+}
+
 std::string port_export_cache_key(
     const std::string_view source_kind,
     const std::uint32_t source_contract_version,
@@ -2006,7 +2095,9 @@ bool valid_latent_aot_entry_hint(
     const LatentAotEntryHintArgument& hint) noexcept {
     return valid_latent_aot_entry_identity(hint.byte_identity) &&
            (hint.disc_byte_offset % latent_aot_entry_disc_sector_size) == 0u &&
-           hint.byte_size != 0u && (hint.byte_size & 3u) == 0u &&
+           hint.byte_size >= 2u && (hint.byte_size & 1u) == 0u &&
+           hint.byte_size <=
+               katana::runtime::maximum_native_aot_template_extent &&
            (hint.module_relative_offset & 1u) == 0u &&
            hint.module_relative_offset <= hint.byte_size - 2u &&
            hint.disc_byte_offset <=
@@ -2079,8 +2170,8 @@ LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view te
     const auto module_relative_offset = parse_latent_aot_entry_integer(
         fields.substr(second_separator + 1u), "Modulentryoffset");
     if ((disc_byte_offset % latent_aot_entry_disc_sector_size) != 0u ||
-        byte_size == 0u || byte_size > std::numeric_limits<std::uint32_t>::max() ||
-        (byte_size & 3u) != 0u ||
+        byte_size < 2u || byte_size > std::numeric_limits<std::uint32_t>::max() ||
+        (byte_size & 1u) != 0u ||
         module_relative_offset > std::numeric_limits<std::uint32_t>::max() ||
         (module_relative_offset & 1u) != 0u ||
         module_relative_offset + 2u > byte_size ||
@@ -2236,12 +2327,11 @@ int export_port_project(const std::filesystem::path& source_path,
         return quoted + "'";
 #endif
     };
-    const auto stage_key =
+    const auto publish_stage_key =
         katana::io::sha256_bytes(absolute_output.generic_string() + ':' + target_name);
-    const auto workspace =
-        absolute_output.parent_path() / (".katana-port-work-" + stage_key.substr(0u, 12u));
     const auto publish_stage =
-        absolute_output.parent_path() / (".katana-port-publish-" + stage_key.substr(0u, 12u));
+        absolute_output.parent_path() /
+        (".katana-port-publish-" + publish_stage_key.substr(0u, 12u));
     std::optional<katana::platform::DreamcastBootExecutableArtifact>
         verified_boot_artifact;
     std::optional<katana::platform::DreamcastDiscBoot>
@@ -2495,6 +2585,15 @@ int export_port_project(const std::filesystem::path& source_path,
             game_project_identity,
             handoff_artifact_identity,
             latent_aot_hint_identity);
+    const auto workspace_key = port_export_workspace_key(
+        whole_export_source_kind,
+        *verified_install_recipe,
+        target_name);
+    const auto workspace =
+        absolute_output.parent_path() /
+        (".katana-port-work-" + workspace_key.substr(0u, 12u));
+    const ExclusivePortExportLock publish_lock(publish_stage);
+    const ExclusivePortExportLock workspace_lock(workspace);
     std::error_code cleanup_error;
     if (safe_regular_port_directory_exists(publish_stage, "Altes Port-Publishing"))
         std::filesystem::remove_all(publish_stage, cleanup_error);

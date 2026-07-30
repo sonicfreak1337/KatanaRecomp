@@ -344,6 +344,48 @@ if(NOT incremental_port_result EQUAL 0 OR NOT incremental_build_cache_match OR
     "${incremental_port_output} ${incremental_port_error}")
 endif()
 
+# Derselbe validierte Inhalt und dasselbe Ziel muessen auch fuer einen anderen,
+# noch nicht vorhandenen Ausgabeordner exakt denselben Arbeits-/Buildcache
+# verwenden. Das Publish und lokale Nutzerdaten bleiben dagegen ausgabebezogen.
+execute_process(
+  COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
+          --output "${fixture}/port-fresh" --target-name cli_game
+          --game-project "${fixture}/disc/product-gate.katana-game-project"
+          --runtime-image-payload "${runtime_image_payload_binding}"
+  RESULT_VARIABLE fresh_port_result
+  OUTPUT_VARIABLE fresh_port_output
+  ERROR_VARIABLE fresh_port_error
+)
+string(REGEX MATCH "Inkrementeller Hostbuild-Cache: ([^\r\n]+)"
+       fresh_build_cache_match "${fresh_port_output}")
+set(fresh_port_build "${CMAKE_MATCH_1}")
+file(TO_CMAKE_PATH "${fresh_port_build}" fresh_port_build)
+if(WIN32)
+  set(fresh_game "${fixture}/port-fresh/cli_game.exe")
+else()
+  set(fresh_game "${fixture}/port-fresh/cli_game")
+endif()
+file(GLOB fresh_publish_stages "${fixture}/.katana-port-publish-*")
+if(NOT fresh_port_result EQUAL 0 OR NOT fresh_build_cache_match OR
+   NOT "${fresh_port_build}" STREQUAL "${port_build}" OR
+   NOT EXISTS "${port_build}/katana-incremental-marker" OR
+   NOT fresh_port_output MATCHES "Analyse-/IR-Cache-Hit: ja" OR
+   NOT fresh_port_output MATCHES
+       "KATANA_PORT_SUBPHASE whole-program-analysis-ir-cache-hit" OR
+   fresh_port_output MATCHES "KATANA_PORT_SUBPHASE control-flow-analysis" OR
+   NOT EXISTS "${fresh_game}" OR
+   NOT EXISTS "${fixture}/port-fresh/content/game.katana-install" OR
+   EXISTS "${fixture}/port-fresh/build" OR
+   EXISTS "${fixture}/port-fresh/build-ninja" OR
+   EXISTS "${fixture}/port-fresh/user-data/content/game.katana-disc" OR
+   fresh_publish_stages)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Ausgabeunabhaengiger Port-Arbeitscache wird fuer frischen Zielordner "
+    "nicht stabil wiederverwendet oder Publish/Nutzerdaten sind gekoppelt: "
+    "${fresh_port_output} ${fresh_port_error}")
+endif()
+
 function(require_whole_export_cache_miss case_name)
   execute_process(
     COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"

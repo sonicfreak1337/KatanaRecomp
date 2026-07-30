@@ -26,6 +26,7 @@ inline constexpr std::uint32_t runtime_write_promotion_maximum_bytes = 128u;
 
 class IndirectDispatchMetrics;
 class ExecutableDiscLoadTransactionCoordinator;
+class NativeAotTemplateBinder;
 
 enum class ExecutableModuleKind : std::uint8_t { Module, Overlay };
 
@@ -216,6 +217,7 @@ class ExecutableModuleCatalog final {
 
   private:
     friend class ExecutableDiscLoadTransactionCoordinator;
+    friend class NativeAotTemplateBinder;
     friend class DemandBlockMaterializer;
     static constexpr std::uint32_t runtime_write_page_size = 4096u;
     static constexpr std::size_t runtime_write_words_per_page = runtime_write_page_size / 64u;

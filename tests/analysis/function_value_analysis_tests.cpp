@@ -501,6 +501,139 @@ conditional_shared_tail_values() {
 }
 
 katana::analysis::FunctionValueAnalysisResult
+nonisolated_tail_cycle_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD404u); // callback literal 0x14 -> r4
+    put_u16(0x02u, 0xE900u); // live cycle counter r9 = 0
+    put_u16(0x04u, 0x412Bu); // candidate-only tail -> 0x20
+    put_u16(0x06u, 0x0009u);
+    put_u32(0x14u, 0x70u);
+
+    put_u16(0x20u, 0x7901u); // add #1,r9
+    put_u16(0x22u, 0x2742u); // callback r4 -> persistent unknown
+    put_u16(0x24u, 0x422Bu); // candidate-only self tail
+    put_u16(0x26u, 0x0009u);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".nonisolated-tail-cycle",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x08u},
+        {0x20u, 0x08u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u> edges{{
+        {0x04u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x24u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+dead_r3_live_r9_tail_contract_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD404u); // callback literal 0x14 -> r4
+    put_u16(0x02u, 0xE37Fu); // dead incoming junk -> r3
+    put_u16(0x04u, 0x412Bu); // candidate-only tail -> 0x20
+    put_u16(0x06u, 0x0009u);
+    put_u32(0x14u, 0x70u);
+
+    put_u16(0x20u, 0x6943u); // callback r4 -> callee-saved r9
+    put_u16(0x22u, 0x422Bu); // candidate-only tail -> 0x40
+    put_u16(0x24u, 0x0009u);
+
+    put_u16(0x40u, 0xE300u); // overwrite r3 before its first read
+    put_u16(0x42u, 0xE400u); // destroy the original ABI carrier
+    put_u16(0x44u, 0x6493u); // live incoming r9 -> r4
+    put_u16(0x46u, 0x2742u); // callback r4 -> persistent unknown
+    put_u16(0x48u, 0x000Bu);
+    put_u16(0x4Au, 0x0009u);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".dead-r3-live-r9-tail-contract",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u> boundaries{{
+        {0x00u, 0x08u},
+        {0x20u, 0x06u},
+        {0x40u, 0x0Cu},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u> edges{{
+        {0x04u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x22u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
 multi_owner_inventory_start_values() {
     std::vector<std::uint8_t> bytes(0x80u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset,
@@ -702,6 +835,183 @@ contextual_dereference_return_values() {
     }};
     return katana::analysis::analyze_function_values(image, lines, boundaries, edges);
 }
+
+katana::analysis::FunctionValueAnalysisResult
+contextual_read_contract_and_fixpoint_budget_values() {
+    std::vector<std::uint8_t> bytes(0x620u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    const auto put_bsr = [&](const std::size_t site,
+                             const std::size_t target) {
+        const auto displacement =
+            (static_cast<std::int64_t>(target) -
+             static_cast<std::int64_t>(site + 4u)) /
+            2;
+        put_u16(site,
+                static_cast<std::uint16_t>(
+                    0xB000u |
+                    (static_cast<std::uint16_t>(displacement) & 0x0FFFu)));
+    };
+
+    put_u16(0x000u, 0xE460u); // real contextual object -> r4
+    put_u16(0x002u, 0xE564u); // irrelevant contextual value -> r5
+    put_bsr(0x004u, 0x020u);
+    put_u16(0x006u, 0x0009u);
+    put_u16(0x008u, 0x000Bu);
+    put_u16(0x00Au, 0x0009u);
+
+    put_u16(0x020u, 0x410Bu); // guarded candidate-only call -> 0x100
+    put_u16(0x022u, 0x0009u);
+    put_u16(0x024u, 0x6C03u); // mov r0,r12
+    put_u16(0x026u, 0x63C2u); // mov.l @r12,r3
+    put_u16(0x028u, 0x000Bu);
+    put_u16(0x02Au, 0x0009u);
+
+    put_u32(0x060u, 0x080u);
+    put_u32(0x080u, 0x090u);
+    put_u32(0x084u, 1u);
+    put_u16(0x090u, 0x000Bu);
+    put_u16(0x092u, 0x0009u);
+
+    put_bsr(0x100u, 0x300u);
+    put_u16(0x102u, 0x0009u);
+    put_u16(0x104u, 0x000Bu);
+    put_u16(0x106u, 0x0009u);
+
+    std::vector<katana::analysis::FunctionBoundary> boundaries;
+    constexpr std::size_t chain_base = 0x300u;
+    constexpr std::size_t chain_wrapper_count = 65u;
+    boundaries.reserve(4u + chain_wrapper_count);
+    boundaries.push_back({0x000u, 0x00Cu});
+    boundaries.push_back({0x020u, 0x00Cu});
+    boundaries.push_back({0x100u, 0x08u});
+    for (std::size_t index = 0u; index < chain_wrapper_count;
+         ++index) {
+        const auto address = chain_base + index * 8u;
+        put_bsr(address, address + 8u);
+        put_u16(address + 2u, 0x0009u);
+        put_u16(address + 4u, 0x000Bu);
+        put_u16(address + 6u, 0x0009u);
+        boundaries.push_back(
+            {static_cast<std::uint32_t>(address), 0x08u});
+    }
+    constexpr std::size_t chain_leaf =
+        chain_base + chain_wrapper_count * 8u;
+    put_u16(chain_leaf, 0x6042u); // leaf: mov.l @r4,r0
+    put_u16(chain_leaf + 2u, 0x000Bu);
+    put_u16(chain_leaf + 4u, 0x0009u);
+    boundaries.push_back(
+        {static_cast<std::uint32_t>(chain_leaf), 0x06u});
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.set_initial_snapshot_entry(0u);
+    image.add_segment({".contextual-read-contract-fixpoint-budget",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x020u,
+         0x100u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+struct AbiContractProbeResult {
+    bool observed = false;
+    bool stack_reads_complete = false;
+    std::vector<std::int32_t> stack_read_slots;
+    std::uint8_t persistent_store_sources = 0u;
+    bool budget_exhausted = false;
+};
+
+AbiContractProbeResult fixed_shift_abi_contract_values(
+    const std::uint16_t shift_opcode,
+    const std::uint32_t input) {
+    std::vector<std::uint8_t> bytes(0x34u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0x60F3u); // mov r15,r0
+    put_u16(0x02u, 0xD307u); // input literal 0x20 -> r3
+    put_u16(0x04u, shift_opcode);
+    put_u16(0x06u, 0x043Eu); // mov.l @(r0,r3),r4
+    put_u16(0x08u, 0xD506u); // persistent global 0x30 -> r5
+    put_u16(0x0Au, 0x2542u);
+    put_u16(0x0Cu, 0x000Bu);
+    put_u16(0x0Eu, 0x0009u);
+    put_u32(0x20u, input);
+    put_u32(0x24u, 0x30u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".fixed-shift-abi-contract",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u>
+        boundaries{{{0x00u, 0x10u}}};
+    AbiContractProbeResult probe;
+    const auto analysis =
+        katana::analysis::detail::
+            analyze_function_values_with_abi_contract_observer_for_testing(
+                image,
+                lines,
+                boundaries,
+                {},
+                [&](const auto& observation) {
+                    if (observation.function_address != 0u)
+                        return;
+                    probe.observed = true;
+                    probe.stack_reads_complete =
+                        observation.stack_reads_complete;
+                    probe.stack_read_slots.assign(
+                        observation.stack_read_slots.begin(),
+                        observation.stack_read_slots.end());
+                    probe.persistent_store_sources =
+                        observation.persistent_store_sources;
+                });
+    probe.budget_exhausted = analysis.budget_exhausted;
+    return probe;
+}
+
 katana::analysis::FunctionValueAnalysisResult
 object_field_tail_values(const bool overwrite_callback_from_object) {
     std::vector<std::uint8_t> bytes(0x80u, 0x09u);
@@ -787,15 +1097,15 @@ candidate_call_stack_tail_values() {
     put_u16(0x26u, 0x422Bu); // jmp @r2 (candidate-only registrar)
     put_u16(0x28u, 0x7F04u); // add #4,r15 (delay)
 
-    put_u16(0x40u, 0x900Eu); // mov.w @(0x60,pc),r0 (guarded frame delta)
-    put_u16(0x42u, 0x3F0Cu); // add r0,r15
+    put_u16(0x40u, 0x900Eu); // mov.w @(0x60,pc),r0 (guarded frame size)
+    put_u16(0x42u, 0x3F08u); // sub r0,r15
     put_u16(0x44u, 0x1F51u); // mov.l r5,@(4,r15)
     put_u16(0x46u, 0x53F1u); // mov.l @(4,r15),r3
     put_u16(0x48u, 0x2732u); // mov.l r3,@r7 (unknown object)
     put_u16(0x4Au, 0x7F08u); // add #8,r15
     put_u16(0x4Cu, 0x000Bu);
     put_u16(0x4Eu, 0x0009u);
-    put_u16(0x60u, 0xFFF8u); // writable captured stack-frame size -8
+    put_u16(0x60u, 0x0008u); // writable captured stack-frame size 8
 
     put_u16(0x70u, 0x000Bu);
     put_u16(0x72u, 0x0009u);
@@ -928,6 +1238,299 @@ katana::analysis::FunctionValueAnalysisResult direct_literal_global_store_values
     return katana::analysis::analyze_function_values(image, lines, boundaries);
 }
 
+katana::analysis::FunctionValueAnalysisResult
+reloaded_stack_epoch_values(const bool displaced_reload,
+                            const bool retain_old_alias = false,
+                            const bool register_reload = false) {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xD407u); // old-stack callback literal 0x20 -> r4
+    put_u16(0x02u, 0x2F42u); // old epoch: mov.l r4,@r15
+    put_u16(0x04u,
+            retain_old_alias
+                ? 0x62F3u // preserve an alias of the old r15 in r2
+                : 0x0009u);
+    put_u16(0x06u,
+            displaced_reload ? 0xE140u : 0xE170u);
+    put_u16(0x08u,
+            register_reload
+                ? 0x6F13u // context switch: mov r1,r15
+                : displaced_reload
+                ? 0x5F15u // context restore: mov.l @(20,r1),r15
+                : 0x6F12u); // context restore: mov.l @r1,r15
+    put_u16(0x0Au, 0xD406u); // old-alias-only callback literal -> r4
+    put_u16(0x0Cu, 0x2242u); // must not become a new-epoch stack slot
+    put_u16(0x0Eu, 0xD406u); // new-stack callback literal 0x28 -> r4
+    put_u16(0x10u, 0x2F42u); // new epoch: mov.l r4,@r15
+    put_u16(0x12u, 0x432Bu); // candidate-only tail -> sink 0x40
+    put_u16(0x14u, 0x0009u);
+
+    put_u32(0x20u, 0x80u);
+    put_u32(0x24u, 0x88u);
+    put_u32(0x28u, 0x90u);
+
+    put_u16(0x40u, 0x64F2u); // sink reloads new slot 0 -> r4
+    put_u16(0x42u, 0xD505u); // persistent destination literal 0x58 -> r5
+    put_u16(0x44u, 0x2542u);
+    put_u16(0x46u, 0x000Bu);
+    put_u16(0x48u, 0x0009u);
+    put_u32(0x54u, 0x2000u); // displaced restored SP
+    put_u32(0x58u, 0x60u);
+    put_u32(0x70u, 0x2000u); // direct restored SP
+
+    put_u16(0x80u, 0x000Bu);
+    put_u16(0x82u, 0x0009u);
+    put_u16(0x88u, 0x000Bu);
+    put_u16(0x8Au, 0x0009u);
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({register_reload
+                           ? ".register-reloaded-stack-epoch"
+                           : displaced_reload
+                               ? ".displaced-reloaded-stack-epoch"
+                               : ".direct-reloaded-stack-epoch",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 5u> boundaries{{
+        {0x00u, 0x16u},
+        {0x40u, 0x0Au},
+        {0x80u, 0x04u},
+        {0x88u, 0x04u},
+        {0x90u, 0x04u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> edges{{
+        {0x12u,
+         0x40u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+saved_stack_epoch_self_reload_values() {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    const auto put_bsr = [&](const std::size_t site,
+                             const std::size_t target) {
+        const auto displacement =
+            (static_cast<std::int64_t>(target) -
+             static_cast<std::int64_t>(site + 4u)) /
+            2;
+        put_u16(site,
+                static_cast<std::uint16_t>(
+                    0xB000u |
+                    (static_cast<std::uint16_t>(displacement) &
+                     0x0FFFu)));
+    };
+
+    put_u16(0x00u, 0xD40Bu); // old callback 0x80 -> r4
+    put_u16(0x02u, 0x2F42u); // old [sp+0] = callback
+    put_u16(0x04u, 0xD10Bu); // saved-SP cell 0x60 -> r1
+    put_u16(0x06u, 0x21F2u); // unknown r15 -> initialized global
+    put_bsr(0x08u, 0x70u);   // epoch must survive a normal helper call
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0xDF0Au); // handler SP 0x2000 -> r15
+    put_u16(0x0Eu, 0xD40Bu); // handler-only callback 0x88 -> r4
+    put_u16(0x10u, 0x2F42u); // handler [sp+0] = callback
+    put_u16(0x12u, 0xDF0Bu); // address 0x60 -> r15, new coord 0
+    put_u16(0x14u, 0x6FF2u); // Sonic form: mov.l @r15,r15
+    put_u16(0x16u, 0x64F2u); // restored old [sp+0] -> r4
+    put_u16(0x18u, 0xD50Au); // persistent destination 0x64 -> r5
+    put_u16(0x1Au, 0x2542u);
+    put_u16(0x1Cu, 0x000Bu);
+    put_u16(0x1Eu, 0x0009u);
+
+    put_u32(0x30u, 0x80u);
+    put_u32(0x34u, 0x60u);
+    put_u32(0x38u, 0x2000u);
+    put_u32(0x3Cu, 0x88u);
+    put_u32(0x40u, 0x60u);
+    put_u32(0x44u, 0x64u);
+    put_u32(0x60u, 0x90u); // static decoy must lose to unknown forward
+
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+    for (const auto target : {0x80u, 0x88u, 0x90u}) {
+        put_u16(target, 0x000Bu);
+        put_u16(target + 2u, 0x0009u);
+    }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".saved-stack-epoch-self-reload",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 5u>
+        boundaries{{
+            {0x00u, 0x20u},
+            {0x70u, 0x04u},
+            {0x80u, 0x04u},
+            {0x88u, 0x04u},
+            {0x90u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+stale_saved_stack_epoch_values() {
+    std::vector<std::uint8_t> bytes(0x94u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD10Bu); // saved-SP cell -> r1
+    put_u16(0x02u, 0x21F2u); // save empty current epoch
+    put_u16(0x04u, 0xD40Bu); // callback added only after snapshot
+    put_u16(0x06u, 0x2F42u);
+    put_u16(0x08u, 0xDF0Bu); // handler SP
+    put_u16(0x0Au, 0xDF0Cu); // saved-SP cell address -> r15
+    put_u16(0x0Cu, 0x6FF2u); // restore stale snapshot
+    put_u16(0x0Eu, 0x430Bu); // candidate call -> stack sink
+    put_u16(0x10u, 0x0009u);
+    put_u16(0x12u, 0x000Bu);
+    put_u16(0x14u, 0x0009u);
+
+    put_u16(0x20u, 0x64F2u);
+    put_u16(0x22u, 0xD507u);
+    put_u16(0x24u, 0x2542u);
+    put_u16(0x26u, 0x000Bu);
+    put_u16(0x28u, 0x0009u);
+    put_u32(0x30u, 0x60u);
+    put_u32(0x34u, 0x80u);
+    put_u32(0x38u, 0x2000u);
+    put_u32(0x3Cu, 0x60u);
+    put_u32(0x40u, 0x64u);
+    put_u32(0x60u, 0x90u);
+    for (const auto target : {0x80u, 0x90u}) {
+        put_u16(target, 0x000Bu);
+        put_u16(target + 2u, 0x0009u);
+    }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".stale-saved-stack-epoch",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 4u>
+        boundaries{{
+            {0x00u, 0x16u},
+            {0x20u, 0x0Au},
+            {0x80u, 0x04u},
+            {0x90u, 0x04u},
+        }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
+        edges{{
+            {0x0Eu,
+             0x20u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+saved_stack_epoch_missing_memory_loop_values() {
+    std::vector<std::uint8_t> bytes(0x24u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD002u); // fixed cell 0x20 -> r0
+    put_u16(0x02u, 0x20F2u); // save current SP epoch
+    put_u16(0x04u, 0x2010u); // partial store removes 32-bit cell
+    put_u16(0x06u, 0xAFFDu); // bra 0x04
+    put_u16(0x08u, 0x0009u);
+    put_u32(0x0Cu, 0x20u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".saved-stack-epoch-missing-memory-loop",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u>
+        boundaries{{
+            {0x00u, 0x0Au},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
 katana::analysis::FunctionValueAnalysisResult mixed_literal_scalar_store_values() {
     std::vector<std::uint8_t> bytes(0x40u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
@@ -970,6 +1573,275 @@ katana::analysis::FunctionValueAnalysisResult mixed_literal_scalar_store_values(
     const auto lines = katana::sh4::disassemble(bytes, 0u);
     constexpr std::array<katana::analysis::FunctionBoundary, 1u> boundaries{{
         {0x00u, 0x14u},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult wide_pc_literal_join_store_values() {
+    std::vector<std::uint8_t> bytes(0x100u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    constexpr std::array<std::uint16_t, 8u> literal_loads{
+        0xD41Fu, 0xD41Eu, 0xD41Du, 0xD41Cu,
+        0xD41Bu, 0xD41Au, 0xD419u, 0xD418u,
+    };
+    constexpr std::array<std::uint16_t, 8u> join_branches{
+        0xA020u, 0xA01Cu, 0xA018u, 0xA014u,
+        0xA010u, 0xA00Cu, 0xA008u, 0xA004u,
+    };
+    constexpr std::array<std::uint32_t, 9u> callbacks{
+        0xC0u, 0xC4u, 0xC8u, 0xCCu, 0xD0u,
+        0xD4u, 0xD8u, 0xDCu, 0xE0u,
+    };
+    for (std::size_t index = 0u; index < literal_loads.size(); ++index) {
+        const auto address = index * 8u;
+        put_u16(address, 0x8902u); // bt to the next candidate node
+        put_u16(address + 2u, literal_loads[index]);
+        put_u16(address + 4u, join_branches[index]);
+        put_u16(address + 6u, 0x0009u);
+    }
+    put_u16(0x40u, 0xD417u); // ninth callback literal 0xA0 -> r4
+    put_u16(0x42u, 0xA001u); // bra 0x48
+    put_u16(0x44u, 0x0009u);
+    put_u16(0x48u, 0xD516u); // persistent global 0xB0 -> r5
+    put_u16(0x4Au, 0x2542u); // joined callback r4 -> global
+    put_u16(0x4Cu, 0x000Bu);
+    put_u16(0x4Eu, 0x0009u);
+    for (std::size_t index = 0u; index < callbacks.size(); ++index) {
+        put_u32(0x80u + index * 4u, callbacks[index]);
+        put_u16(callbacks[index], 0x000Bu);
+        put_u16(callbacks[index] + 2u, 0x0009u);
+    }
+    put_u32(0xA4u, 0xB0u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".wide-pc-literal-join-store",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u> boundaries{{
+        {0x00u, 0x50u},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::io::ExecutableImage wide_abi_stack_indirect_call_image() {
+    std::vector<std::uint8_t> bytes(0x180u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    constexpr std::array<std::uint16_t, 8u> literal_loads{
+        0xD71Fu, 0xD71Eu, 0xD71Du, 0xD71Cu,
+        0xD71Bu, 0xD71Au, 0xD719u, 0xD718u,
+    };
+    constexpr std::array<std::uint16_t, 8u> join_branches{
+        0xA020u, 0xA01Cu, 0xA018u, 0xA014u,
+        0xA010u, 0xA00Cu, 0xA008u, 0xA004u,
+    };
+    constexpr std::array<std::uint32_t, 9u> callbacks{
+        0x140u, 0x144u, 0x148u, 0x14Cu, 0x150u,
+        0x154u, 0x158u, 0x15Cu, 0x160u,
+    };
+    for (std::size_t index = 0u; index < literal_loads.size(); ++index) {
+        const auto address = index * 8u;
+        put_u16(address, 0x8902u);
+        put_u16(address + 2u, literal_loads[index]);
+        put_u16(address + 4u, join_branches[index]);
+        put_u16(address + 6u, 0x0009u);
+    }
+    put_u16(0x40u, 0xD717u); // ninth callback literal -> r7
+    put_u16(0x42u, 0xA001u); // bra 0x48
+    put_u16(0x44u, 0x0009u);
+    put_u16(0x48u, 0xB032u); // bsr 0xB0
+    put_u16(0x4Au, 0x0009u);
+    put_u16(0x4Cu, 0x000Bu);
+    put_u16(0x4Eu, 0x0009u);
+    for (std::size_t index = 0u; index < callbacks.size(); ++index) {
+        put_u32(0x80u + index * 4u, callbacks[index]);
+        put_u16(callbacks[index], 0x000Bu);
+        put_u16(callbacks[index] + 2u, 0x0009u);
+    }
+
+    put_u16(0xB0u, 0x2FE6u); // mov.l r14,@-r15
+    put_u16(0xB2u, 0x4F22u); // sts.l pr,@-r15
+    put_u16(0xB4u, 0xFF0Bu); // fmov.s fr0,@-r15 (FPSCR.SZ: 4/8)
+    put_u16(0xB6u, 0x6EF3u); // mov r15,r14
+    put_u16(0xB8u, 0xE000u); // mov #0,r0
+    put_u16(0xBAu, 0x0E76u); // mov.l r7,@(r0,r14)
+    put_u16(0xBCu, 0xB020u); // bsr 0x100 (ordinary helper)
+    put_u16(0xBEu, 0x0009u);
+    put_u16(0xC0u, 0xE000u); // mov #0,r0 (helper clobbers r0)
+    put_u16(0xC2u, 0x03EEu); // mov.l @(r0,r14),r3
+    put_u16(0xC4u, 0x430Bu); // jsr @r3
+    put_u16(0xC6u, 0x0009u);
+    put_u16(0xC8u, 0xF0F9u); // fmov.s @r15+,fr0 (FPSCR.SZ: 4/8)
+    put_u16(0xCAu, 0x4F26u); // lds.l @r15+,pr
+    put_u16(0xCCu, 0x6EF6u); // mov.l @r15+,r14
+    put_u16(0xCEu, 0x000Bu);
+    put_u16(0xD0u, 0x0009u);
+
+    put_u16(0x100u, 0x000Bu);
+    put_u16(0x102u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".wide-abi-stack-indirect-call",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       std::move(bytes)});
+    image.add_entry_point(0u);
+    return image;
+}
+
+katana::analysis::FunctionValueAnalysisResult
+wide_abi_stack_indirect_call_values() {
+    const auto image = wide_abi_stack_indirect_call_image();
+    const auto lines =
+        katana::sh4::disassemble(image.segments().front().bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u> boundaries{{
+        {0x00u, 0x50u},
+        {0xB0u, 0x22u},
+        {0x100u, 0x04u},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+mixed_null_callback_register_argument_values() {
+    constexpr auto base = std::uint32_t{0x1000u};
+    std::vector<std::uint8_t> bytes(0x60u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0x8902u); // bt 0x08, unknown T
+    put_u16(0x02u, 0xD404u); // callback literal 0x14 -> r4
+    put_u16(0x04u, 0xA002u); // bra 0x0C
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0xE400u); // nullptr alternative
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0xB010u); // bsr base + 0x30
+    put_u16(0x0Eu, 0x0009u);
+    put_u16(0x10u, 0x000Bu);
+    put_u16(0x12u, 0x0009u);
+    put_u32(0x14u, base + 0x50u);
+
+    put_u16(0x30u, 0x2742u); // registrar stores r4 to unknown object r7
+    put_u16(0x32u, 0x000Bu);
+    put_u16(0x34u, 0x0009u);
+    put_u16(0x50u, 0x000Bu);
+    put_u16(0x52u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".mixed-null-callback-register-argument",
+                       base,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(base);
+    const auto lines = katana::sh4::disassemble(bytes, base);
+    const std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {base, 0x14u},
+        {base + 0x30u, 0x06u},
+    }};
+    return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+sub_register_fifth_stack_callback_values(const bool resolved_frame_size,
+                                         const bool store_callback = true) {
+    std::vector<std::uint8_t> bytes(0x70u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, resolved_frame_size ? 0x980Au : 0x0009u);
+    put_u16(0x02u, 0x3F88u); // sub r8,r15
+    put_u16(0x04u, store_callback ? 0xD006u : 0xE001u);
+    // callback literal 0x20 / harmless scalar -> r0
+    put_u16(0x06u, 0x2F02u); // fifth ABI argument r0 -> [sp]
+    put_u16(0x08u, 0xB012u); // bsr 0x30
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0x3F8Cu); // add r8,r15
+    put_u16(0x0Eu, 0x000Bu);
+    put_u16(0x10u, 0x0009u);
+    // Writable mov.w PC literal: a guarded singleton matching Sonic's real
+    // 14,352-byte GCC-style frame allocation.
+    put_u32(0x18u, 14'352u);
+    put_u32(0x20u, 0x50u);
+
+    put_u16(0x30u, 0x64F2u); // mov.l @r15,r4
+    put_u16(0x32u, 0xD505u); // persistent global literal 0x48 -> r5
+    put_u16(0x34u, 0x2542u); // callback r4 -> global
+    put_u16(0x36u, 0x000Bu);
+    put_u16(0x38u, 0x0009u);
+    put_u32(0x48u, 0x60u);
+    put_u16(0x50u, 0x000Bu);
+    put_u16(0x52u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({resolved_frame_size ? ".sub-register-fifth-stack-callback"
+                       : store_callback ? ".unresolved-sub-register-stack-base"
+                                        : ".harmless-unresolved-stack-access",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x12u},
+        {0x30u, 0x0Au},
     }};
     return katana::analysis::analyze_function_values(image, lines, boundaries);
 }
@@ -1032,6 +1904,90 @@ katana::analysis::FunctionValueAnalysisResult fifth_stack_callback_values() {
         {0x30u, 0x14u},
     }};
     return katana::analysis::analyze_function_values(image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+exact_abi_stack_slot_projection_values() {
+    std::vector<std::uint8_t> bytes(0x190u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD045u); // callback literal 0x118 -> r0
+    put_u16(0x02u, 0xD346u); // guarded target literal 0x11C -> r3
+    put_u16(0x04u, 0xE201u); // harmless scalar -> r2
+    put_u16(0x06u, 0x61F3u); // mov r15,r1
+    put_u16(0x08u, 0x2102u); // callback -> outgoing stack slot 0
+    auto cursor = std::size_t{0x0Au};
+    for (std::size_t slot = 1u; slot <= 64u; ++slot) {
+        static_cast<void>(slot);
+        put_u16(cursor, 0x7104u); // add #4,r1
+        put_u16(cursor + 2u, 0x2122u); // scalar -> outgoing slot
+        cursor += 4u;
+    }
+    put_u16(0x10Au, 0x430Bu); // jsr @r3, guarded-partial known target
+    put_u16(0x10Cu, 0x0009u);
+    put_u16(0x10Eu, 0x000Bu);
+    put_u16(0x110u, 0x0009u);
+    put_u32(0x118u, 0x180u);
+    put_u32(0x11Cu, 0x140u);
+
+    put_u16(0x140u, 0x8904u); // bt 0x14C (unknown condition)
+    put_u16(0x142u, 0x64F2u); // store path: only incoming slot 0 -> r4
+    put_u16(0x144u, 0xD506u); // persistent global literal -> r5
+    put_u16(0x146u, 0x2542u); // callback r4 -> global
+    put_u16(0x148u, 0x000Bu);
+    put_u16(0x14Au, 0x0009u);
+    put_u16(0x14Cu, 0xD305u); // tail path: epilogue literal -> r3
+    put_u16(0x14Eu, 0x432Bu); // jmp @r3
+    put_u16(0x150u, 0x0009u);
+    put_u32(0x160u, 0x178u);
+    put_u32(0x164u, 0x170u);
+    put_u16(0x170u, 0x000Bu); // pure epilogue inventory region
+    put_u16(0x172u, 0x0009u);
+    put_u16(0x180u, 0x000Bu);
+    put_u16(0x182u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".exact-abi-stack-slot-projection",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u> boundaries{{
+        {0x00u, 0x112u},
+        {0x140u, 0x12u},
+    }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u> edges{{
+        {0x10Au,
+         0x140u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x14Eu,
+         0x170u,
+         katana::analysis::ResolvedControlFlowKind::Jump,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot}},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
 }
 
 katana::analysis::FunctionValueAnalysisResult fifth_stack_callback_tail_values() {
@@ -1098,6 +2054,72 @@ katana::analysis::FunctionValueAnalysisResult fifth_stack_callback_tail_values()
          true},
     }};
     return katana::analysis::analyze_function_values(image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+mixed_stack_object_destination_values() {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0x8902u); // bt 0x08, unknown T
+    put_u16(0x02u, 0x64F3u); // stack path: mov r15,r4
+    put_u16(0x04u, 0xA002u); // bra 0x0C
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0xE470u); // object path: mov #0x70,r4
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0xD504u); // callback literal 0x20 -> r5
+    put_u16(0x0Eu, 0xB017u); // bsr 0x40
+    put_u16(0x10u, 0x0009u);
+    put_u16(0x12u, 0x000Bu);
+    put_u16(0x14u, 0x0009u);
+    put_u32(0x20u, 0x90u);
+
+    put_u16(0x40u, 0x2452u); // mixed destination: mov.l r5,@r4
+    put_u16(0x42u, 0xB00Du); // bsr 0x60
+    put_u16(0x44u, 0x0009u);
+    put_u16(0x46u, 0x000Bu);
+    put_u16(0x48u, 0x0009u);
+
+    put_u16(0x60u, 0x64F2u); // reload caller slot 0 -> r4
+    put_u16(0x62u, 0xD505u); // persistent destination literal -> r5
+    put_u16(0x64u, 0x2542u); // mov.l r4,@r5
+    put_u16(0x66u, 0x000Bu);
+    put_u16(0x68u, 0x0009u);
+    put_u32(0x78u, 0x7Cu);
+
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".mixed-stack-object-destination",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 4u> boundaries{{
+        {0x00u, 0x16u},
+        {0x40u, 0x0Au},
+        {0x60u, 0x0Au},
+        {0x90u, 0x04u},
+    }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, {});
 }
 
 katana::analysis::FunctionValueAnalysisResult helper_mixed_return_store_values() {
@@ -1242,6 +2264,25 @@ int main() {
                 "Bedingter externer Shared-Tail verlor seinen "
                 "Callbackstore oder meldete ein falsches vollstaendiges Inventar.");
 
+        const auto tail_cycle = nonisolated_tail_cycle_values();
+        require(
+            has_stored_code_address(tail_cycle, 0x70u) &&
+                !tail_cycle.guarded_code_inventory.walk_diagnostics
+                     .forwarded_store_context_limited_functions &&
+                !tail_cycle.guarded_code_inventory.walk_diagnostics
+                     .inventory_candidate_values_truncated,
+            "Der non-isolated Tail-Zyklus konvergierte nicht ueber seinen "
+            "kanonisierten Live-in-Zustand oder verlor den Callback.");
+
+        const auto live_tail_contract =
+            dead_r3_live_r9_tail_contract_values();
+        require(
+            has_stored_code_address(live_tail_contract, 0x70u) &&
+                !live_tail_contract.guarded_code_inventory.walk_diagnostics
+                     .forwarded_store_context_limited_functions,
+            "Die Tail-Kanonisierung verlor das live Callee-saved Register r9 "
+            "oder konvergierte nach dem sicheren r3-Overwrite nicht.");
+
         const auto multi_owner = multi_owner_inventory_start_values();
         require(
             has_stored_code_address(multi_owner, 0x70u) &&
@@ -1270,12 +2311,87 @@ int main() {
             "parameterabhaengigen Returned-Table-Codepointer.");
         const auto contextual = contextual_dereference_return_values();
         const auto* contextual_table = returned_table_candidate(contextual, 0x80u);
+        const auto& contextual_diagnostics =
+            contextual.guarded_code_inventory.walk_diagnostics;
         require(contextual_table != nullptr &&
                     contextual_table->target_addresses ==
                         std::vector<std::uint32_t>{0x90u} &&
+                    !contextual_diagnostics
+                         .contextual_return_context_limited_functions &&
+                    !contextual_diagnostics
+                         .contextual_return_evaluation_limited_functions &&
                     !contextual.budget_exhausted,
                 "Kontexttaint ging beim Pointer-Dereferenzieren vor dem "
-                "direkten Helper-Return verloren.");    }
+                "direkten Helper-Return verloren.");
+
+        const auto contextual_budget =
+            contextual_read_contract_and_fixpoint_budget_values();
+        const auto* contextual_budget_table =
+            returned_table_candidate(contextual_budget, 0x80u);
+        const auto& contextual_budget_diagnostics =
+            contextual_budget.guarded_code_inventory.walk_diagnostics;
+        require(
+            contextual_budget_table != nullptr &&
+                contextual_budget_table->target_addresses ==
+                    std::vector<std::uint32_t>{0x90u} &&
+                contextual_budget_diagnostics
+                        .contextual_return_context_budget == 69u &&
+                contextual_budget_diagnostics
+                        .contextual_return_evaluation_budget == 65'536u &&
+                !contextual_budget_diagnostics
+                     .contextual_return_context_limited_functions &&
+                !contextual_budget_diagnostics
+                     .contextual_return_evaluation_limited_functions &&
+                !contextual_budget.budget_exhausted,
+            "Read-before-def-Pruning oder der kontextuelle "
+            "Rueckgabe-Fixpunkt verlor die echte Dereferenzkette.");
+
+        struct ShiftContractCase {
+            std::uint16_t opcode;
+            std::uint32_t input;
+            std::int32_t expected_slot;
+        };
+        constexpr std::array<ShiftContractCase, 8u> shift_contracts{{
+            {0x4300u, 0x80000004u, 8},
+            {0x4301u, 0x00000010u, 8},
+            {0x4308u, 0x40000002u, 8},
+            {0x4318u, 0x01000001u, 256},
+            {0x4328u, 0x00010000u, 0},
+            {0x4309u, 0x00000020u, 8},
+            {0x4319u, 0x00000800u, 8},
+            {0x4329u, 0x00080000u, 8},
+        }};
+        for (const auto& test : shift_contracts) {
+            const auto contract =
+                fixed_shift_abi_contract_values(
+                    test.opcode, test.input);
+            require(
+                contract.observed &&
+                    contract.stack_reads_complete &&
+                    contract.stack_read_slots ==
+                        std::vector<std::int32_t>{
+                            test.expected_slot} &&
+                    !contract.budget_exhausted,
+                "Fester SH4-Shift verlor seine Konstante im echten "
+                "ABI-Stack-Read-Fixpunkt (Opcode " +
+                    std::to_string(test.opcode) + ").");
+        }
+        const auto maximum_stack_contract =
+            fixed_shift_abi_contract_values(
+                0x0009u, 65'536u);
+        const auto outside_stack_contract =
+            fixed_shift_abi_contract_values(
+                0x0009u, 65'540u);
+        require(
+            maximum_stack_contract.observed &&
+                maximum_stack_contract.stack_reads_complete &&
+                maximum_stack_contract.stack_read_slots ==
+                    std::vector<std::int32_t>{65'536} &&
+                outside_stack_contract.observed &&
+                !outside_stack_contract.stack_reads_complete,
+            "Natuerliche ABI-Stackgrenze akzeptierte 65536 nicht exakt "
+            "oder behandelte 65540 faelschlich als vollstaendigen Slot.");
+    }
 
     {
         const auto direct_argument = object_field_tail_values(false);
@@ -1306,22 +2422,280 @@ int main() {
                 "Ein direkter PC-Literal-Callbackstore ohne ABI-Grenze verlor "
                 "seinen Guarded-AOT-Eintrag.");
 
+        for (const auto displaced_reload : {false, true}) {
+            const auto reloaded_stack =
+                reloaded_stack_epoch_values(displaced_reload);
+            require(
+                has_stored_code_address(reloaded_stack, 0x90u) &&
+                    !has_stored_code_address(reloaded_stack, 0x80u) &&
+                    !has_stored_code_address(reloaded_stack, 0x88u) &&
+                    !reloaded_stack.guarded_code_inventory.walk_diagnostics
+                         .truncated(),
+                "Ein vollstaendiger 32-Bit-SP-Reload trennte die alte "
+                "Stack-Epoch nicht ab, verlor den neuen Callbackslot oder "
+                "behielt einen stale Alias.");
+        }
+        const auto register_reloaded_stack =
+            reloaded_stack_epoch_values(false, false, true);
+        require(
+            has_stored_code_address(register_reloaded_stack, 0x90u) &&
+                !has_stored_code_address(register_reloaded_stack, 0x80u) &&
+                !has_stored_code_address(register_reloaded_stack, 0x88u) &&
+                !register_reloaded_stack.guarded_code_inventory
+                     .walk_diagnostics.truncated(),
+            "Ein vollstaendiges mov-Rm-r15 trennte die alte Stack-Epoch "
+            "nicht sicher ab oder verlor den neuen Callbackslot.");
+        const auto aliased_old_stack =
+            reloaded_stack_epoch_values(true, true);
+        require(
+            aliased_old_stack.guarded_code_inventory.walk_diagnostics
+                .abi_stack_base_unresolved,
+            "Ein vollstaendiger SP-Reload verwarf trotz ueberlebendem Alias "
+            "stillschweigend einen alten Inventory-Callback (truncated=" +
+                std::to_string(
+                    aliased_old_stack.guarded_code_inventory
+                        .walk_diagnostics.truncated()) +
+                ", stored_80=" +
+                std::to_string(
+                    has_stored_code_address(aliased_old_stack, 0x80u)) +
+                ", stored_88=" +
+                std::to_string(
+                    has_stored_code_address(aliased_old_stack, 0x88u)) +
+                ", stored_90=" +
+                std::to_string(
+                    has_stored_code_address(aliased_old_stack, 0x90u)) +
+                ").");
+        const auto saved_self_reload =
+            saved_stack_epoch_self_reload_values();
+        require(
+            has_stored_code_address(saved_self_reload, 0x80u) &&
+                !has_stored_code_address(saved_self_reload, 0x88u) &&
+                !has_stored_code_address(saved_self_reload, 0x90u) &&
+                !saved_self_reload.guarded_code_inventory
+                     .walk_diagnostics.truncated(),
+            "Gespeicherte Stack-Epoch ging ueber Global-Store, Helper-Call "
+            "oder Sonic-Self-Reload mov.l @r15,r15 verloren; alternativ "
+            "wurde Handler-/Image-Decoy-Payload als alte Epoch gelesen "
+            "(old=" +
+                std::to_string(
+                    has_stored_code_address(saved_self_reload, 0x80u)) +
+                ", handler=" +
+                std::to_string(
+                    has_stored_code_address(saved_self_reload, 0x88u)) +
+                ", decoy=" +
+                std::to_string(
+                    has_stored_code_address(saved_self_reload, 0x90u)) +
+                ", base_loss=" +
+                std::to_string(
+                    saved_self_reload.guarded_code_inventory
+                        .walk_diagnostics.abi_stack_base_unresolved) +
+                ", truncated=" +
+                std::to_string(
+                    saved_self_reload.guarded_code_inventory
+                        .walk_diagnostics.truncated()) +
+                ").");
+        const auto stale_saved_epoch =
+            stale_saved_stack_epoch_values();
+        require(
+            stale_saved_epoch.guarded_code_inventory.walk_diagnostics
+                .abi_stack_base_unresolved,
+            "Ein nach dem SP-Snapshot neu geschriebener Callback wurde beim "
+            "Restore des veralteten Snapshots stillschweigend verloren.");
+        const auto missing_memory_loop =
+            saved_stack_epoch_missing_memory_loop_values();
+        require(
+            !missing_memory_loop.budget_exhausted &&
+                missing_memory_loop.fixpoint_iterations <= 2u,
+            "Ein bereits geweiteter Saved-Stack-Epoch-Memory-Join meldete "
+            "dauerhaft Aenderungen und konvergierte nicht.");
+
         const auto mixed = mixed_literal_scalar_store_values();
         require(has_stored_code_address(mixed, 0x30u) &&
                     !has_stored_code_address(mixed, 0x34u),
                 "Wertgenaue Literalprovenienz vermischte Callback und "
                 "decode-validen Scalar vor dem persistenten Store.");
 
+        const auto wide_join = wide_pc_literal_join_store_values();
+        constexpr std::array<std::uint32_t, 9u> wide_store_callbacks{
+            0xC0u, 0xC4u, 0xC8u, 0xCCu, 0xD0u,
+            0xD4u, 0xD8u, 0xDCu, 0xE0u,
+        };
+        require(std::all_of(
+                    wide_store_callbacks.begin(),
+                    wide_store_callbacks.end(),
+                    [&](const auto candidate) {
+                        return has_stored_code_address(wide_join, candidate);
+                    }) &&
+                    !wide_join.guarded_code_inventory.walk_diagnostics
+                         .inventory_candidate_values_truncated,
+                "Der 9-Wege-Join verlor Callbackkandidaten am alten "
+                "semantischen 8-Werte-Limit.");
+
+        constexpr std::array<std::uint32_t, 9u> wide_callbacks{
+            0x140u, 0x144u, 0x148u, 0x14Cu, 0x150u,
+            0x154u, 0x158u, 0x15Cu, 0x160u,
+        };
+        const auto wide_indirect = wide_abi_stack_indirect_call_values();
+        const auto wide_dispatch = std::find_if(
+            wide_indirect.resolutions.begin(),
+            wide_indirect.resolutions.end(),
+            [](const auto& candidate) {
+                return candidate.instruction_address == 0xC4u;
+            });
+        const auto& wide_diagnostics =
+            wide_indirect.guarded_code_inventory.walk_diagnostics;
+        require(
+            wide_dispatch != wide_indirect.resolutions.end() &&
+                wide_dispatch->targets ==
+                    std::vector<std::uint32_t>(wide_callbacks.begin(),
+                                               wide_callbacks.end()) &&
+                wide_dispatch->guarded && !wide_dispatch->complete &&
+                !wide_diagnostics.inventory_candidate_values_truncated &&
+                !wide_diagnostics
+                     .abi_stack_argument_projection_truncated_functions &&
+                !wide_diagnostics
+                     .forwarded_store_context_limited_functions &&
+                !wide_diagnostics
+                     .contextual_return_evaluation_limited_functions,
+            "Der 9-Wege-ABI-Callback verlor beim Stackspill/Reload vor "
+            "dem Helper-Aufruf und indirekten JSR seine Inventory-Ziele "
+            "nach einem FPSCR-abhaengigen FPU-Prolog oder meldete dabei "
+            "eine falsche Projektions-/Kontextgrenze.");
+
+        const auto wide_flow = katana::analysis::analyze_control_flow(
+            wide_abi_stack_indirect_call_image());
+        const auto* wide_flow_dispatch = site(wide_flow, 0xC4u);
+        const auto has_wide_resolved_edge = std::any_of(
+            wide_flow.resolved_edges.begin(),
+            wide_flow.resolved_edges.end(),
+            [](const auto& edge) {
+                return edge.instruction_address == 0xC4u;
+            });
+        const auto wide_callbacks_decoded = std::all_of(
+            wide_callbacks.begin(),
+            wide_callbacks.end(),
+            [&](const auto callback) {
+                return std::any_of(
+                    wide_flow.recursive.instructions.begin(),
+                    wide_flow.recursive.instructions.end(),
+                    [callback](const auto& line) {
+                        return line.address == callback;
+                    });
+            });
+        const auto wide_flow_ir = katana::ir::lower_program(wide_flow);
+        const auto wide_callbacks_seeded = std::all_of(
+            wide_callbacks.begin(),
+            wide_callbacks.end(),
+            [&](const auto callback) {
+                return std::any_of(
+                    wide_flow_ir.begin(),
+                    wide_flow_ir.end(),
+                    [callback](const auto& function) {
+                        return std::any_of(
+                            function.blocks.begin(),
+                            function.blocks.end(),
+                            [callback](const auto& block) {
+                                return block.start_address == callback;
+                            });
+                    });
+            });
+        require(
+            wide_flow_dispatch != nullptr &&
+                wide_flow_dispatch->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                !wide_flow_dispatch->target.has_value() &&
+                wide_flow_dispatch->targets.empty() &&
+                wide_flow_dispatch->analysis_candidates ==
+                    std::vector<std::uint32_t>(wide_callbacks.begin(),
+                                               wide_callbacks.end()) &&
+                !has_wide_resolved_edge && wide_callbacks_decoded &&
+                wide_callbacks_seeded &&
+                katana::ir::verify_program(wide_flow_ir).empty(),
+            "Der ueber einen Helper weitergereichte ABI-Callback erreichte "
+            "RuntimeOnly-CFG, rekursive Dekodierung oder IR-Seeding nicht "
+            "ohne semantische Zielkante.");
+
+        const auto mixed_abi = mixed_null_callback_register_argument_values();
+        require(has_stored_code_address(mixed_abi, 0x1050u) &&
+                    !has_stored_code_address(mixed_abi, 0u),
+                "Ein ungueltiges nullptr-Alternativargument loeschte den "
+                "gueltigen Callback an der ABI-Grenze.");
+
+        const auto sub_stack = sub_register_fifth_stack_callback_values(true);
+        require(has_stored_code_address(sub_stack, 0x50u) &&
+                    !sub_stack.guarded_code_inventory.walk_diagnostics
+                         .abi_stack_base_unresolved,
+                "SUB-Register-Framing verlor das fuenfte ABI-Stackargument.");
+
+        const auto unresolved_stack =
+            sub_register_fifth_stack_callback_values(false);
+        require(unresolved_stack.guarded_code_inventory.walk_diagnostics
+                    .abi_stack_base_unresolved,
+                "Unaufgeloeste SUB-Register-Stackbasis blieb undiagnostiziert.");
+
+        const auto harmless_unresolved_stack =
+            sub_register_fifth_stack_callback_values(false, false);
+        require(!harmless_unresolved_stack.guarded_code_inventory.walk_diagnostics
+                     .abi_stack_base_unresolved,
+                "Harmloser unbekannter lokaler Stackzugriff blockierte den Export.");
+
         const auto fifth_argument = fifth_stack_callback_values();
         require(has_stored_code_address(fifth_argument, 0x50u) &&
-                    !has_stored_code_address(fifth_argument, 0x54u),
+                    !has_stored_code_address(fifth_argument, 0x54u) &&
+                    !fifth_argument.guarded_code_inventory.walk_diagnostics
+                         .abi_stack_argument_projection_truncated_functions,
                 "Fuenftes ABI-Stackargument oder Caller-lokaler Negativslot "
-                "wurde falsch in den Callee transferiert.");
+                "wurde falsch in den Callee transferiert oder loeste eine "
+                "falsche Projektionsgrenze aus.");
+
+        const auto exact_stack_projection =
+            exact_abi_stack_slot_projection_values();
+        require(
+            has_stored_code_address(exact_stack_projection, 0x180u) &&
+                exact_stack_projection.guarded_code_inventory
+                        .walk_diagnostics
+                        .abi_stack_argument_slot_budget == 16'385u &&
+                !exact_stack_projection.guarded_code_inventory.walk_diagnostics
+                     .abi_stack_argument_projection_truncated_functions,
+            "Mehr als 64 ausgehende Stackfacts loesten am bekannten "
+            "GuardedPartial-Callee mit storefreiem Epilogpfad trotz einzig "
+            "relevantem Slot 0 eine ABI-Projektionstrunkierung aus oder "
+            "verloren den Callback.");
 
         const auto fifth_argument_tail = fifth_stack_callback_tail_values();
-        require(has_stored_code_address(fifth_argument_tail, 0x70u),
+        require(
+            has_stored_code_address(fifth_argument_tail, 0x70u) &&
+                !fifth_argument_tail.guarded_code_inventory.walk_diagnostics
+                     .abi_stack_argument_projection_truncated_functions,
                 "Fuenftes ABI-Stackargument verlor seinen Codepointer durch "
-                "einen bewachten Tail-Wrapper.");
+                "einen bewachten Tail-Wrapper oder loeste eine falsche "
+                "Projektionsgrenze aus.");
+
+        const auto mixed_destination =
+            mixed_stack_object_destination_values();
+        const auto mixed_destination_candidate = std::find_if(
+            mixed_destination.guarded_code_inventory
+                .stored_code_addresses.begin(),
+            mixed_destination.guarded_code_inventory
+                .stored_code_addresses.end(),
+            [](const auto& candidate) {
+                return candidate.target_address == 0x90u &&
+                       std::find(
+                           candidate.store_instruction_addresses.begin(),
+                           candidate.store_instruction_addresses.end(),
+                           0x40u) !=
+                           candidate.store_instruction_addresses.end();
+            });
+        const auto& mixed_destination_diagnostics =
+            mixed_destination.guarded_code_inventory.walk_diagnostics;
+        require(
+            mixed_destination_candidate !=
+                    mixed_destination.guarded_code_inventory
+                        .stored_code_addresses.end() &&
+                !mixed_destination_diagnostics.truncated(),
+            "Ein am selben Callsite gemischtes Stack-/Objektziel "
+            "uebersprang den zwingenden exakten Store-Walk, verlor den "
+            "Objektpfad-Callback oder meldete eine falsche Stackbasis.");
 
         const auto helper_mixed = helper_mixed_return_store_values();
         require(has_stored_code_address(helper_mixed, 0x60u) &&

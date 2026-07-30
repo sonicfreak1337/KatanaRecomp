@@ -254,6 +254,18 @@ int main() {
                 "ABI-Stackargumentverlust blieb exportfaehig.");
         completeness_contract.guarded_code_inventory_walk
             .abi_stack_argument_projection_truncated_functions = 0u;
+        completeness_contract.guarded_code_inventory_walk
+            .inventory_candidate_values_truncated = true;
+        require(!katana::analysis::guarded_aot_inventory_complete(completeness_contract),
+                "Inventory-Kandidatendomänenverlust blieb exportfaehig.");
+        completeness_contract.guarded_code_inventory_walk
+            .inventory_candidate_values_truncated = false;
+        completeness_contract.guarded_code_inventory_walk
+            .abi_stack_base_unresolved = true;
+        require(!katana::analysis::guarded_aot_inventory_complete(completeness_contract),
+                "Unaufgeloeste ABI-Stackbasis blieb exportfaehig.");
+        completeness_contract.guarded_code_inventory_walk
+            .abi_stack_base_unresolved = false;
         completeness_contract.candidate_inventory_truncated = true;
         require(!katana::analysis::guarded_aot_inventory_complete(
                     completeness_contract),
@@ -556,6 +568,201 @@ int main() {
                         [](const auto& function) { return function.entry_address == 0x30u; }) &&
                 katana::ir::verify_program(stored_callback_ir).empty(),
             "Gespeicherter Codepointer erreichte das native IR-Inventar nicht.");
+
+    const auto decode_boundary_phase_image = [] {
+        std::vector<std::uint8_t> bytes(0x22u, 0x09u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] =
+                static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] =
+                static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] =
+                static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] =
+                static_cast<std::uint8_t>(value >> 24u);
+        };
+        put_u16(0x00u, 0xD303u); // immutable literal 0x10 -> r3
+        put_u16(0x02u, 0xA001u); // bra 0x08
+        put_u16(0x04u, 0x0009u);
+        put_u16(0x08u, 0x430Bu); // jsr @r3 after local phase boundary
+        put_u16(0x0Au, 0x0009u);
+        put_u16(0x0Cu, 0x000Bu);
+        put_u16(0x0Eu, 0x0009u);
+        put_u32(0x10u, 0x20u);
+        put_u16(0x20u, 0xFFFFu); // valid address, no instruction boundary
+
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.add_segment({".decode-boundary-phase",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Code,
+                           {true, false, true},
+                           std::move(bytes)});
+        image.add_entry_point(0u);
+        return image;
+    }();
+    const auto decode_boundary_phase =
+        katana::analysis::analyze_control_flow(
+            decode_boundary_phase_image);
+    const auto decode_boundary_call = std::find_if(
+        decode_boundary_phase.indirect_control_flow.begin(),
+        decode_boundary_phase.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x08u;
+        });
+    require(
+        !decode_boundary_phase.function_budget_exhausted &&
+            decode_boundary_call !=
+                decode_boundary_phase.indirect_control_flow.end() &&
+            decode_boundary_call->status ==
+                katana::analysis::ResolutionStatus::Guarded &&
+            decode_boundary_call->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedPartial &&
+            decode_boundary_call->reason.ends_with(
+                "-decode-candidate-only") &&
+            has_instruction(decode_boundary_phase, 0x20u) &&
+            !std::binary_search(
+                decode_boundary_phase.recursive
+                    .proven_instruction_addresses.begin(),
+                decode_boundary_phase.recursive
+                    .proven_instruction_addresses.end(),
+                0x20u),
+        "Decode-Boundary-Phasenwechsel blieb zyklisch, exportierte einen "
+        "stalen ProvenComplete-Vertrag oder verlor den Resolution-Seed.");
+
+    const auto reconciled_candidate_call_image = [] {
+        std::vector<std::uint8_t> bytes(0x200u, 0x09u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+
+        // A owns 65 outgoing stack facts. Only slot zero is a callback.
+        put_u16(0x00u, 0xD045u); // mov.l @(0x118,pc),r0 -> callback 0x1E0
+        put_u16(0x02u, 0xE201u); // mov #1,r2
+        put_u16(0x04u, 0x61F3u); // mov r15,r1
+        put_u16(0x06u, 0x2102u); // mov.l r0,@r1
+        auto cursor = std::size_t{0x08u};
+        for (std::size_t slot = 1u; slot <= 64u; ++slot) {
+            static_cast<void>(slot);
+            put_u16(cursor, 0x7104u); // add #4,r1
+            put_u16(cursor + 2u, 0x2122u); // mov.l r2,@r1
+            cursor += 4u;
+        }
+        put_u16(0x108u, 0xB01Au); // bsr 0x140
+        put_u16(0x10Au, 0xE400u); // mov #0,r4 (delay)
+        put_u16(0x10Cu, 0x000Bu);
+        put_u16(0x10Eu, 0x0009u);
+        put_u32(0x118u, 0x1E0u);
+
+        // B's writable call literal is loaded before a basic-block boundary.
+        // Local propagation drops it at 0x14C; the function CFG must recover
+        // it and feed the resulting private candidate carrier back into ABI
+        // contract construction.
+        put_u16(0x140u, 0xD307u); // mov.l @(0x160,pc),r3 -> C 0x180
+        put_u16(0x142u, 0x2742u); // mov.l r4,@r7 (independent sink anchor)
+        put_u16(0x144u, 0xA002u); // bra 0x14C
+        put_u16(0x146u, 0x0009u);
+        put_u16(0x14Cu, 0x430Bu); // jsr @r3
+        put_u16(0x14Eu, 0x0009u);
+        put_u16(0x150u, 0x000Bu);
+        put_u16(0x152u, 0x0009u);
+        put_u32(0x160u, 0x180u);
+
+        // C consumes only ABI stack slot zero and persists that callback.
+        put_u16(0x180u, 0x64F2u); // mov.l @r15,r4
+        put_u16(0x182u, 0xD503u); // mov.l @(0x190,pc),r5
+        put_u16(0x184u, 0x2542u); // mov.l r4,@r5
+        put_u16(0x186u, 0x000Bu);
+        put_u16(0x188u, 0x0009u);
+        put_u32(0x190u, 0x1F0u);
+        put_u16(0x1E0u, 0x000Bu); // persisted callback
+        put_u16(0x1E2u, 0x0009u);
+
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".candidate-call-reconciliation",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-candidate-call-reconciliation"});
+        image.add_entry_point(0u);
+        return image;
+    }();
+    const auto reconciled_candidate_call =
+        katana::analysis::analyze_control_flow(
+            reconciled_candidate_call_image);
+    const auto reconciled_call = std::find_if(
+        reconciled_candidate_call.indirect_control_flow.begin(),
+        reconciled_candidate_call.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x14Cu;
+        });
+    const auto* reconciled_candidate_function =
+        find_function(reconciled_candidate_call, 0x180u);
+    require(
+        reconciled_call !=
+                reconciled_candidate_call.indirect_control_flow.end() &&
+            !reconciled_candidate_call.function_budget_exhausted &&
+            katana::analysis::guarded_aot_inventory_complete(
+                reconciled_candidate_call) &&
+            reconciled_call->evidence ==
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            reconciled_call->targets.empty() &&
+            reconciled_call->analysis_candidates ==
+                std::vector<std::uint32_t>{0x180u} &&
+            reconciled_candidate_function != nullptr &&
+            reconciled_candidate_function->evidence ==
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            std::binary_search(
+                reconciled_candidate_call.recursive
+                    .guarded_candidate_instruction_addresses.begin(),
+                reconciled_candidate_call.recursive
+                    .guarded_candidate_instruction_addresses.end(),
+                0x180u) &&
+            !std::binary_search(
+                reconciled_candidate_call.recursive
+                    .proven_instruction_addresses.begin(),
+                reconciled_candidate_call.recursive
+                    .proven_instruction_addresses.end(),
+                0x180u) &&
+            std::none_of(
+                reconciled_candidate_call.resolved_edges.begin(),
+                reconciled_candidate_call.resolved_edges.end(),
+                [](const auto& edge) {
+                    return edge.instruction_address == 0x14Cu &&
+                           edge.target_address == 0x180u;
+                }) &&
+            reconciled_candidate_call.guarded_code_inventory_walk
+                    .abi_stack_argument_projection_truncated_functions == 0u &&
+            find_guarded_aot_entry(reconciled_candidate_call, 0x1E0u) !=
+                nullptr,
+        "Spaet entdeckter Function-Summary-Callcarrier wurde nicht bis zum "
+        "ABI-/Inventarvertrag rueckgekoppelt oder als feste CFG-Kante "
+        "eingefroren.");
 
     const auto tail_registered_callback_image = [] {
         std::vector<std::uint8_t> bytes(0xE0u, 0x09u);

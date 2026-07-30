@@ -1587,6 +1587,8 @@ int run_test(const int argc, char* argv[]) {
         export_dreamcast_port_project(latent_gdi_path, latent_output, options);
     const auto latent_generated = snapshot(latent_output / "generated");
     const auto& latent_dispatch = latent_generated.at("code/runtime-dispatch.cpp");
+    const auto& latent_dispatch_shard =
+        latent_generated.at("code/runtime-dispatch-shard-00000.cpp");
     const auto latent_metadata = latent_generated.at("metadata/port-project.json");
     const auto latent_main = read_text(latent_output / "src" / "main.cpp");
     const auto latent_recipe =
@@ -1594,6 +1596,13 @@ int run_test(const int argc, char* argv[]) {
     const auto latent_gdi = katana::runtime::GdiDiscSource::open(latent_gdi_path);
     const auto representation_specific_identity =
         katana::runtime::gdi_content_identity(latent_gdi->descriptor());
+    constexpr std::array<std::uint8_t, 4u> latent_block_bytes{
+        0x0Bu, 0x00u, 0x09u, 0x00u};
+    const auto latent_block_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+                        reinterpret_cast<const char*>(
+                            latent_block_bytes.data()),
+                        latent_block_bytes.size()));
     require(latent_result.functions == first.functions + 1u &&
                 std::find(latent_result.checkpoints.begin(),
                           latent_result.checkpoints.end(),
@@ -1602,6 +1611,17 @@ int run_test(const int argc, char* argv[]) {
                 latent_dispatch.find("register_latent_aot_modules") != std::string::npos &&
                 latent_dispatch.find(
                     "NativeAotTemplateDestination::LoadedModule") != std::string::npos &&
+                latent_dispatch.find(
+                    "{0u,4u,\"" +
+                    latent_block_identity +
+                    "\"}") != std::string::npos &&
+                latent_dispatch.find(
+                    "NativeAotTemplateValidationMode::RuntimeBlock") !=
+                    std::string::npos &&
+                latent_dispatch_shard.find(
+                    "append_static_block(fixed_source_blocks, 0x88000000u") != std::string::npos &&
+                latent_dispatch_shard.find(
+                    "register_executable_block(table, services, 0x88000000u") == std::string::npos &&
                 latent_dispatch.find("set_aot_module_descriptors") != std::string::npos &&
                 latent_dispatch.find("source->read(") == std::string::npos &&
                 latent_dispatch.find("sha256_bytes(") == std::string::npos &&
@@ -4191,6 +4211,11 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("result.frame_presented") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("result.presented_nonblack_pixels != 0u &&\n"
+                          "                result.presented_nonblack_pixels <\n"
+                          "                    result.presented_pixel_count;") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("result.proven_frame_presented") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_GUEST_FRAME") !=
                 std::string::npos &&
@@ -4670,6 +4695,84 @@ int run_test(const int argc, char* argv[]) {
                 guarded_metadata.find("\"guarded_partial_control_flow\":0") != std::string::npos &&
                 guarded_metadata.find("\"unresolved_control_flow\":0") != std::string::npos,
             "Guarded-Kandidaten erreichen Portcodegen oder dynamischen Default nicht.");
+
+    auto metadata_cache_options = options;
+    metadata_cache_options.codegen_cache_root =
+        fixture.root / "metadata-cache";
+    auto metadata_cache_baseline_analysis = guarded_analysis;
+    metadata_cache_baseline_analysis.symbolic_addresses.clear();
+    const auto metadata_cache_output =
+        fixture.root / "metadata-cache-port";
+    const auto export_metadata_cache_fixture =
+        [&](const katana::analysis::ControlFlowAnalysisResult& analysis) {
+            return export_dreamcast_port_project(
+                {guarded_image,
+                 analysis,
+                 guarded_program,
+                 guarded_inputs,
+                 katana::platform::dreamcast_disc_boot_address,
+                 katana::platform::dreamcast_disc_boot_address,
+                 guarded_disc.boot_file.size(),
+                 "metadata-cache-key-fixture"},
+                metadata_cache_output,
+                metadata_cache_options);
+        };
+    const auto joined_partition_sources =
+        [](const std::map<std::string, std::string>& sources) {
+            std::string result;
+            for (const auto& [path, content] : sources) {
+                if (path.starts_with("code/unit-") &&
+                    path.ends_with(".cpp"))
+                    result += content;
+            }
+            return result;
+        };
+    const auto metadata_cache_baseline =
+        export_metadata_cache_fixture(
+            metadata_cache_baseline_analysis);
+    const auto metadata_cache_baseline_sources =
+        snapshot(metadata_cache_output / "generated");
+    require(
+        !metadata_cache_baseline.metadata_cache_hit,
+        "Erster Metadata-Cache-Export meldet einen unerwarteten Treffer.");
+
+    auto metadata_cache_analysis_change =
+        metadata_cache_baseline_analysis;
+    metadata_cache_analysis_change.symbolic_addresses = {
+        {guarded_program.front().entry_address,
+         guarded_program.front().entry_address,
+         0u,
+         "metadata_cache_symbol",
+         katana::io::SymbolKind::Function,
+         katana::io::SymbolBinding::Global,
+         true}};
+    const auto metadata_cache_analysis_result =
+        export_metadata_cache_fixture(
+            metadata_cache_analysis_change);
+    const auto metadata_cache_analysis_sources =
+        snapshot(metadata_cache_output / "generated");
+    require(
+        !metadata_cache_analysis_result.metadata_cache_hit &&
+            joined_partition_sources(
+                metadata_cache_analysis_sources) ==
+                joined_partition_sources(
+                    metadata_cache_baseline_sources) &&
+            metadata_cache_analysis_sources.at("metadata/cfg.json") !=
+                metadata_cache_baseline_sources.at("metadata/cfg.json") &&
+            metadata_cache_analysis_sources.at("metadata/cfg.json")
+                    .find("metadata_cache_symbol") !=
+                std::string::npos,
+        "Geaenderte Analyseidentitaet uebernimmt stale "
+        "CFG/Callgraph-Metadaten aus dem Cache.");
+    const auto metadata_cache_repeat =
+        export_metadata_cache_fixture(
+            metadata_cache_analysis_change);
+    require(
+        metadata_cache_repeat.metadata_cache_hit &&
+            metadata_cache_analysis_sources ==
+                snapshot(metadata_cache_output / "generated"),
+        "Identische Artefakt- und Analyseidentitaet trifft den "
+        "Metadata-Cache nicht deterministisch.");
 
     auto runtime_only_analysis = guarded_analysis;
     auto& runtime_only_resolution = runtime_only_analysis.indirect_control_flow.front();

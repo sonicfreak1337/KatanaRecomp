@@ -227,6 +227,7 @@ analyze_function_values_with_guarded_entry_cache(
     std::span<const FunctionBoundary> function_boundaries,
     std::span<const ResolvedControlFlowEdge> resolved_edges,
     const FunctionValueAnalysisProgressCallback& progress_callback,
-    GuardedNativeEntryShapeCache& guarded_native_entry_shapes);
+    GuardedNativeEntryShapeCache& guarded_native_entry_shapes,
+    const AbiContractObserver& abi_contract_observer = {});
 
 } // namespace katana::analysis::detail

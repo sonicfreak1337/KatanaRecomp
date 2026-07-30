@@ -9,6 +9,9 @@
 
 namespace katana::runtime {
 
+inline constexpr std::uint32_t maximum_native_aot_template_extent =
+    4u * 1024u * 1024u;
+
 struct NativeAotTemplatePatchTarget {
     std::uint32_t live_value = 0u;
     std::uint32_t block_address = 0u;

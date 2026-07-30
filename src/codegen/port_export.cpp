@@ -7158,7 +7158,9 @@ std::string handwritten_main(
            "                result.presented_source ==\n"
            "                    katana::runtime::GuestFramePresentedSource::GuestProof &&\n"
            "                result.presented_pixel_count != 0u &&\n"
-           "                result.presented_nonblack_pixels != 0u;\n"
+           "                result.presented_nonblack_pixels != 0u &&\n"
+           "                result.presented_nonblack_pixels <\n"
+           "                    result.presented_pixel_count;\n"
            "            const auto evidence = guest_frame_evidence.observe(\n"
            "                result, game_code_progressed);\n"
            "            if (game_code_progressed && !first_game_framebuffer_write &&\n"
@@ -8938,22 +8940,105 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 symbol(entry.shared_body_address) + ".");
     }
     std::set<std::string> latent_ids;
+    std::unordered_set<std::uint32_t> latent_aot_source_blocks;
+    std::size_t latent_aot_block_identity_count = 0u;
+    std::uint64_t latent_aot_block_identity_bytes = 0u;
+    const auto valid_block_sha256 = [](const std::string_view identity) {
+        constexpr std::string_view prefix{"sha256:"};
+        return identity.size() == prefix.size() + 64u &&
+               identity.starts_with(prefix) &&
+               std::all_of(
+                   identity.begin() +
+                       static_cast<std::ptrdiff_t>(prefix.size()),
+                   identity.end(),
+                   [](const char character) {
+                       return (character >= '0' && character <= '9') ||
+                              (character >= 'a' && character <= 'f');
+                   });
+    };
     for (const auto& module : latent_modules) {
         if (module.id.empty() || !latent_ids.insert(module.id).second ||
             module.byte_identity.size() != 71u || !module.byte_identity.starts_with("sha256:") ||
-            module.byte_size == 0u || (module.byte_size & 3u) != 0u ||
+            module.byte_size < 2u || (module.byte_size & 1u) != 0u ||
             static_cast<std::uint64_t>(module.source_address) + module.byte_size >
                 0x1'0000'0000ull ||
-            module.disc_byte_offset > std::numeric_limits<std::uint64_t>::max() - module.byte_size)
+            module.disc_byte_offset >
+                std::numeric_limits<std::uint64_t>::max() -
+                    module.byte_size ||
+            module.block_identities.empty() ||
+            module.block_identities.size() > 65'536u)
             throw std::runtime_error("Latentes AOT-Modul besitzt ungueltige Exportgrenzen.");
-        bool has_block = false;
-        for (const auto& function : module.program) {
-            for (const auto& block : function.blocks)
-                has_block = has_block || emitted_blocks.contains(block.start_address);
+        std::uint64_t previous_identity_end = 0u;
+        for (const auto& identity : module.block_identities) {
+            const auto identity_end =
+                static_cast<std::uint64_t>(identity.source_offset) +
+                identity.size;
+            if ((identity.source_offset & 1u) != 0u ||
+                identity.size < 2u || (identity.size & 1u) != 0u ||
+                identity_end > module.byte_size ||
+                identity.source_offset < previous_identity_end ||
+                !valid_block_sha256(identity.sha256))
+                throw std::runtime_error(
+                    "Latentes AOT-Modul besitzt eine ungueltige oder "
+                    "ueberlappende Blockidentitaet.");
+            if (latent_aot_block_identity_count >= 65'536u ||
+                identity.size >
+                    64u * 1024u * 1024u -
+                        latent_aot_block_identity_bytes)
+                throw std::runtime_error(
+                    "Latente AOT-Module ueberschreiten das globale "
+                    "Blockidentitaetsbudget.");
+            ++latent_aot_block_identity_count;
+            latent_aot_block_identity_bytes += identity.size;
+            previous_identity_end = identity_end;
         }
-        if (!has_block)
-            throw std::runtime_error("Latentes AOT-Modul besitzt keinen generierten Block.");
+        std::set<std::uint32_t> unique_module_blocks;
+        for (const auto& function : module.program) {
+            for (const auto& block : function.blocks) {
+                if (!unique_module_blocks.insert(block.start_address).second)
+                    continue;
+                if (block.start_address < module.source_address)
+                    throw std::runtime_error(
+                        "Latentes AOT-Modul besitzt einen Block vor seiner "
+                        "Source-Range.");
+                const auto source_offset =
+                    block.start_address - module.source_address;
+                const auto identity = std::lower_bound(
+                    module.block_identities.begin(),
+                    module.block_identities.end(),
+                    source_offset,
+                    [](const auto& candidate, const std::uint32_t value) {
+                        return candidate.source_offset < value;
+                    });
+                const auto dispatch = std::lower_bound(
+                    dispatch_blocks.begin(),
+                    dispatch_blocks.end(),
+                    block.start_address,
+                    [](const auto& candidate, const std::uint32_t value) {
+                        return candidate.address < value;
+                    });
+                if (!emitted_blocks.contains(block.start_address) ||
+                    identity == module.block_identities.end() ||
+                    identity->source_offset != source_offset ||
+                    dispatch == dispatch_blocks.end() ||
+                    dispatch->address != block.start_address ||
+                    identity->size != dispatch->size)
+                    throw std::runtime_error(
+                        "Latentes AOT-Modul verlor die exakte "
+                        "DispatchBlock-Identitaet.");
+                latent_aot_source_blocks.insert(block.start_address);
+            }
+        }
+        if (unique_module_blocks.size() !=
+            module.block_identities.size())
+            throw std::runtime_error(
+                "Latentes AOT-Modul besitzt ungebundene oder fehlende "
+                "Blockidentitaeten.");
     }
+    auto template_source_blocks = runtime_image_source_blocks;
+    template_source_blocks.insert(
+        latent_aot_source_blocks.begin(),
+        latent_aot_source_blocks.end());
 
     constexpr std::size_t dispatch_blocks_per_shard = 512u;
     const auto shard_count =
@@ -9037,7 +9122,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             const auto& block = dispatch_blocks[index];
             const auto address = symbol(block.address);
             shard_output << "    append_static_block("
-                         << (runtime_image_source_blocks.contains(block.address)
+                         << (template_source_blocks.contains(block.address)
                                  ? "fixed_source_blocks"
                                  : "blocks")
                          << ", 0x" << address << "u, " << block.size
@@ -9052,7 +9137,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                         "katana::runtime::PlatformServices& services) {\n";
         for (auto index = begin; index < end; ++index) {
             const auto& block = dispatch_blocks[index];
-            if (runtime_image_source_blocks.contains(block.address))
+            if (template_source_blocks.contains(block.address))
                 continue;
             const auto address = symbol(block.address);
             shard_output << "    register_executable_block(table, services, 0x" << address << "u, "
@@ -10206,10 +10291,10 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    std::vector<katana::runtime::RuntimeBlock> "
               "fixed_source_blocks;\n";
     output << "    static_blocks.reserve("
-           << emitted_blocks.size() - runtime_image_source_blocks.size()
+           << emitted_blocks.size() - template_source_blocks.size()
            << "u);\n"
            << "    fixed_source_blocks.reserve("
-           << runtime_image_source_blocks.size() << "u);\n";
+           << template_source_blocks.size() << "u);\n";
     for (std::size_t shard = 0u; shard < shard_count; ++shard)
         output << "    runtime_dispatch_detail::append_static_blocks_shard_" << shard_symbol(shard)
                << "(static_blocks, fixed_source_blocks);\n";
@@ -10266,7 +10351,16 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                << "u, 0, {}, "
                   "katana::runtime::NativeAotTemplateDestination::LoadedModule, "
                << katana::io::quote_json(expected_content_identity) << ", "
-               << katana::io::quote_json(module.byte_identity) << "},\n";
+               << katana::io::quote_json(module.byte_identity)
+               << ", {}, 0u, {";
+        for (const auto& identity : module.block_identities)
+            output << "{" << identity.source_offset << "u,"
+                   << identity.size << "u,"
+                   << katana::io::quote_json(identity.sha256)
+                   << "},";
+        output << "}, "
+                  "katana::runtime::NativeAotTemplateValidationMode::"
+                  "RuntimeBlock},\n";
     }
     for (const auto& native_template : external_native_templates) {
         output << "        {"
@@ -10858,6 +10952,10 @@ port_metadata(const PortExportOptions& options,
            << analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
            << ",\"guarded_abi_stack_argument_projection_truncated_functions\":"
            << analysis.guarded_code_inventory_walk.abi_stack_argument_projection_truncated_functions
+           << ",\"guarded_inventory_candidate_values_truncated\":"
+           << (analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated ? "true" : "false")
+           << ",\"guarded_abi_stack_base_unresolved\":"
+           << (analysis.guarded_code_inventory_walk.abi_stack_base_unresolved ? "true" : "false")
            << ",\"guarded_code_shape_validation_work\":"
            << analysis.guarded_code_shape_validation_work
            << ",\"guarded_code_shape_validation_work_budget\":"
@@ -11230,6 +11328,10 @@ static PortExportResult export_dreamcast_port_project_impl(
                << prepared.analysis.guarded_code_inventory_walk
                       .abi_stack_argument_projection_truncated_functions
                << '/' << prepared.analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
+               << " inventory_candidate_values_truncated="
+               << prepared.analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated
+               << " abi_stack_base_unresolved="
+               << prepared.analysis.guarded_code_inventory_walk.abi_stack_base_unresolved
                << " shape_budget_exceeded="
                << prepared.analysis
                       .guarded_code_shape_budget_exceeded_candidates
@@ -11726,12 +11828,72 @@ static PortExportResult export_dreamcast_port_project_impl(
     std::string control_flow_graph_dot;
     std::string call_graph_json;
     std::string call_graph_dot;
+    const auto current_control_flow_graph =
+        katana::analysis::build_control_flow_graph(prepared.analysis);
+    const auto current_call_graph =
+        katana::analysis::build_call_graph(prepared.analysis);
+    auto current_control_flow_graph_json =
+        katana::analysis::serialize_analysis_graph_json(
+            current_control_flow_graph);
+    auto current_control_flow_graph_dot =
+        katana::analysis::serialize_analysis_graph_dot(
+            current_control_flow_graph);
+    auto current_call_graph_json =
+        katana::analysis::serialize_analysis_graph_json(current_call_graph);
+    auto current_call_graph_dot =
+        katana::analysis::serialize_analysis_graph_dot(current_call_graph);
     bool metadata_cache_hit = false;
     std::string metadata_cache_key;
     if (partition_cache) {
+        const auto append_identity_component =
+            [](std::ostringstream& identity,
+               const std::string_view name,
+               const std::string_view value) {
+                identity << name.size() << ':' << name << ':' << value.size()
+                         << ':' << katana::io::sha256_bytes(value) << ';';
+            };
+        std::ostringstream emitted_artifact_identity;
+        emitted_artifact_identity << "ordered-emitted-artifacts:";
+        for (std::size_t index = 0u; index < artifacts.size(); ++index) {
+            const auto path =
+                artifacts[index].relative_path.generic_string();
+            emitted_artifact_identity << index << ':';
+            append_identity_component(
+                emitted_artifact_identity, "path", path);
+            append_identity_component(
+                emitted_artifact_identity,
+                "content",
+                artifacts[index].content);
+        }
+        std::ostringstream analysis_identity;
+        analysis_identity << "analysis-metadata:";
+        append_identity_component(
+            analysis_identity,
+            "cfg-json",
+            current_control_flow_graph_json);
+        append_identity_component(
+            analysis_identity,
+            "cfg-dot",
+            current_control_flow_graph_dot);
+        append_identity_component(
+            analysis_identity,
+            "callgraph-json",
+            current_call_graph_json);
+        append_identity_component(
+            analysis_identity,
+            "callgraph-dot",
+            current_call_graph_dot);
         std::ostringstream metadata_ir_identity;
         metadata_ir_identity << "port-metadata-v"
-                             << port_metadata_cache_schema_version << ':';
+                             << port_metadata_cache_schema_version << ':'
+                             << "emitted-artifacts="
+                             << katana::io::sha256_bytes(
+                                    emitted_artifact_identity.str())
+                             << ';'
+                             << "analysis="
+                             << katana::io::sha256_bytes(
+                                    analysis_identity.str())
+                             << ';';
         for (const auto& partition : partitions)
             metadata_ir_identity << partition.content_sha256 << ';';
         for (const auto& input : prepared.inputs)
@@ -11804,16 +11966,12 @@ static PortExportResult export_dreamcast_port_project_impl(
         }
         source_map_json =
             serialize_address_source_map(build_address_source_map(source_map_image, artifacts));
-        const auto control_flow_graph =
-            katana::analysis::build_control_flow_graph(prepared.analysis);
-        const auto call_graph =
-            katana::analysis::build_call_graph(prepared.analysis);
         control_flow_graph_json =
-            katana::analysis::serialize_analysis_graph_json(control_flow_graph);
+            std::move(current_control_flow_graph_json);
         control_flow_graph_dot =
-            katana::analysis::serialize_analysis_graph_dot(control_flow_graph);
-        call_graph_json = katana::analysis::serialize_analysis_graph_json(call_graph);
-        call_graph_dot = katana::analysis::serialize_analysis_graph_dot(call_graph);
+            std::move(current_control_flow_graph_dot);
+        call_graph_json = std::move(current_call_graph_json);
+        call_graph_dot = std::move(current_call_graph_dot);
         if (partition_cache) {
             partition_cache->store(metadata_cache_key, "source-map.json", source_map_json);
             partition_cache->store(metadata_cache_key, "cfg.json", control_flow_graph_json);

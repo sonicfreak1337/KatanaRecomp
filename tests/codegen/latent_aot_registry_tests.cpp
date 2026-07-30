@@ -51,8 +51,21 @@ std::size_t record(std::vector<std::uint8_t>& image,
     return length;
 }
 
-std::vector<std::uint8_t> fixture_iso() {
-    std::vector<std::uint8_t> image(24u * sector_size);
+struct FixtureFile {
+    std::uint32_t lba = 0u;
+    std::string name;
+    std::vector<std::uint8_t> bytes;
+};
+
+std::vector<std::uint8_t>
+fixture_iso_with_files(const std::vector<FixtureFile>& files) {
+    std::size_t image_sectors = 24u;
+    for (const auto& file : files) {
+        image_sectors = std::max(
+            image_sectors,
+            static_cast<std::size_t>(file.lba) + 1u);
+    }
+    std::vector<std::uint8_t> image(image_sectors * sector_size);
     const auto pvd = 16u * sector_size;
     image[pvd] = 1u;
     std::copy_n("CD001", 5u, image.begin() + static_cast<std::ptrdiff_t>(pvd + 1u));
@@ -65,24 +78,34 @@ std::vector<std::uint8_t> fixture_iso() {
         record(image, directory, 20u, sector_size, std::string(1u, '\0'), true);
     directory +=
         record(image, directory, 20u, sector_size, std::string(1u, '\1'), true);
-    directory += record(image, directory, 21u, 4u, "MODULE.BIN;1", false);
-    directory += record(image, directory, 22u, 4u, "COPY.BIN;1", false);
-    static_cast<void>(record(image, directory, 23u, 4u, "DATA.DAT;1", false));
-
-    const std::array module_bytes{std::uint8_t{0x0Bu},
-                                  std::uint8_t{0x00u},
-                                  std::uint8_t{0x09u},
-                                  std::uint8_t{0x00u}};
-    std::copy(module_bytes.begin(),
-              module_bytes.end(),
-              image.begin() + static_cast<std::ptrdiff_t>(21u * sector_size));
-    std::copy(module_bytes.begin(),
-              module_bytes.end(),
-              image.begin() + static_cast<std::ptrdiff_t>(22u * sector_size));
-    std::fill_n(image.begin() + static_cast<std::ptrdiff_t>(23u * sector_size),
-                module_bytes.size(),
-                std::uint8_t{0xFFu});
+    for (const auto& file : files) {
+        directory += record(image,
+                            directory,
+                            file.lba,
+                            static_cast<std::uint32_t>(file.bytes.size()),
+                            file.name,
+                            false);
+        std::copy(file.bytes.begin(),
+                  file.bytes.end(),
+                  image.begin() +
+                      static_cast<std::ptrdiff_t>(file.lba * sector_size));
+    }
     return image;
+}
+
+std::vector<std::uint8_t> fixture_iso() {
+    const std::vector<std::uint8_t> module_bytes{
+        0x0Bu, 0x00u, 0x09u, 0x00u};
+    return fixture_iso_with_files(
+        {{21u, "MODULE.BIN;1", module_bytes},
+         {22u, "COPY.BIN;1", module_bytes},
+         {23u, "DATA.DAT;1", {0xFFu, 0xFFu, 0xFFu, 0xFFu}}});
+}
+
+std::string byte_identity(const std::vector<std::uint8_t>& bytes) {
+    return "sha256:" + katana::io::sha256_bytes(std::string_view(
+                           reinterpret_cast<const char*>(bytes.data()),
+                           bytes.size()));
 }
 
 } // namespace
@@ -139,6 +162,14 @@ int main() {
                     module.id.find("COPY") == std::string::npos &&
                     module.id.find("DATA") == std::string::npos,
                 "Latente Registry verlor Offset/AOT oder exportierte einen Discdateinamen.");
+        require(
+            module.block_identities.size() == 1u &&
+                module.block_identities.front().source_offset == 0u &&
+                module.block_identities.front().size == 4u &&
+                module.block_identities.front().sha256 ==
+                    module.byte_identity,
+            "Latente Registry exportierte nicht die exakte, sortierte "
+            "DispatchBlock-Identitaet.");
 
         const auto repeated =
             katana::codegen::discover_latent_aot_modules(source, 0u, 0u);
@@ -147,8 +178,200 @@ int main() {
                     repeated.modules.front().byte_identity == module.byte_identity &&
                     repeated.modules.front().disc_byte_offset == module.disc_byte_offset &&
                     repeated.modules.front().source_address == module.source_address &&
-                    repeated.modules.front().program.size() == module.program.size(),
+                    repeated.modules.front().program.size() == module.program.size() &&
+                    repeated.modules.front().block_identities ==
+                        module.block_identities,
                 "Latente Registry ist bei identischer Disc nicht deterministisch geordnet.");
+
+        const std::array duplicate_extent_hint{
+            katana::codegen::LatentAotEntryHint{
+                module.byte_identity, 22u * sector_size, 4u, 0u}};
+        const auto exact_duplicate_extent =
+            katana::codegen::discover_latent_aot_modules(
+                source,
+                0u,
+                0u,
+                {},
+                katana::codegen::LatentAotDiscoveryOptions{},
+                {},
+                duplicate_extent_hint);
+        require(
+            exact_duplicate_extent.modules.size() == 1u &&
+                exact_duplicate_extent.modules.front().disc_byte_offset ==
+                    22u * sector_size &&
+                exact_duplicate_extent.modules.front().entry_offsets ==
+                    std::vector<std::uint32_t>{0u},
+            "Byteidentischer erster ISO-Extent konsumierte die exakte Bindung "
+            "des zweiten Extents.");
+
+        const std::array ambiguous_duplicate_hints{
+            katana::codegen::LatentAotEntryHint{
+                module.byte_identity, 21u * sector_size, 4u, 0u},
+            katana::codegen::LatentAotEntryHint{
+                module.byte_identity, 22u * sector_size, 4u, 0u},
+        };
+        bool rejected = false;
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    source,
+                    0u,
+                    0u,
+                    {},
+                    katana::codegen::LatentAotDiscoveryOptions{},
+                    {},
+                    ambiguous_duplicate_hints));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-byte-identity-ambiguous";
+        }
+        require(
+            rejected,
+            "Byteidentische Exact-Hints an verschiedenen Disc-Extents "
+            "erzeugten mehrdeutige Runtime-Templates.");
+
+        const std::vector<std::uint8_t> first_cap_bytes{
+            0x0Bu, 0x00u, 0x09u, 0x00u};
+        const std::vector<std::uint8_t> hinted_cap_bytes{
+            0x0Bu, 0x00u, 0x08u, 0x00u};
+        auto cap_source =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(
+                    {{21u, "FIRST.BIN;1", first_cap_bytes},
+                     {22u, "HINTED.BIN;1", hinted_cap_bytes}}),
+                "synthetic-latent-aot-cap-disc");
+        auto cap_options = katana::codegen::LatentAotDiscoveryOptions{};
+        cap_options.maximum_candidate_files = 1u;
+        const std::array behind_cap_hint{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(hinted_cap_bytes),
+                22u * sector_size,
+                static_cast<std::uint32_t>(hinted_cap_bytes.size()),
+                0u}};
+        const auto exact_behind_cap =
+            katana::codegen::discover_latent_aot_modules(
+                cap_source,
+                0u,
+                0u,
+                {},
+                cap_options,
+                {},
+                behind_cap_hint);
+        require(
+            std::any_of(
+                exact_behind_cap.modules.begin(),
+                exact_behind_cap.modules.end(),
+                [](const auto& candidate) {
+                    return candidate.disc_byte_offset == 22u * sector_size &&
+                           candidate.entry_offsets ==
+                               std::vector<std::uint32_t>{0u};
+                }),
+            "Exakter Latent-AOT-Hint hinter dem Heuristik-Kandidatenlimit "
+            "blieb ungebunden.");
+
+        const std::vector<std::uint8_t> header_module_bytes{
+            0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x0Bu, 0x00u, 0x09u, 0x00u};
+        auto header_source =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(
+                    {{21u, "HEADER.BIN;1", header_module_bytes}}),
+                "synthetic-latent-aot-header-disc");
+        const std::array nonzero_entry_hint{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(header_module_bytes),
+                21u * sector_size,
+                static_cast<std::uint32_t>(header_module_bytes.size()),
+                4u}};
+        const auto exact_nonzero_entry =
+            katana::codegen::discover_latent_aot_modules(
+                header_source,
+                0u,
+                0u,
+                {},
+                katana::codegen::LatentAotDiscoveryOptions{},
+                {},
+                nonzero_entry_hint);
+        require(
+            exact_nonzero_entry.modules.size() == 1u &&
+                exact_nonzero_entry.modules.front().entry_offsets ==
+                    std::vector<std::uint32_t>{4u},
+            "Exakter Nonzero-Entry wurde durch einen synthetischen Entry 0 "
+            "oder dessen Datenheader abgelehnt.");
+
+        const std::vector<std::uint8_t> six_byte_module{
+            0x0Bu, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u};
+        auto six_byte_source =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(
+                    {{21u, "SIX.BIN;1", six_byte_module}}),
+                "synthetic-latent-aot-six-byte-disc");
+        const std::array six_byte_hint{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(six_byte_module),
+                21u * sector_size,
+                static_cast<std::uint32_t>(six_byte_module.size()),
+                0u}};
+        const auto exact_six_byte =
+            katana::codegen::discover_latent_aot_modules(
+                six_byte_source,
+                0u,
+                0u,
+                {},
+                katana::codegen::LatentAotDiscoveryOptions{},
+                {},
+                six_byte_hint);
+        require(exact_six_byte.modules.size() == 1u &&
+                    exact_six_byte.modules.front().byte_size == 6u,
+                "Gerader exakter Sechs-Byte-Modulbound wurde wie ein "
+                "Vierbyte-Heuristikkandidat abgelehnt.");
+
+        auto exact_file_bounded =
+            katana::codegen::LatentAotDiscoveryOptions{};
+        exact_file_bounded.maximum_file_bytes = 4u;
+        rejected = false;
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    six_byte_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_file_bounded,
+                    {},
+                    six_byte_hint));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-file-budget";
+        }
+        require(
+            rejected,
+            "Exact-Hint umging das einzelne Modul-/Binderbudget.");
+
+        auto exact_total_bounded =
+            katana::codegen::LatentAotDiscoveryOptions{};
+        exact_total_bounded.maximum_file_bytes = 8u;
+        exact_total_bounded.maximum_total_file_bytes = 4u;
+        rejected = false;
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    six_byte_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_total_bounded,
+                    {},
+                    six_byte_hint));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-total-budget";
+        }
+        require(
+            rejected,
+            "Exact-Hint umging das globale Dateilesebudget.");
 
         const std::array occupied{
             katana::codegen::LatentAotOccupiedRange{0x88000000u, 4096u}};
@@ -180,7 +403,7 @@ int main() {
 
         auto invalid = katana::codegen::LatentAotDiscoveryOptions{};
         invalid.maximum_workers = 0u;
-        bool rejected = false;
+        rejected = false;
         try {
             static_cast<void>(
                 katana::codegen::discover_latent_aot_modules(source, 0u, 0u, {}, invalid));

@@ -241,6 +241,102 @@ void latent_aot_multiread_regression() {
             "Fremde Contentidentitaet vervollstaendigt eine alte AOT-Coverage.");
 }
 
+void fragmented_full_aot_segment_retention_regression() {
+    constexpr std::uint32_t target = 0x0C004000u;
+    constexpr std::uint64_t source = 0x18000u;
+    constexpr std::uint32_t entry_offset = 4u;
+    constexpr std::uint32_t tail_offset = 12u;
+    const std::array<std::uint8_t, 16u> file{
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+    TransactionFixture fixture;
+    fixture.coordinator->set_aot_module_descriptors(
+        std::array{DiscLoadAotModuleDescriptor{
+            "fragmented_fixture",
+            "sha256:fragmented-content",
+            source,
+            static_cast<std::uint32_t>(file.size()),
+            disc_load_byte_identity(file)}});
+
+    const auto full = fixture.coordinator->execute(
+        request(1u,
+                0x8C004000u,
+                target,
+                file,
+                "sha256:fragmented-content",
+                source));
+    const auto* full_owner =
+        fixture.modules.resolve(target, file.size());
+    require(full.ranges.front().module_activated &&
+                full_owner != nullptr,
+            "Vollstaendiges AOT-Testmodul wurde nicht aktiviert.");
+    const auto full_owner_id = full_owner->id;
+    const auto full_owner_generation = full_owner->generation;
+
+    const std::array<std::uint8_t, 1u> changed_tail{
+        static_cast<std::uint8_t>(file[tail_offset] ^ 0x01u)};
+    fixture.memory.write_bytes(
+        target + tail_offset, changed_tail, CodeWriteSource::Cpu);
+    fixture.modules.record_runtime_write(
+        target + tail_offset, 1u, CodeWriteSource::Cpu, true);
+    full_owner = fixture.modules.find(full_owner_id);
+    require(full_owner != nullptr &&
+                full_owner->materializable(target + entry_offset, 2u) &&
+                !full_owner->materializable(target + tail_offset, 1u),
+            "Entfernte Tail-Aenderung fragmentierte den Fullowner nicht wie erwartet.");
+
+    const auto entry =
+        std::span<const std::uint8_t>(file).subspan(entry_offset, 2u);
+    const auto retained = fixture.coordinator->execute(
+        request(2u,
+                0x8C004000u + entry_offset,
+                target + entry_offset,
+                entry,
+                "sha256:fragmented-content",
+                source + entry_offset));
+    const auto retained_snapshot = fixture.modules.snapshot();
+    full_owner = fixture.modules.find(full_owner_id);
+    require(retained.ranges.front().exact_module_retained &&
+                !retained.ranges.front().module_activated &&
+                full_owner != nullptr &&
+                full_owner->generation == full_owner_generation &&
+                full_owner->materializable(target + entry_offset, 2u) &&
+                std::none_of(
+                    retained_snapshot.modules.begin(),
+                    retained_snapshot.modules.end(),
+                    [](const auto& module) {
+                        return module.active &&
+                               module.id.starts_with("disc-pending-aot-");
+                    }),
+            "Byteidentischer Entry-Slice verlor den fragmentierten Fullowner "
+            "oder publizierte einen Pending-Owner.");
+
+    const std::array<std::uint8_t, 1u> changed_entry{
+        static_cast<std::uint8_t>(file[entry_offset] ^ 0x01u)};
+    fixture.memory.write_bytes(
+        target + entry_offset, changed_entry, CodeWriteSource::Cpu);
+    fixture.modules.record_runtime_write(
+        target + entry_offset, 1u, CodeWriteSource::Cpu, true);
+    const auto rejected = fixture.coordinator->execute(
+        request(3u,
+                0x8C004000u + entry_offset,
+                target + entry_offset,
+                entry,
+                "sha256:fragmented-content",
+                source + entry_offset));
+    const auto rejected_snapshot = fixture.modules.snapshot();
+    require(!rejected.ranges.front().exact_module_retained &&
+                rejected.ranges.front().module_activated &&
+                std::any_of(
+                    rejected_snapshot.modules.begin(),
+                    rejected_snapshot.modules.end(),
+                    [](const auto& module) {
+                        return module.active &&
+                               module.id.starts_with("disc-pending-aot-");
+                    }),
+            "Mutation im Entry-Slice wurde als segmentlokal identisch retained.");
+}
+
 void split_range_and_nonmain_invalidation_regression() {
     Memory memory(0u);
     static_cast<void>(map_dreamcast_main_ram(memory));
@@ -388,6 +484,7 @@ int main() {
     try {
         identity_alias_and_atomic_rejection_regression();
         latent_aot_multiread_regression();
+        fragmented_full_aot_segment_retention_regression();
         split_range_and_nonmain_invalidation_regression();
         partial_catalog_index_and_contract_regression();
         std::cout << "disc load transaction tests passed\n";

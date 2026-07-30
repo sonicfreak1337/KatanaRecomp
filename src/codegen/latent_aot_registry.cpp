@@ -52,8 +52,8 @@ bool valid_sha256_identity(const std::string_view identity) noexcept {
 }
 
 bool valid_entry_hint(const LatentAotEntryHint& hint) noexcept {
-    return valid_sha256_identity(hint.byte_identity) && hint.byte_size >= 4u &&
-           (hint.byte_size & 3u) == 0u &&
+    return valid_sha256_identity(hint.byte_identity) && hint.byte_size >= 2u &&
+           (hint.byte_size & 1u) == 0u &&
            (hint.module_relative_offset & 1u) == 0u &&
            hint.module_relative_offset <= hint.byte_size - 2u;
 }
@@ -82,7 +82,7 @@ normalize_entry_hints(const std::span<const LatentAotEntryHint> entry_hints) {
 }
 
 bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept {
-    if (candidate.entry_offsets.empty() || candidate.entry_offsets.front() != 0u ||
+    if (candidate.entry_offsets.empty() ||
         !std::is_sorted(candidate.entry_offsets.begin(), candidate.entry_offsets.end()) ||
         std::adjacent_find(candidate.entry_offsets.begin(), candidate.entry_offsets.end()) !=
             candidate.entry_offsets.end() ||
@@ -92,6 +92,13 @@ bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept 
                            candidate.explicit_entry_offsets.end()) !=
             candidate.explicit_entry_offsets.end())
         return false;
+    if (candidate.explicit_entry_offsets.empty()) {
+        if (candidate.entry_offsets.size() != 1u ||
+            candidate.entry_offsets.front() != 0u)
+            return false;
+    } else if (candidate.entry_offsets != candidate.explicit_entry_offsets) {
+        return false;
+    }
     const auto valid_offset = [&candidate](const std::uint32_t offset) {
         return (offset & 1u) == 0u &&
                static_cast<std::uint64_t>(offset) + 2u <= candidate.bytes.size();
@@ -271,7 +278,12 @@ bool physical_overlap(const LatentAotOccupiedRange left,
 std::optional<PreparedLatentAotModule>
 analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& options) {
     try {
-        if (candidate.bytes.size() < 4u || (candidate.bytes.size() & 3u) != 0u ||
+        const bool exact_entry_binding = !candidate.explicit_entry_offsets.empty();
+        if ((exact_entry_binding
+                 ? candidate.bytes.size() < 2u ||
+                       (candidate.bytes.size() & 1u) != 0u
+                 : candidate.bytes.size() < 4u ||
+                       (candidate.bytes.size() & 3u) != 0u) ||
             !valid_candidate_entry_offsets(candidate))
             return std::nullopt;
         const auto opcode_at = [&candidate](const std::uint32_t offset) {
@@ -280,26 +292,30 @@ analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& 
                 static_cast<std::uint16_t>(
                     static_cast<std::uint16_t>(candidate.bytes[offset + 1u]) << 8u));
         };
-        if (!katana::sh4::decode(opcode_at(0u)).is_known()) return std::nullopt;
-        if (std::any_of(candidate.explicit_entry_offsets.begin(),
-                        candidate.explicit_entry_offsets.end(),
-                        [&](const auto offset) {
-                            return !katana::sh4::decode(opcode_at(offset)).is_known();
-                        }))
-            return std::nullopt;
-        bool early_control_flow = false;
-        const auto entry_scan = std::min(
-            options.maximum_entry_scan_instructions, candidate.bytes.size() / 2u);
-        for (std::size_t instruction = 0u; instruction < entry_scan; ++instruction) {
-            const auto offset = static_cast<std::uint32_t>(instruction * 2u);
-            const auto decoded = katana::sh4::decode(opcode_at(offset));
-            if (!decoded.is_known()) break;
-            if (decoded.changes_control_flow()) {
-                early_control_flow = true;
-                break;
+        if (exact_entry_binding) {
+            if (std::any_of(candidate.explicit_entry_offsets.begin(),
+                            candidate.explicit_entry_offsets.end(),
+                            [&](const auto offset) {
+                                return !katana::sh4::decode(opcode_at(offset)).is_known();
+                            }))
+                return std::nullopt;
+        } else {
+            if (!katana::sh4::decode(opcode_at(0u)).is_known())
+                return std::nullopt;
+            bool early_control_flow = false;
+            const auto entry_scan = std::min(
+                options.maximum_entry_scan_instructions, candidate.bytes.size() / 2u);
+            for (std::size_t instruction = 0u; instruction < entry_scan; ++instruction) {
+                const auto offset = static_cast<std::uint32_t>(instruction * 2u);
+                const auto decoded = katana::sh4::decode(opcode_at(offset));
+                if (!decoded.is_known()) break;
+                if (decoded.changes_control_flow()) {
+                    early_control_flow = true;
+                    break;
+                }
             }
+            if (!early_control_flow) return std::nullopt;
         }
-        if (!early_control_flow) return std::nullopt;
 
         katana::io::ExecutableImage image;
         image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
@@ -367,6 +383,87 @@ analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& 
                 }
             }
         }
+        std::vector<PreparedLatentAotBlockIdentity> block_identities;
+        block_identities.reserve(block_count);
+        for (const auto& function : program) {
+            for (const auto& block : function.blocks) {
+                const auto block_start =
+                    static_cast<std::uint64_t>(block.start_address);
+                auto block_end = block_start + 2u;
+                if (block_end > module_end) return std::nullopt;
+                for (const auto& instruction : block.instructions) {
+                    const auto instruction_end =
+                        static_cast<std::uint64_t>(
+                            instruction.source_address) +
+                        2u;
+                    if (instruction_end > module_end)
+                        return std::nullopt;
+                    block_end = std::max(block_end, instruction_end);
+                }
+                if (block_end <= block_start ||
+                    block_end - block_start >
+                        std::numeric_limits<std::uint32_t>::max())
+                    return std::nullopt;
+                const auto block_size =
+                    static_cast<std::uint32_t>(block_end - block_start);
+                const auto* const source_segment =
+                    image.find_segment(block.start_address, block_size);
+                const auto byte_offset =
+                    source_segment != nullptr
+                        ? source_segment->byte_offset(block.start_address)
+                        : std::optional<std::size_t>{};
+                if (source_segment == nullptr || !byte_offset.has_value() ||
+                    *byte_offset > source_segment->bytes.size() ||
+                    block_size >
+                        source_segment->bytes.size() - *byte_offset)
+                    return std::nullopt;
+                const auto source_offset =
+                    block.start_address - candidate.source_address;
+                const auto bytes = std::string_view(
+                    reinterpret_cast<const char*>(
+                        source_segment->bytes.data() + *byte_offset),
+                    block_size);
+                block_identities.push_back(
+                    {source_offset,
+                     block_size,
+                     "sha256:" + katana::io::sha256_bytes(bytes)});
+            }
+        }
+        std::sort(
+            block_identities.begin(),
+            block_identities.end(),
+            [](const auto& left, const auto& right) {
+                if (left.source_offset != right.source_offset)
+                    return left.source_offset < right.source_offset;
+                if (left.size != right.size) return left.size < right.size;
+                return left.sha256 < right.sha256;
+            });
+        std::vector<PreparedLatentAotBlockIdentity> unique_block_identities;
+        unique_block_identities.reserve(block_identities.size());
+        std::uint64_t identity_bytes = 0u;
+        for (const auto& identity : block_identities) {
+            if (!unique_block_identities.empty() &&
+                unique_block_identities.back().source_offset ==
+                    identity.source_offset) {
+                if (unique_block_identities.back() != identity)
+                    return std::nullopt;
+                continue;
+            }
+            if (!unique_block_identities.empty() &&
+                identity.source_offset <
+                    static_cast<std::uint64_t>(
+                        unique_block_identities.back().source_offset) +
+                        unique_block_identities.back().size)
+                return std::nullopt;
+            identity_bytes += identity.size;
+            if (identity_bytes > candidate.size)
+                return std::nullopt;
+            unique_block_identities.push_back(identity);
+        }
+        if (unique_block_identities.empty() ||
+            unique_block_identities.size() >
+                options.maximum_blocks_per_module)
+            return std::nullopt;
         for (const auto offset : candidate.entry_offsets) {
             const auto entry_address = candidate.source_address + offset;
             const auto emitted = std::any_of(
@@ -378,13 +475,18 @@ analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& 
                 });
             if (!emitted) return std::nullopt;
         }
+        auto module_id = "latent-aot-" + candidate.byte_identity.substr(7u);
+        if (exact_entry_binding)
+            module_id += "-" + std::to_string(candidate.disc_byte_offset) + "-" +
+                         std::to_string(candidate.size);
         return PreparedLatentAotModule{
-            "latent-aot-" + candidate.byte_identity.substr(7u),
+            std::move(module_id),
             std::move(candidate.byte_identity),
             candidate.disc_byte_offset,
             candidate.size,
             candidate.source_address,
             std::move(candidate.entry_offsets),
+            std::move(unique_block_identities),
             std::move(program)};
     } catch (const std::exception&) {
         return std::nullopt;
@@ -488,67 +590,31 @@ LatentAotDiscovery discover_latent_aot_modules(
 
     LatentAotDiscovery result;
     std::vector<DiscFileCandidate> candidates;
-    candidates.reserve(std::min(files.size(), options.maximum_candidate_files));
+    candidates.reserve(std::min(files.size(), options.maximum_candidate_files) +
+                       std::min(files.size(), normalized_entry_hints.size()));
     std::vector<bool> candidates_have_explicit_entries;
     candidates_have_explicit_entries.reserve(candidates.capacity());
+    const std::set<std::string> excluded_identities(excluded_byte_identities.begin(),
+                                                    excluded_byte_identities.end());
     std::set<std::string> known_identities(excluded_byte_identities.begin(),
                                            excluded_byte_identities.end());
     auto next_source = options.source_address_begin;
     std::vector<LatentAotOccupiedRange> occupied(occupied_source_ranges.begin(),
                                                  occupied_source_ranges.end());
-    for (const auto& [path, entry] : files) {
-        if (candidates.size() == options.maximum_candidate_files) break;
-        if (entry.size < 4u || entry.size > options.maximum_file_bytes ||
-            (entry.size & 3u) != 0u)
-            continue;
-        if (entry.size > options.maximum_total_file_bytes - result.examined_bytes) break;
+    const auto disc_byte_offset_for = [&](const katana::runtime::Iso9660Entry& entry) {
         const auto absolute_lba = static_cast<std::uint64_t>(extent_lba_bias) + entry.lba;
         if (absolute_lba >
             std::numeric_limits<std::uint64_t>::max() / iso_sector_size)
             throw std::overflow_error("Latenter Discdateioffset laeuft ueber.");
-        const auto disc_byte_offset = absolute_lba * iso_sector_size;
-        if (disc_byte_offset > source->size() ||
-            entry.size > source->size() - disc_byte_offset)
-            throw std::runtime_error("Latente Discdatei liegt ausserhalb der Discquelle.");
-        auto bytes = filesystem.read_file(entry, static_cast<std::uint32_t>(
-                                                    options.maximum_file_bytes));
-        if (bytes.size() != entry.size)
-            throw std::runtime_error("Latente Discdatei wurde abgeschnitten gelesen.");
-        ++result.examined_files;
-        result.examined_bytes += bytes.size();
-        auto byte_identity =
-            "sha256:" + katana::io::sha256_bytes(std::string_view(
-                            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-        if (!known_identities.insert(byte_identity).second) {
-            ++result.duplicate_files;
-            continue;
-        }
-        std::vector<std::size_t> matching_entry_hints;
-        std::vector<std::uint32_t> explicit_entry_offsets;
-        for (std::size_t hint_index = 0u; hint_index < normalized_entry_hints.size();
-             ++hint_index) {
-            const auto& hint = normalized_entry_hints[hint_index];
-            if (hint.byte_identity == byte_identity &&
-                hint.disc_byte_offset == disc_byte_offset && hint.byte_size == entry.size) {
-                matching_entry_hints.push_back(hint_index);
-                explicit_entry_offsets.push_back(hint.module_relative_offset);
-            }
-        }
-        std::sort(explicit_entry_offsets.begin(), explicit_entry_offsets.end());
-        explicit_entry_offsets.erase(
-            std::unique(explicit_entry_offsets.begin(), explicit_entry_offsets.end()),
-            explicit_entry_offsets.end());
-        std::vector<std::uint32_t> entry_offsets{0u};
-        entry_offsets.insert(entry_offsets.end(), explicit_entry_offsets.begin(),
-                             explicit_entry_offsets.end());
-        std::sort(entry_offsets.begin(), entry_offsets.end());
-        entry_offsets.erase(std::unique(entry_offsets.begin(), entry_offsets.end()),
-                            entry_offsets.end());
+        return absolute_lba * iso_sector_size;
+    };
+    const auto place_candidate = [&](DiscFileCandidate candidate,
+                                     const bool explicit_entries) {
         bool placed = false;
         next_source = align_up(next_source, 4096u);
-        while (static_cast<std::uint64_t>(next_source) + bytes.size() <=
+        while (static_cast<std::uint64_t>(next_source) + candidate.bytes.size() <=
                options.source_address_end) {
-            const LatentAotOccupiedRange proposed{next_source, bytes.size()};
+            const LatentAotOccupiedRange proposed{next_source, candidate.bytes.size()};
             if (std::none_of(occupied.begin(), occupied.end(), [&](const auto range) {
                     return physical_overlap(proposed, range);
                 })) {
@@ -560,22 +626,132 @@ LatentAotDiscovery discover_latent_aot_modules(
             if (advanced > std::numeric_limits<std::uint32_t>::max()) break;
             next_source = align_up(static_cast<std::uint32_t>(advanced), 4096u);
         }
+        if (!placed) return false;
+        const auto source_end =
+            static_cast<std::uint64_t>(next_source) + candidate.bytes.size();
+        candidate.source_address = next_source;
+        occupied.push_back({next_source, candidate.size});
+        next_source = static_cast<std::uint32_t>(source_end);
+        candidates.push_back(std::move(candidate));
+        candidates_have_explicit_entries.push_back(explicit_entries);
+        return true;
+    };
+
+    std::uint64_t examined_file_bytes = 0u;
+    std::set<std::pair<std::uint64_t, std::uint32_t>> exact_file_extents;
+    for (const auto& [path, entry] : files) {
+        const auto disc_byte_offset = disc_byte_offset_for(entry);
+        std::vector<std::size_t> extent_hint_indices;
+        for (std::size_t hint_index = 0u;
+             hint_index < normalized_entry_hints.size();
+             ++hint_index) {
+            const auto& hint = normalized_entry_hints[hint_index];
+            if (hint.disc_byte_offset == disc_byte_offset &&
+                hint.byte_size == entry.size)
+                extent_hint_indices.push_back(hint_index);
+        }
+        if (extent_hint_indices.empty() ||
+            exact_file_extents.contains({disc_byte_offset, entry.size}))
+            continue;
+        if (disc_byte_offset > source->size() ||
+            entry.size > source->size() - disc_byte_offset)
+            throw std::runtime_error("Latente Discdatei liegt ausserhalb der Discquelle.");
+        if (entry.size > options.maximum_file_bytes)
+            throw std::runtime_error(
+                "latent-aot-entry-hint-file-budget");
+        if (entry.size >
+            options.maximum_total_file_bytes - examined_file_bytes)
+            throw std::runtime_error(
+                "latent-aot-entry-hint-total-budget");
+        auto bytes = filesystem.read_file(entry, entry.size);
+        if (bytes.size() != entry.size)
+            throw std::runtime_error("Latente Discdatei wurde abgeschnitten gelesen.");
+        examined_file_bytes += bytes.size();
+        ++result.examined_files;
+        result.examined_bytes += bytes.size();
+        auto byte_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        std::vector<std::size_t> matching_entry_hints;
+        std::vector<std::uint32_t> explicit_entry_offsets;
+        for (const auto hint_index : extent_hint_indices) {
+            const auto& hint = normalized_entry_hints[hint_index];
+            if (hint.byte_identity == byte_identity) {
+                matching_entry_hints.push_back(hint_index);
+                explicit_entry_offsets.push_back(hint.module_relative_offset);
+            }
+        }
+        if (matching_entry_hints.empty() ||
+            excluded_identities.contains(byte_identity))
+            continue;
+        if (known_identities.contains(byte_identity))
+            throw std::runtime_error(
+                "latent-aot-entry-hint-byte-identity-ambiguous");
+        std::sort(explicit_entry_offsets.begin(), explicit_entry_offsets.end());
+        explicit_entry_offsets.erase(
+            std::unique(explicit_entry_offsets.begin(), explicit_entry_offsets.end()),
+            explicit_entry_offsets.end());
+        const auto entry_offsets = explicit_entry_offsets;
+        const auto placed = place_candidate(
+            {path,
+             entry.lba,
+             entry.size,
+             0u,
+             disc_byte_offset,
+             std::move(bytes),
+             byte_identity,
+             entry_offsets,
+             explicit_entry_offsets},
+            true);
         if (!placed) break;
-        const auto source_end = static_cast<std::uint64_t>(next_source) + bytes.size();
-        candidates.push_back({path,
+        for (const auto hint_index : matching_entry_hints)
+            matched_entry_hints[hint_index] = true;
+        exact_file_extents.emplace(disc_byte_offset, entry.size);
+        known_identities.insert(std::move(byte_identity));
+    }
+
+    std::size_t heuristic_candidate_count = 0u;
+    for (const auto& [path, entry] : files) {
+        if (heuristic_candidate_count == options.maximum_candidate_files) break;
+        if (entry.size < 4u || entry.size > options.maximum_file_bytes ||
+            (entry.size & 3u) != 0u)
+            continue;
+        const auto disc_byte_offset = disc_byte_offset_for(entry);
+        if (exact_file_extents.contains({disc_byte_offset, entry.size}))
+            continue;
+        if (entry.size >
+            options.maximum_total_file_bytes - examined_file_bytes)
+            break;
+        if (disc_byte_offset > source->size() ||
+            entry.size > source->size() - disc_byte_offset)
+            throw std::runtime_error("Latente Discdatei liegt ausserhalb der Discquelle.");
+        auto bytes = filesystem.read_file(
+            entry, static_cast<std::uint32_t>(options.maximum_file_bytes));
+        if (bytes.size() != entry.size)
+            throw std::runtime_error("Latente Discdatei wurde abgeschnitten gelesen.");
+        ++result.examined_files;
+        result.examined_bytes += bytes.size();
+        examined_file_bytes += bytes.size();
+        auto byte_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        if (!known_identities.insert(byte_identity).second) {
+            ++result.duplicate_files;
+            continue;
+        }
+        const std::vector<std::uint32_t> entry_offsets{0u};
+        if (!place_candidate({path,
                               entry.lba,
                               entry.size,
-                              next_source,
+                              0u,
                               disc_byte_offset,
                               std::move(bytes),
                               std::move(byte_identity),
-                              std::move(entry_offsets),
-                              std::move(explicit_entry_offsets)});
-        for (const auto hint_index : matching_entry_hints)
-            matched_entry_hints[hint_index] = true;
-        candidates_have_explicit_entries.push_back(!matching_entry_hints.empty());
-        occupied.push_back({next_source, entry.size});
-        next_source = static_cast<std::uint32_t>(source_end);
+                              entry_offsets,
+                              {}},
+                             false))
+            break;
+        ++heuristic_candidate_count;
     }
 
     if (std::any_of(matched_entry_hints.begin(), matched_entry_hints.end(),

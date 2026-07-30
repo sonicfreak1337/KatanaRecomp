@@ -28,6 +28,8 @@ struct FunctionRegisterValueSummary {
     bool inventory_pc_relative_code_literal = false;
     std::vector<std::uint32_t> inventory_code_pointer_values;
     std::vector<std::uint32_t> inventory_pc_relative_code_literal_values;
+    bool inventory_code_pointer_values_truncated = false;
+    bool inventory_pc_relative_code_literal_values_truncated = false;
     // Internal candidate-return slice dependency. It is not control-flow or
     // code-pointer evidence; it only decides whether a direct helper needs a
     // contextual summary instead of its already authoritative global summary.
@@ -54,6 +56,9 @@ struct FunctionValueSummary {
     std::vector<FunctionRegisterValueSummary> registers;
     bool memory_complete = false;
     std::vector<FunctionMemoryValueSummary> memory_values;
+    // A returned r0 or persistent-memory value carried an internal saved
+    // stack epoch that this compact public summary cannot represent.
+    bool inventory_saved_stack_epoch_escape_unresolved = false;
 
     bool operator==(const FunctionValueSummary&) const = default;
 };
@@ -145,6 +150,8 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t contextual_return_evaluation_limited_functions = 0u;
     std::size_t abi_stack_argument_slot_budget = 0u;
     std::size_t abi_stack_argument_projection_truncated_functions = 0u;
+    bool inventory_candidate_values_truncated = false;
+    bool abi_stack_base_unresolved = false;
 
     [[nodiscard]] constexpr bool truncated() const noexcept {
         return pending_inventory_region_count != 0u ||
@@ -152,7 +159,9 @@ struct GuardedCodeInventoryWalkDiagnostics {
                forwarded_store_context_limited_functions != 0u ||
                contextual_return_context_limited_functions != 0u ||
                contextual_return_evaluation_limited_functions != 0u ||
-               abi_stack_argument_projection_truncated_functions != 0u;
+               abi_stack_argument_projection_truncated_functions != 0u ||
+               inventory_candidate_values_truncated ||
+               abi_stack_base_unresolved;
     }
 
     bool operator==(const GuardedCodeInventoryWalkDiagnostics&) const = default;
@@ -193,6 +202,16 @@ struct GuardedCodeInventoryPriorityTarget {
     GuardedCodeInventoryPriorityKind kind =
         GuardedCodeInventoryPriorityKind::IncompleteStored;
 };
+
+struct AbiContractObservation {
+    std::uint32_t function_address = 0u;
+    bool stack_reads_complete = false;
+    std::span<const std::int32_t> stack_read_slots;
+    std::uint8_t persistent_store_sources = 0u;
+};
+
+using AbiContractObserver =
+    std::function<void(const AbiContractObservation&)>;
 
 [[nodiscard]] std::vector<std::uint32_t>
 guarded_code_inventory_priority_order(
@@ -250,5 +269,19 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         std::span<const FunctionBoundary> function_boundaries,
                         std::span<const ResolvedControlFlowEdge> resolved_edges,
                         const FunctionValueAnalysisProgressCallback& progress_callback);
+
+namespace detail {
+
+// Narrow test observer for the already-computed ABI fixed points. The normal
+// product analysis neither retains nor copies these per-function contracts.
+[[nodiscard]] FunctionValueAnalysisResult
+analyze_function_values_with_abi_contract_observer_for_testing(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    std::span<const FunctionBoundary> function_boundaries,
+    std::span<const ResolvedControlFlowEdge> resolved_edges,
+    const AbiContractObserver& observer);
+
+} // namespace detail
 
 } // namespace katana::analysis

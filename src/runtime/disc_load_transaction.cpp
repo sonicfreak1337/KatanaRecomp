@@ -367,14 +367,14 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
                     const auto range_relative_end = static_cast<std::uint32_t>(
                         intersection_end - range_source_begin);
                     registered_segments[range_index].push_back(
-                        {range_relative_begin,
-                         range_relative_end,
-                         assembly_index,
-                         false,
-                         false});
+                        {range_relative_begin, range_relative_end, assembly_index});
+                    auto& registered_segment =
+                        registered_segments[range_index].back();
 
                     const auto file_relative_begin =
                         static_cast<std::uint32_t>(intersection_begin - descriptor_begin);
+                    const auto file_relative_end =
+                        static_cast<std::uint32_t>(intersection_end - descriptor_begin);
                     const auto backing_intersection =
                         static_cast<std::uint64_t>(range.backing_physical_address) +
                         range_relative_begin;
@@ -401,8 +401,40 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
                         changed_masks[range_index].begin() + range_relative_begin,
                         changed_masks[range_index].begin() + range_relative_end,
                         [](const auto value) { return value != 0u; });
-                    const auto file_relative_end =
-                        static_cast<std::uint32_t>(intersection_end - descriptor_begin);
+                    const auto segment_size =
+                        range_relative_end - range_relative_begin;
+                    const auto request_offset =
+                        range.source_offset + range_relative_begin;
+                    registered_segment.exact_full_module_retained =
+                        !changed_overlap &&
+                        std::any_of(
+                            modules_.modules_.begin(),
+                            modules_.modules_.end(),
+                            [&](const auto& module) {
+                                if (!module.active ||
+                                    module.bytes.size() != descriptor.byte_size ||
+                                    canonical_physical_address(module.guest_start) !=
+                                        candidate ||
+                                    module.content_identity !=
+                                        descriptor.content_identity ||
+                                    module.byte_identity !=
+                                        descriptor.byte_identity ||
+                                    !module.materializable(
+                                        static_cast<std::uint32_t>(
+                                            backing_intersection),
+                                        segment_size))
+                                    return false;
+                                return std::equal(
+                                    request.bytes.begin() +
+                                        static_cast<std::ptrdiff_t>(
+                                            request_offset),
+                                    request.bytes.begin() +
+                                        static_cast<std::ptrdiff_t>(
+                                            request_offset + segment_size),
+                                    module.bytes.begin() +
+                                        static_cast<std::ptrdiff_t>(
+                                            file_relative_begin));
+                            });
                     if (changed_overlap &&
                         coverage_contains(std::span<const AotCoverageInterval>(next_coverage),
                                           file_relative_begin,
@@ -476,16 +508,26 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
                 next_target.reset();
                 next_coverage.clear();
             } else {
-                const auto* existing =
-                    modules_.resolve(*next_target, descriptor.byte_size);
                 exact_full_module =
-                    existing != nullptr &&
-                    existing->content_identity == descriptor.content_identity &&
-                    existing->byte_identity == descriptor.byte_identity &&
-                    existing->active_extents ==
-                        std::vector<ExecutableModuleActiveExtent>{
-                            {0u, descriptor.byte_size}} &&
-                    existing->bytes == full_bytes;
+                    std::any_of(
+                        modules_.modules_.begin(),
+                        modules_.modules_.end(),
+                        [&](const auto& existing) {
+                            return existing.active &&
+                                   canonical_physical_address(
+                                       existing.guest_start) ==
+                                       *next_target &&
+                                   existing.bytes.size() ==
+                                       descriptor.byte_size &&
+                                   existing.content_identity ==
+                                       descriptor.content_identity &&
+                                   existing.byte_identity ==
+                                       descriptor.byte_identity &&
+                                   existing.active_extents ==
+                                       std::vector<ExecutableModuleActiveExtent>{
+                                           {0u, descriptor.byte_size}} &&
+                                   existing.bytes == full_bytes;
+                        });
                 if (!exact_full_module) {
                     ExecutableModule module;
                     module.id = "disc-loaded-aot-" + descriptor.opaque_id + "-" +
@@ -514,7 +556,9 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
         for (auto& segments : registered_segments) {
             for (auto& segment : segments) {
                 if (segment.assembly_index != assembly_index) continue;
-                segment.exact_full_module_retained = exact_full_module;
+                segment.exact_full_module_retained =
+                    segment.exact_full_module_retained ||
+                    exact_full_module;
                 segment.full_module_activated = activated_full_module;
             }
         }

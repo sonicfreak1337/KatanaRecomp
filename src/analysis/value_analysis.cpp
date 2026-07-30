@@ -191,6 +191,7 @@ std::uint16_t general_register_writes(const katana::sh4::DecodedInstruction& ins
     case K::SwapWords:
     case K::ExtractMiddle:
     case K::DecrementAndTest:
+    case K::DivideStep:
     case K::MoveT:
     case K::ShiftLogicalLeftOne:
     case K::ShiftLogicalRightOne:
@@ -248,6 +249,19 @@ std::uint16_t general_register_writes(const katana::sh4::DecodedInstruction& ins
                                           register_bit(instruction.source_register));
 
     case K::LoadSpecialRegisterPostIncrement:
+        if (instruction.special_register ==
+            katana::sh4::SpecialRegister::Sr)
+            return static_cast<std::uint16_t>(
+                0x00FFu |
+                register_bit(instruction.source_register));
+        return register_bit(instruction.source_register);
+
+    case K::LoadSpecialRegister:
+        if (instruction.special_register ==
+            katana::sh4::SpecialRegister::Sr)
+            return 0x00FFu;
+        return 0u;
+
     case K::FmovLoadPostIncrement:
         return register_bit(instruction.source_register);
 

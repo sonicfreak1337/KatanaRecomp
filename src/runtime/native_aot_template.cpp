@@ -4,9 +4,12 @@
 #include "katana/runtime/block_guards.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <exception>
+#include <iostream>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -15,7 +18,6 @@ namespace {
 
 constexpr std::uint64_t guest_address_space_extent =
     static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
-constexpr std::uint32_t maximum_template_extent = 4u * 1024u * 1024u;
 constexpr std::uint32_t maximum_fixed_template_extent =
     16u * 1024u * 1024u;
 constexpr std::size_t maximum_patch_slots = 4096u;
@@ -80,6 +82,10 @@ struct MatchingTemplate {
     const NativeAotTemplate* definition = nullptr;
     CodeAddressMapping mapping;
     std::size_t definition_index = 0u;
+    const ExecutableModule* loaded_module = nullptr;
+    const NativeAotTemplateBlockIdentity* block_identity =
+        nullptr;
+    bool anonymous_runtime_block = false;
 };
 
 std::uint32_t add_signed_wrapping(const std::uint32_t base, const std::int32_t delta) noexcept {
@@ -143,6 +149,26 @@ NativeAotTemplateBindResult reject(const NativeAotTemplateBindFailure failure) {
     return result;
 }
 
+bool native_aot_bind_diagnostics_enabled() {
+    const auto* const enabled =
+        std::getenv("CODEX_NATIVE_AOT_BIND_DIAGNOSTICS");
+    return enabled != nullptr && std::string_view{enabled} == "1";
+}
+
+void emit_missing_aot_diagnostic(const std::string_view detail,
+                                 const std::uint32_t target) {
+    if (!native_aot_bind_diagnostics_enabled()) return;
+    std::cerr << "KATANA_NATIVE_AOT_BIND_FAILURE detail=" << detail
+              << " target=" << target << '\n';
+}
+
+NativeAotTemplateBindResult reject_missing_aot(
+    const std::string_view detail,
+    const std::uint32_t target) {
+    emit_missing_aot_diagnostic(detail, target);
+    return reject(NativeAotTemplateBindFailure::MissingAot);
+}
+
 NativeAotTemplateBindResult reject_anonymous_runtime_without_fixed_contract() {
     auto result = reject(NativeAotTemplateBindFailure::NoMatchingDestination);
     result.candidate.rejection_failure = MaterializationFailure::MissingAot;
@@ -200,11 +226,23 @@ NativeAotTemplateBinder::NativeAotTemplateBinder(
       fixed_source_blocks_(fixed_source_blocks) {
     fixed_block_identities_valid_.reserve(templates_.size());
     for (const auto& definition : templates_) {
-        fixed_block_identities_valid_.push_back(
-            definition.destination !=
-                    NativeAotTemplateDestination::FixedAddress ||
+        switch (definition.destination) {
+        case NativeAotTemplateDestination::VbrRelative:
+            fixed_block_identities_valid_.push_back(
+                definition.block_identities.empty());
+            break;
+        case NativeAotTemplateDestination::LoadedModule:
+            fixed_block_identities_valid_.push_back(
+                definition.block_identities.empty() ||
                 block_identities_valid(
                     definition.block_identities, definition.extent));
+            break;
+        case NativeAotTemplateDestination::FixedAddress:
+            fixed_block_identities_valid_.push_back(
+                block_identities_valid(
+                    definition.block_identities, definition.extent));
+            break;
+        }
     }
 }
 
@@ -314,16 +352,20 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     const std::span<const std::uint8_t> target_suffix,
     const BlockVariantKey& variant) const {
     std::optional<MatchingTemplate> match;
-    const auto* loaded_module = modules_.resolve(physical_origin, 2u);
+    const auto* const resolved_loaded_module =
+        modules_.resolve(physical_origin, 2u);
     bool has_loaded_module_definition = false;
     bool loaded_content_identity_matched = false;
     bool loaded_byte_identity_matched = false;
     bool loaded_byte_identity_mismatched = false;
+    std::string_view loaded_module_missing_aot_detail =
+        "loaded-module-template-unmatched";
     for (std::size_t definition_index = 0u;
          definition_index < templates_.size();
          ++definition_index) {
         const auto& definition = templates_[definition_index];
         if (definition.extent == 0u) continue;
+        const ExecutableModule* definition_loaded_module = nullptr;
         CodeAddressMapping mapping;
         if (definition.destination == NativeAotTemplateDestination::VbrRelative) {
             mapping = {definition.source_start,
@@ -332,54 +374,326 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
         } else if (definition.destination ==
                    NativeAotTemplateDestination::LoadedModule) {
             has_loaded_module_definition = true;
-            if (loaded_module == nullptr ||
-                loaded_module->content_identity != definition.expected_runtime_content_identity)
-                continue;
-            loaded_content_identity_matched = true;
-            if (loaded_module->bytes.size() != definition.extent ||
-                loaded_module->active_extents.size() != 1u ||
-                loaded_module->active_extents.front() !=
-                    ExecutableModuleActiveExtent{0u, definition.extent})
-                continue;
-            if (loaded_module->byte_identity != definition.expected_runtime_byte_identity) {
-                loaded_byte_identity_mismatched = true;
-                continue;
+            for (const auto& candidate : modules_.modules_) {
+                if (!candidate.contains(physical_origin, 2u)) continue;
+                if (candidate.id.starts_with(runtime_write_module_id_prefix))
+                    continue;
+                if (candidate.content_identity !=
+                    definition.expected_runtime_content_identity)
+                    continue;
+                loaded_content_identity_matched = true;
+                if (candidate.bytes.size() != definition.extent) {
+                    loaded_module_missing_aot_detail =
+                        "loaded-module-extent-mismatch";
+                    continue;
+                }
+                if (candidate.byte_identity !=
+                    definition.expected_runtime_byte_identity) {
+                    loaded_byte_identity_mismatched = true;
+                    continue;
+                }
+                loaded_byte_identity_matched = true;
+                const auto offset =
+                    module_offset(candidate, physical_origin, 2u);
+                if (!offset.has_value()) {
+                    loaded_module_missing_aot_detail =
+                        "loaded-module-mapping-unavailable";
+                    continue;
+                }
+                if (target < *offset) {
+                    loaded_module_missing_aot_detail =
+                        "loaded-module-target-before-offset";
+                    continue;
+                }
+                const CodeAddressMapping candidate_mapping{
+                    definition.source_start,
+                    target - *offset,
+                    definition.extent};
+                if (!contains(target,
+                              candidate_mapping.runtime_start,
+                              candidate_mapping.extent)) {
+                    loaded_module_missing_aot_detail =
+                        "loaded-module-target-outside-mapping";
+                    continue;
+                }
+                if (!candidate.materializable(physical_origin, 2u)) {
+                    loaded_module_missing_aot_detail =
+                        "loaded-module-block-not-materializable";
+                    continue;
+                }
+                if (definition_loaded_module != nullptr) {
+                    emit_missing_aot_diagnostic(
+                        "ambiguous-loaded-module-owner", target);
+                    return reject(
+                        NativeAotTemplateBindFailure::AmbiguousDestination);
+                }
+                definition_loaded_module = &candidate;
+                mapping = candidate_mapping;
             }
-            loaded_byte_identity_matched = true;
-            const auto offset = module_offset(*loaded_module, physical_origin, 2u);
-            if (!offset.has_value() || target < *offset) continue;
-            mapping = {definition.source_start, target - *offset, definition.extent};
+            if (definition_loaded_module == nullptr) continue;
         } else {
             mapping = {definition.source_start,
                        definition.fixed_runtime_start,
                        definition.extent};
         }
-        if (!contains(target, mapping.runtime_start, mapping.extent)) continue;
-        if (match.has_value())
+        if (!contains(target, mapping.runtime_start, mapping.extent)) {
+            if (definition.destination ==
+                NativeAotTemplateDestination::LoadedModule)
+                loaded_module_missing_aot_detail =
+                    "loaded-module-target-outside-mapping";
+            continue;
+        }
+        if (match.has_value()) {
+            emit_missing_aot_diagnostic("ambiguous-destination", target);
             return reject(NativeAotTemplateBindFailure::AmbiguousDestination);
+        }
         match =
-            MatchingTemplate{&definition, mapping, definition_index};
+            MatchingTemplate{
+                &definition,
+                mapping,
+                definition_index,
+                definition_loaded_module};
     }
     const auto anonymous_runtime_module =
-        loaded_module != nullptr &&
-        loaded_module->id.starts_with(runtime_write_module_id_prefix);
-    if (!match.has_value() && anonymous_runtime_module)
+        resolved_loaded_module != nullptr &&
+        resolved_loaded_module->id.starts_with(
+            runtime_write_module_id_prefix);
+    if (!match.has_value() && anonymous_runtime_module &&
+        fixed_source_blocks_ != nullptr) {
+        for (std::size_t definition_index = 0u;
+             definition_index < templates_.size();
+             ++definition_index) {
+            const auto& definition = templates_[definition_index];
+            if (definition.destination !=
+                    NativeAotTemplateDestination::LoadedModule ||
+                definition.extent < 2u ||
+                (definition.extent & 1u) != 0u ||
+                definition.extent >
+                    maximum_native_aot_template_extent ||
+                (definition.source_start & 3u) != 0u ||
+                definition.source_module_id.empty() ||
+                definition.expected_source_identity.empty() ||
+                definition.expected_runtime_content_identity.empty() ||
+                definition.expected_runtime_byte_identity.empty() ||
+                definition.expected_source_identity !=
+                    definition.expected_runtime_byte_identity ||
+                definition.destination_vbr_delta != 0 ||
+                definition.fixed_runtime_start != 0u ||
+                !definition.patches.empty() ||
+                !definition.mutable_ranges.empty() ||
+                definition.block_identities.empty() ||
+                !fixed_block_identities_valid_[definition_index] ||
+                definition.validation_mode !=
+                    NativeAotTemplateValidationMode::RuntimeBlock ||
+                !direct_mapped_alias_range(
+                    definition.source_start, definition.extent) ||
+                !linear_physical_range(
+                    definition.source_start, definition.extent))
+                continue;
+            for (const auto& identity :
+                 definition.block_identities) {
+                if (target < identity.source_offset ||
+                    target_suffix.size() < identity.size)
+                    continue;
+                const auto source_address_wide =
+                    static_cast<std::uint64_t>(
+                        definition.source_start) +
+                    identity.source_offset;
+                const auto runtime_start =
+                    target - identity.source_offset;
+                if (source_address_wide >
+                        std::numeric_limits<std::uint32_t>::max() ||
+                    static_cast<std::uint64_t>(runtime_start) +
+                            definition.extent >
+                        guest_address_space_extent ||
+                    (runtime_start & 3u) != 0u ||
+                    !contains(
+                        target, runtime_start, definition.extent) ||
+                    static_cast<std::uint64_t>(physical_origin) +
+                            identity.size >
+                        guest_address_space_extent ||
+                    !cpu_.memory.contains(
+                        physical_origin, identity.size) ||
+                    !linear_instruction_mapping(
+                        cpu_,
+                        target,
+                        physical_origin,
+                        identity.size) ||
+                    !resolved_loaded_module->materializable(
+                        physical_origin, identity.size))
+                    continue;
+                const auto owner_offset =
+                    module_offset(
+                        *resolved_loaded_module,
+                        physical_origin,
+                        identity.size);
+                if (!owner_offset.has_value())
+                    continue;
+                const auto source_address =
+                    static_cast<std::uint32_t>(
+                        source_address_wide);
+                if (blocks_.lookup(
+                        source_address, {}).has_value())
+                    continue;
+                const auto source_handle =
+                    fixed_source_blocks_->lookup(
+                        source_address, {});
+                if (!source_handle.has_value())
+                    continue;
+                const auto source_block =
+                    fixed_source_blocks_->resolve(
+                        *source_handle);
+                if (!source_block.has_value() ||
+                    source_block->get().virtual_start !=
+                        source_address ||
+                    source_block->get().physical_origin !=
+                        canonical_physical_address(
+                            source_address) ||
+                    source_block->get().size != identity.size ||
+                    source_block->get().runtime_registered ||
+                    source_block->get().aot_template.has_value() ||
+                    source_block->get().function == nullptr)
+                    continue;
+                bool bytes_match = true;
+                for (std::uint32_t byte = 0u;
+                     byte < identity.size;
+                     ++byte) {
+                    const auto requested = target_suffix[byte];
+                    if (requested !=
+                            cpu_.memory.read_u8(
+                                physical_origin + byte) ||
+                        requested !=
+                            resolved_loaded_module
+                                ->bytes[*owner_offset + byte]) {
+                        bytes_match = false;
+                        break;
+                    }
+                }
+                if (!bytes_match ||
+                    !sha256_matches(
+                        identity.sha256,
+                        std::string_view(
+                            reinterpret_cast<const char*>(
+                                target_suffix.data()),
+                            identity.size)))
+                    continue;
+                if (match.has_value()) {
+                    emit_missing_aot_diagnostic(
+                        "ambiguous-anonymous-runtime-block",
+                        target);
+                    return reject(
+                        NativeAotTemplateBindFailure::
+                            AmbiguousDestination);
+                }
+                match = MatchingTemplate{
+                    &definition,
+                    {definition.source_start,
+                     runtime_start,
+                     definition.extent},
+                    definition_index,
+                    resolved_loaded_module,
+                    &identity,
+                    true};
+            }
+        }
+    }
+    if (!match.has_value() && anonymous_runtime_module &&
+        native_aot_bind_diagnostics_enabled()) {
+        std::cerr << "KATANA_NATIVE_AOT_BIND_OWNER"
+                  << " target=" << target
+                  << " physical_origin=" << physical_origin
+                  << " suffix_size=" << target_suffix.size()
+                  << " resolved_id=" << resolved_loaded_module->id
+                  << " resolved_start=" << resolved_loaded_module->guest_start
+                  << " resolved_size=" << resolved_loaded_module->bytes.size()
+                  << " resolved_active="
+                  << static_cast<unsigned>(resolved_loaded_module->active)
+                  << " resolved_active_extents="
+                  << resolved_loaded_module->active_extents.size()
+                  << '\n';
+        for (std::size_t definition_index = 0u;
+             definition_index < templates_.size();
+             ++definition_index) {
+            const auto& definition = templates_[definition_index];
+            if (definition.destination !=
+                NativeAotTemplateDestination::LoadedModule)
+                continue;
+            std::size_t identity_owners = 0u;
+            for (const auto& candidate : modules_.modules_) {
+                if (candidate.content_identity !=
+                        definition.expected_runtime_content_identity ||
+                    candidate.byte_identity !=
+                        definition.expected_runtime_byte_identity ||
+                    candidate.bytes.size() != definition.extent)
+                    continue;
+                ++identity_owners;
+                const auto offset =
+                    module_offset(candidate, physical_origin, 2u);
+                bool stored_suffix_matches = offset.has_value() &&
+                    target_suffix.size() <=
+                        candidate.bytes.size() - *offset;
+                for (std::size_t byte = 0u;
+                     stored_suffix_matches && byte < target_suffix.size();
+                     ++byte)
+                    stored_suffix_matches =
+                        target_suffix[byte] ==
+                        candidate.bytes[*offset + byte];
+                std::cerr << "KATANA_NATIVE_AOT_BIND_EXPECTED_OWNER"
+                          << " definition=" << definition_index
+                          << " id=" << candidate.id
+                          << " start=" << candidate.guest_start
+                          << " size=" << candidate.bytes.size()
+                          << " active=" << static_cast<unsigned>(candidate.active)
+                          << " active_extents=" << candidate.active_extents.size()
+                          << " offset="
+                          << (offset.has_value()
+                                  ? std::to_string(*offset)
+                                  : std::string{"none"})
+                          << " remaining="
+                          << candidate.active_extent_remaining(physical_origin)
+                          << " contains="
+                          << static_cast<unsigned>(
+                                 candidate.contains(physical_origin, 2u))
+                          << " materializable="
+                          << static_cast<unsigned>(
+                                 candidate.materializable(physical_origin, 2u))
+                          << " stored_suffix_matches="
+                          << static_cast<unsigned>(stored_suffix_matches)
+                          << '\n';
+            }
+            if (identity_owners == 0u)
+                std::cerr << "KATANA_NATIVE_AOT_BIND_EXPECTED_OWNER"
+                          << " definition=" << definition_index
+                          << " id=absent\n";
+        }
+    }
+    if (!match.has_value() && anonymous_runtime_module) {
+        emit_missing_aot_diagnostic(
+            "anonymous-runtime-without-fixed-contract", target);
         return reject_anonymous_runtime_without_fixed_contract();
-    if (!match.has_value() && has_loaded_module_definition && loaded_module != nullptr) {
+    }
+    if (!match.has_value() && has_loaded_module_definition &&
+        resolved_loaded_module != nullptr) {
         if (!loaded_content_identity_matched)
             return reject(NativeAotTemplateBindFailure::RuntimeContentIdentityMismatch);
         if (!loaded_byte_identity_matched && loaded_byte_identity_mismatched)
             return reject(NativeAotTemplateBindFailure::RuntimeBytesMismatch);
-        return reject(NativeAotTemplateBindFailure::MissingAot);
+        return reject_missing_aot(loaded_module_missing_aot_detail, target);
     }
-    if (!match.has_value())
+    if (!match.has_value()) {
+        emit_missing_aot_diagnostic("no-matching-destination", target);
         return reject(NativeAotTemplateBindFailure::NoMatchingDestination);
+    }
+    const auto* const loaded_module =
+        match->loaded_module != nullptr ? match->loaded_module
+                                        : resolved_loaded_module;
 
     const auto& definition = *match->definition;
     const auto& mapping = match->mapping;
     try {
         validate_code_address_mapping(mapping);
     } catch (const std::exception&) {
+        emit_missing_aot_diagnostic("invalid-address-mapping", target);
         return reject(NativeAotTemplateBindFailure::InvalidDefinition);
     }
     const auto vbr_relative =
@@ -394,6 +708,16 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
          definition.expected_source_identity.empty()) ||
         (!fixed_destination && !definition.source_module_id.empty() &&
          !definition.expected_source_identity.empty());
+    const auto loaded_block_identity_contract_valid =
+        loaded_destination &&
+        fixed_block_identities_valid_[
+            match->definition_index] &&
+        ((definition.block_identities.empty() &&
+          definition.validation_mode ==
+              NativeAotTemplateValidationMode::SourceModule) ||
+         (!definition.block_identities.empty() &&
+          definition.validation_mode ==
+              NativeAotTemplateValidationMode::RuntimeBlock));
     const auto trailing_destination_contract_valid =
         fixed_destination
             ? definition.destination_vbr_delta == 0 &&
@@ -404,16 +728,37 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
                       match->definition_index] &&
                   definition.validation_mode ==
                       NativeAotTemplateValidationMode::RuntimeBlock
-            : definition.fixed_runtime_start == 0u &&
-                  definition.block_identities.empty() &&
-                  definition.validation_mode ==
-                      NativeAotTemplateValidationMode::SourceModule;
+            : loaded_destination
+                  ? definition.fixed_runtime_start == 0u &&
+                        loaded_block_identity_contract_valid
+                  : definition.fixed_runtime_start == 0u &&
+                        definition.block_identities.empty() &&
+                        definition.validation_mode ==
+                            NativeAotTemplateValidationMode::
+                                SourceModule;
+    const auto loaded_instruction_mapping_valid =
+        !loaded_destination ||
+        (loaded_module != nullptr &&
+         (match->anonymous_runtime_block
+              ? match->block_identity != nullptr &&
+                    linear_instruction_mapping(
+                        cpu_,
+                        target,
+                        physical_origin,
+                        match->block_identity->size)
+              : linear_instruction_mapping(
+                    cpu_,
+                    mapping.runtime_start,
+                    canonical_physical_address(
+                        loaded_module->guest_start),
+                    mapping.extent)));
     if ((target & 1u) != 0u || (physical_origin & 1u) != 0u ||
         (definition.source_start & 3u) != 0u || (mapping.runtime_start & 3u) != 0u ||
-        (definition.extent & 3u) != 0u ||
+        (definition.extent &
+         (loaded_destination ? 1u : 3u)) != 0u ||
         definition.extent >
             (fixed_destination ? maximum_fixed_template_extent
-                               : maximum_template_extent) ||
+                               : maximum_native_aot_template_extent) ||
         !source_module_definition_valid || !trailing_destination_contract_valid ||
         !direct_mapped_alias_range(definition.source_start, definition.extent) ||
         (fixed_destination &&
@@ -424,11 +769,7 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
         (vbr_relative &&
          (!linear_physical_range(mapping.runtime_start, mapping.extent) ||
           physical_origin != canonical_physical_address(target))) ||
-        (loaded_destination &&
-         !linear_instruction_mapping(cpu_,
-                                     mapping.runtime_start,
-                                     canonical_physical_address(loaded_module->guest_start),
-                                     mapping.extent)) ||
+        !loaded_instruction_mapping_valid ||
         (loaded_destination &&
          (definition.destination_vbr_delta != 0 ||
           definition.expected_runtime_content_identity.empty() ||
@@ -514,8 +855,15 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
         static_cast<std::uint64_t>(runtime_physical) + definition.extent >
             guest_address_space_extent)
         return reject(NativeAotTemplateBindFailure::RuntimeBytesMismatch);
-    if (!fixed_destination &&
-        !cpu_.memory.contains(runtime_physical, definition.extent))
+    const auto runtime_bytes_available =
+        match->anonymous_runtime_block
+            ? match->block_identity != nullptr &&
+                  cpu_.memory.contains(
+                      physical_origin,
+                      match->block_identity->size)
+            : cpu_.memory.contains(
+                  runtime_physical, definition.extent);
+    if (!fixed_destination && !runtime_bytes_available)
         return reject(NativeAotTemplateBindFailure::RuntimeBytesMismatch);
     if (fixed_destination &&
         (physical_origin != canonical_physical_address(target) ||
@@ -585,34 +933,49 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
 
     const auto offset = block_offset;
     const auto source_address = mapping.source_start + offset;
-    if (fixed_destination && fixed_source_blocks_ == nullptr)
-        return reject(NativeAotTemplateBindFailure::MissingAot);
+    const auto fixed_source_catalog_required =
+        fixed_destination ||
+        (loaded_destination &&
+         definition.validation_mode ==
+             NativeAotTemplateValidationMode::RuntimeBlock &&
+         !definition.block_identities.empty());
+    if (fixed_source_catalog_required &&
+        fixed_source_blocks_ == nullptr)
+        return reject_missing_aot("template-source-catalog-missing", target);
     const auto& source_blocks =
-        fixed_destination ? *fixed_source_blocks_ : blocks_;
+        fixed_source_catalog_required ? *fixed_source_blocks_ : blocks_;
     const auto source_handle = source_blocks.lookup(source_address, {});
-    const auto destination_requires_precompiled_entry =
-        loaded_destination || fixed_destination;
-    if (!source_handle.has_value())
-        return reject(destination_requires_precompiled_entry
-                          ? NativeAotTemplateBindFailure::MissingAot
-                          : NativeAotTemplateBindFailure::SourceBlockMissing);
+    if (!source_handle.has_value()) {
+        if (fixed_source_catalog_required)
+            return reject_missing_aot("template-source-block-missing", target);
+        return reject(NativeAotTemplateBindFailure::SourceBlockMissing);
+    }
     const auto source_block = source_blocks.resolve(*source_handle);
-    if (!source_block.has_value() || source_block->get().runtime_registered ||
+    if (!source_block.has_value() ||
+        source_block->get().virtual_start != source_address ||
+        source_block->get().runtime_registered ||
         source_block->get().aot_template.has_value() || source_block->get().function == nullptr ||
         source_block->get().physical_origin != canonical_physical_address(source_address) ||
+        (loaded_destination && fixed_source_catalog_required &&
+         blocks_.lookup(source_address, {}).has_value()) ||
         source_block->get().size < 2u || (source_block->get().size & 1u) != 0u ||
         source_block->get().size > definition.extent - offset ||
-        source_block->get().size > target_suffix.size())
-        return reject(destination_requires_precompiled_entry
-                          ? NativeAotTemplateBindFailure::MissingAot
-                          : NativeAotTemplateBindFailure::SourceBlockMissing);
+        source_block->get().size > target_suffix.size()) {
+        if (fixed_source_catalog_required)
+            return reject_missing_aot("template-source-block-invalid", target);
+        return reject(NativeAotTemplateBindFailure::SourceBlockMissing);
+    }
     std::optional<std::uint32_t> loaded_block_offset;
     if (loaded_destination) {
         loaded_block_offset =
             module_offset(*loaded_module, physical_origin, source_block->get().size);
-        if (!loaded_block_offset.has_value() ||
-            !loaded_module->materializable(physical_origin, source_block->get().size))
-            return reject(NativeAotTemplateBindFailure::MissingAot);
+        if (!loaded_block_offset.has_value())
+            return reject_missing_aot(
+                "loaded-module-block-offset-unavailable", target);
+        if (!loaded_module->materializable(
+                physical_origin, source_block->get().size))
+            return reject_missing_aot(
+                "loaded-module-block-not-materializable", target);
     } else if (vbr_relative &&
                !source_module->materializable(source_address,
                                               source_block->get().size)) {
@@ -639,7 +1002,11 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
              target_suffix[byte] != loaded_module->bytes[*loaded_block_offset + byte]))
             return reject(NativeAotTemplateBindFailure::RuntimeBytesMismatch);
     }
-    if (fixed_destination) {
+    const auto block_identity_required =
+        fixed_destination ||
+        (loaded_destination &&
+         !definition.block_identities.empty());
+    if (block_identity_required) {
         const auto identity = std::lower_bound(
             definition.block_identities.begin(),
             definition.block_identities.end(),
@@ -650,14 +1017,20 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
         if (identity == definition.block_identities.end() ||
             identity->source_offset != offset ||
             identity->size != source_block->get().size)
-            return reject(NativeAotTemplateBindFailure::MissingAot);
-        std::string runtime_bytes;
-        runtime_bytes.resize(source_block->get().size);
-        for (std::uint32_t byte = 0u; byte < source_block->get().size; ++byte) {
-            runtime_bytes[byte] = static_cast<char>(
-                cpu_.memory.read_u8(physical_origin + byte));
-        }
-        if (!sha256_matches(identity->sha256, runtime_bytes))
+            return reject_missing_aot(
+                loaded_destination
+                    ? "loaded-block-identity-missing"
+                    : "fixed-block-identity-missing",
+                target);
+        if ((match->anonymous_runtime_block &&
+             match->block_identity !=
+                 &*identity) ||
+            !sha256_matches(
+                identity->sha256,
+                std::string_view(
+                    reinterpret_cast<const char*>(
+                        target_suffix.data()),
+                    source_block->get().size)))
             return reject(NativeAotTemplateBindFailure::RuntimeBytesMismatch);
     }
 
@@ -677,7 +1050,8 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     candidate.block.aot_template =
         RuntimeAotTemplateContract{
             mapping,
-            definition.validation_mode == NativeAotTemplateValidationMode::RuntimeBlock
+            definition.validation_mode ==
+                    NativeAotTemplateValidationMode::RuntimeBlock
                 ? source_block->get().size
                 : definition.extent,
             definition.mutable_ranges,
@@ -689,6 +1063,7 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     candidate.code_generated = true;
     candidate.instructions = std::max<std::uint64_t>(1u, candidate.block.size / 2u);
     candidate.recursive_seeds = 1u;
+    emit_missing_aot_diagnostic("bind-success", target);
     return result;
 }
 

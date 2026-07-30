@@ -21,6 +21,9 @@
 namespace katana::analysis {
 namespace {
 
+constexpr std::size_t maximum_function_value_candidate_contract_iterations =
+    64u;
+
 std::string hex_address(const std::uint32_t address) {
     std::ostringstream output;
     output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
@@ -487,9 +490,13 @@ void bind_partial_runtime_contracts(std::vector<IndirectControlFlowResolution>& 
         if (resolution.evidence != ControlFlowEvidence::GuardedPartial) continue;
         const bool guarded_memory = resolution.reason == "guarded-function-memory";
         const bool merged_contexts = resolution.reason == "merged-contexts-partial";
+        const bool inventory_code_pointer_set =
+            resolution.reason == "inventory-code-pointer-set";
         const bool writable_literal =
             resolution.reason.find("guarded-writable-pc-relative-literal") != std::string::npos;
-        if (!guarded_memory && !merged_contexts && !writable_literal) continue;
+        if (!guarded_memory && !merged_contexts &&
+            !inventory_code_pointer_set && !writable_literal)
+            continue;
         if (resolution.target.has_value())
             resolution.analysis_candidates.push_back(*resolution.target);
         resolution.analysis_candidates.insert(resolution.analysis_candidates.end(),
@@ -510,6 +517,8 @@ void bind_partial_runtime_contracts(std::vector<IndirectControlFlowResolution>& 
             resolution.evidence_origins.push_back(AnalysisEvidenceOrigin::RuntimeClassification);
         resolution.reason = guarded_memory    ? "runtime-contract-function-memory"
                             : merged_contexts ? "runtime-contract-merged-contexts"
+                            : inventory_code_pointer_set
+                                ? "runtime-contract-inventory-code-pointer-set"
                                               : "runtime-contract-writable-literal";
     }
 }
@@ -942,6 +951,58 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                            analysis.recursive.contextual_instructions.size(),
                            analysis.indirect_control_flow.size()});
     };
+    const auto apply_decode_boundary_downgrades = [&] {
+        bool changed = false;
+        for (auto& resolution : analysis.indirect_control_flow) {
+            if (!control_flow_evidence_proven(resolution.evidence)) continue;
+            auto targets = resolution.targets;
+            if (resolution.target.has_value())
+                targets.push_back(*resolution.target);
+            const bool boundaries =
+                std::all_of(targets.begin(), targets.end(), [&](const auto target) {
+                    return proven_instruction_boundary(
+                        analysis.recursive.proven_instruction_addresses,
+                        target);
+                });
+            if (boundaries) continue;
+            resolution.status = ResolutionStatus::Guarded;
+            resolution.evidence = ControlFlowEvidence::GuardedPartial;
+            if (!resolution.reason.ends_with("-decode-candidate-only"))
+                resolution.reason += "-decode-candidate-only";
+            changed = true;
+        }
+        for (auto& table : analysis.jump_tables) {
+            if (!table.resolved ||
+                !control_flow_evidence_proven(table.evidence))
+                continue;
+            const bool boundaries =
+                std::all_of(table.entries.begin(),
+                            table.entries.end(),
+                            [&](const auto& entry) {
+                                return proven_instruction_boundary(
+                                    analysis.recursive
+                                        .proven_instruction_addresses,
+                                    entry.target);
+                            });
+            if (boundaries) continue;
+            table.evidence = ControlFlowEvidence::GuardedPartial;
+            const auto resolution =
+                std::find_if(analysis.indirect_control_flow.begin(),
+                             analysis.indirect_control_flow.end(),
+                             [&table](const auto& candidate) {
+                                 return candidate.instruction_address ==
+                                        table.dispatch_address;
+                             });
+            if (resolution != analysis.indirect_control_flow.end()) {
+                resolution->status = ResolutionStatus::Guarded;
+                resolution->evidence = ControlFlowEvidence::GuardedPartial;
+                resolution->origin_class =
+                    IndirectControlFlowOriginClass::Table;
+            }
+            changed = true;
+        }
+        return changed;
+    };
     for (;;) {
         ++analysis.fixpoint_iterations;
         report_progress("iteration-start");
@@ -1311,129 +1372,245 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 function_boundaries.push_back(
                     {function.address, function.size});
         }
-        const auto provisional_edges =
-            collect_function_value_edges(analysis.indirect_control_flow, analysis.jump_tables);
-        report_progress("function-values-start");
-        auto function_values = detail::analyze_function_values_with_guarded_entry_cache(
-            image,
-            analysis.recursive.instructions,
-            function_boundaries,
-            provisional_edges,
-            [&report_progress](const FunctionValueAnalysisProgress& progress) {
-                std::string phase = "function-values-";
-                phase += progress.phase;
-                phase += "-f" + std::to_string(progress.functions);
-                phase += "-b" + std::to_string(progress.blocks);
-                phase += "-k" + std::to_string(progress.fixpoint_iterations);
-                phase += "-d" + std::to_string(progress.completed_functions);
-                phase += "-p" + std::to_string(progress.pending);
-                phase += "-r" + std::to_string(progress.resolutions);
-                report_progress(phase);
-            },
-            guarded_native_entry_shapes);
-        analysis.function_summary_iterations = function_values.fixpoint_iterations;
-        analysis.function_scc_count = function_values.strongly_connected_components;
-        analysis.unchanged_ingress_skips = function_values.unchanged_ingress_skips;
-        analysis.function_iteration_budget = function_values.iteration_budget;
-        analysis.function_budget_exhausted = function_values.budget_exhausted;
-        auto guarded_code_inventory =
-            std::move(function_values.guarded_code_inventory);
-        analysis.raw_stored_code_inventory_candidates =
-            guarded_code_inventory.raw_stored_candidate_count;
-        analysis.raw_stored_code_inventory_budget =
-            guarded_code_inventory.raw_stored_candidate_budget;
-        analysis.raw_stored_code_inventory_truncated =
-            guarded_code_inventory.raw_stored_candidates_truncated;
-        analysis.guarded_code_inventory_candidates =
-            guarded_code_inventory.candidate_count;
-        analysis.guarded_code_inventory_budget =
-            guarded_code_inventory.candidate_budget;
-        analysis.guarded_code_inventory_candidate_budget_exhausted =
-            guarded_code_inventory.candidate_budget_exhausted;
-        analysis.guarded_code_inventory_walk =
-            guarded_code_inventory.walk_diagnostics;
-        analysis.guarded_code_shape_validation_work =
-            guarded_code_inventory.shape_validation_work;
-        analysis.guarded_code_shape_validation_work_budget =
-            guarded_code_inventory.shape_validation_work_budget;
-        analysis.guarded_code_shape_budget_exceeded_candidates =
-            guarded_code_inventory.shape_budget_exceeded_candidates;
-        analysis.candidate_inventory_truncated =
-            guarded_code_inventory.candidate_inventory_truncated;
-        analysis.returned_table_scan_truncated =
-            guarded_code_inventory.table_scan_truncated;
-        final_guarded_code_inventory = guarded_code_inventory;
-        analysis.function_value_summaries = std::move(function_values.summaries);
-        report_progress("function-values-complete");
-        if (analysis.function_budget_exhausted) {
-            // The product export rejects this state.  Growing more outer
-            // seeds from a non-converged summary graph only restarts the same
-            // bounded analysis and can turn one typed failure into minutes of
-            // repeated work without making the inventory complete.
-            report_progress("function-values-budget-exhausted");
-            break;
-        }
-        for (const auto& candidate :
-             guarded_code_inventory.stored_code_addresses) {
-            const std::array origins{FunctionOrigin::StoredCodeAddress};
-            changed = add_seed(seeds,
-                               candidate.target_address,
-                               origins,
-                               false,
-                               ControlFlowEvidence::GuardedPartial) ||
-                      changed;
-        }
-        for (const auto& table :
-             guarded_code_inventory.returned_code_address_tables) {
-            const std::array origins{FunctionOrigin::GuardedSnapshot};
-            for (const auto target : table.target_addresses) {
-                changed = add_seed(seeds,
-                                   target,
-                                   origins,
-                                   false,
-                                   ControlFlowEvidence::GuardedPartial) ||
-                          changed;
+        bool boundary_contracts_active = false;
+        bool function_values_stable = false;
+        std::vector<
+            std::pair<bool, std::vector<ResolvedControlFlowEdge>>>
+            seen_function_value_contract_states;
+        seen_function_value_contract_states.reserve(
+            maximum_function_value_candidate_contract_iterations);
+        while (!function_values_stable && !changed &&
+               !analysis.function_budget_exhausted) {
+            const auto provisional_edges = collect_function_value_edges(
+                analysis.indirect_control_flow, analysis.jump_tables);
+            const auto contract_state =
+                std::pair{boundary_contracts_active, provisional_edges};
+            if (std::find(
+                    seen_function_value_contract_states.begin(),
+                    seen_function_value_contract_states.end(),
+                    contract_state) !=
+                seen_function_value_contract_states.end()) {
+                analysis.function_budget_exhausted = true;
+                report_progress(
+                    "function-values-candidate-contract-cycle-exhausted");
+                break;
             }
+            if (seen_function_value_contract_states.size() >=
+                maximum_function_value_candidate_contract_iterations) {
+                analysis.function_budget_exhausted = true;
+                report_progress(
+                    "function-values-candidate-contract-budget-exhausted");
+                break;
+            }
+            seen_function_value_contract_states.push_back(contract_state);
+            report_progress(
+                seen_function_value_contract_states.size() == 1u
+                    ? "function-values-start"
+                    : "function-values-candidate-contract-reconcile");
+            auto function_values =
+                detail::analyze_function_values_with_guarded_entry_cache(
+                    image,
+                    analysis.recursive.instructions,
+                    function_boundaries,
+                    provisional_edges,
+                    [&report_progress](
+                        const FunctionValueAnalysisProgress& progress) {
+                        std::string phase = "function-values-";
+                        phase += progress.phase;
+                        phase += "-f" +
+                                 std::to_string(progress.functions);
+                        phase += "-b" + std::to_string(progress.blocks);
+                        phase +=
+                            "-k" +
+                            std::to_string(progress.fixpoint_iterations);
+                        phase +=
+                            "-d" +
+                            std::to_string(progress.completed_functions);
+                        phase += "-p" + std::to_string(progress.pending);
+                        phase +=
+                            "-r" +
+                            std::to_string(progress.resolutions);
+                        report_progress(phase);
+                    },
+                    guarded_native_entry_shapes);
+            if (function_values.budget_exhausted) {
+                analysis.function_summary_iterations =
+                    function_values.fixpoint_iterations;
+                analysis.function_scc_count =
+                    function_values.strongly_connected_components;
+                analysis.unchanged_ingress_skips =
+                    function_values.unchanged_ingress_skips;
+                analysis.function_iteration_budget =
+                    function_values.iteration_budget;
+                analysis.function_budget_exhausted = true;
+                report_progress("function-values-budget-exhausted");
+                break;
+            }
+
+            for (auto& proof : function_values.resolutions) {
+                if (proof.targets.empty()) continue;
+                // A recognized table owns the finite AOT candidate set for
+                // this dispatch. A function-summary proof may still have
+                // observed one writable-snapshot value, but replacing the
+                // guarded table resolution with that RuntimeOnly contract
+                // would leave the table edges and site classification
+                // inconsistent.
+                if (is_jump_table_dispatch(proof.instruction_address) ||
+                    snapshot_candidate_dispatches.contains(
+                        proof.instruction_address))
+                    continue;
+                const auto found =
+                    resolution_by_address.find(proof.instruction_address);
+                if (found == resolution_by_address.end()) continue;
+                auto resolution =
+                    analysis.indirect_control_flow.begin() +
+                    static_cast<std::ptrdiff_t>(found->second);
+                if (resolution->status == ResolutionStatus::Resolved ||
+                    resolution->evidence ==
+                        ControlFlowEvidence::ForcedOverride)
+                    continue;
+                if (control_flow_evidence_strength(proof.evidence) <
+                    control_flow_evidence_strength(
+                        resolution->evidence))
+                    continue;
+                resolution->status =
+                    proof.guarded ? ResolutionStatus::Guarded
+                                  : ResolutionStatus::Resolved;
+                resolution->evidence =
+                    proof.complete && !proof.guarded
+                        ? ControlFlowEvidence::ProvenComplete
+                        : proof.evidence;
+                resolution->evidence_origins = {
+                    AnalysisEvidenceOrigin::FunctionSummary};
+                resolution->target =
+                    proof.targets.size() == 1u
+                        ? std::optional<std::uint32_t>(
+                              proof.targets.front())
+                        : std::nullopt;
+                resolution->reason = std::move(proof.reason);
+                resolution->targets = std::move(proof.targets);
+                resolution->evidence_call_sites =
+                    std::move(proof.call_sites);
+                resolution->evidence_callees =
+                    std::move(proof.callees);
+            }
+            if (boundary_contracts_active)
+                static_cast<void>(apply_decode_boundary_downgrades());
+            classify_dynamic_sites(analysis.recursive.instructions,
+                                   analysis.indirect_control_flow);
+            bind_partial_runtime_contracts(
+                analysis.indirect_control_flow);
+
+            // Resolution targets can safely grow the outer decode graph as
+            // soon as their bounded proof exists. Inventory and diagnostics,
+            // however, are published only from a relationally stable pass.
+            for (const auto& resolution :
+                 analysis.indirect_control_flow) {
+                if (is_jump_table_dispatch(
+                        resolution.instruction_address))
+                    continue;
+                changed =
+                    add_resolution_seeds(seeds, resolution) || changed;
+            }
+            if (changed) break;
+
+            const auto reconciled_edges = collect_function_value_edges(
+                analysis.indirect_control_flow, analysis.jump_tables);
+            if (reconciled_edges != provisional_edges) continue;
+
+            for (const auto& candidate :
+                 function_values.guarded_code_inventory
+                     .stored_code_addresses) {
+                const std::array origins{
+                    FunctionOrigin::StoredCodeAddress};
+                changed =
+                    add_seed(seeds,
+                             candidate.target_address,
+                             origins,
+                             false,
+                             ControlFlowEvidence::GuardedPartial) ||
+                    changed;
+            }
+            for (const auto& table :
+                 function_values.guarded_code_inventory
+                     .returned_code_address_tables) {
+                const std::array origins{
+                    FunctionOrigin::GuardedSnapshot};
+                for (const auto target : table.target_addresses) {
+                    changed =
+                        add_seed(seeds,
+                                 target,
+                                 origins,
+                                 false,
+                                 ControlFlowEvidence::GuardedPartial) ||
+                        changed;
+                }
+            }
+            if (changed) break;
+
+            if (!boundary_contracts_active) {
+                boundary_contracts_active = true;
+                static_cast<void>(
+                    apply_decode_boundary_downgrades());
+                classify_dynamic_sites(
+                    analysis.recursive.instructions,
+                    analysis.indirect_control_flow);
+                bind_partial_runtime_contracts(
+                    analysis.indirect_control_flow);
+                const auto boundary_edges =
+                    collect_function_value_edges(
+                        analysis.indirect_control_flow,
+                        analysis.jump_tables);
+                if (boundary_edges != reconciled_edges) continue;
+            }
+
+            analysis.function_summary_iterations =
+                function_values.fixpoint_iterations;
+            analysis.function_scc_count =
+                function_values.strongly_connected_components;
+            analysis.unchanged_ingress_skips =
+                function_values.unchanged_ingress_skips;
+            analysis.function_iteration_budget =
+                function_values.iteration_budget;
+            analysis.function_budget_exhausted = false;
+            auto guarded_code_inventory =
+                std::move(function_values.guarded_code_inventory);
+            analysis.raw_stored_code_inventory_candidates =
+                guarded_code_inventory.raw_stored_candidate_count;
+            analysis.raw_stored_code_inventory_budget =
+                guarded_code_inventory.raw_stored_candidate_budget;
+            analysis.raw_stored_code_inventory_truncated =
+                guarded_code_inventory.raw_stored_candidates_truncated;
+            analysis.guarded_code_inventory_candidates =
+                guarded_code_inventory.candidate_count;
+            analysis.guarded_code_inventory_budget =
+                guarded_code_inventory.candidate_budget;
+            analysis
+                .guarded_code_inventory_candidate_budget_exhausted =
+                guarded_code_inventory.candidate_budget_exhausted;
+            analysis.guarded_code_inventory_walk =
+                guarded_code_inventory.walk_diagnostics;
+            analysis.guarded_code_shape_validation_work =
+                guarded_code_inventory.shape_validation_work;
+            analysis.guarded_code_shape_validation_work_budget =
+                guarded_code_inventory.shape_validation_work_budget;
+            analysis.guarded_code_shape_budget_exceeded_candidates =
+                guarded_code_inventory
+                    .shape_budget_exceeded_candidates;
+            analysis.candidate_inventory_truncated =
+                guarded_code_inventory.candidate_inventory_truncated;
+            analysis.returned_table_scan_truncated =
+                guarded_code_inventory.table_scan_truncated;
+            final_guarded_code_inventory = guarded_code_inventory;
+            analysis.function_value_summaries =
+                std::move(function_values.summaries);
+            function_values_stable = true;
+            report_progress("function-values-complete");
         }
-        for (auto& proof : function_values.resolutions) {
-            if (proof.targets.empty()) continue;
-            // A recognized table owns the finite AOT candidate set for this dispatch.  A
-            // function-summary proof may still have observed one writable-snapshot value, but
-            // replacing the guarded table resolution with that RuntimeOnly contract would leave
-            // the table edges and the site classification inconsistent.  The live runtime load
-            // remains authoritative because partial table evidence always retains its default.
-            if (is_jump_table_dispatch(proof.instruction_address) ||
-                snapshot_candidate_dispatches.contains(proof.instruction_address))
-                continue;
-            const auto found = resolution_by_address.find(proof.instruction_address);
-            if (found == resolution_by_address.end()) continue;
-            auto resolution =
-                analysis.indirect_control_flow.begin() + static_cast<std::ptrdiff_t>(found->second);
-            if (resolution->status == ResolutionStatus::Resolved ||
-                resolution->evidence == ControlFlowEvidence::ForcedOverride)
-                continue;
-            if (control_flow_evidence_strength(proof.evidence) <
-                control_flow_evidence_strength(resolution->evidence))
-                continue;
-            resolution->status =
-                proof.guarded ? ResolutionStatus::Guarded : ResolutionStatus::Resolved;
-            resolution->evidence = proof.complete && !proof.guarded
-                                       ? ControlFlowEvidence::ProvenComplete
-                                       : proof.evidence;
-            resolution->evidence_origins = {AnalysisEvidenceOrigin::FunctionSummary};
-            resolution->target = proof.targets.size() == 1u
-                                     ? std::optional<std::uint32_t>(proof.targets.front())
-                                     : std::nullopt;
-            resolution->reason = std::move(proof.reason);
-            resolution->targets = std::move(proof.targets);
-            resolution->evidence_call_sites = std::move(proof.call_sites);
-            resolution->evidence_callees = std::move(proof.callees);
-        }
-        classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
-        bind_partial_runtime_contracts(analysis.indirect_control_flow);
-        for (const auto& resolution : analysis.indirect_control_flow) {
-            if (is_jump_table_dispatch(resolution.instruction_address)) continue;
-            changed = add_resolution_seeds(seeds, resolution) || changed;
+        if (analysis.function_budget_exhausted) {
+            // Product export rejects both an internal summary-budget loss and
+            // a candidate-contract closure that cannot reach a fixed point.
+            break;
         }
         report_progress("summary-seed-expansion");
         if (!changed && missing_override_dispatch && overrides != nullptr) {
@@ -1479,44 +1656,24 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         }
     }
     report_progress("fixpoint-complete");
-    for (auto& resolution : analysis.indirect_control_flow) {
-        if (!control_flow_evidence_proven(resolution.evidence)) continue;
-        auto targets = resolution.targets;
-        if (resolution.target.has_value()) targets.push_back(*resolution.target);
-        const bool boundaries = std::all_of(targets.begin(), targets.end(), [&](const auto target) {
-            return proven_instruction_boundary(analysis.recursive.proven_instruction_addresses,
-                                               target);
-        });
-        if (!boundaries) {
-            resolution.status = ResolutionStatus::Guarded;
-            resolution.evidence = ControlFlowEvidence::GuardedPartial;
-            resolution.reason += "-decode-candidate-only";
-        }
-    }
-    for (auto& table : analysis.jump_tables) {
-        if (!table.resolved || !control_flow_evidence_proven(table.evidence)) continue;
-        const bool boundaries =
-            std::all_of(table.entries.begin(), table.entries.end(), [&](const auto& entry) {
-                return proven_instruction_boundary(analysis.recursive.proven_instruction_addresses,
-                                                   entry.target);
-            });
-        if (!boundaries) {
-            table.evidence = ControlFlowEvidence::GuardedPartial;
-            const auto resolution =
-                std::find_if(analysis.indirect_control_flow.begin(),
-                             analysis.indirect_control_flow.end(),
-                             [&table](const auto& candidate) {
-                                 return candidate.instruction_address == table.dispatch_address;
-                             });
-            if (resolution != analysis.indirect_control_flow.end()) {
-                resolution->status = ResolutionStatus::Guarded;
-                resolution->evidence = ControlFlowEvidence::GuardedPartial;
-                resolution->origin_class = IndirectControlFlowOriginClass::Table;
-            }
-        }
-    }
-    classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
+    const auto final_function_value_edges = collect_function_value_edges(
+        analysis.indirect_control_flow, analysis.jump_tables);
+    const auto final_boundary_change =
+        apply_decode_boundary_downgrades();
+    classify_dynamic_sites(analysis.recursive.instructions,
+                           analysis.indirect_control_flow);
     bind_partial_runtime_contracts(analysis.indirect_control_flow);
+    if (!analysis.function_budget_exhausted &&
+        (final_boundary_change ||
+         collect_function_value_edges(analysis.indirect_control_flow,
+                                      analysis.jump_tables) !=
+             final_function_value_edges)) {
+        // The stable inner pass must already include the final boundary
+        // normalization. Never publish an inventory produced from stale
+        // candidate contracts if that invariant is violated.
+        analysis.function_budget_exhausted = true;
+        report_progress("function-values-boundary-contract-stale");
+    }
     auto guarded_aot_entries = collect_guarded_aot_entries(
         image, analysis, final_guarded_code_inventory);
     analysis.guarded_aot_entries =

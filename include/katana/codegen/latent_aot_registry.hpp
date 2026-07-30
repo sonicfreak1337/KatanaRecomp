@@ -2,6 +2,7 @@
 
 #include "katana/ir/ir.hpp"
 #include "katana/runtime/disc.hpp"
+#include "katana/runtime/native_aot_template.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +30,8 @@ struct LatentAotDiscoveryOptions {
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;
     std::size_t maximum_total_directory_bytes = 16u * 1024u * 1024u;
     std::size_t maximum_candidate_files = 128u;
-    std::size_t maximum_file_bytes = 4u * 1024u * 1024u;
+    std::size_t maximum_file_bytes =
+        katana::runtime::maximum_native_aot_template_extent;
     std::size_t maximum_total_file_bytes = 64u * 1024u * 1024u;
     std::size_t maximum_workers = 12u;
     std::size_t maximum_entry_scan_instructions = 1024u;
@@ -49,6 +51,14 @@ struct LatentAotOccupiedRange {
     [[nodiscard]] bool operator==(const LatentAotOccupiedRange&) const = default;
 };
 
+struct PreparedLatentAotBlockIdentity {
+    std::uint32_t source_offset = 0u;
+    std::uint32_t size = 0u;
+    std::string sha256;
+
+    [[nodiscard]] bool operator==(const PreparedLatentAotBlockIdentity&) const = default;
+};
+
 // Export-time description of a disc file whose finite native SH-4 graph was
 // accepted. Paths, names and source bytes deliberately do not survive this
 // boundary.
@@ -62,6 +72,9 @@ struct PreparedLatentAotModule {
     // hash-bound explicit entry. The exporter must require a native source
     // block for every listed offset before publishing a loaded-module template.
     std::vector<std::uint32_t> entry_offsets;
+    // Sorted, non-overlapping identities for every uniquely emitted native IR
+    // block. Only hashes survive export-time discovery; source bytes do not.
+    std::vector<PreparedLatentAotBlockIdentity> block_identities;
     std::vector<katana::ir::Function> program;
 };
 

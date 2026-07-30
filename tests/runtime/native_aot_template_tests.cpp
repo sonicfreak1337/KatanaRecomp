@@ -2,6 +2,7 @@
 
 #include "katana/io/input_provenance.hpp"
 #include "katana/runtime/block_guards.hpp"
+#include "katana/runtime/code_invalidation.hpp"
 
 #include <array>
 #include <cstdint>
@@ -274,6 +275,11 @@ int main() {
             "sha256:" + katana::io::sha256_bytes(std::string_view(
                             reinterpret_cast<const char*>(latent_bytes.data()),
                             latent_bytes.size()));
+        const auto latent_block_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(
+                                latent_bytes.data() + latent_offset),
+                            2u));
         ExecutableModuleCatalog latent_modules;
         ExecutableModule loaded_module;
         loaded_module.id = "disc-load-module";
@@ -286,8 +292,8 @@ int main() {
         cpu.memory.write_bytes(canonical_physical_address(latent_runtime),
                                latent_bytes,
                                CodeWriteSource::Copy);
-        RuntimeBlockTable latent_blocks;
-        static_cast<void>(latent_blocks.register_static(
+        RuntimeBlockTable latent_source_blocks;
+        static_cast<void>(latent_source_blocks.register_static(
             {latent_source + latent_offset,
              canonical_physical_address(latent_source + latent_offset),
              2u,
@@ -295,6 +301,12 @@ int main() {
              {},
              native_template_block,
              "synthetic-latent-aot-source"}));
+        ExecutableCodeTracker latent_tracker;
+        RuntimeBlockTable latent_dispatch_blocks;
+        latent_dispatch_blocks.bind_code_tracker(
+            &latent_tracker,
+            StaticAotInvalidationContract::Coordinated);
+        latent_dispatch_blocks.seal_static();
         const std::array latent_templates{NativeAotTemplate{
             "latent-source-module",
             latent_byte_identity,
@@ -304,9 +316,17 @@ int main() {
             {},
             NativeAotTemplateDestination::LoadedModule,
             loaded_module.content_identity,
-            latent_byte_identity}};
+            latent_byte_identity,
+            {},
+            0u,
+            {{latent_offset, 2u, latent_block_identity}},
+            NativeAotTemplateValidationMode::RuntimeBlock}};
         NativeAotTemplateBinder latent_binder(
-            cpu, latent_modules, latent_blocks, latent_templates);
+            cpu,
+            latent_modules,
+            latent_dispatch_blocks,
+            latent_templates,
+            &latent_source_blocks);
         const auto latent_bound = latent_binder.bind(
             latent_runtime + latent_offset,
             canonical_physical_address(latent_runtime + latent_offset),
@@ -320,13 +340,136 @@ int main() {
                             {latent_source,
                              latent_runtime,
                              static_cast<std::uint32_t>(latent_bytes.size())},
-                            static_cast<std::uint32_t>(latent_bytes.size())},
-                "Byteidentisches geladenes Discmodul wurde nicht an latentes AOT gebunden.");
+                            2u,
+                            {},
+                            NativeAotTemplateValidationMode::RuntimeBlock} &&
+                    !latent_dispatch_blocks.lookup(
+                         latent_source + latent_offset, {}).has_value() &&
+                    latent_source_blocks.lookup(
+                        latent_source + latent_offset, {}).has_value(),
+                "Byteidentisches geladenes Discmodul wurde nicht blocklokal aus dem "
+                "isolierten Template-Quellkatalog an latentes AOT gebunden.");
+
+        RuntimeBlockTable source_module_blocks;
+        static_cast<void>(source_module_blocks.register_static(
+            {latent_source + latent_offset,
+             canonical_physical_address(latent_source + latent_offset),
+             2u,
+             BlockEndKind::Return,
+             {},
+             native_template_block,
+             "synthetic-game-project-source-module"}));
+        auto source_module_templates = latent_templates;
+        source_module_templates[0].block_identities.clear();
+        source_module_templates[0].validation_mode =
+            NativeAotTemplateValidationMode::SourceModule;
+        NativeAotTemplateBinder source_module_binder(
+            cpu,
+            latent_modules,
+            source_module_blocks,
+            source_module_templates,
+            &latent_source_blocks);
+        const auto source_module_bound = source_module_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
+            {});
+        require(source_module_bound &&
+                    source_module_bound.candidate.block.function ==
+                        native_template_block &&
+                    source_module_bound.candidate.block.aot_template ==
+                        RuntimeAotTemplateContract{
+                            {latent_source,
+                             latent_runtime,
+                             static_cast<std::uint32_t>(
+                                 latent_bytes.size())},
+                            static_cast<std::uint32_t>(
+                                latent_bytes.size()),
+                            {},
+                            NativeAotTemplateValidationMode::SourceModule},
+                "Externes LoadedModule-SourceModule wurde faelschlich aus dem "
+                "isolierten RuntimeBlock-Quellkatalog gebunden oder verlor "
+                "seinen SourceModule-Validierungsvertrag.");
+
+        ExecutableModuleCatalog shadowed_latent_modules;
+        auto short_owner = loaded_module;
+        short_owner.id = "short-pending-latent-owner";
+        short_owner.guest_start =
+            canonical_physical_address(latent_runtime + latent_offset);
+        short_owner.bytes.assign(
+            latent_bytes.begin() + latent_offset,
+            latent_bytes.begin() + latent_offset + 2u);
+        short_owner.byte_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(
+                                short_owner.bytes.data()),
+                            short_owner.bytes.size()));
+        shadowed_latent_modules.publish(short_owner);
+        auto shadowed_full_owner = loaded_module;
+        shadowed_full_owner.id = "full-latent-owner-behind-short";
+        shadowed_latent_modules.publish_loaded_range(
+            shadowed_full_owner,
+            latent_dispatch_blocks,
+            latent_tracker,
+            LoadedRangeWriteObservation::ObservedByteIdentical);
+        require(
+            shadowed_latent_modules.resolve(
+                canonical_physical_address(
+                    latent_runtime + latent_offset),
+                2u) ==
+                shadowed_latent_modules.find(short_owner.id),
+            "Shadowing-Fixture selektiert nicht den kurzen ersten Owner.");
+        NativeAotTemplateBinder shadowed_latent_binder(
+            cpu,
+            shadowed_latent_modules,
+            latent_dispatch_blocks,
+            latent_templates,
+            &latent_source_blocks);
+        const auto shadowed_latent = shadowed_latent_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
+            {});
+        require(
+            shadowed_latent &&
+                shadowed_latent.candidate.block.function ==
+                    native_template_block,
+            "Kurzer erster Pending-Owner schattete den identitaetsgebundenen "
+            "Fullowner im LoadedModule-Binder ab.");
+
+        auto duplicate_full_owner = loaded_module;
+        duplicate_full_owner.id = "duplicate-full-latent-owner";
+        shadowed_latent_modules.publish_loaded_range(
+            duplicate_full_owner,
+            latent_dispatch_blocks,
+            latent_tracker,
+            LoadedRangeWriteObservation::ObservedByteIdentical);
+        NativeAotTemplateBinder ambiguous_latent_binder(
+            cpu,
+            shadowed_latent_modules,
+            latent_dispatch_blocks,
+            latent_templates,
+            &latent_source_blocks);
+        const auto ambiguous_latent = ambiguous_latent_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
+            {});
+        require(
+            !ambiguous_latent &&
+                ambiguous_latent.failure ==
+                    NativeAotTemplateBindFailure::AmbiguousDestination,
+            "Mehrere exakte LoadedModule-Fullowner wurden nicht fail-closed "
+            "als mehrdeutig abgelehnt.");
 
         auto mutable_latent_templates = latent_templates;
         mutable_latent_templates[0].mutable_ranges = {{8u, 4u}};
         NativeAotTemplateBinder mutable_latent_binder(
-            cpu, latent_modules, latent_blocks, mutable_latent_templates);
+            cpu,
+            latent_modules,
+            latent_dispatch_blocks,
+            mutable_latent_templates,
+            &latent_source_blocks);
         const auto mutable_latent = mutable_latent_binder.bind(
             latent_runtime + latent_offset,
             canonical_physical_address(latent_runtime + latent_offset),
@@ -341,7 +484,11 @@ int main() {
         mismatched_template_identity[0].expected_source_identity =
             "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
         NativeAotTemplateBinder mismatched_template_binder(
-            cpu, latent_modules, latent_blocks, mismatched_template_identity);
+            cpu,
+            latent_modules,
+            latent_dispatch_blocks,
+            mismatched_template_identity,
+            &latent_source_blocks);
         const auto mismatched_template = mismatched_template_binder.bind(
             latent_runtime + latent_offset,
             canonical_physical_address(latent_runtime + latent_offset),
@@ -399,7 +546,9 @@ int main() {
                             {latent_source,
                              latent_tlb_virtual,
                              static_cast<std::uint32_t>(latent_bytes.size())},
-                            static_cast<std::uint32_t>(latent_bytes.size())} &&
+                            2u,
+                            {},
+                            NativeAotTemplateValidationMode::RuntimeBlock} &&
                     cpu.address_space->snapshot() == address_space_before_tlb_bind,
                 "Lineares aktives P0-TLB-Mapping wurde nicht beobachtend an latentes AOT "
                 "gebunden.");
@@ -409,7 +558,11 @@ int main() {
         wrong_content_definition[0].expected_runtime_content_identity =
             "sha256:other-content";
         NativeAotTemplateBinder wrong_content_binder(
-            cpu, latent_modules, latent_blocks, wrong_content_definition);
+            cpu,
+            latent_modules,
+            latent_dispatch_blocks,
+            wrong_content_definition,
+            &latent_source_blocks);
         const auto wrong_content = wrong_content_binder.bind(
             latent_runtime + latent_offset,
             canonical_physical_address(latent_runtime + latent_offset),
@@ -426,7 +579,11 @@ int main() {
         unknown_bytes_definition[0].expected_runtime_byte_identity =
             unknown_bytes_definition[0].expected_source_identity;
         NativeAotTemplateBinder unknown_bytes_binder(
-            cpu, latent_modules, latent_blocks, unknown_bytes_definition);
+            cpu,
+            latent_modules,
+            latent_dispatch_blocks,
+            unknown_bytes_definition,
+            &latent_source_blocks);
         const auto unknown_bytes = unknown_bytes_binder.bind(
             latent_runtime + latent_offset,
             canonical_physical_address(latent_runtime + latent_offset),
@@ -443,17 +600,132 @@ int main() {
         ExecutableModuleCatalog holey_modules;
         auto holey_loaded_module = loaded_module;
         holey_loaded_module.id = "holey-disc-load-module";
-        holey_loaded_module.active_extents = {{0u, 8u}, {12u, 4u}};
         holey_modules.publish(std::move(holey_loaded_module));
+        constexpr std::uint32_t unrelated_write_offset = 12u;
+        auto holey_live_bytes = latent_bytes;
+        holey_live_bytes[unrelated_write_offset] ^= 0x01u;
+        cpu.memory.write_bytes(canonical_physical_address(latent_runtime),
+                               holey_live_bytes,
+                               CodeWriteSource::Cpu);
+        holey_modules.record_runtime_write(
+            canonical_physical_address(latent_runtime) +
+                unrelated_write_offset,
+            1u,
+            CodeWriteSource::Cpu,
+            true);
         NativeAotTemplateBinder holey_binder(
-            cpu, holey_modules, latent_blocks, latent_templates);
+            cpu,
+            holey_modules,
+            latent_dispatch_blocks,
+            latent_templates,
+            &latent_source_blocks);
         const auto holey = holey_binder.bind(
             latent_runtime + latent_offset,
             canonical_physical_address(latent_runtime + latent_offset),
-            std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
+            std::span<const std::uint8_t>(holey_live_bytes).subspan(latent_offset),
             {});
-        require(!holey && holey.failure == NativeAotTemplateBindFailure::MissingAot,
-                "Holey/partiell aktives Discmodul wurde als volle AOT-Vorlage akzeptiert.");
+        require(
+            holey &&
+                holey.candidate.block.aot_template ==
+                    RuntimeAotTemplateContract{
+                        {latent_source,
+                         latent_runtime,
+                         static_cast<std::uint32_t>(latent_bytes.size())},
+                        2u,
+                        {},
+                        NativeAotTemplateValidationMode::RuntimeBlock},
+            "Aenderung ausserhalb des angeforderten LoadedModule-Blocks "
+            "verhinderte die blocklokale AOT-Bindung.");
+
+        BlockMaterializationPolicy latent_policy;
+        latent_policy.enabled = true;
+        latent_policy.max_blocks = 4u;
+        latent_policy.max_bytes = 64u;
+        latent_policy.deterministic_no_host_time = true;
+        DemandBlockMaterializer latent_materializer(
+            holey_modules,
+            latent_dispatch_blocks,
+            &latent_tracker,
+            latent_policy,
+            [&holey_binder](
+                const std::uint32_t target,
+                const std::uint32_t physical_origin,
+                const std::span<const std::uint8_t> bytes,
+                const BlockVariantKey& variant) {
+                return std::move(
+                    holey_binder
+                        .bind(target, physical_origin, bytes, variant)
+                        .candidate);
+            });
+        const BlockVariantKey latent_materialized_variant{
+            21u, 22u, 23u, 24u, 25u};
+        const auto latent_materialized =
+            latent_materializer.try_materialize(
+                cpu,
+                latent_runtime + latent_offset,
+                canonical_physical_address(
+                    latent_runtime + latent_offset),
+                latent_materialized_variant,
+                0x80000012u);
+        require(
+            latent_materialized.has_value() &&
+                latent_materializer.metrics().materializations == 1u &&
+                latent_materializer.metrics().materialized_bytes == 2u &&
+                latent_materializer.validate_for_dispatch(
+                    cpu,
+                    *latent_materialized,
+                    latent_runtime + latent_offset,
+                    canonical_physical_address(
+                        latent_runtime + latent_offset)),
+            "LoadedModule-AOT mit externer Active-Extent-Luecke "
+            "durchlief den DemandBlockMaterializer nicht vollstaendig.");
+        const auto latent_materialized_block =
+            latent_dispatch_blocks.resolve(*latent_materialized);
+        require(
+            latent_materialized_block.has_value() &&
+                latent_materialized_block->get().function ==
+                    native_template_block &&
+                latent_materialized_block->get().aot_template ==
+                    holey.candidate.block.aot_template,
+            "Vollstaendig materialisierter LoadedModule-Block verlor "
+            "nativen Funktionszeiger oder blocklokalen AOT-Vertrag.");
+
+        ExecutableModuleCatalog target_hole_modules;
+        auto target_hole_loaded_module = loaded_module;
+        target_hole_loaded_module.id = "target-hole-disc-load-module";
+        target_hole_modules.publish(std::move(target_hole_loaded_module));
+        auto target_hole_bytes = latent_bytes;
+        target_hole_bytes[latent_offset] ^= 0x01u;
+        cpu.memory.write_bytes(canonical_physical_address(latent_runtime),
+                               target_hole_bytes,
+                               CodeWriteSource::Cpu);
+        target_hole_modules.record_runtime_write(
+            canonical_physical_address(latent_runtime) + latent_offset,
+            1u,
+            CodeWriteSource::Cpu,
+            true);
+        NativeAotTemplateBinder target_hole_binder(
+            cpu,
+            target_hole_modules,
+            latent_dispatch_blocks,
+            latent_templates,
+            &latent_source_blocks);
+        const auto target_hole = target_hole_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(target_hole_bytes).subspan(latent_offset),
+            {});
+        require(
+            !target_hole &&
+                target_hole.failure ==
+                    NativeAotTemplateBindFailure::NoMatchingDestination &&
+                target_hole.candidate.rejection_failure ==
+                    MaterializationFailure::AotTemplateMismatch,
+            "Aenderung und Active-Extent-Luecke im angeforderten "
+            "LoadedModule-Block wurden nicht fail-closed abgelehnt.");
+        cpu.memory.write_bytes(canonical_physical_address(latent_runtime),
+                               latent_bytes,
+                               CodeWriteSource::Copy);
 
         const auto missing_block = latent_binder.bind(
             latent_runtime + 8u,
@@ -765,8 +1037,19 @@ int main() {
         cpu.memory.write_bytes(canonical_physical_address(anonymous_runtime),
                                latent_bytes,
                                CodeWriteSource::Copy);
+        const auto anonymous_block_identity =
+            "sha256:" +
+            katana::io::sha256_bytes(
+                std::string_view(
+                    reinterpret_cast<const char*>(
+                        latent_bytes.data() + latent_offset),
+                    2u));
         NativeAotTemplateBinder anonymous_binder(
-            cpu, anonymous_modules, latent_blocks, latent_templates);
+            cpu,
+            anonymous_modules,
+            latent_dispatch_blocks,
+            source_module_templates,
+            &latent_source_blocks);
         const auto anonymous_without_fixed = anonymous_binder.bind(
             anonymous_runtime + latent_offset,
             canonical_physical_address(anonymous_runtime + latent_offset),
@@ -779,6 +1062,176 @@ int main() {
                         MaterializationFailure::MissingAot,
                 "Anonymer Runtimewrite ohne FixedAddress-Vertrag wurde als Content-/"
                 "Bytemismatch statt Missing-AOT klassifiziert.");
+
+        auto anonymous_hash_templates = latent_templates;
+        anonymous_hash_templates[0].block_identities = {
+            {latent_offset, 2u, anonymous_block_identity}};
+        anonymous_hash_templates[0].validation_mode =
+            NativeAotTemplateValidationMode::RuntimeBlock;
+        ExecutableCodeTracker anonymous_tracker;
+        RuntimeBlockTable anonymous_dispatch_blocks;
+        anonymous_dispatch_blocks.bind_code_tracker(
+            &anonymous_tracker,
+            StaticAotInvalidationContract::Coordinated);
+        anonymous_dispatch_blocks.seal_static();
+        NativeAotTemplateBinder anonymous_hash_binder(
+            cpu,
+            anonymous_modules,
+            anonymous_dispatch_blocks,
+            anonymous_hash_templates,
+            &latent_source_blocks);
+        const BlockVariantKey anonymous_variant{
+            31u, 32u, 33u, 34u, 35u};
+        const auto anonymous_hash_bound =
+            anonymous_hash_binder.bind(
+                anonymous_runtime + latent_offset,
+                canonical_physical_address(
+                    anonymous_runtime + latent_offset),
+                std::span<const std::uint8_t>(
+                    latent_bytes)
+                    .subspan(latent_offset),
+                anonymous_variant);
+        require(
+            anonymous_hash_bound &&
+                !anonymous_hash_bound.candidate.interpreter_backed &&
+                anonymous_hash_bound.candidate.block.function ==
+                    native_template_block &&
+                anonymous_hash_bound.candidate.block.aot_template ==
+                    RuntimeAotTemplateContract{
+                        {latent_source,
+                         anonymous_runtime,
+                         static_cast<std::uint32_t>(
+                             latent_bytes.size())},
+                        2u,
+                        {},
+                        NativeAotTemplateValidationMode::
+                            RuntimeBlock},
+            "Exakt gehashter LoadedModule-Block wurde auf anonymem "
+            "RuntimeWrite-Owner nicht rein vorcompiliert gebunden.");
+
+        BlockMaterializationPolicy anonymous_policy;
+        anonymous_policy.enabled = true;
+        anonymous_policy.max_blocks = 4u;
+        anonymous_policy.max_bytes = 1024u;
+        anonymous_policy.max_memory_bytes = 1024u;
+        anonymous_policy.deterministic_no_host_time = true;
+        DemandBlockMaterializer anonymous_materializer(
+            anonymous_modules,
+            anonymous_dispatch_blocks,
+            &anonymous_tracker,
+            anonymous_policy,
+            [&anonymous_hash_binder](
+                const std::uint32_t target,
+                const std::uint32_t physical_origin,
+                const std::span<const std::uint8_t> bytes,
+                const BlockVariantKey& variant) {
+                return std::move(
+                    anonymous_hash_binder
+                        .bind(
+                            target,
+                            physical_origin,
+                            bytes,
+                            variant)
+                        .candidate);
+            });
+        const auto anonymous_materialized =
+            anonymous_materializer.try_materialize(
+                cpu,
+                anonymous_runtime + latent_offset,
+                canonical_physical_address(
+                    anonymous_runtime + latent_offset),
+                anonymous_variant,
+                0x80000022u);
+        require(
+            anonymous_materialized.has_value() &&
+                anonymous_materializer.metrics()
+                        .materializations == 1u &&
+                anonymous_materializer.metrics()
+                        .materialized_bytes == 2u &&
+                anonymous_materializer.validate_for_dispatch(
+                    cpu,
+                    *anonymous_materialized,
+                    anonymous_runtime + latent_offset,
+                    canonical_physical_address(
+                        anonymous_runtime + latent_offset)),
+            "Hashgebundener anonymer LoadedModule-Block durchlief den "
+            "DemandBlockMaterializer nicht.");
+
+        auto mutated_anonymous_bytes = latent_bytes;
+        mutated_anonymous_bytes[latent_offset] ^= 0x01u;
+        cpu.memory.write_bytes(
+            canonical_physical_address(anonymous_runtime),
+            mutated_anonymous_bytes,
+            CodeWriteSource::Cpu);
+        const auto mutated_anonymous =
+            anonymous_hash_binder.bind(
+                anonymous_runtime + latent_offset,
+                canonical_physical_address(
+                    anonymous_runtime + latent_offset),
+                std::span<const std::uint8_t>(
+                    mutated_anonymous_bytes)
+                    .subspan(latent_offset),
+                {});
+        require(
+            !mutated_anonymous,
+            "Mutierte Livebytes wurden gegen einen unveraenderten "
+            "anonymen Owner hashgebunden akzeptiert.");
+        cpu.memory.write_bytes(
+            canonical_physical_address(anonymous_runtime),
+            latent_bytes,
+            CodeWriteSource::Copy);
+
+        auto wrong_anonymous_hash_templates =
+            anonymous_hash_templates;
+        wrong_anonymous_hash_templates[0]
+            .block_identities[0]
+            .sha256 =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        NativeAotTemplateBinder wrong_anonymous_hash_binder(
+            cpu,
+            anonymous_modules,
+            anonymous_dispatch_blocks,
+            wrong_anonymous_hash_templates,
+            &latent_source_blocks);
+        const auto wrong_anonymous_hash =
+            wrong_anonymous_hash_binder.bind(
+                anonymous_runtime + latent_offset,
+                canonical_physical_address(
+                    anonymous_runtime + latent_offset),
+                std::span<const std::uint8_t>(
+                    latent_bytes)
+                    .subspan(latent_offset),
+                {});
+        require(
+            !wrong_anonymous_hash,
+            "Anonymer RuntimeWrite wurde mit falschem Block-SHA-256 "
+            "an LoadedModule-AOT gebunden.");
+
+        const std::array ambiguous_anonymous_templates{
+            anonymous_hash_templates[0],
+            anonymous_hash_templates[0]};
+        NativeAotTemplateBinder ambiguous_anonymous_binder(
+            cpu,
+            anonymous_modules,
+            anonymous_dispatch_blocks,
+            ambiguous_anonymous_templates,
+            &latent_source_blocks);
+        const auto ambiguous_anonymous =
+            ambiguous_anonymous_binder.bind(
+                anonymous_runtime + latent_offset,
+                canonical_physical_address(
+                    anonymous_runtime + latent_offset),
+                std::span<const std::uint8_t>(
+                    latent_bytes)
+                    .subspan(latent_offset),
+                {});
+        require(
+            !ambiguous_anonymous &&
+                ambiguous_anonymous.failure ==
+                    NativeAotTemplateBindFailure::
+                        AmbiguousDestination,
+            "Zwei identische passende LoadedModule-Blockidentitaeten "
+            "wurden auf anonymem RuntimeWrite nicht fail-closed abgelehnt.");
 
         std::cout << "Native AOT-Templatebindung erfolgreich.\n";
         return EXIT_SUCCESS;
