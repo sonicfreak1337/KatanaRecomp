@@ -255,6 +255,13 @@ int main() {
         completeness_contract.guarded_code_inventory_walk
             .abi_stack_argument_projection_truncated_functions = 0u;
         completeness_contract.guarded_code_inventory_walk
+            .local_fixpoint_limited_evaluations = 1u;
+        require(!katana::analysis::guarded_aot_inventory_complete(
+                    completeness_contract),
+                "Lokaler Function-Fixpunktabbruch blieb exportfaehig.");
+        completeness_contract.guarded_code_inventory_walk
+            .local_fixpoint_limited_evaluations = 0u;
+        completeness_contract.guarded_code_inventory_walk
             .inventory_candidate_values_truncated = true;
         require(!katana::analysis::guarded_aot_inventory_complete(completeness_contract),
                 "Inventory-Kandidatendomänenverlust blieb exportfaehig.");

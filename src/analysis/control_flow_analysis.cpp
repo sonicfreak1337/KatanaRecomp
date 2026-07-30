@@ -1443,6 +1443,13 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 analysis.function_iteration_budget =
                     function_values.iteration_budget;
                 analysis.function_budget_exhausted = true;
+                // Preserve the exact fail-closed reason even on the early
+                // budget exit. In particular, a local CFG fixpoint cap must
+                // remain distinguishable from the outer interprocedural cap
+                // in reports and product-export diagnostics.
+                analysis.guarded_code_inventory_walk =
+                    function_values.guarded_code_inventory
+                        .walk_diagnostics;
                 report_progress("function-values-budget-exhausted");
                 break;
             }

@@ -54,12 +54,17 @@ Sonic-Lauf bleibt trotzdem der entscheidende Test.
 Jeder gestartete Prozess besitzt eine harte Laufzeitgrenze von hoechstens
 15 Minuten und wird danach mitsamt seinem Prozessbaum beendet. Fokussierte
 Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
-Entwicklungsrechner gilt `--parallel 12`. Der CLI-Portbuild verwendet dafuer
-`KATANA_HOST_BUILD_JOBS`; ohne expliziten Wert folgen
-`KATANA_PORT_CODEGEN_JOBS` und danach die gemeldete CPU-Threadzahl. Unter
+Entwicklungsrechner mit 24 logischen CPUs gilt `--parallel 24`. Der
+CLI-Portbuild verwendet dafuer
+`KATANA_HOST_BUILD_JOBS`; ohne expliziten Wert gilt direkt die gemeldete
+CPU-Threadzahl. `KATANA_PORT_CODEGEN_JOBS` steuert getrennt die parallele
+Port-Codegenerierung und faellt ebenfalls direkt auf die CPU-Threadzahl
+zurueck. Unter
 Windows kann `KATANA_HOST_BUILD_GENERATOR=Ninja` zusammen mit
 `KATANA_HOST_BUILD_MAKE_PROGRAM` einen getrennten `build-ninja`-Hostbuild
-waehlen.
+waehlen. Der gemeinsame Analyse-Executor nutzt standardmaessig bis zu 64 der
+gemeldeten CPU-Threads und kann bei reproduzierbaren Diagnose- oder
+Vergleichslaeufen mit `KATANA_ANALYSIS_JOBS=1..64` enger gebunden werden.
 
 Windows-Basisbefehle:
 

@@ -11515,6 +11515,10 @@ port_metadata(const PortExportOptions& options,
            << analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
            << ",\"guarded_abi_stack_argument_projection_truncated_functions\":"
            << analysis.guarded_code_inventory_walk.abi_stack_argument_projection_truncated_functions
+           << ",\"guarded_local_fixpoint_iteration_budget\":"
+           << analysis.guarded_code_inventory_walk.local_fixpoint_iteration_budget
+           << ",\"guarded_local_fixpoint_limited_evaluations\":"
+           << analysis.guarded_code_inventory_walk.local_fixpoint_limited_evaluations
            << ",\"guarded_maximum_local_fixpoint_iterations\":"
            << analysis.guarded_code_inventory_walk.maximum_local_fixpoint_iterations
            << ",\"guarded_inventory_candidate_values_truncated\":"
@@ -12003,6 +12007,11 @@ static PortExportResult export_dreamcast_port_project_impl(
                << prepared.analysis.guarded_code_inventory_walk
                       .abi_stack_argument_projection_truncated_functions
                << '/' << prepared.analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
+               << " local_fixpoint_limited_evaluations="
+               << prepared.analysis.guarded_code_inventory_walk
+                      .local_fixpoint_limited_evaluations
+               << '/' << prepared.analysis.guarded_code_inventory_walk
+                              .local_fixpoint_iteration_budget
                << " maximum_local_fixpoint_iterations="
                << prepared.analysis.guarded_code_inventory_walk
                       .maximum_local_fixpoint_iterations

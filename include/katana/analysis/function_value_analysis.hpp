@@ -90,6 +90,8 @@ struct InterproceduralTargetResolution {
     bool complete = false;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::string reason;
+
+    bool operator==(const InterproceduralTargetResolution&) const = default;
 };
 
 // A finite code address stored through a non-stack 32-bit memory operation
@@ -172,8 +174,14 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t contextual_return_evaluation_limited_functions = 0u;
     std::size_t abi_stack_argument_slot_budget = 0u;
     std::size_t abi_stack_argument_projection_truncated_functions = 0u;
+    // A local CFG transfer must return control to the interprocedural budget.
+    // Reaching this cap is a fail-closed analysis loss, not a performance
+    // counter: otherwise one malformed lattice edge can spin forever inside a
+    // single function and bypass every outer fixpoint guard.
+    std::size_t local_fixpoint_iteration_budget = 0u;
+    std::size_t local_fixpoint_limited_evaluations = 0u;
     // Peak number of local CFG block evaluations in one function analysis.
-    // This is diagnostic only and does not participate in truncation.
+    // This remains diagnostic while the explicit limit above is not reached.
     std::size_t maximum_local_fixpoint_iterations = 0u;
     bool inventory_candidate_values_truncated = false;
     bool abi_stack_base_unresolved = false;
@@ -185,6 +193,7 @@ struct GuardedCodeInventoryWalkDiagnostics {
                contextual_return_context_limited_functions != 0u ||
                contextual_return_evaluation_limited_functions != 0u ||
                abi_stack_argument_projection_truncated_functions != 0u ||
+               local_fixpoint_limited_evaluations != 0u ||
                inventory_candidate_values_truncated ||
                abi_stack_base_unresolved;
     }
@@ -252,6 +261,15 @@ struct FunctionValueAnalysisResult {
     std::size_t fixpoint_iterations = 0u;
     std::size_t strongly_connected_components = 0u;
     std::size_t unchanged_ingress_skips = 0u;
+    // Scheduler telemetry is deliberately run-local. It may be inspected by
+    // tests and live progress reporting, but must not enter canonical analysis
+    // reports, product metadata, cache keys, or artifact identities: worker
+    // count and stale speculative work vary without changing the semantics.
+    std::size_t fixpoint_worker_count = 1u;
+    std::size_t fixpoint_parallel_batches = 0u;
+    std::size_t fixpoint_speculative_evaluations = 0u;
+    std::size_t fixpoint_stale_repairs = 0u;
+    std::size_t maximum_fixpoint_batch_size = 1u;
     std::size_t iteration_budget = 0u;
     bool budget_exhausted = false;
 };

@@ -4196,6 +4196,12 @@ int run_test(const int argc, char* argv[]) {
                     .find("\"guarded_abi_stack_argument_projection_truncated_functions\":0") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
+                    .find("\"guarded_local_fixpoint_iteration_budget\":") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"guarded_local_fixpoint_limited_evaluations\":0") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
                     .find("\"guarded_maximum_local_fixpoint_iterations\":") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
@@ -4291,7 +4297,7 @@ int run_test(const int argc, char* argv[]) {
                           "\"13\")") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_PORT_EXPECTED_PROJECT_CONTRACT_VERSION "
-                          "\"73\")") != std::string::npos &&
+                          "\"74\")") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("katana_require_runtime_contract("
                           "\"${KATANA_PORT_RUNTIME_TARGET}\")") !=

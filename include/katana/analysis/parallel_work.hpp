@@ -247,7 +247,7 @@ class ParallelWorkGroup final {
     const auto hardware_jobs =
         static_cast<std::size_t>(
             std::max(1u, std::thread::hardware_concurrency()));
-    auto result = std::min<std::size_t>(12u, hardware_jobs);
+    auto result = std::min(maximum_jobs, hardware_jobs);
 #ifdef _WIN32
     char* configured_raw = nullptr;
     std::size_t configured_size = 0u;

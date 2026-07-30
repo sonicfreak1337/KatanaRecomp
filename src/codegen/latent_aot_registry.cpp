@@ -1403,7 +1403,7 @@ LatentAotDiscovery discover_latent_aot_modules(
         candidates.size());
     katana::analysis::parallel_analysis_for(
         candidates.size(),
-        std::min(options.maximum_workers, std::size_t{12u}),
+        options.maximum_workers,
         [&](const std::size_t index) {
             const auto analysis_started =
                 std::chrono::steady_clock::now();

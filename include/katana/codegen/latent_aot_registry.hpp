@@ -52,7 +52,7 @@ struct LatentAotDiscoveryOptions {
     std::size_t maximum_file_bytes =
         katana::runtime::maximum_native_aot_template_extent;
     std::size_t maximum_total_file_bytes = 64u * 1024u * 1024u;
-    std::size_t maximum_workers = 12u;
+    std::size_t maximum_workers = 64u;
     std::size_t maximum_entry_scan_instructions = 1024u;
     std::size_t maximum_native_instructions_per_module = 32768u;
     std::size_t maximum_blocks_per_module = 8192u;

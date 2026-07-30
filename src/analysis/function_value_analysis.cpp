@@ -189,6 +189,7 @@ constexpr std::size_t maximum_raw_stored_code_candidates =
 constexpr std::size_t reserved_returned_table_targets = 256u;
 constexpr std::int32_t maximum_stack_distance = 65'536;
 constexpr std::size_t maximum_fixpoint_iterations = 65'536u;
+constexpr std::size_t maximum_local_fixpoint_iterations = 65'536u;
 // ABI stack arguments are four-byte slots in the already bounded
 // [0, maximum_stack_distance] domain. The projection/read-set budget covers
 // that complete semantic domain; the smaller flow-state cap below is only an
@@ -219,7 +220,7 @@ constexpr std::size_t maximum_inventory_stack_coordinates = 64u;
 constexpr std::size_t maximum_inventory_regions = maximum_guarded_code_inventory;
 constexpr std::size_t maximum_inventory_region_blocks = 256u;
 constexpr std::size_t maximum_memory_values = 256u;
-constexpr std::size_t maximum_parallel_resolution_jobs = 12u;
+constexpr std::size_t maximum_parallel_resolution_jobs = 64u;
 constexpr std::size_t minimum_parallel_resolution_functions = 64u;
 constexpr std::size_t maximum_abi_stack_read_top_chain = 16u;
 
@@ -655,7 +656,7 @@ bool merge_state(AbstractState& destination,
     const AbstractValue& value);
 [[nodiscard]] bool has_active_inventory_stack_payload(
     const AbstractState& state);
-void add_unresolved_saved_stack_alias(
+bool add_unresolved_saved_stack_alias(
     AbstractState& state,
     std::uint8_t sources,
     bool tracks_current_epoch);
@@ -1213,6 +1214,7 @@ bool merge_forwarded_inventory_payload(AbstractState& destination,
 
 struct FunctionEvaluation {
     FunctionValueSummary summary;
+    bool local_fixpoint_budget_exhausted = false;
     std::vector<InterproceduralTargetResolution> resolutions;
     struct CallArguments {
         std::uint32_t call_site = 0u;
@@ -2242,13 +2244,14 @@ bool merge_state(AbstractState& destination,
             if (destination.stack_values.contains(offset)) continue;
             auto candidate = value;
             if (has_latent_saved_stack_alias(candidate)) {
-                add_unresolved_saved_stack_alias(
-                    destination,
-                    unresolved_saved_stack_alias_source_stack,
-                    candidate.inventory_saved_stack_epoch
-                        .tracks_current_epoch);
+                changed =
+                    add_unresolved_saved_stack_alias(
+                        destination,
+                        unresolved_saved_stack_alias_source_stack,
+                        candidate.inventory_saved_stack_epoch
+                            .tracks_current_epoch) ||
+                    changed;
                 candidate.inventory_saved_stack_epoch = {};
-                changed = true;
                 if (!has_non_epoch_abstract_fact(candidate))
                     continue;
             }
@@ -2265,13 +2268,14 @@ bool merge_state(AbstractState& destination,
             continue;
         auto candidate = value;
         if (has_latent_saved_stack_alias(candidate)) {
-            add_unresolved_saved_stack_alias(
-                destination,
-                unresolved_saved_stack_alias_source_stack,
-                candidate.inventory_saved_stack_epoch
-                    .tracks_current_epoch);
+            changed =
+                add_unresolved_saved_stack_alias(
+                    destination,
+                    unresolved_saved_stack_alias_source_stack,
+                    candidate.inventory_saved_stack_epoch
+                        .tracks_current_epoch) ||
+                changed;
             candidate.inventory_saved_stack_epoch = {};
-            changed = true;
             if (!has_non_epoch_abstract_fact(candidate))
                 continue;
         }
@@ -2351,13 +2355,14 @@ bool merge_state(AbstractState& destination,
             continue;
         auto candidate = value;
         if (has_latent_saved_stack_alias(candidate)) {
-            add_unresolved_saved_stack_alias(
-                destination,
-                unresolved_saved_stack_alias_source_memory,
-                candidate.inventory_saved_stack_epoch
-                    .tracks_current_epoch);
+            changed =
+                add_unresolved_saved_stack_alias(
+                    destination,
+                    unresolved_saved_stack_alias_source_memory,
+                    candidate.inventory_saved_stack_epoch
+                        .tracks_current_epoch) ||
+                changed;
             candidate.inventory_saved_stack_epoch = {};
-            changed = true;
             if (!has_non_epoch_abstract_fact(candidate))
                 continue;
         }
@@ -3034,19 +3039,30 @@ r0_indexed_inventory_stack_slots(const AbstractState& state,
            !carries_stack_callback_payload(value);
 }
 
-void add_unresolved_saved_stack_alias(
+bool add_unresolved_saved_stack_alias(
     AbstractState& state,
     const std::uint8_t sources,
     const bool tracks_current_epoch) {
-    if (sources == 0u) return;
-    state.inventory_unresolved_saved_stack_alias_sources =
+    if (sources == 0u) return false;
+    const auto merged_sources =
         static_cast<std::uint8_t>(
             state.inventory_unresolved_saved_stack_alias_sources |
             sources);
-    state.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+    const auto merged_tracks_current_epoch =
         state
             .inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
         tracks_current_epoch;
+    const bool changed =
+        merged_sources !=
+            state.inventory_unresolved_saved_stack_alias_sources ||
+        merged_tracks_current_epoch !=
+            state
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch;
+    state.inventory_unresolved_saved_stack_alias_sources =
+        merged_sources;
+    state.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+        merged_tracks_current_epoch;
+    return changed;
 }
 
 void materialize_unresolved_saved_stack_alias(
@@ -6656,6 +6672,11 @@ FunctionEvaluation evaluate_function(
     std::vector<std::pair<std::uint32_t, AbstractState>> returns;
     std::size_t local_fixpoint_iterations = 0u;
     while (!pending.empty()) {
+        if (local_fixpoint_iterations >=
+            maximum_local_fixpoint_iterations) {
+            evaluation.local_fixpoint_budget_exhausted = true;
+            break;
+        }
         const auto address = pending.front();
         pending.pop_front();
         queued.erase(address);
@@ -6936,6 +6957,8 @@ FunctionEvaluation evaluate_function(
             std::max(
                 walk_diagnostics->maximum_local_fixpoint_iterations,
                 local_fixpoint_iterations);
+        if (evaluation.local_fixpoint_budget_exhausted)
+            ++walk_diagnostics->local_fixpoint_limited_evaluations;
     }
 
     // A return block can be revisited while its input converges. Return-site
@@ -10485,6 +10508,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         maximum_contextual_return_evaluations;
     inventory_walk_diagnostics.abi_stack_argument_slot_budget =
         maximum_abi_stack_argument_slots;
+    inventory_walk_diagnostics.local_fixpoint_iteration_budget =
+        maximum_local_fixpoint_iterations;
     const auto enqueue_inventory_region =
         [&](const std::uint32_t target) {
             if (!block_index.contains(target) ||
@@ -11477,6 +11502,103 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 image.entry_points().end())
             input.unknown_ingress = true;
     }
+    std::unordered_map<std::uint32_t, std::size_t>
+        fixpoint_function_index;
+    fixpoint_function_index.reserve(functions.size());
+    std::vector<const FunctionInfo*> fixpoint_functions;
+    fixpoint_functions.reserve(functions.size());
+    for (const auto& function : functions) {
+        fixpoint_function_index.emplace(
+            function.entry_address, fixpoint_functions.size());
+        fixpoint_functions.push_back(&function);
+    }
+    std::vector<std::vector<std::size_t>>
+        fixpoint_summary_dependencies(functions.size());
+    for (std::size_t index = 0u; index < functions.size(); ++index) {
+        const auto& function = functions[index];
+        auto dependencies = function.direct_callees;
+        // Keep this dependency contract aligned with evaluate_function rather
+        // than assuming FunctionInfo will forever be the only call source.
+        // Version validation is allowed to over-approximate, never to miss a
+        // summary which a speculative evaluation can read.
+        for (const auto block_address : function.block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end()) continue;
+            for (const auto& line : block->second->lines) {
+                const bool call =
+                    line.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::Call ||
+                    line.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::IndirectCall;
+                if (!call) continue;
+                if (line.target_address.has_value()) {
+                    dependencies.push_back(*line.target_address);
+                    continue;
+                }
+                const auto candidates =
+                    summary_indirect_callees.find(line.address);
+                if (candidates == summary_indirect_callees.end()) continue;
+                dependencies.insert(
+                    dependencies.end(),
+                    candidates->second.targets.begin(),
+                    candidates->second.targets.end());
+            }
+        }
+        normalize(dependencies);
+        auto& dependency_indices =
+            fixpoint_summary_dependencies[index];
+        dependency_indices.reserve(dependencies.size());
+        for (const auto dependency : dependencies) {
+            const auto found =
+                fixpoint_function_index.find(dependency);
+            if (found != fixpoint_function_index.end())
+                dependency_indices.push_back(found->second);
+        }
+    }
+    std::vector<std::uint64_t> fixpoint_summary_versions(
+        functions.size(), 0u);
+    std::vector<std::uint64_t> fixpoint_input_versions(
+        functions.size(), 0u);
+    struct GlobalFixpointBatchItem {
+        std::uint32_t address = 0u;
+        std::size_t function_index = 0u;
+        AbstractState input;
+        std::uint64_t input_version = 0u;
+        std::vector<std::pair<std::size_t, std::uint64_t>>
+            summary_versions;
+        std::optional<FunctionEvaluation> evaluation;
+        GuardedCodeInventoryWalkDiagnostics diagnostics;
+        std::exception_ptr error;
+    };
+    const auto merge_fixpoint_diagnostics =
+        [](GuardedCodeInventoryWalkDiagnostics& destination,
+           const GuardedCodeInventoryWalkDiagnostics& source) {
+            destination.maximum_local_fixpoint_iterations =
+                std::max(
+                    destination.maximum_local_fixpoint_iterations,
+                    source.maximum_local_fixpoint_iterations);
+            destination.local_fixpoint_limited_evaluations +=
+                source.local_fixpoint_limited_evaluations;
+            destination
+                .abi_stack_argument_projection_truncated_functions =
+                std::max(
+                    destination
+                        .abi_stack_argument_projection_truncated_functions,
+                    source
+                        .abi_stack_argument_projection_truncated_functions);
+            destination.inventory_candidate_values_truncated =
+                destination.inventory_candidate_values_truncated ||
+                source.inventory_candidate_values_truncated;
+            destination.abi_stack_base_unresolved =
+                destination.abi_stack_base_unresolved ||
+                source.abi_stack_base_unresolved;
+        };
+    auto& fixpoint_executor = global_analysis_executor();
+    const auto parallel_fixpoint_jobs =
+        analyzer_stack_diagnostics_enabled()
+            ? std::size_t{1u}
+            : fixpoint_executor.maximum_jobs();
+    result.fixpoint_worker_count = parallel_fixpoint_jobs;
     std::deque<std::uint32_t> pending;
     std::unordered_set<std::uint32_t> queued;
     queued.reserve(functions.size());
@@ -11493,78 +11615,199 @@ detail::analyze_function_values_with_guarded_entry_cache(
             result.budget_exhausted = true;
             break;
         }
-        const auto address = pending.front();
-        pending.pop_front();
-        queued.erase(address);
-        const auto function = function_by_address.find(address);
-        if (function == function_by_address.end()) continue;
-        ++result.fixpoint_iterations;
-        pending_count = pending.size();
-        const bool sampled_iteration = result.fixpoint_iterations <= 16u ||
-                                       (result.fixpoint_iterations &
-                                        (result.fixpoint_iterations - 1u)) == 0u ||
-                                       result.fixpoint_iterations % 128u == 0u;
-        if (sampled_iteration) report_progress("fixpoint-evaluate-start");
-        emit_analyzer_fixpoint_trace("global-start",
-                                     result.fixpoint_iterations,
-                                     address,
-                                     address,
-                                     pending.size());
-        auto evaluation = evaluate_function(image,
-                                            *function->second,
-                                            block_index,
-                                            summary_indirect_callees,
-                                            no_tail_ingresses,
-                                            summaries,
-                                            candidate_inputs[address].state,
-                                            ResolutionCollectionMode::None,
-                                            false,
-                                            nullptr,
-                                            nullptr,
-                                            nullptr,
-                                            nullptr,
-                                            &inventory_walk_diagnostics,
-                                            &abi_stack_argument_reads,
-                                            target_abi_inventory_sink_sources(
-                                                address));
-        emit_analyzer_fixpoint_trace("global-complete",
-                                     result.fixpoint_iterations,
-                                     address,
-                                     address,
-                                     pending.size());
-        if (sampled_iteration) report_progress("fixpoint-evaluate-complete");
-        auto& previous = summaries[address];
-        if (previous != evaluation.summary) {
-            previous = std::move(evaluation.summary);
-            const auto callers = callers_by_callee.find(address);
-            if (callers != callers_by_callee.end()) {
-                for (const auto caller : callers->second) {
-                    if (queued.insert(caller).second) pending.push_back(caller);
-                }
+        const auto remaining_budget =
+            maximum_fixpoint_iterations -
+            result.fixpoint_iterations;
+        const auto batch_size =
+            std::min(
+                {pending.size(),
+                 parallel_fixpoint_jobs,
+                 remaining_budget});
+        std::vector<GlobalFixpointBatchItem> batch(batch_size);
+        auto pending_address = pending.begin();
+        for (std::size_t index = 0u;
+             index < batch.size();
+             ++index, ++pending_address) {
+            auto& item = batch[index];
+            item.address = *pending_address;
+            item.function_index =
+                fixpoint_function_index.at(item.address);
+            item.input =
+                candidate_inputs.at(item.address).state;
+            item.input_version =
+                fixpoint_input_versions[item.function_index];
+            item.summary_versions.reserve(
+                fixpoint_summary_dependencies[item.function_index]
+                    .size());
+            for (const auto dependency :
+                 fixpoint_summary_dependencies[item.function_index]) {
+                item.summary_versions.emplace_back(
+                    dependency,
+                    fixpoint_summary_versions[dependency]);
             }
-        }
-        for (const auto& observation : evaluation.call_arguments) {
-            if (unresolved_stack_callback_loss_reaches_inventory_sink(
-                    observation.state, observation.callee)) {
-                inventory_walk_diagnostics.abi_stack_base_unresolved =
-                    true;
-                emit_analyzer_stack_diagnostic(
-                    "fixpoint-call", address, observation.call_site, observation.callee);
-            }
-            const auto input = candidate_inputs.find(observation.callee);
-            if (input == candidate_inputs.end()) continue;
-            if (merge_candidate_input(
-                    input->second,
-                    observation,
-                    &inventory_walk_diagnostics)) {
-                if (queued.insert(observation.callee).second) {
-                    pending.push_back(observation.callee);
-                }
-            } else {
-                ++result.unchanged_ingress_skips;
-            }
+            item.diagnostics.local_fixpoint_iteration_budget =
+                maximum_local_fixpoint_iterations;
         }
         pending_count = pending.size();
+        if (batch.size() > 1u) {
+            ++result.fixpoint_parallel_batches;
+            report_progress("fixpoint-batch-start");
+        }
+        result.fixpoint_speculative_evaluations += batch.size();
+        result.maximum_fixpoint_batch_size =
+            std::max(
+                result.maximum_fixpoint_batch_size,
+                batch.size());
+        const auto evaluate_batch_item =
+            [&](GlobalFixpointBatchItem& item) noexcept {
+                try {
+                    item.evaluation.emplace(
+                        evaluate_function(
+                            image,
+                            *fixpoint_functions[item.function_index],
+                            block_index,
+                            summary_indirect_callees,
+                            no_tail_ingresses,
+                            summaries,
+                            item.input,
+                            ResolutionCollectionMode::None,
+                            false,
+                            nullptr,
+                            nullptr,
+                            nullptr,
+                            nullptr,
+                            &item.diagnostics,
+                            &abi_stack_argument_reads,
+                            target_abi_inventory_sink_sources(
+                                item.address)));
+                } catch (...) {
+                    item.error = std::current_exception();
+                }
+            };
+        if (batch.size() == 1u) {
+            evaluate_batch_item(batch.front());
+        } else {
+            parallel_analysis_for(
+                fixpoint_executor,
+                batch.size(),
+                parallel_fixpoint_jobs,
+                [&](const std::size_t index) {
+                    evaluate_batch_item(batch[index]);
+                });
+        }
+        for (auto& item : batch) {
+            bool stale =
+                fixpoint_input_versions[item.function_index] !=
+                item.input_version;
+            for (const auto& [dependency, version] :
+                 item.summary_versions) {
+                stale =
+                    stale ||
+                    fixpoint_summary_versions[dependency] !=
+                        version;
+            }
+            if (stale) {
+                ++result.fixpoint_stale_repairs;
+                item.input =
+                    candidate_inputs.at(item.address).state;
+                item.evaluation.reset();
+                item.diagnostics = {};
+                item.diagnostics.local_fixpoint_iteration_budget =
+                    maximum_local_fixpoint_iterations;
+                item.error = {};
+                evaluate_batch_item(item);
+            }
+            if (pending.empty() ||
+                pending.front() != item.address)
+                throw std::logic_error(
+                    "Paralleler Function-Value-Fixpunkt verlor die FIFO-Reihenfolge.");
+            pending.pop_front();
+            queued.erase(item.address);
+            ++result.fixpoint_iterations;
+            pending_count = pending.size();
+            const bool sampled_iteration =
+                result.fixpoint_iterations <= 16u ||
+                (result.fixpoint_iterations &
+                 (result.fixpoint_iterations - 1u)) == 0u ||
+                result.fixpoint_iterations % 128u == 0u;
+            if (sampled_iteration)
+                report_progress("fixpoint-evaluate-start");
+            emit_analyzer_fixpoint_trace(
+                "global-start",
+                result.fixpoint_iterations,
+                item.address,
+                item.address,
+                pending.size());
+            merge_fixpoint_diagnostics(
+                inventory_walk_diagnostics,
+                item.diagnostics);
+            if (item.error)
+                std::rethrow_exception(item.error);
+            auto evaluation =
+                std::move(*item.evaluation);
+            if (evaluation.local_fixpoint_budget_exhausted) {
+                result.budget_exhausted = true;
+                break;
+            }
+            emit_analyzer_fixpoint_trace(
+                "global-complete",
+                result.fixpoint_iterations,
+                item.address,
+                item.address,
+                pending.size());
+            if (sampled_iteration)
+                report_progress("fixpoint-evaluate-complete");
+            auto& previous = summaries[item.address];
+            if (previous != evaluation.summary) {
+                previous = std::move(evaluation.summary);
+                ++fixpoint_summary_versions[item.function_index];
+                const auto callers =
+                    callers_by_callee.find(item.address);
+                if (callers != callers_by_callee.end()) {
+                    for (const auto caller : callers->second) {
+                        if (queued.insert(caller).second)
+                            pending.push_back(caller);
+                    }
+                }
+            }
+            for (const auto& observation :
+                 evaluation.call_arguments) {
+                if (unresolved_stack_callback_loss_reaches_inventory_sink(
+                        observation.state,
+                        observation.callee)) {
+                    inventory_walk_diagnostics
+                        .abi_stack_base_unresolved = true;
+                    emit_analyzer_stack_diagnostic(
+                        "fixpoint-call",
+                        item.address,
+                        observation.call_site,
+                        observation.callee);
+                }
+                const auto input =
+                    candidate_inputs.find(observation.callee);
+                if (input == candidate_inputs.end()) continue;
+                if (merge_candidate_input(
+                        input->second,
+                        observation,
+                        &inventory_walk_diagnostics)) {
+                    const auto callee_index =
+                        fixpoint_function_index.find(
+                            observation.callee);
+                    if (callee_index !=
+                        fixpoint_function_index.end())
+                        ++fixpoint_input_versions
+                              [callee_index->second];
+                    if (queued.insert(observation.callee).second)
+                        pending.push_back(observation.callee);
+                } else {
+                    ++result.unchanged_ingress_skips;
+                }
+            }
+            pending_count = pending.size();
+        }
+        if (result.budget_exhausted) break;
+        if (batch.size() > 1u)
+            report_progress("fixpoint-batch-complete");
     }
     report_progress("fixpoint-complete");
 
@@ -11592,6 +11835,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
     report_progress("resolution-start");
     GuardedCodeInventoryCollector guarded_inventory_collector{
         false, &guarded_native_entry_shapes};
+    if (result.budget_exhausted) {
+        // A failed global fixpoint has already invalidated every summary and
+        // candidate input above. Re-running every function in the resolution
+        // phase cannot recover proof, can repeat the same 65,536-step local
+        // failure, and all of its output would be discarded. Preserve the
+        // precise diagnostics and return immediately.
+        result.guarded_code_inventory =
+            guarded_inventory_collector.finish();
+        result.guarded_code_inventory.walk_diagnostics =
+            inventory_walk_diagnostics;
+        report_progress("resolution-skipped-budget-exhausted");
+        return result;
+    }
     std::vector<const FunctionInfo*> resolution_functions;
     resolution_functions.reserve(functions.size());
     for (const auto& function : functions)
@@ -11623,6 +11879,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
         std::vector<ForwardedStoreContext> forwarded_store_contexts;
         std::deque<std::size_t> pending_forwarded_store_contexts;
         std::vector<bool> forwarded_store_context_queued;
+        // No output from this resolution function may be published after any
+        // of its base, contextual, isolated, or forwarded CFG walks hit the
+        // local cap. The diagnostic alone blocks product export, but semantic
+        // resolutions are consumed earlier by the outer decode fixpoint.
+        bool local_fixpoint_budget_exhausted = false;
     };
     struct CachedForwardedEvaluation {
         FunctionEvaluation evaluation;
@@ -11838,11 +12099,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
         };
     const auto merge_cached_forwarded_diagnostics =
         [](GuardedCodeInventoryWalkDiagnostics& destination,
-           const GuardedCodeInventoryWalkDiagnostics& source) {
+           const GuardedCodeInventoryWalkDiagnostics& source,
+           const bool count_evaluation) {
             destination.maximum_local_fixpoint_iterations =
                 std::max(
                     destination.maximum_local_fixpoint_iterations,
                     source.maximum_local_fixpoint_iterations);
+            if (count_evaluation)
+                destination.local_fixpoint_limited_evaluations +=
+                    source.local_fixpoint_limited_evaluations;
             destination
                 .abi_stack_argument_projection_truncated_functions =
                 std::max(
@@ -11867,6 +12132,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
             maximum_contextual_return_evaluations;
         function_result.walk_diagnostics.abi_stack_argument_slot_budget =
             maximum_abi_stack_argument_slots;
+        function_result.walk_diagnostics.local_fixpoint_iteration_budget =
+            maximum_local_fixpoint_iterations;
+        const auto record_local_fixpoint_limit = [&] {
+            function_result.local_fixpoint_budget_exhausted = true;
+        };
         const auto* function = resolution_functions[function_index];
         const auto& input = final_candidate_inputs.at(function->entry_address);
         const auto record_forwarded_store_limit =
@@ -11952,8 +12222,12 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                                        nullptr,
                                                         &function_result.walk_diagnostics,
                                                         &abi_stack_argument_reads,
-                                                        target_abi_inventory_sink_sources(
-                                                            function->entry_address));
+                                                         target_abi_inventory_sink_sources(
+                                                             function->entry_address));
+        if (function_result.evaluation.local_fixpoint_budget_exhausted) {
+            record_local_fixpoint_limit();
+            return function_result;
+        }
         const auto enqueue_forwarded_context =
             [&](const FunctionInfo* target_function,
                 const std::uint32_t target,
@@ -12410,12 +12684,18 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     ++function_result.walk_diagnostics
                           .forwarded_store_evaluation_cache_misses;
                 }
+                merge_cached_forwarded_diagnostics(
+                    function_result.walk_diagnostics,
+                    forwarded_evaluation->walk_diagnostics,
+                    !cache_hit);
+                if (forwarded_evaluation->evaluation
+                        .local_fixpoint_budget_exhausted) {
+                    record_local_fixpoint_limit();
+                    return;
+                }
                 forwarded_evaluation->inventory
                     .replay_deferred_copy_into(
                         function_result.inventory);
-                merge_cached_forwarded_diagnostics(
-                    function_result.walk_diagnostics,
-                    forwarded_evaluation->walk_diagnostics);
                 context.evaluated = true;
                 context.evaluation_dirty = false;
                 context.resolutions =
@@ -12508,6 +12788,18 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     nullptr,
                     nullptr,
                     &abi_stack_argument_reads);
+                if (context_evaluation.local_fixpoint_budget_exhausted) {
+                    ++function_result.walk_diagnostics
+                          .local_fixpoint_limited_evaluations;
+                    function_result.walk_diagnostics
+                        .maximum_local_fixpoint_iterations =
+                        std::max(
+                            function_result.walk_diagnostics
+                                .maximum_local_fixpoint_iterations,
+                            maximum_local_fixpoint_iterations);
+                    record_local_fixpoint_limit();
+                    return;
+                }
                 const auto previous =
                     contextual_summaries.find(address);
                 const bool summary_changed =
@@ -12624,6 +12916,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     &abi_stack_argument_reads,
                     target_abi_inventory_sink_sources(
                         address));
+                if (stable_evaluation.local_fixpoint_budget_exhausted) {
+                    record_local_fixpoint_limit();
+                    return;
+                }
                 function_result.evaluation.resolutions.insert(
                     function_result.evaluation.resolutions.end(),
                     std::make_move_iterator(
@@ -12646,6 +12942,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         };
         if (!result.budget_exhausted)
             harvest_contextual_candidate_returns();
+        if (function_result.local_fixpoint_budget_exhausted)
+            return function_result;
         const std::set<std::uint32_t> no_forwarded_root_call_sites;
         if (!result.budget_exhausted)
             seed_forwarded_inventory(function_result.evaluation,
@@ -12700,6 +12998,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                       &abi_stack_argument_reads,
                                       target_abi_inventory_sink_sources(
                                           function->entry_address));
+                if (isolated_evaluation.local_fixpoint_budget_exhausted) {
+                    record_local_fixpoint_limit();
+                    return function_result;
+                }
                 function_result.evaluation.resolutions.insert(
                     function_result.evaluation.resolutions.end(),
                     std::make_move_iterator(
@@ -12716,6 +13018,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         }
         if (!result.budget_exhausted)
             drain_forwarded_inventory();
+        if (function_result.local_fixpoint_budget_exhausted)
+            return function_result;
         for (auto& context : function_result.forwarded_store_contexts) {
             function_result.evaluation.resolutions.insert(
                 function_result.evaluation.resolutions.end(),
@@ -12745,6 +13049,17 @@ detail::analyze_function_values_with_guarded_entry_cache(
             });
     }
 
+    const bool resolution_local_fixpoint_budget_exhausted =
+        std::ranges::any_of(
+            function_results,
+            [](const auto& resolved) {
+                return resolved.has_value() &&
+                       resolved->local_fixpoint_budget_exhausted;
+            });
+    if (resolution_local_fixpoint_budget_exhausted)
+        result.budget_exhausted = true;
+    const bool publish_resolution_outputs =
+        !result.budget_exhausted;
     for (auto& function_result : function_results) {
         auto resolved = std::move(*function_result);
 
@@ -12768,6 +13083,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
             resolved.walk_diagnostics.contextual_return_evaluation_limited_functions;
         inventory_walk_diagnostics.abi_stack_argument_projection_truncated_functions +=
             resolved.walk_diagnostics.abi_stack_argument_projection_truncated_functions;
+        inventory_walk_diagnostics.local_fixpoint_limited_evaluations +=
+            resolved.walk_diagnostics.local_fixpoint_limited_evaluations;
         inventory_walk_diagnostics.maximum_local_fixpoint_iterations =
             std::max(
                 inventory_walk_diagnostics
@@ -12780,12 +13097,18 @@ detail::analyze_function_values_with_guarded_entry_cache(
         inventory_walk_diagnostics.abi_stack_base_unresolved =
             inventory_walk_diagnostics.abi_stack_base_unresolved ||
             resolved.walk_diagnostics.abi_stack_base_unresolved;
-        resolution_count += resolved.evaluation.resolutions.size();
-        result.resolutions.insert(
-            result.resolutions.end(),
-            std::make_move_iterator(resolved.evaluation.resolutions.begin()),
-            std::make_move_iterator(resolved.evaluation.resolutions.end()));
-        std::move(resolved.inventory).replay_into(guarded_inventory_collector);
+        if (publish_resolution_outputs) {
+            resolution_count +=
+                resolved.evaluation.resolutions.size();
+            result.resolutions.insert(
+                result.resolutions.end(),
+                std::make_move_iterator(
+                    resolved.evaluation.resolutions.begin()),
+                std::make_move_iterator(
+                    resolved.evaluation.resolutions.end()));
+            std::move(resolved.inventory).replay_into(
+                guarded_inventory_collector);
+        }
         ++completed_functions;
         if (completed_functions <= 16u || completed_functions % 128u == 0u ||
             completed_functions == functions.size())

@@ -32,6 +32,83 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
+void set_stack_diagnostics_for_serial_fixpoint(const bool enabled) {
+#ifdef _WIN32
+    require(
+        _putenv_s(
+            "CODEX_ANALYZER_STACK_DIAGNOSTICS",
+            enabled ? "1" : "") == 0,
+        "Der Test konnte den seriellen Analyzer-Diagnosemodus nicht setzen.");
+#else
+    const auto result =
+        enabled
+            ? ::setenv(
+                  "CODEX_ANALYZER_STACK_DIAGNOSTICS",
+                  "1",
+                  1)
+            : ::unsetenv("CODEX_ANALYZER_STACK_DIAGNOSTICS");
+    require(
+        result == 0,
+        "Der Test konnte den seriellen Analyzer-Diagnosemodus nicht setzen.");
+#endif
+}
+
+void require_same_function_value_semantics(
+    const katana::analysis::FunctionValueAnalysisResult& serial,
+    const katana::analysis::FunctionValueAnalysisResult& parallel) {
+    const auto& serial_inventory = serial.guarded_code_inventory;
+    const auto& parallel_inventory = parallel.guarded_code_inventory;
+    auto serial_walk_diagnostics = serial_inventory.walk_diagnostics;
+    auto parallel_walk_diagnostics = parallel_inventory.walk_diagnostics;
+    serial_walk_diagnostics.forwarded_store_evaluation_cache_hits = 0u;
+    serial_walk_diagnostics.forwarded_store_evaluation_cache_misses = 0u;
+    parallel_walk_diagnostics.forwarded_store_evaluation_cache_hits = 0u;
+    parallel_walk_diagnostics.forwarded_store_evaluation_cache_misses = 0u;
+    require(
+        serial.summaries == parallel.summaries &&
+            serial.resolutions == parallel.resolutions &&
+            serial_inventory.stored_code_addresses ==
+                parallel_inventory.stored_code_addresses &&
+            serial_inventory.returned_code_address_tables ==
+                parallel_inventory.returned_code_address_tables &&
+            serial_inventory.raw_stored_candidate_budget ==
+                parallel_inventory.raw_stored_candidate_budget &&
+            serial_inventory.raw_stored_candidate_count ==
+                parallel_inventory.raw_stored_candidate_count &&
+            serial_inventory.candidate_budget ==
+                parallel_inventory.candidate_budget &&
+            serial_inventory.candidate_count ==
+                parallel_inventory.candidate_count &&
+            serial_inventory.shape_validation_work ==
+                parallel_inventory.shape_validation_work &&
+            serial_inventory.shape_validation_work_budget ==
+                parallel_inventory.shape_validation_work_budget &&
+            serial_inventory.shape_budget_exceeded_candidates ==
+                parallel_inventory.shape_budget_exceeded_candidates &&
+            serial_inventory.raw_stored_candidates_truncated ==
+                parallel_inventory.raw_stored_candidates_truncated &&
+            serial_inventory.candidate_budget_exhausted ==
+                parallel_inventory.candidate_budget_exhausted &&
+            serial_inventory.candidate_inventory_truncated ==
+                parallel_inventory.candidate_inventory_truncated &&
+            serial_inventory.table_scan_truncated ==
+                parallel_inventory.table_scan_truncated &&
+            serial_walk_diagnostics ==
+                parallel_walk_diagnostics &&
+            serial.fixpoint_iterations ==
+                parallel.fixpoint_iterations &&
+            serial.strongly_connected_components ==
+                parallel.strongly_connected_components &&
+            serial.unchanged_ingress_skips ==
+                parallel.unchanged_ingress_skips &&
+            serial.iteration_budget ==
+                parallel.iteration_budget &&
+            serial.budget_exhausted ==
+                parallel.budget_exhausted,
+        "Der versionsvalidierte Parallel-Fixpunkt wich semantisch vom "
+        "exakten seriellen FIFO-Ergebnis ab.");
+}
+
 katana::io::ExecutableImage image_with_callee(const std::vector<std::uint8_t>& callee) {
     std::vector<std::uint8_t> bytes(128u, 0x09u);
     const std::vector<std::uint8_t> main{
@@ -1620,6 +1697,41 @@ saved_stack_epoch_missing_stack_loop_values() {
     katana::io::ExecutableImage image;
     image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
     image.add_segment({".saved-stack-epoch-missing-stack-loop",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u>
+        boundaries{{
+            {0x00u, 0x0Eu},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+saved_stack_epoch_regenerated_source_loop_values() {
+    std::vector<std::uint8_t> bytes(0x10u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0x8902u); // bt 0x08 chooses the regenerating arm
+    put_u16(0x02u, 0x2F00u); // mov.b r0,@r15 removes the long slot
+    put_u16(0x04u, 0xAFFCu); // bra 0x00
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0x2FF2u); // mov.l r15,@r15 recreates an epoch-only slot
+    put_u16(0x0Au, 0xAFF9u); // bra 0x00
+    put_u16(0x0Cu, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".saved-stack-epoch-regenerated-source-loop",
                        0u,
                        0u,
                        bytes.size(),
@@ -3620,6 +3732,28 @@ int main() {
                 active_jobs.load(std::memory_order_relaxed) == 0u,
             "Der Analysis-Executor ignoriert das lokale Zwei-Job-Limit.");
     }
+    {
+        set_stack_diagnostics_for_serial_fixpoint(true);
+        const auto serial =
+            multi_callee_memory_saved_stack_alias_values();
+        set_stack_diagnostics_for_serial_fixpoint(false);
+        const auto parallel =
+            multi_callee_memory_saved_stack_alias_values();
+        require(
+            serial.fixpoint_worker_count == 1u,
+            "Der erzwungene serielle Differentiallauf benutzte mehr als "
+            "einen Fixpoint-Worker.");
+        require(
+            parallel.fixpoint_worker_count <= 1u ||
+                (parallel.maximum_fixpoint_batch_size > 1u &&
+                 parallel.fixpoint_parallel_batches > 0u &&
+                 parallel.fixpoint_stale_repairs > 0u),
+            "Der reale Function-Value-Fixpunkt erreichte trotz "
+            "verfuegbarer Mehrworker-Ausfuehrung keinen versionsvalidierten "
+            "parallelen Batch mit Stale-Reparatur.");
+        require_same_function_value_semantics(
+            serial, parallel);
+    }
 
     const auto unique_image =
         image_with_callee({0x10u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u}); // mov #0x10,r0; rts; nop
@@ -4109,6 +4243,30 @@ int main() {
                         .walk_diagnostics
                         .maximum_local_fixpoint_iterations) +
                 ").");
+        const auto regenerated_source_loop =
+            saved_stack_epoch_regenerated_source_loop_values();
+        const auto& regenerated_source_diagnostics =
+            regenerated_source_loop.guarded_code_inventory
+                .walk_diagnostics;
+        require(
+            !regenerated_source_loop.budget_exhausted &&
+                regenerated_source_diagnostics
+                        .local_fixpoint_limited_evaluations ==
+                    0u &&
+                regenerated_source_diagnostics
+                        .maximum_local_fixpoint_iterations <=
+                    32u,
+            "Ein payload-freier Saved-Stack-Alias wurde auf einem Looparm "
+            "immer neu erzeugt und meldete nach der state-weiten Weitung "
+            "weiterhin eine nicht vorhandene Zustandsaenderung (local=" +
+                std::to_string(
+                    regenerated_source_diagnostics
+                        .maximum_local_fixpoint_iterations) +
+                ", limited=" +
+                std::to_string(
+                    regenerated_source_diagnostics
+                        .local_fixpoint_limited_evaluations) +
+                ").");
         for (const auto direct_local_sink : {false, true}) {
             const auto translated_epoch_loop =
                 translated_saved_stack_epoch_loop_values(
@@ -4563,6 +4721,10 @@ int main() {
             loss_report_memory);
         loss_report.function_value_summaries.push_back(
             loss_report_summary);
+        loss_report.guarded_code_inventory_walk
+            .local_fixpoint_iteration_budget = 65'536u;
+        loss_report.guarded_code_inventory_walk
+            .local_fixpoint_limited_evaluations = 1u;
         const auto loss_report_json =
             katana::analysis::format_control_flow_analysis_json(
                 loss_report);
@@ -4575,9 +4737,16 @@ int main() {
                 loss_report_json.find(
                     loss_json_marker,
                     first_loss_json_marker + 1u) !=
+                    std::string::npos &&
+                loss_report_json.find(
+                    "\"guarded_local_fixpoint_iteration_budget\":65536") !=
+                    std::string::npos &&
+                loss_report_json.find(
+                    "\"guarded_local_fixpoint_limited_evaluations\":1") !=
                     std::string::npos,
             "Register- oder Memory-Summary verlor den neuen "
-            "Stack-Callback-Verlustmarker im JSON-Bericht.");
+            "Stack-Callback-Verlustmarker beziehungsweise die lokale "
+            "Fixpunktgrenze im JSON-Bericht.");
 
         const auto mixed = mixed_literal_scalar_store_values();
         require(has_stored_code_address(mixed, 0x30u) &&
