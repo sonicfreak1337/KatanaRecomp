@@ -1715,6 +1715,126 @@ translated_saved_stack_epoch_loop_values(
         image, lines, boundaries);
 }
 
+struct RecursiveStackProjectionWideningResult {
+    katana::analysis::FunctionValueAnalysisResult analysis;
+    bool recursive_contract_observed = false;
+    bool recursive_stack_reads_complete = true;
+    std::uint8_t recursive_persistent_store_sources = 0u;
+};
+
+RecursiveStackProjectionWideningResult
+recursive_stack_projection_widening_values() {
+    std::vector<std::uint8_t> bytes(0x110u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    const auto put_bsr = [&](const std::size_t site,
+                             const std::size_t target) {
+        const auto displacement =
+            (static_cast<std::int64_t>(target) -
+             static_cast<std::int64_t>(site + 4u)) /
+            2;
+        put_u16(site,
+                static_cast<std::uint16_t>(
+                    0xB000u |
+                    (static_cast<std::uint16_t>(displacement) &
+                     0x0FFFu)));
+    };
+
+    // Root ingress contributes one finite stack callback. The recursive
+    // function rewrites this exact incoming slot before taking a snapshot, so
+    // its seven epoch carriers begin genuinely empty.
+    put_u16(0x00u, 0xD003u); // callback literal 0x10 -> r0
+    put_u16(0x02u, 0x1F08u); // callback -> incoming [sp+32]
+    put_bsr(0x04u, 0x40u);
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0x000Bu);
+    put_u16(0x0Au, 0x0009u);
+    put_u32(0x10u, 0xC0u);
+
+    put_u16(0x40u, 0x6AF3u); // entry SP -> r10
+    put_u16(0x42u, 0x7A20u); // incoming callback slot -> r10
+    put_u16(0x44u, 0xE000u);
+    put_u16(0x46u, 0x2A00u); // byte overwrite removes the old long slot
+    put_u16(0x48u, 0x7FD8u); // add #-40,r15
+    put_u16(0x4Au, 0x69F3u); // current SP -> r9
+    put_u16(0x4Cu, 0x29F2u); // save the still-empty current epoch
+    put_u16(0x4Eu, 0x6892u); // saved empty epoch -> r8
+    put_u16(0x50u, 0x4800u); // lose its exact coordinate, retain provenance
+    for (std::size_t slot = 0u; slot < 7u; ++slot) {
+        put_u16(
+            0x52u + slot * 2u,
+            static_cast<std::uint16_t>(
+                0x1F80u | slot)); // seven empty unresolved epoch spills
+    }
+    put_u16(0x60u, 0xD40Fu); // finite callback literal 0xA0 -> r4
+    put_u16(0x62u, 0x1F48u); // callback mutates [sp+32]
+    put_u16(0x64u, 0xD50Fu); // callback destination 0x100 -> r5
+    put_u16(0x66u, 0x2542u); // keep the finite callback in the inventory
+    put_u16(0x68u, 0x56FAu); // consume prior-ring loss from [sp+40]
+    put_u16(0x6Au, 0xD70Fu); // loss destination 0x104 -> r7
+    put_u16(0x6Cu, 0x2762u); // persistent sink observes the lost slot
+    put_bsr(0x6Eu, 0x40u);   // same callsite grows the frame by 40 per ring
+    put_u16(0x70u, 0x0009u);
+    put_u16(0x72u, 0x410Bu); // unresolved jsr @r1: callee set incomplete
+    put_u16(0x74u, 0x0009u);
+    put_u16(0x76u, 0x000Bu);
+    put_u16(0x78u, 0x0009u);
+
+    put_u32(0xA0u, 0xC0u);
+    put_u32(0xA4u, 0x100u);
+    put_u32(0xA8u, 0x104u);
+    put_u16(0xC0u, 0x000Bu);
+    put_u16(0xC2u, 0x0009u);
+    put_u32(0x100u, 0u);
+    put_u32(0x104u, 0u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".recursive-stack-projection-widening",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, 0x0Cu},
+            {0x40u, 0x3Au},
+            {0xC0u, 0x04u},
+        }};
+    RecursiveStackProjectionWideningResult result;
+    result.analysis =
+        katana::analysis::detail::
+            analyze_function_values_with_abi_contract_observer_for_testing(
+                image,
+                lines,
+                boundaries,
+                {},
+                [&](const auto& observation) {
+                    if (observation.function_address != 0x40u)
+                        return;
+                    result.recursive_contract_observed = true;
+                    result.recursive_stack_reads_complete =
+                        observation.stack_reads_complete;
+                    result.recursive_persistent_store_sources =
+                        observation.persistent_store_sources;
+                });
+    return result;
+}
+
 katana::analysis::FunctionValueAnalysisResult mixed_literal_scalar_store_values() {
     std::vector<std::uint8_t> bytes(0x40u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
@@ -3678,6 +3798,62 @@ int main() {
                     ").");
         }
 
+        const auto recursive_projection =
+            recursive_stack_projection_widening_values();
+        const auto& recursive_projection_analysis =
+            recursive_projection.analysis;
+        const auto& recursive_projection_diagnostics =
+            recursive_projection_analysis.guarded_code_inventory
+                .walk_diagnostics;
+        require(
+            recursive_projection.recursive_contract_observed &&
+                !recursive_projection.recursive_stack_reads_complete &&
+                (recursive_projection
+                     .recursive_persistent_store_sources &
+                 0x10u) != 0u &&
+                !recursive_projection_analysis.budget_exhausted &&
+                recursive_projection_analysis.fixpoint_iterations <=
+                    32u &&
+                has_stored_code_address(
+                    recursive_projection_analysis, 0xC0u) &&
+                recursive_projection_diagnostics
+                    .abi_stack_base_unresolved &&
+                recursive_projection_diagnostics.truncated(),
+            "Ein rekursiver 40-Byte-Frame mit ABI-Readset-Top "
+            "akkumulierte am selben Callsite weiterhin leere "
+            "Saved-Stack-Provenienz, verlor den endlichen Callback oder "
+            "meldete die spaetere echte Snapshot-Mutation nicht fail-closed "
+            "(contract=" +
+                std::to_string(
+                    recursive_projection
+                        .recursive_contract_observed) +
+                "/" +
+                std::to_string(
+                    recursive_projection
+                        .recursive_stack_reads_complete) +
+                ", sources=" +
+                std::to_string(
+                    recursive_projection
+                        .recursive_persistent_store_sources) +
+                ", iterations=" +
+                std::to_string(
+                    recursive_projection_analysis
+                        .fixpoint_iterations) +
+                ", budget=" +
+                std::to_string(
+                    recursive_projection_analysis
+                        .budget_exhausted) +
+                ", candidate=" +
+                std::to_string(
+                    has_stored_code_address(
+                        recursive_projection_analysis,
+                        0xC0u)) +
+                ", base_loss=" +
+                std::to_string(
+                    recursive_projection_diagnostics
+                        .abi_stack_base_unresolved) +
+                ").");
+
         struct ReturnedLossRegression {
             ReturnedStackCallbackLossCase test_case;
             bool expected_unresolved;
@@ -3763,28 +3939,34 @@ int main() {
         struct MemoryLossRegression {
             MemoryStackCallbackLossCase test_case;
             bool expected_summary_marker;
+            bool expected_latent_marker;
             bool expected_unresolved;
         };
         constexpr std::array memory_loss_regressions{
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::ConsumeExactCell,
                 true,
+                false,
                 true},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::ReadUnknownCell,
                 true,
+                false,
                 true},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::
                     ReadUnknownEmptySavedEpoch,
+                false,
                 true,
                 false},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::ReadDifferentCell,
                 true,
+                false,
                 false},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::EmptySavedEpoch,
+                false,
                 true,
                 false},
         };
@@ -3816,12 +3998,18 @@ int main() {
                 memory != nullptr &&
                 memory
                     ->inventory_stack_callback_loss_unresolved;
+            const bool latent_marker =
+                owner != memory_loss.summaries.end() &&
+                memory != nullptr &&
+                memory->inventory_saved_stack_alias_latent;
             const auto& diagnostics =
                 memory_loss.guarded_code_inventory
                     .walk_diagnostics;
             require(
                 summary_marker ==
                         regression.expected_summary_marker &&
+                    latent_marker ==
+                        regression.expected_latent_marker &&
                     diagnostics.abi_stack_base_unresolved ==
                         regression.expected_unresolved &&
                     diagnostics.truncated() ==
@@ -3837,6 +4025,11 @@ int main() {
                     ", expected_summary=" +
                     std::to_string(
                         regression.expected_summary_marker) +
+                    ", latent=" +
+                    std::to_string(latent_marker) +
+                    ", expected_latent=" +
+                    std::to_string(
+                        regression.expected_latent_marker) +
                     ", unresolved=" +
                     std::to_string(
                         diagnostics.abi_stack_base_unresolved) +

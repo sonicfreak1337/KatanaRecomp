@@ -524,6 +524,9 @@ struct AbstractValue {
     bool operator==(const AbstractValue&) const = default;
 };
 
+constexpr std::uint8_t unresolved_saved_stack_alias_source_stack = 1u;
+constexpr std::uint8_t unresolved_saved_stack_alias_source_memory = 2u;
+
 struct AbstractState {
     std::array<AbstractValue, 16u> registers;
     std::array<std::optional<std::int32_t>, 16u> stack_offsets;
@@ -562,6 +565,12 @@ struct AbstractState {
     std::array<bool, 16u> inventory_fixed_storage_reference{};
     std::map<std::int32_t, AbstractValue> stack_values;
     std::map<std::uint32_t, AbstractValue> memory_values;
+    // A payload-free saved-SP alias whose exact bounded cell identity was
+    // widened away. Unlike callback loss, this is harmless until the current
+    // stack epoch later receives a relevant callback candidate. Source bits
+    // allow unknown stack/memory loads to materialize the latent value again.
+    std::uint8_t inventory_unresolved_saved_stack_alias_sources = 0u;
+    bool inventory_unresolved_saved_stack_alias_tracks_current_epoch = false;
     bool inventory_unresolved_stack_callback_loss = false;
     // Sticky state-level evidence that an exact register/slot/cell identity
     // carrying the loss marker exceeded its bounded domain. This is reported
@@ -632,13 +641,30 @@ bool merge_state(AbstractState& destination,
     const AbstractValue& value);
 [[nodiscard]] bool carries_stack_callback_payload(
     const AbstractValue& value);
+[[nodiscard]] bool has_latent_saved_stack_alias(
+    const AbstractValue& value);
 [[nodiscard]] bool has_active_inventory_stack_payload(
     const AbstractState& state);
+void add_unresolved_saved_stack_alias(
+    AbstractState& state,
+    std::uint8_t sources,
+    bool tracks_current_epoch);
+void materialize_unresolved_saved_stack_alias(
+    AbstractValue& value,
+    const AbstractState& state,
+    std::uint8_t source);
+[[nodiscard]] bool has_non_epoch_abstract_fact(
+    const AbstractValue& value);
+void collapse_payload_free_stack_aliases(AbstractState& state);
 
 [[nodiscard]] bool same_saved_stack_epoch_shape(
     const InventorySavedStackEpoch& left,
     const InventorySavedStackEpoch& right) {
     if (left.present != right.present ||
+        left.unresolved != right.unresolved ||
+        left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.candidate_payload_lost !=
+            right.candidate_payload_lost ||
         left.slots.size() != right.slots.size())
         return false;
     for (std::size_t index = 0u; index < left.slots.size(); ++index) {
@@ -818,6 +844,11 @@ bool merge_inventory_saved_stack_epoch(
         left.inventory_vbr_relative != right.inventory_vbr_relative ||
         left.inventory_fixed_storage_reference !=
             right.inventory_fixed_storage_reference ||
+        left.inventory_unresolved_saved_stack_alias_sources !=
+            right.inventory_unresolved_saved_stack_alias_sources ||
+        left.inventory_unresolved_saved_stack_alias_tracks_current_epoch !=
+            right
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
         left.inventory_unresolved_stack_callback_loss !=
             right.inventory_unresolved_stack_callback_loss ||
         left.inventory_stack_callback_loss_identity_truncated !=
@@ -939,6 +970,12 @@ void emit_forwarded_cap_diagnostic(
         same_map_shape(existing->memory_values, incoming->memory_values);
     const auto loss_equal =
         shape_pair &&
+        existing->inventory_unresolved_saved_stack_alias_sources ==
+                incoming->inventory_unresolved_saved_stack_alias_sources &&
+        existing
+                ->inventory_unresolved_saved_stack_alias_tracks_current_epoch ==
+            incoming
+                ->inventory_unresolved_saved_stack_alias_tracks_current_epoch &&
         existing->inventory_unresolved_stack_callback_loss ==
                 incoming->inventory_unresolved_stack_callback_loss &&
         existing->inventory_stack_callback_loss_identity_truncated ==
@@ -1059,6 +1096,25 @@ bool merge_forwarded_inventory_payload(AbstractState& destination,
         throw std::logic_error(
             "Forwarded-Store-Kontexte besitzen unterschiedliche Semantik.");
     bool changed = false;
+    const auto alias_sources =
+        static_cast<std::uint8_t>(
+            destination.inventory_unresolved_saved_stack_alias_sources |
+            source.inventory_unresolved_saved_stack_alias_sources);
+    if (alias_sources !=
+        destination.inventory_unresolved_saved_stack_alias_sources) {
+        destination.inventory_unresolved_saved_stack_alias_sources =
+            alias_sources;
+        changed = true;
+    }
+    if (source
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch &&
+        !destination
+             .inventory_unresolved_saved_stack_alias_tracks_current_epoch) {
+        destination
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+            true;
+        changed = true;
+    }
     if (source.inventory_unresolved_stack_callback_loss &&
         !destination.inventory_unresolved_stack_callback_loss) {
         destination.inventory_unresolved_stack_callback_loss = true;
@@ -1319,7 +1375,8 @@ void synchronize_inventory_provenance(AbstractValue& value) {
 
 [[nodiscard]] bool has_forwarded_inventory_payload(
     const AbstractState& state) {
-    if (state.inventory_unresolved_stack_callback_loss ||
+    if (state.inventory_unresolved_saved_stack_alias_sources != 0u ||
+        state.inventory_unresolved_stack_callback_loss ||
         state.inventory_stack_callback_loss_identity_truncated)
         return true;
     const auto relevant = [](const AbstractValue& value) {
@@ -1979,6 +2036,25 @@ bool merge_state(AbstractState& destination,
             has_current_inventory_stack_lineage(
                 source, index);
     }
+    const auto alias_sources =
+        static_cast<std::uint8_t>(
+            destination.inventory_unresolved_saved_stack_alias_sources |
+            source.inventory_unresolved_saved_stack_alias_sources);
+    if (alias_sources !=
+        destination.inventory_unresolved_saved_stack_alias_sources) {
+        destination.inventory_unresolved_saved_stack_alias_sources =
+            alias_sources;
+        changed = true;
+    }
+    if (source
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch &&
+        !destination
+             .inventory_unresolved_saved_stack_alias_tracks_current_epoch) {
+        destination
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+            true;
+        changed = true;
+    }
     if (source.inventory_unresolved_stack_callback_loss &&
         !destination.inventory_unresolved_stack_callback_loss) {
         destination.inventory_unresolved_stack_callback_loss = true;
@@ -2079,6 +2155,19 @@ bool merge_state(AbstractState& destination,
     for (auto slot = destination.stack_values.begin(); slot != destination.stack_values.end();) {
         const auto source_slot = source.stack_values.find(slot->first);
         if (source_slot == source.stack_values.end()) {
+            if (has_latent_saved_stack_alias(slot->second)) {
+                add_unresolved_saved_stack_alias(
+                    destination,
+                    unresolved_saved_stack_alias_source_stack,
+                    slot->second.inventory_saved_stack_epoch
+                        .tracks_current_epoch);
+                slot->second.inventory_saved_stack_epoch = {};
+                changed = true;
+                if (!has_non_epoch_abstract_fact(slot->second)) {
+                    slot = destination.stack_values.erase(slot);
+                    continue;
+                }
+            }
             if (may_merge_stack_values ||
                 has_saved_stack_epoch(slot->second) ||
                 carries_unresolved_stack_callback(slot->second)) {
@@ -2112,6 +2201,17 @@ bool merge_state(AbstractState& destination,
         for (const auto& [offset, value] : source.stack_values) {
             if (destination.stack_values.contains(offset)) continue;
             auto candidate = value;
+            if (has_latent_saved_stack_alias(candidate)) {
+                add_unresolved_saved_stack_alias(
+                    destination,
+                    unresolved_saved_stack_alias_source_stack,
+                    candidate.inventory_saved_stack_epoch
+                        .tracks_current_epoch);
+                candidate.inventory_saved_stack_epoch = {};
+                changed = true;
+                if (!has_non_epoch_abstract_fact(candidate))
+                    continue;
+            }
             candidate.guarded = true;
             candidate.complete = false;
             destination.stack_values.emplace(offset, std::move(candidate));
@@ -2123,11 +2223,25 @@ bool merge_state(AbstractState& destination,
             (!has_saved_stack_epoch(value) &&
                  !carries_unresolved_stack_callback(value)))
             continue;
+        auto candidate = value;
+        if (has_latent_saved_stack_alias(candidate)) {
+            add_unresolved_saved_stack_alias(
+                destination,
+                unresolved_saved_stack_alias_source_stack,
+                candidate.inventory_saved_stack_epoch
+                    .tracks_current_epoch);
+            candidate.inventory_saved_stack_epoch = {};
+            changed = true;
+            if (!has_non_epoch_abstract_fact(candidate))
+                continue;
+        }
         if (destination.stack_values.size() >=
             maximum_abi_stack_argument_slots) {
-            if (carries_stack_callback_payload(value) &&
+            if (carries_stack_callback_payload(candidate) &&
                 !destination
                      .inventory_stack_callback_loss_identity_truncated) {
+                    destination
+                        .inventory_unresolved_stack_callback_loss = true;
                     destination
                         .inventory_stack_callback_loss_identity_truncated =
                         true;
@@ -2135,7 +2249,6 @@ bool merge_state(AbstractState& destination,
                 }
                 continue;
             }
-            auto candidate = value;
             if (has_saved_stack_epoch(candidate))
                 mark_inventory_saved_stack_epoch_unresolved(
                     candidate.inventory_saved_stack_epoch);
@@ -2150,6 +2263,19 @@ bool merge_state(AbstractState& destination,
          value != destination.memory_values.end();) {
         const auto source_value = source.memory_values.find(value->first);
         if (source_value == source.memory_values.end()) {
+            if (has_latent_saved_stack_alias(value->second)) {
+                add_unresolved_saved_stack_alias(
+                    destination,
+                    unresolved_saved_stack_alias_source_memory,
+                    value->second.inventory_saved_stack_epoch
+                        .tracks_current_epoch);
+                value->second.inventory_saved_stack_epoch = {};
+                changed = true;
+                if (!has_non_epoch_abstract_fact(value->second)) {
+                    value = destination.memory_values.erase(value);
+                    continue;
+                }
+            }
             if (has_saved_stack_epoch(value->second) ||
                 carries_unresolved_stack_callback(value->second)) {
                 const auto original = value->second;
@@ -2183,11 +2309,25 @@ bool merge_state(AbstractState& destination,
             (!has_saved_stack_epoch(value) &&
              !carries_unresolved_stack_callback(value)))
             continue;
+        auto candidate = value;
+        if (has_latent_saved_stack_alias(candidate)) {
+            add_unresolved_saved_stack_alias(
+                destination,
+                unresolved_saved_stack_alias_source_memory,
+                candidate.inventory_saved_stack_epoch
+                    .tracks_current_epoch);
+            candidate.inventory_saved_stack_epoch = {};
+            changed = true;
+            if (!has_non_epoch_abstract_fact(candidate))
+                continue;
+        }
         if (destination.memory_values.size() >=
             maximum_memory_values) {
-            if (carries_stack_callback_payload(value) &&
+            if (carries_stack_callback_payload(candidate) &&
                 !destination
                      .inventory_stack_callback_loss_identity_truncated) {
+                destination
+                    .inventory_unresolved_stack_callback_loss = true;
                 destination
                     .inventory_stack_callback_loss_identity_truncated =
                     true;
@@ -2195,7 +2335,6 @@ bool merge_state(AbstractState& destination,
             }
             continue;
         }
-        auto candidate = value;
         if (has_saved_stack_epoch(candidate))
             mark_inventory_saved_stack_epoch_unresolved(
                 candidate.inventory_saved_stack_epoch);
@@ -2433,6 +2572,14 @@ void load_memory_values(AbstractValue& destination,
     const bool address_contextual_dependency =
         address_evidence != nullptr &&
         address_evidence->contextual_candidate_dependency;
+    const auto materialize_latent_alias =
+        [&](AbstractValue& value) {
+            if (width == 4u)
+                materialize_unresolved_saved_stack_alias(
+                    value,
+                    state,
+                    unresolved_saved_stack_alias_source_memory);
+        };
     const bool address_stack_callback_loss_unresolved =
         width == 4u && address_evidence != nullptr &&
         carries_unresolved_stack_callback(*address_evidence);
@@ -2473,6 +2620,7 @@ void load_memory_values(AbstractValue& destination,
         destination.inventory_stack_callback_loss_unresolved =
             address_stack_callback_loss_unresolved ||
             may_load_stack_callback_payload;
+        materialize_latent_alias(destination);
         return;
     }
     AbstractValue loaded;
@@ -2496,6 +2644,7 @@ void load_memory_values(AbstractValue& destination,
                 destination.inventory_stack_callback_loss_unresolved =
                     address_stack_callback_loss_unresolved ||
                     may_load_stack_callback_payload;
+                materialize_latent_alias(destination);
                 return;
             }
             set_value(value, image_value->value);
@@ -2528,6 +2677,7 @@ void load_memory_values(AbstractValue& destination,
     loaded.inventory_stack_callback_loss_unresolved =
         loaded.inventory_stack_callback_loss_unresolved ||
         incomplete_address_stack_callback_loss;
+    materialize_latent_alias(loaded);
     destination = std::move(loaded);
 }
 
@@ -2546,9 +2696,15 @@ void note_imprecise_memory_stack_callback_store(
     AbstractState& state,
     const std::size_t width,
     const AbstractValue& value) {
-    if (width == 4u &&
-        carries_stack_callback_payload(value))
+    if (width != 4u) return;
+    if (carries_stack_callback_payload(value)) {
         state.inventory_unresolved_stack_callback_loss = true;
+    } else if (has_latent_saved_stack_alias(value)) {
+        add_unresolved_saved_stack_alias(
+            state,
+            unresolved_saved_stack_alias_source_memory,
+            value.inventory_saved_stack_epoch.tracks_current_epoch);
+    }
 }
 
 void store_memory_values(AbstractState& state,
@@ -2609,6 +2765,17 @@ void store_memory_values(AbstractState& state,
             invalidate_memory_values_conservatively(state);
             if (state.memory_values.size() >
                 maximum_memory_values) {
+                for (const auto& [address, saved_alias_value] :
+                     state.memory_values) {
+                    static_cast<void>(address);
+                    if (has_latent_saved_stack_alias(
+                            saved_alias_value))
+                        add_unresolved_saved_stack_alias(
+                            state,
+                            unresolved_saved_stack_alias_source_memory,
+                            saved_alias_value.inventory_saved_stack_epoch
+                                .tracks_current_epoch);
+                }
                 if (std::any_of(
                         state.memory_values.begin(),
                         state.memory_values.end(),
@@ -2650,6 +2817,17 @@ void store_memory_values(AbstractState& state,
     if (state.memory_values.size() > maximum_memory_values) {
         invalidate_memory_values_conservatively(state);
         if (state.memory_values.size() > maximum_memory_values) {
+            for (const auto& [address, saved_alias_value] :
+                 state.memory_values) {
+                static_cast<void>(address);
+                if (has_latent_saved_stack_alias(
+                        saved_alias_value))
+                    add_unresolved_saved_stack_alias(
+                        state,
+                        unresolved_saved_stack_alias_source_memory,
+                        saved_alias_value.inventory_saved_stack_epoch
+                            .tracks_current_epoch);
+            }
             if (std::any_of(
                     state.memory_values.begin(),
                 state.memory_values.end(),
@@ -2806,14 +2984,85 @@ r0_indexed_inventory_stack_slots(const AbstractState& state,
 
 [[nodiscard]] bool carries_stack_callback_payload(
     const AbstractValue& value) {
-    // A saved current-stack epoch is a latent callback carrier even while its
-    // finite slot set is still empty. Losing that lineage before a later stack
-    // callback store would otherwise let the callback disappear without a
-    // truncation marker. Treat every retained epoch as payload at any
-    // lossy/summary boundary; exact in-state epochs remain represented by the
-    // full structure and are not rejected merely for being empty.
     return carries_unresolved_stack_callback(value) ||
-           has_saved_stack_epoch(value);
+           !value.inventory_saved_stack_epoch.slots.empty();
+}
+
+[[nodiscard]] bool has_latent_saved_stack_alias(
+    const AbstractValue& value) {
+    return has_saved_stack_epoch(value) &&
+           !carries_stack_callback_payload(value);
+}
+
+void add_unresolved_saved_stack_alias(
+    AbstractState& state,
+    const std::uint8_t sources,
+    const bool tracks_current_epoch) {
+    if (sources == 0u) return;
+    state.inventory_unresolved_saved_stack_alias_sources =
+        static_cast<std::uint8_t>(
+            state.inventory_unresolved_saved_stack_alias_sources |
+            sources);
+    state.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+        state
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+        tracks_current_epoch;
+}
+
+void materialize_unresolved_saved_stack_alias(
+    AbstractValue& value,
+    const AbstractState& state,
+    const std::uint8_t source) {
+    if ((state.inventory_unresolved_saved_stack_alias_sources & source) ==
+        0u)
+        return;
+    InventorySavedStackEpoch latent;
+    latent.present = true;
+    latent.unresolved = true;
+    latent.tracks_current_epoch =
+        state
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch;
+    static_cast<void>(merge_inventory_saved_stack_epoch(
+        value.inventory_saved_stack_epoch, latent, true));
+    value.inventory_stack_derived = true;
+    value.guarded = true;
+    value.complete = false;
+}
+
+[[nodiscard]] bool has_non_epoch_abstract_fact(
+    const AbstractValue& value) {
+    return value.known ||
+           has_inventory_candidate_values(value) ||
+           inventory_candidate_values_truncated(value) ||
+           value.contextual_candidate_dependency ||
+           carries_unresolved_stack_callback(value);
+}
+
+void collapse_payload_free_stack_aliases(AbstractState& state) {
+    for (auto value = state.stack_values.begin();
+         value != state.stack_values.end();) {
+        if (has_latent_saved_stack_alias(value->second)) {
+            add_unresolved_saved_stack_alias(
+                state,
+                unresolved_saved_stack_alias_source_stack,
+                value->second.inventory_saved_stack_epoch
+                    .tracks_current_epoch);
+            value->second.inventory_saved_stack_epoch = {};
+        }
+        if (carries_unresolved_stack_callback(value->second)) {
+            state.inventory_unresolved_stack_callback_loss = true;
+            value->second
+                .inventory_stack_callback_loss_unresolved = false;
+            if (value->second.inventory_saved_stack_epoch.slots.empty())
+                value->second.inventory_saved_stack_epoch = {};
+        }
+        if (has_non_epoch_abstract_fact(value->second) ||
+            has_saved_stack_epoch(value->second)) {
+            ++value;
+        } else {
+            value = state.stack_values.erase(value);
+        }
+    }
 }
 
 template <std::size_t RegisterCount>
@@ -2905,6 +3154,8 @@ template <std::size_t RegisterCount>
         if (!relevant && !has_saved_stack_epoch(value))
             continue;
         if (has_saved_stack_epoch(value)) {
+            if (has_latent_saved_stack_alias(value))
+                continue;
             mark_inventory_saved_stack_epoch_unresolved(
                 captured,
                 value.inventory_saved_stack_epoch
@@ -3009,6 +3260,9 @@ void invalidate_stack_values_conservatively(AbstractState& state) {
 
 void mark_current_epoch_saved_snapshots_unresolved(
     AbstractState& state) {
+    if (state
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch)
+        state.inventory_unresolved_stack_callback_loss = true;
     const auto mark = [](AbstractValue& value) {
         auto& epoch = value.inventory_saved_stack_epoch;
         if (epoch.tracks_current_epoch)
@@ -3033,7 +3287,14 @@ void load_inventory_stack_values(
     const std::span<const std::int32_t> slots,
     const std::size_t width) {
     make_unknown(destination);
-    if (width != 4u || slots.empty()) return;
+    if (width != 4u) return;
+    if (slots.empty()) {
+        materialize_unresolved_saved_stack_alias(
+            destination,
+            state,
+            unresolved_saved_stack_alias_source_stack);
+        return;
+    }
     for (const auto slot : slots) {
         const auto stored = state.stack_values.find(slot);
         if (stored == state.stack_values.end()) continue;
@@ -3060,6 +3321,10 @@ void load_inventory_stack_values(
             value.inventory_saved_stack_epoch,
             false));
     }
+    materialize_unresolved_saved_stack_alias(
+        destination,
+        state,
+        unresolved_saved_stack_alias_source_stack);
     destination.guarded = true;
     destination.complete = false;
     synchronize_inventory_provenance(destination);
@@ -3200,11 +3465,21 @@ void store_stack_value(AbstractState& state,
         (has_inventory_candidate_values(value) ||
          inventory_candidate_values_truncated(value) ||
          value.contextual_candidate_dependency ||
-         carries_stack_callback_payload(value) ||
-         has_saved_stack_epoch(value));
+         carries_stack_callback_payload(value));
     if (relevant_snapshot_mutation &&
         (offset.has_value() || may_alias_stack))
         mark_current_epoch_saved_snapshots_unresolved(state);
+    if (width == 4u && !offset.has_value() && may_alias_stack) {
+        if (carries_stack_callback_payload(value)) {
+            state.inventory_unresolved_stack_callback_loss = true;
+        } else if (has_latent_saved_stack_alias(value)) {
+            add_unresolved_saved_stack_alias(
+                state,
+                unresolved_saved_stack_alias_source_stack,
+                value.inventory_saved_stack_epoch
+                    .tracks_current_epoch);
+        }
+    }
     invalidate_stack_range(
         state, offset, may_alias_stack, preserve_guarded_inventory, width);
     if (offset.has_value() && width == 4u &&
@@ -3220,6 +3495,17 @@ void store_stack_value(AbstractState& state,
             state.inventory_unresolved_stack_callback_loss = true;
             state.inventory_stack_callback_loss_identity_truncated =
                 true;
+            return;
+        }
+        if (!state.stack_values.contains(*offset) &&
+            state.stack_values.size() >=
+                maximum_abi_stack_argument_slots &&
+            has_latent_saved_stack_alias(value)) {
+            add_unresolved_saved_stack_alias(
+                state,
+                unresolved_saved_stack_alias_source_stack,
+                value.inventory_saved_stack_epoch
+                    .tracks_current_epoch);
             return;
         }
         state.stack_values[*offset] = value;
@@ -3238,8 +3524,7 @@ void store_inventory_stack_value(
         (has_inventory_candidate_values(value) ||
          inventory_candidate_values_truncated(value) ||
          value.contextual_candidate_dependency ||
-         carries_stack_callback_payload(value) ||
-         has_saved_stack_epoch(value)))
+         carries_stack_callback_payload(value)))
         mark_current_epoch_saved_snapshots_unresolved(state);
     std::vector<std::pair<std::int32_t, std::size_t>>
         write_alternatives;
@@ -3264,9 +3549,18 @@ void store_inventory_stack_value(
         if (!state.stack_values.contains(inventory_offset) &&
             state.stack_values.size() >=
                 maximum_abi_stack_argument_slots) {
-            state.inventory_unresolved_stack_callback_loss = true;
-            state.inventory_stack_callback_loss_identity_truncated =
-                true;
+            if (carries_stack_callback_payload(inventory_value)) {
+                state.inventory_unresolved_stack_callback_loss = true;
+                state.inventory_stack_callback_loss_identity_truncated =
+                    true;
+            } else if (has_latent_saved_stack_alias(
+                           inventory_value)) {
+                add_unresolved_saved_stack_alias(
+                    state,
+                    unresolved_saved_stack_alias_source_stack,
+                    inventory_value.inventory_saved_stack_epoch
+                        .tracks_current_epoch);
+            }
             continue;
         }
         const auto [stored, inserted] =
@@ -3287,14 +3581,27 @@ void load_stack_value(AbstractValue& destination,
                       const std::size_t width) {
     if (!offset.has_value() || width != 4u) {
         make_unknown(destination);
+        if (width == 4u)
+            materialize_unresolved_saved_stack_alias(
+                destination,
+                state,
+                unresolved_saved_stack_alias_source_stack);
         return;
     }
     const auto value = state.stack_values.find(*offset);
     if (value == state.stack_values.end()) {
         make_unknown(destination);
+        materialize_unresolved_saved_stack_alias(
+            destination,
+            state,
+            unresolved_saved_stack_alias_source_stack);
         return;
     }
     destination = value->second;
+    materialize_unresolved_saved_stack_alias(
+        destination,
+        state,
+        unresolved_saved_stack_alias_source_stack);
 }
 
 void adjust_stack_offset(AbstractState& state,
@@ -3446,6 +3753,10 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
         stack_pointer.inventory_stack_callback_loss_unresolved;
     auto restored_epoch =
         std::move(stack_pointer.inventory_saved_stack_epoch);
+    const bool restored_latent_alias =
+        (restored_epoch.present || restored_epoch.unresolved) &&
+        !restored_epoch.candidate_payload_lost &&
+        restored_epoch.slots.empty();
     stack_pointer.inventory_saved_stack_epoch = {};
     const auto detach_saved_epoch = [](AbstractValue& value) {
         value.inventory_saved_stack_epoch.tracks_current_epoch = false;
@@ -3493,6 +3804,15 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
     if (old_stack_has_inventory_payload && old_stack_alias_survives)
         state.inventory_unresolved_stack_callback_loss = true;
     state.stack_values.clear();
+    state.inventory_unresolved_saved_stack_alias_sources =
+        static_cast<std::uint8_t>(
+            state.inventory_unresolved_saved_stack_alias_sources &
+            unresolved_saved_stack_alias_source_memory);
+    // Remaining unknown memory aliases now refer to the suspended epoch, not
+    // to the newly active stack.
+    state.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+        restored_latent_alias &&
+        state.inventory_unresolved_saved_stack_alias_sources != 0u;
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         const bool was_old_stack_alias =
             state[index].inventory_stack_derived ||
@@ -5048,9 +5368,32 @@ AbstractState make_callee_abi_input(
     }
 
     for (const auto& [slot, source] : caller.stack_values) {
+        auto projected_source = source;
+        if (has_latent_saved_stack_alias(projected_source)) {
+            add_unresolved_saved_stack_alias(
+                input,
+                unresolved_saved_stack_alias_source_stack,
+                projected_source.inventory_saved_stack_epoch
+                    .tracks_current_epoch);
+            projected_source.inventory_saved_stack_epoch = {};
+        }
+        if (carries_unresolved_stack_callback(projected_source)) {
+            // With an incomplete ABI readset the callee may consume any
+            // outgoing slot. Exact identities of pure loss markers therefore
+            // form an unbounded recursive ladder but add no precision over
+            // the existing state-wide fail-closed top.
+            input.inventory_unresolved_stack_callback_loss = true;
+            projected_source
+                .inventory_stack_callback_loss_unresolved = false;
+            if (projected_source.inventory_saved_stack_epoch.slots.empty())
+                projected_source.inventory_saved_stack_epoch = {};
+        }
+        if (!has_non_epoch_abstract_fact(projected_source) &&
+            !has_saved_stack_epoch(projected_source))
+            continue;
         if (!caller_sp.has_value() &&
-            !has_finite_inventory_candidate_values(source) &&
-            !carries_stack_callback_payload(source))
+            !has_finite_inventory_candidate_values(projected_source) &&
+            !carries_stack_callback_payload(projected_source))
             continue;
         for (const auto projection_base :
              caller_inventory_sp_coordinates) {
@@ -5065,7 +5408,7 @@ AbstractState make_callee_abi_input(
                 continue;
             const auto relative_slot =
                 static_cast<std::int32_t>(relative);
-            project_value(relative_slot, source);
+            project_value(relative_slot, projected_source);
             if (projection_truncated) break;
         }
         if (projection_truncated) break;
@@ -5199,7 +5542,8 @@ void mark_contextual_candidate_abi_arguments(
     for (std::uint8_t index = 4u; index <= 7u; ++index) {
         if ((entry_register_reads & register_bit(index)) != 0u &&
             (state[index].contextual_candidate_dependency ||
-             carries_stack_callback_payload(state[index])))
+             carries_stack_callback_payload(state[index]) ||
+             has_latent_saved_stack_alias(state[index])))
             return true;
     }
     const bool may_read_stack =
@@ -5207,7 +5551,9 @@ void mark_contextual_candidate_abi_arguments(
         !entry_stack_reads->complete ||
         !entry_stack_reads->slots.empty();
     if (may_read_stack &&
-        state.inventory_unresolved_stack_callback_loss)
+        (state.inventory_unresolved_stack_callback_loss ||
+         (state.inventory_unresolved_saved_stack_alias_sources &
+          unresolved_saved_stack_alias_source_stack) != 0u))
         return true;
     for (const auto& [slot, value] : state.stack_values) {
         if ((entry_stack_reads == nullptr || !entry_stack_reads->complete ||
@@ -5215,7 +5561,8 @@ void mark_contextual_candidate_abi_arguments(
                                 entry_stack_reads->slots.end(),
                                 slot)) &&
             (value.contextual_candidate_dependency ||
-             carries_stack_callback_payload(value)))
+             carries_stack_callback_payload(value) ||
+             has_latent_saved_stack_alias(value)))
             return true;
     }
     return false;
@@ -5417,6 +5764,13 @@ void apply_call(AbstractState& state,
     bool returned_inventory_pc_relative_code_literal_values_truncated = false;
     bool returned_contextual_candidate_dependency = false;
     bool returned_stack_callback_loss_unresolved = false;
+    bool returned_saved_stack_alias_latent = false;
+    bool returned_saved_stack_alias_tracks_current_epoch = false;
+    std::uint8_t returned_unresolved_saved_stack_alias_sources = 0u;
+    bool returned_unresolved_saved_stack_alias_tracks_current_epoch =
+        false;
+    bool returned_unresolved_stack_callback_loss = false;
+    bool returned_stack_callback_loss_identity_truncated = false;
     bool returned_memory_complete = candidate_callees_complete;
     bool returned_memory_initialized = false;
     std::map<std::uint32_t, AbstractValue> returned_memory;
@@ -5439,6 +5793,22 @@ void apply_call(AbstractState& state,
             returned_memory_complete = false;
             continue;
         }
+        returned_unresolved_saved_stack_alias_sources =
+            static_cast<std::uint8_t>(
+                returned_unresolved_saved_stack_alias_sources |
+                summary
+                    ->inventory_unresolved_saved_stack_alias_sources);
+        returned_unresolved_saved_stack_alias_tracks_current_epoch =
+            returned_unresolved_saved_stack_alias_tracks_current_epoch ||
+            summary
+                ->inventory_unresolved_saved_stack_alias_tracks_current_epoch;
+        returned_unresolved_stack_callback_loss =
+            returned_unresolved_stack_callback_loss ||
+            summary->inventory_unresolved_stack_callback_loss;
+        returned_stack_callback_loss_identity_truncated =
+            returned_stack_callback_loss_identity_truncated ||
+            summary
+                ->inventory_stack_callback_loss_identity_truncated;
         for (const auto& memory : summary->memory_values) {
             if (memory
                     .inventory_stack_callback_loss_unresolved) {
@@ -5469,11 +5839,20 @@ void apply_call(AbstractState& state,
                 value.inventory_stack_callback_loss_unresolved =
                     memory
                         .inventory_stack_callback_loss_unresolved;
+                if (memory.inventory_saved_stack_alias_latent) {
+                    value.inventory_saved_stack_epoch.present = true;
+                    value.inventory_saved_stack_epoch.unresolved = true;
+                    value.inventory_saved_stack_epoch
+                        .tracks_current_epoch =
+                        memory
+                            .inventory_saved_stack_alias_tracks_current_epoch;
+                }
                 value.call_sites = {call_site};
                 value.callees = {candidate};
                 if (value.known ||
                     value
-                        .inventory_stack_callback_loss_unresolved)
+                        .inventory_stack_callback_loss_unresolved ||
+                    has_saved_stack_epoch(value))
                     candidate_memory.emplace(
                         memory.address, std::move(value));
             }
@@ -5508,6 +5887,13 @@ void apply_call(AbstractState& state,
             returned_stack_callback_loss_unresolved ||
             returned
                 ->inventory_stack_callback_loss_unresolved;
+        returned_saved_stack_alias_latent =
+            returned_saved_stack_alias_latent ||
+            returned->inventory_saved_stack_alias_latent;
+        returned_saved_stack_alias_tracks_current_epoch =
+            returned_saved_stack_alias_tracks_current_epoch ||
+            returned
+                ->inventory_saved_stack_alias_tracks_current_epoch;
         returned_inventory_code_pointer_values.insert(
             returned_inventory_code_pointer_values.end(),
             returned->inventory_code_pointer_values.begin(),
@@ -5552,6 +5938,20 @@ void apply_call(AbstractState& state,
         }
         state.memory_values = std::move(returned_memory);
     }
+    add_unresolved_saved_stack_alias(
+        state,
+        returned_unresolved_saved_stack_alias_sources,
+        returned_unresolved_saved_stack_alias_tracks_current_epoch);
+    state.inventory_unresolved_stack_callback_loss =
+        state.inventory_unresolved_stack_callback_loss ||
+        returned_unresolved_stack_callback_loss;
+    state.inventory_stack_callback_loss_identity_truncated =
+        state.inventory_stack_callback_loss_identity_truncated ||
+        returned_stack_callback_loss_identity_truncated;
+    if (returned_stack_callback_loss_identity_truncated &&
+        walk_diagnostics != nullptr)
+        walk_diagnostics->inventory_candidate_values_truncated =
+            true;
     for (const auto address :
          returned_memory_stack_callback_loss_unresolved) {
         if (!state.memory_values.contains(address) &&
@@ -5585,7 +5985,8 @@ void apply_call(AbstractState& state,
         returned_inventory_pc_relative_code_literal_values.empty() &&
         !returned_inventory_code_pointer_values_truncated &&
         !returned_inventory_pc_relative_code_literal_values_truncated &&
-        !returned_stack_callback_loss_unresolved)
+        !returned_stack_callback_loss_unresolved &&
+        !returned_saved_stack_alias_latent)
         return;
     if (finite_return) {
         state[0u].known = true;
@@ -5608,6 +6009,13 @@ void apply_call(AbstractState& state,
     state[0u].contextual_candidate_dependency = returned_contextual_candidate_dependency;
     state[0u].inventory_stack_callback_loss_unresolved =
         returned_stack_callback_loss_unresolved;
+    if (returned_saved_stack_alias_latent) {
+        state[0u].inventory_saved_stack_epoch.present = true;
+        state[0u].inventory_saved_stack_epoch.unresolved = true;
+        state[0u].inventory_saved_stack_epoch
+            .tracks_current_epoch =
+            returned_saved_stack_alias_tracks_current_epoch;
+    }
     state.stack_may_alias[0u] = returned_may_alias_stack;
     state.inventory_stack_may_alias[0u] =
         returned_inventory_may_alias_stack;
@@ -6355,12 +6763,63 @@ FunctionEvaluation evaluate_function(
                 local_fixpoint_iterations);
     }
 
+    // A return block can be revisited while its input converges. Return-site
+    // identity is semantic; visit history is not. Coalesce each physical RTS
+    // before publishing summaries so recursive callers cannot be requeued by
+    // an ever-growing duplicate return_sites vector.
+    std::sort(returns.begin(),
+              returns.end(),
+              [](const auto& left, const auto& right) {
+                  return left.first < right.first;
+              });
+    std::vector<std::pair<std::uint32_t, AbstractState>>
+        coalesced_returns;
+    coalesced_returns.reserve(returns.size());
+    for (auto& returned : returns) {
+        if (coalesced_returns.empty() ||
+            coalesced_returns.back().first != returned.first) {
+            coalesced_returns.push_back(std::move(returned));
+            continue;
+        }
+        static_cast<void>(merge_state(
+            coalesced_returns.back().second,
+            returned.second,
+            may_merge_stack_inventory));
+    }
+    returns = std::move(coalesced_returns);
+
     // A block can be revisited while its local input converges.  Publish one
     // conservative observation per physical callsite/callee pair; exposing
     // transient visits to the interprocedural worklist lets the same callsite
     // alternately replace its callee input and can keep a recursive graph
     // alive long after the local state has stabilized.
     coalesce_call_arguments(evaluation.call_arguments);
+
+    for (const auto& [return_site, return_state] : returns) {
+        static_cast<void>(return_site);
+        evaluation.summary
+            .inventory_unresolved_saved_stack_alias_sources =
+            static_cast<std::uint8_t>(
+                evaluation.summary
+                    .inventory_unresolved_saved_stack_alias_sources |
+                return_state
+                    .inventory_unresolved_saved_stack_alias_sources);
+        evaluation.summary
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+            evaluation.summary
+                    .inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+            return_state
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch;
+        evaluation.summary.inventory_unresolved_stack_callback_loss =
+            evaluation.summary.inventory_unresolved_stack_callback_loss ||
+            return_state.inventory_unresolved_stack_callback_loss;
+        evaluation.summary
+            .inventory_stack_callback_loss_identity_truncated =
+            evaluation.summary
+                    .inventory_stack_callback_loss_identity_truncated ||
+            return_state
+                .inventory_stack_callback_loss_identity_truncated;
+    }
 
     const std::array<std::uint8_t, 8u> summary_registers{0u, 8u, 9u, 10u, 11u, 12u, 13u, 14u};
     for (const auto register_index : summary_registers) {
@@ -6387,6 +6846,8 @@ FunctionEvaluation evaluate_function(
         bool inventory_pc_relative_code_literal_values_truncated = false;
         bool contextual_candidate_dependency = false;
         bool inventory_stack_callback_loss_unresolved = false;
+        bool inventory_saved_stack_alias_latent = false;
+        bool inventory_saved_stack_alias_tracks_current_epoch = false;
         std::set<std::uint32_t> values;
         std::set<std::uint32_t> evidence;
         for (const auto& [return_site, state] : returns) {
@@ -6395,6 +6856,14 @@ FunctionEvaluation evaluate_function(
             inventory_stack_callback_loss_unresolved =
                 inventory_stack_callback_loss_unresolved ||
                 carries_stack_callback_payload(value);
+            inventory_saved_stack_alias_latent =
+                inventory_saved_stack_alias_latent ||
+                has_latent_saved_stack_alias(value);
+            inventory_saved_stack_alias_tracks_current_epoch =
+                inventory_saved_stack_alias_tracks_current_epoch ||
+                (has_latent_saved_stack_alias(value) &&
+                 value.inventory_saved_stack_epoch
+                     .tracks_current_epoch);
             if (carries_stack_callback_payload(value)) {
                 complete = false;
                 summary.guarded = true;
@@ -6431,6 +6900,10 @@ FunctionEvaluation evaluate_function(
         summary.contextual_candidate_dependency = contextual_candidate_dependency;
         summary.inventory_stack_callback_loss_unresolved =
             inventory_stack_callback_loss_unresolved;
+        summary.inventory_saved_stack_alias_latent =
+            inventory_saved_stack_alias_latent;
+        summary.inventory_saved_stack_alias_tracks_current_epoch =
+            inventory_saved_stack_alias_tracks_current_epoch;
         if (finite) summary.values.assign(values.begin(), values.end());
         summary.inventory_code_pointer_values.assign(
             inventory_code_pointer_values.begin(), inventory_code_pointer_values.end());
@@ -6471,11 +6944,17 @@ FunctionEvaluation evaluate_function(
     if (!returns.empty()) {
         std::set<std::uint32_t>
             returned_memory_stack_callback_loss_unresolved;
+        std::map<std::uint32_t, bool>
+            returned_memory_saved_stack_alias_latent;
         for (const auto& [return_site, state] : returns) {
             static_cast<void>(return_site);
             for (const auto& [address, value] :
                  state.memory_values) {
-                if (!carries_stack_callback_payload(value))
+                const bool callback_loss =
+                    carries_stack_callback_payload(value);
+                const bool latent_alias =
+                    has_latent_saved_stack_alias(value);
+                if (!callback_loss && !latent_alias)
                     continue;
                 const auto initial =
                     initial_state.memory_values.find(address);
@@ -6490,6 +6969,16 @@ FunctionEvaluation evaluate_function(
                     same_stack_callback_provenance(
                         initial->second, value))
                     continue;
+                if (latent_alias && !callback_loss) {
+                    auto& tracks_current =
+                        returned_memory_saved_stack_alias_latent[
+                            address];
+                    tracks_current =
+                        tracks_current ||
+                        value.inventory_saved_stack_epoch
+                            .tracks_current_epoch;
+                    continue;
+                }
                 if (!returned_memory_stack_callback_loss_unresolved
                          .contains(address) &&
                     returned_memory_stack_callback_loss_unresolved
@@ -6526,14 +7015,30 @@ FunctionEvaluation evaluate_function(
             memory.inventory_stack_callback_loss_unresolved =
                 returned_memory_stack_callback_loss_unresolved
                     .erase(address) != 0u;
+            const auto latent =
+                returned_memory_saved_stack_alias_latent.find(
+                    address);
+            memory.inventory_saved_stack_alias_latent =
+                latent !=
+                returned_memory_saved_stack_alias_latent.end();
+            if (latent !=
+                returned_memory_saved_stack_alias_latent.end()) {
+                memory
+                    .inventory_saved_stack_alias_tracks_current_epoch =
+                    latent->second;
+                returned_memory_saved_stack_alias_latent.erase(
+                    latent);
+            }
             memory.complete =
                 value.complete &&
                 !memory
-                     .inventory_stack_callback_loss_unresolved;
+                     .inventory_stack_callback_loss_unresolved &&
+                !memory.inventory_saved_stack_alias_latent;
             memory.guarded =
                 value.guarded ||
                 memory
-                    .inventory_stack_callback_loss_unresolved;
+                    .inventory_stack_callback_loss_unresolved ||
+                memory.inventory_saved_stack_alias_latent;
             memory.values = std::move(value.values);
             evaluation.summary.memory_values.push_back(std::move(memory));
         }
@@ -6552,6 +7057,26 @@ FunctionEvaluation evaluate_function(
             memory.guarded = true;
             memory
                 .inventory_stack_callback_loss_unresolved = true;
+            evaluation.summary.memory_values.push_back(
+                std::move(memory));
+        }
+        for (const auto& [address, tracks_current_epoch] :
+             returned_memory_saved_stack_alias_latent) {
+            if (evaluation.summary.memory_values.size() >=
+                maximum_memory_values) {
+                if (walk_diagnostics != nullptr)
+                    walk_diagnostics
+                        ->inventory_candidate_values_truncated =
+                        true;
+                break;
+            }
+            FunctionMemoryValueSummary memory;
+            memory.address = address;
+            memory.guarded = true;
+            memory.inventory_saved_stack_alias_latent = true;
+            memory
+                .inventory_saved_stack_alias_tracks_current_epoch =
+                tracks_current_epoch;
             evaluation.summary.memory_values.push_back(
                 std::move(memory));
         }
@@ -6593,6 +7118,16 @@ bool merge_candidate_input(
     merged.stack_offsets[15u] = 0;
     for (const auto& [call_site, state] : destination.observations) {
         static_cast<void>(call_site);
+        merged.inventory_unresolved_saved_stack_alias_sources =
+            static_cast<std::uint8_t>(
+                merged.inventory_unresolved_saved_stack_alias_sources |
+                state.inventory_unresolved_saved_stack_alias_sources);
+        merged
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+            merged
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+            state
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch;
         merged.inventory_unresolved_stack_callback_loss =
             merged.inventory_unresolved_stack_callback_loss ||
             state.inventory_unresolved_stack_callback_loss;
@@ -6641,16 +7176,27 @@ bool merge_candidate_input(
                 [&](auto& values,
                     const auto key,
                     const std::size_t limit,
+                    const std::uint8_t alias_source,
                     const AbstractValue& source) {
                 if (!values.contains(key) &&
                     values.size() >= limit) {
-                    if (walk_diagnostics != nullptr)
-                        walk_diagnostics
-                            ->inventory_candidate_values_truncated =
+                    if (has_latent_saved_stack_alias(source)) {
+                        add_unresolved_saved_stack_alias(
+                            merged,
+                            alias_source,
+                            source.inventory_saved_stack_epoch
+                                .tracks_current_epoch);
+                    } else {
+                        if (walk_diagnostics != nullptr)
+                            walk_diagnostics
+                                ->inventory_candidate_values_truncated =
+                                true;
+                        merged.inventory_unresolved_stack_callback_loss =
                             true;
-                    merged
-                        .inventory_stack_callback_loss_identity_truncated =
-                        true;
+                        merged
+                            .inventory_stack_callback_loss_identity_truncated =
+                            true;
+                    }
                     return;
                 }
                 AbstractValue provenance;
@@ -6673,6 +7219,7 @@ bool merge_candidate_input(
                         merged.stack_values,
                         slot,
                         maximum_abi_stack_argument_slots,
+                        unresolved_saved_stack_alias_source_stack,
                         value);
             }
             for (const auto& [address, value] : state.memory_values) {
@@ -6682,6 +7229,7 @@ bool merge_candidate_input(
                         merged.memory_values,
                         address,
                         maximum_memory_values,
+                        unresolved_saved_stack_alias_source_memory,
                         value);
             }
         }
@@ -6861,6 +7409,8 @@ bool merge_candidate_input(
                         walk_diagnostics
                             ->inventory_candidate_values_truncated =
                             true;
+                    merged.inventory_unresolved_stack_callback_loss =
+                        true;
                     merged
                         .inventory_stack_callback_loss_identity_truncated =
                         true;
@@ -6873,13 +7423,23 @@ bool merge_candidate_input(
                 if (!memory_saved_stack_epochs.contains(address) &&
                     memory_saved_stack_epochs.size() >=
                         maximum_memory_values) {
-                    if (walk_diagnostics != nullptr)
-                        walk_diagnostics
-                            ->inventory_candidate_values_truncated =
+                    if (has_latent_saved_stack_alias(value)) {
+                        add_unresolved_saved_stack_alias(
+                            merged,
+                            unresolved_saved_stack_alias_source_memory,
+                            value.inventory_saved_stack_epoch
+                                .tracks_current_epoch);
+                    } else {
+                        if (walk_diagnostics != nullptr)
+                            walk_diagnostics
+                                ->inventory_candidate_values_truncated =
+                                true;
+                        merged.inventory_unresolved_stack_callback_loss =
                             true;
-                    merged
-                        .inventory_stack_callback_loss_identity_truncated =
-                        true;
+                        merged
+                            .inventory_stack_callback_loss_identity_truncated =
+                            true;
+                    }
                     continue;
                 }
                 const auto [stored_epoch, inserted_epoch] =
@@ -6904,6 +7464,8 @@ bool merge_candidate_input(
                         walk_diagnostics
                             ->inventory_candidate_values_truncated =
                             true;
+                    merged.inventory_unresolved_stack_callback_loss =
+                        true;
                     merged
                         .inventory_stack_callback_loss_identity_truncated =
                         true;
@@ -6915,13 +7477,23 @@ bool merge_candidate_input(
                 if (!stack_saved_stack_epochs.contains(slot) &&
                     stack_saved_stack_epochs.size() >=
                         maximum_abi_stack_argument_slots) {
-                    if (walk_diagnostics != nullptr)
-                        walk_diagnostics
-                            ->inventory_candidate_values_truncated =
+                    if (has_latent_saved_stack_alias(value)) {
+                        add_unresolved_saved_stack_alias(
+                            merged,
+                            unresolved_saved_stack_alias_source_stack,
+                            value.inventory_saved_stack_epoch
+                                .tracks_current_epoch);
+                    } else {
+                        if (walk_diagnostics != nullptr)
+                            walk_diagnostics
+                                ->inventory_candidate_values_truncated =
+                                true;
+                        merged.inventory_unresolved_stack_callback_loss =
                             true;
-                    merged
-                        .inventory_stack_callback_loss_identity_truncated =
-                        true;
+                        merged
+                            .inventory_stack_callback_loss_identity_truncated =
+                            true;
+                    }
                     continue;
                 }
                 const auto [stored_epoch, inserted_epoch] =
@@ -6972,6 +7544,7 @@ bool merge_candidate_input(
             if (walk_diagnostics != nullptr)
                 walk_diagnostics
                     ->inventory_candidate_values_truncated = true;
+            merged.inventory_unresolved_stack_callback_loss = true;
             merged
                 .inventory_stack_callback_loss_identity_truncated =
                 true;
@@ -6991,12 +7564,22 @@ bool merge_candidate_input(
          memory_saved_stack_epochs) {
         if (!merged.memory_values.contains(address) &&
             merged.memory_values.size() >= maximum_memory_values) {
-            if (walk_diagnostics != nullptr)
-                walk_diagnostics
-                    ->inventory_candidate_values_truncated = true;
-            merged
-                .inventory_stack_callback_loss_identity_truncated =
-                true;
+            if (!epoch.candidate_payload_lost &&
+                epoch.slots.empty()) {
+                add_unresolved_saved_stack_alias(
+                    merged,
+                    unresolved_saved_stack_alias_source_memory,
+                    epoch.tracks_current_epoch);
+            } else {
+                if (walk_diagnostics != nullptr)
+                    walk_diagnostics
+                        ->inventory_candidate_values_truncated = true;
+                merged.inventory_unresolved_stack_callback_loss =
+                    true;
+                merged
+                    .inventory_stack_callback_loss_identity_truncated =
+                    true;
+            }
             continue;
         }
         AbstractValue provenance;
@@ -7047,6 +7630,7 @@ bool merge_candidate_input(
             if (walk_diagnostics != nullptr)
                 walk_diagnostics
                     ->inventory_candidate_values_truncated = true;
+            merged.inventory_unresolved_stack_callback_loss = true;
             merged
                 .inventory_stack_callback_loss_identity_truncated =
                 true;
@@ -7067,12 +7651,22 @@ bool merge_candidate_input(
         if (!merged.stack_values.contains(slot) &&
             merged.stack_values.size() >=
                 maximum_abi_stack_argument_slots) {
-            if (walk_diagnostics != nullptr)
-                walk_diagnostics
-                    ->inventory_candidate_values_truncated = true;
-            merged
-                .inventory_stack_callback_loss_identity_truncated =
-                true;
+            if (!epoch.candidate_payload_lost &&
+                epoch.slots.empty()) {
+                add_unresolved_saved_stack_alias(
+                    merged,
+                    unresolved_saved_stack_alias_source_stack,
+                    epoch.tracks_current_epoch);
+            } else {
+                if (walk_diagnostics != nullptr)
+                    walk_diagnostics
+                        ->inventory_candidate_values_truncated = true;
+                merged.inventory_unresolved_stack_callback_loss =
+                    true;
+                merged
+                    .inventory_stack_callback_loss_identity_truncated =
+                    true;
+            }
             continue;
         }
         AbstractValue provenance;
@@ -7103,7 +7697,14 @@ bool requires_isolated_store_harvest(
             [&](const auto call_site) { return input.observations.contains(call_site); }))
         return true;
     if (!input.expected_call_sites.contains(call_site)) return true;
-    if (observation.inventory_unresolved_stack_callback_loss !=
+    if (observation.inventory_unresolved_saved_stack_alias_sources !=
+            input.state
+                .inventory_unresolved_saved_stack_alias_sources ||
+        observation
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch !=
+            input.state
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+        observation.inventory_unresolved_stack_callback_loss !=
             input.state.inventory_unresolved_stack_callback_loss ||
         observation.inventory_stack_callback_loss_identity_truncated !=
             input.state
@@ -9121,6 +9722,15 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
                                        required_stack_reads = nullptr) {
     AbstractState input;
     input.stack_offsets[15u] = 0;
+    input.inventory_unresolved_saved_stack_alias_sources =
+        retain_stack_inputs
+            ? observation
+                  .inventory_unresolved_saved_stack_alias_sources
+            : 0u;
+    input.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+        retain_stack_inputs &&
+        observation
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch;
     input.inventory_unresolved_stack_callback_loss =
         retain_stack_inputs &&
         observation.inventory_unresolved_stack_callback_loss;
@@ -9160,6 +9770,7 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
             }
         } else {
             input.stack_values = observation.stack_values;
+            collapse_payload_free_stack_aliases(input);
         }
         for (auto& [slot, value] : input.stack_values) {
             static_cast<void>(slot);
@@ -9234,6 +9845,8 @@ AbstractState tail_store_input(
                 required_stack_reads->slots.end(),
                 stored.first);
         });
+    } else {
+        collapse_payload_free_stack_aliases(input);
     }
     for (auto& [offset, value] : input.stack_values) {
         static_cast<void>(offset);
@@ -9257,7 +9870,14 @@ AbstractState tail_store_input(
 bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage& image,
                                                const AbstractState& observation,
                                                const AbstractState& merged_input) {
-    if (observation.inventory_unresolved_stack_callback_loss !=
+    if (observation.inventory_unresolved_saved_stack_alias_sources !=
+            merged_input
+                .inventory_unresolved_saved_stack_alias_sources ||
+        observation
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch !=
+            merged_input
+                .inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+        observation.inventory_unresolved_stack_callback_loss !=
             merged_input.inventory_unresolved_stack_callback_loss ||
         observation.inventory_stack_callback_loss_identity_truncated !=
             merged_input

@@ -37,6 +37,11 @@ struct FunctionRegisterValueSummary {
     // Inventory-only fail-closed provenance. The concrete return value may be
     // a callback whose finite stack candidate was lost during analysis.
     bool inventory_stack_callback_loss_unresolved = false;
+    // Payload-free saved-stack lineage is not a lost callback. It becomes a
+    // fail-closed loss only if that same current epoch later receives a
+    // relevant callback candidate.
+    bool inventory_saved_stack_alias_latent = false;
+    bool inventory_saved_stack_alias_tracks_current_epoch = false;
     std::vector<std::uint32_t> values;
     std::vector<std::uint32_t> return_sites;
     std::vector<std::uint32_t> evidence_callees;
@@ -52,6 +57,8 @@ struct FunctionMemoryValueSummary {
     // Address-scoped counterpart of the register provenance above. It remains
     // attached to this exact memory cell across a function return.
     bool inventory_stack_callback_loss_unresolved = false;
+    bool inventory_saved_stack_alias_latent = false;
+    bool inventory_saved_stack_alias_tracks_current_epoch = false;
     std::vector<std::uint32_t> values;
 
     bool operator==(const FunctionMemoryValueSummary&) const = default;
@@ -62,6 +69,12 @@ struct FunctionValueSummary {
     std::vector<FunctionRegisterValueSummary> registers;
     bool memory_complete = false;
     std::vector<FunctionMemoryValueSummary> memory_values;
+    // Bounded top for payload-free aliases whose exact storage identity was
+    // widened away inside this function (stack=1, memory=2).
+    std::uint8_t inventory_unresolved_saved_stack_alias_sources = 0u;
+    bool inventory_unresolved_saved_stack_alias_tracks_current_epoch = false;
+    bool inventory_unresolved_stack_callback_loss = false;
+    bool inventory_stack_callback_loss_identity_truncated = false;
 
     bool operator==(const FunctionValueSummary&) const = default;
 };
