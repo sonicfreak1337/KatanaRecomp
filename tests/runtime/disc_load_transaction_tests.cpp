@@ -2,7 +2,9 @@
 
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdrom_controller.hpp"
+#include "katana/runtime/native_aot_template.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -164,6 +166,7 @@ void latent_aot_multiread_regression() {
     TransactionFixture fixture;
     fixture.coordinator->set_aot_module_descriptors(
         std::array{DiscLoadAotModuleDescriptor{"latent_fixture",
+                                                "latent_fixture_template",
                                                 "sha256:recipe-content",
                                                 source,
                                                 static_cast<std::uint32_t>(file.size()),
@@ -181,6 +184,8 @@ void latent_aot_multiread_regression() {
     const auto* pending = fixture.modules.resolve(target, 4u);
     require(first.ranges.front().module_activated && pending != nullptr &&
                 pending->bytes.size() == 4u && pending->executable_permission &&
+                pending->native_aot_template_id ==
+                    "latent_fixture_template" &&
                 !pending->control_transfer_promotion_allowed &&
                 pending->active_extents ==
                     std::vector<ExecutableModuleActiveExtent>{{0u, 4u}} &&
@@ -199,6 +204,8 @@ void latent_aot_multiread_regression() {
                 complete->bytes == std::vector<std::uint8_t>(file.begin(), file.end()) &&
                 complete->content_identity == "sha256:recipe-content" &&
                 complete->byte_identity == disc_load_byte_identity(file) &&
+                complete->native_aot_template_id ==
+                    "latent_fixture_template" &&
                 complete->active_extents ==
                     std::vector<ExecutableModuleActiveExtent>{
                         {0u, static_cast<std::uint32_t>(file.size())}},
@@ -219,6 +226,7 @@ void latent_aot_multiread_regression() {
     TransactionFixture wrong_identity;
     wrong_identity.coordinator->set_aot_module_descriptors(
         std::array{DiscLoadAotModuleDescriptor{"latent_fixture",
+                                                "latent_fixture_template",
                                                 "sha256:recipe-content",
                                                 source,
                                                 static_cast<std::uint32_t>(file.size()),
@@ -239,6 +247,43 @@ void latent_aot_multiread_regression() {
         source + 4u)));
     require(wrong_identity.modules.resolve(target, file.size()) == nullptr,
             "Fremde Contentidentitaet vervollstaendigt eine alte AOT-Coverage.");
+
+    constexpr std::uint64_t second_source = source + 0x1000u;
+    constexpr std::uint32_t second_target = target + 0x1000u;
+    TransactionFixture second_extent;
+    second_extent.coordinator->set_aot_module_descriptors(std::array{
+        DiscLoadAotModuleDescriptor{"latent_fixture_extent_a",
+                                     "latent_fixture_template",
+                                     "sha256:recipe-content",
+                                     source,
+                                     static_cast<std::uint32_t>(file.size()),
+                                     disc_load_byte_identity(file)},
+        DiscLoadAotModuleDescriptor{"latent_fixture_extent_b",
+                                     "latent_fixture_template",
+                                     "sha256:recipe-content",
+                                     second_source,
+                                     static_cast<std::uint32_t>(file.size()),
+                                     disc_load_byte_identity(file)}});
+    const auto second_extent_load = second_extent.coordinator->execute(
+        request(1u,
+                0x8C003000u,
+                second_target,
+                file,
+                "sha256:recipe-content",
+                second_source));
+    const auto* second_extent_module =
+        second_extent.modules.resolve(second_target, file.size());
+    require(
+        second_extent_load.ranges.front().module_activated &&
+            second_extent_module != nullptr &&
+            second_extent_module->id.starts_with(
+                "disc-loaded-aot-latent_fixture_extent_b-") &&
+            second_extent_module->native_aot_template_id ==
+                "latent_fixture_template" &&
+            second_extent_module->bytes ==
+                std::vector<std::uint8_t>(file.begin(), file.end()),
+        "Der zweite bytegleiche Disc-Extent wurde nicht an dieselbe explizite "
+        "native Template-ID gebunden.");
 }
 
 void fragmented_full_aot_segment_retention_regression() {
@@ -253,6 +298,7 @@ void fragmented_full_aot_segment_retention_regression() {
     fixture.coordinator->set_aot_module_descriptors(
         std::array{DiscLoadAotModuleDescriptor{
             "fragmented_fixture",
+            "fragmented_fixture_template",
             "sha256:fragmented-content",
             source,
             static_cast<std::uint32_t>(file.size()),
@@ -335,6 +381,154 @@ void fragmented_full_aot_segment_retention_regression() {
                                module.id.starts_with("disc-pending-aot-");
                     }),
             "Mutation im Entry-Slice wurde als segmentlokal identisch retained.");
+}
+
+void mismatched_template_id_retention_regression() {
+    constexpr std::uint32_t target = 0x0C004800u;
+    constexpr std::uint64_t source = 0x18800u;
+    constexpr std::uint32_t entry_offset = 4u;
+    const std::array<std::uint8_t, 16u> file{
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+    TransactionFixture fixture;
+    fixture.coordinator->set_aot_module_descriptors(
+        std::array{DiscLoadAotModuleDescriptor{
+            "template_identity_fixture",
+            "expected_template",
+            "sha256:template-identity-content",
+            source,
+            static_cast<std::uint32_t>(file.size()),
+            disc_load_byte_identity(file)}});
+    const auto full = fixture.coordinator->execute(
+        request(1u,
+                0x8C004800u,
+                target,
+                file,
+                "sha256:template-identity-content",
+                source));
+    const auto* owner =
+        fixture.modules.resolve(target, file.size());
+    require(full.ranges.front().module_activated && owner != nullptr,
+            "Template-ID-Retentionstest konnte keinen Fullowner aufbauen.");
+    auto mismatched_owner = *owner;
+    mismatched_owner.native_aot_template_id =
+        "wrong_template";
+    fixture.modules.replace(
+        std::move(mismatched_owner), fixture.blocks, fixture.tracker);
+
+    const auto entry =
+        std::span<const std::uint8_t>(file).subspan(entry_offset, 2u);
+    const auto reloaded = fixture.coordinator->execute(
+        request(2u,
+                0x8C004800u + entry_offset,
+                target + entry_offset,
+                entry,
+                "sha256:template-identity-content",
+                source + entry_offset));
+    const auto snapshot = fixture.modules.snapshot();
+    require(
+        !reloaded.ranges.front().exact_module_retained &&
+            reloaded.ranges.front().module_activated &&
+            std::any_of(
+                snapshot.modules.begin(),
+                snapshot.modules.end(),
+                [](const auto& module) {
+                    return module.active &&
+                           module.native_aot_template_id ==
+                               "expected_template";
+                }),
+        "Bytegleicher Fullowner mit falscher nativer Template-ID wurde "
+        "als exakter Modulbesitzer retained.");
+}
+
+void unregistered_extent_clears_typed_aot_owner_regression() {
+    constexpr std::uint32_t target = 0x0C005800u;
+    constexpr std::uint64_t registered_source = 0x19800u;
+    constexpr std::uint64_t unregistered_source = 0x1A800u;
+    const std::array<std::uint8_t, 8u> file{
+        0x09u, 0x00u, 0x0Bu, 0x00u,
+        0x09u, 0x00u, 0x0Bu, 0x00u};
+    const auto file_identity = disc_load_byte_identity(file);
+    TransactionFixture fixture;
+    fixture.coordinator->set_aot_module_descriptors(
+        std::array{DiscLoadAotModuleDescriptor{
+            "registered_extent_fixture",
+            "registered_extent_template",
+            "sha256:registered-extent-content",
+            registered_source,
+            static_cast<std::uint32_t>(file.size()),
+            file_identity}});
+
+    const auto registered = fixture.coordinator->execute(
+        request(1u,
+                0x8C005800u,
+                target,
+                file,
+                "sha256:registered-extent-content",
+                registered_source));
+    const auto* typed_owner =
+        fixture.modules.resolve(target, file.size());
+    require(
+        registered.ranges.front().module_activated &&
+            typed_owner != nullptr &&
+            typed_owner->native_aot_template_id ==
+                "registered_extent_template",
+        "Registrierter Disc-Extent publizierte keinen typisierten AOT-Owner.");
+
+    const auto unregistered = fixture.coordinator->execute(
+        request(2u,
+                0x8C005800u,
+                target,
+                file,
+                "sha256:registered-extent-content",
+                unregistered_source));
+    const auto* ordinary_owner =
+        fixture.modules.resolve(target, file.size());
+    const auto catalog = fixture.modules.snapshot();
+    require(
+        !unregistered.bytes_changed &&
+            !unregistered.ranges.front().exact_module_retained &&
+            unregistered.ranges.front().module_activated &&
+            unregistered.identity_rebound &&
+            ordinary_owner != nullptr &&
+            ordinary_owner->native_aot_template_id.empty() &&
+            !ordinary_owner->executable_permission &&
+            ordinary_owner->control_transfer_promotion_allowed &&
+            std::none_of(
+                catalog.modules.begin(),
+                catalog.modules.end(),
+                [&](const auto& module) {
+                    return module.active &&
+                           module.contains(target, file.size()) &&
+                           !module.native_aot_template_id.empty();
+                }),
+        "Nicht registrierter bytegleicher Disc-Extent erbte die Template-ID "
+        "des vorherigen typisierten Owners.");
+
+    CpuState cpu;
+    cpu.memory = Memory(0u);
+    static_cast<void>(map_dreamcast_main_ram(cpu.memory));
+    cpu.memory.write_bytes(target, file, CodeWriteSource::Copy);
+    const std::array templates{NativeAotTemplate{
+        "registered_extent_template",
+        file_identity,
+        0x88000000u,
+        static_cast<std::uint32_t>(file.size()),
+        0,
+        {},
+        NativeAotTemplateDestination::LoadedModule,
+        "sha256:registered-extent-content",
+        file_identity}};
+    NativeAotTemplateBinder binder(
+        cpu, fixture.modules, fixture.blocks, templates);
+    const auto bind = binder.bind(target, target, file, {});
+    require(
+        !bind &&
+            bind.failure == NativeAotTemplateBindFailure::MissingAot &&
+            bind.candidate.rejection_failure ==
+                MaterializationFailure::MissingAot,
+        "Nicht registrierter bytegleicher Disc-Extent aktivierte weiterhin "
+        "das alte native AOT-Template.");
 }
 
 void split_range_and_nonmain_invalidation_regression() {
@@ -485,6 +679,8 @@ int main() {
         identity_alias_and_atomic_rejection_regression();
         latent_aot_multiread_regression();
         fragmented_full_aot_segment_retention_regression();
+        mismatched_template_id_retention_regression();
+        unregistered_extent_clears_typed_aot_owner_regression();
         split_range_and_nonmain_invalidation_regression();
         partial_catalog_index_and_contract_regression();
         std::cout << "disc load transaction tests passed\n";

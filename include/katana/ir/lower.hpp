@@ -13,6 +13,13 @@ namespace katana::ir {
 [[nodiscard]] Operation
 lowering_operation_for_instruction(katana::sh4::InstructionKind kind) noexcept;
 
+// Lowers exactly one decoded instruction context. This deliberately does not
+// attach analysis-derived indirect targets; callers that validate serialized
+// IR can therefore compare every source-derived field against current bytes
+// before accepting the analysis-specific graph metadata.
+[[nodiscard]] Instruction
+lower_instruction(const katana::sh4::DisassemblyLine& line);
+
 [[nodiscard]] Function
 lower_function(std::span<const katana::sh4::DisassemblyLine> lines,
                const katana::analysis::FunctionInfo& function,

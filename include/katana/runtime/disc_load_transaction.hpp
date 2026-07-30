@@ -85,9 +85,12 @@ using DiscLoadAdmissionObserver =
 // Exported latent-AOT metadata contains no path, file name or source bytes. The logical byte range
 // is in the representation-independent cooked DiscSource address space bound by content_identity.
 struct DiscLoadAotModuleDescriptor {
-    // Stable generated template identifier. Registration carries metadata only;
+    // Stable source-binding identifier. Registration carries metadata only;
     // the corresponding payload enters the module catalog after a proven guest load.
     std::string opaque_id;
+    // Exact LoadedModule NativeAotTemplate::source_module_id selected by this
+    // source binding. Multiple disc extents may name the same template.
+    std::string template_id;
     std::string content_identity;
     std::uint64_t source_byte_offset = 0u;
     std::uint32_t byte_size = 0u;

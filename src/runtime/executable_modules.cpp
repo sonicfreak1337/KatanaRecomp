@@ -420,13 +420,31 @@ bool overlapping_relocated_bytes_match(const ExecutableModule& left,
     return true;
 }
 
+bool equivalent_native_aot_owner_binding(
+    const ExecutableModule& left,
+    const ExecutableModule& right) noexcept {
+    // Ordinary modules retain the historical byte-equivalent failover
+    // contract. A typed native-AOT owner may only fail over within the same
+    // exact template/content/byte binding.
+    if (left.native_aot_template_id.empty() &&
+        right.native_aot_template_id.empty())
+        return true;
+    return !left.native_aot_template_id.empty() &&
+           left.native_aot_template_id ==
+               right.native_aot_template_id &&
+           left.content_identity == right.content_identity &&
+           left.byte_identity == right.byte_identity;
+}
+
 std::vector<ExecutableModuleActiveExtent> extents_without_equivalent_owner(
     const ExecutableModule& removed,
     const std::span<const ExecutableModule> modules) {
     auto remaining = removed.active_extents;
     const auto removed_base = canonical_physical_address(removed.guest_start);
     for (const auto& candidate : modules) {
-        if (&candidate == &removed || !candidate.active) continue;
+        if (&candidate == &removed || !candidate.active ||
+            !equivalent_native_aot_owner_binding(removed, candidate))
+            continue;
         const auto candidate_base = canonical_physical_address(candidate.guest_start);
         for (const auto removed_extent : removed.active_extents) {
             const auto removed_begin =
@@ -2238,6 +2256,9 @@ DemandBlockMaterializer::compatible_owner(const MaterializedOrigin& origin) cons
         if (module.id == origin.module_id) continue;
         if (!origin_matches_module(origin, module)) continue;
         if (origin.aot_template) {
+            if (!equivalent_native_aot_owner_binding(
+                    *aot_reference, module))
+                continue;
             const auto reference_offset =
                 module_offset(*aot_reference,
                               origin.block_module_address,

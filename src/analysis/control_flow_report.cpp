@@ -423,6 +423,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
            << ",\"guarded_abi_stack_argument_projection_truncated_functions\":"
            << analysis.guarded_code_inventory_walk.abi_stack_argument_projection_truncated_functions
+           << ",\"guarded_maximum_local_fixpoint_iterations\":"
+           << analysis.guarded_code_inventory_walk.maximum_local_fixpoint_iterations
            << ",\"guarded_inventory_candidate_values_truncated\":"
            << (analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated ? "true" : "false")
            << ",\"guarded_abi_stack_base_unresolved\":"
@@ -822,6 +824,10 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                    << (value.inventory_code_pointer ? "true" : "false")
                    << ",\"inventory_pc_relative_code_literal\":"
                    << (value.inventory_pc_relative_code_literal ? "true" : "false")
+                   << ",\"inventory_stack_callback_loss_unresolved\":"
+                   << (value.inventory_stack_callback_loss_unresolved
+                           ? "true"
+                           : "false")
                    << ",\"reason\":" << katana::io::quote_json(value.reason) << ",\"values\":[";
             for (std::size_t item = 0u; item < value.values.size(); ++item) {
                 if (item != 0u) output << ',';
@@ -846,7 +852,12 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             const auto& value = function_summary.memory_values[memory];
             output << "{\"address\":" << katana::io::quote_json(hex32(value.address))
                    << ",\"complete\":" << (value.complete ? "true" : "false")
-                   << ",\"guarded\":" << (value.guarded ? "true" : "false") << ",\"values\":[";
+                   << ",\"guarded\":" << (value.guarded ? "true" : "false")
+                   << ",\"inventory_stack_callback_loss_unresolved\":"
+                   << (value.inventory_stack_callback_loss_unresolved
+                           ? "true"
+                           : "false")
+                   << ",\"values\":[";
             for (std::size_t item = 0u; item < value.values.size(); ++item) {
                 if (item != 0u) output << ',';
                 output << katana::io::quote_json(hex32(value.values[item]));

@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <string>
@@ -25,10 +26,28 @@ struct LatentAotEntryHint {
     [[nodiscard]] bool operator==(const LatentAotEntryHint&) const = default;
 };
 
+enum class LatentAotDiscoveryMode : std::uint8_t {
+    // Exact hints are resolved first, followed by bounded unhinted discovery.
+    HintsAndHeuristics,
+    // Only exact hints are resolved; an empty hint set performs no disc scan.
+    ExactOnly,
+};
+
 struct LatentAotDiscoveryOptions {
+    LatentAotDiscoveryMode mode = LatentAotDiscoveryMode::HintsAndHeuristics;
+    // Optional persistent, local-only analysis cache. The caller must place it
+    // below its existing private codegen-cache root; neither this path nor a
+    // cache key survives into exported product metadata. Persistent caching is
+    // enabled only when analysis_implementation_identity proves the exact
+    // analyzer/exporter binary; an empty identity deliberately disables it.
+    std::filesystem::path analysis_cache_root;
+    std::string analysis_implementation_identity;
     std::size_t maximum_directory_entries = 4096u;
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;
     std::size_t maximum_total_directory_bytes = 16u * 1024u * 1024u;
+    // Maximum number of unique heuristic templates analyzed. Byte-identical
+    // later extents may still be hashed within maximum_total_file_bytes so
+    // their source bindings are not lost.
     std::size_t maximum_candidate_files = 128u;
     std::size_t maximum_file_bytes =
         katana::runtime::maximum_native_aot_template_extent;
@@ -59,18 +78,30 @@ struct PreparedLatentAotBlockIdentity {
     [[nodiscard]] bool operator==(const PreparedLatentAotBlockIdentity&) const = default;
 };
 
-// Export-time description of a disc file whose finite native SH-4 graph was
-// accepted. Paths, names and source bytes deliberately do not survive this
-// boundary.
+// One exact logical disc extent which may materialize a byte-identical native
+// template at runtime. The identifier is descriptor-local and carries neither
+// a source path nor source bytes.
+struct PreparedLatentAotSourceBinding {
+    std::string id;
+    std::uint64_t disc_byte_offset = 0u;
+    std::uint32_t byte_size = 0u;
+
+    [[nodiscard]] bool operator==(const PreparedLatentAotSourceBinding&) const = default;
+};
+
+// Export-time description of one byte template whose finite native SH-4 graph
+// was accepted. Multiple exact disc extents may bind the same template. Paths,
+// names and source bytes deliberately do not survive this boundary.
 struct PreparedLatentAotModule {
     std::string id;
     std::string byte_identity;
-    std::uint64_t disc_byte_offset = 0u;
     std::uint32_t byte_size = 0u;
     std::uint32_t source_address = 0u;
-    // Includes the conventional module entry at offset zero and every accepted
-    // hash-bound explicit entry. The exporter must require a native source
-    // block for every listed offset before publishing a loaded-module template.
+    std::vector<PreparedLatentAotSourceBinding> source_bindings;
+    // Contains offset zero for a heuristic candidate, or exactly the accepted
+    // hash-bound explicit offsets for an exact candidate. The exporter must
+    // require a native source block for every listed offset before publishing
+    // a loaded-module template.
     std::vector<std::uint32_t> entry_offsets;
     // Sorted, non-overlapping identities for every uniquely emitted native IR
     // block. Only hashes survive export-time discovery; source bytes do not.
@@ -80,10 +111,19 @@ struct PreparedLatentAotModule {
 
 struct LatentAotDiscovery {
     std::vector<PreparedLatentAotModule> modules;
+    // One wall-clock sample per unique analyzed candidate, in deterministic
+    // candidate order. Workers only write their own slot; reporting happens
+    // after the parallel region so telemetry never races on stdout.
+    std::vector<std::uint64_t> analysis_candidate_duration_ms;
     std::size_t examined_files = 0u;
     std::size_t rejected_files = 0u;
     std::size_t duplicate_files = 0u;
     std::uint64_t examined_bytes = 0u;
+    std::size_t analysis_cache_positive_hits = 0u;
+    std::size_t analysis_cache_negative_hits = 0u;
+    std::size_t analysis_cache_misses = 0u;
+    std::size_t analysis_cache_corrupt_entries = 0u;
+    std::size_t analysis_cache_stores = 0u;
 };
 
 // Every address that the native backend relocates must stay inside the exact

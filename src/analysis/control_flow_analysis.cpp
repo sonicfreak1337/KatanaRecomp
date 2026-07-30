@@ -1514,6 +1514,23 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             }
             if (changed) break;
 
+            // Once every proof target has had the opportunity to grow the
+            // outer decode graph, fold boundary normalization into the same
+            // candidate-contract snapshot as the FunctionValue
+            // reconciliation.  Waiting until the unnormalized contracts had
+            // first stabilized forced a whole additional FunctionValue pass
+            // over an otherwise unchanged graph.
+            if (!boundary_contracts_active) {
+                boundary_contracts_active = true;
+                static_cast<void>(
+                    apply_decode_boundary_downgrades());
+                classify_dynamic_sites(
+                    analysis.recursive.instructions,
+                    analysis.indirect_control_flow);
+                bind_partial_runtime_contracts(
+                    analysis.indirect_control_flow);
+            }
+
             const auto reconciled_edges = collect_function_value_edges(
                 analysis.indirect_control_flow, analysis.jump_tables);
             if (reconciled_edges != provisional_edges) continue;
@@ -1547,22 +1564,6 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 }
             }
             if (changed) break;
-
-            if (!boundary_contracts_active) {
-                boundary_contracts_active = true;
-                static_cast<void>(
-                    apply_decode_boundary_downgrades());
-                classify_dynamic_sites(
-                    analysis.recursive.instructions,
-                    analysis.indirect_control_flow);
-                bind_partial_runtime_contracts(
-                    analysis.indirect_control_flow);
-                const auto boundary_edges =
-                    collect_function_value_edges(
-                        analysis.indirect_control_flow,
-                        analysis.jump_tables);
-                if (boundary_edges != reconciled_edges) continue;
-            }
 
             analysis.function_summary_iterations =
                 function_values.fixpoint_iterations;

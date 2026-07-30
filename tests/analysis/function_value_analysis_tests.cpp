@@ -1,17 +1,25 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/function_value_analysis.hpp"
+#include "katana/analysis/parallel_work.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/verifier.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <barrier>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <future>
 #include <iostream>
+#include <mutex>
 #include <set>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -684,6 +692,68 @@ multi_owner_inventory_start_values() {
          {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
          true},
     }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+duplicate_forwarded_context_values() {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xA002u); // owner A -> shared 0x08
+    put_u16(0x02u, 0x0009u);
+    put_u16(0x04u, 0xA000u); // owner B -> shared 0x08
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0xD402u); // identical callback literal 0x14 -> r4
+    put_u16(0x0Au, 0x412Bu); // shared candidate-only tail -> 0x20
+    put_u16(0x0Cu, 0x0009u);
+    put_u32(0x14u, 0x70u);
+    put_u16(0x20u, 0x2742u); // persistent callback store
+    put_u16(0x22u, 0x000Bu);
+    put_u16(0x24u, 0x0009u);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".duplicate-forwarded-context",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, 0x0Eu},
+            {0x04u, 0x0Au},
+            {0x20u, 0x06u},
+        }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
+        edges{{
+            {0x0Au,
+             0x20u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+        }};
     return katana::analysis::analyze_function_values(
         image, lines, boundaries, edges);
 }
@@ -1531,6 +1601,120 @@ saved_stack_epoch_missing_memory_loop_values() {
         image, lines, boundaries);
 }
 
+katana::analysis::FunctionValueAnalysisResult
+saved_stack_epoch_missing_stack_loop_values() {
+    std::vector<std::uint8_t> bytes(0x10u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0x2FF2u); // [r15] = current SP epoch
+    put_u16(0x02u, 0x8902u); // bt 0x0A retains the slot
+    put_u16(0x04u, 0x2F00u); // mov.b r0,@r15 removes the long slot
+    put_u16(0x06u, 0xAFFCu); // bra 0x02
+    put_u16(0x08u, 0x0009u);
+    put_u16(0x0Au, 0xAFFAu); // retained-slot path rejoins at 0x02
+    put_u16(0x0Cu, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".saved-stack-epoch-missing-stack-loop",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u>
+        boundaries{{
+            {0x00u, 0x0Eu},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+translated_saved_stack_epoch_loop_values(
+    const bool direct_local_sink) {
+    std::vector<std::uint8_t> bytes(0x94u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xD40Bu); // callback 0x80 -> r4
+    put_u16(0x02u, 0x2F42u); // [r15] = callback
+    put_u16(0x04u, 0xD10Cu); // saved-SP cell 0x60 -> r1
+    put_u16(0x06u, 0x21F2u); // [r1] = r15 plus captured epoch
+    put_u16(0x08u, 0x6A12u); // captured epoch -> r10
+    put_u16(0x0Au, 0x8902u); // bt 0x12, unknown T exits loop
+    put_u16(0x0Cu, 0x7A01u); // add #1,r10 translates epoch slots
+    put_u16(0x0Eu, 0xAFFCu); // bra 0x0A
+    put_u16(0x10u, 0x0009u);
+    put_u16(0x12u, 0x6FA3u); // consume widened epoch as new r15
+    put_u16(0x14u, 0x64F2u); // possible lost slot -> r4
+    put_u16(
+        0x16u,
+        direct_local_sink
+            ? 0xD510u // persistent destination 0x64 -> r5
+            : 0xB013u); // register-only persistent sink 0x40
+    put_u16(
+        0x18u,
+        direct_local_sink
+            ? 0x2542u // owner-local [r5] = r4
+            : 0x0009u);
+    put_u16(0x1Au, 0x000Bu);
+    put_u16(0x1Cu, 0x0009u);
+
+    put_u32(0x30u, 0x80u);
+    put_u32(0x38u, 0x60u);
+    put_u16(0x40u, 0xD505u); // persistent destination 0x64 -> r5
+    put_u16(0x42u, 0x2542u); // [r5] = r4
+    put_u16(0x44u, 0x000Bu);
+    put_u16(0x46u, 0x0009u);
+    put_u32(0x58u, 0x64u);
+    put_u32(0x60u, 0x90u); // static decoy loses to memory forwarding
+    for (const auto target : {0x80u, 0x90u}) {
+        put_u16(target, 0x000Bu);
+        put_u16(target + 2u, 0x0009u);
+    }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({direct_local_sink
+                           ? ".translated-saved-stack-epoch-local-loop"
+                           : ".translated-saved-stack-epoch-forwarded-loop",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    std::vector<katana::analysis::FunctionBoundary> boundaries{
+        {0x00u, 0x1Eu},
+        {0x80u, 0x04u},
+        {0x90u, 0x04u},
+    };
+    if (!direct_local_sink)
+        boundaries.insert(boundaries.begin() + 1u,
+                          {0x40u, 0x08u});
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
 katana::analysis::FunctionValueAnalysisResult mixed_literal_scalar_store_values() {
     std::vector<std::uint8_t> bytes(0x40u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset, const std::uint16_t value) {
@@ -2172,9 +2356,866 @@ katana::analysis::FunctionValueAnalysisResult helper_mixed_return_store_values()
     return katana::analysis::analyze_function_values(image, lines, entries);
 }
 
+enum class ReturnedStackCallbackLossCase {
+    ConsumeReturnedR0,
+    OverwriteReturnedR0,
+    OverwriteReturnedR0WithMoveT,
+};
+
+katana::analysis::FunctionValueAnalysisResult
+returned_stack_callback_loss_values(
+    const ReturnedStackCallbackLossCase test_case) {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xB01Eu); // bsr 0x40
+    put_u16(0x02u, 0x0009u);
+    if (test_case ==
+        ReturnedStackCallbackLossCase::ConsumeReturnedR0) {
+        put_u16(0x04u, 0x6403u); // returned r0 -> r4
+        put_u16(0x06u, 0xD507u); // destination literal 0x24 -> r5
+        put_u16(0x08u, 0x2542u); // persistent [r5] = r4
+        put_u16(0x0Au, 0x000Bu);
+        put_u16(0x0Cu, 0x0009u);
+    } else if (
+        test_case ==
+        ReturnedStackCallbackLossCase::OverwriteReturnedR0) {
+        put_u16(0x04u, 0xE000u); // overwrite returned r0
+        put_u16(0x06u, 0xD406u); // fresh callback literal 0x20 -> r4
+        put_u16(0x08u, 0xD506u); // destination literal 0x24 -> r5
+        put_u16(0x0Au, 0x2542u); // persistent [r5] = r4
+        put_u16(0x0Cu, 0x000Bu);
+        put_u16(0x0Eu, 0x0009u);
+    } else {
+        put_u16(0x04u, 0x0029u); // movt r0 is an exact overwrite
+        put_u16(0x06u, 0x6403u); // overwritten r0 -> r4
+        put_u16(0x08u, 0xD506u); // destination literal 0x24 -> r5
+        put_u16(0x0Au, 0x2542u); // must not carry the stale loss marker
+        put_u16(0x0Cu, 0x000Bu);
+        put_u16(0x0Eu, 0x0009u);
+    }
+    put_u32(0x20u, 0x90u);
+    put_u32(0x24u, 0x84u);
+
+    put_u16(0x40u, 0xD405u); // callback literal 0x58 -> r4
+    put_u16(0x42u, 0x2F42u); // [r15] = callback
+    put_u16(0x44u, 0x3F0Cu); // unknown add r0,r15 loses its slot
+    put_u16(0x46u, 0x60F2u); // possible lost callback -> r0
+    put_u16(0x48u, 0x000Bu);
+    put_u16(0x4Au, 0x0009u);
+    put_u32(0x58u, 0x90u);
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {test_case ==
+                 ReturnedStackCallbackLossCase::ConsumeReturnedR0
+             ? ".returned-stack-callback-loss-consumed"
+             : test_case ==
+                       ReturnedStackCallbackLossCase::OverwriteReturnedR0
+                   ? ".returned-stack-callback-loss-overwritten"
+                   : ".returned-stack-callback-loss-movt-overwritten",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    const std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u,
+             test_case ==
+                     ReturnedStackCallbackLossCase::ConsumeReturnedR0
+                 ? 0x0Eu
+                 : 0x10u},
+            {0x40u, 0x0Cu},
+            {0x90u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+enum class MemoryStackCallbackLossCase {
+    ConsumeExactCell,
+    ReadUnknownCell,
+    ReadUnknownEmptySavedEpoch,
+    ReadDifferentCell,
+    EmptySavedEpoch,
+};
+
+katana::analysis::FunctionValueAnalysisResult
+memory_stack_callback_loss_values(
+    const MemoryStackCallbackLossCase test_case) {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    const bool consume =
+        test_case == MemoryStackCallbackLossCase::ConsumeExactCell ||
+        test_case == MemoryStackCallbackLossCase::ReadUnknownCell;
+    const bool capture_callback =
+        test_case != MemoryStackCallbackLossCase::EmptySavedEpoch &&
+        test_case !=
+            MemoryStackCallbackLossCase::
+                ReadUnknownEmptySavedEpoch;
+    put_u16(0x00u, 0xB01Eu); // bsr 0x40
+    put_u16(0x02u, 0x0009u);
+    put_u16(
+        0x04u,
+        test_case == MemoryStackCallbackLossCase::ReadUnknownCell ||
+                test_case ==
+                    MemoryStackCallbackLossCase::
+                        ReadUnknownEmptySavedEpoch
+            ? 0x6103u // unknown returned r0 -> address r1
+            : 0xD107u); // selected-cell literal 0x24 -> r1
+    put_u16(0x06u, 0x6A12u); // [r1] -> r10
+    put_u16(0x08u, 0x6FA3u); // restored candidate epoch -> r15
+    put_u16(0x0Au, 0x64F2u); // possible lost callback -> r4
+    if (consume) {
+        put_u16(0x0Cu, 0xD506u); // destination literal 0x28 -> r5
+        put_u16(0x0Eu, 0x2542u); // consume the unresolved value
+        put_u16(0x10u, 0x000Bu);
+        put_u16(0x12u, 0x0009u);
+    } else {
+        put_u16(0x0Cu, 0xD404u); // overwrite with fresh callback
+        put_u16(0x0Eu, 0xD506u); // destination literal 0x28 -> r5
+        put_u16(0x10u, 0x2542u); // independent valid callback store
+        put_u16(0x12u, 0x000Bu);
+        put_u16(0x14u, 0x0009u);
+    }
+    put_u32(0x20u, 0x90u);
+    put_u32(
+        0x24u,
+        test_case == MemoryStackCallbackLossCase::ReadDifferentCell
+            ? 0x88u
+            : 0x80u);
+    put_u32(0x28u, 0x84u);
+
+    if (capture_callback) {
+        put_u16(0x40u, 0xD405u); // callback literal 0x58 -> r4
+        put_u16(0x42u, 0x2F42u); // capture callback on current stack
+    } else {
+        put_u16(0x40u, 0x0009u);
+        put_u16(0x42u, 0x0009u);
+    }
+    put_u16(0x44u, 0xD105u); // saved-SP cell literal 0x5C -> r1
+    put_u16(0x46u, 0x21F2u); // [r1] = r15 plus captured epoch
+    put_u16(0x48u, 0x000Bu);
+    put_u16(0x4Au, 0x0009u);
+    put_u32(0x58u, 0x90u);
+    put_u32(0x5Cu, 0x80u);
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {consume
+             ? test_case ==
+                       MemoryStackCallbackLossCase::ReadUnknownCell
+                   ? ".memory-stack-callback-loss-unknown-cell"
+                   : ".memory-stack-callback-loss-consumed"
+             : test_case ==
+                       MemoryStackCallbackLossCase::
+                           ReadUnknownEmptySavedEpoch
+                   ? ".memory-stack-callback-loss-unknown-empty-epoch"
+             : test_case ==
+                       MemoryStackCallbackLossCase::ReadDifferentCell
+                   ? ".memory-stack-callback-loss-other-cell"
+                   : ".memory-stack-callback-loss-empty-epoch",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    const std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, consume ? 0x14u : 0x16u},
+            {0x40u, 0x0Cu},
+            {0x90u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+unknown_saved_stack_epoch_memory_roundtrip_values(
+    const bool callback_after_empty_snapshot = false) {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    if (callback_after_empty_snapshot) {
+        put_u16(0x00u, 0x6103u); // unknown r0 -> address r1
+        put_u16(0x02u, 0x21F2u); // unknown [r1] = empty saved r15 epoch
+        put_u16(0x04u, 0xD40Au); // callback literal 0x30 -> r4
+        put_u16(0x06u, 0x2F42u); // callback mutates the captured current epoch
+    } else {
+        put_u16(0x00u, 0xD40Bu); // callback literal 0x30 -> r4
+        put_u16(0x02u, 0x2F42u); // current [r15] = callback
+        put_u16(0x04u, 0x6103u); // unknown r0 -> address r1
+        put_u16(0x06u, 0x21F2u); // unknown [r1] = saved r15 epoch
+    }
+    put_u16(0x08u, 0x6F12u); // reload saved epoch through unknown [r1]
+    put_u16(0x0Au, 0x64F2u); // possible restored callback -> r4
+    put_u16(0x0Cu, 0xD509u); // destination literal 0x34 -> r5
+    put_u16(0x0Eu, 0x2542u); // consume the unresolved value
+    put_u16(0x10u, 0x000Bu);
+    put_u16(0x12u, 0x0009u);
+    put_u32(0x30u, 0x80u);
+    put_u32(0x34u, 0x84u);
+    put_u16(0x80u, 0x000Bu);
+    put_u16(0x82u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {callback_after_empty_snapshot
+             ? ".unknown-empty-saved-stack-epoch-late-callback"
+             : ".unknown-saved-stack-epoch-memory-roundtrip",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u>
+        boundaries{{
+            {0x00u, 0x14u},
+            {0x80u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+identity_transformed_old_stack_alias_values() {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xD40Bu); // old-stack callback literal 0x30 -> r4
+    put_u16(0x02u, 0x2F42u); // old [r15] = callback
+    put_u16(0x04u, 0x60F3u); // preserve old r15 in r0
+    put_u16(0x06u, 0xCB00u); // or #0,r0 is an exact identity
+    put_u16(0x08u, 0xE140u); // replacement stack value -> r1
+    put_u16(0x0Au, 0x6F13u); // fresh epoch: mov r1,r15
+    put_u16(0x0Cu, 0x6402u); // old [r0] callback -> r4
+    put_u16(0x0Eu, 0xD509u); // destination literal 0x34 -> r5
+    put_u16(0x10u, 0x2542u); // consume the unresolved old alias
+    put_u16(0x12u, 0x000Bu);
+    put_u16(0x14u, 0x0009u);
+    put_u32(0x30u, 0x80u);
+    put_u32(0x34u, 0x84u);
+    put_u16(0x80u, 0x000Bu);
+    put_u16(0x82u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {".identity-transformed-old-stack-alias",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u>
+        boundaries{{
+            {0x00u, 0x16u},
+            {0x80u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+merged_old_stack_alias_values() {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xD40Bu); // old-stack callback literal 0x30 -> r4
+    put_u16(0x02u, 0x2F42u); // old [r15] = callback
+    put_u16(0x04u, 0x8902u); // bt 0x0C: path without alias
+    put_u16(0x06u, 0x60F3u); // alias path: old r15 -> r0
+    put_u16(0x08u, 0xA001u); // bra merge at 0x0E
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0xE000u); // other path: r0 is not an alias
+    put_u16(0x0Eu, 0xE140u); // replacement stack value -> r1
+    put_u16(0x10u, 0x6F13u); // fresh epoch: mov r1,r15
+    put_u16(0x12u, 0x6402u); // possible old [r0] callback -> r4
+    put_u16(0x14u, 0xD507u); // destination literal 0x34 -> r5
+    put_u16(0x16u, 0x2542u); // consume the merged alias loss
+    put_u16(0x18u, 0x000Bu);
+    put_u16(0x1Au, 0x0009u);
+    put_u32(0x30u, 0x80u);
+    put_u32(0x34u, 0x84u);
+    put_u16(0x80u, 0x000Bu);
+    put_u16(0x82u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {".merged-old-stack-alias",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u>
+        boundaries{{
+            {0x00u, 0x1Cu},
+            {0x80u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+conditional_memory_stack_callback_loss_values() {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xB01Eu); // bsr 0x40
+    put_u16(0x02u, 0x0009u);
+    put_u16(0x04u, 0xD106u); // marked-cell literal 0x20 -> r1
+    put_u16(0x06u, 0x6412u); // possible lost callback -> r4
+    put_u16(0x08u, 0xD506u); // destination literal 0x24 -> r5
+    put_u16(0x0Au, 0x2542u); // consume the unresolved value
+    put_u16(0x0Cu, 0x000Bu);
+    put_u16(0x0Eu, 0x0009u);
+    put_u32(0x20u, 0x80u);
+    put_u32(0x24u, 0x84u);
+
+    put_u16(0x40u, 0x8906u); // bt 0x50, path without cell
+    put_u16(0x42u, 0xD407u); // callback literal 0x60 -> r4
+    put_u16(0x44u, 0x2F42u); // [r15] = callback
+    put_u16(0x46u, 0x3F0Cu); // unknown add r0,r15 loses its slot
+    put_u16(0x48u, 0x64F2u); // possible lost callback -> r4
+    put_u16(0x4Au, 0xD106u); // marked-cell literal 0x64 -> r1
+    put_u16(0x4Cu, 0x2142u); // exact cell gets raw loss marker
+    put_u16(0x4Eu, 0xA000u); // bra 0x52
+    put_u16(0x50u, 0x0009u);
+    put_u16(0x52u, 0x000Bu);
+    put_u16(0x54u, 0x0009u);
+    put_u32(0x60u, 0x90u);
+    put_u32(0x64u, 0x80u);
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {".conditional-memory-stack-callback-loss",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, 0x10u},
+            {0x40u, 0x16u},
+            {0x90u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+conditional_stack_slot_callback_loss_values() {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xB01Eu); // bsr 0x40
+    put_u16(0x02u, 0x0009u);
+    put_u16(0x04u, 0x8902u); // bt 0x0C, path without spill
+    put_u16(0x06u, 0x2F02u); // [r15] = returned loss marker
+    put_u16(0x08u, 0xA001u); // bra 0x0E
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0x0009u);
+    put_u16(0x0Eu, 0x64F2u); // possible lost callback -> r4
+    put_u16(0x10u, 0xD503u); // destination literal 0x20 -> r5
+    put_u16(0x12u, 0x2542u); // consume the unresolved value
+    put_u16(0x14u, 0x000Bu);
+    put_u16(0x16u, 0x0009u);
+    put_u32(0x20u, 0x84u);
+
+    put_u16(0x40u, 0xD405u); // callback literal 0x58 -> r4
+    put_u16(0x42u, 0x2F42u); // [r15] = callback
+    put_u16(0x44u, 0x3F0Cu); // unknown add r0,r15 loses its slot
+    put_u16(0x46u, 0x60F2u); // possible lost callback -> r0
+    put_u16(0x48u, 0x000Bu);
+    put_u16(0x4Au, 0x0009u);
+    put_u32(0x58u, 0x90u);
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {".conditional-stack-slot-callback-loss",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, 0x18u},
+            {0x40u, 0x0Cu},
+            {0x90u, 0x04u},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries);
+}
+
+katana::analysis::FunctionValueAnalysisResult
+candidate_only_memory_stack_callback_loss_values() {
+    std::vector<std::uint8_t> bytes(0xD4u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xB04Eu); // bsr marker producer 0xA0
+    put_u16(0x02u, 0x0009u);
+    put_u16(0x04u, 0xB00Cu); // bsr candidate-call owner 0x20
+    put_u16(0x06u, 0x0009u);
+    put_u16(0x08u, 0x000Bu);
+    put_u16(0x0Au, 0x0009u);
+
+    put_u16(0x20u, 0x410Bu); // guarded candidate-only call -> 0x40
+    put_u16(0x22u, 0x0009u);
+    put_u16(0x24u, 0x000Bu);
+    put_u16(0x26u, 0x0009u);
+
+    put_u16(0x40u, 0xD105u); // marked-cell literal 0x58 -> r1
+    put_u16(0x42u, 0x6412u); // exact marked cell -> r4
+    put_u16(0x44u, 0xD505u); // destination literal 0x5C -> r5
+    put_u16(0x46u, 0x2542u); // marker reaches local persistent sink
+    put_u16(0x48u, 0x000Bu);
+    put_u16(0x4Au, 0x0009u);
+    put_u32(0x58u, 0x80u);
+    put_u32(0x5Cu, 0x84u);
+
+    put_u16(0xA0u, 0xD405u); // callback literal 0xB8 -> r4
+    put_u16(0xA2u, 0x2F42u); // [r15] = callback
+    put_u16(0xA4u, 0xD105u); // saved-SP cell literal 0xBC -> r1
+    put_u16(0xA6u, 0x21F2u); // cell gets captured callback epoch
+    put_u16(0xA8u, 0x000Bu);
+    put_u16(0xAAu, 0x0009u);
+    put_u32(0xB8u, 0xD0u);
+    put_u32(0xBCu, 0x80u);
+    put_u16(0xD0u, 0x000Bu);
+    put_u16(0xD2u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment(
+        {".candidate-only-memory-stack-callback-loss",
+         0u,
+         0u,
+         bytes.size(),
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 5u>
+        boundaries{{
+            {0x00u, 0x0Cu},
+            {0x20u, 0x08u},
+            {0x40u, 0x0Cu},
+            {0xA0u, 0x0Cu},
+            {0xD0u, 0x04u},
+        }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
+        edges{{
+            {0x20u,
+             0x40u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+        }};
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
+}
+
 } // namespace
 
 int main() {
+    {
+        katana::analysis::ParallelWorkExecutor executor(2u);
+        std::atomic_size_t outer_count = 0u;
+        std::atomic_size_t inner_count = 0u;
+        katana::analysis::parallel_analysis_for(
+            executor,
+            8u,
+            2u,
+            [&](const std::size_t) {
+                outer_count.fetch_add(1u, std::memory_order_relaxed);
+                katana::analysis::parallel_analysis_for(
+                    executor,
+                    3u,
+                    2u,
+                    [&](const std::size_t) {
+                        inner_count.fetch_add(
+                            1u, std::memory_order_relaxed);
+                    });
+            });
+        require(
+            outer_count.load(std::memory_order_relaxed) == 8u &&
+                inner_count.load(std::memory_order_relaxed) == 24u,
+            "Der globale Analysis-Executor verlor verschachtelte Arbeit "
+            "oder blockierte.");
+        std::barrier simultaneous_nested_barrier(2);
+        std::atomic_size_t simultaneous_nested_items = 0u;
+        katana::analysis::parallel_analysis_for(
+            executor,
+            2u,
+            2u,
+            [&](const std::size_t) {
+                simultaneous_nested_barrier.arrive_and_wait();
+                katana::analysis::parallel_analysis_for(
+                    executor,
+                    4u,
+                    2u,
+                    [&](const std::size_t) {
+                        simultaneous_nested_items.fetch_add(
+                            1u, std::memory_order_relaxed);
+                    });
+            });
+        require(
+            simultaneous_nested_items.load(
+                std::memory_order_relaxed) == 8u,
+            "Der Analysis-Executor deadlockt, wenn alle Worker gleichzeitig "
+            "verschachtelte Batches starten.");
+
+        bool exception_propagated = false;
+        std::atomic_size_t exception_batch_items = 0u;
+        try {
+            katana::analysis::parallel_analysis_for(
+                executor,
+                6u,
+                2u,
+                [&](const std::size_t index) {
+                    exception_batch_items.fetch_add(
+                        1u, std::memory_order_relaxed);
+                    if (index == 1u)
+                        throw std::runtime_error(
+                            "parallel-analysis-first");
+                    if (index == 3u)
+                        throw std::runtime_error(
+                            "parallel-analysis-later");
+                });
+        } catch (const std::runtime_error& error) {
+            exception_propagated =
+                std::string(error.what()) ==
+                "parallel-analysis-first";
+        }
+        require(
+            exception_propagated &&
+                exception_batch_items.load(
+                    std::memory_order_relaxed) == 6u,
+            "Der Analysis-Executor verlor die indexerste Worker-Ausnahme "
+            "oder brach den restlichen Batch vorzeitig ab.");
+        std::atomic_size_t recovery_items = 0u;
+        katana::analysis::parallel_analysis_for(
+            executor,
+            5u,
+            2u,
+            [&](const std::size_t) {
+                recovery_items.fetch_add(
+                    1u, std::memory_order_relaxed);
+            });
+        require(
+            recovery_items.load(std::memory_order_relaxed) == 5u,
+            "Der Analysis-Executor blieb nach einer Worker-Ausnahme defekt.");
+
+        std::atomic_size_t roots_ready = 0u;
+        std::atomic_size_t active_jobs = 0u;
+        std::atomic_size_t peak_jobs = 0u;
+        std::atomic_bool start_roots = false;
+        const auto root = [&] {
+            roots_ready.fetch_add(1u, std::memory_order_release);
+            while (!start_roots.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            katana::analysis::parallel_analysis_for(
+                executor,
+                6u,
+                2u,
+                [&](const std::size_t) {
+                    const auto active =
+                        active_jobs.fetch_add(
+                            1u, std::memory_order_acq_rel) +
+                        1u;
+                    auto peak =
+                        peak_jobs.load(std::memory_order_relaxed);
+                    while (peak < active &&
+                           !peak_jobs.compare_exchange_weak(
+                               peak,
+                               active,
+                               std::memory_order_relaxed))
+                        ;
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(2));
+                    active_jobs.fetch_sub(
+                        1u, std::memory_order_acq_rel);
+                });
+        };
+        auto first_root =
+            std::async(std::launch::async, root);
+        auto second_root =
+            std::async(std::launch::async, root);
+        while (roots_ready.load(std::memory_order_acquire) != 2u)
+            std::this_thread::yield();
+        start_roots.store(true, std::memory_order_release);
+        first_root.get();
+        second_root.get();
+        require(
+            peak_jobs.load(std::memory_order_relaxed) <= 2u &&
+                active_jobs.load(std::memory_order_relaxed) == 0u,
+            "Der process-weite Analysis-Executor liess zwei "
+            "Root-Aufrufer zusammen mehr als zwei schwere Jobs ausfuehren.");
+
+        std::mutex worker_ids_mutex;
+        std::set<std::thread::id> initial_worker_ids;
+        std::barrier initial_worker_barrier(2);
+        katana::analysis::parallel_analysis_for(
+            executor,
+            2u,
+            2u,
+            [&](const std::size_t) {
+                {
+                    std::lock_guard lock(worker_ids_mutex);
+                    initial_worker_ids.insert(
+                        std::this_thread::get_id());
+                }
+                initial_worker_barrier.arrive_and_wait();
+            });
+        std::set<std::thread::id> later_worker_ids;
+        for (std::size_t round = 0u; round < 32u; ++round) {
+            katana::analysis::parallel_analysis_for(
+                executor,
+                8u,
+                2u,
+                [&](const std::size_t) {
+                    std::lock_guard lock(worker_ids_mutex);
+                    later_worker_ids.insert(
+                        std::this_thread::get_id());
+                });
+        }
+        require(
+            executor.worker_count() == 2u &&
+                initial_worker_ids.size() == 2u &&
+                std::all_of(
+                    later_worker_ids.begin(),
+                    later_worker_ids.end(),
+                    [&](const auto id) {
+                        return initial_worker_ids.contains(id);
+                    }),
+            "Der Analysis-Executor erzeugt zwischen Batches neue Worker "
+            "statt seinen festen Pool wiederzuverwenden.");
+    }
+    {
+        katana::analysis::ParallelWorkExecutor single_worker(1u);
+        std::atomic_size_t nested_items = 0u;
+        katana::analysis::parallel_analysis_for(
+            single_worker,
+            4u,
+            1u,
+            [&](const std::size_t) {
+                katana::analysis::parallel_analysis_for(
+                    single_worker,
+                    3u,
+                    1u,
+                    [&](const std::size_t) {
+                        nested_items.fetch_add(
+                            1u, std::memory_order_relaxed);
+                    });
+            });
+        require(
+            nested_items.load(std::memory_order_relaxed) == 12u,
+            "Der Analysis-Executor deadlockt oder verliert Nested-Arbeit "
+            "mit genau einem Worker.");
+    }
+    {
+        katana::analysis::ParallelWorkExecutor four_workers(4u);
+        std::atomic_size_t active_jobs = 0u;
+        std::atomic_size_t peak_jobs = 0u;
+        katana::analysis::parallel_analysis_for(
+            four_workers,
+            16u,
+            2u,
+            [&](const std::size_t) {
+                const auto active =
+                    active_jobs.fetch_add(
+                        1u, std::memory_order_acq_rel) +
+                    1u;
+                auto peak =
+                    peak_jobs.load(std::memory_order_relaxed);
+                while (peak < active &&
+                       !peak_jobs.compare_exchange_weak(
+                           peak,
+                           active,
+                           std::memory_order_relaxed))
+                    ;
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(1));
+                active_jobs.fetch_sub(
+                    1u, std::memory_order_acq_rel);
+            });
+        require(
+            peak_jobs.load(std::memory_order_relaxed) <= 2u &&
+                active_jobs.load(std::memory_order_relaxed) == 0u,
+            "Der Analysis-Executor ignoriert das lokale Zwei-Job-Limit.");
+    }
+
     const auto unique_image =
         image_with_callee({0x10u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u}); // mov #0x10,r0; rts; nop
     const auto unique = katana::analysis::analyze_control_flow(unique_image);
@@ -2290,6 +3331,92 @@ int main() {
                      .candidate_inventory_truncated,
             "Ein Guarded-Inventareinstieg mit mehreren Funktionsownern "
             "wurde verworfen oder faelschlich als trunciert gemeldet.");
+
+        const auto duplicate_forwarded =
+            duplicate_forwarded_context_values();
+        const auto& duplicate_forwarded_diagnostics =
+            duplicate_forwarded.guarded_code_inventory
+                .walk_diagnostics;
+        const auto duplicate_forwarded_candidate =
+            std::find_if(
+                duplicate_forwarded.guarded_code_inventory
+                    .stored_code_addresses.begin(),
+                duplicate_forwarded.guarded_code_inventory
+                    .stored_code_addresses.end(),
+                [](const auto& candidate) {
+                    return candidate.target_address == 0x70u;
+                });
+        require(
+            duplicate_forwarded_candidate !=
+                    duplicate_forwarded.guarded_code_inventory
+                        .stored_code_addresses.end() &&
+                duplicate_forwarded_candidate->guarded &&
+                !duplicate_forwarded_candidate->complete &&
+                duplicate_forwarded_candidate
+                        ->store_instruction_addresses ==
+                    std::vector<std::uint32_t>{0x20u} &&
+                duplicate_forwarded_candidate->evidence_call_sites ==
+                    std::vector<std::uint32_t>{0x0Au} &&
+                duplicate_forwarded_diagnostics
+                        .forwarded_store_evaluation_cache_hits ==
+                    1u &&
+                duplicate_forwarded_diagnostics
+                        .forwarded_store_evaluation_cache_misses ==
+                    1u &&
+                !duplicate_forwarded_diagnostics.truncated(),
+            "Zwei exakt gleiche passweite Forwarded-Kontexte wurden erneut "
+            "ausgewertet oder ihr Guarded-Inventar/Fail-closed-Zustand "
+            "wich beim Memo-Replay ab (candidate=" +
+                std::to_string(
+                    has_stored_code_address(duplicate_forwarded, 0x70u)) +
+                ", hits=" +
+                std::to_string(
+                    duplicate_forwarded_diagnostics
+                        .forwarded_store_evaluation_cache_hits) +
+                ", misses=" +
+                std::to_string(
+                    duplicate_forwarded_diagnostics
+                        .forwarded_store_evaluation_cache_misses) +
+                ", truncated=" +
+                std::to_string(
+                    duplicate_forwarded_diagnostics.truncated()) +
+                ", guarded=" +
+                std::to_string(
+                    duplicate_forwarded_candidate !=
+                            duplicate_forwarded.guarded_code_inventory
+                                .stored_code_addresses.end() &&
+                        duplicate_forwarded_candidate->guarded) +
+                ", complete=" +
+                std::to_string(
+                    duplicate_forwarded_candidate !=
+                            duplicate_forwarded.guarded_code_inventory
+                                .stored_code_addresses.end() &&
+                        duplicate_forwarded_candidate->complete) +
+                ", stores=" +
+                std::to_string(
+                    duplicate_forwarded_candidate ==
+                            duplicate_forwarded.guarded_code_inventory
+                                .stored_code_addresses.end()
+                        ? 0u
+                        : duplicate_forwarded_candidate
+                              ->store_instruction_addresses.size()) +
+                ", calls=" +
+                std::to_string(
+                    duplicate_forwarded_candidate ==
+                            duplicate_forwarded.guarded_code_inventory
+                                .stored_code_addresses.end()
+                        ? 0u
+                        : duplicate_forwarded_candidate
+                              ->evidence_call_sites.size()) +
+                ", callees=" +
+                std::to_string(
+                    duplicate_forwarded_candidate ==
+                            duplicate_forwarded.guarded_code_inventory
+                                .stored_code_addresses.end()
+                        ? 0u
+                        : duplicate_forwarded_candidate
+                              ->evidence_callees.size()) +
+                ").");
 
         const auto parameterized = parameterized_candidate_return_values();
         const auto returned_table = std::find_if(
@@ -2508,6 +3635,371 @@ int main() {
                 missing_memory_loop.fixpoint_iterations <= 2u,
             "Ein bereits geweiteter Saved-Stack-Epoch-Memory-Join meldete "
             "dauerhaft Aenderungen und konvergierte nicht.");
+        const auto missing_stack_loop =
+            saved_stack_epoch_missing_stack_loop_values();
+        require(
+            !missing_stack_loop.budget_exhausted &&
+                missing_stack_loop.guarded_code_inventory
+                        .walk_diagnostics
+                        .maximum_local_fixpoint_iterations <=
+                    16u,
+            "Ein bereits normalisierter Saved-Stack-Epoch-Stack-Join "
+            "meldete ohne Zustandsaenderung dauerhaft changed (local=" +
+                std::to_string(
+                    missing_stack_loop.guarded_code_inventory
+                        .walk_diagnostics
+                        .maximum_local_fixpoint_iterations) +
+                ").");
+        for (const auto direct_local_sink : {false, true}) {
+            const auto translated_epoch_loop =
+                translated_saved_stack_epoch_loop_values(
+                    direct_local_sink);
+            const auto& translated_epoch_diagnostics =
+                translated_epoch_loop.guarded_code_inventory
+                    .walk_diagnostics;
+            require(
+                !translated_epoch_loop.budget_exhausted &&
+                    translated_epoch_diagnostics
+                        .abi_stack_base_unresolved &&
+                    translated_epoch_diagnostics
+                            .maximum_local_fixpoint_iterations <=
+                        64u,
+                "Ein affin verschobener Saved-Stack-Epoch-Loop konvergierte "
+                "nicht schnell auf ein fail-closed Top (local_sink=" +
+                    std::to_string(direct_local_sink) +
+                    ", local=" +
+                    std::to_string(
+                        translated_epoch_diagnostics
+                            .maximum_local_fixpoint_iterations) +
+                    ", base_loss=" +
+                    std::to_string(
+                        translated_epoch_diagnostics
+                            .abi_stack_base_unresolved) +
+                    ").");
+        }
+
+        struct ReturnedLossRegression {
+            ReturnedStackCallbackLossCase test_case;
+            bool expected_unresolved;
+            bool expected_candidate;
+        };
+        constexpr std::array returned_loss_regressions{
+            ReturnedLossRegression{
+                ReturnedStackCallbackLossCase::ConsumeReturnedR0,
+                true,
+                false},
+            ReturnedLossRegression{
+                ReturnedStackCallbackLossCase::OverwriteReturnedR0,
+                false,
+                true},
+            ReturnedLossRegression{
+                ReturnedStackCallbackLossCase::
+                    OverwriteReturnedR0WithMoveT,
+                false,
+                false},
+        };
+        for (const auto& regression :
+             returned_loss_regressions) {
+            const auto returned_loss =
+                returned_stack_callback_loss_values(
+                    regression.test_case);
+            const auto owner = std::find_if(
+                returned_loss.summaries.begin(),
+                returned_loss.summaries.end(),
+                [](const auto& summary) {
+                    return summary.function_address == 0x40u;
+                });
+            const katana::analysis::FunctionRegisterValueSummary*
+                returned = nullptr;
+            if (owner != returned_loss.summaries.end()) {
+                const auto found = std::find_if(
+                    owner->registers.cbegin(),
+                    owner->registers.cend(),
+                    [](const auto& value) {
+                        return value.register_index == 0u;
+                    });
+                if (found != owner->registers.cend())
+                    returned = &*found;
+            }
+            const auto& diagnostics =
+                returned_loss.guarded_code_inventory
+                    .walk_diagnostics;
+            require(
+                owner != returned_loss.summaries.end() &&
+                    returned != nullptr &&
+                    returned
+                        ->inventory_stack_callback_loss_unresolved &&
+                    diagnostics.abi_stack_base_unresolved ==
+                        regression.expected_unresolved &&
+                    diagnostics.truncated() ==
+                        regression.expected_unresolved &&
+                    has_stored_code_address(returned_loss, 0x90u) ==
+                        regression.expected_candidate,
+                "Der r0-spezifische Stack-Callback-Verlust wurde ueber "
+                "die Callee-Summary nicht bis zur echten Senke getragen "
+                "oder nach einem Register-Overwrite nicht geloescht "
+                "(consume=" +
+                    std::to_string(
+                        regression.expected_unresolved) +
+                    ", summary=" +
+                    std::to_string(
+                        owner != returned_loss.summaries.end() &&
+                        returned != nullptr &&
+                        returned
+                            ->inventory_stack_callback_loss_unresolved) +
+                    ", unresolved=" +
+                    std::to_string(
+                        diagnostics.abi_stack_base_unresolved) +
+                    ", candidate=" +
+                    std::to_string(
+                        has_stored_code_address(
+                            returned_loss, 0x90u)) +
+                    ", expected_candidate=" +
+                    std::to_string(
+                        regression.expected_candidate) +
+                    ").");
+        }
+
+        struct MemoryLossRegression {
+            MemoryStackCallbackLossCase test_case;
+            bool expected_summary_marker;
+            bool expected_unresolved;
+        };
+        constexpr std::array memory_loss_regressions{
+            MemoryLossRegression{
+                MemoryStackCallbackLossCase::ConsumeExactCell,
+                true,
+                true},
+            MemoryLossRegression{
+                MemoryStackCallbackLossCase::ReadUnknownCell,
+                true,
+                true},
+            MemoryLossRegression{
+                MemoryStackCallbackLossCase::
+                    ReadUnknownEmptySavedEpoch,
+                true,
+                false},
+            MemoryLossRegression{
+                MemoryStackCallbackLossCase::ReadDifferentCell,
+                true,
+                false},
+            MemoryLossRegression{
+                MemoryStackCallbackLossCase::EmptySavedEpoch,
+                true,
+                false},
+        };
+        for (const auto& regression :
+             memory_loss_regressions) {
+            const auto memory_loss =
+                memory_stack_callback_loss_values(
+                    regression.test_case);
+            const auto owner = std::find_if(
+                memory_loss.summaries.begin(),
+                memory_loss.summaries.end(),
+                [](const auto& summary) {
+                    return summary.function_address == 0x40u;
+                });
+            const katana::analysis::FunctionMemoryValueSummary*
+                memory = nullptr;
+            if (owner != memory_loss.summaries.end()) {
+                const auto found = std::find_if(
+                    owner->memory_values.cbegin(),
+                    owner->memory_values.cend(),
+                    [](const auto& value) {
+                        return value.address == 0x80u;
+                    });
+                if (found != owner->memory_values.cend())
+                    memory = &*found;
+            }
+            const bool summary_marker =
+                owner != memory_loss.summaries.end() &&
+                memory != nullptr &&
+                memory
+                    ->inventory_stack_callback_loss_unresolved;
+            const auto& diagnostics =
+                memory_loss.guarded_code_inventory
+                    .walk_diagnostics;
+            require(
+                summary_marker ==
+                        regression.expected_summary_marker &&
+                    diagnostics.abi_stack_base_unresolved ==
+                        regression.expected_unresolved &&
+                    diagnostics.truncated() ==
+                        regression.expected_unresolved &&
+                    has_stored_code_address(memory_loss, 0x90u) ==
+                        !regression.expected_unresolved,
+                "Der adressspezifische Stack-Callback-Verlust wurde "
+                "nicht ueber exakt Speicherzelle 0x80 getragen, faerbte "
+                "eine andere Zelle oder verlor eine latente leere Epoche "
+                "beziehungsweise ueberlebte ein "
+                "Overwrite (summary=" +
+                    std::to_string(summary_marker) +
+                    ", expected_summary=" +
+                    std::to_string(
+                        regression.expected_summary_marker) +
+                    ", unresolved=" +
+                    std::to_string(
+                        diagnostics.abi_stack_base_unresolved) +
+                    ", expected_unresolved=" +
+                    std::to_string(
+                        regression.expected_unresolved) +
+                    ", candidate=" +
+                    std::to_string(
+                        has_stored_code_address(
+                            memory_loss, 0x90u)) +
+                    ").");
+        }
+
+        const auto unknown_memory_roundtrip =
+            unknown_saved_stack_epoch_memory_roundtrip_values();
+        require(
+            unknown_memory_roundtrip.guarded_code_inventory
+                    .walk_diagnostics.abi_stack_base_unresolved &&
+                unknown_memory_roundtrip.guarded_code_inventory
+                    .walk_diagnostics.truncated() &&
+                !has_stored_code_address(
+                    unknown_memory_roundtrip, 0x80u),
+            "Ein Saved-Stack-Epoch ging bei einem unbekannten 32-Bit-"
+            "Memory-Store mit anschliessendem Reload still verloren.");
+        const auto unknown_empty_epoch_late_callback =
+            unknown_saved_stack_epoch_memory_roundtrip_values(true);
+        require(
+            unknown_empty_epoch_late_callback.guarded_code_inventory
+                    .walk_diagnostics.abi_stack_base_unresolved &&
+                unknown_empty_epoch_late_callback.guarded_code_inventory
+                    .walk_diagnostics.truncated() &&
+                !has_stored_code_address(
+                    unknown_empty_epoch_late_callback, 0x80u),
+            "Eine zunaechst leere, unbekannt gespeicherte Stack-Epoche "
+            "ging nach einem spaeteren Callback-Store still verloren.");
+
+        const auto identity_old_stack_alias =
+            identity_transformed_old_stack_alias_values();
+        require(
+            identity_old_stack_alias.guarded_code_inventory
+                    .walk_diagnostics.abi_stack_base_unresolved &&
+                identity_old_stack_alias.guarded_code_inventory
+                    .walk_diagnostics.truncated() &&
+                !has_stored_code_address(
+                    identity_old_stack_alias, 0x80u),
+            "Die Identitaet `mov r15,r0; or #0,r0` verlor vor einem "
+            "vollstaendigen Stackwechsel den Alias auf den alten "
+            "Callback-Stack.");
+
+        const auto merged_old_stack_alias =
+            merged_old_stack_alias_values();
+        require(
+            merged_old_stack_alias.guarded_code_inventory
+                    .walk_diagnostics.abi_stack_base_unresolved &&
+                merged_old_stack_alias.guarded_code_inventory
+                    .walk_diagnostics.truncated() &&
+                !has_stored_code_address(
+                    merged_old_stack_alias, 0x80u),
+            "Ein nur auf einem CFG-Pfad vorhandener alter Stack-Alias "
+            "verlor beim Merge vor dem Stackwechsel seinen "
+            "wertgebundenen Callback-Verlustmarker.");
+
+        const auto conditional_memory_loss =
+            conditional_memory_stack_callback_loss_values();
+        const auto conditional_memory_owner = std::find_if(
+            conditional_memory_loss.summaries.begin(),
+            conditional_memory_loss.summaries.end(),
+            [](const auto& summary) {
+                return summary.function_address == 0x40u;
+            });
+        const bool conditional_memory_marker =
+            conditional_memory_owner !=
+                conditional_memory_loss.summaries.end() &&
+            std::any_of(
+                conditional_memory_owner->memory_values.begin(),
+                conditional_memory_owner->memory_values.end(),
+                [](const auto& value) {
+                    return value.address == 0x80u &&
+                           value
+                               .inventory_stack_callback_loss_unresolved;
+                });
+        require(
+            conditional_memory_marker &&
+                conditional_memory_loss.guarded_code_inventory
+                    .walk_diagnostics.abi_stack_base_unresolved &&
+                conditional_memory_loss.guarded_code_inventory
+                    .walk_diagnostics.truncated() &&
+                !has_stored_code_address(
+                    conditional_memory_loss, 0x90u),
+            "Ein adressspezifischer Stack-Callback-Verlust ging verloren, "
+            "wenn nur ein CFG-Vorgaenger die markierte Speicherzelle "
+            "besass (summary=" +
+                std::to_string(conditional_memory_marker) +
+                ", unresolved=" +
+                std::to_string(
+                    conditional_memory_loss.guarded_code_inventory
+                        .walk_diagnostics.abi_stack_base_unresolved) +
+                ", candidate=" +
+                std::to_string(
+                    has_stored_code_address(
+                        conditional_memory_loss, 0x90u)) +
+                ").");
+
+        const auto conditional_stack_loss =
+            conditional_stack_slot_callback_loss_values();
+        require(
+            conditional_stack_loss.guarded_code_inventory
+                    .walk_diagnostics.abi_stack_base_unresolved &&
+                conditional_stack_loss.guarded_code_inventory
+                    .walk_diagnostics.truncated() &&
+                !has_stored_code_address(
+                    conditional_stack_loss, 0x90u),
+            "Ein wertgenauer Stack-Callback-Verlust ging verloren, wenn "
+            "nur ein CFG-Vorgaenger den markierten Stackslot besass.");
+
+        const auto candidate_only_memory_loss =
+            candidate_only_memory_stack_callback_loss_values();
+        require(
+            candidate_only_memory_loss.guarded_code_inventory
+                    .walk_diagnostics.abi_stack_base_unresolved &&
+                candidate_only_memory_loss.guarded_code_inventory
+                    .walk_diagnostics.truncated() &&
+                !has_stored_code_address(
+                    candidate_only_memory_loss, 0xD0u),
+            "Ein exakter Memory-Verlustmarker erreichte keinen "
+            "candidate-only Callee, dessen Senke keine ABI-Quelle liest.");
+
+        katana::analysis::ControlFlowAnalysisResult
+            loss_report;
+        katana::analysis::FunctionValueSummary
+            loss_report_summary;
+        loss_report_summary.function_address = 0x40u;
+        katana::analysis::FunctionRegisterValueSummary
+            loss_report_register;
+        loss_report_register.register_index = 0u;
+        loss_report_register
+            .inventory_stack_callback_loss_unresolved = true;
+        loss_report_summary.registers.push_back(
+            loss_report_register);
+        katana::analysis::FunctionMemoryValueSummary
+            loss_report_memory;
+        loss_report_memory.address = 0x80u;
+        loss_report_memory
+            .inventory_stack_callback_loss_unresolved = true;
+        loss_report_summary.memory_values.push_back(
+            loss_report_memory);
+        loss_report.function_value_summaries.push_back(
+            loss_report_summary);
+        const auto loss_report_json =
+            katana::analysis::format_control_flow_analysis_json(
+                loss_report);
+        constexpr auto loss_json_marker =
+            "\"inventory_stack_callback_loss_unresolved\":true";
+        const auto first_loss_json_marker =
+            loss_report_json.find(loss_json_marker);
+        require(
+            first_loss_json_marker != std::string::npos &&
+                loss_report_json.find(
+                    loss_json_marker,
+                    first_loss_json_marker + 1u) !=
+                    std::string::npos,
+            "Register- oder Memory-Summary verlor den neuen "
+            "Stack-Callback-Verlustmarker im JSON-Bericht.");
 
         const auto mixed = mixed_literal_scalar_store_values();
         require(has_stored_code_address(mixed, 0x30u) &&

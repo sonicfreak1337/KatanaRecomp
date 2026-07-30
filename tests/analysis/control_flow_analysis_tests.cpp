@@ -712,9 +712,30 @@ int main() {
         image.add_entry_point(0u);
         return image;
     }();
+    std::size_t candidate_contract_iteration = 0u;
+    std::size_t candidate_contract_passes = 0u;
+    std::size_t maximum_candidate_contract_passes = 0u;
     const auto reconciled_candidate_call =
         katana::analysis::analyze_control_flow(
-            reconciled_candidate_call_image);
+            reconciled_candidate_call_image,
+            nullptr,
+            [&](const katana::analysis::ControlFlowAnalysisProgress&
+                    progress) {
+                if (progress.phase != "function-values-start" &&
+                    progress.phase !=
+                        "function-values-candidate-contract-reconcile")
+                    return;
+                if (candidate_contract_iteration !=
+                    progress.iteration) {
+                    candidate_contract_iteration =
+                        progress.iteration;
+                    candidate_contract_passes = 0u;
+                }
+                ++candidate_contract_passes;
+                maximum_candidate_contract_passes =
+                    std::max(maximum_candidate_contract_passes,
+                             candidate_contract_passes);
+            });
     const auto reconciled_call = std::find_if(
         reconciled_candidate_call.indirect_control_flow.begin(),
         reconciled_candidate_call.indirect_control_flow.end(),
@@ -759,10 +780,13 @@ int main() {
             reconciled_candidate_call.guarded_code_inventory_walk
                     .abi_stack_argument_projection_truncated_functions == 0u &&
             find_guarded_aot_entry(reconciled_candidate_call, 0x1E0u) !=
-                nullptr,
+                nullptr &&
+            maximum_candidate_contract_passes >= 1u &&
+            maximum_candidate_contract_passes <= 2u,
         "Spaet entdeckter Function-Summary-Callcarrier wurde nicht bis zum "
-        "ABI-/Inventarvertrag rueckgekoppelt oder als feste CFG-Kante "
-        "eingefroren.");
+        "ABI-/Inventarvertrag rueckgekoppelt, als feste CFG-Kante "
+        "eingefroren oder benoetigte trotz zusammengelegter Proof-/"
+        "Boundary-Normalisierung mehr als einen Reconcile-Pass.");
 
     const auto tail_registered_callback_image = [] {
         std::vector<std::uint8_t> bytes(0xE0u, 0x09u);

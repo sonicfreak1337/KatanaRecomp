@@ -145,12 +145,13 @@ int main() {
                                   8u,
                                   "manifest",
                                   "overrides",
-                                  2u,
-                                  1u,
-                                  "0.34.0-dev"};
+                                   2u,
+                                   1u,
+                                   "0.34.0-dev",
+                                   "metadata-exporter-a"};
     const auto base_key = make_codegen_cache_key(base);
     cache.store(base_key, "metadata/blocks.json", metadata);
-    std::vector<CodegenCacheInputs> variants(11u, base);
+    std::vector<CodegenCacheInputs> variants(12u, base);
     variants[0].input_hash = "input-2";
     variants[1].ir_hash = "ir-2";
     variants[2].configuration_hash = "optimization-2";
@@ -162,6 +163,7 @@ int main() {
     variants[8].ir_version = 3u;
     variants[9].optimization_version = 2u;
     variants[10].tool_version = "0.35.0-dev";
+    variants[11].implementation_identity = "metadata-exporter-b";
     for (const auto& variant : variants) {
         const auto key = make_codegen_cache_key(variant);
         require(key != base_key && !cache.load(key, "metadata/blocks.json") &&

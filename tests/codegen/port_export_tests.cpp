@@ -501,16 +501,22 @@ memory_fill_loop_boot_track(const MemoryFillFixtureVariant variant =
 
 std::vector<std::uint8_t> latent_module_boot_track() {
     auto bytes = boot_track();
-    bytes.resize(23u * raw_sector_size);
+    bytes.resize(25u * raw_sector_size);
     bytes[22u * raw_sector_size + 15u] = 1u;
+    bytes[23u * raw_sector_size + 15u] = 1u;
+    bytes[24u * raw_sector_size + 15u] = 1u;
     auto directory = payload_offset(20u);
     directory +=
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
     directory +=
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
     directory += record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
+    directory +=
+        record(bytes, directory, data_lba + 22u, 4u, "ENGINE.BIN;1", false);
+    directory +=
+        record(bytes, directory, data_lba + 23u, 4u, "ENGINE_COPY.BIN;1", false);
     static_cast<void>(
-        record(bytes, directory, data_lba + 22u, 4u, "ENGINE.BIN;1", false));
+        record(bytes, directory, data_lba + 24u, 4u, "UNHINTED.BIN;1", false));
     constexpr std::array<std::uint8_t, 4u> module{
         0x0Bu, 0x00u, // rts
         0x09u, 0x00u  // delay-slot nop
@@ -518,6 +524,16 @@ std::vector<std::uint8_t> latent_module_boot_track() {
     std::copy(module.begin(),
               module.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(22u)));
+    std::copy(module.begin(),
+              module.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(23u)));
+    constexpr std::array<std::uint8_t, 4u> unhinted_module{
+        0x0Bu, 0x00u, // rts
+        0x08u, 0x00u  // delay-slot clrt
+    };
+    std::copy(unhinted_module.begin(),
+              unhinted_module.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(24u)));
     return bytes;
 }
 
@@ -658,6 +674,28 @@ int run_test(const int argc, char* argv[]) {
                                  : FixtureProgram::Normal;
         write_fixture(directory, program);
         if (std::string_view(argv[1]) == "--write-fixture") {
+            write_binary(
+                directory / "high.bin",
+                latent_module_boot_track());
+            constexpr std::array<std::uint8_t, 4u> latent_module{
+                0x0Bu, 0x00u, 0x09u, 0x00u};
+            const auto latent_module_identity =
+                "sha256:" +
+                katana::io::sha256_bytes(std::string_view(
+                    reinterpret_cast<const char*>(
+                        latent_module.data()),
+                    latent_module.size()));
+            std::ofstream latent_hint(
+                directory / "latent-aot-entry.txt",
+                std::ios::binary | std::ios::trunc);
+            latent_hint
+                << latent_module_identity << '@'
+                << static_cast<std::uint64_t>(data_lba + 22u) *
+                       payload_size
+                << ":4:0\n";
+            if (!latent_hint)
+                throw std::runtime_error(
+                    "Latent-AOT-CLI-Hint konnte nicht geschrieben werden.");
             const auto boot = katana::runtime::load_dreamcast_runtime_boot(
                 directory / "disc.gdi");
             const auto boot_identity =
@@ -758,6 +796,36 @@ int run_test(const int argc, char* argv[]) {
                 read_text(published_port / "user-data" / "content" /
                           "game.katana-disc") == "local-retail-cache",
             "Atomarer Portaustausch verliert oder kopiert lokale Disc-/Speicherdaten.");
+    const auto external_user_data =
+        fixture.root / "external-user-data";
+    const auto linked_previous_port =
+        fixture.root / "linked-previous-port";
+    const auto linked_published_port =
+        fixture.root / "linked-published-port";
+    std::filesystem::create_directories(external_user_data);
+    std::filesystem::create_directories(linked_previous_port);
+    std::filesystem::create_directories(
+        linked_published_port / "user-data");
+    std::error_code user_data_link_error;
+    std::filesystem::create_directory_symlink(
+        external_user_data,
+        linked_previous_port / "user-data",
+        user_data_link_error);
+    if (!user_data_link_error) {
+        bool rejected_linked_user_data = false;
+        try {
+            preserve_local_port_user_data(
+                linked_previous_port,
+                linked_published_port);
+        } catch (const std::runtime_error&) {
+            rejected_linked_user_data = true;
+        }
+        require(
+            rejected_linked_user_data &&
+                std::filesystem::is_directory(external_user_data),
+            "Atomarer Portaustausch akzeptierte verlinkte lokale "
+            "Portdaten.");
+    }
     write_fixture(fixture.root / "disc");
     const auto gdi = fixture.root / "disc" / "disc.gdi";
     const auto runtime_boot = katana::runtime::load_dreamcast_runtime_boot(gdi);
@@ -1583,8 +1651,43 @@ int run_test(const int argc, char* argv[]) {
     write_binary(latent_disc_directory / "high.bin", latent_module_boot_track());
     const auto latent_gdi_path = latent_disc_directory / "disc.gdi";
     const auto latent_output = fixture.root / "latent-aot-port";
+    constexpr std::array<std::uint8_t, 4u> latent_block_bytes{
+        0x0Bu, 0x00u, 0x09u, 0x00u};
+    const auto latent_block_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+                        reinterpret_cast<const char*>(
+                            latent_block_bytes.data()),
+                        latent_block_bytes.size()));
+    const std::array latent_entry_hints{
+        katana::codegen::LatentAotEntryHint{
+            latent_block_identity,
+            static_cast<std::uint64_t>(data_lba + 22u) * payload_size,
+            4u,
+            0u},
+        katana::codegen::LatentAotEntryHint{
+            latent_block_identity,
+            static_cast<std::uint64_t>(data_lba + 23u) * payload_size,
+            4u,
+            0u},
+    };
+    auto latent_options = options;
+    latent_options.latent_aot_entry_hints = latent_entry_hints;
+    latent_options.latent_aot_discovery_mode =
+        katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+    observed_progress.clear();
     const auto latent_result =
-        export_dreamcast_port_project(latent_gdi_path, latent_output, options);
+        export_dreamcast_port_project(
+            latent_gdi_path, latent_output, latent_options);
+    require(
+        std::any_of(
+            observed_progress.begin(),
+            observed_progress.end(),
+            [](const auto& phase) {
+                return phase.starts_with(
+                    "latent-aot-module-analysis-ms:0:");
+            }),
+        "Latent-AOT-Modulanalyse meldet keine deterministisch "
+        "gesammelte Einzelmodulzeit.");
     const auto latent_generated = snapshot(latent_output / "generated");
     const auto& latent_dispatch = latent_generated.at("code/runtime-dispatch.cpp");
     const auto& latent_dispatch_shard =
@@ -1594,23 +1697,117 @@ int run_test(const int argc, char* argv[]) {
     const auto latent_recipe =
         katana::runtime::parse_disc_install_recipe(latent_result.disc_install_recipe);
     const auto latent_gdi = katana::runtime::GdiDiscSource::open(latent_gdi_path);
+    const auto latent_boot =
+        katana::platform::load_dreamcast_gdi_boot(latent_gdi_path);
+    const auto latent_boot_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                latent_boot.boot_file.data()),
+            latent_boot.boot_file.size()));
+    const auto latent_template_id =
+        std::string("latent-aot-") +
+        latent_block_identity.substr(7u) + "-4";
+    katana::runtime::NativeAotTemplate colliding_template;
+    colliding_template.source_module_id = latent_template_id;
+    colliding_template.expected_source_identity =
+        latent_block_identity;
+    colliding_template.source_start = 0x88000000u;
+    colliding_template.extent = 4u;
+    colliding_template.destination =
+        katana::runtime::NativeAotTemplateDestination::LoadedModule;
+    colliding_template.expected_runtime_content_identity =
+        latent_recipe.content_identity;
+    colliding_template.expected_runtime_byte_identity =
+        latent_block_identity;
+    const std::array colliding_templates{colliding_template};
+    katana::runtime::GameProjectDefinition collision_project;
+    collision_project.project_id =
+        "katana.test.latent-template-id-collision";
+    collision_project.project_version = "1";
+    collision_project.identity = {
+        latent_recipe.content_identity,
+        latent_boot.metadata.boot_file_name,
+        latent_boot_identity};
+    collision_project.runtime_code_templates =
+        colliding_templates;
+    auto collision_options = latent_options;
+    collision_options.game_project = &collision_project;
+    collision_options.progress_callback = observe_progress;
+    observed_progress.clear();
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(export_dreamcast_port_project(
+                latent_gdi_path,
+                fixture.root / "latent-template-id-collision-port",
+                collision_options));
+        },
+        "Externes GameProject-LoadedModule-Template ohne deklarative "
+        "SourceBinding wurde akzeptiert.");
+    require(
+        std::find(observed_progress.begin(),
+                  observed_progress.end(),
+                  "partition-codegen") ==
+            observed_progress.end(),
+        "Nicht bindbares GameProject-LoadedModule-Template wird erst nach "
+        "teurem Partition-Codegen abgelehnt.");
     const auto representation_specific_identity =
         katana::runtime::gdi_content_identity(latent_gdi->descriptor());
-    constexpr std::array<std::uint8_t, 4u> latent_block_bytes{
-        0x0Bu, 0x00u, 0x09u, 0x00u};
-    const auto latent_block_identity =
-        "sha256:" + katana::io::sha256_bytes(std::string_view(
-                        reinterpret_cast<const char*>(
-                            latent_block_bytes.data()),
-                        latent_block_bytes.size()));
+    const std::string latent_descriptor_marker{
+        "descriptors.push_back({\"latent-aot-source-"};
+    const auto first_latent_descriptor =
+        latent_dispatch.find(latent_descriptor_marker);
+    const auto second_latent_descriptor =
+        first_latent_descriptor == std::string::npos
+            ? std::string::npos
+            : latent_dispatch.find(
+                  latent_descriptor_marker,
+                  first_latent_descriptor + latent_descriptor_marker.size());
+    const auto third_latent_descriptor =
+        second_latent_descriptor == std::string::npos
+            ? std::string::npos
+            : latent_dispatch.find(
+                  latent_descriptor_marker,
+                  second_latent_descriptor + latent_descriptor_marker.size());
+    constexpr std::string_view latent_template_marker{
+        "NativeAotTemplateDestination::LoadedModule"};
+    const auto first_latent_template =
+        latent_dispatch.find(latent_template_marker);
+    const auto second_latent_template =
+        first_latent_template == std::string::npos
+            ? std::string::npos
+            : latent_dispatch.find(
+                  latent_template_marker,
+                  first_latent_template + latent_template_marker.size());
     require(latent_result.functions == first.functions + 1u &&
                 std::find(latent_result.checkpoints.begin(),
                           latent_result.checkpoints.end(),
                           "latent-aot-registry-written") != latent_result.checkpoints.end() &&
+                latent_metadata.find(
+                    "\"latent_aot_discovery_mode\":\"exact-only\"") !=
+                    std::string::npos &&
                 latent_metadata.find("\"latent_aot_modules\":1") != std::string::npos &&
+                latent_metadata.find(
+                    "\"latent_aot_source_bindings\":2") !=
+                    std::string::npos &&
                 latent_dispatch.find("register_latent_aot_modules") != std::string::npos &&
                 latent_dispatch.find(
                     "NativeAotTemplateDestination::LoadedModule") != std::string::npos &&
+                first_latent_descriptor != std::string::npos &&
+                second_latent_descriptor != std::string::npos &&
+                third_latent_descriptor == std::string::npos &&
+                first_latent_template != std::string::npos &&
+                second_latent_template == std::string::npos &&
+                latent_dispatch.find(
+                    std::to_string(
+                        static_cast<std::uint64_t>(data_lba + 22u) *
+                        payload_size) +
+                    "ull, 4u") != std::string::npos &&
+                latent_dispatch.find(
+                    std::to_string(
+                        static_cast<std::uint64_t>(data_lba + 23u) *
+                        payload_size) +
+                    "ull, 4u") != std::string::npos &&
                 latent_dispatch.find(
                     "{0u,4u,\"" +
                     latent_block_identity +
@@ -1639,9 +1836,11 @@ int run_test(const int argc, char* argv[]) {
                     "gdi->descriptor().tracks.size(), "
                     "std::string(expected_content_identity))") != std::string::npos &&
                 latent_dispatch.find("ENGINE.BIN") == std::string::npos &&
+                latent_dispatch.find("ENGINE_COPY.BIN") == std::string::npos &&
+                latent_dispatch.find("UNHINTED.BIN") == std::string::npos &&
                 latent_dispatch.find(latent_disc_directory.string()) == std::string::npos,
-            "Latentes natives Disc-AOT wurde nicht generisch, lokal oder metadatengebunden "
-            "exportiert.");
+            "Latentes natives Disc-AOT wurde nicht als ein Byte-Template "
+            "mit zwei exakten Disc-Deskriptoren exportiert.");
     require(latent_main.find("start_byte_transfer(") != std::string::npos &&
                 latent_main.find("0x00005400u") == std::string::npos,
             "Exportierter Produkt-DMA verwendet nicht den expliziten Bytevertrag.");
@@ -3500,10 +3699,16 @@ int run_test(const int argc, char* argv[]) {
         runtime_dispatch.find(
             "active_diagnostics = detailed_dispatch_diagnostics_enabled()") !=
                 std::string::npos &&
-            runtime_dispatch.find(
-                "dispatch_metrics.set_site_details_enabled(\n"
-                "        detailed_dispatch_diagnostics_enabled())") !=
-                std::string::npos &&
+             runtime_dispatch.find(
+                 "dispatch_metrics.set_site_details_enabled(\n"
+                 "        detailed_dispatch_diagnostics_enabled())") !=
+                 std::string::npos &&
+             runtime_dispatch.find(
+                 "if (!static_aot_escape_site_detail_enabled) return;") !=
+                 std::string::npos &&
+             runtime_dispatch.find(
+                 "static_aot_escape_site_counts.clear();") !=
+                 std::string::npos &&
             runtime_dispatch.find(
                 "for (const auto& descriptor :\n"
                  "                 composite_callback_batch_descriptors)") ==
@@ -3991,6 +4196,9 @@ int run_test(const int argc, char* argv[]) {
                     .find("\"guarded_abi_stack_argument_projection_truncated_functions\":0") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
+                    .find("\"guarded_maximum_local_fixpoint_iterations\":") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
                     .find("\"returned_table_scan_truncated\":false") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
@@ -4071,6 +4279,25 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "CMakeLists.txt")
                     .find("add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" "
                           "\"${CMAKE_BINARY_DIR}/katana-runtime\" EXCLUDE_FROM_ALL)") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("set(KATANA_PORT_EXPECTED_RUNTIME_ABI_VERSION \"83\")") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("set(KATANA_PORT_EXPECTED_BLOCK_ABI_VERSION \"5\")") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("set(KATANA_PORT_EXPECTED_PLATFORM_SERVICES_ABI_VERSION "
+                          "\"13\")") != std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("set(KATANA_PORT_EXPECTED_PROJECT_CONTRACT_VERSION "
+                          "\"73\")") != std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("katana_require_runtime_contract("
+                          "\"${KATANA_PORT_RUNTIME_TARGET}\")") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("KatanaRecomp runtime contract mismatch") !=
                 std::string::npos &&
             std::filesystem::exists(output / "src" / "main.cpp") &&
             read_text(output / "src" / "main.cpp")
@@ -4211,9 +4438,19 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("result.frame_presented") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("result.presented_nonblack_pixels != 0u &&\n"
-                          "                result.presented_nonblack_pixels <\n"
-                          "                    result.presented_pixel_count;") !=
+                    .find("visible_game_frame_classifier.observe(") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("visible_progress.visible_progress") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("result.presented_changed_pixels") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("has_relevant_guest_frame_content(") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("result.presented_nonblack_pixels != 0u &&") ==
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("result.proven_frame_presented") != std::string::npos &&
@@ -4310,6 +4547,33 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("DreamcastMutableStorage::open") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("HostPacer") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_HOST_VIDEO_BACKEND backend=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("native_video_backend_name(") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("video->hardware_accelerated()") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("video->backend_fallbacks()") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("video->presentation_telemetry()") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("host_video_occluded_frames=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("HostWorkloadLimiter") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("#include <cerrno>") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("KATANA_HOST_CPU_PERCENT") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_HOST_WORKLOAD_LIMITER") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp").find("mutable_storage->save") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KATANA_HOST_PACING_ERROR") !=
@@ -4334,9 +4598,97 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "run-product-gate.ps1")
                     .find("status=host-watchdog-hang") != std::string::npos &&
             read_text(output / "run-product-gate.ps1")
+                    .find("[ValidateRange(1, 840)]") != std::string::npos &&
+            read_text(output / "run-product-gate.ps1")
+                    .find("[ValidateRange(1, 3600)]") == std::string::npos &&
+            read_text(output / "run-product-gate.ps1")
                     .find("$env:KATANA_GUEST_CYCLE_BUDGET =") ==
                 std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    const auto terminal_summary_buffer =
+        generated_main.find("std::ostringstream product_terminal_summary;");
+    const auto normal_host_shutdown =
+        generated_main.find(
+            "host.shutdown();\n"
+            "        host.require_clean_shutdown();",
+            terminal_summary_buffer);
+    const auto diagnostic_terminal_emit =
+        generated_main.find(
+            "emit_product_terminal_summary();", normal_host_shutdown);
+    const auto normal_terminal_emit =
+        generated_main.find(
+            "emit_product_terminal_summary();",
+            diagnostic_terminal_emit + 1u);
+    const auto normal_terminal_return =
+        generated_main.find("return product_exit_code;", normal_terminal_emit);
+    require(
+        terminal_summary_buffer != std::string::npos &&
+            normal_host_shutdown != std::string::npos &&
+            diagnostic_terminal_emit != std::string::npos &&
+            normal_terminal_emit != std::string::npos &&
+            normal_terminal_return != std::string::npos &&
+            normal_host_shutdown < diagnostic_terminal_emit &&
+            diagnostic_terminal_emit < normal_terminal_emit &&
+            normal_terminal_emit < normal_terminal_return &&
+            occurrences(
+                generated_main,
+                "terminal_telemetry.terminal_summary_emitted = true;") == 2u &&
+            generated_main.find(
+                "const auto line = product_terminal_summary.str();\n"
+                "            terminal_telemetry.terminal_summary_emitted = true;") !=
+                std::string::npos &&
+            generated_main.find(
+                "if (terminal_telemetry.terminal_summary_emitted) return;") !=
+                std::string::npos &&
+            generated_main.find(
+                "lifecycle_test == \"close-before-running\"") !=
+                std::string::npos &&
+            generated_main.find(
+                "if (silent_failures != 0u)") == std::string::npos &&
+            generated_main.find(
+                "? \"runtime-contract\"") != std::string::npos,
+        "Terminaler Produkterfolg wird vor falliblem Host-Save/Shutdown ausgegeben "
+        "oder ein geordnet klassifizierter Lifecycle-/Runtime-Vertragsfehler "
+        "wird vor der gepufferten Terminalausgabe zur Runtime-Exception.");
+    require(
+        generated_main.find("workload_limiter_->limit_if_due();") !=
+                std::string::npos &&
+            generated_main.find(
+                "workload_limiter_->limit();\n"
+                "        return {result.guest_cycle") !=
+                std::string::npos &&
+            generated_main.find("workload_limit_call_quantum") ==
+                std::string::npos &&
+            generated_main.find("host_cpu_measured_wall_ns=") !=
+                std::string::npos &&
+            generated_main.find("host_cpu_measured_thread_cpu_ns=") !=
+                std::string::npos &&
+            generated_main.find("host_cpu_measured_percent_milli=") !=
+                std::string::npos,
+        "Produkt-Wiring nutzt weiterhin grobe Call-Quanten oder verliert "
+        "gemessene CPU-Telemetrie nach schweren Scheduler-/Framepfaden.");
+    require(
+        generated_main.find(
+            "last_presented_nonblack_pixels =\n"
+            "                    result.presented_nonblack_pixels;") !=
+                std::string::npos &&
+            generated_main.find(
+                "last_presented_pixel_count =\n"
+                "                    result.presented_pixel_count;") !=
+                std::string::npos &&
+            generated_main.find(
+                "result.presented_frame_evidence.valid\n"
+                "                        ? result.presented_frame_evidence.digest : 0u;") !=
+                std::string::npos &&
+            generated_main.find(
+                "last_presented_evidence_collected =\n"
+                "                    result.presented_frame_evidence_collected;") !=
+                std::string::npos &&
+            occurrences(
+                generated_main,
+                "host_last_presented_evidence_collected=") == 2u,
+        "Last-Frame-Telemetrie wird nicht atomar ersetzt oder unterscheidet "
+        "fehlende Evidenz weiterhin nicht von einem schwarzen Frame.");
     const auto product_entry_boundary =
         generated_main.find("void note_guest_program_entry() noexcept");
     const auto product_entry_evidence_callback =
@@ -4353,6 +4705,53 @@ int run_test(const int argc, char* argv[]) {
                 "state.pvr_renderer->reset_guest_frame_evidence(\n"
                 "                state.vram->bytes())") != std::string::npos &&
             generated_main.find("guest_frame_evidence = {};") !=
+                std::string::npos &&
+            generated_main.find(
+                "visible_game_frame_classifier.begin_product_interval(\n"
+                "                katana::runtime::capture_pvr_scanout_frame(\n"
+                "                    *state.pvr_registers, "
+                "state.vram->bytes()))") !=
+                std::string::npos &&
+            generated_main.find("last_game_frame_visibility = {};") !=
+                std::string::npos &&
+            generated_main.find(
+                "pending_visible_game_frame = {};") !=
+                std::string::npos &&
+            generated_main.find(
+                "pending_visible_game_frame.observation =\n"
+                "                    visible_progress;") !=
+                std::string::npos &&
+            generated_main.find(
+                "product_progress_evidence_callback_();") !=
+                std::string::npos &&
+            generated_main.find(
+                "promote_pending_visible_game_frame,\n"
+                "           std::move(game_entry_callback)") !=
+                std::string::npos &&
+            generated_main.find(
+                "first_visible_game_frame_changed_pixels =\n"
+                "                promoted.changed_pixels") !=
+                std::string::npos &&
+            generated_main.find("first_visible_game_frame_presented_cycle=") !=
+                std::string::npos &&
+            generated_main.find("first_visible_game_frame_changed_tiles=") !=
+                std::string::npos &&
+            generated_main.find(
+                "first_visible_game_frame_proof_changed_pixels=") !=
+                std::string::npos &&
+            generated_main.find(
+                "first_visible_game_frame_required_changed_pixels=") !=
+                std::string::npos &&
+            generated_main.find(
+                "first_visible_game_frame_changed_interior_tiles=") !=
+                std::string::npos &&
+            generated_main.find("visible_frame_baseline_available=") !=
+                std::string::npos &&
+            generated_main.find("visible_frame_geometry_matches=") !=
+                std::string::npos &&
+            generated_main.find("visible_frame_required_changed_pixels=") !=
+                std::string::npos &&
+            generated_main.find("visible_frame_changed_interior_tiles=") !=
                 std::string::npos &&
             generated_main.find("product_entry_evidence_failed_ = true") !=
                 std::string::npos &&
@@ -4699,6 +5098,8 @@ int run_test(const int argc, char* argv[]) {
     auto metadata_cache_options = options;
     metadata_cache_options.codegen_cache_root =
         fixture.root / "metadata-cache";
+    metadata_cache_options.codegen_implementation_identity =
+        "port-export-fixture-a";
     auto metadata_cache_baseline_analysis = guarded_analysis;
     metadata_cache_baseline_analysis.symbolic_addresses.clear();
     const auto metadata_cache_output =
@@ -4773,6 +5174,18 @@ int run_test(const int argc, char* argv[]) {
                 snapshot(metadata_cache_output / "generated"),
         "Identische Artefakt- und Analyseidentitaet trifft den "
         "Metadata-Cache nicht deterministisch.");
+    metadata_cache_options.codegen_implementation_identity =
+        "port-export-fixture-b";
+    const auto implementation_change =
+        export_metadata_cache_fixture(
+            metadata_cache_analysis_change);
+    require(
+        !implementation_change.metadata_cache_hit &&
+            implementation_change.codegen_cache_hits == 0u &&
+            implementation_change.codegen_cache_misses ==
+                implementation_change.partitions,
+        "Andere Exporterimplementierung uebernimmt stale Partition- oder "
+        "Metadata-Artefakte aus dem inneren Cache.");
 
     auto runtime_only_analysis = guarded_analysis;
     auto& runtime_only_resolution = runtime_only_analysis.indirect_control_flow.front();

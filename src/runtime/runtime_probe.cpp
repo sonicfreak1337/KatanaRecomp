@@ -1878,6 +1878,9 @@ make_runtime_probe_device_snapshot(const ExecutableModuleCatalogSnapshot& snapsh
                        for (const auto& module : snapshot.modules) {
                            append_string(hash, module.id);
                            append_string(hash, module.source_identity);
+                           append_string(hash, module.content_identity);
+                           append_string(hash, module.byte_identity);
+                           append_string(hash, module.native_aot_template_id);
                            hash.append_u32(module.guest_start);
                            hash.append_u64(module.bytes.size());
                            hash.append_bytes(module.bytes);

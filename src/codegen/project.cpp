@@ -11,11 +11,37 @@
 #include <system_error>
 #include <utility>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace katana::codegen {
 namespace {
 
 constexpr std::string_view artifact_manifest_name = ".katana-generated-artifacts";
 constexpr std::string_view artifact_manifest_header = "katana-codegen-artifacts-v1";
+constexpr std::size_t maximum_project_cache_artifact_bytes =
+    64u * 1024u * 1024u;
+constexpr std::uintmax_t maximum_artifact_manifest_bytes =
+    16u * 1024u * 1024u;
+constexpr std::size_t maximum_artifact_manifest_entries = 131'072u;
+constexpr std::size_t maximum_artifact_manifest_path_bytes = 4'096u;
+
+bool unsafe_project_link(
+    const std::filesystem::path& path,
+    const std::filesystem::file_status status) noexcept {
+    if (std::filesystem::is_symlink(status)) return true;
+#ifdef _WIN32
+    const auto attributes = GetFileAttributesW(path.c_str());
+    return attributes == INVALID_FILE_ATTRIBUTES ||
+           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+#else
+    static_cast<void>(path);
+    return false;
+#endif
+}
 
 std::filesystem::path validate_relative_path(const std::filesystem::path& path) {
     const auto normalized = path.lexically_normal();
@@ -52,7 +78,7 @@ std::filesystem::path secure_artifact_path(const std::filesystem::path& canonica
             missing_prefix = true;
             continue;
         }
-        if (!status_error && std::filesystem::is_symlink(status)) {
+        if (!status_error && unsafe_project_link(candidate, status)) {
             throw std::runtime_error("Codegen-Projektpfad enthaelt einen symbolischen Link: " +
                                      relative.generic_string());
         }
@@ -100,6 +126,13 @@ std::vector<std::filesystem::path> read_artifact_manifest(const std::filesystem:
     if (!std::filesystem::exists(path)) {
         return {};
     }
+    std::error_code size_error;
+    const auto manifest_bytes =
+        std::filesystem::file_size(path, size_error);
+    if (size_error ||
+        manifest_bytes > maximum_artifact_manifest_bytes)
+        throw std::runtime_error(
+            "Katana-Artefaktmanifest ueberschreitet sein Bytebudget.");
     std::ifstream input(path, std::ios::binary);
     std::string line;
     if (!input || !std::getline(input, line) || line != artifact_manifest_header) {
@@ -111,6 +144,11 @@ std::vector<std::filesystem::path> read_artifact_manifest(const std::filesystem:
         if (line.empty()) {
             continue;
         }
+        if (line.size() > maximum_artifact_manifest_path_bytes ||
+            paths.size() >= maximum_artifact_manifest_entries)
+            throw std::runtime_error(
+                "Katana-Artefaktmanifest ueberschreitet sein "
+                "Pfadbudget.");
         paths.push_back(validate_relative_path(std::filesystem::path(line)));
     }
     if (!input.eof()) {
@@ -125,12 +163,23 @@ std::vector<std::filesystem::path> read_artifact_manifest(const std::filesystem:
 }
 
 std::string artifact_manifest(const std::vector<std::filesystem::path>& paths) {
+    if (paths.size() > maximum_artifact_manifest_entries)
+        throw std::runtime_error(
+            "Katana-Artefaktmanifest ueberschreitet sein Eintragsbudget.");
     std::ostringstream output;
     output << artifact_manifest_header << '\n';
     for (const auto& path : paths) {
-        output << path.generic_string() << '\n';
+        const auto encoded = path.generic_string();
+        if (encoded.size() > maximum_artifact_manifest_path_bytes)
+            throw std::runtime_error(
+                "Katana-Artefaktmanifest enthaelt einen zu langen Pfad.");
+        output << encoded << '\n';
     }
-    return output.str();
+    auto manifest = output.str();
+    if (manifest.size() > maximum_artifact_manifest_bytes)
+        throw std::runtime_error(
+            "Katana-Artefaktmanifest ueberschreitet sein Bytebudget.");
+    return manifest;
 }
 
 std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
@@ -262,7 +311,9 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
     const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();
     std::error_code root_status_error;
     const auto root_status = std::filesystem::symlink_status(absolute_root, root_status_error);
-    if (!root_status_error && std::filesystem::is_symlink(root_status)) {
+    if (!root_status_error &&
+        std::filesystem::exists(root_status) &&
+        unsafe_project_link(absolute_root, root_status)) {
         throw std::runtime_error("Codegen-Ausgabeziel darf kein symbolischer Link sein.");
     }
     if (root_status_error && root_status_error != std::errc::no_such_file_or_directory) {
@@ -278,14 +329,23 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
     };
     const auto write_artifact = [&](const ProjectArtifact& artifact) {
         bool hit = false;
-        if (options.cache != nullptr) {
+        if (options.cache != nullptr &&
+            artifact.content.size() <=
+                maximum_project_cache_artifact_bytes) {
             const auto cache_name = artifact.relative_path.generic_string();
-            const auto cached = options.cache->load(options.cache_key, cache_name);
+            const auto cached = options.cache->load_bounded(
+                options.cache_key,
+                cache_name,
+                maximum_project_cache_artifact_bytes);
             if (cached) {
                 write_file(root, artifact.relative_path, *cached);
                 hit = true;
             } else {
-                options.cache->store(options.cache_key, cache_name, artifact.content);
+                options.cache->store_bounded(
+                    options.cache_key,
+                    cache_name,
+                    artifact.content,
+                    maximum_project_cache_artifact_bytes);
                 write_file(root, artifact.relative_path, artifact.content);
             }
         } else {

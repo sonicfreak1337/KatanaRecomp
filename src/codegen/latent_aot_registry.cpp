@@ -2,6 +2,10 @@
 
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
+#include "katana/analysis/abi.hpp"
+#include "katana/analysis/parallel_work.hpp"
+#include "katana/codegen/cache.hpp"
+#include "katana/codegen/latent_aot_analysis_cache.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/ir/lower.hpp"
@@ -13,8 +17,10 @@
 
 #include <algorithm>
 #include <atomic>
-#include <future>
+#include <chrono>
 #include <limits>
+#include <map>
+#include <new>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -26,15 +32,17 @@ namespace {
 
 constexpr std::uint32_t iso_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
+constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
+constexpr std::size_t maximum_analysis_implementation_identity_bytes = 4096u;
+constexpr std::string_view latent_aot_analysis_cache_artifact{
+    "module-analysis.bin"};
 
 struct DiscFileCandidate {
-    std::string path;
-    std::uint32_t lba = 0u;
     std::uint32_t size = 0u;
     std::uint32_t source_address = 0u;
-    std::uint64_t disc_byte_offset = 0u;
     std::vector<std::uint8_t> bytes;
     std::string byte_identity;
+    std::vector<PreparedLatentAotSourceBinding> source_bindings;
     std::vector<std::uint32_t> entry_offsets;
     std::vector<std::uint32_t> explicit_entry_offsets;
 };
@@ -81,8 +89,66 @@ normalize_entry_hints(const std::span<const LatentAotEntryHint> entry_hints) {
     return normalized;
 }
 
+bool source_binding_less(const PreparedLatentAotSourceBinding& left,
+                         const PreparedLatentAotSourceBinding& right) noexcept {
+    if (left.disc_byte_offset != right.disc_byte_offset)
+        return left.disc_byte_offset < right.disc_byte_offset;
+    if (left.byte_size != right.byte_size)
+        return left.byte_size < right.byte_size;
+    return left.id < right.id;
+}
+
+PreparedLatentAotSourceBinding make_source_binding(
+    const std::string_view byte_identity,
+    const std::uint64_t disc_byte_offset,
+    const std::uint32_t byte_size) {
+    return {"latent-aot-source-" + std::string(byte_identity.substr(7u)) + "-" +
+                std::to_string(disc_byte_offset) + "-" +
+                std::to_string(byte_size),
+            disc_byte_offset,
+            byte_size};
+}
+
+bool insert_source_binding(
+    DiscFileCandidate& candidate,
+    PreparedLatentAotSourceBinding binding) {
+    const auto position = std::lower_bound(candidate.source_bindings.begin(),
+                                           candidate.source_bindings.end(),
+                                           binding,
+                                           source_binding_less);
+    if (position != candidate.source_bindings.end() &&
+        *position == binding)
+        return false;
+    candidate.source_bindings.insert(position, std::move(binding));
+    return true;
+}
+
+void merge_entry_offsets(std::vector<std::uint32_t>& destination,
+                         const std::vector<std::uint32_t>& source) {
+    destination.insert(destination.end(), source.begin(), source.end());
+    std::sort(destination.begin(), destination.end());
+    destination.erase(std::unique(destination.begin(), destination.end()),
+                      destination.end());
+}
+
 bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept {
-    if (candidate.entry_offsets.empty() ||
+    if (candidate.source_bindings.empty() ||
+        !std::is_sorted(candidate.source_bindings.begin(),
+                        candidate.source_bindings.end(),
+                        source_binding_less) ||
+        std::adjacent_find(candidate.source_bindings.begin(),
+                           candidate.source_bindings.end()) !=
+            candidate.source_bindings.end() ||
+        std::any_of(candidate.source_bindings.begin(),
+                    candidate.source_bindings.end(),
+                    [&](const auto& binding) {
+                        return binding.id.empty() ||
+                               binding.byte_size != candidate.size ||
+                               binding.disc_byte_offset >
+                                   std::numeric_limits<std::uint64_t>::max() -
+                                       binding.byte_size;
+                    }) ||
+        candidate.entry_offsets.empty() ||
         !std::is_sorted(candidate.entry_offsets.begin(), candidate.entry_offsets.end()) ||
         std::adjacent_find(candidate.entry_offsets.begin(), candidate.entry_offsets.end()) !=
             candidate.entry_offsets.end() ||
@@ -116,7 +182,17 @@ bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept 
 
 class AnalysisBudgetExceeded final : public std::runtime_error {
   public:
-    AnalysisBudgetExceeded() : std::runtime_error("latent-aot-analysis-budget") {}
+    explicit AnalysisBudgetExceeded(
+        const LatentAotAnalysisRejection rejection)
+        : std::runtime_error("latent-aot-analysis-budget"),
+          rejection_(rejection) {}
+
+    [[nodiscard]] LatentAotAnalysisRejection rejection() const noexcept {
+        return rejection_;
+    }
+
+  private:
+    LatentAotAnalysisRejection rejection_;
 };
 
 bool safe_component(const std::string_view component) noexcept {
@@ -275,222 +351,697 @@ bool physical_overlap(const LatentAotOccupiedRange left,
            right_begin < left_begin + left.size;
 }
 
-std::optional<PreparedLatentAotModule>
-analyze_candidate(DiscFileCandidate candidate, const LatentAotDiscoveryOptions& options) {
-    try {
-        const bool exact_entry_binding = !candidate.explicit_entry_offsets.empty();
-        if ((exact_entry_binding
-                 ? candidate.bytes.size() < 2u ||
-                       (candidate.bytes.size() & 1u) != 0u
-                 : candidate.bytes.size() < 4u ||
-                       (candidate.bytes.size() & 3u) != 0u) ||
-            !valid_candidate_entry_offsets(candidate))
-            return std::nullopt;
-        const auto opcode_at = [&candidate](const std::uint32_t offset) {
-            return static_cast<std::uint16_t>(
-                static_cast<std::uint16_t>(candidate.bytes[offset]) |
-                static_cast<std::uint16_t>(
-                    static_cast<std::uint16_t>(candidate.bytes[offset + 1u]) << 8u));
-        };
-        if (exact_entry_binding) {
-            if (std::any_of(candidate.explicit_entry_offsets.begin(),
-                            candidate.explicit_entry_offsets.end(),
-                            [&](const auto offset) {
-                                return !katana::sh4::decode(opcode_at(offset)).is_known();
-                            }))
-                return std::nullopt;
-        } else {
-            if (!katana::sh4::decode(opcode_at(0u)).is_known())
-                return std::nullopt;
-            bool early_control_flow = false;
-            const auto entry_scan = std::min(
-                options.maximum_entry_scan_instructions, candidate.bytes.size() / 2u);
-            for (std::size_t instruction = 0u; instruction < entry_scan; ++instruction) {
-                const auto offset = static_cast<std::uint32_t>(instruction * 2u);
-                const auto decoded = katana::sh4::decode(opcode_at(offset));
-                if (!decoded.is_known()) break;
-                if (decoded.changes_control_flow()) {
-                    early_control_flow = true;
-                    break;
-                }
+struct CandidateAnalysisOutcome {
+    std::optional<PreparedLatentAotModule> module;
+    // Positive cache payloads retain the exact unoptimized lowering. Cache
+    // hits rebind every source-derived field to current bytes and rerun the
+    // optimizer instead of trusting serialized transformed semantics.
+    std::vector<katana::ir::Function> cache_program;
+    LatentAotAnalysisRejection rejection =
+        LatentAotAnalysisRejection::ProgramInvalid;
+    bool deterministic = true;
+};
+
+struct CandidateAnalysisCacheCounters {
+    std::atomic_size_t positive_hits = 0u;
+    std::atomic_size_t negative_hits = 0u;
+    std::atomic_size_t misses = 0u;
+    std::atomic_size_t corrupt_entries = 0u;
+    std::atomic_size_t stores = 0u;
+};
+
+CandidateAnalysisOutcome reject_candidate(
+    const LatentAotAnalysisRejection rejection,
+    const bool deterministic = true) {
+    return {std::nullopt, {}, rejection, deterministic};
+}
+
+bool source_lowering_matches(
+    const katana::ir::Instruction& cached,
+    const katana::ir::Instruction& current) noexcept {
+    return cached.source_address == current.source_address &&
+           cached.original_opcode == current.original_opcode &&
+           cached.original_operation == current.original_operation &&
+           cached.operation == current.operation &&
+           cached.widths == current.widths &&
+           cached.status_effects == current.status_effects &&
+           cached.memory_effects == current.memory_effects &&
+           cached.accumulator_effects == current.accumulator_effects &&
+           cached.destination_register == current.destination_register &&
+           cached.source_register == current.source_register &&
+           cached.branch_register == current.branch_register &&
+           cached.immediate == current.immediate &&
+           cached.displacement == current.displacement &&
+           cached.special_register == current.special_register &&
+           cached.effective_address == current.effective_address &&
+           cached.target_address == current.target_address &&
+           !cached.forwarded_value_register.has_value() &&
+           cached.delay_slot == current.delay_slot &&
+           cached.is_privileged == current.is_privileged &&
+           cached.branch_register_relative ==
+               current.branch_register_relative;
+}
+
+bool source_bound_unoptimized_program(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program) {
+    const auto module_end =
+        static_cast<std::uint64_t>(candidate.source_address) +
+        candidate.bytes.size();
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                const auto address =
+                    static_cast<std::uint64_t>(instruction.source_address);
+                if (address < candidate.source_address ||
+                    address + 2u > module_end)
+                    return false;
+                const auto offset = static_cast<std::size_t>(
+                    address - candidate.source_address);
+                const auto opcode = static_cast<std::uint16_t>(
+                    static_cast<std::uint16_t>(candidate.bytes[offset]) |
+                    static_cast<std::uint16_t>(
+                        static_cast<std::uint16_t>(
+                            candidate.bytes[offset + 1u])
+                        << 8u));
+                if (instruction.original_opcode != opcode)
+                    return false;
+                katana::sh4::DisassemblyLine line;
+                line.address = instruction.source_address;
+                line.opcode = opcode;
+                line.instruction = katana::sh4::decode(opcode);
+                if (!line.instruction.is_known())
+                    return false;
+                line.is_delay_slot =
+                    instruction.delay_slot.role ==
+                    katana::ir::DelaySlotRole::Slot;
+                line.target_address =
+                    katana::sh4::calculate_direct_branch_target(
+                        line.instruction, line.address);
+                const auto current =
+                    katana::ir::lower_instruction(line);
+                if (!source_lowering_matches(instruction, current))
+                    return false;
+                if (current.dynamic_target_class ==
+                        katana::ir::DynamicTargetClass::NotApplicable &&
+                    (instruction.dynamic_target_class !=
+                         katana::ir::DynamicTargetClass::NotApplicable ||
+                     !instruction.resolved_targets.empty()))
+                    return false;
             }
-            if (!early_control_flow) return std::nullopt;
         }
+    }
+    return true;
+}
 
-        katana::io::ExecutableImage image;
-        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
-        image.set_initial_snapshot_policy(katana::io::InitialSnapshotPolicy::ImmutableOnly);
-        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
-        katana::io::ImageSegment segment{
-            ".latent-disc-module",
-            candidate.source_address,
-            candidate.disc_byte_offset,
-            candidate.bytes.size(),
-            katana::io::SegmentKind::Mixed,
-            {true, true, true},
-            std::move(candidate.bytes)};
-        segment.source_kind = katana::io::ImageSourceKind::DiscModule;
-        segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
-        image.add_segment(std::move(segment));
-        for (const auto offset : candidate.entry_offsets)
-            image.add_entry_point(candidate.source_address + offset);
+bool same_unoptimized_instruction(
+    const katana::ir::Instruction& left,
+    const katana::ir::Instruction& right) noexcept {
+    return left.source_address == right.source_address &&
+           left.original_opcode == right.original_opcode &&
+           left.original_operation == right.original_operation &&
+           left.operation == right.operation &&
+           left.widths == right.widths &&
+           left.status_effects == right.status_effects &&
+           left.memory_effects == right.memory_effects &&
+           left.accumulator_effects == right.accumulator_effects &&
+           left.destination_register == right.destination_register &&
+           left.source_register == right.source_register &&
+           left.branch_register == right.branch_register &&
+           left.immediate == right.immediate &&
+           left.displacement == right.displacement &&
+           left.special_register == right.special_register &&
+           left.effective_address == right.effective_address &&
+           left.target_address == right.target_address &&
+           left.resolved_targets == right.resolved_targets &&
+           left.forwarded_value_register ==
+               right.forwarded_value_register &&
+           left.dynamic_target_class ==
+               right.dynamic_target_class &&
+           left.delay_slot == right.delay_slot &&
+           left.is_privileged == right.is_privileged &&
+           left.branch_register_relative ==
+               right.branch_register_relative;
+}
 
-        const auto analysis = katana::analysis::analyze_control_flow(
-            image,
-            nullptr,
-            [&options](const katana::analysis::ControlFlowAnalysisProgress& progress) {
-                if (progress.iteration > options.maximum_analysis_iterations ||
-                    progress.instructions >
-                        options.maximum_native_instructions_per_module ||
-                    progress.contexts > options.maximum_analysis_contexts)
-                    throw AnalysisBudgetExceeded();
-            });
-        if (!complete_native_graph(analysis)) return std::nullopt;
-        const auto architectural_safepoints =
-            katana::ir::architectural_safepoint_block_leaders(analysis);
-        auto program =
-            katana::ir::lower_program(analysis, architectural_safepoints);
-        if (program.empty() || program.size() > options.maximum_functions_per_module)
-            return std::nullopt;
+bool same_unoptimized_program(
+    const std::span<const katana::ir::Function> left,
+    const std::span<const katana::ir::Function> right) noexcept {
+    if (left.size() != right.size())
+        return false;
+    for (std::size_t function_index = 0u;
+         function_index < left.size();
+         ++function_index) {
+        const auto& left_function = left[function_index];
+        const auto& right_function = right[function_index];
+        if (left_function.entry_address !=
+                right_function.entry_address ||
+            left_function.direct_callees !=
+                right_function.direct_callees ||
+            left_function.indirect_call_sites !=
+                right_function.indirect_call_sites ||
+            left_function.blocks.size() !=
+                right_function.blocks.size())
+            return false;
+        for (std::size_t block_index = 0u;
+             block_index < left_function.blocks.size();
+             ++block_index) {
+            const auto& left_block =
+                left_function.blocks[block_index];
+            const auto& right_block =
+                right_function.blocks[block_index];
+            if (left_block.start_address !=
+                    right_block.start_address ||
+                left_block.successors !=
+                    right_block.successors ||
+                left_block.has_indirect_successor !=
+                    right_block.has_indirect_successor ||
+                left_block.instructions.size() !=
+                    right_block.instructions.size())
+                return false;
+            for (std::size_t instruction_index = 0u;
+                 instruction_index <
+                     left_block.instructions.size();
+                 ++instruction_index) {
+                if (!same_unoptimized_instruction(
+                        left_block.instructions[
+                            instruction_index],
+                        right_block.instructions[
+                            instruction_index]))
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
+CandidateAnalysisOutcome finalize_candidate_program(
+    const DiscFileCandidate& candidate,
+    std::vector<katana::ir::Function> program,
+    const LatentAotDiscoveryOptions& options) {
+    if (program.empty())
+        return reject_candidate(
+            LatentAotAnalysisRejection::ProgramInvalid);
+    if (program.size() > options.maximum_functions_per_module)
+        return reject_candidate(
+            LatentAotAnalysisRejection::FunctionBudgetExceeded);
+    try {
+        if (!source_bound_unoptimized_program(candidate, program))
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid);
+        katana::ir::require_valid_program(program);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        return reject_candidate(
+            LatentAotAnalysisRejection::ProgramInvalid);
+    }
+    std::size_t source_block_count = 0u;
+    std::size_t source_instruction_count = 0u;
+    for (const auto& function : program) {
+        if (source_block_count > options.maximum_blocks_per_module ||
+            function.blocks.size() >
+                options.maximum_blocks_per_module -
+                    source_block_count)
+            return reject_candidate(
+                LatentAotAnalysisRejection::BlockBudgetExceeded);
+        source_block_count += function.blocks.size();
+        for (const auto& block : function.blocks) {
+            if (source_instruction_count >
+                    options.maximum_native_instructions_per_module ||
+                block.instructions.size() >
+                    options.maximum_native_instructions_per_module -
+                        source_instruction_count)
+                return reject_candidate(
+                    LatentAotAnalysisRejection::
+                        InstructionBudgetExceeded);
+            source_instruction_count += block.instructions.size();
+        }
+    }
+    auto cache_program = program;
+    try {
         static_cast<void>(katana::ir::optimize_program(program));
         katana::ir::require_valid_program(program);
-        if (!relocation_closed_impl(program, candidate.source_address, candidate.size))
-            return std::nullopt;
-        std::size_t block_count = 0u;
-        std::size_t instruction_count = 0u;
-        for (const auto& function : program) {
-            if (function.blocks.size() > options.maximum_blocks_per_module - block_count)
-                return std::nullopt;
-            block_count += function.blocks.size();
-            for (const auto& block : function.blocks) {
-                if (block.instructions.size() >
-                    options.maximum_native_instructions_per_module - instruction_count)
-                    return std::nullopt;
-                instruction_count += block.instructions.size();
-            }
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        return reject_candidate(
+            LatentAotAnalysisRejection::ProgramInvalid);
+    }
+    if (!relocation_closed_impl(
+            program, candidate.source_address, candidate.size))
+        return reject_candidate(
+            LatentAotAnalysisRejection::RelocationNotClosed);
+
+    std::size_t block_count = 0u;
+    std::size_t instruction_count = 0u;
+    for (const auto& function : program) {
+        if (block_count > options.maximum_blocks_per_module ||
+            function.blocks.size() >
+                options.maximum_blocks_per_module - block_count)
+            return reject_candidate(
+                LatentAotAnalysisRejection::BlockBudgetExceeded);
+        block_count += function.blocks.size();
+        for (const auto& block : function.blocks) {
+            if (instruction_count >
+                    options.maximum_native_instructions_per_module ||
+                block.instructions.size() >
+                    options.maximum_native_instructions_per_module -
+                        instruction_count)
+                return reject_candidate(
+                    LatentAotAnalysisRejection::
+                        InstructionBudgetExceeded);
+            instruction_count += block.instructions.size();
         }
-        const auto module_end =
-            static_cast<std::uint64_t>(candidate.source_address) + candidate.size;
-        for (const auto& function : program) {
-            for (const auto& block : function.blocks) {
-                if (block.start_address < candidate.source_address ||
-                    block.start_address >= module_end)
-                    return std::nullopt;
-                for (const auto& instruction : block.instructions) {
-                    if (instruction.source_address < candidate.source_address ||
-                        instruction.source_address >= module_end)
-                        return std::nullopt;
-                }
-            }
-        }
-        std::vector<PreparedLatentAotBlockIdentity> block_identities;
-        block_identities.reserve(block_count);
-        for (const auto& function : program) {
-            for (const auto& block : function.blocks) {
-                const auto block_start =
-                    static_cast<std::uint64_t>(block.start_address);
-                auto block_end = block_start + 2u;
-                if (block_end > module_end) return std::nullopt;
-                for (const auto& instruction : block.instructions) {
-                    const auto instruction_end =
-                        static_cast<std::uint64_t>(
-                            instruction.source_address) +
-                        2u;
-                    if (instruction_end > module_end)
-                        return std::nullopt;
-                    block_end = std::max(block_end, instruction_end);
-                }
-                if (block_end <= block_start ||
-                    block_end - block_start >
-                        std::numeric_limits<std::uint32_t>::max())
-                    return std::nullopt;
-                const auto block_size =
-                    static_cast<std::uint32_t>(block_end - block_start);
-                const auto* const source_segment =
-                    image.find_segment(block.start_address, block_size);
-                const auto byte_offset =
-                    source_segment != nullptr
-                        ? source_segment->byte_offset(block.start_address)
-                        : std::optional<std::size_t>{};
-                if (source_segment == nullptr || !byte_offset.has_value() ||
-                    *byte_offset > source_segment->bytes.size() ||
-                    block_size >
-                        source_segment->bytes.size() - *byte_offset)
-                    return std::nullopt;
-                const auto source_offset =
-                    block.start_address - candidate.source_address;
-                const auto bytes = std::string_view(
-                    reinterpret_cast<const char*>(
-                        source_segment->bytes.data() + *byte_offset),
-                    block_size);
-                block_identities.push_back(
-                    {source_offset,
-                     block_size,
-                     "sha256:" + katana::io::sha256_bytes(bytes)});
-            }
-        }
-        std::sort(
-            block_identities.begin(),
-            block_identities.end(),
-            [](const auto& left, const auto& right) {
-                if (left.source_offset != right.source_offset)
-                    return left.source_offset < right.source_offset;
-                if (left.size != right.size) return left.size < right.size;
-                return left.sha256 < right.sha256;
-            });
-        std::vector<PreparedLatentAotBlockIdentity> unique_block_identities;
-        unique_block_identities.reserve(block_identities.size());
-        std::uint64_t identity_bytes = 0u;
-        for (const auto& identity : block_identities) {
-            if (!unique_block_identities.empty() &&
-                unique_block_identities.back().source_offset ==
-                    identity.source_offset) {
-                if (unique_block_identities.back() != identity)
-                    return std::nullopt;
-                continue;
-            }
-            if (!unique_block_identities.empty() &&
-                identity.source_offset <
+    }
+
+    const auto module_end =
+        static_cast<std::uint64_t>(candidate.source_address) +
+        candidate.size;
+    std::vector<PreparedLatentAotBlockIdentity> block_identities;
+    block_identities.reserve(block_count);
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            const auto block_start =
+                static_cast<std::uint64_t>(block.start_address);
+            if (block.start_address < candidate.source_address ||
+                block_start >= module_end)
+                return reject_candidate(
+                    LatentAotAnalysisRejection::ProgramInvalid);
+            auto block_end = block_start + 2u;
+            if (block_end > module_end)
+                return reject_candidate(
+                    LatentAotAnalysisRejection::ProgramInvalid);
+            for (const auto& instruction : block.instructions) {
+                const auto instruction_start =
                     static_cast<std::uint64_t>(
-                        unique_block_identities.back().source_offset) +
-                        unique_block_identities.back().size)
-                return std::nullopt;
-            identity_bytes += identity.size;
-            if (identity_bytes > candidate.size)
-                return std::nullopt;
-            unique_block_identities.push_back(identity);
+                        instruction.source_address);
+                const auto instruction_end = instruction_start + 2u;
+                if (instruction.source_address <
+                        candidate.source_address ||
+                    instruction_start >= module_end ||
+                    instruction_end > module_end)
+                    return reject_candidate(
+                        LatentAotAnalysisRejection::ProgramInvalid);
+                block_end = std::max(block_end, instruction_end);
+            }
+            if (block_end <= block_start ||
+                block_end - block_start >
+                    std::numeric_limits<std::uint32_t>::max())
+                return reject_candidate(
+                    LatentAotAnalysisRejection::ProgramInvalid);
+            const auto source_offset =
+                block.start_address - candidate.source_address;
+            const auto block_size =
+                static_cast<std::uint32_t>(block_end - block_start);
+            if (source_offset > candidate.bytes.size() ||
+                block_size >
+                    candidate.bytes.size() - source_offset)
+                return reject_candidate(
+                    LatentAotAnalysisRejection::ProgramInvalid);
+            const auto bytes = std::string_view(
+                reinterpret_cast<const char*>(
+                    candidate.bytes.data() + source_offset),
+                block_size);
+            block_identities.push_back(
+                {source_offset,
+                 block_size,
+                 "sha256:" + katana::io::sha256_bytes(bytes)});
         }
-        if (unique_block_identities.empty() ||
-            unique_block_identities.size() >
-                options.maximum_blocks_per_module)
-            return std::nullopt;
-        for (const auto offset : candidate.entry_offsets) {
-            const auto entry_address = candidate.source_address + offset;
-            const auto emitted = std::any_of(
-                program.begin(), program.end(), [&](const auto& function) {
-                    return std::any_of(function.blocks.begin(), function.blocks.end(),
-                                       [&](const auto& block) {
-                                           return block.start_address == entry_address;
-                                       });
-                });
-            if (!emitted) return std::nullopt;
+    }
+    std::sort(
+        block_identities.begin(),
+        block_identities.end(),
+        [](const auto& left, const auto& right) {
+            if (left.source_offset != right.source_offset)
+                return left.source_offset < right.source_offset;
+            if (left.size != right.size)
+                return left.size < right.size;
+            return left.sha256 < right.sha256;
+        });
+    std::vector<PreparedLatentAotBlockIdentity>
+        unique_block_identities;
+    unique_block_identities.reserve(block_identities.size());
+    std::uint64_t identity_bytes = 0u;
+    for (const auto& identity : block_identities) {
+        if (!unique_block_identities.empty() &&
+            unique_block_identities.back().source_offset ==
+                identity.source_offset) {
+            if (unique_block_identities.back() != identity)
+                return reject_candidate(
+                    LatentAotAnalysisRejection::ProgramInvalid);
+            continue;
         }
-        auto module_id = "latent-aot-" + candidate.byte_identity.substr(7u);
-        if (exact_entry_binding)
-            module_id += "-" + std::to_string(candidate.disc_byte_offset) + "-" +
-                         std::to_string(candidate.size);
-        return PreparedLatentAotModule{
+        if (!unique_block_identities.empty() &&
+            identity.source_offset <
+                static_cast<std::uint64_t>(
+                    unique_block_identities.back().source_offset) +
+                    unique_block_identities.back().size)
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid);
+        identity_bytes += identity.size;
+        if (identity_bytes > candidate.size)
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid);
+        unique_block_identities.push_back(identity);
+    }
+    if (unique_block_identities.empty())
+        return reject_candidate(
+            LatentAotAnalysisRejection::ProgramInvalid);
+    if (unique_block_identities.size() >
+        options.maximum_blocks_per_module)
+        return reject_candidate(
+            LatentAotAnalysisRejection::BlockBudgetExceeded);
+    for (const auto offset : candidate.entry_offsets) {
+        const auto entry_address =
+            candidate.source_address + offset;
+        const auto emitted = std::any_of(
+            program.begin(),
+            program.end(),
+            [&](const auto& function) {
+                return std::any_of(
+                    function.blocks.begin(),
+                    function.blocks.end(),
+                    [&](const auto& block) {
+                        return block.start_address ==
+                               entry_address;
+                    });
+            });
+        if (!emitted)
+            return reject_candidate(
+                LatentAotAnalysisRejection::EntryBlockMissing);
+    }
+    auto module_id =
+        "latent-aot-" + candidate.byte_identity.substr(7u) +
+        "-" + std::to_string(candidate.size);
+    return {
+        PreparedLatentAotModule{
             std::move(module_id),
-            std::move(candidate.byte_identity),
-            candidate.disc_byte_offset,
+            candidate.byte_identity,
             candidate.size,
             candidate.source_address,
-            std::move(candidate.entry_offsets),
+            candidate.source_bindings,
+            candidate.entry_offsets,
             std::move(unique_block_identities),
-            std::move(program)};
-    } catch (const std::exception&) {
-        return std::nullopt;
+            std::move(program)},
+        std::move(cache_program),
+        LatentAotAnalysisRejection::None,
+        true};
+}
+
+CandidateAnalysisOutcome analyze_candidate_uncached(
+    const DiscFileCandidate& candidate,
+    const LatentAotDiscoveryOptions& options) {
+    const bool exact_entry_binding =
+        !candidate.explicit_entry_offsets.empty();
+    if ((exact_entry_binding
+             ? candidate.bytes.size() < 2u ||
+                   (candidate.bytes.size() & 1u) != 0u
+             : candidate.bytes.size() < 4u ||
+                   (candidate.bytes.size() & 3u) != 0u) ||
+        !valid_candidate_entry_offsets(candidate))
+        return reject_candidate(
+            candidate.entry_offsets.empty()
+                ? LatentAotAnalysisRejection::NoEntryPoints
+                : LatentAotAnalysisRejection::ProgramInvalid);
+    const auto opcode_at =
+        [&candidate](const std::uint32_t offset) {
+            return static_cast<std::uint16_t>(
+                static_cast<std::uint16_t>(
+                    candidate.bytes[offset]) |
+                static_cast<std::uint16_t>(
+                    static_cast<std::uint16_t>(
+                        candidate.bytes[offset + 1u])
+                    << 8u));
+        };
+    if (exact_entry_binding) {
+        if (std::any_of(
+                candidate.explicit_entry_offsets.begin(),
+                candidate.explicit_entry_offsets.end(),
+                [&](const auto offset) {
+                    return !katana::sh4::decode(
+                                opcode_at(offset))
+                                .is_known();
+                }))
+            return reject_candidate(
+                LatentAotAnalysisRejection::EntryDecodeFailed);
+    } else {
+        if (!katana::sh4::decode(opcode_at(0u)).is_known())
+            return reject_candidate(
+                LatentAotAnalysisRejection::EntryDecodeFailed);
+        bool early_control_flow = false;
+        const auto entry_scan = std::min(
+            options.maximum_entry_scan_instructions,
+            candidate.bytes.size() / 2u);
+        for (std::size_t instruction = 0u;
+             instruction < entry_scan;
+             ++instruction) {
+            const auto offset =
+                static_cast<std::uint32_t>(instruction * 2u);
+            const auto decoded =
+                katana::sh4::decode(opcode_at(offset));
+            if (!decoded.is_known())
+                break;
+            if (decoded.changes_control_flow()) {
+                early_control_flow = true;
+                break;
+            }
+        }
+        if (!early_control_flow)
+            return reject_candidate(
+                LatentAotAnalysisRejection::EntryDecodeFailed);
     }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::ImmutableOnly);
+    image.set_address_model(
+        katana::io::ImageAddressModel::Sh4DirectMapped);
+    katana::io::ImageSegment segment{
+        ".latent-disc-module",
+        candidate.source_address,
+        candidate.source_bindings.front().disc_byte_offset,
+        candidate.bytes.size(),
+        katana::io::SegmentKind::Mixed,
+        {true, true, true},
+        candidate.bytes};
+    segment.source_kind =
+        katana::io::ImageSourceKind::DiscModule;
+    segment.load_phase =
+        katana::io::ImageLoadPhase::RuntimeModule;
+    image.add_segment(std::move(segment));
+    for (const auto offset : candidate.entry_offsets)
+        image.add_entry_point(candidate.source_address + offset);
+
+    katana::analysis::ControlFlowAnalysisResult analysis;
+    try {
+        analysis = katana::analysis::analyze_control_flow(
+            image,
+            nullptr,
+            [&options](
+                const katana::analysis::
+                    ControlFlowAnalysisProgress& progress) {
+                if (progress.iteration >
+                    options.maximum_analysis_iterations)
+                    throw AnalysisBudgetExceeded(
+                        LatentAotAnalysisRejection::
+                            AnalysisIterationBudgetExceeded);
+                if (progress.instructions >
+                    options
+                        .maximum_native_instructions_per_module)
+                    throw AnalysisBudgetExceeded(
+                        LatentAotAnalysisRejection::
+                            InstructionBudgetExceeded);
+                if (progress.contexts >
+                    options.maximum_analysis_contexts)
+                    throw AnalysisBudgetExceeded(
+                        LatentAotAnalysisRejection::
+                            AnalysisContextBudgetExceeded);
+            });
+    } catch (const AnalysisBudgetExceeded& error) {
+        return reject_candidate(error.rejection());
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        return reject_candidate(
+            LatentAotAnalysisRejection::ProgramInvalid,
+            false);
+    }
+    if (!complete_native_graph(analysis))
+        return reject_candidate(
+            katana::analysis::guarded_aot_inventory_complete(
+                analysis)
+                ? LatentAotAnalysisRejection::
+                      ControlFlowIncomplete
+                : LatentAotAnalysisRejection::
+                      InventoryTruncated);
+
+    std::vector<katana::ir::Function> program;
+    try {
+        const auto architectural_safepoints =
+            katana::ir::architectural_safepoint_block_leaders(
+                analysis);
+        program = katana::ir::lower_program(
+            analysis, architectural_safepoints);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        return reject_candidate(
+            LatentAotAnalysisRejection::ProgramInvalid);
+    }
+    return finalize_candidate_program(
+        candidate, std::move(program), options);
+}
+
+LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
+    const DiscFileCandidate& candidate,
+    const LatentAotDiscoveryOptions& options) {
+    LatentAotAnalysisCacheKeyInputs inputs;
+    inputs.byte_sha256 = candidate.byte_identity.substr(7u);
+    inputs.byte_size = candidate.size;
+    inputs.entry_offsets = candidate.entry_offsets;
+    inputs.exact_candidate =
+        !candidate.explicit_entry_offsets.empty();
+    inputs.source_address = candidate.source_address;
+    inputs.maximum_entry_scan_instructions =
+        options.maximum_entry_scan_instructions;
+    inputs.maximum_native_instructions =
+        options.maximum_native_instructions_per_module;
+    inputs.maximum_blocks =
+        options.maximum_blocks_per_module;
+    inputs.maximum_functions =
+        options.maximum_functions_per_module;
+    inputs.maximum_analysis_iterations =
+        options.maximum_analysis_iterations;
+    inputs.maximum_analysis_contexts =
+        options.maximum_analysis_contexts;
+    inputs.analyzer_abi = katana::analysis::abi_version;
+    inputs.analyzer_implementation_id =
+        std::string(latent_aot_analysis_implementation_id) + "-" +
+        katana::io::sha256_bytes(
+            options.analysis_implementation_identity);
+    return inputs;
+}
+
+CandidateAnalysisOutcome analyze_candidate(
+    const DiscFileCandidate& candidate,
+    const LatentAotDiscoveryOptions& options,
+    CodegenCache* const cache,
+    CandidateAnalysisCacheCounters& counters) {
+    std::string cache_key;
+    bool cache_entry_absent = true;
+    if (cache != nullptr) {
+        try {
+            cache_key = make_latent_aot_analysis_cache_key(
+                candidate_cache_key_inputs(candidate, options));
+            const auto artifact = cache->load_bounded(
+                cache_key,
+                latent_aot_analysis_cache_artifact,
+                maximum_latent_aot_analysis_cache_artifact_bytes);
+            if (artifact) {
+                cache_entry_absent = false;
+                auto parsed =
+                    parse_latent_aot_analysis_cache(
+                        cache_key,
+                        std::span<const std::uint8_t>(
+                            reinterpret_cast<
+                                const std::uint8_t*>(
+                                artifact->data()),
+                            artifact->size()));
+                if (parsed.state ==
+                    LatentAotAnalysisCacheState::Negative) {
+                    counters.negative_hits.fetch_add(
+                        1u, std::memory_order_relaxed);
+                    return reject_candidate(parsed.rejection);
+                }
+                if (parsed.state ==
+                    LatentAotAnalysisCacheState::Positive) {
+                    // A checksum-consistent cache artifact is still untrusted:
+                    // opcode rebinding alone cannot prove cached blocks,
+                    // successors or indirect targets. Reconstruct the complete
+                    // current graph and require byte-for-byte semantic
+                    // equality of every unoptimized IR field before reporting
+                    // a positive hit.
+                    auto authoritative =
+                        analyze_candidate_uncached(
+                            candidate, options);
+                    if (authoritative.module &&
+                        same_unoptimized_program(
+                            parsed.program,
+                            authoritative.cache_program)) {
+                        std::vector<katana::ir::Function>{}.swap(
+                            authoritative.cache_program);
+                        counters.positive_hits.fetch_add(
+                            1u, std::memory_order_relaxed);
+                        return authoritative;
+                    }
+                    counters.corrupt_entries.fetch_add(
+                        1u, std::memory_order_relaxed);
+                } else if (
+                    parsed.state ==
+                    LatentAotAnalysisCacheState::Corrupt) {
+                    counters.corrupt_entries.fetch_add(
+                        1u, std::memory_order_relaxed);
+                }
+                cache_entry_absent =
+                    cache->erase_bounded_if_matches(
+                        cache_key,
+                        latent_aot_analysis_cache_artifact,
+                        *artifact,
+                        maximum_latent_aot_analysis_cache_artifact_bytes);
+            }
+            counters.misses.fetch_add(
+                1u, std::memory_order_relaxed);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            cache_entry_absent = false;
+            counters.corrupt_entries.fetch_add(
+                1u, std::memory_order_relaxed);
+            counters.misses.fetch_add(
+                1u, std::memory_order_relaxed);
+        }
+    }
+
+    auto analyzed = analyze_candidate_uncached(
+        candidate, options);
+    if (cache == nullptr || cache_key.empty() ||
+        !cache_entry_absent || !analyzed.deterministic)
+        return analyzed;
+    try {
+        std::vector<std::uint8_t> artifact;
+        if (analyzed.module) {
+            if (analyzed.cache_program.empty())
+                throw std::logic_error(
+                    "Positiver Latent-AOT-Cacheeintrag besitzt kein "
+                    "sourcegebundenes Rohprogramm.");
+            artifact = serialize_latent_aot_positive_cache(
+                cache_key, analyzed.cache_program);
+        } else {
+            artifact = serialize_latent_aot_negative_cache(
+                cache_key, analyzed.rejection);
+        }
+        if (artifact.size() <=
+            maximum_latent_aot_analysis_cache_artifact_bytes) {
+            cache->store_bounded(
+                cache_key,
+                latent_aot_analysis_cache_artifact,
+                std::string_view(
+                    reinterpret_cast<const char*>(
+                        artifact.data()),
+                    artifact.size()),
+                maximum_latent_aot_analysis_cache_artifact_bytes);
+            counters.stores.fetch_add(
+                1u, std::memory_order_relaxed);
+        }
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        // Cache population is an optimization. The freshly revalidated
+        // deterministic analysis remains authoritative.
+    }
+    return analyzed;
 }
 } // namespace
 
@@ -511,19 +1062,38 @@ LatentAotDiscovery discover_latent_aot_modules(
     const LatentAotDiscoveryOptions& options,
     const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
     const std::span<const LatentAotEntryHint> entry_hints) {
+    bool heuristic_discovery = false;
+    switch (options.mode) {
+    case LatentAotDiscoveryMode::HintsAndHeuristics:
+        heuristic_discovery = true;
+        break;
+    case LatentAotDiscoveryMode::ExactOnly:
+        break;
+    default:
+        throw std::invalid_argument(
+            "Latente AOT-Discovery besitzt einen ungueltigen Modus.");
+    }
+    const auto minimum_candidate_bytes =
+        heuristic_discovery ? std::size_t{4u} : std::size_t{2u};
     if (!source || options.maximum_directory_entries == 0u ||
         options.maximum_directory_bytes == 0u ||
         options.maximum_directory_bytes >
             std::numeric_limits<std::uint32_t>::max() ||
         options.maximum_total_directory_bytes < options.maximum_directory_bytes ||
-        options.maximum_candidate_files == 0u || options.maximum_file_bytes < 4u ||
-        options.maximum_total_file_bytes < 4u || options.maximum_workers == 0u ||
+        (heuristic_discovery && options.maximum_candidate_files == 0u) ||
+        options.maximum_file_bytes < minimum_candidate_bytes ||
+        options.maximum_file_bytes >
+            katana::runtime::maximum_native_aot_template_extent ||
+        options.maximum_total_file_bytes < minimum_candidate_bytes ||
+        options.maximum_workers == 0u ||
         options.maximum_entry_scan_instructions == 0u ||
         options.maximum_native_instructions_per_module == 0u ||
         options.maximum_blocks_per_module == 0u ||
         options.maximum_functions_per_module == 0u ||
         options.maximum_analysis_iterations == 0u ||
         options.maximum_analysis_contexts == 0u ||
+        options.analysis_implementation_identity.size() >
+            maximum_analysis_implementation_identity_bytes ||
         options.source_address_begin >= options.source_address_end ||
         (options.source_address_begin & 3u) != 0u ||
         (options.source_address_end & 3u) != 0u)
@@ -534,6 +1104,8 @@ LatentAotDiscovery discover_latent_aot_modules(
         throw std::invalid_argument("Latente AOT-Discovery besitzt ungueltige belegte Ranges.");
     const auto normalized_entry_hints = normalize_entry_hints(entry_hints);
     std::vector<bool> matched_entry_hints(normalized_entry_hints.size(), false);
+    if (!heuristic_discovery && normalized_entry_hints.empty())
+        return {};
 
     katana::runtime::Iso9660Filesystem filesystem(
         source, iso_sector_size, volume_start_lba, extent_lba_bias);
@@ -594,6 +1166,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                        std::min(files.size(), normalized_entry_hints.size()));
     std::vector<bool> candidates_have_explicit_entries;
     candidates_have_explicit_entries.reserve(candidates.capacity());
+    std::map<std::pair<std::string, std::uint32_t>, std::size_t>
+        candidate_by_byte_identity_and_size;
     const std::set<std::string> excluded_identities(excluded_byte_identities.begin(),
                                                     excluded_byte_identities.end());
     std::set<std::string> known_identities(excluded_byte_identities.begin(),
@@ -638,8 +1212,10 @@ LatentAotDiscovery discover_latent_aot_modules(
     };
 
     std::uint64_t examined_file_bytes = 0u;
+    std::size_t source_binding_count = 0u;
     std::set<std::pair<std::uint64_t, std::uint32_t>> exact_file_extents;
-    for (const auto& [path, entry] : files) {
+    for (const auto& file : files) {
+        const auto& entry = file.second;
         const auto disc_byte_offset = disc_byte_offset_for(entry);
         std::vector<std::size_t> extent_hint_indices;
         for (std::size_t hint_index = 0u;
@@ -684,101 +1260,194 @@ LatentAotDiscovery discover_latent_aot_modules(
         if (matching_entry_hints.empty() ||
             excluded_identities.contains(byte_identity))
             continue;
-        if (known_identities.contains(byte_identity))
-            throw std::runtime_error(
-                "latent-aot-entry-hint-byte-identity-ambiguous");
         std::sort(explicit_entry_offsets.begin(), explicit_entry_offsets.end());
         explicit_entry_offsets.erase(
             std::unique(explicit_entry_offsets.begin(), explicit_entry_offsets.end()),
             explicit_entry_offsets.end());
-        const auto entry_offsets = explicit_entry_offsets;
-        const auto placed = place_candidate(
-            {path,
-             entry.lba,
-             entry.size,
-             0u,
-             disc_byte_offset,
-             std::move(bytes),
-             byte_identity,
-             entry_offsets,
-             explicit_entry_offsets},
-            true);
-        if (!placed) break;
+        auto source_binding =
+            make_source_binding(byte_identity, disc_byte_offset, entry.size);
+        const auto candidate_key =
+            std::pair{byte_identity, entry.size};
+        const auto existing =
+            candidate_by_byte_identity_and_size.find(candidate_key);
+        if (existing != candidate_by_byte_identity_and_size.end()) {
+            auto& candidate = candidates[existing->second];
+            if (candidate.size != entry.size)
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-byte-identity-size-mismatch");
+            if (source_binding_count >= maximum_latent_aot_source_bindings)
+                throw std::runtime_error(
+                    "latent-aot-source-binding-budget");
+            if (insert_source_binding(candidate, std::move(source_binding)))
+                ++source_binding_count;
+            merge_entry_offsets(candidate.entry_offsets,
+                                explicit_entry_offsets);
+            merge_entry_offsets(candidate.explicit_entry_offsets,
+                                explicit_entry_offsets);
+        } else {
+            if (known_identities.contains(byte_identity))
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-byte-identity-ambiguous");
+            if (source_binding_count >= maximum_latent_aot_source_bindings)
+                throw std::runtime_error(
+                    "latent-aot-source-binding-budget");
+            const auto entry_offsets = explicit_entry_offsets;
+            if (!place_candidate(
+                    {entry.size,
+                     0u,
+                     std::move(bytes),
+                     byte_identity,
+                     {std::move(source_binding)},
+                     entry_offsets,
+                     explicit_entry_offsets},
+                    true))
+                break;
+            candidate_by_byte_identity_and_size.emplace(
+                std::move(candidate_key), candidates.size() - 1u);
+            known_identities.insert(byte_identity);
+            ++source_binding_count;
+        }
         for (const auto hint_index : matching_entry_hints)
             matched_entry_hints[hint_index] = true;
         exact_file_extents.emplace(disc_byte_offset, entry.size);
-        known_identities.insert(std::move(byte_identity));
     }
 
     std::size_t heuristic_candidate_count = 0u;
-    for (const auto& [path, entry] : files) {
-        if (heuristic_candidate_count == options.maximum_candidate_files) break;
-        if (entry.size < 4u || entry.size > options.maximum_file_bytes ||
-            (entry.size & 3u) != 0u)
-            continue;
-        const auto disc_byte_offset = disc_byte_offset_for(entry);
-        if (exact_file_extents.contains({disc_byte_offset, entry.size}))
-            continue;
-        if (entry.size >
-            options.maximum_total_file_bytes - examined_file_bytes)
-            break;
-        if (disc_byte_offset > source->size() ||
-            entry.size > source->size() - disc_byte_offset)
-            throw std::runtime_error("Latente Discdatei liegt ausserhalb der Discquelle.");
-        auto bytes = filesystem.read_file(
-            entry, static_cast<std::uint32_t>(options.maximum_file_bytes));
-        if (bytes.size() != entry.size)
-            throw std::runtime_error("Latente Discdatei wurde abgeschnitten gelesen.");
-        ++result.examined_files;
-        result.examined_bytes += bytes.size();
-        examined_file_bytes += bytes.size();
-        auto byte_identity =
-            "sha256:" + katana::io::sha256_bytes(std::string_view(
-                            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-        if (!known_identities.insert(byte_identity).second) {
-            ++result.duplicate_files;
-            continue;
+    if (heuristic_discovery) {
+        for (const auto& file : files) {
+            const auto& entry = file.second;
+            if (source_binding_count >=
+                maximum_latent_aot_source_bindings)
+                break;
+            if (entry.size < 4u || entry.size > options.maximum_file_bytes ||
+                (entry.size & 3u) != 0u)
+                continue;
+            const auto disc_byte_offset = disc_byte_offset_for(entry);
+            if (exact_file_extents.contains({disc_byte_offset, entry.size}))
+                continue;
+            if (entry.size >
+                options.maximum_total_file_bytes - examined_file_bytes)
+                break;
+            if (disc_byte_offset > source->size() ||
+                entry.size > source->size() - disc_byte_offset)
+                throw std::runtime_error(
+                    "Latente Discdatei liegt ausserhalb der Discquelle.");
+            auto bytes = filesystem.read_file(
+                entry, static_cast<std::uint32_t>(options.maximum_file_bytes));
+            if (bytes.size() != entry.size)
+                throw std::runtime_error(
+                    "Latente Discdatei wurde abgeschnitten gelesen.");
+            ++result.examined_files;
+            result.examined_bytes += bytes.size();
+            examined_file_bytes += bytes.size();
+            auto byte_identity =
+                "sha256:" + katana::io::sha256_bytes(std::string_view(
+                                reinterpret_cast<const char*>(bytes.data()),
+                                bytes.size()));
+            const auto candidate_key =
+                std::pair{byte_identity, entry.size};
+            if (!known_identities.insert(byte_identity).second) {
+                ++result.duplicate_files;
+                const auto existing =
+                    candidate_by_byte_identity_and_size.find(
+                        candidate_key);
+                if (existing !=
+                    candidate_by_byte_identity_and_size.end()) {
+                    auto source_binding = make_source_binding(
+                        byte_identity,
+                        disc_byte_offset,
+                        entry.size);
+                    if (insert_source_binding(
+                            candidates[existing->second],
+                            std::move(source_binding)))
+                        ++source_binding_count;
+                }
+                continue;
+            }
+            if (heuristic_candidate_count ==
+                options.maximum_candidate_files)
+                continue;
+            auto source_binding =
+                make_source_binding(byte_identity, disc_byte_offset, entry.size);
+            const std::vector<std::uint32_t> entry_offsets{0u};
+            if (!place_candidate({entry.size,
+                                  0u,
+                                  std::move(bytes),
+                                  std::move(byte_identity),
+                                  {std::move(source_binding)},
+                                  entry_offsets,
+                                  {}},
+                                 false))
+                break;
+            candidate_by_byte_identity_and_size.emplace(
+                candidate_key, candidates.size() - 1u);
+            ++source_binding_count;
+            ++heuristic_candidate_count;
         }
-        const std::vector<std::uint32_t> entry_offsets{0u};
-        if (!place_candidate({path,
-                              entry.lba,
-                              entry.size,
-                              0u,
-                              disc_byte_offset,
-                              std::move(bytes),
-                              std::move(byte_identity),
-                              entry_offsets,
-                              {}},
-                             false))
-            break;
-        ++heuristic_candidate_count;
     }
 
     if (std::any_of(matched_entry_hints.begin(), matched_entry_hints.end(),
                     [](const bool matched) { return !matched; }))
         throw std::runtime_error("latent-aot-entry-hint-unmatched");
 
-    std::vector<std::optional<PreparedLatentAotModule>> analyzed(candidates.size());
-    std::atomic_size_t next_candidate = 0u;
-    const auto worker_count =
-        std::min({options.maximum_workers, candidates.size(), std::size_t{12u}});
-    std::vector<std::future<void>> workers;
-    workers.reserve(worker_count);
-    for (std::size_t worker = 0u; worker < worker_count; ++worker) {
-        workers.push_back(std::async(std::launch::async, [&] {
-            for (;;) {
-                const auto index = next_candidate.fetch_add(1u, std::memory_order_relaxed);
-                if (index >= candidates.size()) return;
-                analyzed[index] =
-                    analyze_candidate(std::move(candidates[index]), options);
-            }
-        }));
-    }
-    for (auto& worker : workers) worker.get();
+    std::unique_ptr<CodegenCache> analysis_cache;
+    if (!options.analysis_cache_root.empty() &&
+        !options.analysis_implementation_identity.empty())
+        analysis_cache =
+            std::make_unique<CodegenCache>(
+                options.analysis_cache_root);
+    CandidateAnalysisCacheCounters cache_counters;
+    std::vector<CandidateAnalysisOutcome> analyzed(
+        candidates.size());
+    std::vector<std::uint64_t> analysis_candidate_duration_ms(
+        candidates.size());
+    katana::analysis::parallel_analysis_for(
+        candidates.size(),
+        std::min(options.maximum_workers, std::size_t{12u}),
+        [&](const std::size_t index) {
+            const auto analysis_started =
+                std::chrono::steady_clock::now();
+            analyzed[index] =
+                analyze_candidate(
+                    candidates[index],
+                    options,
+                    analysis_cache.get(),
+                    cache_counters);
+            analysis_candidate_duration_ms[index] =
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() -
+                        analysis_started)
+                        .count());
+            // Analysis artifacts never retain source bytes. Release each
+            // candidate buffer as soon as its worker has finished so a cold
+            // multi-module scan does not hold both every file and every IR
+            // result until the final collection pass.
+            std::vector<std::uint8_t>{}.swap(
+                candidates[index].bytes);
+        });
+    result.analysis_candidate_duration_ms =
+        std::move(analysis_candidate_duration_ms);
+    result.analysis_cache_positive_hits =
+        cache_counters.positive_hits.load(
+            std::memory_order_relaxed);
+    result.analysis_cache_negative_hits =
+        cache_counters.negative_hits.load(
+            std::memory_order_relaxed);
+    result.analysis_cache_misses =
+        cache_counters.misses.load(
+            std::memory_order_relaxed);
+    result.analysis_cache_corrupt_entries =
+        cache_counters.corrupt_entries.load(
+            std::memory_order_relaxed);
+    result.analysis_cache_stores =
+        cache_counters.stores.load(
+            std::memory_order_relaxed);
     for (std::size_t index = 0u; index < analyzed.size(); ++index) {
         auto& candidate = analyzed[index];
-        if (candidate)
-            result.modules.push_back(std::move(*candidate));
+        if (candidate.module)
+            result.modules.push_back(
+                std::move(*candidate.module));
         else {
             if (candidates_have_explicit_entries[index])
                 throw std::runtime_error("latent-aot-entry-hint-analysis-rejected");

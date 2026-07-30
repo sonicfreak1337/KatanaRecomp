@@ -210,6 +210,7 @@ void ExecutableDiscLoadTransactionCoordinator::set_aot_module_descriptors(
     std::uint64_t total_bytes = 0u;
     for (const auto& descriptor : descriptors) {
         if (!opaque_descriptor_id(descriptor.opaque_id) ||
+            !opaque_descriptor_id(descriptor.template_id) ||
             descriptor.content_identity.empty() || descriptor.byte_identity.empty() ||
             descriptor.byte_size == 0u ||
             descriptor.byte_size > maximum_aot_descriptor_bytes ||
@@ -419,6 +420,8 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
                                         descriptor.content_identity ||
                                     module.byte_identity !=
                                         descriptor.byte_identity ||
+                                    module.native_aot_template_id !=
+                                        descriptor.template_id ||
                                     !module.materializable(
                                         static_cast<std::uint32_t>(
                                             backing_intersection),
@@ -523,6 +526,8 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
                                        descriptor.content_identity &&
                                    existing.byte_identity ==
                                        descriptor.byte_identity &&
+                                   existing.native_aot_template_id ==
+                                       descriptor.template_id &&
                                    existing.active_extents ==
                                        std::vector<ExecutableModuleActiveExtent>{
                                            {0u, descriptor.byte_size}} &&
@@ -534,6 +539,8 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
                                 std::to_string(*next_target);
                     module.content_identity = descriptor.content_identity;
                     module.byte_identity = descriptor.byte_identity;
+                    module.native_aot_template_id =
+                        descriptor.template_id;
                     module.source_identity = disc_load_source_identity(
                         module.content_identity, module.byte_identity);
                     module.guest_start = *next_target;
@@ -620,6 +627,9 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
                             std::to_string(cut - 1u);
                 module.content_identity = request.content_identity;
                 module.byte_identity = disc_load_byte_identity(segment_bytes);
+                module.native_aot_template_id =
+                    aot_assemblies_[registered->assembly_index]
+                        .descriptor.template_id;
                 module.source_identity = disc_load_source_identity(
                     module.content_identity, module.byte_identity);
                 module.guest_start = range.backing_physical_address + begin;
@@ -642,6 +652,7 @@ ExecutableDiscLoadTransactionCoordinator::execute(const DiscLoadRequest& request
             const auto* existing = modules_.resolve(segment_address, segment_size);
             const auto exact_module =
                 existing != nullptr &&
+                existing->native_aot_template_id.empty() &&
                 existing->content_identity == request.content_identity &&
                 existing->byte_identity == segment_identity &&
                 modules_.validate_bytes_at(memory_,

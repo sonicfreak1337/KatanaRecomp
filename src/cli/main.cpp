@@ -39,6 +39,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -51,6 +52,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -65,11 +67,161 @@
 #undef CompareString
 #else
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
 namespace {
+
+class PortPhaseTimingRecorder final {
+  public:
+    PortPhaseTimingRecorder()
+        : started_(std::chrono::steady_clock::now()),
+          phase_started_(started_) {}
+
+    PortPhaseTimingRecorder(const PortPhaseTimingRecorder&) = delete;
+    PortPhaseTimingRecorder& operator=(const PortPhaseTimingRecorder&) = delete;
+
+    ~PortPhaseTimingRecorder() {
+        try {
+            emit();
+        } catch (...) {
+        }
+    }
+
+    void transition(const std::string_view phase) {
+        const auto now = std::chrono::steady_clock::now();
+        finish_current(now);
+        current_phase_ = std::string(phase);
+        phase_started_ = now;
+    }
+
+    void record_parallel_sample(const std::string_view phase,
+                                const std::int64_t duration_ms) {
+        pending_parallel_samples_.push_back(
+            {std::string(phase), duration_ms, true});
+    }
+
+    void emit() {
+        if (emitted_) return;
+        const auto now = std::chrono::steady_clock::now();
+        finish_current(now);
+        emitted_ = true;
+        std::ostringstream output;
+        output << "{\"schema\":\"katana-port-phase-timings-v1\","
+                  "\"total_ms\":"
+               << std::chrono::duration_cast<std::chrono::milliseconds>(
+                      now - started_)
+                      .count()
+               << ",\"phases\":[";
+        for (std::size_t index = 0u; index < samples_.size(); ++index) {
+            if (index != 0u) output << ',';
+            output << "{\"phase\":"
+                   << katana::io::quote_json(samples_[index].phase)
+                   << ",\"duration_ms\":"
+                   << samples_[index].duration_ms
+                   << ",\"parallel\":"
+                   << (samples_[index].parallel ? "true" : "false")
+                   << '}';
+        }
+        output << "]}";
+        std::cout << "KATANA_PORT_PHASE_TIMINGS "
+                  << output.str() << '\n' << std::flush;
+    }
+
+  private:
+    struct Sample {
+        std::string phase;
+        std::int64_t duration_ms = 0;
+        bool parallel = false;
+    };
+
+    void finish_current(
+        const std::chrono::steady_clock::time_point now) {
+        if (!current_phase_.empty()) {
+            samples_.push_back(
+                {current_phase_,
+                 std::chrono::duration_cast<std::chrono::milliseconds>(
+                     now - phase_started_)
+                     .count(),
+                 false});
+            current_phase_.clear();
+        }
+        for (auto& sample : pending_parallel_samples_)
+            samples_.push_back(std::move(sample));
+        pending_parallel_samples_.clear();
+    }
+
+    std::chrono::steady_clock::time_point started_;
+    std::chrono::steady_clock::time_point phase_started_;
+    std::string current_phase_;
+    std::vector<Sample> samples_;
+    std::vector<Sample> pending_parallel_samples_;
+    bool emitted_ = false;
+};
+
+thread_local PortPhaseTimingRecorder* active_port_phase_timings = nullptr;
+
+class PortPhaseTimingBinding final {
+  public:
+    explicit PortPhaseTimingBinding(PortPhaseTimingRecorder& recorder)
+        : previous_(std::exchange(
+              active_port_phase_timings, &recorder)) {}
+    ~PortPhaseTimingBinding() {
+        active_port_phase_timings = previous_;
+    }
+
+  private:
+    PortPhaseTimingRecorder* previous_ = nullptr;
+};
+
+void observe_port_export_progress(const std::string_view phase) {
+    constexpr std::string_view module_timing_prefix{
+        "latent-aot-module-analysis-ms:"};
+    bool recorded_module_timing = false;
+    if (active_port_phase_timings != nullptr &&
+        phase.starts_with(module_timing_prefix)) {
+        const auto payload = phase.substr(module_timing_prefix.size());
+        const auto delimiter = payload.find(':');
+        if (delimiter != std::string_view::npos) {
+            std::uint64_t candidate_index = 0u;
+            std::uint64_t duration_ms = 0u;
+            const auto index_text = payload.substr(0u, delimiter);
+            const auto duration_text = payload.substr(delimiter + 1u);
+            const auto index_parse = std::from_chars(
+                index_text.data(),
+                index_text.data() + index_text.size(),
+                candidate_index);
+            const auto duration_parse = std::from_chars(
+                duration_text.data(),
+                duration_text.data() + duration_text.size(),
+                duration_ms);
+            if (index_parse.ec == std::errc{} &&
+                index_parse.ptr == index_text.data() + index_text.size() &&
+                duration_parse.ec == std::errc{} &&
+                duration_parse.ptr ==
+                    duration_text.data() + duration_text.size() &&
+                duration_ms <=
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                active_port_phase_timings->record_parallel_sample(
+                    "export:latent-aot-module-analysis-" +
+                        std::to_string(candidate_index),
+                    static_cast<std::int64_t>(duration_ms));
+                recorded_module_timing = true;
+            }
+        }
+    }
+    if (active_port_phase_timings != nullptr &&
+        !recorded_module_timing)
+        active_port_phase_timings->transition(
+            std::string("export:") + std::string(phase));
+    std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n'
+              << std::flush;
+}
 
 std::uint32_t
 parse_hex_value(std::string text, const std::uint32_t maximum, const std::string& description) {
@@ -1065,6 +1217,45 @@ std::optional<std::string> configured_environment_value(const char* name) {
 #endif
 }
 
+std::optional<std::filesystem::path> current_process_executable_path() {
+#ifdef _WIN32
+    std::wstring executable(32'768u, L'\0');
+    const auto length =
+        GetModuleFileNameW(nullptr, executable.data(),
+                           static_cast<DWORD>(executable.size()));
+    if (length == 0u || length >= executable.size()) return std::nullopt;
+    executable.resize(length);
+    return std::filesystem::path(std::move(executable));
+#else
+    std::error_code link_error;
+    auto executable =
+        std::filesystem::read_symlink("/proc/self/exe", link_error);
+    if (link_error || executable.empty()) return std::nullopt;
+    return executable;
+#endif
+}
+
+std::optional<std::string> current_exporter_cache_identity() {
+    if (katana::build_contract::katana_git_commit !=
+        "0000000000000000000000000000000000000000")
+        return "git:" +
+               std::string(katana::build_contract::katana_git_commit);
+    const auto executable = current_process_executable_path();
+    if (!executable) return std::nullopt;
+    try {
+        const auto provenance =
+            katana::io::capture_input_provenance(
+                "katana-exporter-binary", *executable);
+        if (provenance.sha256.size() != 64u) return std::nullopt;
+        return "executable-sha256:" + provenance.sha256;
+    } catch (...) {
+        // Dirty/local builds have no trusted source commit. If their exact
+        // running binary cannot be hashed, fail closed instead of sharing an
+        // export under an unproven identity.
+        return std::nullopt;
+    }
+}
+
 std::filesystem::path discover_source_root_for_protection() {
     std::vector<std::filesystem::path> starts{std::filesystem::current_path()};
 #ifdef _WIN32
@@ -1178,6 +1369,252 @@ std::string normalized_host_command(const std::string& command) {
 #endif
 }
 
+struct SupervisedHostCommandResult final {
+    int exit_code = 1;
+    bool timed_out = false;
+};
+
+inline constexpr auto maximum_port_host_command_runtime =
+    std::chrono::seconds(840);
+
+std::chrono::milliseconds configured_port_host_command_runtime(
+    const std::string_view stage) {
+    const auto test_stage =
+        configured_environment_value(
+            "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_STAGE");
+    const auto test_timeout =
+        configured_environment_value(
+            "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_MS");
+    if (!test_stage && !test_timeout)
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            maximum_port_host_command_runtime);
+    if (!test_stage || !test_timeout ||
+        (*test_stage != "configure" &&
+         *test_stage != "host-build"))
+        throw std::invalid_argument(
+            "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_STAGE/_MS "
+            "bilden keinen gueltigen Testvertrag.");
+    std::size_t parsed = 0u;
+    const auto milliseconds =
+        std::stoull(*test_timeout, &parsed, 10);
+    if (parsed != test_timeout->size() ||
+        milliseconds == 0u || milliseconds > 10'000u)
+        throw std::invalid_argument(
+            "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_MS ist ungueltig.");
+    if (*test_stage != stage)
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            maximum_port_host_command_runtime);
+    return std::chrono::milliseconds(milliseconds);
+}
+
+SupervisedHostCommandResult run_supervised_host_command(
+    const std::string& command,
+    const std::chrono::milliseconds timeout) {
+    if (timeout.count() <= 0 ||
+        timeout >
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                maximum_port_host_command_runtime))
+        throw std::invalid_argument(
+            "Port-Hostprozess besitzt kein sicheres Zeitlimit.");
+#ifdef _WIN32
+    const auto job = CreateJobObjectW(nullptr, nullptr);
+    if (job == nullptr)
+        throw std::runtime_error(
+            "Port-Hostprozess-Job konnte nicht erstellt werden.");
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags =
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &limits,
+            sizeof(limits))) {
+        CloseHandle(job);
+        throw std::runtime_error(
+            "Port-Hostprozess-Job konnte nicht begrenzt werden.");
+    }
+
+    auto command_line = command;
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessA(nullptr,
+                        command_line.data(),
+                        nullptr,
+                        nullptr,
+                        TRUE,
+                        CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                        nullptr,
+                        nullptr,
+                        &startup,
+                        &process)) {
+        CloseHandle(job);
+        throw std::runtime_error(
+            "Port-Hostprozess konnte nicht gestartet werden.");
+    }
+    const auto terminate_failed_start = [&]() noexcept {
+        static_cast<void>(TerminateProcess(process.hProcess, 125u));
+        static_cast<void>(WaitForSingleObject(process.hProcess, 5'000u));
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        CloseHandle(job);
+    };
+    if (!AssignProcessToJobObject(job, process.hProcess)) {
+        terminate_failed_start();
+        throw std::runtime_error(
+            "Port-Hostprozess konnte nicht an seinen Prozessbaum-Job "
+            "gebunden werden.");
+    }
+    if (ResumeThread(process.hThread) == static_cast<DWORD>(-1)) {
+        terminate_failed_start();
+        throw std::runtime_error(
+            "Port-Hostprozess konnte nicht sicher gestartet werden.");
+    }
+
+    const auto wait = WaitForSingleObject(
+        process.hProcess,
+        static_cast<DWORD>(timeout.count()));
+    SupervisedHostCommandResult result;
+    if (wait == WAIT_TIMEOUT) {
+        result.exit_code = 124;
+        result.timed_out = true;
+        static_cast<void>(TerminateJobObject(job, 124u));
+        static_cast<void>(
+            WaitForSingleObject(process.hProcess, 5'000u));
+    } else if (wait == WAIT_OBJECT_0) {
+        DWORD exit_code = 1u;
+        if (!GetExitCodeProcess(process.hProcess, &exit_code)) {
+            static_cast<void>(TerminateJobObject(job, 125u));
+            static_cast<void>(
+                WaitForSingleObject(process.hProcess, 5'000u));
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+            CloseHandle(job);
+            throw std::runtime_error(
+                "Port-Hostprozessstatus konnte nicht gelesen werden.");
+        }
+        result.exit_code = static_cast<int>(exit_code);
+    } else {
+        static_cast<void>(TerminateJobObject(job, 125u));
+        static_cast<void>(
+            WaitForSingleObject(process.hProcess, 5'000u));
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        CloseHandle(job);
+        throw std::runtime_error(
+            "Port-Hostprozess konnte nicht sicher beaufsichtigt werden.");
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    // KILL_ON_JOB_CLOSE beendet auch bei einem bereits beendeten Shellprozess
+    // noch lebende Compiler-/Build-Nachkommen.
+    CloseHandle(job);
+    return result;
+#else
+    const auto child = ::fork();
+    if (child < 0)
+        throw std::runtime_error(
+            "Port-Hostprozess konnte nicht gestartet werden.");
+    if (child == 0) {
+        if (::setpgid(0, 0) != 0) ::_exit(126);
+        ::execl("/bin/sh",
+                "sh",
+                "-c",
+                command.c_str(),
+                static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    if (::setpgid(child, child) != 0 &&
+        errno != EACCES && errno != ESRCH) {
+        static_cast<void>(::kill(child, SIGKILL));
+        int discarded_status = 0;
+        static_cast<void>(::waitpid(child, &discarded_status, 0));
+        throw std::runtime_error(
+            "Port-Hostprozess konnte nicht an seine Prozessgruppe "
+            "gebunden werden.");
+    }
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + timeout;
+    int status = 0;
+    bool reaped = false;
+    for (;;) {
+        const auto waited = ::waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            reaped = true;
+            break;
+        }
+        if (waited < 0 && errno != EINTR) {
+            static_cast<void>(::kill(-child, SIGKILL));
+            static_cast<void>(::kill(child, SIGKILL));
+            throw std::runtime_error(
+                "Port-Hostprozess konnte nicht sicher beaufsichtigt werden.");
+        }
+        if (std::chrono::steady_clock::now() >= deadline)
+            break;
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(20));
+    }
+
+    SupervisedHostCommandResult result;
+    if (!reaped) {
+        result.exit_code = 124;
+        result.timed_out = true;
+        static_cast<void>(::kill(-child, SIGTERM));
+        const auto term_deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < term_deadline) {
+            const auto waited =
+                ::waitpid(child, &status, WNOHANG);
+            if (waited == child) {
+                reaped = true;
+                break;
+            }
+            if (waited < 0 && errno != EINTR) break;
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(20));
+        }
+        // Auch wenn der direkte Shellprozess bereits auf SIGTERM reagiert
+        // hat, koennen weitere Mitglieder der Build-Prozessgruppe das Signal
+        // ignorieren. Der harte Timeout beendet deshalb die ganze Gruppe.
+        static_cast<void>(::kill(-child, SIGKILL));
+        if (!reaped) {
+            static_cast<void>(::kill(child, SIGKILL));
+            const auto kill_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(3);
+            while (std::chrono::steady_clock::now() <
+                   kill_deadline) {
+                const auto waited =
+                    ::waitpid(child, &status, WNOHANG);
+                if (waited == child) {
+                    reaped = true;
+                    break;
+                }
+                if (waited < 0 && errno != EINTR) break;
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(20));
+            }
+        }
+        return result;
+    }
+
+    // Ein Shellprozess darf keine abgekoppelten Nachkommen ueber die
+    // beaufsichtigte Buildphase hinaus am Leben lassen.
+    static_cast<void>(::kill(-child, SIGKILL));
+    if (WIFEXITED(status))
+        result.exit_code = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status))
+        result.exit_code = 128 + WTERMSIG(status);
+    return result;
+#endif
+}
+
 std::size_t configured_host_build_jobs() {
     constexpr std::size_t maximum_jobs = 256u;
     auto configured = configured_environment_value("KATANA_HOST_BUILD_JOBS");
@@ -1192,27 +1629,253 @@ std::size_t configured_host_build_jobs() {
     return static_cast<std::size_t>(jobs);
 }
 
+bool valid_port_target_name(const std::string_view value) noexcept {
+    if (value.empty() ||
+        !std::isalpha(static_cast<unsigned char>(value.front())))
+        return false;
+    const auto valid_character = [](const unsigned char character) {
+        return std::isalnum(character) != 0 || character == '_' ||
+               character == '-';
+    };
+    return std::all_of(value.begin(), value.end(), valid_character) &&
+           value != "katana-recomp" && value != "katana_runtime" &&
+           value != "katana_core" && value != "katana_generated" &&
+           value != "all" && value != "clean" && value != "install" &&
+           value != "test" && value != "help" &&
+           value != "rebuild_cache";
+}
+
+bool unsafe_port_filesystem_link(
+    const std::filesystem::path& path,
+    const std::filesystem::file_status status) noexcept {
+    if (std::filesystem::is_symlink(status)) return true;
+#ifdef _WIN32
+    const auto attributes = GetFileAttributesW(path.c_str());
+    return attributes == INVALID_FILE_ATTRIBUTES ||
+           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+#else
+    static_cast<void>(path);
+    return false;
+#endif
+}
+
 bool safe_regular_port_directory_exists(const std::filesystem::path& root,
-                                        const std::string_view description) {
+                                         const std::string_view description) {
     std::error_code status_error;
     const auto status = std::filesystem::symlink_status(root, status_error);
     if (status_error == std::errc::no_such_file_or_directory ||
-        status.type() == std::filesystem::file_type::not_found)
+        (!status_error &&
+         status.type() ==
+             std::filesystem::file_type::not_found))
         return false;
     if (status_error)
         throw std::runtime_error(std::string(description) +
                                  " konnte nicht sicher geprueft werden.");
-    if (!std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+    if (!std::filesystem::is_directory(status) ||
+        unsafe_port_filesystem_link(root, status))
         throw std::runtime_error(std::string(description) +
-                                 " ist kein sicherer regulaerer Ordner.");
+                                  " ist kein sicherer regulaerer Ordner.");
     return true;
+}
+
+void require_safe_port_tree(
+    const std::filesystem::path& root,
+    const std::string_view description) {
+    if (!safe_regular_port_directory_exists(root, description))
+        throw std::runtime_error(
+            std::string(description) + " fehlt.");
+    for (std::filesystem::recursive_directory_iterator iterator(root),
+         end;
+         iterator != end;
+         ++iterator) {
+        std::error_code status_error;
+        const auto status =
+            iterator->symlink_status(status_error);
+        if (status_error ||
+            unsafe_port_filesystem_link(iterator->path(), status) ||
+            (!std::filesystem::is_directory(status) &&
+             !std::filesystem::is_regular_file(status)))
+            throw std::runtime_error(
+                std::string(description) +
+                " enthaelt einen unsicheren Dateisystemeintrag.");
+    }
+}
+
+void remove_safe_port_tree(
+    const std::filesystem::path& root,
+    const std::string_view description) {
+    if (!safe_regular_port_directory_exists(root, description))
+        return;
+    require_safe_port_tree(root, description);
+    std::error_code remove_error;
+    static_cast<void>(
+        std::filesystem::remove_all(root, remove_error));
+    if (remove_error)
+        throw std::filesystem::filesystem_error(
+            std::string(description) +
+                " konnte nicht entfernt werden.",
+            root,
+            remove_error);
+}
+
+bool safe_port_directory_chain_exists(
+    const std::filesystem::path& root,
+    const std::filesystem::path& directory,
+    const std::string_view description) {
+    const auto normalized_root =
+        std::filesystem::absolute(root).lexically_normal();
+    const auto normalized_directory =
+        std::filesystem::absolute(directory).lexically_normal();
+    const auto relative =
+        normalized_directory.lexically_relative(normalized_root);
+    if ((relative.empty() && normalized_directory != normalized_root) ||
+        relative.is_absolute() ||
+        (!relative.empty() && *relative.begin() == ".."))
+        throw std::runtime_error(
+            std::string(description) +
+            " liegt ausserhalb des privaten Port-Arbeitsverzeichnisses.");
+    if (!safe_regular_port_directory_exists(normalized_root, description))
+        return false;
+    auto current = normalized_root;
+    for (const auto& component : relative) {
+        if (component.empty() || component == ".") continue;
+        current /= component;
+        if (!safe_regular_port_directory_exists(current, description))
+            return false;
+    }
+    return true;
+}
+
+void ensure_safe_port_directory_chain(
+    const std::filesystem::path& root,
+    const std::filesystem::path& directory,
+    const std::string_view description) {
+    const auto normalized_root =
+        std::filesystem::absolute(root).lexically_normal();
+    const auto normalized_directory =
+        std::filesystem::absolute(directory).lexically_normal();
+    const auto relative =
+        normalized_directory.lexically_relative(normalized_root);
+    if ((relative.empty() && normalized_directory != normalized_root) ||
+        relative.is_absolute() ||
+        (!relative.empty() && *relative.begin() == "..") ||
+        !safe_regular_port_directory_exists(normalized_root, description))
+        throw std::runtime_error(
+            std::string(description) +
+            " besitzt keinen sicheren privaten Port-Stamm.");
+    auto current = normalized_root;
+    for (const auto& component : relative) {
+        if (component.empty() || component == ".") continue;
+        current /= component;
+        if (safe_regular_port_directory_exists(current, description))
+            continue;
+        std::error_code create_error;
+        if (!std::filesystem::create_directory(current, create_error) &&
+            create_error)
+            throw std::filesystem::filesystem_error(
+                std::string(description) + " konnte nicht erstellt werden.",
+                current,
+                create_error);
+        if (!safe_regular_port_directory_exists(current, description))
+            throw std::runtime_error(
+                std::string(description) +
+                " wurde nicht als sicherer Ordner erstellt.");
+    }
+}
+
+void ensure_safe_absolute_directory_chain(
+    const std::filesystem::path& directory,
+    const std::string_view description) {
+    const auto normalized =
+        std::filesystem::absolute(directory).lexically_normal();
+    if (normalized.empty() || normalized.root_path().empty())
+        throw std::runtime_error(
+            std::string(description) +
+            " besitzt keinen absoluten Dateisystemanker.");
+    auto current = normalized.root_path();
+    const auto require_safe_current =
+        [&](const std::filesystem::path& candidate) {
+            std::error_code status_error;
+            const auto status =
+                std::filesystem::symlink_status(
+                    candidate, status_error);
+            if (status_error ||
+                !std::filesystem::is_directory(status) ||
+                unsafe_port_filesystem_link(candidate, status))
+                throw std::runtime_error(
+                    std::string(description) +
+                    " enthaelt eine unsichere Elternkomponente.");
+        };
+    require_safe_current(current);
+    for (const auto& component : normalized.relative_path()) {
+        if (component.empty() || component == ".") continue;
+        if (component == "..")
+            throw std::runtime_error(
+                std::string(description) +
+                " verlaesst seinen absoluten Dateisystemanker.");
+        current /= component;
+        std::error_code status_error;
+        auto status =
+            std::filesystem::symlink_status(current, status_error);
+        const bool missing =
+            status_error == std::errc::no_such_file_or_directory ||
+            (!status_error &&
+             status.type() ==
+                 std::filesystem::file_type::not_found);
+        if (missing) {
+            status_error.clear();
+            if (!std::filesystem::create_directory(
+                    current, status_error) &&
+                status_error)
+                throw std::filesystem::filesystem_error(
+                    std::string(description) +
+                        " konnte eine Elternkomponente nicht erstellen.",
+                    current,
+                    status_error);
+            status =
+                std::filesystem::symlink_status(
+                    current, status_error);
+        }
+        if (status_error ||
+            !std::filesystem::is_directory(status) ||
+            unsafe_port_filesystem_link(current, status))
+            throw std::runtime_error(
+                std::string(description) +
+                " enthaelt eine unsichere Elternkomponente.");
+    }
+}
+
+void require_safe_replaceable_port_file(
+    const std::filesystem::path& root,
+    const std::filesystem::path& path,
+    const std::string_view description) {
+    if (!safe_port_directory_chain_exists(
+            root, path.parent_path(), description))
+        throw std::runtime_error(
+            std::string(description) +
+            " besitzt keinen sicheren Zielordner.");
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(path, status_error);
+    if (status_error == std::errc::no_such_file_or_directory ||
+        (!status_error &&
+         status.type() ==
+             std::filesystem::file_type::not_found))
+        return;
+    if (status_error ||
+        !std::filesystem::is_regular_file(status) ||
+        unsafe_port_filesystem_link(path, status))
+        throw std::runtime_error(
+            std::string(description) +
+            " ist keine sicher ersetzbare regulaere Datei.");
 }
 
 class ExclusivePortExportLock final {
   public:
     explicit ExclusivePortExportLock(const std::filesystem::path& workspace)
         : lock_path_(workspace.string() + ".lock") {
-        std::filesystem::create_directories(lock_path_.parent_path());
+        ensure_safe_absolute_directory_chain(
+            lock_path_.parent_path(), "Port-Exportpfad-Sperre");
 #ifdef _WIN32
         handle_ = CreateFileW(lock_path_.c_str(),
                               GENERIC_READ | GENERIC_WRITE,
@@ -1231,6 +1894,21 @@ class ExclusivePortExportLock final {
             throw std::runtime_error(
                 "Port-Exportpfad-Sperre konnte nicht geoeffnet werden.");
         }
+        FILE_ATTRIBUTE_TAG_INFO attributes{};
+        if (!GetFileInformationByHandleEx(
+                handle_,
+                FileAttributeTagInfo,
+                &attributes,
+                sizeof(attributes)) ||
+            (attributes.FileAttributes &
+             (FILE_ATTRIBUTE_REPARSE_POINT |
+              FILE_ATTRIBUTE_DIRECTORY)) != 0u) {
+            static_cast<void>(CloseHandle(handle_));
+            handle_ = INVALID_HANDLE_VALUE;
+            throw std::runtime_error(
+                "Port-Exportpfad-Sperre ist kein sicheres regulaeres "
+                "Artefakt.");
+        }
 #else
         auto flags = O_CREAT | O_RDWR;
 #ifdef O_CLOEXEC
@@ -1243,6 +1921,15 @@ class ExclusivePortExportLock final {
         if (descriptor_ < 0)
             throw std::runtime_error(
                 "Port-Exportpfad-Sperre konnte nicht geoeffnet werden.");
+        struct stat lock_status {};
+        if (::fstat(descriptor_, &lock_status) != 0 ||
+            !S_ISREG(lock_status.st_mode)) {
+            static_cast<void>(::close(descriptor_));
+            descriptor_ = -1;
+            throw std::runtime_error(
+                "Port-Exportpfad-Sperre ist kein sicheres regulaeres "
+                "Artefakt.");
+        }
         if (::flock(descriptor_, LOCK_EX | LOCK_NB) != 0) {
             const auto error = errno;
             static_cast<void>(::close(descriptor_));
@@ -1278,6 +1965,745 @@ class ExclusivePortExportLock final {
 #endif
 };
 
+struct PortPublishOutputPaths final {
+    std::filesystem::path output;
+    std::filesystem::path lock_base;
+    std::filesystem::path journal;
+    std::string output_identity;
+};
+
+struct ActivePortPublishTransaction final {
+    PortPublishOutputPaths output_paths;
+    std::string token;
+    std::string owner_document;
+    std::filesystem::path root;
+    std::filesystem::path owner_marker;
+    std::filesystem::path state;
+    std::filesystem::path journal_staging;
+    std::filesystem::path stage;
+    std::filesystem::path backup;
+};
+
+std::filesystem::path canonical_port_publish_output(
+    const std::filesystem::path& absolute_output) {
+    std::error_code canonical_error;
+    const auto canonical_parent =
+        std::filesystem::canonical(
+            absolute_output.parent_path(), canonical_error);
+    if (canonical_error)
+        throw std::runtime_error(
+            "Port-Ausgabeelternpfad konnte nicht physisch aufgeloest "
+            "werden.");
+    return (canonical_parent / absolute_output.filename()).lexically_normal();
+}
+
+std::string port_publish_output_identity(
+    const std::filesystem::path& output) {
+#ifdef _WIN32
+    const auto parent = output.parent_path();
+    const auto parent_handle =
+        CreateFileW(parent.c_str(),
+                    FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr,
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS |
+                        FILE_FLAG_OPEN_REPARSE_POINT,
+                    nullptr);
+    if (parent_handle == INVALID_HANDLE_VALUE)
+        throw std::runtime_error(
+            "Port-Ausgabeelternpfad konnte nicht physisch identifiziert "
+            "werden.");
+    BY_HANDLE_FILE_INFORMATION information{};
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    const auto information_ok =
+        GetFileInformationByHandle(parent_handle, &information) != FALSE;
+    const auto attributes_ok =
+        GetFileInformationByHandleEx(
+            parent_handle,
+            FileAttributeTagInfo,
+            &attributes,
+            sizeof(attributes)) != FALSE;
+    static_cast<void>(CloseHandle(parent_handle));
+    if (!information_ok || !attributes_ok ||
+        (attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0u ||
+        (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u)
+        throw std::runtime_error(
+            "Port-Ausgabeelternpfad besitzt keine sichere physische "
+            "Identitaet.");
+
+    auto filename = output.filename().native();
+    const auto folded_size =
+        LCMapStringEx(LOCALE_NAME_INVARIANT,
+                      LCMAP_LOWERCASE,
+                      filename.data(),
+                      static_cast<int>(filename.size()),
+                      nullptr,
+                      0,
+                      nullptr,
+                      nullptr,
+                      0);
+    if (folded_size <= 0)
+        throw std::runtime_error(
+            "Port-Ausgabename konnte nicht kanonisch normalisiert werden.");
+    std::wstring folded(static_cast<std::size_t>(folded_size), L'\0');
+    if (LCMapStringEx(LOCALE_NAME_INVARIANT,
+                      LCMAP_LOWERCASE,
+                      filename.data(),
+                      static_cast<int>(filename.size()),
+                      folded.data(),
+                      folded_size,
+                      nullptr,
+                      nullptr,
+                      0) != folded_size)
+        throw std::runtime_error(
+            "Port-Ausgabename konnte nicht kanonisch normalisiert werden.");
+
+    std::ostringstream identity;
+    identity << "windows-parent-file-id-v1:"
+             << std::hex << std::setfill('0')
+             << std::setw(8) << information.dwVolumeSerialNumber << ':'
+             << std::setw(8) << information.nFileIndexHigh
+             << std::setw(8) << information.nFileIndexLow << ':';
+    for (const auto character : folded)
+        identity << std::setw(4)
+                 << static_cast<std::uint32_t>(
+                        static_cast<std::uint16_t>(character));
+    return katana::io::sha256_bytes(identity.str());
+#else
+    return katana::io::sha256_bytes(output.generic_string());
+#endif
+}
+
+PortPublishOutputPaths port_publish_output_paths(
+    const std::filesystem::path& absolute_output) {
+    PortPublishOutputPaths paths;
+    paths.output = canonical_port_publish_output(absolute_output);
+    paths.lock_base =
+        std::filesystem::path(paths.output.string() + ".katana-publish");
+    paths.journal =
+        std::filesystem::path(
+            paths.output.string() + ".katana-publish-transaction");
+    paths.output_identity = port_publish_output_identity(paths.output);
+    return paths;
+}
+
+bool safe_regular_port_file_exists(
+    const std::filesystem::path& path,
+    const std::string_view description) {
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(path, status_error);
+    if (status_error == std::errc::no_such_file_or_directory ||
+        (!status_error &&
+         status.type() == std::filesystem::file_type::not_found))
+        return false;
+    if (status_error ||
+        !std::filesystem::is_regular_file(status) ||
+        unsafe_port_filesystem_link(path, status))
+        throw std::runtime_error(
+            std::string(description) +
+            " ist kein sicheres regulaeres Dateiartefakt.");
+    return true;
+}
+
+std::string read_safe_small_port_file(
+    const std::filesystem::path& path,
+    const std::size_t maximum_size,
+    const std::string_view description) {
+    if (!safe_regular_port_file_exists(path, description))
+        throw std::runtime_error(
+            std::string(description) + " fehlt.");
+    std::error_code size_error;
+    const auto size = std::filesystem::file_size(path, size_error);
+    if (size_error || size > maximum_size)
+        throw std::runtime_error(
+            std::string(description) +
+            " besitzt keine sichere begrenzte Groesse.");
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        throw std::runtime_error(
+            std::string(description) +
+            " konnte nicht sicher geoeffnet werden.");
+    std::string document{
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()};
+    if (input.bad() || document.size() != size)
+        throw std::runtime_error(
+            std::string(description) +
+            " konnte nicht vollstaendig gelesen werden.");
+    return document;
+}
+
+void write_exclusive_safe_port_file(
+    const std::filesystem::path& path,
+    const std::string_view document,
+    const std::string_view description) {
+#ifdef _WIN32
+    auto handle =
+        CreateFileW(path.c_str(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0u,
+                    nullptr,
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                    nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+        throw std::runtime_error(
+            std::string(description) +
+            " konnte nicht exklusiv erstellt werden.");
+    try {
+        FILE_ATTRIBUTE_TAG_INFO attributes{};
+        if (!GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInfo,
+                &attributes,
+                sizeof(attributes)) ||
+            (attributes.FileAttributes &
+             (FILE_ATTRIBUTE_REPARSE_POINT |
+              FILE_ATTRIBUTE_DIRECTORY)) != 0u)
+            throw std::runtime_error(
+                std::string(description) +
+                " wurde nicht als sicheres regulaeres Dateiartefakt "
+                "erstellt.");
+        std::size_t offset = 0u;
+        while (offset < document.size()) {
+            const auto remaining = document.size() - offset;
+            const auto chunk =
+                static_cast<DWORD>(
+                    std::min<std::size_t>(
+                        remaining,
+                        std::numeric_limits<DWORD>::max()));
+            DWORD written = 0u;
+            if (!WriteFile(handle,
+                           document.data() + offset,
+                           chunk,
+                           &written,
+                           nullptr) ||
+                written != chunk)
+                throw std::runtime_error(
+                    std::string(description) +
+                    " konnte nicht vollstaendig geschrieben werden.");
+            offset += written;
+        }
+        if (!FlushFileBuffers(handle))
+            throw std::runtime_error(
+                std::string(description) +
+                " konnte nicht dauerhaft geschrieben werden.");
+        static_cast<void>(CloseHandle(handle));
+        handle = INVALID_HANDLE_VALUE;
+    } catch (...) {
+        if (handle != INVALID_HANDLE_VALUE)
+            static_cast<void>(CloseHandle(handle));
+        static_cast<void>(DeleteFileW(path.c_str()));
+        throw;
+    }
+#else
+    auto flags = O_CREAT | O_EXCL | O_WRONLY;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+    auto descriptor = ::open(path.c_str(), flags, 0600);
+    if (descriptor < 0)
+        throw std::runtime_error(
+            std::string(description) +
+            " konnte nicht exklusiv erstellt werden.");
+    try {
+        struct stat status {};
+        if (::fstat(descriptor, &status) != 0 ||
+            !S_ISREG(status.st_mode))
+            throw std::runtime_error(
+                std::string(description) +
+                " wurde nicht als sicheres regulaeres Dateiartefakt "
+                "erstellt.");
+        std::size_t offset = 0u;
+        while (offset < document.size()) {
+            const auto written =
+                ::write(descriptor,
+                        document.data() + offset,
+                        document.size() - offset);
+            if (written <= 0)
+                throw std::runtime_error(
+                    std::string(description) +
+                    " konnte nicht vollstaendig geschrieben werden.");
+            offset += static_cast<std::size_t>(written);
+        }
+        if (::fsync(descriptor) != 0)
+            throw std::runtime_error(
+                std::string(description) +
+                " konnte nicht dauerhaft geschrieben werden.");
+        if (::close(descriptor) != 0) {
+            descriptor = -1;
+            throw std::runtime_error(
+                std::string(description) +
+                " konnte nicht sicher geschlossen werden.");
+        }
+        descriptor = -1;
+    } catch (...) {
+        if (descriptor >= 0) static_cast<void>(::close(descriptor));
+        static_cast<void>(::unlink(path.c_str()));
+        throw;
+    }
+#endif
+}
+
+void remove_owned_safe_port_file(
+    const std::filesystem::path& path,
+    const std::string_view expected_document,
+    const std::string_view description) {
+    const auto document =
+        read_safe_small_port_file(path, 1024u, description);
+    if (document != expected_document)
+        throw std::runtime_error(
+            std::string(description) +
+            " ist nicht transaktionseigen und bleibt unangetastet.");
+    std::error_code remove_error;
+    if (!std::filesystem::remove(path, remove_error) || remove_error)
+        throw std::filesystem::filesystem_error(
+            std::string(description) +
+                " konnte nicht entfernt werden.",
+            path,
+            remove_error);
+}
+
+std::string port_publish_owner_document(
+    const PortPublishOutputPaths& paths,
+    const std::string_view token) {
+    return "KATANA_PORT_PUBLISH_TRANSACTION_V1\n"
+           "output-sha256=" +
+           paths.output_identity +
+           "\ntoken=" + std::string(token) + "\n";
+}
+
+std::optional<std::string> parse_port_publish_journal_token(
+    const std::string_view document,
+    const PortPublishOutputPaths& paths) {
+    constexpr std::string_view header =
+        "KATANA_PORT_PUBLISH_TRANSACTION_V1\n";
+    const auto digest_line =
+        "output-sha256=" + paths.output_identity + "\n";
+    if (!document.starts_with(header) ||
+        !document.substr(header.size()).starts_with(digest_line))
+        return std::nullopt;
+    const auto token_line =
+        document.substr(header.size() + digest_line.size());
+    constexpr std::string_view token_prefix = "token=";
+    if (!token_line.starts_with(token_prefix) ||
+        token_line.size() != token_prefix.size() + 32u + 1u ||
+        token_line.back() != '\n')
+        return std::nullopt;
+    const auto token =
+        token_line.substr(token_prefix.size(), 32u);
+    if (!std::all_of(
+            token.begin(),
+            token.end(),
+            [](const unsigned char character) {
+                return std::isdigit(character) != 0 ||
+                       (character >= 'a' && character <= 'f');
+            }))
+        return std::nullopt;
+    return std::string(token);
+}
+
+ActivePortPublishTransaction active_port_publish_transaction(
+    const PortPublishOutputPaths& paths,
+    const std::string& token) {
+    ActivePortPublishTransaction transaction;
+    transaction.output_paths = paths;
+    transaction.token = token;
+    transaction.owner_document =
+        port_publish_owner_document(paths, token);
+    transaction.root =
+        std::filesystem::path(
+            paths.output.string() +
+            ".katana-publish-transaction." + token);
+    transaction.owner_marker = transaction.root / "owner";
+    transaction.state = transaction.root / "state";
+    transaction.journal_staging =
+        std::filesystem::path(
+            paths.journal.string() + ".new." + token);
+    transaction.stage = transaction.root / "stage";
+    transaction.backup = transaction.root / "backup";
+    return transaction;
+}
+
+void install_port_publish_journal(
+    const ActivePortPublishTransaction& transaction) {
+    write_exclusive_safe_port_file(
+        transaction.journal_staging,
+        transaction.owner_document,
+        "Vorbereiteter Port-Publish-Transaktionsmarker");
+#ifdef _WIN32
+    if (!MoveFileExW(
+            transaction.journal_staging.c_str(),
+            transaction.output_paths.journal.c_str(),
+            MOVEFILE_WRITE_THROUGH)) {
+        try {
+            remove_owned_safe_port_file(
+                transaction.journal_staging,
+                transaction.owner_document,
+                "Vorbereiteter Port-Publish-Transaktionsmarker");
+        } catch (...) {
+        }
+        throw std::runtime_error(
+            "Port-Publish-Transaktionsmarker konnte nicht atomar "
+            "installiert werden.");
+    }
+#else
+    if (::link(
+            transaction.journal_staging.c_str(),
+            transaction.output_paths.journal.c_str()) != 0) {
+        try {
+            remove_owned_safe_port_file(
+                transaction.journal_staging,
+                transaction.owner_document,
+                "Vorbereiteter Port-Publish-Transaktionsmarker");
+        } catch (...) {
+        }
+        throw std::runtime_error(
+            "Port-Publish-Transaktionsmarker konnte nicht atomar "
+            "installiert werden.");
+    }
+    try {
+        remove_owned_safe_port_file(
+            transaction.journal_staging,
+            transaction.owner_document,
+            "Installierter Port-Publish-Transaktionsmarker");
+    } catch (...) {
+        // Der vollstaendige, atomar verlinkte Journalmarker bleibt
+        // autoritativ. Ein zweiter Hardlink ist kein Grund, den aktiven
+        // Publishzustand zu verwerfen.
+    }
+#endif
+}
+
+std::string new_port_publish_transaction_token(
+    const PortPublishOutputPaths& paths) {
+    std::random_device random;
+    std::ostringstream seed;
+    seed << paths.output_identity << ':'
+         << std::chrono::steady_clock::now().time_since_epoch().count()
+         << ':' << random() << ':' << random() << ':' << random()
+         << ':' << random();
+#ifdef _WIN32
+    seed << ':' << GetCurrentProcessId();
+#else
+    seed << ':' << ::getpid();
+#endif
+    return katana::io::sha256_bytes(seed.str()).substr(0u, 32u);
+}
+
+void write_port_publish_state(
+    const ActivePortPublishTransaction& transaction,
+    const std::string_view state) {
+    static constexpr std::array<std::string_view, 5u> allowed{
+        "prepared",
+        "old-moved",
+        "new-published",
+        "user-data-preserved",
+        "committed"};
+    if (std::find(allowed.begin(), allowed.end(), state) == allowed.end())
+        throw std::logic_error(
+            "Port-Publish-Transaktionszustand ist ungueltig.");
+    require_safe_replaceable_port_file(
+        transaction.root,
+        transaction.state,
+        "Port-Publish-Transaktionszustand");
+    std::ofstream output(
+        transaction.state,
+        std::ios::binary | std::ios::trunc);
+    output << state << '\n' << std::flush;
+    if (!output)
+        throw std::runtime_error(
+            "Port-Publish-Transaktionszustand konnte nicht geschrieben "
+            "werden.");
+}
+
+void validate_owned_port_publish_transaction_tree(
+    const ActivePortPublishTransaction& transaction) {
+    require_safe_port_tree(
+        transaction.root,
+        "Port-Publish-Transaktionsbaum");
+    bool owner_seen = false;
+    bool owner_complete = false;
+    bool transaction_payload_seen = false;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(transaction.root)) {
+        const auto name = entry.path().filename().generic_string();
+        if (name == "owner") {
+            owner_seen = true;
+            const auto owner =
+                read_safe_small_port_file(
+                    entry.path(),
+                    1024u,
+                    "Port-Publish-Transaktionseigentuemer");
+            owner_complete =
+                owner == transaction.owner_document;
+            if (!owner_complete &&
+                !transaction.owner_document.starts_with(owner))
+                throw std::runtime_error(
+                    "Port-Publish-Transaktionsbaum besitzt keinen "
+                    "passenden Eigentuemermarker und bleibt "
+                    "unangetastet.");
+            continue;
+        }
+        if (name == "state") {
+            transaction_payload_seen = true;
+            static_cast<void>(
+                read_safe_small_port_file(
+                    entry.path(),
+                    128u,
+                    "Port-Publish-Transaktionszustand"));
+            continue;
+        }
+        if (name == "stage" || name == "backup") {
+            transaction_payload_seen = true;
+            static_cast<void>(
+                safe_regular_port_directory_exists(
+                    entry.path(),
+                    "Port-Publish-Transaktionsunterordner"));
+            continue;
+        }
+        throw std::runtime_error(
+            "Port-Publish-Transaktionsbaum enthaelt einen fremden "
+            "Eintrag und bleibt unangetastet.");
+    }
+    if ((!owner_seen || !owner_complete) &&
+        transaction_payload_seen)
+        throw std::runtime_error(
+            "Port-Publish-Transaktionsbaum besitzt keinen "
+            "vollstaendigen Eigentuemermarker und bleibt "
+            "unangetastet.");
+}
+
+std::optional<ActivePortPublishTransaction>
+load_owned_port_publish_transaction(
+    const PortPublishOutputPaths& paths) {
+    if (!safe_regular_port_file_exists(
+            paths.journal,
+            "Port-Publish-Transaktionsmarker"))
+        return std::nullopt;
+    const auto journal =
+        read_safe_small_port_file(
+            paths.journal,
+            1024u,
+            "Port-Publish-Transaktionsmarker");
+    const auto token =
+        parse_port_publish_journal_token(journal, paths);
+    if (!token)
+        throw std::runtime_error(
+            "Port-Publish-Transaktionsmarker ist fremd oder ungueltig "
+            "und bleibt unangetastet.");
+    auto transaction =
+        active_port_publish_transaction(paths, *token);
+    if (!safe_regular_port_directory_exists(
+            transaction.root,
+            "Port-Publish-Transaktionsbaum")) {
+        remove_owned_safe_port_file(
+            paths.journal,
+            transaction.owner_document,
+            "Verwaister Port-Publish-Transaktionsmarker");
+        return std::nullopt;
+    }
+    validate_owned_port_publish_transaction_tree(transaction);
+    return transaction;
+}
+
+bool output_has_owned_port_publish_marker(
+    const ActivePortPublishTransaction& transaction) {
+    const auto marker =
+        transaction.output_paths.output / ".katana-publish-owner";
+    if (!safe_regular_port_file_exists(
+            marker,
+            "Publizierter Port-Transaktionsmarker"))
+        return false;
+    const auto document =
+        read_safe_small_port_file(
+            marker,
+            1024u,
+            "Publizierter Port-Transaktionsmarker");
+    if (document != transaction.owner_document)
+        throw std::runtime_error(
+            "Bestehendes Portpaket besitzt einen fremden "
+            "Transaktionsmarker und bleibt unangetastet.");
+    return true;
+}
+
+void remove_owned_output_publish_marker(
+    const ActivePortPublishTransaction& transaction) {
+    remove_owned_safe_port_file(
+        transaction.output_paths.output / ".katana-publish-owner",
+        transaction.owner_document,
+        "Publizierter Port-Transaktionsmarker");
+}
+
+void cleanup_owned_port_publish_transaction(
+    const ActivePortPublishTransaction& transaction) {
+    validate_owned_port_publish_transaction_tree(transaction);
+    if (safe_regular_port_directory_exists(
+            transaction.stage,
+            "Port-Publish-Staging") ||
+        safe_regular_port_directory_exists(
+            transaction.backup,
+            "Port-Publish-Backup"))
+        throw std::runtime_error(
+            "Port-Publish-Transaktion ist vor der Bereinigung nicht leer.");
+    remove_safe_port_tree(
+        transaction.root,
+        "Abgeschlossene Port-Publish-Transaktion");
+    remove_owned_safe_port_file(
+        transaction.output_paths.journal,
+        transaction.owner_document,
+        "Abgeschlossener Port-Publish-Transaktionsmarker");
+}
+
+void recover_port_publish_transaction(
+    const PortPublishOutputPaths& paths) {
+    auto loaded = load_owned_port_publish_transaction(paths);
+    if (!loaded) return;
+    auto& transaction = *loaded;
+    const auto output_exists =
+        safe_regular_port_directory_exists(
+            paths.output,
+            "Port-Publish-Recovery-Ausgabe");
+    auto backup_exists =
+        safe_regular_port_directory_exists(
+            transaction.backup,
+            "Port-Publish-Recovery-Backup");
+    const auto output_is_owned =
+        output_exists &&
+        output_has_owned_port_publish_marker(transaction);
+
+    if (backup_exists && !output_exists) {
+        std::filesystem::rename(
+            transaction.backup,
+            paths.output);
+        backup_exists = false;
+    } else if (backup_exists && output_is_owned) {
+        katana::codegen::preserve_local_port_user_data(
+            transaction.backup,
+            paths.output);
+        write_port_publish_state(
+            transaction,
+            "user-data-preserved");
+        remove_safe_port_tree(
+            transaction.backup,
+            "Gerettetes Port-Publish-Backup");
+        backup_exists = false;
+    } else if (backup_exists) {
+        throw std::runtime_error(
+            "Port-Publish-Recovery fand neben dem gesicherten Altport "
+            "einen fremden Ausgabeordner; beide bleiben unangetastet.");
+    }
+
+    if (safe_regular_port_directory_exists(
+            transaction.stage,
+            "Verwaistes Port-Publish-Staging"))
+        remove_safe_port_tree(
+            transaction.stage,
+            "Verwaistes Port-Publish-Staging");
+
+    if (output_is_owned) {
+        write_port_publish_state(transaction, "committed");
+        remove_owned_output_publish_marker(transaction);
+    }
+    if (backup_exists)
+        throw std::logic_error(
+            "Port-Publish-Recovery verlor den Backupzustand.");
+    cleanup_owned_port_publish_transaction(transaction);
+}
+
+ActivePortPublishTransaction begin_port_publish_transaction(
+    const PortPublishOutputPaths& paths) {
+    if (safe_regular_port_file_exists(
+            paths.journal,
+            "Port-Publish-Transaktionsmarker"))
+        throw std::runtime_error(
+            "Port-Publish-Transaktionsmarker ist bereits vorhanden.");
+    const auto token = new_port_publish_transaction_token(paths);
+    auto transaction =
+        active_port_publish_transaction(paths, token);
+    std::error_code status_error;
+    const auto root_status =
+        std::filesystem::symlink_status(
+            transaction.root,
+            status_error);
+    if (status_error != std::errc::no_such_file_or_directory &&
+        (status_error ||
+         root_status.type() !=
+             std::filesystem::file_type::not_found))
+        throw std::runtime_error(
+            "Neuer Port-Publish-Transaktionsbaum kollidiert mit einem "
+            "fremden Dateisystemeintrag.");
+    install_port_publish_journal(transaction);
+    std::error_code create_error;
+    if (!std::filesystem::create_directory(
+            transaction.root,
+            create_error) ||
+        create_error)
+        throw std::filesystem::filesystem_error(
+            "Port-Publish-Transaktionsbaum konnte nicht erstellt werden.",
+            transaction.root,
+            create_error);
+    if (!safe_regular_port_directory_exists(
+            transaction.root,
+            "Port-Publish-Transaktionsbaum"))
+        throw std::runtime_error(
+            "Port-Publish-Transaktionsbaum wurde nicht sicher erstellt.");
+    write_exclusive_safe_port_file(
+        transaction.owner_marker,
+        transaction.owner_document,
+        "Port-Publish-Transaktionseigentuemer");
+    write_port_publish_state(transaction, "prepared");
+    return transaction;
+}
+
+void maybe_hold_port_publish_lock_for_test() {
+    const auto configured =
+        configured_environment_value(
+            "KATANA_PORT_PUBLISH_TEST_HOLD_LOCK_MS");
+    if (!configured) return;
+    std::size_t parsed = 0u;
+    const auto duration = std::stoull(*configured, &parsed, 10);
+    if (parsed != configured->size() || duration == 0u ||
+        duration > 10000u)
+        throw std::invalid_argument(
+            "KATANA_PORT_PUBLISH_TEST_HOLD_LOCK_MS ist ungueltig.");
+    std::cout << "KATANA_PORT_PUBLISH_TEST_OUTPUT_LOCK_HELD\n"
+              << std::flush;
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(duration));
+}
+
+bool exit_after_port_publish_recovery_for_test() {
+    const auto configured =
+        configured_environment_value(
+            "KATANA_PORT_PUBLISH_TEST_EXIT_AFTER_RECOVERY");
+    if (!configured) return false;
+    if (*configured != "1")
+        throw std::invalid_argument(
+            "KATANA_PORT_PUBLISH_TEST_EXIT_AFTER_RECOVERY ist "
+            "ungueltig.");
+    std::cout << "KATANA_PORT_PUBLISH_TEST_RECOVERY_COMPLETE\n"
+              << std::flush;
+    return true;
+}
+
+void maybe_crash_port_publish_for_test(
+    const std::string_view point) {
+    const auto configured =
+        configured_environment_value(
+            "KATANA_PORT_PUBLISH_TEST_CRASH_POINT");
+    if (!configured || *configured != point) return;
+    std::cerr << "KATANA_PORT_PUBLISH_TEST_CRASH point="
+              << point << '\n' << std::flush;
+    std::cout.flush();
+    std::_Exit(86);
+}
+
 void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
                                          const std::filesystem::path& build_root) {
     const auto normalized_port = std::filesystem::absolute(port_root).lexically_normal();
@@ -1299,11 +2725,9 @@ void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
     if (canonical_error || resolved_build.parent_path() != resolved_port)
         throw std::runtime_error(
             "Configure-Bereinigung wuerde den sicheren Portbuildpfad verlassen.");
-    std::error_code remove_error;
-    static_cast<void>(std::filesystem::remove_all(normalized_build, remove_error));
-    if (remove_error)
-        throw std::runtime_error(
-            "Fehlgeschlagener CMake-Configure-Zustand konnte nicht entfernt werden.");
+    remove_safe_port_tree(
+        normalized_build,
+        "Fehlgeschlagener CMake-Configure-Zustand");
 }
 
 #ifdef _WIN32
@@ -1366,8 +2790,10 @@ bool path_is_within(const std::filesystem::path& path,
     return true;
 }
 
-inline constexpr std::uint32_t port_export_cache_version = 7u;
+inline constexpr std::uint32_t port_export_cache_version = 8u;
 inline constexpr std::uint32_t port_ir_contract_version = 2u;
+inline constexpr std::uintmax_t maximum_port_export_cache_state_bytes =
+    4u * 1024u;
 inline constexpr std::string_view untrusted_katana_source_identity =
     "0000000000000000000000000000000000000000";
 inline constexpr std::string_view generated_artifact_manifest_name =
@@ -1413,7 +2839,7 @@ read_generated_artifact_manifest(const std::filesystem::path& generated_root) {
     const auto status =
         std::filesystem::symlink_status(manifest, status_error);
     if (status_error || !std::filesystem::is_regular_file(status) ||
-        std::filesystem::is_symlink(status))
+        unsafe_port_filesystem_link(manifest, status))
         return std::nullopt;
     std::ifstream input(manifest, std::ios::binary);
     std::string line;
@@ -1447,7 +2873,8 @@ collect_generated_artifact_files(const std::filesystem::path& generated_root) {
          ++iterator) {
         std::error_code status_error;
         const auto status = iterator->symlink_status(status_error);
-        if (status_error || std::filesystem::is_symlink(status))
+        if (status_error ||
+            unsafe_port_filesystem_link(iterator->path(), status))
             return std::nullopt;
         if (std::filesystem::is_directory(status)) continue;
         if (!std::filesystem::is_regular_file(status))
@@ -1539,6 +2966,50 @@ std::string runtime_dependency_manifest_document(
            recipe.job_generation + "\",\"files\":[]}\n";
 }
 
+std::string declared_port_distribution_target_name(
+    const std::filesystem::path& source) {
+    const auto metadata =
+        source / "generated" / "metadata" /
+        "port-project.json";
+    if (!safe_regular_port_file_exists(
+            metadata,
+            "Portprojekt-Metadaten"))
+        throw std::runtime_error(
+            "Bestehende Portdistribution besitzt keine "
+            "targetgebundenen Metadaten.");
+    const auto document =
+        read_port_distribution_text(metadata);
+    constexpr std::string_view field{"\"target_name\":"};
+    const auto field_position = document.find(field);
+    if (field_position == std::string::npos ||
+        document.find(field, field_position + field.size()) !=
+            std::string::npos)
+        throw std::runtime_error(
+            "Bestehende Portdistribution besitzt keine eindeutige "
+            "Targetbindung.");
+    const auto value_begin = field_position + field.size();
+    if (value_begin >= document.size() ||
+        document[value_begin] != '"')
+        throw std::runtime_error(
+            "Bestehende Portdistribution besitzt eine ungueltige "
+            "Targetbindung.");
+    const auto value_end =
+        document.find('"', value_begin + 1u);
+    if (value_end == std::string::npos)
+        throw std::runtime_error(
+            "Bestehende Portdistribution besitzt eine unvollstaendige "
+            "Targetbindung.");
+    const auto target_name =
+        document.substr(
+            value_begin + 1u,
+            value_end - value_begin - 1u);
+    if (!valid_port_target_name(target_name))
+        throw std::runtime_error(
+            "Bestehende Portdistribution besitzt keinen sicheren "
+            "Targetnamen.");
+    return target_name;
+}
+
 bool private_port_workspace_path(const std::filesystem::path& relative) {
     if (relative.empty()) return false;
     const auto top_level = relative.begin()->generic_string();
@@ -1551,9 +3022,11 @@ void copy_validated_port_distribution(
     const std::filesystem::path& source,
     const std::filesystem::path& destination,
     const std::string_view target_name,
-    const katana::runtime::DiscInstallRecipe& expected_recipe) {
+    const katana::runtime::DiscInstallRecipe& expected_recipe,
+    const bool copy_files = true) {
     if (!safe_regular_port_directory_exists(source, "Portquelle")) return;
-    if (safe_regular_port_directory_exists(destination, "Portkopieziel"))
+    if (copy_files &&
+        safe_regular_port_directory_exists(destination, "Portkopieziel"))
         throw std::runtime_error("Portkopieziel existiert bereits.");
 
     std::vector<std::filesystem::path> allowed;
@@ -1595,7 +3068,7 @@ void copy_validated_port_distribution(
         std::error_code status_error;
         const auto status = std::filesystem::symlink_status(path, status_error);
         if (status_error || !std::filesystem::is_regular_file(status) ||
-            std::filesystem::is_symlink(status))
+            unsafe_port_filesystem_link(path, status))
             throw std::runtime_error(
                 "Portdistributionsdatei fehlt oder ist nicht regulaer: " +
                 relative.generic_string());
@@ -1641,16 +3114,17 @@ void copy_validated_port_distribution(
          ++iterator) {
         const auto relative =
             iterator->path().lexically_relative(source).lexically_normal();
+        std::error_code status_error;
+        const auto status = iterator->symlink_status(status_error);
+        if (status_error ||
+            unsafe_port_filesystem_link(iterator->path(), status))
+            throw std::runtime_error(
+                "Portquelle enthaelt einen unsicheren Dateisystemeintrag.");
         if (private_port_workspace_path(relative)) {
-            if (iterator->is_directory())
+            if (std::filesystem::is_directory(status))
                 iterator.disable_recursion_pending();
             continue;
         }
-        std::error_code status_error;
-        const auto status = iterator->symlink_status(status_error);
-        if (status_error || std::filesystem::is_symlink(status))
-            throw std::runtime_error(
-                "Portquelle enthaelt einen unsicheren Dateisystemeintrag.");
         if (std::filesystem::is_directory(status)) continue;
         if (!std::filesystem::is_regular_file(status))
             throw std::runtime_error(
@@ -1667,7 +3141,12 @@ void copy_validated_port_distribution(
                 relative.generic_string());
     }
 
+    if (!copy_files) return;
     std::filesystem::create_directories(destination);
+    if (!safe_regular_port_directory_exists(
+            destination, "Portkopieziel"))
+        throw std::runtime_error(
+            "Portkopieziel wurde nicht als sicherer Ordner erstellt.");
     for (const auto& relative : allowed) {
         const auto source_path = source / relative;
         const auto target = destination / relative;
@@ -1675,16 +3154,21 @@ void copy_validated_port_distribution(
         const auto status =
             std::filesystem::symlink_status(source_path, status_error);
         if (status_error || !std::filesystem::is_regular_file(status) ||
-            std::filesystem::is_symlink(status))
+            unsafe_port_filesystem_link(source_path, status))
             throw std::runtime_error(
                 "Portdistributionsdatei wurde waehrend des Publish "
                 "ungueltig: " +
                 relative.generic_string());
-        std::filesystem::create_directories(target.parent_path());
+        ensure_safe_port_directory_chain(
+            destination,
+            target.parent_path(),
+            "Portkopieziel");
+        require_safe_replaceable_port_file(
+            destination, target, "Portkopiezieldatei");
         std::filesystem::copy_file(
             source_path,
             target,
-            std::filesystem::copy_options::overwrite_existing);
+            std::filesystem::copy_options::none);
         std::error_code permission_error;
         std::filesystem::permissions(
             target,
@@ -1717,11 +3201,8 @@ void remove_invalid_generated_artifact_tree(
             generated_root,
             "Ungueltige Portcodegen-Ausgabe"))
         return;
-    std::error_code remove_error;
-    static_cast<void>(std::filesystem::remove_all(generated_root, remove_error));
-    if (remove_error)
-        throw std::runtime_error(
-            "Ungueltige Portcodegen-Ausgabe konnte nicht entfernt werden.");
+    remove_safe_port_tree(
+        generated_root, "Ungueltige Portcodegen-Ausgabe");
 }
 
 void remove_invalid_generated_source_tree(
@@ -1736,11 +3217,8 @@ void remove_invalid_generated_source_tree(
             source_root,
             "Ungueltige generierte Portquelle"))
         return;
-    std::error_code remove_error;
-    static_cast<void>(std::filesystem::remove_all(source_root, remove_error));
-    if (remove_error)
-        throw std::runtime_error(
-            "Ungueltige generierte Portquelle konnte nicht entfernt werden.");
+    remove_safe_port_tree(
+        source_root, "Ungueltige generierte Portquelle");
 }
 
 void reconcile_generated_artifacts_after_cache_miss(
@@ -1810,7 +3288,7 @@ port_codegen_tree_identity(const std::filesystem::path& root) {
         std::error_code status_error;
         const auto status = std::filesystem::symlink_status(path, status_error);
         if (status_error || !std::filesystem::is_regular_file(status) ||
-            std::filesystem::is_symlink(status))
+            unsafe_port_filesystem_link(path, status))
             return std::nullopt;
         files.push_back(path);
     }
@@ -1878,6 +3356,7 @@ std::string port_export_cache_key(
     const std::string_view game_project_identity,
     const std::string_view game_entry_handoff_artifact_identity,
     const std::string_view latent_aot_entry_hint_identity,
+    const std::string_view exporter_identity,
     const katana::codegen::PartitionOptions& partition_options = {}) {
     std::ostringstream identity;
     const auto append = [&identity](const auto& value) {
@@ -1905,7 +3384,7 @@ std::string port_export_cache_key(
     append(partition_options.maximum_functions);
     append(partition_options.maximum_instructions);
     append(KATANA_RECOMP_VERSION);
-    append(katana::build_contract::katana_git_commit);
+    append(exporter_identity);
     append(katana::build_contract::analyzer_abi_version);
     append(katana::build_contract::runtime_abi_version);
     append(katana::build_contract::block_abi_version);
@@ -1938,15 +3417,54 @@ load_cached_port_export(
     const katana::runtime::DiscInstallRecipe& expected_recipe) {
     const auto state_path =
         port_export_cache_path(workspace, expected_source_kind, expected_key);
+    if (!safe_port_directory_chain_exists(
+            workspace,
+            state_path.parent_path(),
+            "Content-addressed Portexport-Cache"))
+        return std::nullopt;
     std::error_code status_error;
     const auto status = std::filesystem::symlink_status(state_path, status_error);
     if (status_error == std::errc::no_such_file_or_directory ||
-        status.type() == std::filesystem::file_type::not_found)
+        (!status_error &&
+         status.type() ==
+             std::filesystem::file_type::not_found))
         return std::nullopt;
     if (status_error || !std::filesystem::is_regular_file(status) ||
-        std::filesystem::is_symlink(status))
+        unsafe_port_filesystem_link(state_path, status))
         return std::nullopt;
-    std::ifstream input(state_path, std::ios::binary);
+    const auto state_bytes =
+        std::filesystem::file_size(state_path, status_error);
+    if (status_error ||
+        state_bytes > maximum_port_export_cache_state_bytes)
+        return std::nullopt;
+    std::ifstream state_input(state_path, std::ios::binary | std::ios::ate);
+    if (!state_input || state_input.tellg() < 0 ||
+        static_cast<std::uintmax_t>(state_input.tellg()) != state_bytes)
+        return std::nullopt;
+    std::string state_content(
+        static_cast<std::size_t>(state_bytes), '\0');
+    state_input.seekg(0, std::ios::beg);
+    if (!state_content.empty())
+        state_input.read(
+            state_content.data(),
+            static_cast<std::streamsize>(state_content.size()));
+    if (!state_input ||
+        state_input.peek() != std::char_traits<char>::eof())
+        return std::nullopt;
+    state_input.close();
+    const auto final_status =
+        std::filesystem::symlink_status(state_path, status_error);
+    if (status_error ||
+        !std::filesystem::is_regular_file(final_status) ||
+        unsafe_port_filesystem_link(state_path, final_status) ||
+        std::filesystem::file_size(state_path, status_error) != state_bytes ||
+        status_error ||
+        !safe_port_directory_chain_exists(
+            workspace,
+            state_path.parent_path(),
+            "Content-addressed Portexport-Cache"))
+        return std::nullopt;
+    std::istringstream input(state_content);
     std::string magic;
     std::uint32_t version = 0u;
     CachedPortExport cached;
@@ -2010,27 +3528,71 @@ void store_cached_port_export(
         throw std::runtime_error(
             "Content-addressed Portcodegen-Ausgabe ist nach Export unvollstaendig.");
     const auto state_path = port_export_cache_path(workspace, source_kind, key);
-    std::filesystem::create_directories(state_path.parent_path());
+    ensure_safe_port_directory_chain(
+        workspace,
+        state_path.parent_path(),
+        "Content-addressed Portexport-Cache");
     const auto temporary = std::filesystem::path(state_path.string() + ".tmp");
+    std::ostringstream state_content;
+    state_content << "KATANA_PORT_EXPORT_STATE "
+                  << port_export_cache_version << '\n'
+                  << "key " << key << '\n'
+                  << "source " << source_kind << '\n'
+                  << "tree " << *tree_identity << '\n'
+                  << "recipe " << port_export_recipe_identity(expected_recipe)
+                  << '\n'
+                  << "functions " << report.functions << '\n'
+                  << "partitions " << report.partitions << '\n';
+    const auto serialized_state = state_content.str();
+    if (serialized_state.size() > maximum_port_export_cache_state_bytes)
+        throw std::runtime_error(
+            "Content-addressed Portexport-Status ueberschreitet sein Bytebudget.");
+    std::error_code replace_error;
+    const auto temporary_status =
+        std::filesystem::symlink_status(temporary, replace_error);
+    if (replace_error == std::errc::no_such_file_or_directory ||
+        (!replace_error &&
+         temporary_status.type() ==
+             std::filesystem::file_type::not_found)) {
+        replace_error.clear();
+    } else if (
+        replace_error ||
+        !std::filesystem::is_regular_file(temporary_status) ||
+        unsafe_port_filesystem_link(temporary, temporary_status) ||
+        !std::filesystem::remove(temporary, replace_error) ||
+        replace_error) {
+        throw std::runtime_error(
+            "Temporaerer Portexport-Status ist kein sicher ersetzbares Artefakt.");
+    }
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    output << "KATANA_PORT_EXPORT_STATE "
-           << port_export_cache_version << '\n'
-           << "key " << key << '\n'
-           << "source " << source_kind << '\n'
-           << "tree " << *tree_identity << '\n'
-           << "recipe " << port_export_recipe_identity(expected_recipe) << '\n'
-           << "functions " << report.functions << '\n'
-           << "partitions " << report.partitions << '\n';
+    output.write(
+        serialized_state.data(),
+        static_cast<std::streamsize>(serialized_state.size()));
     output.flush();
     if (!output)
         throw std::runtime_error(
             "Content-addressed Portexport-Status konnte nicht geschrieben werden.");
     output.close();
-    std::error_code replace_error;
-    std::filesystem::remove(state_path, replace_error);
-    if (replace_error)
+    const auto previous_status =
+        std::filesystem::symlink_status(state_path, replace_error);
+    if (replace_error == std::errc::no_such_file_or_directory ||
+        (!replace_error &&
+         previous_status.type() ==
+             std::filesystem::file_type::not_found)) {
+        replace_error.clear();
+    } else if (
+        replace_error ||
+        !std::filesystem::is_regular_file(previous_status) ||
+        unsafe_port_filesystem_link(state_path, previous_status) ||
+        !std::filesystem::remove(state_path, replace_error) ||
+        replace_error) {
         throw std::runtime_error(
-            "Alter content-addressed Portexport-Status konnte nicht ersetzt werden.");
+            "Alter content-addressed Portexport-Status konnte nicht sicher ersetzt werden.");
+    }
+    ensure_safe_port_directory_chain(
+        workspace,
+        state_path.parent_path(),
+        "Content-addressed Portexport-Cache");
     std::filesystem::rename(temporary, state_path, replace_error);
     if (replace_error)
         throw std::runtime_error(
@@ -2076,9 +3638,21 @@ using RuntimeImagePayloadArgument =
     std::pair<std::string, std::filesystem::path>;
 
 using LatentAotEntryHintArgument = katana::codegen::LatentAotEntryHint;
+using LatentAotDiscoveryModeArgument =
+    katana::codegen::LatentAotDiscoveryMode;
 
 constexpr std::uint64_t latent_aot_entry_disc_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hint_arguments = 1024u;
+
+LatentAotDiscoveryModeArgument parse_latent_aot_discovery_mode(
+    const std::string_view text) {
+    if (text == "heuristic")
+        return LatentAotDiscoveryModeArgument::HintsAndHeuristics;
+    if (text == "exact-only")
+        return LatentAotDiscoveryModeArgument::ExactOnly;
+    throw std::invalid_argument(
+        "--latent-aot-mode erwartet heuristic oder exact-only.");
+}
 
 bool valid_latent_aot_entry_identity(const std::string_view identity) noexcept {
     constexpr std::string_view prefix{"sha256:"};
@@ -2210,9 +3784,21 @@ std::vector<LatentAotEntryHintArgument> normalize_latent_aot_entry_hints(
 }
 
 std::string latent_aot_entry_hint_identity(
-    const std::vector<LatentAotEntryHintArgument>& hints) {
+    const std::vector<LatentAotEntryHintArgument>& hints,
+    const LatentAotDiscoveryModeArgument discovery_mode) {
     std::ostringstream identity;
-    append_port_export_cache_field(identity, "katana-latent-aot-entry-hints-v1");
+    append_port_export_cache_field(identity, "katana-latent-aot-entry-hints-v2");
+    switch (discovery_mode) {
+    case LatentAotDiscoveryModeArgument::HintsAndHeuristics:
+        append_port_export_cache_field(identity, "heuristic");
+        break;
+    case LatentAotDiscoveryModeArgument::ExactOnly:
+        append_port_export_cache_field(identity, "exact-only");
+        break;
+    default:
+        throw std::invalid_argument(
+            "Latent-AOT-Discoverymodus ist ungueltig.");
+    }
     for (const auto& hint : hints) {
         append_port_export_cache_field(identity, hint.byte_identity);
         append_port_export_cache_field(identity, std::to_string(hint.disc_byte_offset));
@@ -2234,7 +3820,7 @@ std::vector<std::uint8_t> load_runtime_image_payload(
     const auto status =
         std::filesystem::symlink_status(path, status_error);
     if (status_error || !std::filesystem::is_regular_file(status) ||
-        std::filesystem::is_symlink(status))
+        unsafe_port_filesystem_link(path, status))
         throw std::invalid_argument(
             "Runtime-Image-Payload muss eine regulaere Nicht-Symlink-Datei sein.");
     const auto canonical =
@@ -2271,7 +3857,7 @@ std::vector<std::uint8_t> load_runtime_image_payload(
     const auto final_status =
         std::filesystem::symlink_status(canonical, status_error);
     if (status_error || !std::filesystem::is_regular_file(final_status) ||
-        std::filesystem::is_symlink(final_status) ||
+        unsafe_port_filesystem_link(canonical, final_status) ||
         std::filesystem::file_size(canonical, status_error) !=
             expected_size ||
         status_error)
@@ -2293,7 +3879,17 @@ int export_port_project(const std::filesystem::path& source_path,
                         const std::vector<RuntimeImagePayloadArgument>&
                             runtime_image_payload_arguments = {},
                         const std::vector<LatentAotEntryHintArgument>&
-                            latent_aot_entry_hints = {}) {
+                            latent_aot_entry_hints = {},
+                        const LatentAotDiscoveryModeArgument
+                            latent_aot_discovery_mode =
+                                LatentAotDiscoveryModeArgument::
+                                     HintsAndHeuristics) {
+    PortPhaseTimingRecorder phase_timings;
+    PortPhaseTimingBinding phase_timing_binding(phase_timings);
+    phase_timings.transition("setup");
+    if (!valid_port_target_name(target_name))
+        throw std::invalid_argument(
+            "--target-name ist kein sicherer CMake-Targetname.");
     const auto normalized_latent_aot_entry_hints =
         normalize_latent_aot_entry_hints(latent_aot_entry_hints);
     if (!normalized_latent_aot_entry_hints.empty() &&
@@ -2304,6 +3900,10 @@ int export_port_project(const std::filesystem::path& source_path,
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_binding = discover_runtime_binding_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
+    if (absolute_output == absolute_output.root_path() ||
+        absolute_output.filename().empty())
+        throw std::invalid_argument(
+            "Port-Ausgabe darf kein Dateisystemstamm sein.");
     if (!source_root.empty()) {
         const auto relative_to_source = absolute_output.lexically_relative(source_root);
         if (!relative_to_source.empty() && !relative_to_source.is_absolute() &&
@@ -2327,11 +3927,19 @@ int export_port_project(const std::filesystem::path& source_path,
         return quoted + "'";
 #endif
     };
-    const auto publish_stage_key =
-        katana::io::sha256_bytes(absolute_output.generic_string() + ':' + target_name);
-    const auto publish_stage =
-        absolute_output.parent_path() /
-        (".katana-port-publish-" + publish_stage_key.substr(0u, 12u));
+    ensure_safe_absolute_directory_chain(
+        absolute_output.parent_path(), "Port-Ausgabeelternpfad");
+    const auto publish_paths =
+        port_publish_output_paths(absolute_output);
+    const ExclusivePortExportLock publish_lock(
+        publish_paths.lock_base);
+    maybe_hold_port_publish_lock_for_test();
+    recover_port_publish_transaction(publish_paths);
+    if (exit_after_port_publish_recovery_for_test())
+        return 0;
+    static_cast<void>(
+        safe_regular_port_directory_exists(
+            publish_paths.output, "Bestehendes Portpaket"));
     std::optional<katana::platform::DreamcastBootExecutableArtifact>
         verified_boot_artifact;
     std::optional<katana::platform::DreamcastDiscBoot>
@@ -2353,9 +3961,10 @@ int export_port_project(const std::filesystem::path& source_path,
     std::uint32_t whole_export_source_contract_version = 0u;
     std::string whole_export_boot_file_name;
     std::uint32_t whole_export_entry_address = 0u;
+    const auto exporter_cache_identity =
+        current_exporter_cache_identity();
     const bool whole_export_cache_enabled =
-        katana::build_contract::katana_git_commit !=
-        untrusted_katana_source_identity;
+        exporter_cache_identity.has_value();
     if (game_project_path.has_value() && diagnostic_partial)
         throw std::invalid_argument(
             "--game-project ist ausschliesslich fuer vollstaendige Produktports erlaubt.");
@@ -2369,11 +3978,17 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--runtime-image-payload braucht einen vollstaendigen "
             "Produktport mit --game-project.");
+    phase_timings.transition("analysis-codegen");
     std::cout << "KATANA_PORT_PHASE analysis-codegen\n";
     if (!whole_export_cache_enabled)
         std::cout
             << "KATANA_PORT_SUBPHASE "
-               "whole-program-analysis-ir-cache-disabled-untrusted-source\n";
+               "whole-program-analysis-ir-cache-disabled-unproven-exporter\n";
+    else if (katana::build_contract::katana_git_commit ==
+             untrusted_katana_source_identity)
+        std::cout
+            << "KATANA_PORT_SUBPHASE "
+               "whole-program-analysis-ir-cache-binary-identity\n";
     std::cout << std::flush;
     if (game_project_path.has_value()) {
         verified_game_project =
@@ -2459,6 +4074,7 @@ int export_port_project(const std::filesystem::path& source_path,
         }
     } else {
         const auto disc_load_started = std::chrono::steady_clock::now();
+        phase_timings.transition("disc-load");
         std::cout << "KATANA_PORT_SUBPHASE disc-load\n" << std::flush;
         verified_native_disc =
             katana::platform::load_dreamcast_gdi_boot(source_path);
@@ -2482,6 +4098,7 @@ int export_port_project(const std::filesystem::path& source_path,
                    .count()
             << '\n'
             << std::flush;
+        phase_timings.transition("analysis-codegen");
         whole_export_source_kind = "native-disc";
         whole_export_source_contract_version = 1u;
         whole_export_boot_file_name =
@@ -2571,7 +4188,8 @@ int export_port_project(const std::filesystem::path& source_path,
             ? verified_game_entry_handoff->artifact_identity()
             : std::string{};
     const auto latent_aot_hint_identity =
-        latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints);
+        latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints,
+                                       latent_aot_discovery_mode);
     if (whole_export_cache_enabled)
         whole_export_cache_key = port_export_cache_key(
             whole_export_source_kind,
@@ -2584,7 +4202,8 @@ int export_port_project(const std::filesystem::path& source_path,
             console_profile,
             game_project_identity,
             handoff_artifact_identity,
-            latent_aot_hint_identity);
+            latent_aot_hint_identity,
+            *exporter_cache_identity);
     const auto workspace_key = port_export_workspace_key(
         whole_export_source_kind,
         *verified_install_recipe,
@@ -2592,20 +4211,60 @@ int export_port_project(const std::filesystem::path& source_path,
     const auto workspace =
         absolute_output.parent_path() /
         (".katana-port-work-" + workspace_key.substr(0u, 12u));
-    const ExclusivePortExportLock publish_lock(publish_stage);
+    ensure_safe_absolute_directory_chain(
+        workspace.parent_path(), "Port-Arbeitsverzeichnis");
+    static_cast<void>(
+        safe_regular_port_directory_exists(
+            workspace, "Port-Arbeitsverzeichnis"));
     const ExclusivePortExportLock workspace_lock(workspace);
-    std::error_code cleanup_error;
-    if (safe_regular_port_directory_exists(publish_stage, "Altes Port-Publishing"))
-        std::filesystem::remove_all(publish_stage, cleanup_error);
-    if (cleanup_error)
-        throw std::runtime_error("Altes Port-Publishing konnte nicht entfernt werden.");
     try {
-        if (!safe_regular_port_directory_exists(workspace, "Port-Arbeitsverzeichnis"))
-            copy_validated_port_distribution(
-                absolute_output,
+        if (!safe_regular_port_directory_exists(
                 workspace,
-                target_name,
-                *verified_install_recipe);
+                "Port-Arbeitsverzeichnis") &&
+            safe_regular_port_directory_exists(
+                absolute_output,
+                "Bestehende Portdistribution")) {
+            const auto existing_target =
+                declared_port_distribution_target_name(
+                    absolute_output);
+            if (existing_target == target_name) {
+                copy_validated_port_distribution(
+                    absolute_output,
+                    workspace,
+                    target_name,
+                    *verified_install_recipe);
+            } else {
+                // Der Workspace-Schluessel ist targetgebunden. Eine gueltige
+                // Distribution fuer ein anderes Target darf deshalb weder als
+                // Seed dienen noch unter dem neuen Executable-Namen validiert
+                // werden. Ihre Disc-/Publish-Bindung bleibt trotzdem
+                // fail-closed geprueft, bevor ein leerer Workspace entsteht.
+                copy_validated_port_distribution(
+                    absolute_output,
+                    {},
+                    existing_target,
+                    *verified_install_recipe,
+                    false);
+            }
+        }
+        if (!safe_regular_port_directory_exists(
+                workspace, "Port-Arbeitsverzeichnis")) {
+            std::error_code create_error;
+            if (!std::filesystem::create_directory(workspace, create_error) &&
+                create_error)
+                throw std::filesystem::filesystem_error(
+                    "Port-Arbeitsverzeichnis konnte nicht sicher erstellt werden.",
+                    workspace,
+                    create_error);
+        }
+        if (!safe_regular_port_directory_exists(
+                workspace, "Port-Arbeitsverzeichnis"))
+            throw std::runtime_error(
+                "Port-Arbeitsverzeichnis wurde nicht als sicherer Ordner erstellt.");
+        ensure_safe_port_directory_chain(
+            workspace,
+            workspace / ".katana-codegen-cache",
+            "Privater Port-Codegen-Cache");
         katana::codegen::PortExportOptions export_options{
             target_name,
             KATANA_RECOMP_VERSION,
@@ -2613,10 +4272,10 @@ int export_port_project(const std::filesystem::path& source_path,
             source_root,
             diagnostic_partial,
             console_profile,
-            [](const std::string_view phase) {
-                std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n' << std::flush;
-            }};
+            observe_port_export_progress};
         export_options.codegen_cache_root = workspace / ".katana-codegen-cache";
+        export_options.codegen_implementation_identity =
+            exporter_cache_identity.value_or(std::string{});
         export_options.game_project =
             resolved_game_project.has_value()
                 ? &*resolved_game_project
@@ -2625,6 +4284,8 @@ int export_port_project(const std::filesystem::path& source_path,
             runtime_image_payloads;
         export_options.latent_aot_entry_hints =
             normalized_latent_aot_entry_hints;
+        export_options.latent_aot_discovery_mode =
+            latent_aot_discovery_mode;
         katana::codegen::PortExportResult report;
         bool whole_export_cache_hit = false;
         if (whole_export_cache_key) {
@@ -2682,6 +4343,16 @@ int export_port_project(const std::filesystem::path& source_path,
         if (build_profile != "bringup" && build_profile != "gate")
             throw std::invalid_argument(
                 "KATANA_PORT_BUILD_PROFILE muss bringup oder gate sein.");
+        auto compiler_launcher =
+            configured_environment_value("KATANA_COMPILER_CACHE");
+        if (!compiler_launcher)
+            compiler_launcher =
+                configured_environment_value(
+                    "CMAKE_CXX_COMPILER_LAUNCHER");
+        if (!compiler_launcher &&
+            !katana::build_contract::configured_compiler_launcher.empty())
+            compiler_launcher = std::string(
+                katana::build_contract::configured_compiler_launcher);
 #ifdef _WIN32
         const auto host_compiler =
             configured_environment_value("KATANA_PORT_CXX_COMPILER")
@@ -2695,8 +4366,21 @@ int export_port_project(const std::filesystem::path& source_path,
             host_linker != "lld")
             throw std::invalid_argument(
                 "KATANA_PORT_LINKER muss default, msvc oder lld sein.");
+        const auto requested_generator =
+            configured_environment_value("KATANA_HOST_BUILD_GENERATOR");
+        if (requested_generator &&
+            *requested_generator != "Ninja" &&
+            *requested_generator != "Visual Studio")
+            throw std::invalid_argument(
+                "KATANA_HOST_BUILD_GENERATOR muss Ninja oder Visual Studio sein.");
         const bool use_ninja =
-            configured_environment_value("KATANA_HOST_BUILD_GENERATOR") == "Ninja";
+            requested_generator
+                ? *requested_generator == "Ninja"
+                : compiler_launcher.has_value();
+        if (compiler_launcher && !use_ninja)
+            throw std::invalid_argument(
+                "Ein Compiler-Launcher braucht den Ninja-Hostbuild; "
+                "Visual Studio ignoriert CXX_COMPILER_LAUNCHER.");
 #else
         const auto host_compiler = std::string("native");
         const auto host_linker = std::string("default");
@@ -2746,30 +4430,82 @@ int export_port_project(const std::filesystem::path& source_path,
         if (host_linker != "default")
             configure += " -DCMAKE_LINKER_TYPE=" +
                          std::string(host_linker == "msvc" ? "MSVC" : "LLD");
-        if (katana::build_contract::katana_git_commit !=
-            "0000000000000000000000000000000000000000") {
-            // The incremental port build directory intentionally survives
-            // exports. Refresh the cached source assertion with the exact
-            // exporter identity so a new Katana HEAD does not retain the
-            // previous build's commit and fail only after code generation.
-            configure += " -DKATANA_GIT_COMMIT=" +
-                         std::string(katana::build_contract::katana_git_commit);
+        if (compiler_launcher) {
+            configure +=
+                " -DCMAKE_CXX_COMPILER_LAUNCHER=" +
+                shell_quote(std::filesystem::path(*compiler_launcher));
+        } else {
+            // The incremental build directory survives exports. Clear a
+            // previously configured launcher when this invocation requests
+            // none instead of silently retaining stale host-build state.
+            configure += " -DCMAKE_CXX_COMPILER_LAUNCHER=";
         }
+        // Refresh or clear the cached source assertion on every configure.
+        // Dirty/local exporters use the sentinel identity and must not retain
+        // a previous clean-HEAD assertion in the reusable build directory.
+        configure += " -DKATANA_GIT_COMMIT=";
+        if (katana::build_contract::katana_git_commit !=
+            "0000000000000000000000000000000000000000")
+            configure +=
+                std::string(katana::build_contract::katana_git_commit);
+        phase_timings.transition("configure");
         std::cout << "KATANA_PORT_PHASE configure\n" << std::flush;
         const auto configure_command = normalized_host_command(configure);
-        if (std::system(configure_command.c_str()) != 0) {
+        const auto configure_runtime =
+            configured_port_host_command_runtime("configure");
+        SupervisedHostCommandResult configure_result;
+        try {
+            configure_result =
+                run_supervised_host_command(
+                    configure_command,
+                    configure_runtime);
+        } catch (const std::exception& process_error) {
             try {
                 remove_failed_port_host_build_state(report.output_root, build_path);
             } catch (const std::exception& cleanup_error) {
                 throw katana::cli::Error(
                     katana::cli::ExitCode::BuildFailure,
-                    std::string("Port-Hostbuild konnte nicht konfiguriert und sein "
-                                "unvollstaendiger CMake-Zustand nicht bereinigt werden: ") +
+                    std::string(
+                        "Port-Hostbuild-Prozess konnte nicht sicher ausgefuehrt "
+                        "und sein unvollstaendiger CMake-Zustand nicht "
+                        "bereinigt werden: ") +
+                        process_error.what() + ' ' +
                         cleanup_error.what());
             }
-            throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
-                                     "Port-Hostbuild konnte nicht konfiguriert werden; der "
-                                     "unvollstaendige CMake-Zustand wurde entfernt.");
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                std::string(
+                    "Port-Hostbuild-Prozess konnte nicht sicher ausgefuehrt "
+                    "werden; der unvollstaendige CMake-Zustand wurde "
+                    "entfernt: ") +
+                    process_error.what());
+        }
+        if (configure_result.exit_code != 0) {
+            const auto failure =
+                configure_result.timed_out
+                    ? std::string(
+                          "KATANA_PORT_HOST_COMMAND_TIMEOUT "
+                          "stage=configure limit_ms=") +
+                          std::to_string(configure_runtime.count()) +
+                          " process_tree=terminated"
+                    : std::string(
+                          "Port-Hostbuild konnte nicht konfiguriert werden");
+            try {
+                remove_failed_port_host_build_state(
+                    report.output_root,
+                    build_path);
+            } catch (const std::exception& cleanup_error) {
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    failure +
+                        "; unvollstaendiger CMake-Zustand konnte nicht "
+                        "bereinigt werden: " +
+                        cleanup_error.what());
+            }
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                failure +
+                    "; unvollstaendiger CMake-Zustand wurde entfernt.");
         }
 #ifdef _WIN32
         try {
@@ -2796,9 +4532,40 @@ int export_port_project(const std::filesystem::path& source_path,
 #ifdef _WIN32
         if (!use_ninja) build += " --config RelWithDebInfo -- /nodeReuse:false";
 #endif
+        phase_timings.transition("host-build");
         std::cout << "KATANA_PORT_PHASE host-build\n" << std::flush;
         const auto build_command = normalized_host_command(build);
-        if (std::system(build_command.c_str()) != 0) {
+        const auto build_runtime =
+            configured_port_host_command_runtime("host-build");
+        const auto build_result =
+            run_supervised_host_command(
+                build_command,
+                build_runtime);
+        if (build_result.timed_out) {
+            const auto failure =
+                std::string(
+                    "KATANA_PORT_HOST_COMMAND_TIMEOUT "
+                    "stage=host-build limit_ms=") +
+                std::to_string(build_runtime.count()) +
+                " process_tree=terminated";
+            try {
+                remove_failed_port_host_build_state(
+                    report.output_root,
+                    build_path);
+            } catch (const std::exception& cleanup_error) {
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    failure +
+                        "; unvollstaendiger Buildzustand konnte nicht "
+                        "bereinigt werden: " +
+                        cleanup_error.what());
+            }
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                failure +
+                    "; unvollstaendiger Buildzustand wurde entfernt.");
+        }
+        if (build_result.exit_code != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hosttarget konnte nicht gebaut werden.");
         }
@@ -2810,6 +4577,10 @@ int export_port_project(const std::filesystem::path& source_path,
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hostbuild besitzt kein ausfuehrbares Artefakt.");
         const auto published_executable = report.output_root / built_executable.filename();
+        require_safe_replaceable_port_file(
+            report.output_root,
+            published_executable,
+            "Publiziertes Hostprogramm");
         std::filesystem::copy_file(built_executable,
                                    published_executable,
                                    std::filesystem::copy_options::overwrite_existing);
@@ -2823,6 +4594,14 @@ int export_port_project(const std::filesystem::path& source_path,
         const auto executable_sha256 =
             katana::io::capture_input_provenance("host-executable", published_executable).sha256;
         const auto install_manifest = report.output_root / "content" / "game.katana-install.json";
+        ensure_safe_port_directory_chain(
+            report.output_root,
+            install_manifest.parent_path(),
+            "Port-Installationsmanifest");
+        require_safe_replaceable_port_file(
+            report.output_root,
+            install_manifest,
+            "Port-Installationsmanifest");
         std::ofstream manifest(install_manifest, std::ios::binary | std::ios::trunc);
         manifest << disc_install_manifest_document(
             recipe,
@@ -2832,37 +4611,81 @@ int export_port_project(const std::filesystem::path& source_path,
         if (!manifest)
             throw std::runtime_error("Disc-Installationsmanifest konnte nicht finalisiert werden.");
         manifest.close();
-        std::filesystem::create_directories(report.output_root / "runtime");
-        std::ofstream runtime_manifest(report.output_root / "runtime" / "runtime-dependencies.json",
+        const auto runtime_manifest_path =
+            report.output_root / "runtime" / "runtime-dependencies.json";
+        ensure_safe_port_directory_chain(
+            report.output_root,
+            runtime_manifest_path.parent_path(),
+            "Port-Runtimemanifest");
+        require_safe_replaceable_port_file(
+            report.output_root,
+            runtime_manifest_path,
+            "Port-Runtimemanifest");
+        std::ofstream runtime_manifest(runtime_manifest_path,
                                        std::ios::binary | std::ios::trunc);
         runtime_manifest << runtime_dependency_manifest_document(recipe);
         if (!runtime_manifest)
             throw std::runtime_error(
                 "Runtime-Abhaengigkeitsmanifest konnte nicht geschrieben werden.");
         runtime_manifest.close();
-        std::filesystem::create_directories(report.output_root / "user-data");
+        ensure_safe_port_directory_chain(
+            report.output_root,
+            report.output_root / "user-data",
+            "Lokaler Portdatenordner");
+        phase_timings.transition("package");
         std::cout << "KATANA_PORT_PHASE package\n" << std::flush;
+        const auto publish_transaction =
+            begin_port_publish_transaction(publish_paths);
         copy_validated_port_distribution(
             report.output_root,
-            publish_stage,
+            publish_transaction.stage,
             target_name,
             recipe);
-        std::filesystem::create_directories(publish_stage / "user-data");
-        const auto stale = std::filesystem::path(absolute_output.string() + ".katana-stale-port");
-        std::filesystem::remove_all(stale, cleanup_error);
-        if (cleanup_error)
-            throw std::runtime_error("Altes Port-Backup konnte nicht entfernt werden.");
-        if (std::filesystem::exists(absolute_output))
-            std::filesystem::rename(absolute_output, stale);
-        try {
-            std::filesystem::rename(publish_stage, absolute_output);
-            katana::codegen::preserve_local_port_user_data(stale, absolute_output);
-        } catch (...) {
-            std::filesystem::remove_all(absolute_output, cleanup_error);
-            if (std::filesystem::exists(stale)) std::filesystem::rename(stale, absolute_output);
-            throw;
+        ensure_safe_port_directory_chain(
+            publish_transaction.stage,
+            publish_transaction.stage / "user-data",
+            "Publizierter lokaler Portdatenordner");
+        write_exclusive_safe_port_file(
+            publish_transaction.stage / ".katana-publish-owner",
+            publish_transaction.owner_document,
+            "Neuer Port-Publish-Eigentuemermarker");
+        const auto existing_output =
+            safe_regular_port_directory_exists(
+                publish_paths.output, "Bestehendes Portpaket");
+        if (existing_output) {
+            std::filesystem::rename(
+                publish_paths.output,
+                publish_transaction.backup);
+            write_port_publish_state(
+                publish_transaction,
+                "old-moved");
+            maybe_crash_port_publish_for_test("after-old-move");
         }
-        std::filesystem::remove_all(stale, cleanup_error);
+        std::filesystem::rename(
+            publish_transaction.stage,
+            publish_paths.output);
+        write_port_publish_state(
+            publish_transaction,
+            "new-published");
+        maybe_crash_port_publish_for_test("after-new-publish");
+        if (existing_output)
+            katana::codegen::preserve_local_port_user_data(
+                publish_transaction.backup,
+                publish_paths.output);
+        write_port_publish_state(
+            publish_transaction,
+            "user-data-preserved");
+        if (existing_output)
+            remove_safe_port_tree(
+                publish_transaction.backup,
+                "Publiziertes altes Port-Backup");
+        write_port_publish_state(
+            publish_transaction,
+            "committed");
+        remove_owned_output_publish_marker(
+            publish_transaction);
+        cleanup_owned_port_publish_transaction(
+            publish_transaction);
         std::cout << "Portpaket erzeugt: " << absolute_output.string() << '\n'
                   << "Funktionen: " << report.functions << '\n'
                   << "Partitionen: " << report.partitions << '\n'
@@ -2877,12 +4700,24 @@ int export_port_project(const std::filesystem::path& source_path,
                   << "Hostcompiler: " << host_compiler << '\n'
                   << "Hostlinker: " << host_linker << '\n'
                   << "Buildprofil: " << build_profile << '\n'
-                  << "Inkrementeller Hostbuild-Cache: " << build_path.string() << '\n'
-                  << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
+                   << "Inkrementeller Hostbuild-Cache: " << build_path.string() << '\n'
+                   << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
+        phase_timings.transition("complete");
+        phase_timings.emit();
         return 0;
     } catch (...) {
-        std::filesystem::remove_all(publish_stage, cleanup_error);
-        throw;
+        const auto original_error = std::current_exception();
+        try {
+            recover_port_publish_transaction(publish_paths);
+        } catch (const std::exception& recovery_error) {
+            throw std::runtime_error(
+                std::string(
+                    "Port-Publishing scheiterte; die transaktionseigene "
+                    "Recovery liess alle nicht sicher zuordenbaren Daten "
+                    "unangetastet: ") +
+                recovery_error.what());
+        }
+        std::rethrow_exception(original_error);
     }
 }
 
@@ -2920,6 +4755,7 @@ void print_usage(std::ostream& output) {
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
               "[--game-project <Descriptor-Artefakt>] "
               "[--runtime-image-payload <Image-ID>=<private-Datei>] "
+              "[--latent-aot-mode <heuristic|exact-only>] "
               "[--latent-aot-entry "
               "<sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
               "<module-relative-offset>>]...\n"
@@ -3117,6 +4953,9 @@ int main(const int argc, char* argv[]) {
                 runtime_image_payload_arguments;
             std::vector<LatentAotEntryHintArgument>
                 latent_aot_entry_hints;
+            auto latent_aot_discovery_mode =
+                LatentAotDiscoveryModeArgument::HintsAndHeuristics;
+            bool latent_aot_discovery_mode_seen = false;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             for (std::size_t argument = 3u; argument < static_cast<std::size_t>(argc);
@@ -3161,6 +5000,13 @@ int main(const int argc, char* argv[]) {
                            port_command == "port") {
                     latent_aot_entry_hints.push_back(
                         parse_latent_aot_entry_hint(argv[argument + 1u]));
+                } else if (option == "--latent-aot-mode" &&
+                           port_command == "port" &&
+                           !latent_aot_discovery_mode_seen) {
+                    latent_aot_discovery_mode =
+                        parse_latent_aot_discovery_mode(
+                            argv[argument + 1u]);
+                    latent_aot_discovery_mode_seen = true;
                 } else {
                     throw std::invalid_argument(
                         "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
@@ -3168,6 +5014,10 @@ int main(const int argc, char* argv[]) {
             }
             latent_aot_entry_hints =
                 normalize_latent_aot_entry_hints(std::move(latent_aot_entry_hints));
+            if (!latent_aot_discovery_mode_seen &&
+                !latent_aot_entry_hints.empty())
+                latent_aot_discovery_mode =
+                    LatentAotDiscoveryModeArgument::ExactOnly;
             if (!output_path.has_value() || !target_name.has_value()) {
                 throw std::invalid_argument(
                     "port erwartet --output und --target-name jeweils genau einmal.");
@@ -3181,7 +5031,8 @@ int main(const int argc, char* argv[]) {
                                        game_project_path,
                                        game_entry_handoff_path,
                                        runtime_image_payload_arguments,
-                                       latent_aot_entry_hints);
+                                       latent_aot_entry_hints,
+                                       latent_aot_discovery_mode);
         }
 
         if ((argc == 3 || argc == 4) &&

@@ -86,7 +86,18 @@ int main() {
     Fixture fixture;
     CodegenCache cache(fixture.root / "cache");
     const auto key = make_codegen_cache_key(
-        {"input", "ir", "opt", "cpp", 1u, 8u, "manifest", "overrides", 2u, 1u, "0.34.0-dev"});
+        {"input",
+         "ir",
+         "opt",
+         "cpp",
+         1u,
+         8u,
+         "manifest",
+         "overrides",
+         2u,
+         1u,
+         "0.34.0-dev",
+         "project-exporter-a"});
     const std::vector<ProjectArtifact> artifacts = {
         {"code/unit-00001.cpp",
          "#include <katana/build_contract.hpp>\n"

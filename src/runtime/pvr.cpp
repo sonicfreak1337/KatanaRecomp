@@ -4170,6 +4170,54 @@ void PvrSoftwareRenderer::reset_guest_frame_evidence(
     queued_scanout_frame_.reset();
 }
 
+namespace {
+
+PvrFrame capture_decoded_pvr_scanout(
+    const PvrScanoutDescriptor& scanout,
+    const std::uint32_t scanout_field,
+    const std::span<const std::uint8_t> vram) {
+    PvrFramebuffer framebuffer;
+    const auto weave_fields = scanout.interlaced && scanout.weave_fields;
+    framebuffer.configure(scanout.width,
+                          scanout.height,
+                          scanout.stride_bytes,
+                          scanout.format,
+                          scanout.line_double,
+                          weave_fields,
+                          scanout.source_width,
+                          scanout.source_height,
+                          scanout.concat,
+                          true);
+    const auto active_base = scanout_field == 0u
+                                 ? scanout.base_offset
+                                 : scanout.second_base_offset;
+    return framebuffer.capture(
+        scanout.video_blank
+            ? std::span<const std::uint8_t>{}
+            : vram,
+        weave_fields ? scanout.base_offset : active_base,
+        weave_fields
+            ? std::optional<std::size_t>{scanout.second_base_offset}
+            : std::nullopt,
+        scanout.video_blank
+            ? std::optional<std::array<std::uint8_t, 4u>>{
+                  scanout.border_rgba}
+            : std::nullopt);
+}
+
+} // namespace
+
+std::optional<PvrFrame>
+capture_pvr_scanout_frame(const PvrRegisterFile& registers,
+                          const std::span<const std::uint8_t> vram) {
+    const auto scanout = decode_pvr_scanout(registers, vram.size());
+    if (!scanout) return std::nullopt;
+    const auto scanout_field =
+        scanout->interlaced ? (registers.field() & 1u) : 0u;
+    return capture_decoded_pvr_scanout(
+        *scanout, scanout_field, vram);
+}
+
 void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& registers,
                                                  const std::span<const std::uint8_t> vram) {
     const auto scanout = decode_pvr_scanout(registers, vram.size());
@@ -4178,32 +4226,16 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
     const auto scanout_field = scanout->interlaced ? (registers.field() & 1u) : 0u;
     const auto active_base = scanout_field == 0u ? scanout->base_offset
                                                  : scanout->second_base_offset;
-    const auto capture_scanout =
-        [&](const std::span<const std::uint8_t> source_vram,
-            const std::optional<std::array<std::uint8_t, 4u>> solid_color = std::nullopt) {
-        PvrFramebuffer framebuffer;
-        const auto weave_fields = scanout->interlaced && scanout->weave_fields;
-        framebuffer.configure(scanout->width,
-                              scanout->height,
-                              scanout->stride_bytes,
-                              scanout->format,
-                              scanout->line_double,
-                              weave_fields,
-                              scanout->source_width,
-                              scanout->source_height,
-                              scanout->concat,
-                              true);
-        return framebuffer.capture(
-            source_vram,
-            weave_fields ? scanout->base_offset : active_base,
-            weave_fields ? std::optional<std::size_t>{scanout->second_base_offset}
-                         : std::nullopt,
-            solid_color);
-    };
     if (scanout->video_blank) {
-        queued_scanout_frame_ = capture_scanout({}, scanout->border_rgba);
+        queued_scanout_frame_ = capture_decoded_pvr_scanout(
+            *scanout, scanout_field, vram);
         return;
     }
+    const auto capture_scanout =
+        [&](const std::span<const std::uint8_t> source_vram) {
+            return capture_decoded_pvr_scanout(
+                *scanout, scanout_field, source_vram);
+        };
     if (direct_vram_shadow_.empty()) direct_vram_shadow_.resize(dreamcast_vram_size, 0u);
     auto frame = capture_scanout(vram);
     // Keep the first unconsumed proof intact, but never let diagnostic evidence
@@ -4470,6 +4502,19 @@ std::optional<PvrFrame> PvrSoftwareRenderer::take_scanout_frame() {
     auto frame = std::move(queued_scanout_frame_);
     queued_scanout_frame_.reset();
     return frame;
+}
+
+bool PvrSoftwareRenderer::retain_unpresented_guest_frame_proof(
+    PvrGuestFrameProof proof) {
+    if (queued_guest_frame_proof_) return false;
+    queued_guest_frame_proof_ = std::move(proof);
+    return true;
+}
+
+bool PvrSoftwareRenderer::retain_unpresented_scanout_frame(PvrFrame frame) {
+    if (queued_scanout_frame_) return false;
+    queued_scanout_frame_ = std::move(frame);
+    return true;
 }
 
 const PvrSoftwareRenderMetrics& PvrSoftwareRenderer::metrics() const noexcept {

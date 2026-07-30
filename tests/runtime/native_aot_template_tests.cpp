@@ -286,6 +286,8 @@ int main() {
         loaded_module.source_identity = "disc-load-v1:free-provenance";
         loaded_module.content_identity = "sha256:free-content-v1";
         loaded_module.byte_identity = latent_byte_identity;
+        loaded_module.native_aot_template_id =
+            "latent-source-module";
         loaded_module.guest_start = canonical_physical_address(latent_runtime);
         loaded_module.bytes = latent_bytes;
         latent_modules.publish(loaded_module);
@@ -349,6 +351,58 @@ int main() {
                         latent_source + latent_offset, {}).has_value(),
                 "Byteidentisches geladenes Discmodul wurde nicht blocklokal aus dem "
                 "isolierten Template-Quellkatalog an latentes AOT gebunden.");
+
+        std::vector<NativeAotTemplate> colliding_loaded_templates{
+            latent_templates.begin(), latent_templates.end()};
+        colliding_loaded_templates.push_back(latent_templates.front());
+        colliding_loaded_templates.back().source_module_id =
+            "external-collision-template";
+        NativeAotTemplateBinder explicitly_bound_latent_binder(
+            cpu,
+            latent_modules,
+            latent_dispatch_blocks,
+            colliding_loaded_templates,
+            &latent_source_blocks);
+        const auto explicitly_bound_latent =
+            explicitly_bound_latent_binder.bind(
+                latent_runtime + latent_offset,
+                canonical_physical_address(
+                    latent_runtime + latent_offset),
+                std::span<const std::uint8_t>(latent_bytes)
+                    .subspan(latent_offset),
+                {});
+        require(
+            explicitly_bound_latent &&
+                explicitly_bound_latent.candidate.block.function ==
+                    native_template_block,
+            "Explizite SourceBinding-Template-ID wurde durch eine "
+            "bytegleiche externe LoadedModule-Vorlage mehrdeutig.");
+
+        auto untyped_loaded_module = loaded_module;
+        untyped_loaded_module.id = "untyped-external-loaded-module";
+        untyped_loaded_module.native_aot_template_id.clear();
+        ExecutableModuleCatalog untyped_loaded_modules;
+        untyped_loaded_modules.publish(std::move(untyped_loaded_module));
+        NativeAotTemplateBinder untyped_loaded_binder(
+            cpu,
+            untyped_loaded_modules,
+            latent_dispatch_blocks,
+            latent_templates,
+            &latent_source_blocks);
+        const auto untyped_loaded = untyped_loaded_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(latent_bytes)
+                .subspan(latent_offset),
+            {});
+        require(
+            !untyped_loaded &&
+                untyped_loaded.failure ==
+                    NativeAotTemplateBindFailure::MissingAot &&
+                untyped_loaded.candidate.rejection_failure ==
+                    MaterializationFailure::MissingAot,
+            "Externes bytegleiches LoadedModule ohne exakte Template-ID "
+            "aktivierte eine native Vorlage.");
 
         RuntimeBlockTable source_module_blocks;
         static_cast<void>(source_module_blocks.register_static(

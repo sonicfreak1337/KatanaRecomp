@@ -1047,6 +1047,10 @@ int main() {
     ExecutableModule private_module;
     private_module.id = private_module_id_sentinel;
     private_module.source_identity = private_source_identity_sentinel;
+    private_module.content_identity = "sha256:private-module-content";
+    private_module.byte_identity = "sha256:private-module-bytes";
+    private_module.native_aot_template_id =
+        "private-module-native-aot-template";
     private_module.guest_start = 0x8C200000u;
     private_module.bytes.assign(private_module_bytes_sentinel.begin(),
                                 private_module_bytes_sentinel.end());
@@ -1066,6 +1070,65 @@ int main() {
 
     const auto private_module_device_hash =
         hash_runtime_probe_devices(full_devices);
+    auto changed_template_catalog = private_module_catalog;
+    changed_template_catalog.modules.front().native_aot_template_id =
+        "private-module-native-aot-template-changed";
+    auto changed_template_devices = full_devices;
+    const auto changed_template_device = std::find_if(
+        changed_template_devices.begin(),
+        changed_template_devices.end(),
+        [](const auto& device) {
+            return device.kind == RuntimeProbeDeviceKind::ModuleCatalog &&
+                   device.instance == 0u;
+        });
+    require(changed_template_device != changed_template_devices.end(),
+            "Der geaenderte Template-ID-Zustand verlor den Modul-Katalog.");
+    *changed_template_device =
+        make_runtime_probe_device_snapshot(changed_template_catalog);
+    require(
+        private_module_device_hash !=
+            hash_runtime_probe_devices(changed_template_devices),
+        "Eine native AOT-Template-ID-Aenderung bleibt im Devicehash "
+        "unsichtbar.");
+    auto changed_content_catalog = private_module_catalog;
+    changed_content_catalog.modules.front().content_identity =
+        "sha256:private-module-content-changed";
+    auto changed_content_devices = full_devices;
+    const auto changed_content_device = std::find_if(
+        changed_content_devices.begin(),
+        changed_content_devices.end(),
+        [](const auto& device) {
+            return device.kind == RuntimeProbeDeviceKind::ModuleCatalog &&
+                   device.instance == 0u;
+        });
+    require(changed_content_device != changed_content_devices.end(),
+            "Der geaenderte Content-ID-Zustand verlor den Modul-Katalog.");
+    *changed_content_device =
+        make_runtime_probe_device_snapshot(changed_content_catalog);
+    require(
+        private_module_device_hash !=
+            hash_runtime_probe_devices(changed_content_devices),
+        "Eine Modul-Content-ID-Aenderung bleibt im Devicehash unsichtbar.");
+    auto changed_byte_identity_catalog = private_module_catalog;
+    changed_byte_identity_catalog.modules.front().byte_identity =
+        "sha256:private-module-bytes-changed";
+    auto changed_byte_identity_devices = full_devices;
+    const auto changed_byte_identity_device = std::find_if(
+        changed_byte_identity_devices.begin(),
+        changed_byte_identity_devices.end(),
+        [](const auto& device) {
+            return device.kind == RuntimeProbeDeviceKind::ModuleCatalog &&
+                   device.instance == 0u;
+        });
+    require(changed_byte_identity_device !=
+                changed_byte_identity_devices.end(),
+            "Der geaenderte Byte-ID-Zustand verlor den Modul-Katalog.");
+    *changed_byte_identity_device =
+        make_runtime_probe_device_snapshot(changed_byte_identity_catalog);
+    require(
+        private_module_device_hash !=
+            hash_runtime_probe_devices(changed_byte_identity_devices),
+        "Eine Modul-Byte-ID-Aenderung bleibt im Devicehash unsichtbar.");
     auto changed_module_catalog = private_module_catalog;
     ++changed_module_catalog.modules.front().bytes.front();
     auto changed_module_devices = full_devices;

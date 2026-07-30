@@ -389,6 +389,13 @@ struct PvrFrame {
     std::vector<std::uint8_t> rgba;
 };
 
+// Captures the scanout represented by the current register/VRAM state without
+// mutating renderer evidence queues. This is used for exact product-boundary
+// baselines rather than reusing an older host-presented frame.
+[[nodiscard]] std::optional<PvrFrame>
+capture_pvr_scanout_frame(const PvrRegisterFile& registers,
+                          std::span<const std::uint8_t> vram);
+
 class PvrFramebuffer final {
   public:
     void configure(std::uint32_t width,
@@ -884,6 +891,12 @@ class PvrSoftwareRenderer final {
                                 std::span<const std::uint8_t> vram);
     [[nodiscard]] std::optional<PvrGuestFrameProof> take_guest_frame_proof();
     [[nodiscard]] std::optional<PvrFrame> take_scanout_frame();
+    // Presentation retries are bounded by the existing one-proof/one-scanout
+    // queues. Any subsequently observed scanout wins over a retained proof;
+    // byte-identical pixels do not imply the same presentation generation.
+    [[nodiscard]] bool retain_unpresented_guest_frame_proof(
+        PvrGuestFrameProof proof);
+    [[nodiscard]] bool retain_unpresented_scanout_frame(PvrFrame frame);
     [[nodiscard]] const PvrSoftwareRenderMetrics& metrics() const noexcept;
     [[nodiscard]] std::uint64_t last_render_generation() const noexcept;
     [[nodiscard]] std::size_t pending_render_generations() const noexcept;

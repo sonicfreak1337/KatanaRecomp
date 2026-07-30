@@ -92,6 +92,9 @@ struct ExecutableModule {
     // provenance and must never be used as a substitute for either binding.
     std::string content_identity;
     std::string byte_identity;
+    // Optional exact LoadedModule template binding carried from a proven disc
+    // source descriptor. Empty for ordinary and externally discovered modules.
+    std::string native_aot_template_id;
     std::uint32_t guest_start = 0u;
     std::vector<std::uint8_t> bytes;
     std::vector<ExecutableModuleRelocation> relocations;

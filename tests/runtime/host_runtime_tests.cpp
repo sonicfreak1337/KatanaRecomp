@@ -1,5 +1,6 @@
 #include "katana/runtime/host_runtime.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -29,6 +30,7 @@ int main() {
     using namespace katana::runtime;
     static_assert(native_host_runtime_contract_version == 2u);
     static_assert(host_pacing_contract_version == 1u);
+    static_assert(host_workload_limiter_contract_version == 1u);
     std::uint64_t host_now = 1'000u;
     std::vector<std::uint64_t> deadlines;
     HostPacer pacer(
@@ -81,6 +83,195 @@ int main() {
     require(pacer.serialize_status_json().find("\"wait_calls\":2") != std::string::npos &&
                 guest_regression.first_error().has_value(),
             "Host-Pacing-Status verliert Metriken oder ersten Fehler.");
+
+    bool disabled_clock_read = false;
+    bool disabled_wait = false;
+    HostWorkloadLimiter disabled_limiter(
+        {100u, 0u, 0u},
+        [&] {
+            disabled_clock_read = true;
+            return std::uint64_t{0u};
+        },
+        [&] {
+            disabled_clock_read = true;
+            return std::uint64_t{0u};
+        },
+        [&](const std::uint64_t) { disabled_wait = true; });
+    disabled_limiter.limit();
+    require(!disabled_limiter.enabled() && !disabled_limiter.initialized() &&
+                !disabled_clock_read && !disabled_wait &&
+                disabled_limiter.wait_calls() == 0u &&
+                disabled_limiter.wait_time_ns() == 0u,
+            "Eine 100-Prozent-Lastquote ist nicht vollstaendig deaktiviert.");
+    require(
+        throws<std::invalid_argument>([] {
+            const HostWorkloadLimiter invalid({0u, 100'000'000u, 2'000'000u});
+            static_cast<void>(invalid);
+        }) &&
+            throws<std::invalid_argument>([] {
+                const HostWorkloadLimiter invalid({101u, 100'000'000u, 2'000'000u});
+                static_cast<void>(invalid);
+            }) &&
+            throws<std::invalid_argument>([] {
+                const HostWorkloadLimiter invalid({50u, 0u, 2'000'000u});
+                static_cast<void>(invalid);
+            }) &&
+            throws<std::invalid_argument>([] {
+                const HostWorkloadLimiter invalid({50u, 100'000'000u, 0u});
+                static_cast<void>(invalid);
+            }) &&
+            throws<std::invalid_argument>([] {
+                const HostWorkloadLimiter invalid(
+                    {50u, 100'000'000u,
+                     host_workload_limiter_maximum_wait_ceiling_ns + 1u});
+                static_cast<void>(invalid);
+            }),
+        "Ungueltige Lastquote, Fenster- oder Wartegrenze wird akzeptiert.");
+
+    std::uint64_t limiter_wall_ns = 0u;
+    std::uint64_t limiter_thread_cpu_ns = 0u;
+    std::vector<std::uint64_t> limiter_waits;
+    HostWorkloadLimiter limiter(
+        {50u, 100'000'000u, 2'000'000u},
+        [&] { return limiter_wall_ns; },
+        [&] { return limiter_thread_cpu_ns; },
+        [&](const std::uint64_t duration) {
+            limiter_waits.push_back(duration);
+            limiter_wall_ns += duration;
+        });
+    limiter.limit();
+    limiter_wall_ns = 4'000'000u;
+    limiter_thread_cpu_ns = 4'000'000u;
+    limiter.limit();
+    limiter.limit();
+    limiter.limit();
+    require(limiter_waits ==
+                    std::vector<std::uint64_t>({2'000'000u, 2'000'000u}) &&
+                limiter.wait_calls() == 2u &&
+                limiter.wait_time_ns() == 4'000'000u &&
+                limiter_wall_ns == 8'000'000u,
+            "Lastbegrenzer beschraenkt Warteintervalle oder kumuliert CPU-Schuld falsch.");
+
+    limiter.reset();
+    limiter.limit();
+    limiter_wall_ns += 1'000'000u;
+    limiter_thread_cpu_ns += 1'000'000u;
+    limiter.limit();
+    require(limiter.initialized() && limiter.wait_calls() == 3u &&
+                limiter.wait_time_ns() == 5'000'000u &&
+                limiter_waits.back() == 1'000'000u,
+            "Reset verankert Uhren nicht neu oder verwirft kumulative Telemetrie.");
+    const auto limiter_status = limiter.serialize_status_json();
+    require(limiter_status.find("\"target_cpu_percent\":50") != std::string::npos &&
+                limiter_status.find("\"wait_calls\":3") != std::string::npos &&
+                limiter_status.find("\"wait_time_ns\":5000000") != std::string::npos &&
+                limiter_status.find("\"measured_wall_time_ns\":") !=
+                    std::string::npos &&
+                limiter_status.find("\"measured_thread_cpu_time_ns\":") !=
+                    std::string::npos &&
+                limiter_status.find("\"measured_cpu_percent_milli\":") !=
+                    std::string::npos,
+            "Lastbegrenzer-Status verliert Zielquote oder Wartezeit.");
+
+    std::uint64_t regression_wall_ns = 1'000u;
+    std::uint64_t regression_thread_cpu_ns = 1'000u;
+    std::uint64_t regression_waits = 0u;
+    HostWorkloadLimiter regression_limiter(
+        {50u, 100'000'000u, 2'000'000u},
+        [&] { return regression_wall_ns; },
+        [&] { return regression_thread_cpu_ns; },
+        [&](const std::uint64_t duration) {
+            ++regression_waits;
+            regression_wall_ns += duration;
+        });
+    regression_limiter.limit();
+    regression_wall_ns = 900u;
+    regression_thread_cpu_ns = 900u;
+    regression_limiter.limit();
+    require(regression_limiter.initialized() && regression_waits == 0u,
+            "Ruecklaeufige injizierte Uhren werden nicht sicher neu verankert.");
+    regression_wall_ns += 1'000'000u;
+    regression_thread_cpu_ns += 1'000'000u;
+    regression_limiter.limit();
+    require(regression_waits == 1u,
+            "Lastbegrenzer arbeitet nach einer sicheren Clock-Neuverankerung nicht weiter.");
+
+    std::uint64_t window_wall_ns = 0u;
+    std::uint64_t window_thread_cpu_ns = 0u;
+    std::vector<std::uint64_t> window_waits;
+    HostWorkloadLimiter window_limiter(
+        {50u, 100'000'000u, 2'000'000u},
+        [&] { return window_wall_ns; },
+        [&] { return window_thread_cpu_ns; },
+        [&](const std::uint64_t duration) {
+            window_waits.push_back(duration);
+            window_wall_ns += duration;
+        });
+    window_limiter.limit();
+    window_wall_ns = 100'000'000u;
+    window_limiter.limit();
+    window_wall_ns += 1'000'000u;
+    window_thread_cpu_ns += 1'000'000u;
+    window_limiter.limit();
+    require(window_waits == std::vector<std::uint64_t>{1'000'000u},
+            "Ein abgelaufenes Abrechnungsfenster erlaubt unbegrenzte alte Leerlaufgutschrift.");
+
+    std::uint64_t overflow_wall_ns = 0u;
+    std::uint64_t overflow_thread_cpu_ns = 0u;
+    HostWorkloadLimiter overflow_limiter(
+        {1u, 100'000'000u, 2'000'000u},
+        [&] { return overflow_wall_ns; },
+        [&] { return overflow_thread_cpu_ns; },
+        [&](const std::uint64_t duration) {
+            overflow_wall_ns += duration + 250u;
+        });
+    overflow_limiter.limit();
+    overflow_thread_cpu_ns = std::numeric_limits<std::uint64_t>::max();
+    require(throws<std::overflow_error>([&] { overflow_limiter.limit(); }) &&
+                overflow_limiter.wait_calls() == 0u,
+            "Nicht darstellbare CPU-Schuld startet einen praktisch unendlichen Wait.");
+
+    std::uint64_t burst_wall_ns = 0u;
+    std::uint64_t burst_thread_cpu_ns = 0u;
+    std::vector<std::uint64_t> burst_waits;
+    std::uint64_t burst_thread_cpu_reads = 0u;
+    HostWorkloadLimiter burst_limiter(
+        {85u, 100'000'000u, 2'000'000u},
+        [&] { return burst_wall_ns; },
+        [&] {
+            ++burst_thread_cpu_reads;
+            return burst_thread_cpu_ns;
+        },
+        [&](const std::uint64_t duration) {
+            burst_waits.push_back(duration);
+            burst_wall_ns += duration;
+        });
+    burst_limiter.limit_if_due();
+    burst_wall_ns += 500'000u;
+    burst_thread_cpu_ns += 500'000u;
+    burst_limiter.limit_if_due();
+    require(burst_thread_cpu_reads == 1u && burst_waits.empty(),
+            "Billiger Lastsafepoint liest die Thread-CPU vor Ablauf des 1-ms-Intervalls.");
+    burst_wall_ns += 19'500'000u;
+    burst_thread_cpu_ns += 19'500'000u;
+    burst_limiter.limit_if_due();
+    const auto waits_after_20ms_burst = burst_waits.size();
+    burst_wall_ns += 50'000'000u;
+    burst_thread_cpu_ns += 50'000'000u;
+    burst_limiter.limit();
+    require(waits_after_20ms_burst == 2u &&
+                burst_waits.size() == 7u &&
+                std::all_of(
+                    burst_waits.begin(), burst_waits.end(),
+                    [](const std::uint64_t duration) {
+                        return duration != 0u && duration <= 2'000'000u;
+                    }) &&
+                burst_limiter.measured_wall_time_ns() == burst_wall_ns &&
+                burst_limiter.measured_thread_cpu_time_ns() ==
+                    burst_thread_cpu_ns &&
+                burst_limiter.measured_cpu_percent_milli() <= 85'000u,
+            "20- bis 50-ms-CPU-Bursts werden nicht vollstaendig in begrenzten "
+            "Wait-Chunks auf hoechstens 85 Prozent abgerechnet.");
 
     EventScheduler scheduler;
     DreamcastMediaClock clock(scheduler, {600u, 60u, 60u, 2u});
@@ -147,6 +338,15 @@ int main() {
                 save_failure.state() == HostRuntimeState::Shutdown &&
                 save_failure.shutdown_error() == "persistent-storage-save-failed",
             "Persistenzfehler bleibt nach noexcept-Shutdown nicht reproduzierbar sichtbar.");
+    bool terminal_success_emitted = false;
+    try {
+        save_failure.require_clean_shutdown();
+        terminal_success_emitted = true;
+    } catch (const std::runtime_error&) {
+    }
+    require(!terminal_success_emitted,
+            "Persistenzfehler laesst eine terminale Erfolgsfreigabe nach "
+            "require_clean_shutdown zu.");
 
     EventScheduler failing_scheduler;
     DreamcastMediaClock failing_clock(failing_scheduler, {600u, 60u, 60u, 2u});

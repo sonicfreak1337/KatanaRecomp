@@ -1655,6 +1655,9 @@ void runtime_aot_owner_failover_regression() {
     ExecutableModule owner_a;
     owner_a.id = "runtime-aot-owner-a";
     owner_a.source_identity = "free-runtime-aot-owner-a-v1";
+    owner_a.content_identity = "sha256:runtime-aot-content";
+    owner_a.byte_identity = "sha256:runtime-aot-bytes";
+    owner_a.native_aot_template_id = "runtime-aot-template-a";
     owner_a.guest_start = address;
     owner_a.bytes = bytes;
     ExecutableModule owner_b = owner_a;
@@ -1696,6 +1699,12 @@ void runtime_aot_owner_failover_regression() {
                                block,
                                "runtime-aot-owner-failover",
                                true};
+            candidate.block.aot_template =
+                RuntimeAotTemplateContract{
+                    {target, target, 4u},
+                    2u,
+                    {},
+                    NativeAotTemplateValidationMode::RuntimeBlock};
             candidate.decode_candidate_validated = true;
             candidate.bounded_analysis_complete = true;
             candidate.ir_verified = true;
@@ -1722,11 +1731,20 @@ void runtime_aot_owner_failover_regression() {
                 materializer.last_failure() == MaterializationFailure::None,
             "Runtime-AOT-Bindung faellt beim ersten byteidentischen Owner-Unload aus.");
 
+    auto owner_c = owner_b;
+    owner_c.id = "runtime-aot-owner-c";
+    owner_c.source_identity = "free-runtime-aot-owner-c-v1";
+    owner_c.native_aot_template_id = "runtime-aot-template-b";
+    modules.publish_loaded_range(owner_c,
+                                 blocks,
+                                 tracker,
+                                 LoadedRangeWriteObservation::ObservedByteIdentical);
     modules.unload(owner_b.id, blocks, tracker);
     materializer.reconcile_inactive_origins();
     require(!blocks.active(*handle) &&
                 materializer.metrics().retained_validation_bytes == 0u,
-            "Runtime-AOT-Bindung ueberlebt den letzten physisch aktiven Owner.");
+            "Runtime-AOT-Bindung wechselte auf einen bytegleichen Owner mit "
+            "abweichender Template-ID.");
 }
 
 void relocation_owner_failover_regression() {

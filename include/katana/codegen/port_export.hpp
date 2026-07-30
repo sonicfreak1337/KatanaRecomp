@@ -48,8 +48,10 @@ struct PortExportOptions {
     std::string console_profile = "japan-ntsc";
     PortExportProgressCallback progress_callback = nullptr;
     // Optional persistent, local-only cache. Each AOT partition is looked up
-    // here before invoking the backend emitter.
+    // here before invoking the backend emitter. Caching remains disabled unless
+    // codegen_implementation_identity proves the exact exporter implementation.
     std::filesystem::path codegen_cache_root;
+    std::string codegen_implementation_identity;
     // Optional external, identity-bound game project. The caller owns the
     // definition and all referenced spans for the complete export call.
     const katana::runtime::GameProjectDefinition* game_project = nullptr;
@@ -61,6 +63,8 @@ struct PortExportOptions {
     // Export-time-only, hash-bound native entries for exact disc modules.
     // The caller owns the descriptors; they contain no source bytes or paths.
     std::span<const LatentAotEntryHint> latent_aot_entry_hints;
+    LatentAotDiscoveryMode latent_aot_discovery_mode =
+        LatentAotDiscoveryMode::HintsAndHeuristics;
 };
 
 struct PortExportResult {

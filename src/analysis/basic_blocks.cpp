@@ -64,6 +64,7 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
     }
 
     std::set<std::size_t> leaders;
+    std::set<std::size_t> normal_entry_leaders;
     leaders.insert(0u);
 
     for (std::size_t index = 1u; index < lines.size(); ++index) {
@@ -80,6 +81,7 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
 
             if (target != address_to_index.end()) {
                 leaders.insert(target->second);
+                normal_entry_leaders.insert(target->second);
             }
         }
 
@@ -99,11 +101,18 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
         if (const auto target = address_to_index.find(edge.target_address);
             target != address_to_index.end()) {
             leaders.insert(target->second);
+            normal_entry_leaders.insert(target->second);
         }
     }
     for (const auto address : additional_leaders) {
         if (const auto leader = address_to_index.find(address); leader != address_to_index.end()) {
-            leaders.insert(leader->second);
+            // A boundary alone is not proof that a physical delay slot also
+            // has a normal-entry context. Ignoring that split keeps the owner
+            // paired with its slot; direct and resolved targets above remain
+            // authoritative normal-entry evidence.
+            if (!lines[leader->second].is_delay_slot ||
+                normal_entry_leaders.contains(leader->second))
+                leaders.insert(leader->second);
         }
     }
 
@@ -121,9 +130,17 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
                                        : lines.size();
         const bool overlaps_normal_delay_slot =
             end_exclusive < lines.size() && end_exclusive > first_index &&
-            !lines[end_exclusive].is_delay_slot && !lines[end_exclusive - 1u].is_delay_slot &&
+            normal_entry_leaders.contains(end_exclusive) &&
+            !lines[end_exclusive - 1u].is_delay_slot &&
             lines[end_exclusive - 1u].instruction.has_delay_slot &&
             lines[end_exclusive].address == lines[end_exclusive - 1u].address + 2u;
+        const bool begins_normal_delay_slot_entry =
+            first_index > 0u &&
+            normal_entry_leaders.contains(first_index) &&
+            lines[first_index].is_delay_slot &&
+            !lines[first_index - 1u].is_delay_slot &&
+            lines[first_index - 1u].instruction.has_delay_slot &&
+            lines[first_index].address == lines[first_index - 1u].address + 2u;
         const auto copy_end = end_exclusive + (overlaps_normal_delay_slot ? 1u : 0u);
 
         BasicBlock block;
@@ -139,6 +156,12 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
             // instruction then has two contexts: it closes the owner block as
             // a delay slot and also starts a normal-entry block.
             block.lines.back().is_delay_slot = true;
+        }
+        if (begins_normal_delay_slot_entry) {
+            // Linear disassembly can attach the physical delay-slot tag only
+            // once. A leader at that same address is the distinct normal-entry
+            // context and must not inherit the owner's tag.
+            block.lines.front().is_delay_slot = false;
         }
 
         blocks.push_back(std::move(block));

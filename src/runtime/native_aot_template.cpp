@@ -355,6 +355,7 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     const auto* const resolved_loaded_module =
         modules_.resolve(physical_origin, 2u);
     bool has_loaded_module_definition = false;
+    bool loaded_template_identity_matched = false;
     bool loaded_content_identity_matched = false;
     bool loaded_byte_identity_matched = false;
     bool loaded_byte_identity_mismatched = false;
@@ -378,6 +379,14 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
                 if (!candidate.contains(physical_origin, 2u)) continue;
                 if (candidate.id.starts_with(runtime_write_module_id_prefix))
                     continue;
+                if (candidate.native_aot_template_id !=
+                    definition.source_module_id) {
+                    if (!loaded_template_identity_matched)
+                        loaded_module_missing_aot_detail =
+                            "loaded-module-template-id-mismatch";
+                    continue;
+                }
+                loaded_template_identity_matched = true;
                 if (candidate.content_identity !=
                     definition.expected_runtime_content_identity)
                     continue;
@@ -674,6 +683,9 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     }
     if (!match.has_value() && has_loaded_module_definition &&
         resolved_loaded_module != nullptr) {
+        if (!loaded_template_identity_matched)
+            return reject_missing_aot(
+                "loaded-module-template-id-mismatch", target);
         if (!loaded_content_identity_matched)
             return reject(NativeAotTemplateBindFailure::RuntimeContentIdentityMismatch);
         if (!loaded_byte_identity_matched && loaded_byte_identity_mismatched)

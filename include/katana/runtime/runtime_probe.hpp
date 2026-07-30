@@ -39,7 +39,7 @@ struct DreamcastRuntimeState;
 class SystemReplayLog;
 
 inline constexpr std::uint32_t runtime_probe_schema_version = 5u;
-inline constexpr std::uint64_t runtime_probe_device_schema_version = 5u;
+inline constexpr std::uint64_t runtime_probe_device_schema_version = 6u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
 inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
 inline constexpr std::size_t runtime_probe_replay_coverage_class_count = 12u;

@@ -476,8 +476,15 @@ void validate_game_project_definition(
     for (const auto& definition_template : definition.runtime_code_templates) {
         switch (definition_template.destination) {
         case NativeAotTemplateDestination::VbrRelative:
-        case NativeAotTemplateDestination::LoadedModule:
             break;
+        case NativeAotTemplateDestination::LoadedModule:
+            // A LoadedModule template is safe only when a proven runtime
+            // module carries its exact template ID. The current GameProject
+            // contract has no declarative Disc source binding that can
+            // publish that ID, so accepting this definition would create a
+            // template that can only fail later as MissingAot.
+            throw std::invalid_argument(
+                "game-project-loaded-module-template-source-binding-unavailable");
         default:
             throw std::invalid_argument(
                 "game-project-runtime-template-destination-invalid");
@@ -503,18 +510,8 @@ void validate_game_project_definition(
                 4u))
             throw std::invalid_argument(
                 "game-project-runtime-template-invalid");
-        if (definition_template.destination ==
-                NativeAotTemplateDestination::LoadedModule &&
-            (definition_template.expected_runtime_content_identity.empty() ||
-             definition_template.expected_runtime_byte_identity.empty()))
-            throw std::invalid_argument(
-                "game-project-runtime-template-identity-empty");
         if (!valid_game_project_sha256_identity(
-                definition_template.expected_source_identity) ||
-            (definition_template.destination ==
-                 NativeAotTemplateDestination::LoadedModule &&
-             !valid_game_project_sha256_identity(
-                 definition_template.expected_runtime_byte_identity)))
+                definition_template.expected_source_identity))
             throw std::invalid_argument(
                 "game-project-runtime-template-byte-identity-invalid");
 

@@ -34,6 +34,9 @@ struct FunctionRegisterValueSummary {
     // code-pointer evidence; it only decides whether a direct helper needs a
     // contextual summary instead of its already authoritative global summary.
     bool contextual_candidate_dependency = false;
+    // Inventory-only fail-closed provenance. The concrete return value may be
+    // a callback whose finite stack candidate was lost during analysis.
+    bool inventory_stack_callback_loss_unresolved = false;
     std::vector<std::uint32_t> values;
     std::vector<std::uint32_t> return_sites;
     std::vector<std::uint32_t> evidence_callees;
@@ -46,6 +49,9 @@ struct FunctionMemoryValueSummary {
     std::uint32_t address = 0u;
     bool complete = false;
     bool guarded = false;
+    // Address-scoped counterpart of the register provenance above. It remains
+    // attached to this exact memory cell across a function return.
+    bool inventory_stack_callback_loss_unresolved = false;
     std::vector<std::uint32_t> values;
 
     bool operator==(const FunctionMemoryValueSummary&) const = default;
@@ -56,9 +62,6 @@ struct FunctionValueSummary {
     std::vector<FunctionRegisterValueSummary> registers;
     bool memory_complete = false;
     std::vector<FunctionMemoryValueSummary> memory_values;
-    // A returned r0 or persistent-memory value carried an internal saved
-    // stack epoch that this compact public summary cannot represent.
-    bool inventory_saved_stack_epoch_escape_unresolved = false;
 
     bool operator==(const FunctionValueSummary&) const = default;
 };
@@ -142,6 +145,12 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t inventory_region_block_limited_regions = 0u;
     std::size_t forwarded_store_context_budget = 0u;
     std::size_t forwarded_store_context_limited_functions = 0u;
+    // Pass-local exact memoization is an optimization only. These two
+    // performance counters are scheduling- and run-local, not canonical
+    // analysis output. Misses above the private cache budget are evaluated
+    // normally and never truncate results.
+    std::size_t forwarded_store_evaluation_cache_hits = 0u;
+    std::size_t forwarded_store_evaluation_cache_misses = 0u;
     std::vector<ForwardedStoreContextLimitDiagnostic>
         forwarded_store_context_limit_diagnostics;
     std::size_t contextual_return_context_budget = 0u;
@@ -150,6 +159,9 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t contextual_return_evaluation_limited_functions = 0u;
     std::size_t abi_stack_argument_slot_budget = 0u;
     std::size_t abi_stack_argument_projection_truncated_functions = 0u;
+    // Peak number of local CFG block evaluations in one function analysis.
+    // This is diagnostic only and does not participate in truncation.
+    std::size_t maximum_local_fixpoint_iterations = 0u;
     bool inventory_candidate_values_truncated = false;
     bool abi_stack_base_unresolved = false;
 

@@ -524,7 +524,7 @@ Operation lower_operation(const katana::sh4::InstructionKind kind) {
     return Operation::Unknown;
 }
 
-Instruction lower_instruction(const katana::sh4::DisassemblyLine& source) {
+Instruction lower_instruction_impl(const katana::sh4::DisassemblyLine& source) {
     Instruction result;
 
     result.source_address = source.address;
@@ -587,6 +587,10 @@ Instruction lower_instruction(const katana::sh4::DisassemblyLine& source) {
 
 Operation lowering_operation_for_instruction(const katana::sh4::InstructionKind kind) noexcept {
     return lower_operation(kind);
+}
+
+Instruction lower_instruction(const katana::sh4::DisassemblyLine& source) {
+    return lower_instruction_impl(source);
 }
 
 std::string_view operation_name(const Operation operation) noexcept {

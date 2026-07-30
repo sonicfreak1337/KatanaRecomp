@@ -68,6 +68,14 @@ if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
             "Cannot inspect the Katana worktree: ${KATANA_GIT_STATUS_ERROR}"
         )
     endif()
+    if(NOT "${KATANA_GIT_COMMIT_ASSERTION}" STREQUAL "" AND
+       NOT "${KATANA_GIT_STATUS}" STREQUAL "")
+        message(
+            FATAL_ERROR
+            "KATANA_GIT_COMMIT requires a clean worktree at "
+            "${KATANA_GIT_HEAD}"
+        )
+    endif()
     if("${KATANA_GIT_STATUS}" STREQUAL "")
         set(KATANA_GIT_COMMIT "${KATANA_GIT_HEAD}")
         set(KATANA_SOURCE_IDENTITY_TRUSTED 1)
@@ -79,9 +87,8 @@ if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     endif()
 elseif(NOT "${KATANA_GIT_COMMIT_ASSERTION}" STREQUAL "")
     message(
-        WARNING
-        "Ignoring KATANA_GIT_COMMIT because the source identity cannot be "
-        "verified without a Git checkout"
+        FATAL_ERROR
+        "KATANA_GIT_COMMIT cannot be verified without an inspectable Git checkout"
     )
 endif()
 string(TOLOWER "${KATANA_GIT_COMMIT}" KATANA_GIT_COMMIT)
@@ -105,12 +112,6 @@ if(KATANA_SOURCE_IDENTITY_TRUSTED)
         VERBATIM
     )
 endif()
-
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in
-    ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
-    @ONLY
-)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -205,6 +206,17 @@ if(KATANA_COMPILER_CACHE)
     endif()
     set(CMAKE_CXX_COMPILER_LAUNCHER "${KATANA_COMPILER_CACHE_EXECUTABLE}")
 endif()
+
+set(KATANA_CONFIGURED_COMPILER_LAUNCHER "${CMAKE_CXX_COMPILER_LAUNCHER}")
+string(REPLACE "\\" "\\\\" KATANA_CONFIGURED_COMPILER_LAUNCHER
+       "${KATANA_CONFIGURED_COMPILER_LAUNCHER}")
+string(REPLACE "\"" "\\\"" KATANA_CONFIGURED_COMPILER_LAUNCHER
+       "${KATANA_CONFIGURED_COMPILER_LAUNCHER}")
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
+    @ONLY
+)
 
 if(KATANA_ENABLE_SANITIZERS)
     if(MSVC)
@@ -378,6 +390,11 @@ set(KATANA_RUNTIME_CORE_SOURCES
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
+if(WIN32)
+    list(APPEND KATANA_RUNTIME_CORE_SOURCES
+        src/runtime/host_video_d3d11.cpp
+    )
+endif()
 
 set(KATANA_SH4_DECODER_SOURCES
     src/decoder/decoder.cpp
@@ -410,6 +427,9 @@ function(katana_configure_runtime_objects target)
         target_compile_options(${target} PRIVATE /fp:strict)
     else()
         target_compile_options(${target} PRIVATE -frounding-math)
+    endif()
+    if(TARGET katana-source-identity)
+        add_dependencies(${target} katana-source-identity)
     endif()
 endfunction()
 
@@ -445,6 +465,25 @@ add_library(
 )
 set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)
 set_target_properties(katana_runtime_core PROPERTIES EXPORT_NAME runtime_core)
+
+function(katana_stamp_runtime_contract target)
+    set_target_properties(
+        ${target}
+        PROPERTIES
+            KATANA_PROJECT_VERSION "${PROJECT_VERSION}"
+            KATANA_RUNTIME_ABI_VERSION "${KATANA_RUNTIME_ABI_VERSION}"
+            KATANA_BLOCK_ABI_VERSION "${KATANA_BLOCK_ABI_VERSION}"
+            KATANA_PLATFORM_SERVICES_ABI_VERSION
+                "${KATANA_PLATFORM_SERVICES_ABI_VERSION}"
+            KATANA_PORT_PROJECT_CONTRACT_VERSION
+                "${KATANA_PORT_PROJECT_CONTRACT_VERSION}"
+            EXPORT_PROPERTIES
+                "KATANA_PROJECT_VERSION;KATANA_RUNTIME_ABI_VERSION;KATANA_BLOCK_ABI_VERSION;KATANA_PLATFORM_SERVICES_ABI_VERSION;KATANA_PORT_PROJECT_CONTRACT_VERSION"
+    )
+endfunction()
+
+katana_stamp_runtime_contract(katana_runtime)
+katana_stamp_runtime_contract(katana_runtime_core)
 
 # A static runtime built with sanitizers carries sanitizer-dependent ABI details
 # into every object file. In particular, MSVC's ASan-enabled STL emits
@@ -482,7 +521,7 @@ function(katana_configure_runtime_archive target)
         endif()
     endif()
     if(WIN32)
-        target_link_libraries(${target} PUBLIC bcrypt gdi32 user32 winmm)
+        target_link_libraries(${target} PUBLIC bcrypt d3d11 dxgi gdi32 user32 winmm)
     endif()
 endfunction()
 
@@ -537,6 +576,7 @@ add_library(katana_core STATIC
     src/codegen/backend.cpp
     src/codegen/cache.cpp
     src/codegen/cpp_emitter.cpp
+    src/codegen/latent_aot_analysis_cache.cpp
     src/codegen/latent_aot_registry.cpp
     src/codegen/metadata.cpp
     src/codegen/naming.cpp
@@ -1676,6 +1716,12 @@ add_test(NAME katana-pvr-framebuffer-tests COMMAND katana-pvr-framebuffer-tests)
 
 add_executable(katana-host-video-tests tests/runtime/host_video_tests.cpp)
 target_link_libraries(katana-host-video-tests PRIVATE katana_runtime)
+if(WIN32)
+    target_include_directories(
+        katana-host-video-tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
+    )
+endif()
 katana_enable_warnings(katana-host-video-tests)
 add_test(NAME katana-host-video-tests COMMAND katana-host-video-tests)
 
@@ -2428,6 +2474,16 @@ target_link_libraries(katana-latent-aot-registry-tests PRIVATE katana_core)
 katana_enable_warnings(katana-latent-aot-registry-tests)
 add_test(NAME katana-latent-aot-registry-tests COMMAND katana-latent-aot-registry-tests)
 
+add_executable(katana-latent-aot-analysis-cache-tests
+    tests/codegen/latent_aot_analysis_cache_tests.cpp
+)
+target_link_libraries(katana-latent-aot-analysis-cache-tests PRIVATE katana_core)
+katana_enable_warnings(katana-latent-aot-analysis-cache-tests)
+add_test(
+    NAME katana-latent-aot-analysis-cache-tests
+    COMMAND katana-latent-aot-analysis-cache-tests
+)
+
 add_executable(katana-port-export-tests tests/codegen/port_export_tests.cpp)
 target_link_libraries(katana-port-export-tests PRIVATE katana_core katana_runtime)
 katana_enable_warnings(katana-port-export-tests)
@@ -2440,9 +2496,20 @@ add_test(
         -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_port_cli.cmake
 )
+add_test(
+    NAME katana-build-contract-configuration-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+        -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_build_contract_configuration.cmake
+)
 set_tests_properties(
     katana-port-cli-tests
     PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
+)
+set_tests_properties(
+    katana-build-contract-configuration-tests
+    PROPERTIES TIMEOUT 180
 )
 add_test(
     NAME katana-counted-loop-differential-tests

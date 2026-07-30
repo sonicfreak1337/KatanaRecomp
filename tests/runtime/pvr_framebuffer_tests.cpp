@@ -130,10 +130,16 @@ int main() {
                                   blanked->source_height);
     const auto blanked_frame = blanked_framebuffer.capture(
         {}, blanked->base_offset, std::nullopt, blanked->border_rgba);
+    const auto entry_baseline =
+        capture_pvr_scanout_frame(registers, rgb888_vram);
     require(blanked->video_blank && blanked->border_rgba ==
                                          std::array<std::uint8_t, 4u>{0x12u, 0x34u, 0x56u, 0xFFu} &&
-                blanked_frame.rgba.front() == 0x12u && blanked_frame.rgba.back() == 0xFFu,
-            "VO_CONTROL-Blanking oder BORDER_COL erreicht die native Scanoutausgabe nicht.");
+                blanked_frame.rgba.front() == 0x12u &&
+                blanked_frame.rgba.back() == 0xFFu &&
+                entry_baseline.has_value() &&
+                entry_baseline->rgba == blanked_frame.rgba,
+            "VO_CONTROL-Blanking, BORDER_COL oder der nebenwirkungsfreie "
+            "Product-Entry-Snapshot erreicht die native Scanoutausgabe nicht.");
     const auto original_read_control = registers.read(pvr_register::FramebufferReadControl);
     const auto original_spg_control = registers.read(pvr_register::SpgControl);
     registers.write(pvr_register::FramebufferReadControl, original_read_control | 2u);

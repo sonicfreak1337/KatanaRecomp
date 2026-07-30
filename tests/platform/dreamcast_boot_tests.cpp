@@ -244,5 +244,63 @@ int main() {
             }),
             "Runtime-Image-ID darf das CLI-Trennzeichen nicht enthalten.");
 
+    runtime::NativeAotTemplate unsupported_loaded_template;
+    unsupported_loaded_template.source_module_id =
+        "external-loaded-template";
+    unsupported_loaded_template.expected_source_identity =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    unsupported_loaded_template.source_start = 0x8C200000u;
+    unsupported_loaded_template.extent = 4u;
+    unsupported_loaded_template.destination =
+        runtime::NativeAotTemplateDestination::LoadedModule;
+    unsupported_loaded_template.expected_runtime_content_identity =
+        game_project.identity.content_identity;
+    unsupported_loaded_template.expected_runtime_byte_identity =
+        unsupported_loaded_template.expected_source_identity;
+    const std::array unsupported_loaded_templates{
+        unsupported_loaded_template};
+    runtime::GameProjectDefinition unsupported_loaded_project;
+    unsupported_loaded_project.project_id =
+        "loaded-template-source-binding-regression";
+    unsupported_loaded_project.project_version = "1";
+    unsupported_loaded_project.identity = game_project.identity;
+    unsupported_loaded_project.runtime_code_templates =
+        unsupported_loaded_templates;
+    const auto rejects_unbound_loaded_template = [&] {
+        try {
+            runtime::validate_game_project_definition(
+                unsupported_loaded_project);
+        } catch (const std::invalid_argument& error) {
+            return std::string(error.what()) ==
+                   "game-project-loaded-module-template-source-binding-unavailable";
+        }
+        return false;
+    }();
+    require(
+        rejects_unbound_loaded_template,
+        "GameProject akzeptiert ein LoadedModule-Template ohne deklarative "
+        "SourceBinding oder meldet keinen typisierten Vertragsfehler.");
+
+    const auto unsupported_artifact_path =
+        std::filesystem::temp_directory_path() /
+        "katana-unbound-loaded-template.katana-game-project";
+    std::filesystem::remove(unsupported_artifact_path);
+    const auto artifact_rejects_unbound_loaded_template = [&] {
+        try {
+            static_cast<void>(runtime::GameProjectArtifact::write(
+                unsupported_artifact_path,
+                unsupported_loaded_project));
+        } catch (const std::invalid_argument& error) {
+            return std::string(error.what()) ==
+                   "game-project-loaded-module-template-source-binding-unavailable";
+        }
+        return false;
+    }();
+    require(
+        artifact_rejects_unbound_loaded_template &&
+            !std::filesystem::exists(unsupported_artifact_path),
+        "GameProject-Artifact serialisiert ein nicht bindbares LoadedModule-"
+        "Template oder verliert seinen typisierten Vertragsfehler.");
+
     std::cout << "BIOS-freier Dreamcast-Homebrew-Boot erfolgreich.\n";
 }
