@@ -5,6 +5,7 @@
 #include "katana/ir/lower.hpp"
 #include "katana/ir/verifier.hpp"
 #include "katana/sh4/disassembler.hpp"
+#include "../../src/analysis/guarded_native_entry_shape.hpp"
 
 #include <algorithm>
 #include <array>
@@ -107,6 +108,395 @@ void require_same_function_value_semantics(
                 parallel.budget_exhausted,
         "Der versionsvalidierte Parallel-Fixpunkt wich semantisch vom "
         "exakten seriellen FIFO-Ergebnis ab.");
+}
+
+katana::io::ExecutableImage
+image_with_callee(const std::vector<std::uint8_t>& callee);
+
+void verify_persistent_function_value_session() {
+    const std::vector<std::uint8_t> callee{
+        0x10u,
+        0xE0u, // mov #0x10,r0
+        0x0Bu,
+        0x00u, // rts
+        0x09u,
+        0x00u  // nop (delay)
+    };
+    const auto image = image_with_callee(callee);
+    const auto lines =
+        katana::sh4::disassemble(
+            image.segments().front().bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u>
+        boundaries{{{0u, 0u}, {0x20u, 0u}}};
+
+    katana::analysis::detail::FunctionValueAnalysisSession session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        first_shapes{image};
+    const auto first =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                {},
+                {},
+                first_shapes,
+                session);
+    const auto first_stats = session.statistics();
+
+    std::vector<katana::analysis::FunctionValueAnalysisProgress>
+        warm_progress;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        second_shapes{image};
+    const auto second =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                {},
+                [&warm_progress](const auto& progress) {
+                    warm_progress.push_back(progress);
+                },
+                second_shapes,
+                session);
+    const auto second_stats = session.statistics();
+    require_same_function_value_semantics(first, second);
+    require(
+        second_stats.hits > first_stats.hits &&
+            second_stats.entries != 0u &&
+            second_stats.bytes != 0u,
+        "Die analyseweite Function-Value-Session lieferte im identischen "
+        "zweiten Kandidatenvertrag keinen echten Warm-Hit.");
+    require(
+        !warm_progress.empty() &&
+            warm_progress.front().phase == "start" &&
+            warm_progress.back().phase == "complete" &&
+            warm_progress.back().active_workers == 0u &&
+            warm_progress.back().logical_evaluations != 0u &&
+            warm_progress.back().physical_evaluations <=
+                warm_progress.back().logical_evaluations &&
+            warm_progress.back().session_cache_hits != 0u,
+        "Der Function-Value-Progress meldete keinen sauberen "
+        "analyse-lokalen Start/Abschluss oder verlor seine Cache-/"
+        "Workerzaehler.");
+
+    std::vector<std::uint8_t> inventory_bytes(0x48u, 0x09u);
+    const auto put_inventory_u16 =
+        [&inventory_bytes](const std::size_t offset,
+                           const std::uint16_t value) {
+            inventory_bytes[offset] =
+                static_cast<std::uint8_t>(value);
+            inventory_bytes[offset + 1u] =
+                static_cast<std::uint8_t>(value >> 8u);
+        };
+    const auto put_inventory_u32 =
+        [&inventory_bytes](const std::size_t offset,
+                           const std::uint32_t value) {
+            inventory_bytes[offset] =
+                static_cast<std::uint8_t>(value);
+            inventory_bytes[offset + 1u] =
+                static_cast<std::uint8_t>(value >> 8u);
+            inventory_bytes[offset + 2u] =
+                static_cast<std::uint8_t>(value >> 16u);
+            inventory_bytes[offset + 3u] =
+                static_cast<std::uint8_t>(value >> 24u);
+        };
+    put_inventory_u16(0x00u, 0xD405u); // mov.l @(0x18,pc),r4
+    put_inventory_u16(0x02u, 0xB003u); // bsr 0x0c
+    put_inventory_u16(0x04u, 0x0009u);
+    put_inventory_u16(0x06u, 0x000Bu);
+    put_inventory_u16(0x08u, 0x0009u);
+    put_inventory_u16(0x0Cu, 0xE220u); // mov #0x20,r2
+    put_inventory_u16(0x0Eu, 0x2242u); // mov.l r4,@r2
+    put_inventory_u16(0x10u, 0x000Bu);
+    put_inventory_u16(0x12u, 0x0009u);
+    put_inventory_u32(0x18u, 0x40u);
+    put_inventory_u16(0x40u, 0x000Bu);
+    put_inventory_u16(0x42u, 0x0009u);
+    put_inventory_u16(0x44u, 0x000Bu);
+    put_inventory_u16(0x46u, 0x0009u);
+
+    katana::io::ExecutableImage inventory_image;
+    inventory_image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    inventory_image.add_segment({
+        ".persistent-session-inventory",
+        0u,
+        0u,
+        inventory_bytes.size(),
+        katana::io::SegmentKind::Mixed,
+        {true, true, true},
+        inventory_bytes});
+    inventory_image.add_entry_point(0u);
+    const auto inventory_lines =
+        katana::sh4::disassemble(inventory_bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 4u>
+        inventory_boundaries{{
+            {0u, 0u},
+            {0x0Cu, 0u},
+            {0x40u, 0u},
+            {0x44u, 0u}}};
+    katana::analysis::detail::FunctionValueAnalysisSession
+        inventory_session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        cold_inventory_shapes{inventory_image};
+    const auto cold_inventory =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                inventory_image,
+                inventory_lines,
+                inventory_boundaries,
+                {},
+                {},
+                cold_inventory_shapes,
+                inventory_session);
+    const auto cold_inventory_stats =
+        inventory_session.statistics();
+    require(
+        !cold_inventory.guarded_code_inventory
+             .stored_code_addresses.empty(),
+        "Der Session-Replay-Test erzeugte im Kaltlauf kein "
+        "Guarded-AOT-Inventar und koennte dessen Verlust daher nicht "
+        "erkennen.");
+
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        warm_inventory_shapes{inventory_image};
+    const auto warm_inventory =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                inventory_image,
+                inventory_lines,
+                inventory_boundaries,
+                {},
+                {},
+                warm_inventory_shapes,
+                inventory_session);
+    const auto warm_inventory_stats =
+        inventory_session.statistics();
+    require_same_function_value_semantics(
+        cold_inventory, warm_inventory);
+    require(
+        warm_inventory_stats.hits > cold_inventory_stats.hits &&
+            !warm_inventory.guarded_code_inventory
+                 .stored_code_addresses.empty(),
+        "Ein echter Function-Value-Warmtreffer spielte das nichtleere "
+        "Guarded-AOT-Inventar nicht exakt wieder ein.");
+
+    inventory_image.write_u32_le(0x18u, 0x44u);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        mutated_inventory_shapes{inventory_image};
+    const auto mutated_inventory =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                inventory_image,
+                inventory_lines,
+                inventory_boundaries,
+                {},
+                {},
+                mutated_inventory_shapes,
+                inventory_session);
+    const auto contains_inventory_target =
+        [](const auto& analysis, const std::uint32_t target) {
+            return std::any_of(
+                analysis.guarded_code_inventory
+                    .stored_code_addresses.begin(),
+                analysis.guarded_code_inventory
+                    .stored_code_addresses.end(),
+                [target](const auto& candidate) {
+                    return candidate.target_address == target;
+                });
+        };
+    require(
+        contains_inventory_target(mutated_inventory, 0x44u) &&
+            !contains_inventory_target(mutated_inventory, 0x40u) &&
+            inventory_session.statistics().misses != 0u,
+        "Eine In-place-Mutation desselben ExecutableImage wurde nicht "
+        "als neue Session-Generation gebunden oder lieferte ein altes "
+        "Literal-Inventar.");
+
+    auto shape_mutation_image = inventory_image;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        revision_bound_shapes{shape_mutation_image};
+    require(
+        revision_bound_shapes.classify(0x44u) ==
+            katana::analysis::detail::
+                GuardedNativeEntryShapeStatus::Valid,
+        "Der Shape-Cache erkannte den gueltigen Ausgangseinstieg nicht.");
+    shape_mutation_image.write_u32_le(0x44u, 0xFFFFFFFFu);
+    require(
+        revision_bound_shapes.classify(0x44u) ==
+            katana::analysis::detail::
+                GuardedNativeEntryShapeStatus::StructurallyInvalid,
+        "Der Shape-Cache verwendete nach einer Image-Mutation eine "
+        "veraltete gueltige Klassifikation.");
+
+    katana::analysis::detail::FunctionValueAnalysisSession
+        concurrently_reused_session;
+    std::barrier concurrent_start{3};
+    auto concurrent_plain = std::async(
+        std::launch::async,
+        [&] {
+            concurrent_start.arrive_and_wait();
+            katana::analysis::detail::
+                GuardedNativeEntryShapeCache shapes{image};
+            return katana::analysis::detail::
+                analyze_function_values_with_guarded_entry_cache(
+                    image,
+                    lines,
+                    boundaries,
+                    {},
+                    {},
+                    shapes,
+                    concurrently_reused_session);
+        });
+    auto concurrent_inventory = std::async(
+        std::launch::async,
+        [&] {
+            concurrent_start.arrive_and_wait();
+            // Deliberately construct against the other image: the analysis
+            // entrypoint must rebind this retained cache before classifying.
+            katana::analysis::detail::
+                GuardedNativeEntryShapeCache shapes{image};
+            return katana::analysis::detail::
+                analyze_function_values_with_guarded_entry_cache(
+                    inventory_image,
+                    inventory_lines,
+                    inventory_boundaries,
+                    {},
+                    {},
+                    shapes,
+                    concurrently_reused_session);
+        });
+    concurrent_start.arrive_and_wait();
+    const auto concurrent_plain_result =
+        concurrent_plain.get();
+    const auto concurrent_inventory_result =
+        concurrent_inventory.get();
+    require_same_function_value_semantics(
+        first, concurrent_plain_result);
+    require_same_function_value_semantics(
+        mutated_inventory, concurrent_inventory_result);
+
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        expanded_boundaries{{
+            {0u, 0u},
+            {0x10u, 0u},
+            {0x20u, 0u}}};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        expanded_shapes{image};
+    const auto expanded_cached =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                expanded_boundaries,
+                {},
+                {},
+                expanded_shapes,
+                session);
+    const auto expanded_stats = session.statistics();
+    require(
+        expanded_stats.hits > second_stats.hits &&
+            expanded_stats.misses > second_stats.misses,
+        "Eine neue unabhaengige Funktion invalidierte entweder alle warmen "
+        "Funktionsartefakte oder erzeugte keinen eigenen Miss.");
+    katana::analysis::detail::FunctionValueAnalysisSession
+        expanded_fresh_session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        expanded_fresh_shapes{image};
+    const auto expanded_fresh =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                expanded_boundaries,
+                {},
+                {},
+                expanded_fresh_shapes,
+                expanded_fresh_session);
+    require_same_function_value_semantics(
+        expanded_cached, expanded_fresh);
+
+    constexpr std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
+        changed_edges{{{
+            0x04u,
+            0x10u,
+            katana::analysis::ResolvedControlFlowKind::Jump,
+            true,
+            katana::analysis::ControlFlowEvidence::GuardedPartial,
+            {},
+            false}}};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        changed_shapes{image};
+    const auto changed_cached =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                changed_edges,
+                {},
+                changed_shapes,
+                session);
+    const auto changed_stats = session.statistics();
+    require(
+        changed_stats.misses > expanded_stats.misses,
+        "Eine geaenderte CFG-/Callee-Abhaengigkeit wurde faelschlich als "
+        "vollstaendiger Session-Hit behandelt.");
+
+    katana::analysis::detail::FunctionValueAnalysisSession
+        fresh_session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        fresh_shapes{image};
+    const auto changed_fresh =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                changed_edges,
+                {},
+                fresh_shapes,
+                fresh_session);
+    require_same_function_value_semantics(
+        changed_cached, changed_fresh);
+
+    katana::analysis::detail::FunctionValueAnalysisSession
+        tiny_session{1u, 1u};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        tiny_shapes{image};
+    const auto tiny =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                {},
+                {},
+                tiny_shapes,
+                tiny_session);
+    require_same_function_value_semantics(first, tiny);
+
+    katana::analysis::detail::FunctionValueAnalysisSession
+        evicting_session{1u, 1'024u * 1'024u * 1'024u};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        evicting_shapes{image};
+    const auto evicting =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                {},
+                {},
+                evicting_shapes,
+                evicting_session);
+    require_same_function_value_semantics(first, evicting);
+    require(
+        evicting_session.statistics().evictions != 0u,
+        "Ein Eintrag grosser Session-Cache uebte den deterministischen "
+        "LRU-Eviction-Pfad nicht aus.");
 }
 
 katana::io::ExecutableImage image_with_callee(const std::vector<std::uint8_t>& callee) {
@@ -981,6 +1371,138 @@ contextual_dereference_return_values() {
          true},
     }};
     return katana::analysis::analyze_function_values(image, lines, boundaries, edges);
+}
+
+struct MultiOwnerContextualResult {
+    katana::analysis::FunctionValueAnalysisResult values;
+    std::size_t resolution_roots = 0u;
+    std::size_t function_count = 0u;
+};
+
+MultiOwnerContextualResult
+multi_owner_contextual_return_values() {
+    std::vector<std::uint8_t> bytes(0x180u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0xE470u); // owner A object -> r4
+    put_u16(0x02u, 0xB00Du); // bsr owner A 0x20
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0xE474u); // owner B object -> r4
+    put_u16(0x08u, 0xB012u); // bsr owner B 0x30
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0x000Bu);
+    put_u16(0x0Eu, 0x0009u);
+
+    const auto put_owner = [&](const std::size_t address) {
+        put_u16(address + 0x00u, 0x410Bu); // candidate call -> 0x50
+        put_u16(address + 0x02u, 0x0009u);
+        put_u16(address + 0x04u, 0x6C03u); // mov r0,r12
+        put_u16(address + 0x06u, 0x63C2u); // mov.l @r12,r3
+        put_u16(address + 0x08u, 0x000Bu);
+        put_u16(address + 0x0Au, 0x0009u);
+    };
+    put_owner(0x20u);
+    put_owner(0x30u);
+
+    put_u16(0x50u, 0x6442u); // candidate: mov.l @r4,r4
+    put_u16(0x52u, 0xB005u); // bsr shared helper 0x60
+    put_u16(0x54u, 0x0009u);
+    put_u16(0x56u, 0x000Bu);
+    put_u16(0x58u, 0x0009u);
+    put_u16(0x60u, 0x6042u); // shared helper: mov.l @r4,r0
+    put_u16(0x62u, 0x000Bu);
+    put_u16(0x64u, 0x0009u);
+
+    put_u32(0x70u, 0x80u);
+    put_u32(0x74u, 0x88u);
+    put_u32(0x80u, 0x90u);
+    put_u32(0x88u, 0x98u);
+    put_u32(0x90u, 0xC0u);
+    put_u32(0x94u, 1u);
+    put_u32(0x98u, 0xD0u);
+    put_u32(0x9Cu, 1u);
+    put_u16(0xC0u, 0x000Bu);
+    put_u16(0xC2u, 0x0009u);
+    put_u16(0xD0u, 0x000Bu);
+    put_u16(0xD2u, 0x0009u);
+
+    std::vector<katana::analysis::FunctionBoundary> boundaries{
+        {0x00u, 0x10u},
+        {0x20u, 0x0Cu},
+        {0x30u, 0x0Cu},
+        {0x50u, 0x0Au},
+        {0x60u, 0x06u},
+    };
+    for (std::uint32_t address = 0x100u;
+         address < 0x180u;
+         address += 8u) {
+        if (address == 0x100u) {
+            put_u16(address, 0x2542u); // local mov.l r4,@r5 inventory probe
+            put_u16(address + 2u, 0x000Bu);
+            put_u16(address + 4u, 0x0009u);
+            boundaries.push_back({address, 0x06u});
+        } else {
+            put_u16(address, 0x000Bu);
+            put_u16(address + 2u, 0x0009u);
+            boundaries.push_back({address, 0x04u});
+        }
+    }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.set_initial_snapshot_entry(0u);
+    image.add_segment({".multi-owner-contextual-return",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u> edges{{
+        {0x20u,
+         0x50u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x30u,
+         0x50u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    std::atomic_size_t resolution_roots = 0u;
+    auto values = katana::analysis::analyze_function_values(
+        image,
+        lines,
+        boundaries,
+        edges,
+        [&resolution_roots](const auto& progress) {
+            resolution_roots.store(
+                progress.resolution_functions_total,
+                std::memory_order_relaxed);
+        });
+    return {std::move(values),
+            resolution_roots.load(std::memory_order_relaxed),
+            boundaries.size()};
 }
 
 katana::analysis::FunctionValueAnalysisResult
@@ -3506,6 +4028,8 @@ multi_callee_memory_saved_stack_alias_values() {
 } // namespace
 
 int main() {
+    verify_persistent_function_value_session();
+
     {
         katana::analysis::ParallelWorkExecutor executor(2u);
         std::atomic_size_t outer_count = 0u;
@@ -3989,6 +4513,55 @@ int main() {
                     !contextual.budget_exhausted,
                 "Kontexttaint ging beim Pointer-Dereferenzieren vor dem "
                 "direkten Helper-Return verloren.");
+
+        set_stack_diagnostics_for_serial_fixpoint(true);
+        const auto multi_owner_contextual_serial =
+            multi_owner_contextual_return_values();
+        set_stack_diagnostics_for_serial_fixpoint(false);
+        const auto multi_owner_contextual_parallel =
+            multi_owner_contextual_return_values();
+        require_same_function_value_semantics(
+            multi_owner_contextual_serial.values,
+            multi_owner_contextual_parallel.values);
+        require(
+                multi_owner_contextual_serial.resolution_roots ==
+                    multi_owner_contextual_parallel.resolution_roots &&
+                multi_owner_contextual_parallel.resolution_roots == 5u &&
+                multi_owner_contextual_parallel.resolution_roots <
+                    multi_owner_contextual_parallel.function_count,
+            "Die syntaktische Resolution-Root-Auswahl verwarf einen lokalen "
+            "Long-Store/Load oder wertete weiterhin reine RTS-Funktionen aus "
+            "(roots=" +
+                std::to_string(
+                    multi_owner_contextual_parallel.resolution_roots) +
+                ", functions=" +
+                std::to_string(
+                    multi_owner_contextual_parallel.function_count) +
+                ").");
+        const auto* multi_owner_table_a = returned_table_candidate(
+            multi_owner_contextual_parallel.values, 0x90u);
+        const auto* multi_owner_table_b = returned_table_candidate(
+            multi_owner_contextual_parallel.values, 0x98u);
+        require(
+            multi_owner_table_a != nullptr &&
+                multi_owner_table_a->target_addresses ==
+                    std::vector<std::uint32_t>{0xC0u, 0xD0u} &&
+                multi_owner_table_b != nullptr &&
+                multi_owner_table_b->target_addresses ==
+                    std::vector<std::uint32_t>{0xD0u} &&
+                !multi_owner_contextual_parallel.values
+                     .guarded_code_inventory.walk_diagnostics.truncated(),
+            "Der globale Contextual-Return-Fixpunkt verlor einen der beiden "
+            "Owner am gemeinsamen Helper oder meldete einen falschen "
+            "Budgetverlust (table_a=" +
+                std::to_string(multi_owner_table_a != nullptr) +
+                ", table_b=" +
+                std::to_string(multi_owner_table_b != nullptr) +
+                ", truncated=" +
+                std::to_string(
+                    multi_owner_contextual_parallel.values
+                        .guarded_code_inventory.walk_diagnostics.truncated()) +
+                ").");
 
         const auto contextual_budget =
             contextual_read_contract_and_fixpoint_budget_values();

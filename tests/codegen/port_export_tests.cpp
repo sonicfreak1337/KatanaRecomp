@@ -1496,6 +1496,72 @@ int run_test(const int argc, char* argv[]) {
                                 return phase.starts_with("control-flow-complete-");
                             }),
             "Portexport verliert budgetierte Kontrollfluss-Fixpunktzaehler.");
+
+    auto analysis_cache_options = options;
+    analysis_cache_options.analysis_cache_root =
+        fixture.root / "global-analysis-cache";
+    analysis_cache_options.codegen_cache_root =
+        fixture.root / "analysis-cache-codegen";
+    analysis_cache_options.analysis_implementation_identity =
+        std::string(64u, 'a');
+    analysis_cache_options.codegen_implementation_identity =
+        std::string(64u, 'b');
+    const auto analysis_cache_cold =
+        export_dreamcast_port_project(
+            gdi,
+            fixture.root / "analysis-cache-cold-port",
+            analysis_cache_options);
+    require(
+        !analysis_cache_cold.boot_analysis_cache_hit &&
+            analysis_cache_cold.boot_analysis_pipeline_runs == 1u &&
+            std::find(
+                analysis_cache_cold.checkpoints.begin(),
+                analysis_cache_cold.checkpoints.end(),
+                "analysis-ir-positive-cache-disabled") !=
+                analysis_cache_cold.checkpoints.end(),
+        "Kalter Export markierte den positiven Bootcache nicht fail-closed.");
+
+    analysis_cache_options.codegen_implementation_identity =
+        std::string(64u, 'c');
+    const auto analysis_cache_warm =
+        export_dreamcast_port_project(
+            gdi,
+            fixture.root / "analysis-cache-warm-port",
+            analysis_cache_options);
+    require(
+        !analysis_cache_warm.boot_analysis_cache_hit &&
+            analysis_cache_warm.boot_analysis_pipeline_runs == 1u &&
+            analysis_cache_warm.codegen_cache_misses != 0u &&
+            std::find(
+                analysis_cache_warm.checkpoints.begin(),
+                analysis_cache_warm.checkpoints.end(),
+                "analysis-ir-positive-cache-disabled") !=
+                analysis_cache_warm.checkpoints.end(),
+        "Warmer Export konsumierte einen positiven Bootcache oder liess "
+        "Codegen faelschlich treffen. hit=" +
+            std::to_string(
+                analysis_cache_warm.boot_analysis_cache_hit) +
+            " runs=" +
+            std::to_string(
+                analysis_cache_warm.boot_analysis_pipeline_runs) +
+            " codegen_misses=" +
+            std::to_string(
+                analysis_cache_warm.codegen_cache_misses));
+
+    analysis_cache_options.analysis_implementation_identity =
+        std::string(64u, 'e');
+    analysis_cache_options.codegen_implementation_identity =
+        std::string(64u, 'f');
+    const auto analysis_cache_identity_miss =
+        export_dreamcast_port_project(
+            gdi,
+            fixture.root / "analysis-cache-identity-port",
+            analysis_cache_options);
+    require(
+        !analysis_cache_identity_miss.boot_analysis_cache_hit &&
+            analysis_cache_identity_miss.boot_analysis_pipeline_runs == 1u,
+        "Analyzer-Identitaetswechsel traf einen fremden Boot-Analysecache.");
+
     require(std::filesystem::exists(output / "content" / "game.katana-install") &&
                 !std::filesystem::exists(output / "content" / "game.katana-disc") &&
                 read_text(output / ".gitignore").find("*.katana-disc") != std::string::npos &&
@@ -1828,13 +1894,18 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 latent_dispatch.find(latent_recipe.content_identity) != std::string::npos &&
                 latent_main.find(
-                    "packed->info().tracks.size(), packed->info().content_identity)") !=
+                    "packed->info().tracks.size(), packed->info().content_identity,\n"
+                    "                    runtime_startup_progress);") !=
                     std::string::npos &&
-                latent_main.find("auto gdi = katana::runtime::GdiDiscSource::open(source)") !=
+                latent_main.find(
+                    "auto gdi = katana::runtime::GdiDiscSource::open(\n"
+                    "                    source, runtime_startup_progress);") !=
                     std::string::npos &&
                 latent_main.find(
                     "gdi->descriptor().tracks.size(), "
-                    "std::string(expected_content_identity))") != std::string::npos &&
+                    "std::string(expected_content_identity),\n"
+                    "                    runtime_startup_progress);") !=
+                    std::string::npos &&
                 latent_dispatch.find("ENGINE.BIN") == std::string::npos &&
                 latent_dispatch.find("ENGINE_COPY.BIN") == std::string::npos &&
                 latent_dispatch.find("UNHINTED.BIN") == std::string::npos &&
@@ -4277,6 +4348,24 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_RUNTIME_PREFIX \"\" CACHE PATH") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
+                    .find("set(KATANA_RUNTIME_BUILD_TARGETS \"\" CACHE FILEPATH") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("include(\"${KATANA_RUNTIME_BUILD_TARGETS}\")") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("find_package(Threads REQUIRED)") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("IMPORTED_CONFIGURATIONS)") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("MAP_IMPORTED_CONFIG_RELWITHDEBINFO") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("Katana runtime import has no optimized configuration") !=
+                std::string::npos &&
+            read_text(output / "CMakeLists.txt")
                     .find("unset(KatanaRecomp_DIR CACHE)") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("find_package(KatanaRecomp CONFIG REQUIRED PATHS "
@@ -4287,7 +4376,7 @@ int run_test(const int argc, char* argv[]) {
                           "\"${CMAKE_BINARY_DIR}/katana-runtime\" EXCLUDE_FROM_ALL)") !=
                 std::string::npos &&
             read_text(output / "CMakeLists.txt")
-                    .find("set(KATANA_PORT_EXPECTED_RUNTIME_ABI_VERSION \"83\")") !=
+                    .find("set(KATANA_PORT_EXPECTED_RUNTIME_ABI_VERSION \"85\")") !=
                 std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_PORT_EXPECTED_BLOCK_ABI_VERSION \"5\")") !=
@@ -4297,7 +4386,7 @@ int run_test(const int argc, char* argv[]) {
                           "\"13\")") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_PORT_EXPECTED_PROJECT_CONTRACT_VERSION "
-                          "\"74\")") != std::string::npos &&
+                          "\"75\")") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("katana_require_runtime_contract("
                           "\"${KATANA_PORT_RUNTIME_TARGET}\")") !=
@@ -4580,6 +4669,21 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp")
                     .find("KATANA_HOST_WORKLOAD_LIMITER") !=
                 std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_RUNTIME_PROGRESS operation=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("katana::ProgressOperation::RuntimeStartup") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_RUNTIME_PARALLEL jobs=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("destination, runtime_progress") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("source, runtime_startup_progress") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp").find("mutable_storage->save") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KATANA_HOST_PACING_ERROR") !=
@@ -4611,6 +4715,22 @@ int run_test(const int argc, char* argv[]) {
                     .find("$env:KATANA_GUEST_CYCLE_BUDGET =") ==
                 std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    require(
+        generated_main.find("KATANA_HOST_PROCESS_CPU_PERCENT") !=
+                std::string::npos &&
+            generated_main.find(
+                "// Keep one runaway guest thread below a permanently busy\n"
+                "            // logical CPU even when guest-time pacing is already late.\n"
+                "            if (text == nullptr || *text == '\\0')\n"
+                "                return std::uint32_t{85u};") !=
+                std::string::npos &&
+            generated_main.find(
+                "configured_process_cpu_percent,\n"
+                "                static_cast<std::uint32_t>(\n"
+                "                    state.aica_registers->render_job_capacity())") !=
+                std::string::npos,
+        "Portprojekt verdrahtet die Hauptthread- und Prozess-CPU-Grenzen "
+        "nicht mit der Runtime-Workerkapazitaet.");
     const auto terminal_summary_buffer =
         generated_main.find("std::ostringstream product_terminal_summary;");
     const auto normal_host_shutdown =
@@ -4657,10 +4777,23 @@ int run_test(const int argc, char* argv[]) {
         "oder ein geordnet klassifizierter Lifecycle-/Runtime-Vertragsfehler "
         "wird vor der gepufferten Terminalausgabe zur Runtime-Exception.");
     require(
-        generated_main.find("workload_limiter_->limit_if_due();") !=
+        generated_main.find(
+            "auto* active_workload_limiter = workload_limiter->enabled()\n"
+            "            ? &*workload_limiter : nullptr;") !=
+                std::string::npos &&
+            generated_main.find("           active_workload_limiter,\n") !=
+                std::string::npos &&
+            generated_main.find("           &*workload_limiter,\n") ==
                 std::string::npos &&
             generated_main.find(
-                "workload_limiter_->limit();\n"
+                "active_workload_limiter != nullptr)\n"
+                "            active_workload_limiter->limit();") !=
+                std::string::npos &&
+            generated_main.find("workload_limiter_->limit_if_due();") !=
+                std::string::npos &&
+            generated_main.find(
+                "result.processed_events != 0u)\n"
+                "            workload_limiter_->limit();\n"
                 "        return {result.guest_cycle") !=
                 std::string::npos &&
             generated_main.find("workload_limit_call_quantum") ==
@@ -4670,6 +4803,10 @@ int run_test(const int argc, char* argv[]) {
             generated_main.find("host_cpu_measured_thread_cpu_ns=") !=
                 std::string::npos &&
             generated_main.find("host_cpu_measured_percent_milli=") !=
+                std::string::npos &&
+            generated_main.find("host_cpu_measured_process_cpu_ns=") !=
+                std::string::npos &&
+            generated_main.find("host_cpu_measured_process_percent_milli=") !=
                 std::string::npos,
         "Produkt-Wiring nutzt weiterhin grobe Call-Quanten oder verliert "
         "gemessene CPU-Telemetrie nach schweren Scheduler-/Framepfaden.");

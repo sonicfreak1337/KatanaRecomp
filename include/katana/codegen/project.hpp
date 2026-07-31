@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/codegen/cache.hpp"
+#include "katana/progress.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -18,6 +19,7 @@ struct ProjectWriteOptions {
     std::size_t parallel_jobs = 1u;
     CodegenCache* cache = nullptr;
     std::string cache_key;
+    katana::ProgressReporter progress;
 };
 
 struct ProjectWriteResult {

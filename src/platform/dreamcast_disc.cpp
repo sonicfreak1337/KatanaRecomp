@@ -203,8 +203,12 @@ DreamcastBootMetadata parse_dreamcast_boot_metadata(const std::span<const std::u
     return result;
 }
 
-DreamcastDiscBoot load_dreamcast_gdi_boot(const std::filesystem::path& descriptor_path) {
-    auto boot = runtime::load_dreamcast_runtime_boot(descriptor_path);
+DreamcastDiscBoot load_dreamcast_gdi_boot(
+    const std::filesystem::path& descriptor_path,
+    const ProgressReporter& progress) {
+    auto boot = runtime::load_dreamcast_runtime_boot(
+        descriptor_path,
+        progress);
     auto source = std::dynamic_pointer_cast<runtime::GdiDiscSource>(boot.source);
     if (!source) throw std::logic_error("GDI-Boot besitzt keine GDI-DiscSource.");
     return {std::move(source),

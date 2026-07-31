@@ -15,7 +15,7 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t native_host_runtime_contract_version = 2u;
 inline constexpr std::uint32_t host_pacing_contract_version = 1u;
-inline constexpr std::uint32_t host_workload_limiter_contract_version = 1u;
+inline constexpr std::uint32_t host_workload_limiter_contract_version = 2u;
 inline constexpr std::uint64_t host_workload_limiter_maximum_wait_ceiling_ns =
     2'000'000u;
 inline constexpr std::uint64_t host_workload_limiter_safepoint_interval_ns =
@@ -41,6 +41,7 @@ struct HostPacingConfig {
 using HostMonotonicNow = std::function<std::uint64_t()>;
 using HostWaitUntil = std::function<void(std::uint64_t)>;
 using HostThreadCpuNow = std::function<std::uint64_t()>;
+using HostProcessCpuNow = std::function<std::uint64_t()>;
 using HostWaitFor = std::function<void(std::uint64_t)>;
 
 class HostPacingException final : public std::runtime_error {
@@ -95,6 +96,12 @@ struct HostWorkloadLimiterConfig {
     std::uint32_t target_cpu_percent = 100u;
     std::uint64_t accounting_window_ns = 100'000'000u;
     std::uint64_t maximum_wait_ns = 2'000'000u;
+    // Aggregate process CPU is expressed as a percentage of the available
+    // parallel capacity. For example, 25 percent at capacity 24 permits an
+    // average of six fully busy logical CPUs while still allowing short,
+    // latency-friendly bursts across all workers.
+    std::uint32_t target_process_cpu_percent = 100u;
+    std::uint32_t process_cpu_capacity = 1u;
 };
 
 class HostWorkloadLimiter final {
@@ -102,7 +109,8 @@ class HostWorkloadLimiter final {
     explicit HostWorkloadLimiter(HostWorkloadLimiterConfig config = {},
                                  HostMonotonicNow wall_now = {},
                                  HostThreadCpuNow thread_cpu_now = {},
-                                 HostWaitFor wait_for = {});
+                                 HostWaitFor wait_for = {},
+                                 HostProcessCpuNow process_cpu_now = {});
     // Limits host work only. Guest cycles and device deadlines remain authoritative.
     void limit();
     // Cheap wall-clock safepoint. Thread CPU is sampled and debt is settled only
@@ -113,31 +121,43 @@ class HostWorkloadLimiter final {
     [[nodiscard]] bool enabled() const noexcept;
     [[nodiscard]] bool initialized() const noexcept;
     [[nodiscard]] std::uint32_t target_cpu_percent() const noexcept;
+    [[nodiscard]] std::uint32_t target_process_cpu_percent() const noexcept;
+    [[nodiscard]] std::uint32_t process_cpu_capacity() const noexcept;
     [[nodiscard]] std::uint64_t wait_calls() const noexcept;
     [[nodiscard]] std::uint64_t wait_time_ns() const noexcept;
     [[nodiscard]] std::uint64_t measured_wall_time_ns() const noexcept;
     [[nodiscard]] std::uint64_t measured_thread_cpu_time_ns() const noexcept;
+    [[nodiscard]] std::uint64_t measured_process_cpu_time_ns() const noexcept;
     // 85 percent is serialized as 85000.
     [[nodiscard]] std::uint64_t measured_cpu_percent_milli() const noexcept;
+    // Aggregate process CPU may exceed 100000 when multiple workers run.
+    [[nodiscard]] std::uint64_t measured_process_cpu_percent_milli() const noexcept;
     [[nodiscard]] std::string serialize_status_json() const;
 
   private:
     void limit_at(std::uint64_t wall_ns);
     void observe_sample(std::uint64_t wall_ns,
-                        std::uint64_t thread_cpu_ns) noexcept;
-    void rebase(std::uint64_t wall_ns, std::uint64_t thread_cpu_ns) noexcept;
+                        std::uint64_t thread_cpu_ns,
+                        std::uint64_t process_cpu_ns) noexcept;
+    void rebase(std::uint64_t wall_ns,
+                std::uint64_t thread_cpu_ns,
+                std::uint64_t process_cpu_ns) noexcept;
     HostWorkloadLimiterConfig config_;
     HostMonotonicNow wall_now_;
     HostThreadCpuNow thread_cpu_now_;
     HostWaitFor wait_for_;
+    HostProcessCpuNow process_cpu_now_;
     std::uint64_t anchor_wall_ns_ = 0u;
     std::uint64_t anchor_thread_cpu_ns_ = 0u;
+    std::uint64_t anchor_process_cpu_ns_ = 0u;
     std::uint64_t last_wall_ns_ = 0u;
     std::uint64_t last_thread_cpu_ns_ = 0u;
+    std::uint64_t last_process_cpu_ns_ = 0u;
     std::uint64_t wait_calls_ = 0u;
     std::uint64_t wait_time_ns_ = 0u;
     std::uint64_t measured_wall_time_ns_ = 0u;
     std::uint64_t measured_thread_cpu_time_ns_ = 0u;
+    std::uint64_t measured_process_cpu_time_ns_ = 0u;
     bool initialized_ = false;
 };
 

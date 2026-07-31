@@ -55,7 +55,8 @@ class PackedDiscSource final : public DiscSource {
   public:
     using DiscSource::read;
     ~PackedDiscSource() override;
-    [[nodiscard]] static std::shared_ptr<PackedDiscSource> open(const std::filesystem::path& path);
+    [[nodiscard]] static std::shared_ptr<PackedDiscSource>
+    open(const std::filesystem::path& path, const ProgressReporter& progress = {});
     [[nodiscard]] std::uint64_t size() const noexcept override;
     [[nodiscard]] const std::string& identity() const noexcept override;
     [[nodiscard]] std::vector<DiscTrackLayout> layout() const override;
@@ -67,7 +68,7 @@ class PackedDiscSource final : public DiscSource {
     [[nodiscard]] std::vector<std::uint8_t> read_raw_sectors(std::uint32_t track_number,
                                                              std::uint64_t first_sector,
                                                              std::size_t count) const;
-    void verify_all_chunks() const;
+    void verify_all_chunks(const ProgressReporter& progress = {}) const;
     [[nodiscard]] std::size_t chunk_cache_size() const noexcept;
     [[nodiscard]] std::size_t chunk_cache_capacity() const noexcept;
 
@@ -98,8 +99,10 @@ class PackedDiscSource final : public DiscSource {
 [[nodiscard]] PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
                                                const std::filesystem::path& destination,
                                                std::string job_generation,
-                                               std::string_view expected_content_identity = {});
-[[nodiscard]] std::string packed_disc_content_identity(const GdiDiscSource& source);
+                                               std::string_view expected_content_identity = {},
+                                               const ProgressReporter& progress = {});
+[[nodiscard]] std::string packed_disc_content_identity(const GdiDiscSource& source,
+                                                       const ProgressReporter& progress = {});
 [[nodiscard]] std::string
 format_packed_disc_manifest(const PackedDiscInfo& info,
                             std::string_view pack_sha256,

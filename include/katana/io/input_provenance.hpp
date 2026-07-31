@@ -1,5 +1,7 @@
 #pragma once
 
+#include "katana/progress.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -30,11 +32,15 @@ struct BuildProvenance {
     std::vector<InputProvenance> inputs;
 };
 
+using InputChunkCallback = std::function<void(std::uint64_t file_offset, std::string_view bytes)>;
+
 [[nodiscard]] std::string sha256_bytes(std::string_view bytes);
 [[nodiscard]] InputProvenance
 capture_input_provenance(std::string role,
                          const std::filesystem::path& path,
-                         const std::function<void()>& checkpoint = {});
+                         const std::function<void()>& checkpoint = {},
+                         const ProgressReporter& progress = {},
+                         const InputChunkCallback& chunk_callback = {});
 [[nodiscard]] std::string make_portable_build_identity(const BuildProvenance& provenance);
 [[nodiscard]] std::string format_build_provenance_json(const BuildProvenance& provenance);
 

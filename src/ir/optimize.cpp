@@ -520,13 +520,35 @@ OptimizationResult simplify_load_store(Function& function) {
 }
 
 OptimizationPipelineReport optimize_program(std::vector<Function>& program,
-                                            const OptimizationOptions& options) {
+                                            const OptimizationOptions& options,
+                                            const katana::ProgressReporter& progress) {
     OptimizationPipelineReport report;
-    if (!options.enabled) return report;
+    const auto enabled_passes =
+        static_cast<std::size_t>(options.constant_folding) +
+        static_cast<std::size_t>(options.copy_propagation) +
+        static_cast<std::size_t>(options.dead_code_elimination) +
+        static_cast<std::size_t>(options.cfg_simplification) +
+        static_cast<std::size_t>(
+            options.load_store_simplification);
+    auto optimization_progress = progress.begin(
+        katana::ProgressOperation::IrOptimization,
+        katana::ProgressUnit::Steps,
+        options.enabled
+            ? std::optional<std::uint64_t>(
+                  enabled_passes * program.size())
+            : std::nullopt,
+        "ir-optimization");
+    if (!options.enabled) {
+        optimization_progress.skipped();
+        return report;
+    }
 
     using Pass = OptimizationResult (*)(Function&);
     const auto run_pass =
-        [&program, &options, &report](const char* name, const bool enabled, const Pass pass) {
+        [&program, &options, &report, &optimization_progress](
+            const char* name,
+            const bool enabled,
+            const Pass pass) {
             if (!enabled) return;
             OptimizationPassReport pass_report;
             pass_report.name = name;
@@ -535,6 +557,7 @@ OptimizationPipelineReport optimize_program(std::vector<Function>& program,
             }
             for (auto& function : program) {
                 pass_report.changes += pass(function).changes;
+                optimization_progress.advance(1u);
             }
             if (options.capture_dumps) {
                 pass_report.after = emit_ir_text(program);
@@ -548,6 +571,7 @@ OptimizationPipelineReport optimize_program(std::vector<Function>& program,
     run_pass("dead-code-elimination", options.dead_code_elimination, eliminate_dead_code);
     run_pass("cfg-simplification", options.cfg_simplification, simplify_cfg);
     run_pass("load-store-simplification", options.load_store_simplification, simplify_load_store);
+    optimization_progress.complete();
     return report;
 }
 

@@ -3,6 +3,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/ir/ir.hpp"
+#include "katana/progress.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <span>
@@ -29,7 +30,8 @@ lower_function(std::span<const katana::sh4::DisassemblyLine> lines,
 [[nodiscard]] std::vector<Function>
 lower_program(std::span<const katana::sh4::DisassemblyLine> lines,
               std::span<const katana::analysis::FunctionInfo> functions,
-              std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges = {});
+              std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges = {},
+              const katana::ProgressReporter& progress = {});
 
 // Native product code may leave its owner immediately after an architectural
 // state change to accept an interrupt. These continuations are execution
@@ -44,6 +46,7 @@ architectural_safepoint_block_leaders(
 // slot; an owner/slot pair is an atomic basic-block terminator.
 [[nodiscard]] std::vector<Function>
 lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis,
-              std::span<const std::uint32_t> additional_block_leaders = {});
+              std::span<const std::uint32_t> additional_block_leaders = {},
+              const katana::ProgressReporter& progress = {});
 
 } // namespace katana::ir

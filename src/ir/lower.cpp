@@ -1130,12 +1130,15 @@ Function lower_function(const LoweringContext& context,
 
 std::vector<Function>
 lower_program(const LoweringContext& context,
-              const std::span<const katana::analysis::FunctionInfo> functions) {
+              const std::span<const katana::analysis::FunctionInfo> functions,
+              katana::ProgressScope* const progress = nullptr) {
     std::vector<Function> result;
     result.reserve(functions.size());
 
-    for (const auto& function : functions)
+    for (const auto& function : functions) {
         result.push_back(lower_function(context, function));
+        if (progress != nullptr) progress->advance(1u);
+    }
 
     std::sort(result.begin(), result.end(), [](const Function& left, const Function& right) {
         return left.entry_address < right.entry_address;
@@ -1167,7 +1170,13 @@ lower_function(const std::span<const katana::sh4::DisassemblyLine> lines,
 std::vector<Function>
 lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
               const std::span<const katana::analysis::FunctionInfo> functions,
-              const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges) {
+              const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges,
+              const katana::ProgressReporter& progress) {
+    auto lowering_progress = progress.begin(
+        katana::ProgressOperation::IrGeneration,
+        katana::ProgressUnit::Functions,
+        functions.size(),
+        "ir-lowering");
     std::vector<std::uint32_t> function_entries;
     function_entries.reserve(functions.size() * 2u);
     for (const auto& function : functions) {
@@ -1183,7 +1192,12 @@ lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
     }
     const auto source_blocks =
         katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
-    return lower_program(LoweringContext(source_blocks, resolved_edges), functions);
+    auto result = lower_program(
+        LoweringContext(source_blocks, resolved_edges),
+        functions,
+        &lowering_progress);
+    lowering_progress.complete();
+    return result;
 }
 
 std::vector<std::uint32_t> architectural_safepoint_block_leaders(
@@ -1202,7 +1216,13 @@ std::vector<std::uint32_t> architectural_safepoint_block_leaders(
 }
 
 std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis,
-                                    const std::span<const std::uint32_t> additional_block_leaders) {
+                                    const std::span<const std::uint32_t> additional_block_leaders,
+                                    const katana::ProgressReporter& progress) {
+    auto lowering_progress = progress.begin(
+        katana::ProgressOperation::IrGeneration,
+        katana::ProgressUnit::Functions,
+        std::nullopt,
+        "ir-preparation-and-lowering");
     std::map<std::uint32_t, std::uint32_t> boundary_by_entry;
     for (const auto& function : analysis.recursive.functions) {
         if (!katana::analysis::control_flow_evidence_proven(
@@ -1368,10 +1388,12 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     const auto lowering_blocks = katana::analysis::build_basic_blocks(
         analysis.recursive.instructions, analysis.resolved_edges, all_entries);
     const LoweringContext context(lowering_blocks, analysis.resolved_edges);
-    auto program = lower_program(context, functions);
+    auto program =
+        lower_program(context, functions, &lowering_progress);
     for (const auto& supplemental : supplemental_functions) {
         auto supplemental_ir = lower_function(context, supplemental);
         program.push_back(std::move(supplemental_ir));
+        lowering_progress.advance(1u);
     }
     std::sort(program.begin(), program.end(), [](const Function& left, const Function& right) {
         return left.entry_address < right.entry_address;
@@ -1407,6 +1429,7 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
             }
         }
     }
+    lowering_progress.complete();
     return program;
 }
 

@@ -414,6 +414,8 @@ class PvrFramebuffer final {
                                    std::optional<std::array<std::uint8_t, 4u>> solid_color =
                                        std::nullopt);
     [[nodiscard]] std::uint64_t presented_frames() const noexcept;
+    [[nodiscard]] std::size_t capture_job_capacity() const noexcept;
+    [[nodiscard]] std::size_t last_capture_job_count() const noexcept;
 
   private:
     std::uint32_t width_ = 0u;
@@ -427,6 +429,7 @@ class PvrFramebuffer final {
     bool interlaced_ = false;
     bool logical_32bit_vram_ = false;
     std::uint64_t presented_frames_ = 0u;
+    std::size_t last_capture_jobs_ = 1u;
 };
 
 enum class PvrListType : std::uint8_t {
@@ -898,6 +901,8 @@ class PvrSoftwareRenderer final {
         PvrGuestFrameProof proof);
     [[nodiscard]] bool retain_unpresented_scanout_frame(PvrFrame frame);
     [[nodiscard]] const PvrSoftwareRenderMetrics& metrics() const noexcept;
+    [[nodiscard]] std::size_t render_job_capacity() const noexcept;
+    [[nodiscard]] std::size_t last_render_job_count() const noexcept;
     [[nodiscard]] std::uint64_t last_render_generation() const noexcept;
     [[nodiscard]] std::size_t pending_render_generations() const noexcept;
     [[nodiscard]] std::size_t pending_render_evidence_bytes() const noexcept;
@@ -931,6 +936,7 @@ class PvrSoftwareRenderer final {
     // the restored PVR registers and VRAM at the next VBlank.
     std::optional<PvrFrame> queued_scanout_frame_;
     std::optional<PvrRenderFirstError> first_error_;
+    std::size_t last_render_jobs_ = 1u;
 };
 
 inline constexpr std::uint32_t dreamcast_pvr_state_contract_version = 1u;

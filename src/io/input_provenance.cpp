@@ -18,8 +18,10 @@
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
+// clang-format off: bcrypt.h requires Windows base types from windows.h first.
 #include <windows.h>
 #include <bcrypt.h>
+// clang-format on
 #endif
 
 namespace katana::io {
@@ -181,10 +183,12 @@ bool bcrypt_succeeded(const NTSTATUS status) noexcept {
 
 std::string hash_file_windows(std::ifstream& input,
                               const std::function<void()>& checkpoint,
+                              ProgressScope& progress,
+                              const InputChunkCallback& chunk_callback,
                               std::uint64_t& size) {
     BCryptAlgorithmHandle algorithm;
-    if (!bcrypt_succeeded(BCryptOpenAlgorithmProvider(
-            &algorithm.value, BCRYPT_SHA256_ALGORITHM, nullptr, 0u)))
+    if (!bcrypt_succeeded(
+            BCryptOpenAlgorithmProvider(&algorithm.value, BCRYPT_SHA256_ALGORITHM, nullptr, 0u)))
         throw InputOutputError("Windows-SHA-256-Provider konnte nicht geoeffnet werden.");
 
     DWORD object_size = 0u;
@@ -230,14 +234,17 @@ std::string hash_file_windows(std::ifstream& input,
                                              static_cast<ULONG>(count),
                                              0u)))
             throw InputOutputError("Windows-SHA-256 konnte Eingabedaten nicht verarbeiten.");
+        if (chunk_callback)
+            chunk_callback(size, std::string_view(buffer.data(), static_cast<std::size_t>(count)));
         size += static_cast<std::uint64_t>(count);
+        progress.update(size);
     }
     if (checkpoint) checkpoint();
     if (!input.eof()) throw InputOutputError("Provenienzeingabe konnte nicht gelesen werden.");
 
     std::array<UCHAR, 32u> digest{};
-    if (!bcrypt_succeeded(BCryptFinishHash(
-            hash.value, digest.data(), static_cast<ULONG>(digest.size()), 0u)))
+    if (!bcrypt_succeeded(
+            BCryptFinishHash(hash.value, digest.data(), static_cast<ULONG>(digest.size()), 0u)))
         throw InputOutputError("Windows-SHA-256 konnte nicht abgeschlossen werden.");
     std::ostringstream output;
     output << std::hex << std::setfill('0');
@@ -300,16 +307,26 @@ std::string sha256_bytes(const std::string_view bytes) {
 
 InputProvenance capture_input_provenance(std::string role,
                                          const std::filesystem::path& path,
-                                         const std::function<void()>& checkpoint) {
+                                         const std::function<void()>& checkpoint,
+                                         const ProgressReporter& progress,
+                                         const InputChunkCallback& chunk_callback) {
     if (!stable_token(role)) {
         throw std::invalid_argument("Eingabeprovenienz braucht eine portable Rolle.");
     }
     std::ifstream input(path, std::ios::binary);
     if (!input) throw InputOutputError("Provenienzeingabe konnte nicht geoeffnet werden.");
+    std::optional<std::uint64_t> expected_size;
+    if (progress.enabled()) {
+        std::error_code size_error;
+        const auto file_size = std::filesystem::file_size(path, size_error);
+        if (!size_error) expected_size = file_size;
+    }
+    auto progress_scope = progress.begin(
+        ProgressOperation::InputProvenance, ProgressUnit::Bytes, expected_size, role);
     std::uint64_t size = 0u;
     std::string digest;
 #ifdef _WIN32
-    digest = hash_file_windows(input, checkpoint, size);
+    digest = hash_file_windows(input, checkpoint, progress_scope, chunk_callback, size);
 #else
     Sha256 hash;
     std::vector<char> buffer(64u * 1024u);
@@ -319,15 +336,22 @@ InputProvenance capture_input_provenance(std::string role,
         const auto count = input.gcount();
         if (count > 0) {
             hash.update(std::string_view(buffer.data(), static_cast<std::size_t>(count)));
+            if (chunk_callback)
+                chunk_callback(size,
+                               std::string_view(buffer.data(), static_cast<std::size_t>(count)));
             size += static_cast<std::uint64_t>(count);
+            progress_scope.update(size);
         }
     }
     if (checkpoint) checkpoint();
     if (!input.eof()) throw InputOutputError("Provenienzeingabe konnte nicht gelesen werden.");
     digest = hash.finish();
 #endif
-    return {
-        std::move(role), size, std::move(digest), std::filesystem::absolute(path).lexically_normal()};
+    progress_scope.complete(size);
+    return {std::move(role),
+            size,
+            std::move(digest),
+            std::filesystem::absolute(path).lexically_normal()};
 }
 
 std::string make_portable_build_identity(const BuildProvenance& provenance) {

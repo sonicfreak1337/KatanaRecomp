@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/progress.hpp"
 #include "katana/runtime/disc.hpp"
 
 #include <cstdint>
@@ -46,14 +47,15 @@ struct GdiIoCounters {
     std::uint64_t sector_cache_evictions = 0u;
 };
 
-[[nodiscard]] GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path);
+[[nodiscard]] GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path,
+                                                 const ProgressReporter& progress = {});
 [[nodiscard]] std::string gdi_content_identity(const GdiDescriptor& descriptor);
 
 class GdiDiscSource final : public DiscSource {
   public:
     using DiscSource::read;
     [[nodiscard]] static std::shared_ptr<GdiDiscSource>
-    open(const std::filesystem::path& descriptor_path);
+    open(const std::filesystem::path& descriptor_path, const ProgressReporter& progress = {});
     [[nodiscard]] std::uint64_t size() const noexcept override;
     [[nodiscard]] const std::string& identity() const noexcept override;
     [[nodiscard]] std::vector<DiscTrackLayout> layout() const override;
@@ -73,9 +75,10 @@ class GdiDiscSource final : public DiscSource {
     [[nodiscard]] std::size_t sector_cache_capacity() const noexcept;
 
   private:
-    friend std::string packed_disc_content_identity(const GdiDiscSource& source);
+    friend std::string packed_disc_content_identity(const GdiDiscSource& source,
+                                                    const ProgressReporter& progress);
 
-    explicit GdiDiscSource(GdiDescriptor descriptor);
+    explicit GdiDiscSource(GdiDescriptor descriptor, const ProgressReporter& progress);
     [[nodiscard]] std::vector<std::uint8_t> read_data_sector(std::uint64_t absolute_lba) const;
     [[nodiscard]] std::vector<std::uint8_t> read_data_sectors(std::uint64_t absolute_lba,
                                                               std::size_t count) const;
@@ -85,6 +88,7 @@ class GdiDiscSource final : public DiscSource {
                                                                  std::size_t count) const;
     GdiDescriptor descriptor_;
     std::vector<std::shared_ptr<FileDiscSource>> track_sources_;
+    std::vector<std::vector<std::string>> packed_chunk_sha256_;
     std::unordered_map<std::uint32_t, std::size_t> track_number_index_;
     std::string identity_;
     std::uint64_t logical_size_ = 0u;

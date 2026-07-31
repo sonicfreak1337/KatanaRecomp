@@ -941,15 +941,60 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     ControlFlowAnalysisResult analysis;
     GuardedCodeInventory final_guarded_code_inventory;
     detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
+    detail::FunctionValueAnalysisSession function_value_session;
     JumpTableSnapshotCache jump_table_cache;
-    const auto report_progress = [&](const std::string_view phase) {
+    const auto report_progress_detail =
+        [&](const std::string_view phase,
+            const FunctionValueAnalysisProgress* const function_values) {
         if (!progress_callback) return;
         progress_callback({phase,
                            analysis.fixpoint_iterations,
                            seeds.size(),
                            analysis.recursive.instructions.size(),
                            analysis.recursive.contextual_instructions.size(),
-                           analysis.indirect_control_flow.size()});
+                           analysis.indirect_control_flow.size(),
+                           function_values != nullptr,
+                           function_values != nullptr
+                               ? function_values->functions
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->blocks
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->fixpoint_iterations
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->completed_functions
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->pending
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->active_workers
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->logical_evaluations
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->physical_evaluations
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values
+                                     ->resolution_functions_total
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->session_cache_hits
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->session_cache_misses
+                               : 0u,
+                           function_values != nullptr
+                               ? function_values->session_cache_evictions
+                               : 0u});
+    };
+    const auto report_progress =
+        [&](const std::string_view phase) {
+            report_progress_detail(phase, nullptr);
     };
     const auto apply_decode_boundary_downgrades = [&] {
         bool changed = false;
@@ -1413,7 +1458,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     analysis.recursive.instructions,
                     function_boundaries,
                     provisional_edges,
-                    [&report_progress](
+                    [&report_progress_detail](
                         const FunctionValueAnalysisProgress& progress) {
                         std::string phase = "function-values-";
                         phase += progress.phase;
@@ -1430,9 +1475,12 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                         phase +=
                             "-r" +
                             std::to_string(progress.resolutions);
-                        report_progress(phase);
+                        report_progress_detail(
+                            phase,
+                            &progress);
                     },
-                    guarded_native_entry_shapes);
+                    guarded_native_entry_shapes,
+                    function_value_session);
             if (function_values.budget_exhausted) {
                 analysis.function_summary_iterations =
                     function_values.fixpoint_iterations;

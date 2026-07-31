@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -153,6 +154,25 @@ int main() {
             detail::Win32D3d11PresentResult::Failed) ==
         detail::Win32D3d11PresentDecision{
             NativeVideoPresentationOutcome::BackendFailure, false});
+    static_assert(
+        detail::win32_d3d11_swap_chain_configurations[0u] ==
+            detail::Win32D3d11SwapChainConfiguration{
+                detail::Win32D3d11SwapChainMode::FlipSequential, 2u} &&
+        detail::win32_d3d11_swap_chain_configurations[1u] ==
+            detail::Win32D3d11SwapChainConfiguration{
+                detail::Win32D3d11SwapChainMode::LegacyDiscard, 1u});
+    static_assert(
+        detail::win32_d3d11_deadline_after(20u, 100u) == 120u &&
+        !detail::win32_d3d11_deadline_reached(119u, 120u) &&
+        detail::win32_d3d11_deadline_reached(120u, 120u) &&
+        detail::win32_d3d11_deadline_after(
+            std::numeric_limits<std::uint64_t>::max() - 10u, 100u) ==
+            std::numeric_limits<std::uint64_t>::max());
+    static_assert(
+        detail::win32_d3d11_recovery_delay_ms(0u) == 250u &&
+        detail::win32_d3d11_recovery_delay_ms(1u) == 500u &&
+        detail::win32_d3d11_recovery_delay_ms(4u) == 4'000u &&
+        detail::win32_d3d11_recovery_delay_ms(100u) == 4'000u);
 #endif
     FakeVideoOutput backend_default;
     require(backend_default.backend() == NativeVideoBackend::Unknown &&

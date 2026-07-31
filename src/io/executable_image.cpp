@@ -1,6 +1,7 @@
 #include "katana/io/executable_image.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -11,6 +12,18 @@ namespace {
 constexpr std::uint64_t kAddressSpaceSize = 0x100000000ull;
 constexpr std::uint64_t kSh4DirectWindowSize = 0x20000000ull;
 constexpr std::uint32_t kSh4DirectAddressLimit = 0xE0000000u;
+std::atomic_uint64_t next_executable_image_identity{1u};
+
+[[nodiscard]] std::uint64_t
+allocate_executable_image_identity() noexcept {
+    auto identity = next_executable_image_identity.fetch_add(
+        1u, std::memory_order_relaxed);
+    if (identity == 0u) {
+        identity = next_executable_image_identity.fetch_add(
+            1u, std::memory_order_relaxed);
+    }
+    return identity;
+}
 
 bool ranges_overlap(const std::uint64_t first_begin,
                     const std::uint64_t first_end,
@@ -162,7 +175,91 @@ ImageSegment::source_byte_offset(const std::uint32_t address) const noexcept {
 }
 
 ExecutableImage::ExecutableImage(std::filesystem::path source_path)
-    : source_path_(std::move(source_path)) {}
+    : source_path_(std::move(source_path)),
+      analysis_instance_identity_(
+          allocate_executable_image_identity()) {}
+
+ExecutableImage::ExecutableImage(
+    const ExecutableImage& other)
+    : source_path_(other.source_path_),
+      segments_(other.segments_),
+      entry_points_(other.entry_points_),
+      symbols_(other.symbols_),
+      relocations_(other.relocations_),
+      address_aliases_(other.address_aliases_),
+      guest_call_abi_(other.guest_call_abi_),
+      initial_snapshot_policy_(other.initial_snapshot_policy_),
+      initial_snapshot_entry_(other.initial_snapshot_entry_),
+      address_model_(other.address_model_),
+      analysis_instance_identity_(
+          allocate_executable_image_identity()) {}
+
+ExecutableImage&
+ExecutableImage::operator=(const ExecutableImage& other) {
+    if (this == &other) return *this;
+    ExecutableImage replacement(other);
+    source_path_.swap(replacement.source_path_);
+    segments_.swap(replacement.segments_);
+    entry_points_.swap(replacement.entry_points_);
+    symbols_.swap(replacement.symbols_);
+    relocations_.swap(replacement.relocations_);
+    address_aliases_.swap(replacement.address_aliases_);
+    std::swap(guest_call_abi_,
+              replacement.guest_call_abi_);
+    std::swap(initial_snapshot_policy_,
+              replacement.initial_snapshot_policy_);
+    std::swap(initial_snapshot_entry_,
+              replacement.initial_snapshot_entry_);
+    std::swap(address_model_, replacement.address_model_);
+    mark_analysis_mutation();
+    return *this;
+}
+
+ExecutableImage::ExecutableImage(
+    ExecutableImage&& other) noexcept
+    : source_path_(std::move(other.source_path_)),
+      segments_(std::move(other.segments_)),
+      entry_points_(std::move(other.entry_points_)),
+      symbols_(std::move(other.symbols_)),
+      relocations_(std::move(other.relocations_)),
+      address_aliases_(std::move(other.address_aliases_)),
+      guest_call_abi_(other.guest_call_abi_),
+      initial_snapshot_policy_(other.initial_snapshot_policy_),
+      initial_snapshot_entry_(other.initial_snapshot_entry_),
+      address_model_(other.address_model_),
+      analysis_instance_identity_(
+          allocate_executable_image_identity()) {
+    other.mark_analysis_mutation();
+}
+
+ExecutableImage&
+ExecutableImage::operator=(ExecutableImage&& other) noexcept {
+    if (this == &other) return *this;
+    source_path_ = std::move(other.source_path_);
+    segments_ = std::move(other.segments_);
+    entry_points_ = std::move(other.entry_points_);
+    symbols_ = std::move(other.symbols_);
+    relocations_ = std::move(other.relocations_);
+    address_aliases_ = std::move(other.address_aliases_);
+    guest_call_abi_ = other.guest_call_abi_;
+    initial_snapshot_policy_ = other.initial_snapshot_policy_;
+    initial_snapshot_entry_ = other.initial_snapshot_entry_;
+    address_model_ = other.address_model_;
+    mark_analysis_mutation();
+    other.mark_analysis_mutation();
+    return *this;
+}
+
+void ExecutableImage::mark_analysis_mutation() noexcept {
+    if (analysis_revision_ ==
+        std::numeric_limits<std::uint64_t>::max()) {
+        analysis_instance_identity_ =
+            allocate_executable_image_identity();
+        analysis_revision_ = 0u;
+        return;
+    }
+    ++analysis_revision_;
+}
 
 void ExecutableImage::add_segment(ImageSegment segment) {
     if (segment.name.empty()) {
@@ -220,6 +317,7 @@ void ExecutableImage::add_segment(ImageSegment segment) {
               [](const ImageSegment& first, const ImageSegment& second) {
                   return first.virtual_address < second.virtual_address;
               });
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::add_entry_point(const std::uint32_t address) {
@@ -228,6 +326,7 @@ void ExecutableImage::add_entry_point(const std::uint32_t address) {
     }
     entry_points_.push_back(address);
     std::sort(entry_points_.begin(), entry_points_.end());
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::add_symbol(ImageSymbol symbol) {
@@ -245,6 +344,7 @@ void ExecutableImage::add_symbol(ImageSymbol symbol) {
             }
             return first.name < second.name;
         });
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::add_relocation(ImageRelocation relocation) {
@@ -257,6 +357,7 @@ void ExecutableImage::add_relocation(ImageRelocation relocation) {
                   }
                   return first.raw_type < second.raw_type;
               });
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::add_address_alias(ImageAddressAlias alias) {
@@ -321,18 +422,25 @@ void ExecutableImage::add_address_alias(ImageAddressAlias alias) {
                   }
                   return first.source_start < second.source_start;
               });
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::set_guest_call_abi(const GuestCallAbi abi) noexcept {
+    if (guest_call_abi_ == abi) return;
     guest_call_abi_ = abi;
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::set_initial_snapshot_policy(const InitialSnapshotPolicy policy) noexcept {
+    if (initial_snapshot_policy_ == policy) return;
     initial_snapshot_policy_ = policy;
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::set_initial_snapshot_entry(const std::uint32_t address) noexcept {
+    if (initial_snapshot_entry_ == address) return;
     initial_snapshot_entry_ = address;
+    mark_analysis_mutation();
 }
 
 void ExecutableImage::set_address_model(const ImageAddressModel model) {
@@ -345,7 +453,9 @@ void ExecutableImage::set_address_model(const ImageAddressModel model) {
     default:
         throw std::invalid_argument("Unbekanntes Executable-Image-Adressmodell.");
     }
+    if (address_model_ == model) return;
     address_model_ = model;
+    mark_analysis_mutation();
 }
 
 const std::filesystem::path& ExecutableImage::source_path() const noexcept {
@@ -386,6 +496,16 @@ std::optional<std::uint32_t> ExecutableImage::initial_snapshot_entry() const noe
 
 ImageAddressModel ExecutableImage::address_model() const noexcept {
     return address_model_;
+}
+
+std::uint64_t
+ExecutableImage::analysis_instance_identity() const noexcept {
+    return analysis_instance_identity_;
+}
+
+std::uint64_t
+ExecutableImage::analysis_revision() const noexcept {
+    return analysis_revision_;
 }
 
 std::optional<std::uint32_t>
@@ -474,6 +594,7 @@ void ExecutableImage::write_u32_le(const std::uint32_t address, const std::uint3
         for (std::size_t index = 0; index < 4u; ++index) {
             segment.bytes[*offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
         }
+        mark_analysis_mutation();
         return;
     }
     throw std::out_of_range("32-Bit-Schreibzugriff liegt ausserhalb der Image-Segmente.");

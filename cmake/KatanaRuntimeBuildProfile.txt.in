@@ -1,0 +1,2 @@
+schema=katana-runtime-build-profile-v1
+multi_config=@KATANA_RUNTIME_GENERATOR_IS_MULTI_CONFIG@

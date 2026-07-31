@@ -887,7 +887,7 @@ int main() {
 
         direct_registers.write(pvr_register::VideoControl,
                                direct_registers.read(pvr_register::VideoControl) & ~0x8u);
-        static_cast<void>(direct_scheduler.advance_to(240u, 8u));
+        static_cast<void>(direct_scheduler.advance_to(420u, 8u));
         const auto direct_proof = direct_renderer.take_guest_frame_proof();
         require(direct_proof.has_value() && direct_proof->frame.width == 1u &&
                     direct_proof->frame.height == 1u &&

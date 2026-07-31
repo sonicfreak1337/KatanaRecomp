@@ -221,16 +221,19 @@ struct DreamcastRuntimeState {
 };
 
 [[nodiscard]] DreamcastRuntimeBootImage
-load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path);
+load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path,
+                            const ProgressReporter& progress = {});
 
 [[nodiscard]] DreamcastRuntimeBootImage load_dreamcast_runtime_boot(
     std::shared_ptr<DiscSource> source,
     std::uint32_t data_track_lba,
     std::size_t validated_tracks,
-    std::string content_identity = {});
+    std::string content_identity = {},
+    const ProgressReporter& progress = {});
 
 [[nodiscard]] DreamcastRuntimeBootImage
-load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path);
+load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path,
+                                      const ProgressReporter& progress = {});
 
 [[nodiscard]] std::string
 dreamcast_boot_executable_byte_identity(const DreamcastRuntimeBootImage& boot);

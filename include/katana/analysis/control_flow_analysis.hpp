@@ -161,6 +161,19 @@ struct ControlFlowAnalysisProgress {
     std::size_t instructions = 0u;
     std::size_t contexts = 0u;
     std::size_t resolutions = 0u;
+    bool function_value_active = false;
+    std::size_t function_value_functions = 0u;
+    std::size_t function_value_blocks = 0u;
+    std::size_t function_value_iterations = 0u;
+    std::size_t function_value_completed_functions = 0u;
+    std::size_t function_value_pending = 0u;
+    std::size_t function_value_active_workers = 0u;
+    std::size_t function_value_logical_evaluations = 0u;
+    std::size_t function_value_physical_evaluations = 0u;
+    std::size_t function_value_resolution_functions_total = 0u;
+    std::size_t function_value_session_cache_hits = 0u;
+    std::size_t function_value_session_cache_misses = 0u;
+    std::size_t function_value_session_cache_evictions = 0u;
 };
 
 using ControlFlowAnalysisProgressCallback =

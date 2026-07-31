@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/ir/ir.hpp"
+#include "katana/progress.hpp"
 #include "katana/runtime/disc.hpp"
 #include "katana/runtime/native_aot_template.hpp"
 
@@ -35,13 +36,15 @@ enum class LatentAotDiscoveryMode : std::uint8_t {
 
 struct LatentAotDiscoveryOptions {
     LatentAotDiscoveryMode mode = LatentAotDiscoveryMode::HintsAndHeuristics;
-    // Optional persistent, local-only analysis cache. The caller must place it
+    // Optional persistent, local-only negative analysis cache. The caller must place it
     // below its existing private codegen-cache root; neither this path nor a
     // cache key survives into exported product metadata. Persistent caching is
     // enabled only when analysis_implementation_identity proves the exact
-    // analyzer/exporter binary; an empty identity deliberately disables it.
+    // build-bound analysis/IR implementation components; an empty identity
+    // deliberately disables it.
     std::filesystem::path analysis_cache_root;
     std::string analysis_implementation_identity;
+    katana::ProgressReporter progress;
     std::size_t maximum_directory_entries = 4096u;
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;
     std::size_t maximum_total_directory_bytes = 16u * 1024u * 1024u;
@@ -124,6 +127,10 @@ struct LatentAotDiscovery {
     std::size_t analysis_cache_misses = 0u;
     std::size_t analysis_cache_corrupt_entries = 0u;
     std::size_t analysis_cache_stores = 0u;
+    // Number of candidates that entered the complete CFA/FVA/lowering
+    // pipeline. Every positive candidate does so; only a current-byte
+    // source-shape-derived negative rejection may bypass it.
+    std::size_t analysis_full_pipeline_runs = 0u;
 };
 
 // Every address that the native backend relocates must stay inside the exact

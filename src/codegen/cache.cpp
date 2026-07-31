@@ -1,19 +1,13 @@
 #include "katana/codegen/cache.hpp"
 
+#include "cache_secure_io.hpp" // Descriptor/handle-based bounded-cache I/O.
+
 #include "katana/io/input_provenance.hpp"
 
-#include <fstream>
 #include <iomanip>
 #include <limits>
-#include <random>
 #include <sstream>
 #include <stdexcept>
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
 
 namespace katana::codegen {
 namespace {
@@ -129,91 +123,6 @@ bool safe_component(const std::string_view value) noexcept {
     return true;
 }
 
-[[nodiscard]] bool unsafe_cache_link(
-    const std::filesystem::path& path,
-    const std::filesystem::file_status status) noexcept {
-    if (std::filesystem::is_symlink(status)) return true;
-#ifdef _WIN32
-    const auto attributes = GetFileAttributesW(path.c_str());
-    return attributes == INVALID_FILE_ATTRIBUTES ||
-           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
-#else
-    static_cast<void>(path);
-    return false;
-#endif
-}
-
-[[nodiscard]] bool safe_cache_directory_chain(
-    const std::filesystem::path& root,
-    const std::filesystem::path& directory) {
-    const auto relative = directory.lexically_relative(root);
-    if ((relative.empty() && directory != root) || relative.is_absolute() ||
-        (!relative.empty() && *relative.begin() == ".."))
-        return false;
-    std::error_code error;
-    auto status = std::filesystem::symlink_status(root, error);
-    if (error || !std::filesystem::is_directory(status) ||
-        unsafe_cache_link(root, status))
-        return false;
-    auto current = root;
-    for (const auto& component : relative) {
-        if (component.empty() || component == ".") continue;
-        current /= component;
-        status = std::filesystem::symlink_status(current, error);
-        if (error || !std::filesystem::is_directory(status) ||
-            unsafe_cache_link(current, status))
-            return false;
-    }
-    return true;
-}
-
-void ensure_safe_cache_directory(const std::filesystem::path& root,
-                                  const std::filesystem::path& directory) {
-    std::error_code error;
-    std::filesystem::create_directories(root, error);
-    if (error)
-        throw std::filesystem::filesystem_error(
-            "Begrenztes Codegen-Cacheverzeichnis konnte nicht erstellt werden.",
-            root,
-            error);
-    const auto root_status = std::filesystem::symlink_status(root, error);
-    if (error || !std::filesystem::is_directory(root_status) ||
-        unsafe_cache_link(root, root_status))
-        throw std::runtime_error(
-            "Begrenzter Codegen-Cache besitzt kein sicheres Stammverzeichnis.");
-
-    const auto relative = directory.lexically_relative(root);
-    if (relative.empty() && directory != root)
-        throw std::runtime_error(
-            "Begrenzter Codegen-Cachepfad liegt ausserhalb seines Stamms.");
-    if (relative.is_absolute() ||
-        (!relative.empty() && *relative.begin() == ".."))
-        throw std::runtime_error(
-            "Begrenzter Codegen-Cachepfad liegt ausserhalb seines Stamms.");
-    auto current = root;
-    for (const auto& component : relative) {
-        if (component.empty() || component == ".") continue;
-        current /= component;
-        auto status = std::filesystem::symlink_status(current, error);
-        if (error == std::errc::no_such_file_or_directory ||
-            (!error &&
-             status.type() ==
-                 std::filesystem::file_type::not_found)) {
-            error.clear();
-            if (!std::filesystem::create_directory(current, error) && error)
-                throw std::filesystem::filesystem_error(
-                    "Begrenztes Codegen-Cacheverzeichnis konnte nicht erstellt werden.",
-                    current,
-                    error);
-            status = std::filesystem::symlink_status(current, error);
-        }
-        if (error || !std::filesystem::is_directory(status) ||
-            unsafe_cache_link(current, status))
-            throw std::runtime_error(
-                "Begrenzter Codegen-Cachepfad ist kein sicherer Ordner.");
-    }
-}
-
 } // namespace
 
 std::string make_codegen_cache_key(const CodegenCacheInputs& inputs) {
@@ -264,48 +173,11 @@ CodegenCache::load_bounded(const std::string_view key,
     if (maximum_bytes == 0u)
         throw std::invalid_argument(
             "Begrenzter Codegen-Cache-Read braucht ein Bytebudget.");
-    const auto path = artifact_path(key, artifact_name);
-    if (!safe_cache_directory_chain(root_, path.parent_path()))
+    const auto read = detail::secure_cache_read(
+        root_, artifact_path(key, artifact_name), maximum_bytes);
+    if (read.kind != detail::SecureArtifactKind::Regular)
         return std::nullopt;
-    std::error_code status_error;
-    const auto status = std::filesystem::symlink_status(path, status_error);
-    if (status_error == std::errc::no_such_file_or_directory ||
-        (!status_error &&
-         status.type() ==
-             std::filesystem::file_type::not_found))
-        return std::nullopt;
-    if (status_error || !std::filesystem::is_regular_file(status) ||
-        unsafe_cache_link(path, status))
-        return std::nullopt;
-    const auto file_bytes = std::filesystem::file_size(path, status_error);
-    if (status_error || file_bytes > maximum_bytes ||
-        file_bytes >
-            static_cast<std::uintmax_t>(
-                std::numeric_limits<std::streamsize>::max()))
-        return std::nullopt;
-
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input || input.tellg() < 0 ||
-        static_cast<std::uintmax_t>(input.tellg()) != file_bytes)
-        return std::nullopt;
-    std::string content(static_cast<std::size_t>(file_bytes), '\0');
-    input.seekg(0, std::ios::beg);
-    if (!content.empty())
-        input.read(content.data(),
-                   static_cast<std::streamsize>(content.size()));
-    if (!input || input.peek() != std::char_traits<char>::eof())
-        return std::nullopt;
-    input.close();
-
-    const auto final_status =
-        std::filesystem::symlink_status(path, status_error);
-    if (!safe_cache_directory_chain(root_, path.parent_path()) ||
-        status_error || !std::filesystem::is_regular_file(final_status) ||
-        unsafe_cache_link(path, final_status) ||
-        std::filesystem::file_size(path, status_error) != file_bytes ||
-        status_error)
-        return std::nullopt;
-    return content;
+    return read.content;
 }
 
 std::optional<std::string>
@@ -335,123 +207,27 @@ void CodegenCache::store_bounded(const std::string_view key,
         throw std::invalid_argument(
             "Begrenzter Codegen-Cache-Publish besitzt ein ungueltiges Bytebudget.");
     const auto path = artifact_path(key, artifact_name);
-    if (const auto existing =
-            load_bounded(key, artifact_name, maximum_bytes);
-        existing) {
-        if (*existing == content) return;
+    const auto existing =
+        detail::secure_cache_read(root_, path, maximum_bytes);
+    if (existing.kind == detail::SecureArtifactKind::Regular) {
+        if (existing.content == content) return;
         throw std::runtime_error(
             "Begrenzter Codegen-Cache-Schluessel kollidiert mit "
             "abweichendem Inhalt.");
     }
-    std::error_code status_error;
-    const auto status =
-        std::filesystem::symlink_status(path, status_error);
-    const bool missing =
-        status_error == std::errc::no_such_file_or_directory ||
-        (!status_error &&
-         status.type() ==
-             std::filesystem::file_type::not_found);
-    if (!missing) {
-        const bool safe_oversized_artifact =
-            !status_error &&
-            std::filesystem::is_regular_file(status) &&
-            !unsafe_cache_link(path, status) &&
-            safe_cache_directory_chain(root_, path.parent_path());
-        const auto existing_bytes =
-            safe_oversized_artifact
-                ? std::filesystem::file_size(path, status_error)
-                : 0u;
-        if (!safe_oversized_artifact || status_error ||
-            existing_bytes <= maximum_bytes ||
-            !std::filesystem::remove(path, status_error) ||
-            status_error)
+    if (existing.kind == detail::SecureArtifactKind::Unsafe)
+        throw std::runtime_error(
+            "Begrenzter Codegen-Cache verweigert ein unsicheres "
+            "bestehendes Artefakt.");
+    if (existing.kind == detail::SecureArtifactKind::Oversized) {
+        if (!detail::secure_cache_erase_oversized(
+                root_, path, maximum_bytes))
             throw std::runtime_error(
                 "Begrenzter Codegen-Cache verweigert ein unsicheres "
                 "bestehendes Artefakt.");
     }
-    status_error.clear();
-    ensure_safe_cache_directory(root_, path.parent_path());
-    if (!safe_cache_directory_chain(root_, path.parent_path()))
-        throw std::runtime_error(
-            "Begrenzter Codegen-Cachepfad wurde vor dem Publish unsicher.");
-
-    std::filesystem::path staging;
-    std::random_device random;
-    for (std::size_t attempt = 0u; attempt < 32u; ++attempt) {
-        staging = root_ /
-                  (".publish-bounded-" + std::to_string(random()) + '-' +
-                   std::to_string(random()));
-        std::error_code create_error;
-        if (std::filesystem::create_directory(staging, create_error)) break;
-        staging.clear();
-    }
-    if (staging.empty())
-        throw std::runtime_error(
-            "Begrenztes Codegen-Cache-Staging konnte nicht atomar "
-            "angelegt werden.");
-    {
-        std::error_code staging_error;
-        const auto staging_status =
-            std::filesystem::symlink_status(staging, staging_error);
-        if (staging_error ||
-            !std::filesystem::is_directory(staging_status) ||
-            unsafe_cache_link(staging, staging_status))
-            throw std::runtime_error(
-                "Begrenztes Codegen-Cache-Staging ist kein sicherer Ordner.");
-    }
-    const auto temporary = staging / "artifact.tmp";
-    const auto cleanup_staging = [&]() noexcept {
-        std::error_code cleanup_error;
-        const auto staging_status =
-            std::filesystem::symlink_status(staging, cleanup_error);
-        if (cleanup_error ||
-            !std::filesystem::is_directory(staging_status) ||
-            unsafe_cache_link(staging, staging_status))
-            return;
-        const auto temporary_status =
-            std::filesystem::symlink_status(temporary, cleanup_error);
-        if (!cleanup_error &&
-            std::filesystem::is_regular_file(temporary_status) &&
-            !unsafe_cache_link(temporary, temporary_status))
-            static_cast<void>(
-                std::filesystem::remove(temporary, cleanup_error));
-        cleanup_error.clear();
-        static_cast<void>(
-            std::filesystem::remove(staging, cleanup_error));
-    };
-    try {
-        std::ofstream output(
-            temporary, std::ios::binary | std::ios::trunc);
-        if (!output)
-            throw std::runtime_error(
-                "Begrenztes Codegen-Cache-Artefakt konnte nicht "
-                "geoeffnet werden.");
-        output.write(content.data(),
-                     static_cast<std::streamsize>(content.size()));
-        output.close();
-        if (!output)
-            throw std::runtime_error(
-                "Begrenztes Codegen-Cache-Artefakt konnte nicht "
-                "geschrieben werden.");
-        std::error_code publish_error;
-        if (!safe_cache_directory_chain(root_, path.parent_path()))
-            throw std::runtime_error(
-                "Begrenzter Codegen-Cachepfad wurde vor dem Publish unsicher.");
-        std::filesystem::create_hard_link(
-            temporary, path, publish_error);
-        if (publish_error) {
-            const auto concurrent =
-                load_bounded(key, artifact_name, maximum_bytes);
-            if (!concurrent || *concurrent != content)
-                throw std::runtime_error(
-                    "Begrenzter Codegen-Cache-Publish kollidiert mit "
-                    "einem unsicheren oder abweichenden Artefakt.");
-        }
-        cleanup_staging();
-    } catch (...) {
-        cleanup_staging();
-        throw;
-    }
+    detail::secure_cache_publish(
+        root_, path, content, maximum_bytes);
 }
 
 void CodegenCache::store_integrity_bounded(
@@ -517,20 +293,11 @@ bool CodegenCache::erase_bounded_if_matches(
         throw std::invalid_argument(
             "Begrenzte Codegen-Cache-Reparatur besitzt ein "
             "ungueltiges Bytebudget.");
-    const auto current =
-        load_bounded(key, artifact_name, maximum_bytes);
-    if (!current || *current != expected_content) return false;
-    const auto path = artifact_path(key, artifact_name);
-    if (!safe_cache_directory_chain(root_, path.parent_path()))
-        return false;
-    std::error_code status_error;
-    const auto status =
-        std::filesystem::symlink_status(path, status_error);
-    if (status_error || !std::filesystem::is_regular_file(status) ||
-        unsafe_cache_link(path, status))
-        return false;
-    const auto removed = std::filesystem::remove(path, status_error);
-    return removed && !status_error;
+    return detail::secure_cache_erase_if_matches(
+        root_,
+        artifact_path(key, artifact_name),
+        expected_content,
+        maximum_bytes);
 }
 
 void CodegenCache::store(const std::string_view key,

@@ -67,7 +67,8 @@ struct DreamcastBootExecutableArtifact {
 parse_dreamcast_boot_metadata(std::span<const std::uint8_t> bytes);
 
 [[nodiscard]] DreamcastDiscBoot
-load_dreamcast_gdi_boot(const std::filesystem::path& descriptor_path);
+load_dreamcast_gdi_boot(const std::filesystem::path& descriptor_path,
+                        const ProgressReporter& progress = {});
 
 [[nodiscard]] io::ExecutableImage make_dreamcast_disc_executable(const DreamcastDiscBoot& disc);
 

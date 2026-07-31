@@ -502,41 +502,81 @@ std::string DreamcastMutableStorage::serialize_status_json() const {
 }
 
 DreamcastRuntimeBootImage
-load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path) {
+load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path,
+                            const ProgressReporter& progress) {
     if (descriptor_path.empty()) {
         throw std::invalid_argument("Dreamcast-Runtime braucht eine GDI-Quelle.");
     }
-    auto source = GdiDiscSource::open(descriptor_path);
+    auto load_progress = progress.begin(
+        ProgressOperation::DiscLoad,
+        ProgressUnit::Steps,
+        3u,
+        "dreamcast-gdi-boot");
+    auto source = GdiDiscSource::open(
+        descriptor_path,
+        load_progress.child_reporter());
+    load_progress.advance(1u);
     const auto data_track_lba = source->primary_data_lba();
     const auto validated_tracks = source->descriptor().tracks.size();
-    const auto content_identity = packed_disc_content_identity(*source);
-    return load_dreamcast_runtime_boot(
-        std::move(source), data_track_lba, validated_tracks, content_identity);
+    const auto content_identity = packed_disc_content_identity(
+        *source,
+        load_progress.child_reporter());
+    load_progress.advance(1u);
+    auto result = load_dreamcast_runtime_boot(
+        std::move(source),
+        data_track_lba,
+        validated_tracks,
+        content_identity,
+        load_progress.child_reporter());
+    load_progress.complete();
+    return result;
 }
 
 DreamcastRuntimeBootImage
-load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path) {
+load_dreamcast_runtime_boot_from_pack(
+    const std::filesystem::path& pack_path,
+    const ProgressReporter& progress) {
     if (pack_path.empty()) {
         throw std::invalid_argument("Dreamcast-Runtime braucht einen Katana-Disc-Pack.");
     }
-    auto source = PackedDiscSource::open(pack_path);
+    auto load_progress = progress.begin(
+        ProgressOperation::DiscLoad,
+        ProgressUnit::Steps,
+        2u,
+        "dreamcast-packed-boot");
+    auto source = PackedDiscSource::open(
+        pack_path,
+        load_progress.child_reporter());
+    load_progress.advance(1u);
     const auto data_track_lba = source->primary_data_lba();
     const auto validated_tracks = source->info().tracks.size();
     const auto content_identity = source->info().content_identity;
-    return load_dreamcast_runtime_boot(
-        std::move(source), data_track_lba, validated_tracks, content_identity);
+    auto result = load_dreamcast_runtime_boot(
+        std::move(source),
+        data_track_lba,
+        validated_tracks,
+        content_identity,
+        load_progress.child_reporter());
+    load_progress.complete();
+    return result;
 }
 
 DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource> source,
                                                        const std::uint32_t data_track_lba,
                                                        const std::size_t validated_tracks,
-                                                       std::string content_identity) {
+                                                       std::string content_identity,
+                                                       const ProgressReporter& progress) {
     if (!source || validated_tracks == 0u) {
         throw std::invalid_argument("Dreamcast-Runtime-Discquelle ist unvollstaendig.");
     }
     if (data_track_lba > std::numeric_limits<std::uint64_t>::max() / 2048u) {
         throw std::out_of_range("Dreamcast-Bootsektoroffset laeuft ueber.");
     }
+    auto load_progress = progress.begin(
+        ProgressOperation::BootImage,
+        ProgressUnit::Steps,
+        3u,
+        "dreamcast-boot-image");
     const auto boot_sector = source->read(static_cast<std::uint64_t>(data_track_lba) * 2048u, 256u);
     const auto bootstrap_offset = static_cast<std::uint64_t>(data_track_lba) * 2048u;
     auto system_bootstrap = source->read(bootstrap_offset, dreamcast_system_bootstrap_size);
@@ -559,6 +599,7 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     if (!disc_type.empty() && disc_type != "GD-ROM") {
         throw std::runtime_error("unsupported-scrambled-non-gdrom-boot-layout");
     }
+    load_progress.advance(1u);
 
     std::vector<std::uint8_t> boot_file;
     std::uint32_t selected_bias = 0u;
@@ -579,6 +620,7 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     if (boot_file.size() > dreamcast_main_ram_size - 0x00010000u) {
         throw std::out_of_range("Dreamcast-Bootdatei passt nicht in den Hauptspeicher.");
     }
+    load_progress.advance(1u);
 
     Iso9660Filesystem repeated_filesystem(source, 2048u, data_track_lba, selected_bias);
     const auto repeated = repeated_filesystem.read_file("/" + boot_file_name);
@@ -586,18 +628,21 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
         repeated_system_bootstrap.size() == dreamcast_system_bootstrap_size &&
         repeated_system_bootstrap == system_bootstrap;
     const bool repeated_reads_match = repeated == boot_file;
-    return {std::move(source),
-            hardware_id,
-            area_symbols,
-            boot_file_name,
-            std::move(system_bootstrap),
-            std::move(boot_file),
-            data_track_lba,
-             selected_bias,
-             validated_tracks,
-             repeated_bootstrap_reads_match,
-             repeated_reads_match,
-             std::move(content_identity)};
+    auto result = DreamcastRuntimeBootImage{
+        std::move(source),
+        hardware_id,
+        area_symbols,
+        boot_file_name,
+        std::move(system_bootstrap),
+        std::move(boot_file),
+        data_track_lba,
+        selected_bias,
+        validated_tracks,
+        repeated_bootstrap_reads_match,
+        repeated_reads_match,
+        std::move(content_identity)};
+    load_progress.complete();
+    return result;
 }
 
 std::string

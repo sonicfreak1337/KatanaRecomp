@@ -111,17 +111,15 @@ PackedDiscPayloadKind payload_kind(const GdiTrack& track);
 std::uint32_t payload_offset(const GdiTrack& track);
 
 std::string content_identity_from_tracks(const std::span<const PackedDiscTrack> tracks) {
-    if (tracks.empty())
-        throw std::invalid_argument("Disc-Pack-Content-Identitaet braucht Tracks.");
+    if (tracks.empty()) throw std::invalid_argument("Disc-Pack-Content-Identitaet braucht Tracks.");
     std::ostringstream material;
     material << "katana-packed-content-v2;";
     for (const auto& track : tracks) {
         static_cast<void>(decode_sha256(track.integrity_sha256));
-        material << track.number << ':' << track.lba << ':'
-                 << static_cast<unsigned>(track.type) << ':' << track.sector_size << ':'
-                 << static_cast<unsigned>(track.payload_kind) << ':' << track.payload_offset << ':'
-                 << track.session << ':' << track.sector_count << ':' << track.integrity_sha256
-                 << ';';
+        material << track.number << ':' << track.lba << ':' << static_cast<unsigned>(track.type)
+                 << ':' << track.sector_size << ':' << static_cast<unsigned>(track.payload_kind)
+                 << ':' << track.payload_offset << ':' << track.session << ':' << track.sector_count
+                 << ':' << track.integrity_sha256 << ';';
     }
     return katana::io::sha256_bytes(material.str());
 }
@@ -139,8 +137,8 @@ PackedDiscTrack make_track_identity(const GdiTrack& source_track,
     track.session = session;
     track.sector_count = source_track.sector_count;
     track.first_chunk = first_chunk;
-    track.chunk_count = (source_track.sector_count + packed_disc_chunk_sectors - 1u) /
-                        packed_disc_chunk_sectors;
+    track.chunk_count =
+        (source_track.sector_count + packed_disc_chunk_sectors - 1u) / packed_disc_chunk_sectors;
     return track;
 }
 
@@ -152,28 +150,44 @@ std::ostringstream track_integrity_material(const PackedDiscTrack& track) {
     return material;
 }
 
-std::string compute_packed_disc_content_identity(const GdiDiscSource& source) {
+std::string compute_packed_disc_content_identity(
+    const GdiDiscSource& source,
+    const std::vector<std::vector<std::string>>& packed_chunk_sha256,
+    ProgressScope& progress) {
     const auto& source_tracks = source.descriptor().tracks;
     if (source_tracks.empty())
         throw std::invalid_argument("Disc-Pack-Content-Identitaet braucht eine Quelle.");
+    if (packed_chunk_sha256.size() != source_tracks.size())
+        throw std::runtime_error(
+            "Disc-Pack-Content-Identitaet besitzt keine vollstaendigen Trackdigests.");
     std::vector<PackedDiscTrack> tracks;
     tracks.reserve(source_tracks.size());
     std::uint32_t session = 1u;
     std::uint64_t previous_end_lba = 0u;
     std::uint64_t next_chunk = 0u;
+    std::uint64_t completed_sectors = 0u;
     for (std::size_t index = 0u; index < source_tracks.size(); ++index) {
         const auto& source_track = source_tracks[index];
         if (index != 0u && source_track.lba > previous_end_lba) ++session;
         previous_end_lba = static_cast<std::uint64_t>(source_track.lba) + source_track.sector_count;
         auto track = make_track_identity(source_track, session, next_chunk);
         auto integrity = track_integrity_material(track);
-        for (std::uint64_t first_sector = 0u; first_sector < source_track.sector_count;) {
+        if (index >= packed_chunk_sha256.size() ||
+            packed_chunk_sha256[index].size() != track.chunk_count)
+            throw std::runtime_error(
+                "Disc-Pack-Content-Identitaet besitzt keine vollstaendigen Trackdigests.");
+        std::uint64_t first_sector = 0u;
+        for (const auto& chunk_sha256 : packed_chunk_sha256[index]) {
             const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
                 packed_disc_chunk_sectors, source_track.sector_count - first_sector));
-            const auto raw = source.read_raw_sectors(source_track.number, first_sector, count);
-            integrity << hash_bytes(raw) << ';';
+            integrity << chunk_sha256 << ';';
             first_sector += count;
+            completed_sectors += count;
+            progress.update(completed_sectors);
         }
+        if (first_sector != source_track.sector_count)
+            throw std::runtime_error(
+                "Disc-Pack-Content-Identitaet deckt den Track nicht vollstaendig ab.");
         track.integrity_sha256 = katana::io::sha256_bytes(integrity.str());
         next_chunk += track.chunk_count;
         tracks.push_back(std::move(track));
@@ -240,7 +254,10 @@ struct PackedDiscSource::Chunk {
 
 PackedDiscSource::~PackedDiscSource() = default;
 
-std::shared_ptr<PackedDiscSource> PackedDiscSource::open(const std::filesystem::path& path) {
+std::shared_ptr<PackedDiscSource> PackedDiscSource::open(const std::filesystem::path& path,
+                                                         const ProgressReporter& progress) {
+    auto open_progress = progress.begin(
+        ProgressOperation::PackedDiscOpen, ProgressUnit::Bytes, std::nullopt, "packed-disc");
     std::error_code error;
     if (!std::filesystem::is_regular_file(path, error) || error)
         throw std::invalid_argument("Katana-Disc-Pack ist keine lesbare regulaere Datei.");
@@ -254,6 +271,8 @@ std::shared_ptr<PackedDiscSource> PackedDiscSource::open(const std::filesystem::
     input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
     if (!input || !std::equal(pack_magic.begin(), pack_magic.end(), header.begin()))
         throw std::runtime_error("Katana-Disc-Pack besitzt keine gueltige Kennung.");
+    std::uint64_t bytes_read = header.size();
+    open_progress.update(bytes_read);
     const auto version = get_u32(header, 8u);
     if (version != packed_disc_format_version || get_u32(header, 12u) != header_size)
         throw std::runtime_error("Katana-Disc-Pack-Formatversion wird nicht unterstuetzt.");
@@ -282,6 +301,10 @@ std::shared_ptr<PackedDiscSource> PackedDiscSource::open(const std::filesystem::
     input.read(reinterpret_cast<char*>(metadata.data()),
                static_cast<std::streamsize>(metadata.size()));
     if (!input) throw std::runtime_error("Katana-Disc-Pack-Metadaten sind abgeschnitten.");
+    if (metadata.size() > std::numeric_limits<std::uint64_t>::max() - bytes_read)
+        throw std::out_of_range("Katana-Disc-Pack-Lesezaehler laeuft ueber.");
+    bytes_read += metadata.size();
+    open_progress.update(bytes_read);
     const auto stored_metadata_hash =
         encode_sha256(std::span<const std::uint8_t>(metadata).subspan(metadata_hash_offset, 32u));
     std::fill_n(metadata.begin() + static_cast<std::ptrdiff_t>(metadata_hash_offset),
@@ -385,8 +408,10 @@ std::shared_ptr<PackedDiscSource> PackedDiscSource::open(const std::filesystem::
     }
     if (content_identity_from_tracks(info.tracks) != info.content_identity)
         throw std::runtime_error("Katana-Disc-Pack-Content-Identitaet ist inkonsistent.");
-    return std::shared_ptr<PackedDiscSource>(
+    auto result = std::shared_ptr<PackedDiscSource>(
         new PackedDiscSource(path, std::move(info), std::move(chunks), file_size));
+    open_progress.complete(bytes_read);
+    return result;
 }
 
 PackedDiscSource::PackedDiscSource(std::filesystem::path path,
@@ -416,13 +441,13 @@ std::vector<DiscTrackLayout> PackedDiscSource::layout() const {
     std::vector<DiscTrackLayout> result;
     result.reserve(info_.tracks.size());
     for (const auto& track : info_.tracks) {
-        result.push_back({track.number,
-                          track.lba,
-                          track.type == GdiTrackType::Data ? DiscTrackKind::Data
-                                                          : DiscTrackKind::Audio,
-                          track.sector_size,
-                          track.sector_count,
-                          track.session});
+        result.push_back(
+            {track.number,
+             track.lba,
+             track.type == GdiTrackType::Data ? DiscTrackKind::Data : DiscTrackKind::Audio,
+             track.sector_size,
+             track.sector_count,
+             track.session});
     }
     return result;
 }
@@ -598,9 +623,14 @@ void PackedDiscSource::read(const std::uint64_t offset,
                 destination.begin());
 }
 
-void PackedDiscSource::verify_all_chunks() const {
-    for (std::size_t index = 0u; index < chunks_.size(); ++index)
+void PackedDiscSource::verify_all_chunks(const ProgressReporter& progress) const {
+    auto verify_progress = progress.begin(
+        ProgressOperation::PackedDiscVerify, ProgressUnit::Chunks, chunks_.size(), "packed-disc");
+    for (std::size_t index = 0u; index < chunks_.size(); ++index) {
         static_cast<void>(load_chunk(index));
+        verify_progress.update(index + 1u);
+    }
+    verify_progress.complete();
 }
 
 std::size_t PackedDiscSource::chunk_cache_size() const noexcept {
@@ -611,17 +641,36 @@ std::size_t PackedDiscSource::chunk_cache_capacity() const noexcept {
     return chunk_cache_capacity_;
 }
 
-std::string packed_disc_content_identity(const GdiDiscSource& source) {
-    std::call_once(source.packed_content_identity_once_, [&source] {
-        source.packed_content_identity_ = compute_packed_disc_content_identity(source);
+std::string packed_disc_content_identity(const GdiDiscSource& source,
+                                         const ProgressReporter& progress) {
+    std::uint64_t sector_count = 0u;
+    for (const auto& track : source.descriptor().tracks) {
+        if (track.sector_count > std::numeric_limits<std::uint64_t>::max() - sector_count)
+            throw std::out_of_range("Disc-Pack-Sektorzaehler laeuft ueber.");
+        sector_count += track.sector_count;
+    }
+    auto identity_progress = progress.begin(ProgressOperation::PackedDiscContentIdentity,
+                                            ProgressUnit::Sectors,
+                                            sector_count,
+                                            "packed-disc");
+    bool computed = false;
+    std::call_once(source.packed_content_identity_once_, [&source, &identity_progress, &computed] {
+        computed = true;
+        source.packed_content_identity_ = compute_packed_disc_content_identity(
+            source, source.packed_chunk_sha256_, identity_progress);
     });
+    if (computed)
+        identity_progress.complete();
+    else
+        identity_progress.cached();
     return source.packed_content_identity_;
 }
 
 PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
                                  const std::filesystem::path& destination,
                                  std::string job_generation,
-                                 const std::string_view expected_content_identity) {
+                                 const std::string_view expected_content_identity,
+                                 const ProgressReporter& progress) {
     if (destination.empty() || source.descriptor().tracks.empty())
         throw std::invalid_argument("Disc-Pack-Export braucht Quelle und Ausgabeziel.");
     try {
@@ -667,6 +716,8 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
             (std::numeric_limits<std::size_t>::max() - header_size) / track_entry_size ||
         chunk_count > std::numeric_limits<std::size_t>::max() / chunk_entry_size)
         throw std::out_of_range("Disc-Pack-Metadaten sind fuer den Host zu gross.");
+    auto write_progress = progress.begin(
+        ProgressOperation::PackedDiscWrite, ProgressUnit::Sectors, packed_sectors, "packed-disc");
     const auto chunk_offset = header_size + source_tracks.size() * track_entry_size;
     const auto data_offset =
         chunk_offset + static_cast<std::size_t>(chunk_count) * chunk_entry_size;
@@ -703,6 +754,7 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
     std::uint64_t next_chunk = 0u;
     std::uint32_t session = 1u;
     std::uint64_t previous_end_lba = 0u;
+    std::uint64_t written_sectors = 0u;
     for (std::size_t track_index = 0u; track_index < source_tracks.size(); ++track_index) {
         const auto& source_track = source_tracks[track_index];
         if (track_index != 0u && source_track.lba > previous_end_lba) ++session;
@@ -731,6 +783,8 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
             track_integrity << hash << ';';
             next_data_offset += raw.size();
             first_sector += count;
+            written_sectors += count;
+            write_progress.update(written_sectors);
             ++next_chunk;
         }
         track.integrity_sha256 = katana::io::sha256_bytes(track_integrity.str());
@@ -750,10 +804,8 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
         info.tracks.push_back(std::move(track));
     }
     info.content_identity = content_identity_from_tracks(info.tracks);
-    if (!expected_content_identity.empty() &&
-        info.content_identity != expected_content_identity)
-        throw std::runtime_error(
-            "Disc-Pack-Quelle wurde waehrend der Installation veraendert.");
+    if (!expected_content_identity.empty() && info.content_identity != expected_content_identity)
+        throw std::runtime_error("Disc-Pack-Quelle wurde waehrend der Installation veraendert.");
     put_sha256(metadata, 80u, info.content_identity);
     std::fill_n(metadata.begin() + static_cast<std::ptrdiff_t>(metadata_hash_offset),
                 32u,
@@ -766,14 +818,15 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
     if (!output) throw std::runtime_error("Disc-Pack-Metadaten konnten nicht finalisiert werden.");
     output.close();
     info.pack_size = std::filesystem::file_size(temporary);
-    auto verification = PackedDiscSource::open(temporary);
-    verification->verify_all_chunks();
+    auto verification = PackedDiscSource::open(temporary, write_progress.child_reporter());
+    verification->verify_all_chunks(write_progress.child_reporter());
     if (verification->info().content_identity != info.content_identity ||
         verification->info().job_generation != info.job_generation)
         throw std::runtime_error("Disc-Pack-Verifikation besitzt eine abweichende Identitaet.");
     verification.reset();
     atomic_replace(temporary, destination);
     staging_cleanup.active = false;
+    write_progress.complete();
     return info;
 }
 

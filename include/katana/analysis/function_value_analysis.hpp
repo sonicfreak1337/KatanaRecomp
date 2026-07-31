@@ -282,6 +282,15 @@ struct FunctionValueAnalysisProgress {
     std::size_t completed_functions = 0u;
     std::size_t pending = 0u;
     std::size_t resolutions = 0u;
+    // Run-local live telemetry. These counters never participate in
+    // canonical analysis output, cache keys, or product identities.
+    std::size_t active_workers = 0u;
+    std::size_t logical_evaluations = 0u;
+    std::size_t physical_evaluations = 0u;
+    std::size_t resolution_functions_total = 0u;
+    std::size_t session_cache_hits = 0u;
+    std::size_t session_cache_misses = 0u;
+    std::size_t session_cache_evictions = 0u;
 };
 
 using FunctionValueAnalysisProgressCallback =

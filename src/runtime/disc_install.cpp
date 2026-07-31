@@ -63,7 +63,8 @@ void validate_recipe(const DiscInstallRecipe& recipe) {
 
 DiscInstallRecipe make_disc_install_recipe(const GdiDiscSource& source,
                                            std::string job_generation,
-                                           std::string boot_sha256) {
+                                           std::string boot_sha256,
+                                           const ProgressReporter& progress) {
     try {
         require_sha256(job_generation, "Jobgeneration");
     } catch (const std::runtime_error&) {
@@ -86,7 +87,7 @@ DiscInstallRecipe make_disc_install_recipe(const GdiDiscSource& source,
                                source_track.sha256};
         result.tracks.push_back(std::move(track));
     }
-    result.content_identity = packed_disc_content_identity(source);
+    result.content_identity = packed_disc_content_identity(source, progress);
     validate_recipe(result);
     return result;
 }
@@ -158,9 +159,15 @@ DiscInstallRecipe parse_disc_install_recipe(const std::filesystem::path& path) {
     return recipe;
 }
 
-void verify_disc_install_source(const DiscInstallRecipe& recipe, const GdiDiscSource& source) {
+void verify_disc_install_source(const DiscInstallRecipe& recipe,
+                                const GdiDiscSource& source,
+                                const ProgressReporter& progress) {
     validate_recipe(recipe);
     const auto& actual = source.descriptor();
+    auto verify_progress = progress.begin(ProgressOperation::DiscInstallSourceVerify,
+                                          ProgressUnit::Tracks,
+                                          actual.tracks.size(),
+                                          "disc-source");
     if (actual.sha256 != recipe.descriptor_sha256 || actual.tracks.size() != recipe.tracks.size())
         throw std::runtime_error(
             "Originaldisc stimmt nicht mit der Installations-Recipe ueberein.");
@@ -172,20 +179,30 @@ void verify_disc_install_source(const DiscInstallRecipe& recipe, const GdiDiscSo
             left.sector_count != right.sector_count || left.sha256 != right.sha256)
             throw std::runtime_error(
                 "Originaldisc-Track stimmt nicht mit der Installations-Recipe ueberein.");
+        verify_progress.update(index + 1u);
     }
-    const auto rebuilt =
-        make_disc_install_recipe(source, recipe.job_generation, recipe.boot_sha256);
+    const auto rebuilt = make_disc_install_recipe(
+        source, recipe.job_generation, recipe.boot_sha256, verify_progress.child_reporter());
     if (rebuilt.content_identity != recipe.content_identity)
         throw std::runtime_error("Originaldisc besitzt eine abweichende Content-Identitaet.");
+    verify_progress.complete();
 }
 
 PackedDiscInfo install_disc_content(const DiscInstallRecipe& recipe,
                                     const std::filesystem::path& gdi_path,
-                                    const std::filesystem::path& destination) {
-    const auto source = GdiDiscSource::open(gdi_path);
-    verify_disc_install_source(recipe, *source);
-    return write_packed_disc(
-        *source, destination, recipe.job_generation, recipe.content_identity);
+                                    const std::filesystem::path& destination,
+                                    const ProgressReporter& progress) {
+    auto install_progress =
+        progress.begin(ProgressOperation::DiscInstall, ProgressUnit::Steps, 3u, "disc-install");
+    const auto child_progress = install_progress.child_reporter();
+    const auto source = GdiDiscSource::open(gdi_path, child_progress);
+    install_progress.update(1u);
+    verify_disc_install_source(recipe, *source, child_progress);
+    install_progress.update(2u);
+    auto result = write_packed_disc(
+        *source, destination, recipe.job_generation, recipe.content_identity, child_progress);
+    install_progress.complete(3u);
+    return result;
 }
 
 } // namespace katana::runtime

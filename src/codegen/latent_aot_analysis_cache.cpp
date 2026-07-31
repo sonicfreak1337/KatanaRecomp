@@ -29,6 +29,16 @@ constexpr std::size_t maximum_implementation_id_bytes = 128u;
 constexpr std::size_t maximum_key_material_bytes =
     maximum_latent_aot_analysis_cache_entries * sizeof(std::uint32_t) +
     1'024u;
+constexpr IrProgramCacheLimits latent_ir_limits{
+    maximum_latent_aot_analysis_cache_artifact_bytes - cache_header_bytes,
+    maximum_latent_aot_analysis_cache_functions,
+    maximum_latent_aot_analysis_cache_blocks,
+    maximum_latent_aot_analysis_cache_instructions,
+    maximum_latent_aot_analysis_cache_successors,
+    maximum_latent_aot_analysis_cache_targets,
+    maximum_latent_aot_analysis_cache_callsites,
+    maximum_latent_aot_analysis_cache_parser_depth,
+    128u * 1024u * 1024u};
 
 enum class PayloadKind : std::uint8_t {
     Positive = 1u,
@@ -142,7 +152,18 @@ private:
 
 class Reader {
 public:
-    explicit Reader(const std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
+    explicit Reader(const std::span<const std::uint8_t> bytes,
+                    const std::size_t maximum_depth =
+                        maximum_latent_aot_analysis_cache_parser_depth,
+                    const std::size_t maximum_allocation_bytes =
+                        128u * 1024u * 1024u)
+        : bytes_(bytes),
+          maximum_depth_(maximum_depth),
+          allocation_bytes_remaining_(maximum_allocation_bytes) {
+        if (maximum_depth_ == 0u ||
+            allocation_bytes_remaining_ == 0u)
+            throw CodecError();
+    }
 
     class DepthScope {
     public:
@@ -213,13 +234,26 @@ public:
         return offset_ == bytes_.size();
     }
 
+    template <typename Value>
+    void reserve_vector(const std::size_t count,
+                        const std::size_t minimum_encoded_bytes = 1u) {
+        if (minimum_encoded_bytes == 0u ||
+            count > remaining() / minimum_encoded_bytes ||
+            count > std::numeric_limits<std::size_t>::max() /
+                        sizeof(Value))
+            throw CodecError();
+        const auto bytes = count * sizeof(Value);
+        if (bytes > allocation_bytes_remaining_) throw CodecError();
+        allocation_bytes_remaining_ -= bytes;
+    }
+
 private:
     void require(const std::size_t count) const {
         if (count > remaining()) throw CodecError();
     }
 
     void enter() {
-        if (depth_ >= maximum_latent_aot_analysis_cache_parser_depth)
+        if (depth_ >= maximum_depth_)
             throw CodecError();
         ++depth_;
     }
@@ -229,8 +263,10 @@ private:
     }
 
     std::span<const std::uint8_t> bytes_;
+    std::size_t maximum_depth_ = 0u;
     std::size_t offset_ = 0u;
     std::size_t depth_ = 0u;
+    std::size_t allocation_bytes_remaining_ = 0u;
 };
 
 template <typename Enum>
@@ -333,7 +369,8 @@ void write_optional_u8(Writer& output,
 }
 
 void write_instruction(Writer& output,
-                       const katana::ir::Instruction& instruction) {
+                       const katana::ir::Instruction& instruction,
+                       const std::size_t maximum_targets) {
     const auto original_operation = static_cast<
         std::underlying_type_t<katana::ir::Operation>>(
         instruction.original_operation);
@@ -377,8 +414,7 @@ void write_instruction(Writer& output,
             enum_u8(katana::ir::DynamicTargetClass::Unresolved) ||
         enum_u8(instruction.delay_slot.role) >
             enum_u8(katana::ir::DelaySlotRole::Slot) ||
-        instruction.resolved_targets.size() >
-            maximum_latent_aot_analysis_cache_targets)
+        instruction.resolved_targets.size() > maximum_targets)
         throw CodecError();
 
     output.u32(instruction.source_address);
@@ -430,7 +466,8 @@ void write_instruction(Writer& output,
 
 [[nodiscard]] katana::ir::Instruction read_instruction(
     Reader& input,
-    std::size_t& target_count) {
+    std::size_t& target_count,
+    const std::size_t maximum_targets) {
     katana::ir::Instruction instruction;
     instruction.source_address = input.u32();
     instruction.original_opcode = input.u16();
@@ -537,9 +574,11 @@ void write_instruction(Writer& output,
         static_cast<std::size_t>(input.u32());
     require_add(target_count,
                 resolved_target_count,
-                maximum_latent_aot_analysis_cache_targets);
+                maximum_targets);
     {
         auto depth = input.scoped_depth();
+        input.reserve_vector<std::uint32_t>(
+            resolved_target_count, sizeof(std::uint32_t));
         instruction.resolved_targets.reserve(resolved_target_count);
         for (std::size_t index = 0u; index < resolved_target_count; ++index)
             instruction.resolved_targets.push_back(input.u32());
@@ -571,12 +610,21 @@ void write_instruction(Writer& output,
 }
 
 [[nodiscard]] std::vector<std::uint8_t> serialize_program_payload(
-    const std::span<const katana::ir::Function> program) {
-    if (program.empty() ||
-        program.size() > maximum_latent_aot_analysis_cache_functions)
+    const std::span<const katana::ir::Function> program,
+    const IrProgramCacheLimits& limits) {
+    if (limits.maximum_payload_bytes < sizeof(std::uint32_t) ||
+        limits.maximum_functions == 0u ||
+        limits.maximum_blocks == 0u ||
+        limits.maximum_instructions == 0u ||
+        limits.maximum_successors == 0u ||
+        limits.maximum_targets == 0u ||
+        limits.maximum_callsites == 0u ||
+        limits.maximum_parser_depth == 0u ||
+        limits.maximum_allocation_bytes == 0u ||
+        program.empty() ||
+        program.size() > limits.maximum_functions)
         throw CodecError();
-    Writer output(
-        maximum_latent_aot_analysis_cache_artifact_bytes - cache_header_bytes);
+    Writer output(limits.maximum_payload_bytes);
     output.u32(static_cast<std::uint32_t>(program.size()));
 
     std::size_t block_count = 0u;
@@ -587,23 +635,23 @@ void write_instruction(Writer& output,
     for (const auto& function : program) {
         require_add(block_count,
                     function.blocks.size(),
-                    maximum_latent_aot_analysis_cache_blocks);
+                    limits.maximum_blocks);
         require_add(callsite_count,
                     function.direct_callees.size(),
-                    maximum_latent_aot_analysis_cache_callsites);
+                    limits.maximum_callsites);
         require_add(callsite_count,
                     function.indirect_call_sites.size(),
-                    maximum_latent_aot_analysis_cache_callsites);
+                    limits.maximum_callsites);
 
         output.u32(function.entry_address);
         output.u32(static_cast<std::uint32_t>(function.blocks.size()));
         for (const auto& block : function.blocks) {
             require_add(instruction_count,
                         block.instructions.size(),
-                        maximum_latent_aot_analysis_cache_instructions);
+                        limits.maximum_instructions);
             require_add(successor_count,
                         block.successors.size(),
-                        maximum_latent_aot_analysis_cache_successors);
+                        limits.maximum_successors);
 
             output.u32(block.start_address);
             output.u32(static_cast<std::uint32_t>(
@@ -611,8 +659,8 @@ void write_instruction(Writer& output,
             for (const auto& instruction : block.instructions) {
                 require_add(target_count,
                             instruction.resolved_targets.size(),
-                            maximum_latent_aot_analysis_cache_targets);
-                write_instruction(output, instruction);
+                            limits.maximum_targets);
+                write_instruction(output, instruction, limits.maximum_targets);
             }
             output.u32(static_cast<std::uint32_t>(block.successors.size()));
             for (const auto successor : block.successors)
@@ -632,10 +680,11 @@ void write_instruction(Writer& output,
 }
 
 [[nodiscard]] std::vector<katana::ir::Function> parse_program_payload(
-    Reader& input) {
+    Reader& input,
+    const IrProgramCacheLimits& limits) {
     const auto function_count = static_cast<std::size_t>(input.u32());
     if (function_count == 0u ||
-        function_count > maximum_latent_aot_analysis_cache_functions)
+        function_count > limits.maximum_functions)
         throw CodecError();
 
     std::size_t block_count = 0u;
@@ -644,6 +693,8 @@ void write_instruction(Writer& output,
     std::size_t target_count = 0u;
     std::size_t callsite_count = 0u;
     std::vector<katana::ir::Function> program;
+    input.reserve_vector<katana::ir::Function>(
+        function_count, sizeof(std::uint32_t) * 2u);
     program.reserve(function_count);
     auto program_depth = input.scoped_depth();
     for (std::size_t function_index = 0u;
@@ -655,7 +706,9 @@ void write_instruction(Writer& output,
             static_cast<std::size_t>(input.u32());
         require_add(block_count,
                     local_block_count,
-                    maximum_latent_aot_analysis_cache_blocks);
+                    limits.maximum_blocks);
+        input.reserve_vector<katana::ir::BasicBlock>(
+            local_block_count, sizeof(std::uint32_t) * 2u);
         function.blocks.reserve(local_block_count);
         {
             auto block_depth = input.scoped_depth();
@@ -669,7 +722,9 @@ void write_instruction(Writer& output,
                 require_add(
                     instruction_count,
                     local_instruction_count,
-                    maximum_latent_aot_analysis_cache_instructions);
+                    limits.maximum_instructions);
+                input.reserve_vector<katana::ir::Instruction>(
+                    local_instruction_count, 32u);
                 block.instructions.reserve(local_instruction_count);
                 {
                     auto instruction_depth = input.scoped_depth();
@@ -677,7 +732,8 @@ void write_instruction(Writer& output,
                          instruction_index < local_instruction_count;
                          ++instruction_index) {
                         block.instructions.push_back(
-                            read_instruction(input, target_count));
+                            read_instruction(
+                                input, target_count, limits.maximum_targets));
                     }
                 }
 
@@ -685,9 +741,12 @@ void write_instruction(Writer& output,
                     static_cast<std::size_t>(input.u32());
                 require_add(successor_count,
                             local_successor_count,
-                            maximum_latent_aot_analysis_cache_successors);
+                            limits.maximum_successors);
                 {
                     auto successor_depth = input.scoped_depth();
+                    input.reserve_vector<std::uint32_t>(
+                        local_successor_count,
+                        sizeof(std::uint32_t));
                     block.successors.reserve(local_successor_count);
                     for (std::size_t successor_index = 0u;
                          successor_index < local_successor_count;
@@ -706,9 +765,11 @@ void write_instruction(Writer& output,
             static_cast<std::size_t>(input.u32());
         require_add(callsite_count,
                     direct_callee_count,
-                    maximum_latent_aot_analysis_cache_callsites);
+                    limits.maximum_callsites);
         {
             auto callees_depth = input.scoped_depth();
+            input.reserve_vector<std::uint32_t>(
+                direct_callee_count, sizeof(std::uint32_t));
             function.direct_callees.reserve(direct_callee_count);
             for (std::size_t callee_index = 0u;
                  callee_index < direct_callee_count;
@@ -719,9 +780,12 @@ void write_instruction(Writer& output,
             static_cast<std::size_t>(input.u32());
         require_add(callsite_count,
                     indirect_call_site_count,
-                    maximum_latent_aot_analysis_cache_callsites);
+                    limits.maximum_callsites);
         {
             auto callsites_depth = input.scoped_depth();
+            input.reserve_vector<std::uint32_t>(
+                indirect_call_site_count,
+                sizeof(std::uint32_t));
             function.indirect_call_sites.reserve(indirect_call_site_count);
             for (std::size_t callsite_index = 0u;
                  callsite_index < indirect_call_site_count;
@@ -763,6 +827,24 @@ void write_instruction(Writer& output,
 }
 
 } // namespace
+
+std::vector<std::uint8_t> serialize_ir_program_cache_payload(
+    const std::span<const katana::ir::Function> program,
+    const IrProgramCacheLimits& limits) {
+    return serialize_program_payload(program, limits);
+}
+
+std::vector<katana::ir::Function> parse_ir_program_cache_payload(
+    const std::span<const std::uint8_t> payload,
+    const IrProgramCacheLimits& limits) {
+    if (payload.size() > limits.maximum_payload_bytes) throw CodecError();
+    Reader input(payload,
+                 limits.maximum_parser_depth,
+                 limits.maximum_allocation_bytes);
+    auto program = parse_program_payload(input, limits);
+    if (!input.empty()) throw CodecError();
+    return program;
+}
 
 std::string make_latent_aot_analysis_cache_key(
     const LatentAotAnalysisCacheKeyInputs& inputs) {
@@ -838,7 +920,7 @@ std::string make_latent_aot_analysis_cache_key(
 std::vector<std::uint8_t> serialize_latent_aot_positive_cache(
     const std::string_view key,
     const std::span<const katana::ir::Function> program) {
-    const auto payload = serialize_program_payload(program);
+    const auto payload = serialize_program_payload(program, latent_ir_limits);
     return make_envelope(key, PayloadKind::Positive, payload);
 }
 
@@ -902,9 +984,13 @@ LatentAotAnalysisCacheParseResult parse_latent_aot_analysis_cache(
         if (!std::ranges::equal(expected_payload_sha, actual_payload_sha))
             throw CodecError();
 
-        Reader payload_input(payload);
+        Reader payload_input(
+            payload,
+            latent_ir_limits.maximum_parser_depth,
+            latent_ir_limits.maximum_allocation_bytes);
         if (kind == enum_u8(PayloadKind::Positive)) {
-            result.program = parse_program_payload(payload_input);
+            result.program =
+                parse_program_payload(payload_input, latent_ir_limits);
             if (!payload_input.empty()) throw CodecError();
             result.rejection = LatentAotAnalysisRejection::None;
             result.state = LatentAotAnalysisCacheState::Positive;

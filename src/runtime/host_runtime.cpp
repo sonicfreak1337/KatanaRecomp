@@ -99,6 +99,78 @@ std::uint64_t required_wall_time_ns(const std::uint64_t thread_cpu_ns,
     return result;
 }
 
+std::uint64_t scaled_ratio_saturating(
+    const std::uint64_t numerator,
+    const std::uint64_t denominator,
+    const std::uint64_t scale) noexcept {
+    if (denominator == 0u || scale == 0u) return 0u;
+    const auto whole = numerator / denominator;
+    const auto remainder = numerator % denominator;
+    if (whole > std::numeric_limits<std::uint64_t>::max() / scale)
+        return std::numeric_limits<std::uint64_t>::max();
+    auto result = whole * scale;
+    std::uint64_t fraction = 0u;
+    if (remainder <=
+        std::numeric_limits<std::uint64_t>::max() / scale) {
+        fraction = remainder * scale / denominator;
+    } else {
+        // Exact overflow-free floor(remainder * scale / denominator).
+        // The telemetry scale is small (100000), and this slow branch is
+        // reached only after many cumulative CPU hours.
+        std::uint64_t reduced = 0u;
+        for (std::uint64_t index = 0u; index < scale; ++index) {
+            if (reduced >= denominator - remainder) {
+                reduced -= denominator - remainder;
+                ++fraction;
+            } else {
+                reduced += remainder;
+            }
+        }
+    }
+    if (fraction > std::numeric_limits<std::uint64_t>::max() - result)
+        return std::numeric_limits<std::uint64_t>::max();
+    return result + fraction;
+}
+
+#ifdef _WIN32
+std::uint64_t process_cpu_now_ns() {
+    FILETIME creation{};
+    FILETIME exit{};
+    FILETIME kernel{};
+    FILETIME user{};
+    if (GetProcessTimes(
+            GetCurrentProcess(), &creation, &exit, &kernel, &user) == FALSE)
+        throw std::runtime_error("Prozess-CPU-Zeit konnte nicht gelesen werden.");
+
+    ULARGE_INTEGER kernel_ticks{};
+    kernel_ticks.LowPart = kernel.dwLowDateTime;
+    kernel_ticks.HighPart = kernel.dwHighDateTime;
+    ULARGE_INTEGER user_ticks{};
+    user_ticks.LowPart = user.dwLowDateTime;
+    user_ticks.HighPart = user.dwHighDateTime;
+    if (user_ticks.QuadPart >
+        std::numeric_limits<std::uint64_t>::max() - kernel_ticks.QuadPart)
+        throw std::overflow_error("Prozess-CPU-Zeit ist uebergelaufen.");
+    const auto ticks = kernel_ticks.QuadPart + user_ticks.QuadPart;
+    if (ticks > std::numeric_limits<std::uint64_t>::max() / 100u)
+        throw std::overflow_error("Prozess-CPU-Zeit ist zu gross.");
+    return ticks * 100u;
+}
+#elif defined(CLOCK_PROCESS_CPUTIME_ID)
+std::uint64_t process_cpu_now_ns() {
+    timespec value{};
+    if (::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &value) != 0)
+        throw std::runtime_error("Prozess-CPU-Zeit konnte nicht gelesen werden.");
+    if (value.tv_sec < 0 || value.tv_nsec < 0 ||
+        value.tv_nsec >= 1'000'000'000L)
+        throw std::runtime_error("Prozess-CPU-Zeit ist ungueltig.");
+    const auto seconds = static_cast<std::uint64_t>(value.tv_sec);
+    if (seconds > std::numeric_limits<std::uint64_t>::max() / 1'000'000'000u)
+        throw std::overflow_error("Prozess-CPU-Zeit ist zu gross.");
+    return seconds * 1'000'000'000u +
+           static_cast<std::uint64_t>(value.tv_nsec);
+}
+#else
 std::uint64_t process_cpu_now_ns() {
     const auto ticks = std::clock();
     if (ticks == static_cast<std::clock_t>(-1) || ticks < 0)
@@ -110,6 +182,7 @@ std::uint64_t process_cpu_now_ns() {
         throw std::overflow_error("Prozess-CPU-Zeit ist zu gross.");
     return static_cast<std::uint64_t>(nanoseconds);
 }
+#endif
 
 #ifdef _WIN32
 std::uint64_t thread_cpu_now_ns() {
@@ -446,11 +519,21 @@ const char* host_pacing_error_name(const HostPacingError value) noexcept {
 HostWorkloadLimiter::HostWorkloadLimiter(const HostWorkloadLimiterConfig config,
                                          HostMonotonicNow wall_now,
                                          HostThreadCpuNow thread_cpu_now,
-                                         HostWaitFor wait_for)
+                                         HostWaitFor wait_for,
+                                         HostProcessCpuNow process_cpu_now)
     : config_(config), wall_now_(std::move(wall_now)),
-      thread_cpu_now_(std::move(thread_cpu_now)), wait_for_(std::move(wait_for)) {
+      thread_cpu_now_(std::move(thread_cpu_now)),
+      wait_for_(std::move(wait_for)),
+      process_cpu_now_(std::move(process_cpu_now)) {
     if (config_.target_cpu_percent == 0u || config_.target_cpu_percent > 100u)
         throw std::invalid_argument("Host-Lastbegrenzung besitzt eine ungueltige Zielquote.");
+    if (config_.target_process_cpu_percent == 0u ||
+        config_.target_process_cpu_percent > 100u ||
+        config_.process_cpu_capacity == 0u ||
+        config_.process_cpu_capacity >
+            std::numeric_limits<std::uint32_t>::max() / 100u)
+        throw std::invalid_argument(
+            "Host-Lastbegrenzung besitzt eine ungueltige Prozessquote.");
     if (!enabled()) return;
     if (config_.accounting_window_ns == 0u)
         throw std::invalid_argument(
@@ -460,7 +543,10 @@ HostWorkloadLimiter::HostWorkloadLimiter(const HostWorkloadLimiterConfig config,
         throw std::invalid_argument(
             "Host-Lastbegrenzung besitzt ein ungueltiges Warteintervall.");
     if (!wall_now_) wall_now_ = monotonic_now_ns;
-    if (!thread_cpu_now_) thread_cpu_now_ = thread_cpu_now_ns;
+    if (config_.target_cpu_percent < 100u && !thread_cpu_now_)
+        thread_cpu_now_ = thread_cpu_now_ns;
+    if (config_.target_process_cpu_percent < 100u && !process_cpu_now_)
+        process_cpu_now_ = process_cpu_now_ns;
     if (!wait_for_) wait_for_ = wait_for_ns;
 }
 
@@ -479,30 +565,48 @@ void HostWorkloadLimiter::limit_if_due() {
 }
 
 void HostWorkloadLimiter::limit_at(std::uint64_t wall_now) {
-    auto thread_cpu_now = thread_cpu_now_();
+    auto thread_cpu_now = config_.target_cpu_percent < 100u
+        ? thread_cpu_now_()
+        : 0u;
+    auto process_cpu_now = config_.target_process_cpu_percent < 100u
+        ? process_cpu_now_()
+        : 0u;
     if (!initialized_) {
-        rebase(wall_now, thread_cpu_now);
+        rebase(wall_now, thread_cpu_now, process_cpu_now);
         return;
     }
-    if (wall_now < last_wall_ns_ || thread_cpu_now < last_thread_cpu_ns_) {
-        rebase(wall_now, thread_cpu_now);
+    if (wall_now < last_wall_ns_ ||
+        thread_cpu_now < last_thread_cpu_ns_ ||
+        process_cpu_now < last_process_cpu_ns_) {
+        rebase(wall_now, thread_cpu_now, process_cpu_now);
         return;
     }
-    observe_sample(wall_now, thread_cpu_now);
+    observe_sample(wall_now, thread_cpu_now, process_cpu_now);
 
     for (;;) {
         const auto wall_elapsed = wall_now - anchor_wall_ns_;
         const auto thread_cpu_elapsed =
             thread_cpu_now - anchor_thread_cpu_ns_;
-        const auto required_wall =
-            required_wall_time_ns(
+        auto required_wall = std::uint64_t{0u};
+        if (config_.target_cpu_percent < 100u)
+            required_wall = required_wall_time_ns(
                 thread_cpu_elapsed, config_.target_cpu_percent);
+        if (config_.target_process_cpu_percent < 100u) {
+            const auto aggregate_process_target =
+                config_.target_process_cpu_percent *
+                config_.process_cpu_capacity;
+            required_wall = std::max(
+                required_wall,
+                required_wall_time_ns(
+                    process_cpu_now - anchor_process_cpu_ns_,
+                    aggregate_process_target));
+        }
         if (required_wall == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error(
                 "Host-Lastbegrenzungsschuld ist nicht darstellbar.");
         if (required_wall <= wall_elapsed) {
             if (wall_elapsed >= config_.accounting_window_ns)
-                rebase(wall_now, thread_cpu_now);
+                rebase(wall_now, thread_cpu_now, process_cpu_now);
             return;
         }
         const auto wait_duration =
@@ -511,11 +615,19 @@ void HostWorkloadLimiter::limit_at(std::uint64_t wall_now) {
         increment(wait_calls_);
 
         const auto wall_after_wait = wall_now_();
-        const auto thread_cpu_after_wait = thread_cpu_now_();
+        const auto thread_cpu_after_wait =
+            config_.target_cpu_percent < 100u ? thread_cpu_now_() : 0u;
+        const auto process_cpu_after_wait =
+            config_.target_process_cpu_percent < 100u
+                ? process_cpu_now_()
+                : 0u;
         if (wall_after_wait >= wall_now)
             saturating_add(wait_time_ns_, wall_after_wait - wall_now);
-        if (wall_after_wait < wall_now || thread_cpu_after_wait < thread_cpu_now) {
-            rebase(wall_after_wait, thread_cpu_after_wait);
+        if (wall_after_wait < wall_now ||
+            thread_cpu_after_wait < thread_cpu_now ||
+            process_cpu_after_wait < process_cpu_now) {
+            rebase(
+                wall_after_wait, thread_cpu_after_wait, process_cpu_after_wait);
             return;
         }
         if (wall_after_wait == wall_now)
@@ -523,20 +635,24 @@ void HostWorkloadLimiter::limit_at(std::uint64_t wall_now) {
                 "Host-Lastbegrenzungswait erzeugte keinen Zeitfortschritt.");
         wall_now = wall_after_wait;
         thread_cpu_now = thread_cpu_after_wait;
-        observe_sample(wall_now, thread_cpu_now);
+        process_cpu_now = process_cpu_after_wait;
+        observe_sample(wall_now, thread_cpu_now, process_cpu_now);
     }
 }
 
 void HostWorkloadLimiter::reset() noexcept {
     anchor_wall_ns_ = 0u;
     anchor_thread_cpu_ns_ = 0u;
+    anchor_process_cpu_ns_ = 0u;
     last_wall_ns_ = 0u;
     last_thread_cpu_ns_ = 0u;
+    last_process_cpu_ns_ = 0u;
     initialized_ = false;
 }
 
 bool HostWorkloadLimiter::enabled() const noexcept {
-    return config_.target_cpu_percent < 100u;
+    return config_.target_cpu_percent < 100u ||
+           config_.target_process_cpu_percent < 100u;
 }
 
 bool HostWorkloadLimiter::initialized() const noexcept {
@@ -545,6 +661,15 @@ bool HostWorkloadLimiter::initialized() const noexcept {
 
 std::uint32_t HostWorkloadLimiter::target_cpu_percent() const noexcept {
     return config_.target_cpu_percent;
+}
+
+std::uint32_t
+HostWorkloadLimiter::target_process_cpu_percent() const noexcept {
+    return config_.target_process_cpu_percent;
+}
+
+std::uint32_t HostWorkloadLimiter::process_cpu_capacity() const noexcept {
+    return config_.process_cpu_capacity;
 }
 
 std::uint64_t HostWorkloadLimiter::wait_calls() const noexcept {
@@ -565,24 +690,39 @@ HostWorkloadLimiter::measured_thread_cpu_time_ns() const noexcept {
 }
 
 std::uint64_t
+HostWorkloadLimiter::measured_process_cpu_time_ns() const noexcept {
+    return measured_process_cpu_time_ns_;
+}
+
+std::uint64_t
 HostWorkloadLimiter::measured_cpu_percent_milli() const noexcept {
-    if (measured_wall_time_ns_ == 0u) return 0u;
     constexpr std::uint64_t scale = 100'000u;
-    if (measured_thread_cpu_time_ns_ >
-        std::numeric_limits<std::uint64_t>::max() / scale)
-        return std::numeric_limits<std::uint64_t>::max();
-    return measured_thread_cpu_time_ns_ * scale /
-           measured_wall_time_ns_;
+    return scaled_ratio_saturating(
+        measured_thread_cpu_time_ns_,
+        measured_wall_time_ns_,
+        scale);
+}
+
+std::uint64_t
+HostWorkloadLimiter::measured_process_cpu_percent_milli() const noexcept {
+    constexpr std::uint64_t scale = 100'000u;
+    return scaled_ratio_saturating(
+        measured_process_cpu_time_ns_,
+        measured_wall_time_ns_,
+        scale);
 }
 
 std::string HostWorkloadLimiter::serialize_status_json() const {
     std::ostringstream output;
     katana::io::write_json_report_header(
-        output, "katana-host-workload-limiter-v1", "host-workload-limiter");
+        output, "katana-host-workload-limiter-v2", "host-workload-limiter");
     output << ",\"contract_version\":" << host_workload_limiter_contract_version
            << ",\"enabled\":" << (enabled() ? "true" : "false")
            << ",\"initialized\":" << (initialized_ ? "true" : "false")
            << ",\"target_cpu_percent\":" << config_.target_cpu_percent
+           << ",\"target_process_cpu_percent\":"
+           << config_.target_process_cpu_percent
+           << ",\"process_cpu_capacity\":" << config_.process_cpu_capacity
            << ",\"accounting_window_ns\":" << config_.accounting_window_ns
            << ",\"maximum_wait_ns\":" << config_.maximum_wait_ns
            << ",\"wait_calls\":" << wait_calls_
@@ -591,26 +731,38 @@ std::string HostWorkloadLimiter::serialize_status_json() const {
            << ",\"measured_thread_cpu_time_ns\":"
            << measured_thread_cpu_time_ns_
            << ",\"measured_cpu_percent_milli\":"
-           << measured_cpu_percent_milli() << '}';
+           << measured_cpu_percent_milli()
+           << ",\"measured_process_cpu_time_ns\":"
+           << measured_process_cpu_time_ns_
+           << ",\"measured_process_cpu_percent_milli\":"
+           << measured_process_cpu_percent_milli() << '}';
     return output.str();
 }
 
 void HostWorkloadLimiter::observe_sample(
     const std::uint64_t wall_ns,
-    const std::uint64_t thread_cpu_ns) noexcept {
+    const std::uint64_t thread_cpu_ns,
+    const std::uint64_t process_cpu_ns) noexcept {
     saturating_add(measured_wall_time_ns_, wall_ns - last_wall_ns_);
     saturating_add(
         measured_thread_cpu_time_ns_, thread_cpu_ns - last_thread_cpu_ns_);
+    saturating_add(
+        measured_process_cpu_time_ns_,
+        process_cpu_ns - last_process_cpu_ns_);
     last_wall_ns_ = wall_ns;
     last_thread_cpu_ns_ = thread_cpu_ns;
+    last_process_cpu_ns_ = process_cpu_ns;
 }
 
 void HostWorkloadLimiter::rebase(const std::uint64_t wall_ns,
-                                 const std::uint64_t thread_cpu_ns) noexcept {
+                                 const std::uint64_t thread_cpu_ns,
+                                 const std::uint64_t process_cpu_ns) noexcept {
     anchor_wall_ns_ = wall_ns;
     anchor_thread_cpu_ns_ = thread_cpu_ns;
+    anchor_process_cpu_ns_ = process_cpu_ns;
     last_wall_ns_ = wall_ns;
     last_thread_cpu_ns_ = thread_cpu_ns;
+    last_process_cpu_ns_ = process_cpu_ns;
     initialized_ = true;
 }
 

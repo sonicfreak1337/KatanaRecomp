@@ -1,6 +1,7 @@
 #include "katana/runtime/aica.hpp"
 
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "parallel_work.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -324,6 +325,8 @@ void AicaRegisterFile::reset() noexcept {
     rendered_frames_ = 0u;
     voice_errors_ = 0u;
     first_voice_error_.reset();
+    last_render_jobs_ = 1u;
+    parallel_rendered_buffers_ = 0u;
     if (execution_) execution_->reset();
 }
 
@@ -350,145 +353,248 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
     if (sample_rate == 0u || frame_count > std::numeric_limits<std::size_t>::max() / 2u)
         throw std::invalid_argument("AICA-Audioausgabe besitzt eine ungueltige Geometrie.");
     std::vector<std::int16_t> output(frame_count * 2u, 0);
-    std::vector<std::int64_t> accumulation(frame_count * 2u, 0);
+    std::vector<std::size_t> active_channels;
+    active_channels.reserve(channels_.size());
+    for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
+        if (channels_[channel].active) active_channels.push_back(channel);
+    }
+    if (active_channels.empty()) {
+        last_render_jobs_ = 1u;
+        ++rendered_buffers_;
+        rendered_frames_ += frame_count;
+        return output;
+    }
+
+    struct ChannelResult {
+        ChannelRuntime runtime;
+        std::optional<AicaVoiceFirstError> error;
+    };
+    std::array<ChannelResult, aica_channel_count> channel_results{};
+    for (const auto channel : active_channels)
+        channel_results[channel].runtime = channels_[channel];
+
+    const auto requested_jobs =
+        std::min(active_channels.size(), detail::runtime_parallel_job_capacity());
+    std::vector<std::vector<std::int64_t>> job_accumulations(
+        requested_jobs, std::vector<std::int64_t>(frame_count * 2u, 0));
     const auto read16 = [this](const std::size_t offset) {
         return static_cast<std::uint16_t>(registers_[offset]) |
                static_cast<std::uint16_t>(registers_[offset + 1u] << 8u);
     };
     const auto ram_size = static_cast<std::uint64_t>(ram_->size());
     const auto master = static_cast<double>(registers_[aica_common_register_base] & 0x0Fu) / 15.0;
-    for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
-        auto& runtime = channels_[channel];
-        if (!runtime.active) continue;
-        const auto base = channel * aica_channel_register_stride;
-        const auto control = read16(base);
-        const auto format = static_cast<std::uint8_t>((control >> 7u) & 3u);
-        const auto sample_format =
-            format == 0u ? AicaSampleFormat::Pcm16
-            : format == 1u ? AicaSampleFormat::Pcm8
-                           : AicaSampleFormat::Adpcm4;
-        const auto range_error =
-            format == 0u ? AicaVoiceError::Pcm16OutOfRange
-            : format == 1u ? AicaVoiceError::Pcm8OutOfRange
-                           : AicaVoiceError::AdpcmOutOfRange;
-        const auto sample_base = (static_cast<std::uint32_t>(control & 0x7Fu) << 16u) |
-                                 read16(base + 4u);
-        const auto loop_start = static_cast<std::uint32_t>(read16(base + 8u));
-        const auto loop_end = static_cast<std::uint32_t>(read16(base + 12u));
-        if (loop_end == 0u) {
-            runtime.active = false;
-            continue;
-        }
-        if (sample_base >= ram_size) {
-            record_voice_error(
-                range_error, sample_format, channel, sample_base, rendered_frames_);
-            runtime.active = false;
-            continue;
-        }
-        const auto pitch = read16(base + 24u);
-        auto octave = static_cast<int>((pitch >> 11u) & 0x0Fu);
-        if ((octave & 8) != 0) octave -= 16;
-        const auto frequency = 44'100.0 * std::ldexp(1.0, octave) *
-                               (1.0 + static_cast<double>(pitch & 0x03FFu) / 1024.0);
-        const auto phase_step = static_cast<std::uint64_t>(
-            std::max(0.0, frequency / sample_rate) * 4294967296.0);
-        const auto total_level = registers_[base + 41u];
-        const auto direct_level = registers_[base + 37u] & 0x0Fu;
-        const auto gain = master * (static_cast<double>(direct_level) / 15.0) *
-                          std::pow(10.0, -0.75 * total_level / 20.0);
-        const auto pan = registers_[base + 36u] & 0x1Fu;
-        const auto pan_attenuation = std::pow(10.0, -3.0 * (pan & 0x0Fu) / 20.0);
-        const auto left_gain = gain * (((pan & 0x10u) != 0u) ? 1.0 : pan_attenuation);
-        const auto right_gain = gain * (((pan & 0x10u) != 0u) ? pan_attenuation : 1.0);
-        const auto reset_adpcm = [&runtime] {
-            runtime.adpcm_position = 0u;
-            runtime.adpcm_predictor = 0;
-            runtime.adpcm_step = 127;
-        };
-        const auto decode_adpcm_until =
-            [&](const std::uint32_t target,
-                const std::size_t frame) -> std::optional<std::int16_t> {
-            while (runtime.adpcm_position <= target) {
-                const auto byte_offset = static_cast<std::uint64_t>(sample_base) +
-                                         runtime.adpcm_position / 2u;
-                if (byte_offset >= ram_size) {
-                    record_voice_error(AicaVoiceError::AdpcmOutOfRange,
-                                       AicaSampleFormat::Adpcm4,
-                                       channel,
-                                       byte_offset,
-                                       rendered_frames_ + frame);
-                    runtime.active = false;
-                    return std::nullopt;
-                }
-                const auto packed = ram_->read_u8(static_cast<std::uint32_t>(byte_offset));
-                const auto nibble = static_cast<std::uint8_t>(
-                    (runtime.adpcm_position & 1u) == 0u ? packed & 0x0Fu : packed >> 4u);
-                static constexpr std::array<std::int32_t, 8u> scale{230,230,230,230,307,409,512,614};
-                const auto magnitude = static_cast<std::int32_t>(nibble & 7u);
-                const auto delta = ((magnitude * 2 + 1) * runtime.adpcm_step) >> 3;
-                runtime.adpcm_predictor += (nibble & 8u) != 0u ? -delta : delta;
-                runtime.adpcm_predictor = std::clamp(runtime.adpcm_predictor, -32768, 32767);
-                runtime.adpcm_step = std::clamp(
-                    (runtime.adpcm_step * scale[static_cast<std::size_t>(magnitude)]) >> 8,
-                    127,
-                    24576);
-                ++runtime.adpcm_position;
-            }
-            return static_cast<std::int16_t>(runtime.adpcm_predictor);
-        };
-        for (std::size_t frame = 0u; frame < frame_count && runtime.active; ++frame) {
-            auto position = static_cast<std::uint32_t>(runtime.phase >> 32u);
-            if (position >= loop_end) {
-                if ((control & 0x0200u) == 0u) {
-                    runtime.active = false;
-                    break;
-                }
-                position = std::min(loop_start, loop_end - 1u);
-                runtime.phase = static_cast<std::uint64_t>(position) << 32u;
-                if (format >= 2u) reset_adpcm();
-            }
-            std::int16_t sample = 0;
-            if (format == 0u) {
-                const auto address = static_cast<std::uint64_t>(sample_base) + position * 2u;
-                if (address > ram_size || ram_size - address < 2u) {
-                    record_voice_error(AicaVoiceError::Pcm16OutOfRange,
-                                       AicaSampleFormat::Pcm16,
-                                       channel,
-                                       address,
-                                       rendered_frames_ + frame);
-                    runtime.active = false;
-                    break;
-                }
-                sample = std::bit_cast<std::int16_t>(ram_->read_u16(static_cast<std::uint32_t>(address)));
-            } else if (format == 1u) {
-                const auto address = static_cast<std::uint64_t>(sample_base) + position;
-                if (address >= ram_size) {
-                    record_voice_error(AicaVoiceError::Pcm8OutOfRange,
-                                       AicaSampleFormat::Pcm8,
-                                       channel,
-                                       address,
-                                       rendered_frames_ + frame);
-                    runtime.active = false;
-                    break;
-                }
-                sample = static_cast<std::int16_t>(
-                    static_cast<std::int16_t>(std::bit_cast<std::int8_t>(ram_->read_u8(static_cast<std::uint32_t>(address)))) * 256);
-            } else {
-                if (runtime.adpcm_position > position) reset_adpcm();
-                const auto decoded = decode_adpcm_until(position, frame);
-                if (!decoded) break;
-                sample = *decoded;
-            }
-            accumulation[frame * 2u] += static_cast<std::int64_t>(std::lround(sample * left_gain));
-            accumulation[frame * 2u + 1u] += static_cast<std::int64_t>(std::lround(sample * right_gain));
-            runtime.phase += phase_step;
-            if ((control & 0x0200u) == 0u && (runtime.phase >> 32u) >= loop_end)
+    const auto rendered_frame_base = rendered_frames_;
+    const auto run_job = [&](const std::size_t job,
+                             const std::size_t job_count) {
+        auto& accumulation = job_accumulations[job];
+        const auto begin = active_channels.size() * job / job_count;
+        const auto end = active_channels.size() * (job + 1u) / job_count;
+        for (auto active_index = begin; active_index < end; ++active_index) {
+            const auto channel = active_channels[active_index];
+            auto& result = channel_results[channel];
+            auto& runtime = result.runtime;
+            const auto base = channel * aica_channel_register_stride;
+            const auto control = read16(base);
+            const auto format = static_cast<std::uint8_t>((control >> 7u) & 3u);
+            const auto sample_format =
+                format == 0u ? AicaSampleFormat::Pcm16
+                : format == 1u ? AicaSampleFormat::Pcm8
+                               : AicaSampleFormat::Adpcm4;
+            const auto range_error =
+                format == 0u ? AicaVoiceError::Pcm16OutOfRange
+                : format == 1u ? AicaVoiceError::Pcm8OutOfRange
+                               : AicaVoiceError::AdpcmOutOfRange;
+            const auto sample_base =
+                (static_cast<std::uint32_t>(control & 0x7Fu) << 16u) |
+                read16(base + 4u);
+            const auto loop_start =
+                static_cast<std::uint32_t>(read16(base + 8u));
+            const auto loop_end =
+                static_cast<std::uint32_t>(read16(base + 12u));
+            if (loop_end == 0u) {
                 runtime.active = false;
+                continue;
+            }
+            if (sample_base >= ram_size) {
+                result.error = AicaVoiceFirstError{
+                    range_error,
+                    sample_format,
+                    static_cast<std::uint32_t>(channel),
+                    sample_base,
+                    rendered_frame_base,
+                };
+                runtime.active = false;
+                continue;
+            }
+            const auto pitch = read16(base + 24u);
+            auto octave = static_cast<int>((pitch >> 11u) & 0x0Fu);
+            if ((octave & 8) != 0) octave -= 16;
+            const auto frequency =
+                44'100.0 * std::ldexp(1.0, octave) *
+                (1.0 +
+                 static_cast<double>(pitch & 0x03FFu) / 1024.0);
+            const auto phase_step = static_cast<std::uint64_t>(
+                std::max(0.0, frequency / sample_rate) * 4294967296.0);
+            const auto total_level = registers_[base + 41u];
+            const auto direct_level = registers_[base + 37u] & 0x0Fu;
+            const auto gain =
+                master * (static_cast<double>(direct_level) / 15.0) *
+                std::pow(10.0, -0.75 * total_level / 20.0);
+            const auto pan = registers_[base + 36u] & 0x1Fu;
+            const auto pan_attenuation =
+                std::pow(10.0, -3.0 * (pan & 0x0Fu) / 20.0);
+            const auto left_gain =
+                gain * (((pan & 0x10u) != 0u) ? 1.0 : pan_attenuation);
+            const auto right_gain =
+                gain * (((pan & 0x10u) != 0u) ? pan_attenuation : 1.0);
+            const auto reset_adpcm = [&runtime] {
+                runtime.adpcm_position = 0u;
+                runtime.adpcm_predictor = 0;
+                runtime.adpcm_step = 127;
+            };
+            const auto decode_adpcm_until =
+                [&](const std::uint32_t target,
+                    const std::size_t frame) -> std::optional<std::int16_t> {
+                while (runtime.adpcm_position <= target) {
+                    const auto byte_offset =
+                        static_cast<std::uint64_t>(sample_base) +
+                        runtime.adpcm_position / 2u;
+                    if (byte_offset >= ram_size) {
+                        result.error = AicaVoiceFirstError{
+                            AicaVoiceError::AdpcmOutOfRange,
+                            AicaSampleFormat::Adpcm4,
+                            static_cast<std::uint32_t>(channel),
+                            byte_offset,
+                            rendered_frame_base + frame,
+                        };
+                        runtime.active = false;
+                        return std::nullopt;
+                    }
+                    const auto packed =
+                        ram_->read_u8(static_cast<std::uint32_t>(byte_offset));
+                    const auto nibble = static_cast<std::uint8_t>(
+                        (runtime.adpcm_position & 1u) == 0u
+                            ? packed & 0x0Fu
+                            : packed >> 4u);
+                    static constexpr std::array<std::int32_t, 8u> scale{
+                        230, 230, 230, 230, 307, 409, 512, 614};
+                    const auto magnitude =
+                        static_cast<std::int32_t>(nibble & 7u);
+                    const auto delta =
+                        ((magnitude * 2 + 1) * runtime.adpcm_step) >> 3;
+                    runtime.adpcm_predictor +=
+                        (nibble & 8u) != 0u ? -delta : delta;
+                    runtime.adpcm_predictor =
+                        std::clamp(runtime.adpcm_predictor, -32768, 32767);
+                    runtime.adpcm_step = std::clamp(
+                        (runtime.adpcm_step *
+                         scale[static_cast<std::size_t>(magnitude)]) >>
+                            8,
+                        127,
+                        24576);
+                    ++runtime.adpcm_position;
+                }
+                return static_cast<std::int16_t>(
+                    runtime.adpcm_predictor);
+            };
+            for (std::size_t frame = 0u;
+                 frame < frame_count && runtime.active;
+                 ++frame) {
+                auto position =
+                    static_cast<std::uint32_t>(runtime.phase >> 32u);
+                if (position >= loop_end) {
+                    if ((control & 0x0200u) == 0u) {
+                        runtime.active = false;
+                        break;
+                    }
+                    position = std::min(loop_start, loop_end - 1u);
+                    runtime.phase =
+                        static_cast<std::uint64_t>(position) << 32u;
+                    if (format >= 2u) reset_adpcm();
+                }
+                std::int16_t sample = 0;
+                if (format == 0u) {
+                    const auto address =
+                        static_cast<std::uint64_t>(sample_base) +
+                        position * 2u;
+                    if (address > ram_size || ram_size - address < 2u) {
+                        result.error = AicaVoiceFirstError{
+                            AicaVoiceError::Pcm16OutOfRange,
+                            AicaSampleFormat::Pcm16,
+                            static_cast<std::uint32_t>(channel),
+                            address,
+                            rendered_frame_base + frame,
+                        };
+                        runtime.active = false;
+                        break;
+                    }
+                    sample = std::bit_cast<std::int16_t>(
+                        ram_->read_u16(
+                            static_cast<std::uint32_t>(address)));
+                } else if (format == 1u) {
+                    const auto address =
+                        static_cast<std::uint64_t>(sample_base) + position;
+                    if (address >= ram_size) {
+                        result.error = AicaVoiceFirstError{
+                            AicaVoiceError::Pcm8OutOfRange,
+                            AicaSampleFormat::Pcm8,
+                            static_cast<std::uint32_t>(channel),
+                            address,
+                            rendered_frame_base + frame,
+                        };
+                        runtime.active = false;
+                        break;
+                    }
+                    sample = static_cast<std::int16_t>(
+                        static_cast<std::int16_t>(
+                            std::bit_cast<std::int8_t>(
+                                ram_->read_u8(
+                                    static_cast<std::uint32_t>(
+                                        address)))) *
+                        256);
+                } else {
+                    if (runtime.adpcm_position > position) reset_adpcm();
+                    const auto decoded =
+                        decode_adpcm_until(position, frame);
+                    if (!decoded) break;
+                    sample = *decoded;
+                }
+                accumulation[frame * 2u] +=
+                    static_cast<std::int64_t>(
+                        std::lround(sample * left_gain));
+                accumulation[frame * 2u + 1u] +=
+                    static_cast<std::int64_t>(
+                        std::lround(sample * right_gain));
+                runtime.phase += phase_step;
+                if ((control & 0x0200u) == 0u &&
+                    (runtime.phase >> 32u) >= loop_end)
+                    runtime.active = false;
+            }
+        }
+    };
+    const auto render_jobs =
+        detail::run_runtime_parallel_work(active_channels.size(), run_job);
+
+    std::vector<std::int64_t> accumulation(frame_count * 2u, 0);
+    for (std::size_t job = 0u; job < render_jobs; ++job) {
+        for (std::size_t sample = 0u; sample < accumulation.size(); ++sample)
+            accumulation[sample] += job_accumulations[job][sample];
+    }
+    for (const auto channel : active_channels) {
+        channels_[channel] = channel_results[channel].runtime;
+        if (const auto& error = channel_results[channel].error) {
+            record_voice_error(error->error,
+                               error->format,
+                               error->channel,
+                               error->sample_address,
+                               error->rendered_frame);
         }
     }
     for (std::size_t index = 0u; index < output.size(); ++index)
         output[index] = static_cast<std::int16_t>(
             std::clamp<std::int64_t>(accumulation[index], -32768, 32767));
+    last_render_jobs_ = render_jobs;
+    if (render_jobs > 1u) ++parallel_rendered_buffers_;
     ++rendered_buffers_;
     rendered_frames_ += frame_count;
     return output;
@@ -513,6 +619,18 @@ std::uint64_t AicaRegisterFile::voice_error_count() const noexcept {
 
 std::optional<AicaVoiceFirstError> AicaRegisterFile::first_voice_error() const noexcept {
     return first_voice_error_;
+}
+
+std::size_t AicaRegisterFile::render_job_capacity() const noexcept {
+    return detail::runtime_parallel_job_capacity();
+}
+
+std::size_t AicaRegisterFile::last_render_job_count() const noexcept {
+    return last_render_jobs_;
+}
+
+std::uint64_t AicaRegisterFile::parallel_rendered_buffer_count() const noexcept {
+    return parallel_rendered_buffers_;
 }
 
 #if defined(_MSC_VER)

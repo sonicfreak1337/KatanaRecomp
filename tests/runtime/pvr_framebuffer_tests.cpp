@@ -58,6 +58,29 @@ int main() {
     require(framebuffer.presented_frames() == 1u,
             "Frame-Synchronisationszaehler schreitet nicht fort.");
 
+    PvrFramebuffer parallel_framebuffer;
+    parallel_framebuffer.configure(
+        64u, 64u, 128u, PvrFramebufferFormat::Rgb565);
+    const auto parallel_frame = parallel_framebuffer.capture(
+        std::vector<std::uint8_t>(64u * 128u, 0u));
+    const auto expected_capture_jobs =
+        std::min<std::size_t>(
+            64u, parallel_framebuffer.capture_job_capacity());
+    auto parallel_frame_is_black = parallel_frame.rgba.size() == 64u * 64u * 4u;
+    for (std::size_t offset = 0u;
+         parallel_frame_is_black && offset < parallel_frame.rgba.size();
+         offset += 4u)
+        parallel_frame_is_black =
+            parallel_frame.rgba[offset] == 0u &&
+            parallel_frame.rgba[offset + 1u] == 0u &&
+            parallel_frame.rgba[offset + 2u] == 0u &&
+            parallel_frame.rgba[offset + 3u] == 0xFFu;
+    require(parallel_frame_is_black &&
+                parallel_framebuffer.last_capture_job_count() ==
+                    expected_capture_jobs,
+            "PVR-Scanoutkonvertierung ist nicht pixelgenau ueber den "
+            "begrenzten Runtime-Executor verteilt.");
+
     PvrFramebuffer rgb0555;
     rgb0555.configure(2u, 1u, 4u, PvrFramebufferFormat::Rgb0555, false, false, 0u, 0u, 5u);
     const auto rgb0555_frame =

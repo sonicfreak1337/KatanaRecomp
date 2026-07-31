@@ -1,11 +1,13 @@
 #include "katana/codegen/latent_aot_registry.hpp"
 
 #include "katana/analysis/abi.hpp"
+#include "katana/codegen/cache.hpp"
 #include "katana/codegen/latent_aot_analysis_cache.hpp"
 #include "katana/io/input_provenance.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -13,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -114,11 +117,14 @@ std::string byte_identity(const std::vector<std::uint8_t>& bytes) {
 }
 
 struct AnalysisCacheFixture {
-    std::filesystem::path path =
-        std::filesystem::current_path() /
-        "katana-latent-aot-analysis-cache-fixture";
+    std::filesystem::path path;
 
-    AnalysisCacheFixture() {
+    explicit AnalysisCacheFixture(
+        const std::string_view suffix = {})
+        : path(
+              std::filesystem::current_path() /
+              ("katana-latent-aot-analysis-cache-fixture" +
+               std::string(suffix))) {
         std::error_code error;
         std::filesystem::remove_all(path, error);
     }
@@ -199,16 +205,162 @@ struct AnalysisCacheFixture {
         }
         return false;
     }
+
+    [[nodiscard]] bool replace_positive_with_instruction_gap(
+        const std::string& positive_key) const {
+        if (!std::filesystem::exists(path))
+            return false;
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(path)) {
+            if (!entry.is_regular_file() ||
+                entry.path().filename() != "module-analysis.bin")
+                continue;
+            std::ifstream input(entry.path(), std::ios::binary);
+            const std::vector<std::uint8_t> artifact{
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+            if (input.bad() || artifact.empty())
+                throw std::runtime_error(
+                    "Analysecache-Fixture konnte ein Artefakt nicht lesen.");
+            auto parsed =
+                katana::codegen::parse_latent_aot_analysis_cache(
+                    positive_key, artifact);
+            if (parsed.state !=
+                katana::codegen::LatentAotAnalysisCacheState::Positive)
+                continue;
+            auto& instructions =
+                parsed.program.front().blocks.front().instructions;
+            if (instructions.size() < 4u)
+                continue;
+            // Every retained instruction still decodes exactly from the
+            // current bytes and the ordinary verifier accepts the delayed
+            // return pair. The missing middle NOP nevertheless makes this an
+            // impossible basic block and must invalidate the untrusted hit.
+            instructions.erase(instructions.begin() + 1);
+            const auto replaced =
+                katana::codegen::serialize_latent_aot_positive_cache(
+                    positive_key, parsed.program);
+            std::ofstream output(
+                entry.path(),
+                std::ios::binary | std::ios::trunc);
+            output.write(
+                reinterpret_cast<const char*>(replaced.data()),
+                static_cast<std::streamsize>(replaced.size()));
+            output.close();
+            if (!output)
+                throw std::runtime_error(
+                    "Analysecache-Fixture konnte Gap-IR nicht schreiben.");
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool replace_positive_with_negative(
+        const std::string& positive_key) const {
+        if (!std::filesystem::exists(path))
+            return false;
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(path)) {
+            if (!entry.is_regular_file() ||
+                entry.path().filename() != "module-analysis.bin")
+                continue;
+            std::ifstream input(entry.path(), std::ios::binary);
+            const std::vector<std::uint8_t> artifact{
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+            if (input.bad() || artifact.empty())
+                throw std::runtime_error(
+                    "Analysecache-Fixture konnte ein Artefakt nicht lesen.");
+            const auto parsed =
+                katana::codegen::parse_latent_aot_analysis_cache(
+                    positive_key, artifact);
+            if (parsed.state !=
+                katana::codegen::LatentAotAnalysisCacheState::Positive)
+                continue;
+            const auto replaced =
+                katana::codegen::serialize_latent_aot_negative_cache(
+                    positive_key,
+                    katana::codegen::LatentAotAnalysisRejection::
+                        ProgramInvalid);
+            std::ofstream output(
+                entry.path(),
+                std::ios::binary | std::ios::trunc);
+            output.write(
+                reinterpret_cast<const char*>(replaced.data()),
+                static_cast<std::streamsize>(replaced.size()));
+            output.close();
+            if (!output)
+                throw std::runtime_error(
+                    "Analysecache-Fixture konnte keinen negativen "
+                    "Eintrag schreiben.");
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool replace_positive_with_forged_dynamic_target(
+        const std::string& positive_key) const {
+        if (!std::filesystem::exists(path))
+            return false;
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(path)) {
+            if (!entry.is_regular_file() ||
+                entry.path().filename() != "module-analysis.bin")
+                continue;
+            std::ifstream input(entry.path(), std::ios::binary);
+            const std::vector<std::uint8_t> artifact{
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+            if (input.bad() || artifact.empty())
+                throw std::runtime_error(
+                    "Analysecache-Fixture konnte ein Artefakt nicht lesen.");
+            auto parsed =
+                katana::codegen::parse_latent_aot_analysis_cache(
+                    positive_key, artifact);
+            if (parsed.state !=
+                katana::codegen::LatentAotAnalysisCacheState::Positive)
+                continue;
+            auto& block =
+                parsed.program.front().blocks.front();
+            auto& instruction = block.instructions.front();
+            if (instruction.operation !=
+                katana::ir::Operation::JumpRegister)
+                continue;
+            instruction.resolved_targets = {
+                block.start_address};
+            instruction.dynamic_target_class =
+                katana::ir::DynamicTargetClass::GuardedComplete;
+            block.successors = {block.start_address};
+            block.has_indirect_successor = false;
+            const auto replaced =
+                katana::codegen::serialize_latent_aot_positive_cache(
+                    positive_key, parsed.program);
+            std::ofstream output(
+                entry.path(),
+                std::ios::binary | std::ios::trunc);
+            output.write(
+                reinterpret_cast<const char*>(replaced.data()),
+                static_cast<std::streamsize>(replaced.size()));
+            output.close();
+            if (!output)
+                throw std::runtime_error(
+                    "Analysecache-Fixture konnte dynamisches Fremdziel "
+                    "nicht schreiben.");
+            return true;
+        }
+        return false;
+    }
 };
 
 std::string analysis_cache_key_for_module(
     const katana::codegen::PreparedLatentAotModule& module,
-    const katana::codegen::LatentAotDiscoveryOptions& options) {
+    const katana::codegen::LatentAotDiscoveryOptions& options,
+    const bool exact_candidate = false) {
     katana::codegen::LatentAotAnalysisCacheKeyInputs inputs;
     inputs.byte_sha256 = module.byte_identity.substr(7u);
     inputs.byte_size = module.byte_size;
     inputs.entry_offsets = module.entry_offsets;
-    inputs.exact_candidate = false;
+    inputs.exact_candidate = exact_candidate;
     inputs.source_address = module.source_address;
     inputs.maximum_entry_scan_instructions =
         options.maximum_entry_scan_instructions;
@@ -320,6 +472,17 @@ int main() {
         AnalysisCacheFixture analysis_cache_fixture;
         auto cached_options =
             katana::codegen::LatentAotDiscoveryOptions{};
+        std::mutex latent_progress_mutex;
+        std::vector<katana::ProgressEvent>
+            latent_progress_events;
+        cached_options.progress = katana::ProgressReporter(
+            [&](const katana::ProgressEvent& event) {
+                const std::lock_guard lock(
+                    latent_progress_mutex);
+                latent_progress_events.push_back(event);
+            },
+            std::chrono::milliseconds(0),
+            std::chrono::milliseconds(1000));
         cached_options.analysis_cache_root =
             analysis_cache_fixture.path;
         const auto unproven_cache_disabled =
@@ -331,6 +494,7 @@ int main() {
                 unproven_cache_disabled.analysis_cache_negative_hits == 0u &&
                 unproven_cache_disabled.analysis_cache_misses == 0u &&
                 unproven_cache_disabled.analysis_cache_stores == 0u &&
+                unproven_cache_disabled.analysis_full_pipeline_runs == 2u &&
                 !std::filesystem::exists(analysis_cache_fixture.path),
             "Latent-AOT-Analysecache lief ohne beweisbare genaue "
             "Analyzer-/Exporter-Identitaet.");
@@ -339,6 +503,39 @@ int main() {
         const auto cache_cold =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);
+        bool saw_module_control_flow_update = false;
+        bool saw_module_function_values = false;
+        {
+            const std::lock_guard lock(
+                latent_progress_mutex);
+            saw_module_control_flow_update =
+                std::any_of(
+                    latent_progress_events.begin(),
+                    latent_progress_events.end(),
+                    [](const katana::ProgressEvent& event) {
+                        return event.operation ==
+                                   katana::ProgressOperation::
+                                       ControlFlowAnalysis &&
+                               event.label.starts_with(
+                                   "latent-aot-module-") &&
+                               event.counters.iteration
+                                   .has_value() &&
+                               event.counters.started
+                                   .has_value();
+                    });
+            saw_module_function_values =
+                std::any_of(
+                    latent_progress_events.begin(),
+                    latent_progress_events.end(),
+                    [](const katana::ProgressEvent& event) {
+                        return event.operation ==
+                                   katana::ProgressOperation::
+                                       FunctionValueAnalysis &&
+                               event.counters.iteration
+                                   .has_value();
+                    });
+            latent_progress_events.clear();
+        }
         require(
             cache_cold.modules.size() == 1u &&
                 cache_cold.rejected_files == 1u &&
@@ -346,12 +543,21 @@ int main() {
                 cache_cold.analysis_cache_positive_hits == 0u &&
                 cache_cold.analysis_cache_negative_hits == 0u &&
                 cache_cold.analysis_cache_misses == 2u &&
-                cache_cold.analysis_cache_stores == 2u,
-            "Kalter Latent-AOT-Analysecache speicherte positive und "
-            "deterministisch negative Resultate nicht exakt einmal.");
+                cache_cold.analysis_cache_stores == 1u &&
+                cache_cold.analysis_full_pipeline_runs == 2u &&
+                saw_module_control_flow_update &&
+                saw_module_function_values,
+            "Kalter Latent-AOT-Analysecache speicherte den sicher "
+            "source-derived negativen Treffer nicht exakt einmal oder "
+                "meldete keinen inneren CFA/FVA-Modulfortschritt.");
         const auto cache_warm =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);
+        {
+            const std::lock_guard lock(
+                latent_progress_mutex);
+            latent_progress_events.clear();
+        }
         require(
             cache_warm.modules.size() == 1u &&
                 cache_warm.analysis_candidate_duration_ms.size() == 2u &&
@@ -364,36 +570,75 @@ int main() {
                 cache_warm.modules.front().block_identities ==
                     cache_cold.modules.front().block_identities &&
                 cache_warm.rejected_files == 1u &&
-                cache_warm.analysis_cache_positive_hits == 1u &&
+                cache_warm.analysis_cache_positive_hits == 0u &&
                 cache_warm.analysis_cache_negative_hits == 1u &&
-                cache_warm.analysis_cache_misses == 0u &&
-                cache_warm.analysis_cache_stores == 0u,
-            "Warmer Latent-AOT-Analysecache lieferte keinen validierten "
-            "positiven und negativen Treffer.");
+                cache_warm.analysis_cache_misses == 1u &&
+                cache_warm.analysis_cache_stores == 0u &&
+                cache_warm.analysis_full_pipeline_runs == 1u &&
+                katana::codegen::serialize_latent_aot_positive_cache(
+                    std::string(64u, 'a'),
+                    cache_warm.modules.front().program) ==
+                    katana::codegen::serialize_latent_aot_positive_cache(
+                        std::string(64u, 'a'),
+                        cache_cold.modules.front().program),
+            "Warmer Latent-AOT-Lauf war nicht kanonisch identisch oder "
+            "verlor den sicheren negativen Shape-Treffer. "
+            "positive=" +
+                std::to_string(
+                    cache_warm.analysis_cache_positive_hits) +
+                ", negative=" +
+                std::to_string(
+                    cache_warm.analysis_cache_negative_hits) +
+                ", misses=" +
+                std::to_string(
+                    cache_warm.analysis_cache_misses) +
+                ", stores=" +
+                std::to_string(
+                    cache_warm.analysis_cache_stores) +
+                ", pipelines=" +
+                std::to_string(
+                    cache_warm.analysis_full_pipeline_runs));
 
         const auto positive_cache_key =
             analysis_cache_key_for_module(
                 cache_cold.modules.front(), cached_options);
+        auto subset_program = cache_cold.modules.front().program;
         require(
-            analysis_cache_fixture
-                .replace_positive_with_source_mismatch(
-                    positive_cache_key),
-            "Analysecache-Fixture fand keinen positiven Cacheeintrag.");
-        const auto cache_source_mismatch =
+            !subset_program.empty() &&
+                !subset_program.front().blocks.empty() &&
+                subset_program.front().blocks.front().instructions.size() >
+                    1u,
+            "Subset-Forge-Fixture besitzt keinen entfernbaren Quellbefehl.");
+        subset_program.front().blocks.front().instructions.pop_back();
+        const auto subset_artifact =
+            katana::codegen::serialize_latent_aot_positive_cache(
+                positive_cache_key, subset_program);
+        katana::codegen::CodegenCache(
+            analysis_cache_fixture.path)
+            .store_bounded(
+                positive_cache_key,
+                "module-analysis.bin",
+                std::string_view(
+                    reinterpret_cast<const char*>(
+                        subset_artifact.data()),
+                    subset_artifact.size()),
+                katana::codegen::
+                    maximum_latent_aot_analysis_cache_artifact_bytes);
+        const auto cache_subset_forge =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);
         require(
-            cache_source_mismatch.modules.size() == 1u &&
-                cache_source_mismatch.rejected_files == 1u &&
-                cache_source_mismatch.analysis_cache_positive_hits == 0u &&
-                cache_source_mismatch.analysis_cache_negative_hits == 1u &&
-                cache_source_mismatch.analysis_cache_misses == 1u &&
-                cache_source_mismatch.analysis_cache_corrupt_entries == 1u &&
-                cache_source_mismatch.analysis_cache_stores == 1u &&
-                cache_source_mismatch.modules.front().block_identities ==
+            cache_subset_forge.modules.size() == 1u &&
+                cache_subset_forge.rejected_files == 1u &&
+                cache_subset_forge.analysis_cache_positive_hits == 0u &&
+                cache_subset_forge.analysis_cache_negative_hits == 1u &&
+                cache_subset_forge.analysis_cache_misses == 1u &&
+                cache_subset_forge.analysis_cache_stores == 0u &&
+                cache_subset_forge.analysis_full_pipeline_runs == 1u &&
+                cache_subset_forge.modules.front().block_identities ==
                     cache_cold.modules.front().block_identities,
-            "Checksum-konsistentes, formal gueltiges Fremd-IR wurde nicht "
-            "an die aktuellen Modulbytes gebunden und neu analysiert.");
+            "Checksum-konsistenter positiver Subset-Forge wurde nicht "
+            "fail-closed als Miss vollstaendig neu analysiert.");
 
         auto changed_implementation_options = cached_options;
         changed_implementation_options.analysis_implementation_identity =
@@ -407,7 +652,8 @@ int main() {
                 implementation_key_miss.analysis_cache_positive_hits == 0u &&
                 implementation_key_miss.analysis_cache_negative_hits == 0u &&
                 implementation_key_miss.analysis_cache_misses == 2u &&
-                implementation_key_miss.analysis_cache_stores == 2u,
+                implementation_key_miss.analysis_cache_stores == 1u &&
+                implementation_key_miss.analysis_full_pipeline_runs == 2u,
             "Geaenderte genaue Analyzer-/Exporter-Implementierung "
             "invalidierte positive und negative Cacheeintraege nicht.");
 
@@ -422,14 +668,15 @@ int main() {
                 cache_key_miss.analysis_cache_positive_hits == 0u &&
                 cache_key_miss.analysis_cache_negative_hits == 0u &&
                 cache_key_miss.analysis_cache_misses == 2u &&
-                cache_key_miss.analysis_cache_stores == 2u,
+                cache_key_miss.analysis_cache_stores == 1u &&
+                cache_key_miss.analysis_full_pipeline_runs == 2u,
             "Analyse-relevantes Budget invalidierte den "
             "Latent-AOT-Analysecache nicht.");
 
         require(
-            analysis_cache_fixture.corrupt_all_artifacts() == 6u,
-            "Analysecache-Fixture fand nicht alle positiven/negativen "
-            "Artefakte beider Schluessel.");
+            analysis_cache_fixture.corrupt_all_artifacts() == 3u,
+            "Analysecache-Fixture fand nicht alle sicheren negativen "
+            "Artefakte der drei Schluessel.");
         const auto cache_corrupt =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);
@@ -443,8 +690,9 @@ int main() {
                 cache_corrupt.analysis_cache_positive_hits == 0u &&
                 cache_corrupt.analysis_cache_negative_hits == 0u &&
                 cache_corrupt.analysis_cache_misses == 2u &&
-                cache_corrupt.analysis_cache_corrupt_entries == 2u &&
-                cache_corrupt.analysis_cache_stores == 2u,
+                cache_corrupt.analysis_cache_corrupt_entries == 1u &&
+                cache_corrupt.analysis_cache_stores == 1u &&
+                cache_corrupt.analysis_full_pipeline_runs == 2u,
             "Korrupter Latent-AOT-Analysecache wurde nicht fail-closed "
             "als Miss neu analysiert und begrenzt repariert.");
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/ir/ir.hpp"
+#include "katana/progress.hpp"
 
 #include <cstddef>
 #include <string>
@@ -40,6 +41,7 @@ struct OptimizationPipelineReport {
 [[nodiscard]] OptimizationResult simplify_cfg(Function& function);
 [[nodiscard]] OptimizationResult simplify_load_store(Function& function);
 [[nodiscard]] OptimizationPipelineReport optimize_program(std::vector<Function>& program,
-                                                          const OptimizationOptions& options = {});
+                                                          const OptimizationOptions& options = {},
+                                                          const katana::ProgressReporter& progress = {});
 
 } // namespace katana::ir

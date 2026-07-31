@@ -35,6 +35,8 @@
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
 
+#include "port_export_orchestration.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -53,10 +55,12 @@
 #include <limits>
 #include <optional>
 #include <random>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <syncstream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -75,6 +79,13 @@
 #endif
 
 namespace {
+
+using katana::cli::port_export_cache_key;
+using katana::cli::port_export_cache_version;
+using katana::cli::port_export_implementation_identities;
+using katana::cli::port_export_recipe_identity;
+using katana::cli::port_export_workspace_key;
+using katana::cli::port_ir_contract_version;
 
 class PortPhaseTimingRecorder final {
   public:
@@ -103,6 +114,17 @@ class PortPhaseTimingRecorder final {
                                 const std::int64_t duration_ms) {
         pending_parallel_samples_.push_back(
             {std::string(phase), duration_ms, true});
+    }
+
+    [[nodiscard]] bool should_emit_dynamic_progress(
+        const bool force = false) noexcept {
+        const auto now = std::chrono::steady_clock::now();
+        if (!force &&
+            now - last_dynamic_progress_ <
+                std::chrono::seconds(1))
+            return false;
+        last_dynamic_progress_ = now;
+        return true;
     }
 
     void emit() {
@@ -157,6 +179,7 @@ class PortPhaseTimingRecorder final {
 
     std::chrono::steady_clock::time_point started_;
     std::chrono::steady_clock::time_point phase_started_;
+    std::chrono::steady_clock::time_point last_dynamic_progress_{};
     std::string current_phase_;
     std::vector<Sample> samples_;
     std::vector<Sample> pending_parallel_samples_;
@@ -215,12 +238,102 @@ void observe_port_export_progress(const std::string_view phase) {
             }
         }
     }
+    constexpr std::array timing_boundaries{
+        std::string_view{"program-validation"},
+        std::string_view{"latent-aot-source-validation"},
+        std::string_view{"latent-aot-discovery"},
+        std::string_view{"game-project-validation"},
+        std::string_view{"partition-codegen"},
+        std::string_view{"metadata"},
+        std::string_view{"disc-recipe"},
+        std::string_view{"artifact-write"},
+        std::string_view{"disc-load"},
+        std::string_view{"boot-artifact-load"},
+        std::string_view{"boot-image"},
+        std::string_view{"control-flow-analysis"},
+        std::string_view{"ir-lowering"},
+        std::string_view{"ir-optimization"},
+        std::string_view{"input-provenance"}};
+    const bool timing_boundary =
+        std::find(
+            timing_boundaries.begin(),
+            timing_boundaries.end(),
+            phase) != timing_boundaries.end();
     if (active_port_phase_timings != nullptr &&
-        !recorded_module_timing)
+        !recorded_module_timing && timing_boundary)
         active_port_phase_timings->transition(
             std::string("export:") + std::string(phase));
+    const bool terminal_dynamic =
+        phase.find("budget-exhausted") !=
+            std::string_view::npos ||
+        phase.find("cycle-exhausted") !=
+            std::string_view::npos ||
+        phase.ends_with("-complete");
+    if (!recorded_module_timing && !timing_boundary &&
+        active_port_phase_timings != nullptr &&
+        !active_port_phase_timings
+             ->should_emit_dynamic_progress(
+                 terminal_dynamic))
+        return;
     std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n'
               << std::flush;
+}
+
+void observe_structured_progress(
+    const katana::ProgressEvent& event) {
+    std::ostringstream line;
+    line << "KATANA_PROGRESS"
+         << " operation="
+         << katana::progress_operation_name(event.operation)
+         << " state="
+         << katana::progress_state_name(event.state)
+         << " elapsed_ms=" << event.elapsed_milliseconds
+         << " scope=" << event.scope_id;
+    if (event.parent_scope_id)
+        line << " parent=" << *event.parent_scope_id;
+    line << " unit="
+         << katana::progress_unit_name(event.unit)
+         << " completed=" << event.completed;
+    if (event.total) {
+        line << " total=" << *event.total;
+        const auto percent_milli =
+            *event.total == 0u
+                ? (event.state == katana::ProgressState::Completed ||
+                           event.state ==
+                               katana::ProgressState::Cached
+                       ? 100'000u
+                       : 0u)
+                : static_cast<std::uint64_t>(
+                      std::min<long double>(
+                          100'000.0L,
+                          static_cast<long double>(
+                              event.completed) *
+                              100'000.0L /
+                              static_cast<long double>(
+                                  *event.total)));
+        line << " percent_milli=" << percent_milli;
+    }
+    const auto append_counter =
+        [&line](const std::string_view name,
+                const std::optional<std::uint64_t> value) {
+            if (value) line << ' ' << name << '=' << *value;
+        };
+    append_counter("iteration", event.counters.iteration);
+    append_counter("pass", event.counters.pass);
+    append_counter(
+        "active_workers",
+        event.counters.active_workers);
+    append_counter("queued_work", event.counters.queued_work);
+    append_counter("discovered", event.counters.discovered);
+    append_counter("started", event.counters.started);
+    append_counter("requeued", event.counters.requeued);
+    append_counter("cache_hits", event.counters.cache_hits);
+    append_counter("cache_misses", event.counters.cache_misses);
+    if (!event.label.empty())
+        line << " label="
+             << katana::io::quote_json(event.label);
+    std::osyncstream(std::cout) << line.str() << '\n'
+                                << std::flush;
 }
 
 std::uint32_t
@@ -1217,45 +1330,6 @@ std::optional<std::string> configured_environment_value(const char* name) {
 #endif
 }
 
-std::optional<std::filesystem::path> current_process_executable_path() {
-#ifdef _WIN32
-    std::wstring executable(32'768u, L'\0');
-    const auto length =
-        GetModuleFileNameW(nullptr, executable.data(),
-                           static_cast<DWORD>(executable.size()));
-    if (length == 0u || length >= executable.size()) return std::nullopt;
-    executable.resize(length);
-    return std::filesystem::path(std::move(executable));
-#else
-    std::error_code link_error;
-    auto executable =
-        std::filesystem::read_symlink("/proc/self/exe", link_error);
-    if (link_error || executable.empty()) return std::nullopt;
-    return executable;
-#endif
-}
-
-std::optional<std::string> current_exporter_cache_identity() {
-    if (katana::build_contract::katana_git_commit !=
-        "0000000000000000000000000000000000000000")
-        return "git:" +
-               std::string(katana::build_contract::katana_git_commit);
-    const auto executable = current_process_executable_path();
-    if (!executable) return std::nullopt;
-    try {
-        const auto provenance =
-            katana::io::capture_input_provenance(
-                "katana-exporter-binary", *executable);
-        if (provenance.sha256.size() != 64u) return std::nullopt;
-        return "executable-sha256:" + provenance.sha256;
-    } catch (...) {
-        // Dirty/local builds have no trusted source commit. If their exact
-        // running binary cannot be hashed, fail closed instead of sharing an
-        // export under an unproven identity.
-        return std::nullopt;
-    }
-}
-
 std::filesystem::path discover_source_root_for_protection() {
     std::vector<std::filesystem::path> starts{std::filesystem::current_path()};
 #ifdef _WIN32
@@ -1287,7 +1361,11 @@ std::filesystem::path discover_source_root_for_protection() {
 
 struct RuntimeBuildBinding {
     std::filesystem::path package_prefix;
+    std::filesystem::path build_targets_file;
     std::filesystem::path source_root;
+    std::string build_configuration;
+    bool multi_config = false;
+    bool msbuild_generator = false;
 };
 
 bool is_runtime_source_root(const std::filesystem::path& root) {
@@ -1310,18 +1388,272 @@ bool is_runtime_package_prefix(const std::filesystem::path& prefix) {
                prefix / "share" / "KatanaRecomp" / "KatanaRecompConfig.cmake");
 }
 
+bool is_runtime_build_targets_file(
+    const std::filesystem::path& targets_file) {
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(
+            targets_file, status_error);
+    return !status_error &&
+           std::filesystem::is_regular_file(status) &&
+           !std::filesystem::is_symlink(status) &&
+           targets_file.filename() ==
+                "KatanaRuntimeBuildTargets.cmake";
+}
+
+struct RuntimeBuildTreeProfile final {
+    std::string configuration;
+    bool multi_config = false;
+    bool msbuild_generator = false;
+};
+
+std::optional<std::string> cmake_cache_value(
+    const std::filesystem::path& cache_path,
+    const std::string_view key) {
+    std::ifstream cache(cache_path, std::ios::binary);
+    if (!cache)
+        throw std::invalid_argument(
+            "Katana-Buildtree besitzt keinen lesbaren CMakeCache.txt.");
+
+    std::optional<std::string> result;
+    std::string line;
+    while (std::getline(cache, line)) {
+        if (line.size() <= key.size() ||
+            !line.starts_with(key) ||
+            line[key.size()] != ':')
+            continue;
+        const auto assignment = line.find('=', key.size() + 1u);
+        if (assignment == std::string::npos)
+            throw std::invalid_argument(
+                "Katana-Buildtree besitzt einen ungueltigen CMakeCache-Eintrag.");
+        if (result)
+            throw std::invalid_argument(
+                "Katana-Buildtree besitzt einen mehrdeutigen CMakeCache-Eintrag.");
+        result = line.substr(assignment + 1u);
+        if (!result->empty() && result->back() == '\r')
+            result->pop_back();
+    }
+    if (!cache.eof())
+        throw std::invalid_argument(
+            "Katana-Buildtree-CMakeCache konnte nicht vollstaendig gelesen werden.");
+    return result;
+}
+
+std::string uppercase_ascii(std::string value) {
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](const unsigned char character) {
+            return static_cast<char>(std::toupper(character));
+        });
+    return value;
+}
+
+std::optional<std::string> preferred_optimized_configuration(
+    const std::vector<std::string>& configurations) {
+    constexpr std::array preferred{
+        std::string_view("RELWITHDEBINFO"),
+        std::string_view("RELEASE"),
+        std::string_view("MINSIZEREL")};
+    for (const auto expected : preferred) {
+        for (const auto& configuration : configurations) {
+            if (uppercase_ascii(configuration) == expected)
+                return configuration;
+        }
+    }
+    return std::nullopt;
+}
+
+bool runtime_build_tree_is_multi_config(
+    const std::filesystem::path& build_root) {
+    const auto profile_path =
+        build_root / "KatanaRuntimeBuildProfile.txt";
+    std::error_code profile_status_error;
+    const auto profile_status =
+        std::filesystem::symlink_status(
+            profile_path, profile_status_error);
+    if (profile_status_error ||
+        !std::filesystem::is_regular_file(profile_status) ||
+        std::filesystem::is_symlink(profile_status))
+        throw std::invalid_argument(
+            "Katana-Buildtree-Export besitzt kein regulaeres "
+            "KatanaRuntimeBuildProfile.txt.");
+
+    std::ifstream profile(profile_path, std::ios::binary);
+    if (!profile)
+        throw std::invalid_argument(
+            "Katana-Buildtree-Profil konnte nicht gelesen werden.");
+    std::optional<std::string> schema;
+    std::optional<std::string> multi_config;
+    std::string line;
+    while (std::getline(profile, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        const auto assignment = line.find('=');
+        if (assignment == std::string::npos)
+            throw std::invalid_argument(
+                "Katana-Buildtree-Profil ist ungueltig.");
+        const auto key = line.substr(0u, assignment);
+        const auto value = line.substr(assignment + 1u);
+        auto* destination =
+            key == "schema"
+                ? &schema
+                : key == "multi_config"
+                      ? &multi_config
+                      : nullptr;
+        if (destination == nullptr || *destination)
+            throw std::invalid_argument(
+                "Katana-Buildtree-Profil ist unbekannt oder mehrdeutig.");
+        *destination = value;
+    }
+    if (!profile.eof() ||
+        schema != "katana-runtime-build-profile-v1" ||
+        !multi_config ||
+        (*multi_config != "0" && *multi_config != "1"))
+        throw std::invalid_argument(
+            "Katana-Buildtree-Profil ist unvollstaendig oder inkompatibel.");
+    return *multi_config == "1";
+}
+
+RuntimeBuildTreeProfile require_optimized_runtime_build_tree(
+    const std::filesystem::path& targets_file) {
+    const auto build_root = targets_file.parent_path();
+    const auto multi_config =
+        runtime_build_tree_is_multi_config(build_root);
+    const auto cache_path = build_root / "CMakeCache.txt";
+    std::error_code cache_status_error;
+    const auto cache_status =
+        std::filesystem::symlink_status(cache_path, cache_status_error);
+    if (cache_status_error ||
+        !std::filesystem::is_regular_file(cache_status) ||
+        std::filesystem::is_symlink(cache_status))
+        throw std::invalid_argument(
+            "Katana-Buildtree-Export besitzt keinen regulaeren CMakeCache.txt.");
+    const auto generator =
+        cmake_cache_value(cache_path, "CMAKE_GENERATOR");
+    if (!generator || generator->empty())
+        throw std::invalid_argument(
+            "Katana-Buildtree besitzt keinen eindeutigen CMake-Generator.");
+#ifdef _WIN32
+    const bool msbuild_generator =
+        generator->starts_with("Visual Studio ");
+#else
+    const bool msbuild_generator = false;
+#endif
+
+    std::vector<std::string> configuration_types;
+    if (const auto configured_types =
+            cmake_cache_value(cache_path, "CMAKE_CONFIGURATION_TYPES")) {
+        std::size_t begin = 0u;
+        while (begin <= configured_types->size()) {
+            const auto end = configured_types->find(';', begin);
+            const auto count =
+                end == std::string::npos
+                    ? configured_types->size() - begin
+                    : end - begin;
+            auto configuration = configured_types->substr(begin, count);
+            const auto first = configuration.find_first_not_of(" \t");
+            if (first != std::string::npos) {
+                const auto last = configuration.find_last_not_of(" \t");
+                configuration =
+                    configuration.substr(first, last - first + 1u);
+                configuration_types.push_back(std::move(configuration));
+            }
+            if (end == std::string::npos) break;
+            begin = end + 1u;
+        }
+    }
+
+    if (multi_config) {
+        if (configuration_types.empty())
+            throw std::invalid_argument(
+                "Katana-Multi-Config-Buildtree besitzt keine "
+                "CMAKE_CONFIGURATION_TYPES.");
+        const auto optimized =
+            preferred_optimized_configuration(configuration_types);
+        if (!optimized)
+            throw std::invalid_argument(
+                "Katana-Multi-Config-Buildtree besitzt keine optimierte "
+                "Konfiguration; RelWithDebInfo, Release oder MinSizeRel "
+                "muss in CMAKE_CONFIGURATION_TYPES enthalten sein.");
+        return {*optimized, true, msbuild_generator};
+    }
+
+    const auto build_type =
+        cmake_cache_value(cache_path, "CMAKE_BUILD_TYPE");
+    const std::vector<std::string> configured_build_type =
+        build_type && !build_type->empty()
+            ? std::vector<std::string>{*build_type}
+            : std::vector<std::string>{};
+    const auto optimized =
+        preferred_optimized_configuration(configured_build_type);
+    if (!optimized)
+        throw std::invalid_argument(
+            "Katana-Single-Config-Buildtree ist nicht optimiert "
+            "(CMAKE_BUILD_TYPE=" +
+            (build_type && !build_type->empty()
+                 ? *build_type
+                 : std::string("<leer>")) +
+            "); verwende einen separaten Buildtree mit RelWithDebInfo, "
+            "Release oder MinSizeRel.");
+    return {*optimized, false, msbuild_generator};
+}
+
+RuntimeBuildBinding runtime_build_tree_binding(
+    const std::filesystem::path& targets_file) {
+    const auto profile =
+        require_optimized_runtime_build_tree(targets_file);
+    return {
+        {},
+        targets_file,
+        {},
+        profile.configuration,
+        profile.multi_config,
+        profile.msbuild_generator};
+}
+
 RuntimeBuildBinding
 discover_runtime_binding_for_build(const std::filesystem::path& source_root) {
-    if (const auto configured = configured_environment_value("KATANA_RUNTIME_PREFIX")) {
+    const auto configured_prefix =
+        configured_environment_value("KATANA_RUNTIME_PREFIX");
+    const auto configured_build_targets =
+        configured_environment_value("KATANA_RUNTIME_BUILD_TARGETS");
+    const auto configured_source_root =
+        configured_environment_value("KATANA_RUNTIME_ROOT");
+    const auto configured_binding_count =
+        static_cast<unsigned>(configured_prefix.has_value()) +
+        static_cast<unsigned>(configured_build_targets.has_value()) +
+        static_cast<unsigned>(configured_source_root.has_value());
+    if (configured_binding_count > 1u)
+        throw std::invalid_argument(
+            "Konfiguriere genau eine Runtime-Umgebungsbindung aus "
+            "KATANA_RUNTIME_PREFIX, KATANA_RUNTIME_BUILD_TARGETS oder "
+            "KATANA_RUNTIME_ROOT.");
+
+    if (configured_prefix) {
         const auto prefix =
-            std::filesystem::absolute(*configured).lexically_normal();
-        if (is_runtime_package_prefix(prefix)) return {prefix, {}};
+            std::filesystem::absolute(*configured_prefix).lexically_normal();
+        if (is_runtime_package_prefix(prefix))
+            return {prefix, {}, {}};
         throw std::invalid_argument(
             "KATANA_RUNTIME_PREFIX bezeichnet kein installiertes KatanaRecomp-Runtime-Paket.");
     }
-    if (const auto configured = configured_environment_value("KATANA_RUNTIME_ROOT")) {
-        const auto root = std::filesystem::absolute(*configured).lexically_normal();
-        if (is_runtime_source_root(root)) return {{}, root};
+    if (configured_build_targets) {
+        const auto targets =
+            std::filesystem::absolute(*configured_build_targets)
+                .lexically_normal();
+        if (is_runtime_build_targets_file(targets))
+            return runtime_build_tree_binding(targets);
+        throw std::invalid_argument(
+            "KATANA_RUNTIME_BUILD_TARGETS bezeichnet keinen "
+            "gueltigen Katana-Buildtree-Export.");
+    }
+    if (configured_source_root) {
+        const auto root =
+            std::filesystem::absolute(*configured_source_root).lexically_normal();
+        if (is_runtime_source_root(root))
+            return {{}, {}, root};
         throw std::invalid_argument("KATANA_RUNTIME_ROOT bezeichnet kein kompatibles Runtime-SDK.");
     }
 
@@ -1342,19 +1674,32 @@ discover_runtime_binding_for_build(const std::filesystem::path& source_root) {
         const auto installed_prefix =
             executable.parent_path().parent_path().lexically_normal();
         if (is_runtime_package_prefix(installed_prefix))
-            return {installed_prefix, {}};
+            return {installed_prefix, {}, {}};
+
+        const std::array build_targets_candidates{
+            executable.parent_path() /
+                "KatanaRuntimeBuildTargets.cmake",
+            executable.parent_path().parent_path() /
+                "KatanaRuntimeBuildTargets.cmake"};
+        for (const auto& build_targets :
+             build_targets_candidates) {
+            if (is_runtime_build_targets_file(build_targets))
+                return runtime_build_tree_binding(build_targets);
+        }
 
         const auto packaged_sdk = executable.parent_path() / "runtime-sdk";
         if (is_runtime_package_prefix(packaged_sdk))
-            return {packaged_sdk, {}};
+            return {packaged_sdk, {}, {}};
         if (is_runtime_source_root(packaged_sdk))
-            return {{}, packaged_sdk};
+            return {{}, {}, packaged_sdk};
     }
-    if (!source_root.empty()) return {{}, source_root};
+    if (!source_root.empty())
+        return {{}, {}, source_root};
 
     throw std::runtime_error(
-        "Runtime-SDK fuer Portbuild fehlt; KATANA_RUNTIME_PREFIX oder "
-        "KATANA_RUNTIME_ROOT kann es explizit angeben.");
+        "Runtime-SDK fuer Portbuild fehlt; KATANA_RUNTIME_PREFIX, "
+        "KATANA_RUNTIME_BUILD_TARGETS oder KATANA_RUNTIME_ROOT "
+        "kann es explizit angeben.");
 }
 
 std::string normalized_host_command(const std::string& command) {
@@ -1377,19 +1722,52 @@ struct SupervisedHostCommandResult final {
 inline constexpr auto maximum_port_host_command_runtime =
     std::chrono::seconds(840);
 
-std::chrono::milliseconds configured_port_host_command_runtime(
+using PortHostCommandTimeout =
+    std::optional<std::chrono::milliseconds>;
+
+PortHostCommandTimeout configured_port_host_command_runtime(
     const std::string_view stage) {
+    const auto configured_timeout = []() -> PortHostCommandTimeout {
+        const auto value =
+            configured_environment_value(
+                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS");
+        if (!value)
+            return std::chrono::duration_cast<
+                std::chrono::milliseconds>(
+                maximum_port_host_command_runtime);
+        std::uint64_t milliseconds = 0u;
+        const auto conversion = std::from_chars(
+            value->data(),
+            value->data() + value->size(),
+            milliseconds,
+            10);
+        if (conversion.ec != std::errc{} ||
+            conversion.ptr != value->data() + value->size())
+            throw std::invalid_argument(
+                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS ist ungueltig.");
+        // Zero is an explicit caller opt-in for an unbounded supervised
+        // process. The process tree remains owned by the job object/process
+        // group and is still terminated if the CLI itself exits.
+        if (milliseconds == 0u) return std::nullopt;
+        constexpr auto maximum_wait_milliseconds =
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::uint32_t>::max() -
+                1u);
+        if (milliseconds > maximum_wait_milliseconds)
+            throw std::invalid_argument(
+                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS ist zu gross.");
+        return std::chrono::milliseconds(milliseconds);
+    }();
     const auto test_stage =
         configured_environment_value(
             "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_STAGE");
     const auto test_timeout =
         configured_environment_value(
             "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_MS");
-    if (!test_stage && !test_timeout)
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-            maximum_port_host_command_runtime);
+    if (!test_stage && !test_timeout) return configured_timeout;
     if (!test_stage || !test_timeout ||
         (*test_stage != "configure" &&
+         *test_stage != "runtime-sdk-build" &&
          *test_stage != "host-build"))
         throw std::invalid_argument(
             "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_STAGE/_MS "
@@ -1401,21 +1779,16 @@ std::chrono::milliseconds configured_port_host_command_runtime(
         milliseconds == 0u || milliseconds > 10'000u)
         throw std::invalid_argument(
             "KATANA_PORT_HOST_COMMAND_TEST_TIMEOUT_MS ist ungueltig.");
-    if (*test_stage != stage)
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-            maximum_port_host_command_runtime);
+    if (*test_stage != stage) return configured_timeout;
     return std::chrono::milliseconds(milliseconds);
 }
 
 SupervisedHostCommandResult run_supervised_host_command(
     const std::string& command,
-    const std::chrono::milliseconds timeout) {
-    if (timeout.count() <= 0 ||
-        timeout >
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                maximum_port_host_command_runtime))
+    const PortHostCommandTimeout timeout) {
+    if (timeout && timeout->count() <= 0)
         throw std::invalid_argument(
-            "Port-Hostprozess besitzt kein sicheres Zeitlimit.");
+            "Port-Hostprozess besitzt ein ungueltiges Zeitlimit.");
 #ifdef _WIN32
     const auto job = CreateJobObjectW(nullptr, nullptr);
     if (job == nullptr)
@@ -1477,7 +1850,9 @@ SupervisedHostCommandResult run_supervised_host_command(
 
     const auto wait = WaitForSingleObject(
         process.hProcess,
-        static_cast<DWORD>(timeout.count()));
+        timeout
+            ? static_cast<DWORD>(timeout->count())
+            : INFINITE);
     SupervisedHostCommandResult result;
     if (wait == WAIT_TIMEOUT) {
         result.exit_code = 124;
@@ -1539,7 +1914,11 @@ SupervisedHostCommandResult run_supervised_host_command(
     }
 
     const auto deadline =
-        std::chrono::steady_clock::now() + timeout;
+        timeout
+            ? std::optional(
+                  std::chrono::steady_clock::now() +
+                  *timeout)
+            : std::nullopt;
     int status = 0;
     bool reaped = false;
     for (;;) {
@@ -1554,7 +1933,8 @@ SupervisedHostCommandResult run_supervised_host_command(
             throw std::runtime_error(
                 "Port-Hostprozess konnte nicht sicher beaufsichtigt werden.");
         }
-        if (std::chrono::steady_clock::now() >= deadline)
+        if (deadline &&
+            std::chrono::steady_clock::now() >= *deadline)
             break;
         std::this_thread::sleep_for(
             std::chrono::milliseconds(20));
@@ -2790,12 +3170,8 @@ bool path_is_within(const std::filesystem::path& path,
     return true;
 }
 
-inline constexpr std::uint32_t port_export_cache_version = 8u;
-inline constexpr std::uint32_t port_ir_contract_version = 2u;
 inline constexpr std::uintmax_t maximum_port_export_cache_state_bytes =
     4u * 1024u;
-inline constexpr std::string_view untrusted_katana_source_identity =
-    "0000000000000000000000000000000000000000";
 inline constexpr std::string_view generated_artifact_manifest_name =
     ".katana-generated-artifacts";
 inline constexpr std::string_view generated_artifact_manifest_header =
@@ -3274,8 +3650,19 @@ void reconcile_generated_sources_after_cache_miss(
         remove_invalid_generated_source_tree(workspace);
 }
 
-std::optional<std::string>
-port_codegen_tree_identity(const std::filesystem::path& root) {
+std::optional<std::string> port_codegen_tree_identity(
+    const std::filesystem::path& root,
+    const katana::ProgressReporter& progress,
+    const std::string_view progress_label) {
+    const auto skipped_progress = [&]() {
+        auto scope = progress.begin(
+            katana::ProgressOperation::ProgramValidation,
+            katana::ProgressUnit::Files,
+            std::nullopt,
+            std::string(progress_label));
+        scope.skipped();
+        return std::optional<std::string>{};
+    };
     std::vector<std::filesystem::path> files;
     constexpr std::array<std::string_view, 5u> required_files{
         "CMakeLists.txt",
@@ -3289,18 +3676,18 @@ port_codegen_tree_identity(const std::filesystem::path& root) {
         const auto status = std::filesystem::symlink_status(path, status_error);
         if (status_error || !std::filesystem::is_regular_file(status) ||
             unsafe_port_filesystem_link(path, status))
-            return std::nullopt;
+            return skipped_progress();
         files.push_back(path);
     }
     const auto generated_files =
         validated_generated_artifact_files(root);
-    if (!generated_files) return std::nullopt;
+    if (!generated_files) return skipped_progress();
     files.insert(files.end(),
                  generated_files->begin(),
                  generated_files->end());
     const auto generated_sources =
         validated_generated_source_files(root);
-    if (!generated_sources) return std::nullopt;
+    if (!generated_sources) return skipped_progress();
     files.insert(files.end(),
                  generated_sources->begin(),
                  generated_sources->end());
@@ -3308,6 +3695,11 @@ port_codegen_tree_identity(const std::filesystem::path& root) {
         return left.lexically_relative(root).generic_string() <
                right.lexically_relative(root).generic_string();
     });
+    auto identity_progress = progress.begin(
+        katana::ProgressOperation::ProgramValidation,
+        katana::ProgressUnit::Files,
+        files.size(),
+        std::string(progress_label));
     std::ostringstream identity;
     identity << "katana-port-codegen-tree-v3;";
     for (const auto& file : files) {
@@ -3315,8 +3707,11 @@ port_codegen_tree_identity(const std::filesystem::path& root) {
         const auto provenance =
             katana::io::capture_input_provenance("port-codegen-cache", file);
         identity << relative << ':' << provenance.size << ':' << provenance.sha256 << ';';
+        identity_progress.advance(1u);
     }
-    return katana::io::sha256_bytes(identity.str());
+    auto result = katana::io::sha256_bytes(identity.str());
+    identity_progress.complete();
+    return result;
 }
 
 void append_port_export_cache_field(std::ostringstream& output,
@@ -3324,81 +3719,36 @@ void append_port_export_cache_field(std::ostringstream& output,
     output << value.size() << ':' << value << ';';
 }
 
-std::string port_export_recipe_identity(
-    const katana::runtime::DiscInstallRecipe& recipe) {
-    return katana::io::sha256_bytes(
-        katana::runtime::format_disc_install_recipe(recipe));
-}
-
-std::string port_export_workspace_key(
-    const std::string_view source_kind,
-    const katana::runtime::DiscInstallRecipe& recipe,
-    const std::string_view target_name) {
-    std::ostringstream identity;
-    append_port_export_cache_field(identity, "katana-port-workspace");
-    append_port_export_cache_field(identity, "1");
-    append_port_export_cache_field(identity, source_kind);
-    append_port_export_cache_field(identity, recipe.content_identity);
-    append_port_export_cache_field(identity, recipe.boot_sha256);
-    append_port_export_cache_field(identity, target_name);
-    return katana::io::sha256_bytes(identity.str());
-}
-
-std::string port_export_cache_key(
-    const std::string_view source_kind,
-    const std::uint32_t source_contract_version,
-    const katana::runtime::DiscInstallRecipe& recipe,
-    const std::string_view boot_file_name,
-    const std::uint32_t entry_address,
-    const std::string_view target_name,
-    const bool diagnostic_partial,
-    const std::string_view console_profile,
-    const std::string_view game_project_identity,
-    const std::string_view game_entry_handoff_artifact_identity,
-    const std::string_view latent_aot_entry_hint_identity,
-    const std::string_view exporter_identity,
-    const katana::codegen::PartitionOptions& partition_options = {}) {
-    std::ostringstream identity;
-    const auto append = [&identity](const auto& value) {
-        std::ostringstream field;
-        field << value;
-        append_port_export_cache_field(identity, field.str());
-    };
-    append("katana-port-whole-export");
-    append(port_export_cache_version);
-    append(source_kind);
-    append(source_contract_version);
-    append(recipe.version);
-    append(port_export_recipe_identity(recipe));
-    append(recipe.job_generation);
-    append(recipe.content_identity);
-    append(recipe.boot_sha256);
-    append(boot_file_name);
-    append(entry_address);
-    append(target_name);
-    append(diagnostic_partial);
-    append(console_profile);
-    append(game_project_identity);
-    append(game_entry_handoff_artifact_identity);
-    append(latent_aot_entry_hint_identity);
-    append(partition_options.maximum_functions);
-    append(partition_options.maximum_instructions);
-    append(KATANA_RECOMP_VERSION);
-    append(exporter_identity);
-    append(katana::build_contract::analyzer_abi_version);
-    append(katana::build_contract::runtime_abi_version);
-    append(katana::build_contract::block_abi_version);
-    append(katana::build_contract::platform_services_abi_version);
-    append(katana::codegen::backend_interface_abi_version);
-    append(katana::codegen::port_project_contract_version);
-    append(katana::codegen::port_partition_emission_schema_version);
-    append(katana::codegen::port_metadata_cache_schema_version);
-    append(katana::codegen::codegen_cache_schema_version);
-    append(katana::codegen::native_aot_emission_profile_version);
-    append(port_ir_contract_version);
-    append(katana::runtime::game_project_contract_version);
-    append(katana::runtime::game_project_artifact_format_version);
-    return katana::io::sha256_bytes(identity.str());
+std::filesystem::path port_export_workspace_root(
+    const std::filesystem::path& output_parent) {
+    if (const auto configured =
+            configured_environment_value(
+                "KATANA_PORT_WORKSPACE_ROOT")) {
+        const auto root =
+            std::filesystem::path(*configured).lexically_normal();
+        if (!root.is_absolute())
+            throw std::invalid_argument(
+                "KATANA_PORT_WORKSPACE_ROOT muss absolut sein.");
+        return root;
+    }
+#ifdef _WIN32
+    if (const auto local_app_data =
+            configured_environment_value("LOCALAPPDATA"))
+        return std::filesystem::path(*local_app_data) /
+               "KatanaRecomp" / "port-workspaces";
+#else
+    if (const auto xdg_cache =
+            configured_environment_value("XDG_CACHE_HOME"))
+        return std::filesystem::path(*xdg_cache) /
+               "KatanaRecomp" / "port-workspaces";
+    if (const auto user_home =
+            configured_environment_value("HOME"))
+        return std::filesystem::path(*user_home) /
+               ".cache" / "KatanaRecomp" / "port-workspaces";
+#endif
+    // Minimal environments without a per-user cache root remain functional.
+    // The content-addressed key still makes sibling output paths share work.
+    return output_parent;
 }
 
 std::filesystem::path port_export_cache_path(
@@ -3414,7 +3764,8 @@ load_cached_port_export(
     const std::filesystem::path& workspace,
     const std::string_view expected_source_kind,
     const std::string_view expected_key,
-    const katana::runtime::DiscInstallRecipe& expected_recipe) {
+    const katana::runtime::DiscInstallRecipe& expected_recipe,
+    const katana::ProgressReporter& progress) {
     const auto state_path =
         port_export_cache_path(workspace, expected_source_kind, expected_key);
     if (!safe_port_directory_chain_exists(
@@ -3496,7 +3847,10 @@ load_cached_port_export(
         !valid_cache_digest(cached.recipe_identity) ||
         cached.functions == 0u || cached.partitions == 0u)
         return std::nullopt;
-    const auto actual_tree = port_codegen_tree_identity(workspace);
+    const auto actual_tree = port_codegen_tree_identity(
+        workspace,
+        progress,
+        "whole-export-cache-tree-load");
     if (!actual_tree || *actual_tree != cached.tree_identity)
         return std::nullopt;
     const auto recipe_path = workspace / "content" / "game.katana-install";
@@ -3517,13 +3871,17 @@ void store_cached_port_export(
     const std::string_view source_kind,
     const std::string_view key,
     const katana::runtime::DiscInstallRecipe& expected_recipe,
-    const katana::codegen::PortExportResult& report) {
+    const katana::codegen::PortExportResult& report,
+    const katana::ProgressReporter& progress) {
     if (report.job_generation != expected_recipe.job_generation ||
         report.content_identity != expected_recipe.content_identity ||
         report.disc_tracks != expected_recipe.tracks.size())
         throw std::runtime_error(
             "Content-addressed Portexport besitzt eine unerwartete Disc-Bindung.");
-    const auto tree_identity = port_codegen_tree_identity(workspace);
+    const auto tree_identity = port_codegen_tree_identity(
+        workspace,
+        progress,
+        "whole-export-cache-tree-store");
     if (!tree_identity)
         throw std::runtime_error(
             "Content-addressed Portcodegen-Ausgabe ist nach Export unvollstaendig.");
@@ -3886,6 +4244,10 @@ int export_port_project(const std::filesystem::path& source_path,
                                      HintsAndHeuristics) {
     PortPhaseTimingRecorder phase_timings;
     PortPhaseTimingBinding phase_timing_binding(phase_timings);
+    const katana::ProgressReporter port_progress(
+        observe_structured_progress,
+        std::chrono::milliseconds(250),
+        std::chrono::seconds(1));
     phase_timings.transition("setup");
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
@@ -3961,10 +4323,8 @@ int export_port_project(const std::filesystem::path& source_path,
     std::uint32_t whole_export_source_contract_version = 0u;
     std::string whole_export_boot_file_name;
     std::uint32_t whole_export_entry_address = 0u;
-    const auto exporter_cache_identity =
-        current_exporter_cache_identity();
-    const bool whole_export_cache_enabled =
-        exporter_cache_identity.has_value();
+    const auto implementation_identities =
+        port_export_implementation_identities();
     if (game_project_path.has_value() && diagnostic_partial)
         throw std::invalid_argument(
             "--game-project ist ausschliesslich fuer vollstaendige Produktports erlaubt.");
@@ -3980,15 +4340,6 @@ int export_port_project(const std::filesystem::path& source_path,
             "Produktport mit --game-project.");
     phase_timings.transition("analysis-codegen");
     std::cout << "KATANA_PORT_PHASE analysis-codegen\n";
-    if (!whole_export_cache_enabled)
-        std::cout
-            << "KATANA_PORT_SUBPHASE "
-               "whole-program-analysis-ir-cache-disabled-unproven-exporter\n";
-    else if (katana::build_contract::katana_git_commit ==
-             untrusted_katana_source_identity)
-        std::cout
-            << "KATANA_PORT_SUBPHASE "
-               "whole-program-analysis-ir-cache-binary-identity\n";
     std::cout << std::flush;
     if (game_project_path.has_value()) {
         verified_game_project =
@@ -4077,7 +4428,9 @@ int export_port_project(const std::filesystem::path& source_path,
         phase_timings.transition("disc-load");
         std::cout << "KATANA_PORT_SUBPHASE disc-load\n" << std::flush;
         verified_native_disc =
-            katana::platform::load_dreamcast_gdi_boot(source_path);
+            katana::platform::load_dreamcast_gdi_boot(
+                source_path,
+                port_progress);
         const auto boot_sha256 = katana::io::sha256_bytes(
             std::string_view(
                 reinterpret_cast<const char*>(
@@ -4090,7 +4443,8 @@ int export_port_project(const std::filesystem::path& source_path,
             katana::runtime::make_disc_install_recipe(
                 *verified_native_disc->source,
                 project_identity,
-                boot_sha256);
+                boot_sha256,
+                port_progress);
         std::cout
             << "KATANA_PORT_SUBPHASE disc-load-complete-ms"
             << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -4190,26 +4544,44 @@ int export_port_project(const std::filesystem::path& source_path,
     const auto latent_aot_hint_identity =
         latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints,
                                        latent_aot_discovery_mode);
-    if (whole_export_cache_enabled)
-        whole_export_cache_key = port_export_cache_key(
-            whole_export_source_kind,
-            whole_export_source_contract_version,
-            *verified_install_recipe,
-            whole_export_boot_file_name,
-            whole_export_entry_address,
-            target_name,
-            diagnostic_partial,
-            console_profile,
-            game_project_identity,
-            handoff_artifact_identity,
-            latent_aot_hint_identity,
-            *exporter_cache_identity);
+    whole_export_cache_key = port_export_cache_key(
+        whole_export_source_kind,
+        whole_export_source_contract_version,
+        *verified_install_recipe,
+        whole_export_boot_file_name,
+        whole_export_entry_address,
+        target_name,
+        diagnostic_partial,
+        console_profile,
+        game_project_identity,
+        handoff_artifact_identity,
+        latent_aot_hint_identity,
+        implementation_identities.whole_export);
     const auto workspace_key = port_export_workspace_key(
         whole_export_source_kind,
         *verified_install_recipe,
         target_name);
+    const auto workspace_root =
+        port_export_workspace_root(
+            absolute_output.parent_path());
+    if (workspace_root == workspace_root.root_path() ||
+        workspace_root.filename().empty())
+        throw std::invalid_argument(
+            "Globaler Port-Arbeitscache darf kein Dateisystemstamm sein.");
+    if (!source_root.empty() &&
+        path_is_within(workspace_root, source_root))
+        throw std::invalid_argument(
+            "Globaler Port-Arbeitscache muss ausserhalb des "
+            "KatanaRecomp-Quellbaums liegen.");
+    ensure_safe_absolute_directory_chain(
+        workspace_root, "Globaler Port-Arbeitscache");
+    const auto component_cache_root =
+        workspace_root / "component-cache";
+    ensure_safe_absolute_directory_chain(
+        component_cache_root,
+        "Globaler Port-Komponentencache");
     const auto workspace =
-        absolute_output.parent_path() /
+        workspace_root /
         (".katana-port-work-" + workspace_key.substr(0u, 12u));
     ensure_safe_absolute_directory_chain(
         workspace.parent_path(), "Port-Arbeitsverzeichnis");
@@ -4273,9 +4645,14 @@ int export_port_project(const std::filesystem::path& source_path,
             diagnostic_partial,
             console_profile,
             observe_port_export_progress};
+        export_options.progress = port_progress;
+        export_options.analysis_cache_root =
+            component_cache_root;
         export_options.codegen_cache_root = workspace / ".katana-codegen-cache";
+        export_options.analysis_implementation_identity =
+            implementation_identities.analysis;
         export_options.codegen_implementation_identity =
-            exporter_cache_identity.value_or(std::string{});
+            implementation_identities.codegen;
         export_options.game_project =
             resolved_game_project.has_value()
                 ? &*resolved_game_project
@@ -4294,7 +4671,8 @@ int export_port_project(const std::filesystem::path& source_path,
                         workspace,
                         whole_export_source_kind,
                         *whole_export_cache_key,
-                        *verified_install_recipe);
+                        *verified_install_recipe,
+                        port_progress);
                 cached) {
                 report.output_root = workspace;
                 report.functions = cached->functions;
@@ -4314,6 +4692,58 @@ int export_port_project(const std::filesystem::path& source_path,
                     "partition-codegen-cache-hit",
                     "metadata-cache-hit"};
                 whole_export_cache_hit = true;
+                const auto cached_phase =
+                    [&port_progress](
+                        const katana::ProgressOperation operation,
+                        const katana::ProgressUnit unit,
+                        const std::string_view label) {
+                        auto scope = port_progress.begin(
+                            operation,
+                            unit,
+                            std::nullopt,
+                            std::string(label));
+                        scope.cached();
+                    };
+                cached_phase(
+                    katana::ProgressOperation::ProgramValidation,
+                    katana::ProgressUnit::Steps,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::ControlFlowAnalysis,
+                    katana::ProgressUnit::Steps,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::FunctionValueAnalysis,
+                    katana::ProgressUnit::Functions,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::CandidateResolution,
+                    katana::ProgressUnit::Functions,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::LatentAotAnalysis,
+                    katana::ProgressUnit::Modules,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::IrGeneration,
+                    katana::ProgressUnit::Functions,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::IrOptimization,
+                    katana::ProgressUnit::Steps,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::SourceGeneration,
+                    katana::ProgressUnit::Partitions,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::MetadataGeneration,
+                    katana::ProgressUnit::Files,
+                    "whole-export-cache");
+                cached_phase(
+                    katana::ProgressOperation::ArtifactWrite,
+                    katana::ProgressUnit::Files,
+                    "whole-export-cache");
                 std::cout
                     << "KATANA_PORT_SUBPHASE whole-program-analysis-ir-cache-hit\n"
                     << std::flush;
@@ -4335,7 +4765,8 @@ int export_port_project(const std::filesystem::path& source_path,
                     whole_export_source_kind,
                     *whole_export_cache_key,
                     *verified_install_recipe,
-                    report);
+                    report,
+                    port_progress);
         }
         const auto build_profile =
             configured_environment_value("KATANA_PORT_BUILD_PROFILE")
@@ -4398,6 +4829,60 @@ int export_port_project(const std::filesystem::path& source_path,
              build_profile + '-' + generator_identity);
         static_cast<void>(
             safe_regular_port_directory_exists(build_path, "Inkrementeller Hostbuild-Cache"));
+        if (!runtime_binding.build_targets_file.empty()) {
+            const auto runtime_build_root =
+                runtime_binding.build_targets_file.parent_path();
+            const auto runtime_target =
+                diagnostic_partial
+                    ? std::string_view("katana_runtime")
+                    : std::string_view("katana_runtime_core");
+            auto runtime_build =
+                std::string("cmake --build ") +
+                shell_quote(runtime_build_root) +
+                " --target " + std::string(runtime_target);
+            if (runtime_binding.multi_config)
+                runtime_build +=
+                    " --config " +
+                    runtime_binding.build_configuration;
+            runtime_build +=
+                " --parallel " +
+                std::to_string(configured_host_build_jobs());
+#ifdef _WIN32
+            if (runtime_binding.msbuild_generator)
+                runtime_build += " -- /nodeReuse:false";
+#endif
+            phase_timings.transition("runtime-sdk-build");
+            std::cout
+                << "KATANA_PORT_PHASE runtime-sdk-build"
+                << " config="
+                << runtime_binding.build_configuration
+                << " generator="
+                << (runtime_binding.multi_config ? "multi" : "single")
+                << '\n'
+                << std::flush;
+            auto runtime_build_progress =
+                port_progress.begin(
+                    katana::ProgressOperation::HostRuntimeBuild,
+                    katana::ProgressUnit::Steps,
+                    1u,
+                    "build-tree-runtime");
+            const auto runtime_build_result =
+                run_supervised_host_command(
+                    normalized_host_command(runtime_build),
+                    configured_port_host_command_runtime(
+                        "runtime-sdk-build"));
+            if (runtime_build_result.timed_out)
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    "KATANA_PORT_HOST_COMMAND_TIMEOUT "
+                    "stage=runtime-sdk-build process_tree=terminated");
+            if (runtime_build_result.exit_code != 0)
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    "Buildtree-Runtime konnte vor dem Portlink nicht "
+                    "aktualisiert werden.");
+            runtime_build_progress.complete();
+        }
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
 #ifdef _WIN32
@@ -4421,12 +4906,26 @@ int export_port_project(const std::filesystem::path& source_path,
         configure +=
             " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_PORT_BUILD_PROFILE=" +
             build_profile;
-        if (!runtime_binding.package_prefix.empty())
-            configure += " -DKATANA_RUNTIME_ROOT= -DKATANA_RUNTIME_PREFIX=" +
-                         shell_quote(runtime_binding.package_prefix);
-        else
-            configure += " -DKATANA_RUNTIME_PREFIX= -DKATANA_RUNTIME_ROOT=" +
-                         shell_quote(runtime_binding.source_root);
+        if (!runtime_binding.package_prefix.empty()) {
+            configure +=
+                " -DKATANA_RUNTIME_BUILD_TARGETS= "
+                "-DKATANA_RUNTIME_ROOT= "
+                "-DKATANA_RUNTIME_PREFIX=" +
+                shell_quote(runtime_binding.package_prefix);
+        } else if (!runtime_binding.build_targets_file.empty()) {
+            configure +=
+                " -DKATANA_RUNTIME_PREFIX= "
+                "-DKATANA_RUNTIME_ROOT= "
+                "-DKATANA_RUNTIME_BUILD_TARGETS=" +
+                shell_quote(
+                    runtime_binding.build_targets_file);
+        } else {
+            configure +=
+                " -DKATANA_RUNTIME_PREFIX= "
+                "-DKATANA_RUNTIME_BUILD_TARGETS= "
+                "-DKATANA_RUNTIME_ROOT=" +
+                shell_quote(runtime_binding.source_root);
+        }
         if (host_linker != "default")
             configure += " -DCMAKE_LINKER_TYPE=" +
                          std::string(host_linker == "msvc" ? "MSVC" : "LLD");
@@ -4453,6 +4952,12 @@ int export_port_project(const std::filesystem::path& source_path,
         const auto configure_command = normalized_host_command(configure);
         const auto configure_runtime =
             configured_port_host_command_runtime("configure");
+        auto configure_progress =
+            port_progress.begin(
+                katana::ProgressOperation::Configure,
+                katana::ProgressUnit::Steps,
+                1u,
+                "port-host-configure");
         SupervisedHostCommandResult configure_result;
         try {
             configure_result =
@@ -4486,7 +4991,8 @@ int export_port_project(const std::filesystem::path& source_path,
                     ? std::string(
                           "KATANA_PORT_HOST_COMMAND_TIMEOUT "
                           "stage=configure limit_ms=") +
-                          std::to_string(configure_runtime.count()) +
+                          std::to_string(
+                              configure_runtime->count()) +
                           " process_tree=terminated"
                     : std::string(
                           "Port-Hostbuild konnte nicht konfiguriert werden");
@@ -4526,6 +5032,7 @@ int export_port_project(const std::filesystem::path& source_path,
                     configuration_error.what());
         }
 #endif
+        configure_progress.complete();
         auto build =
             std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
         build += " --parallel " + std::to_string(configured_host_build_jobs());
@@ -4537,6 +5044,12 @@ int export_port_project(const std::filesystem::path& source_path,
         const auto build_command = normalized_host_command(build);
         const auto build_runtime =
             configured_port_host_command_runtime("host-build");
+        auto compilation_progress =
+            port_progress.begin(
+                katana::ProgressOperation::Compilation,
+                katana::ProgressUnit::Steps,
+                1u,
+                "port-host-compile-and-link");
         const auto build_result =
             run_supervised_host_command(
                 build_command,
@@ -4546,7 +5059,7 @@ int export_port_project(const std::filesystem::path& source_path,
                 std::string(
                     "KATANA_PORT_HOST_COMMAND_TIMEOUT "
                     "stage=host-build limit_ms=") +
-                std::to_string(build_runtime.count()) +
+                std::to_string(build_runtime->count()) +
                 " process_tree=terminated";
             try {
                 remove_failed_port_host_build_state(
@@ -4569,6 +5082,13 @@ int export_port_project(const std::filesystem::path& source_path,
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hosttarget konnte nicht gebaut werden.");
         }
+        compilation_progress.complete();
+        auto link_progress =
+            port_progress.begin(
+                katana::ProgressOperation::Linking,
+                katana::ProgressUnit::Files,
+                1u,
+                "port-host-link-validation");
         auto built_executable = build_path / target_name;
 #ifdef _WIN32
         built_executable += ".exe";
@@ -4576,6 +5096,13 @@ int export_port_project(const std::filesystem::path& source_path,
         if (!std::filesystem::is_regular_file(built_executable))
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hostbuild besitzt kein ausfuehrbares Artefakt.");
+        link_progress.complete();
+        auto packaging_progress =
+            port_progress.begin(
+                katana::ProgressOperation::Packaging,
+                katana::ProgressUnit::Steps,
+                6u,
+                "port-distribution");
         const auto published_executable = report.output_root / built_executable.filename();
         require_safe_replaceable_port_file(
             report.output_root,
@@ -4584,6 +5111,7 @@ int export_port_project(const std::filesystem::path& source_path,
         std::filesystem::copy_file(built_executable,
                                    published_executable,
                                    std::filesystem::copy_options::overwrite_existing);
+        packaging_progress.advance(1u);
         const auto recipe = katana::runtime::parse_disc_install_recipe(report.disc_install_recipe);
         if (recipe.job_generation != report.job_generation ||
             recipe.content_identity != report.content_identity)
@@ -4593,6 +5121,7 @@ int export_port_project(const std::filesystem::path& source_path,
                 .sha256;
         const auto executable_sha256 =
             katana::io::capture_input_provenance("host-executable", published_executable).sha256;
+        packaging_progress.advance(1u);
         const auto install_manifest = report.output_root / "content" / "game.katana-install.json";
         ensure_safe_port_directory_chain(
             report.output_root,
@@ -4611,6 +5140,7 @@ int export_port_project(const std::filesystem::path& source_path,
         if (!manifest)
             throw std::runtime_error("Disc-Installationsmanifest konnte nicht finalisiert werden.");
         manifest.close();
+        packaging_progress.advance(1u);
         const auto runtime_manifest_path =
             report.output_root / "runtime" / "runtime-dependencies.json";
         ensure_safe_port_directory_chain(
@@ -4632,6 +5162,7 @@ int export_port_project(const std::filesystem::path& source_path,
             report.output_root,
             report.output_root / "user-data",
             "Lokaler Portdatenordner");
+        packaging_progress.advance(1u);
         phase_timings.transition("package");
         std::cout << "KATANA_PORT_PHASE package\n" << std::flush;
         const auto publish_transaction =
@@ -4641,6 +5172,7 @@ int export_port_project(const std::filesystem::path& source_path,
             publish_transaction.stage,
             target_name,
             recipe);
+        packaging_progress.advance(1u);
         ensure_safe_port_directory_chain(
             publish_transaction.stage,
             publish_transaction.stage / "user-data",
@@ -4686,6 +5218,7 @@ int export_port_project(const std::filesystem::path& source_path,
             publish_transaction);
         cleanup_owned_port_publish_transaction(
             publish_transaction);
+        packaging_progress.complete();
         std::cout << "Portpaket erzeugt: " << absolute_output.string() << '\n'
                   << "Funktionen: " << report.functions << '\n'
                   << "Partitionen: " << report.partitions << '\n'

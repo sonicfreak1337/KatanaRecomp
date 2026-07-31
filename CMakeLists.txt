@@ -212,6 +212,187 @@ string(REPLACE "\\" "\\\\" KATANA_CONFIGURED_COMPILER_LAUNCHER
        "${KATANA_CONFIGURED_COMPILER_LAUNCHER}")
 string(REPLACE "\"" "\\\"" KATANA_CONFIGURED_COMPILER_LAUNCHER
        "${KATANA_CONFIGURED_COMPILER_LAUNCHER}")
+
+# Persistent analysis artifacts must follow the implementation components that
+# can actually change them, rather than every byte of the monolithic CLI.
+# CONFIGURE_DEPENDS notices added/removed implementation files; the custom
+# command's explicit dependencies notice every content change at build time.
+file(
+    GLOB_RECURSE
+    KATANA_ANALYSIS_IDENTITY_INPUTS
+    CONFIGURE_DEPENDS
+    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    "src/analysis/*.cpp"
+    "src/analysis/*.hpp"
+    "src/decoder/*.cpp"
+    "src/decoder/*.hpp"
+    "include/katana/analysis/*.hpp"
+    "include/katana/decoder/*.hpp"
+    "include/katana/sh4/*.hpp"
+)
+list(
+    APPEND
+    KATANA_ANALYSIS_IDENTITY_INPUTS
+    "include/katana/codegen/latent_aot_analysis_cache.hpp"
+    "include/katana/codegen/latent_aot_registry.hpp"
+    "include/katana/codegen/boot_analysis_cache.hpp"
+    "src/io/binary_reader.cpp"
+    "src/io/executable_image.cpp"
+    "src/codegen/latent_aot_analysis_cache.cpp"
+    "src/codegen/latent_aot_registry.cpp"
+    "src/codegen/boot_analysis_cache.cpp"
+    # prepare_boot_analysis() and its semantic cache contract currently live
+    # in this monolithic source. Until that slice is physically separated,
+    # analysis identity must conservatively own it.
+    "src/codegen/port_export.cpp"
+)
+file(
+    GLOB_RECURSE
+    KATANA_IR_IDENTITY_INPUTS
+    CONFIGURE_DEPENDS
+    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    "src/ir/*.cpp"
+    "src/ir/*.hpp"
+    "include/katana/ir/*.hpp"
+)
+file(
+    GLOB_RECURSE
+    KATANA_CODEGEN_IDENTITY_INPUTS
+    CONFIGURE_DEPENDS
+    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    "src/codegen/*.cpp"
+    "src/codegen/*.hpp"
+    "src/io/*.cpp"
+    "src/io/*.hpp"
+    "src/platform/*.cpp"
+    "src/platform/*.hpp"
+    "include/katana/codegen/*.hpp"
+    "include/katana/io/*.hpp"
+    "include/katana/platform/*.hpp"
+)
+list(
+    REMOVE_ITEM
+    KATANA_CODEGEN_IDENTITY_INPUTS
+    "include/katana/codegen/boot_analysis_cache.hpp"
+    "include/katana/codegen/latent_aot_analysis_cache.hpp"
+    "include/katana/codegen/latent_aot_registry.hpp"
+    "src/codegen/boot_analysis_cache.cpp"
+    "src/codegen/latent_aot_analysis_cache.cpp"
+    "src/codegen/latent_aot_registry.cpp"
+)
+list(
+    APPEND
+    KATANA_CODEGEN_IDENTITY_INPUTS
+    "VERSION"
+    "cmake/KatanaVersions.cmake"
+    "include/katana/build_contract.hpp.in"
+    "include/katana/runtime/aot_runtime_abi.hpp"
+    "include/katana/runtime/block_abi.hpp"
+    "include/katana/runtime/disc_install.hpp"
+    "include/katana/runtime/dreamcast_boot.hpp"
+    "include/katana/runtime/executable_modules.hpp"
+    "include/katana/runtime/game_entry_handoff.hpp"
+    "include/katana/runtime/game_entry_handoff_artifact.hpp"
+    "include/katana/runtime/game_project.hpp"
+    "include/katana/runtime/game_project_artifact.hpp"
+    "include/katana/runtime/gdi.hpp"
+    "include/katana/runtime/native_aot_template.hpp"
+    "include/katana/runtime/packed_disc.hpp"
+    "src/runtime/disc_install.cpp"
+    "src/runtime/dreamcast_boot.cpp"
+    "src/runtime/game_entry_handoff.cpp"
+    "src/runtime/game_entry_handoff_artifact.cpp"
+    "src/runtime/game_project.cpp"
+    "src/runtime/game_project_artifact.cpp"
+    "src/runtime/gdi.cpp"
+    "src/runtime/guest_program_range.cpp"
+    "src/runtime/iso9660.cpp"
+    "src/runtime/packed_disc.cpp"
+)
+set(
+    KATANA_ORCHESTRATION_IDENTITY_INPUTS
+    "src/cli/main.cpp"
+    "src/cli/port_export_orchestration.cpp"
+    "src/cli/port_export_orchestration.hpp"
+)
+list(REMOVE_DUPLICATES KATANA_ANALYSIS_IDENTITY_INPUTS)
+list(REMOVE_DUPLICATES KATANA_IR_IDENTITY_INPUTS)
+list(REMOVE_DUPLICATES KATANA_CODEGEN_IDENTITY_INPUTS)
+list(REMOVE_DUPLICATES KATANA_ORCHESTRATION_IDENTITY_INPUTS)
+list(SORT KATANA_ANALYSIS_IDENTITY_INPUTS)
+list(SORT KATANA_IR_IDENTITY_INPUTS)
+list(SORT KATANA_CODEGEN_IDENTITY_INPUTS)
+list(SORT KATANA_ORCHESTRATION_IDENTITY_INPUTS)
+file(
+    GLOB_RECURSE
+    KATANA_COMPONENT_IDENTITY_WATCH_INPUTS
+    CONFIGURE_DEPENDS
+    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    "src/*.cpp"
+    "src/*.hpp"
+    "include/katana/*.hpp"
+    "include/katana/*.in"
+)
+set(
+    KATANA_COMPONENT_IDENTITY_INPUTS_FILE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/component-identity-inputs.cmake"
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ComponentIdentityInputs.cmake.in"
+    "${KATANA_COMPONENT_IDENTITY_INPUTS_FILE}"
+    @ONLY
+)
+set(
+    KATANA_COMPONENT_IDENTITY_HEADER
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/component_identity.hpp"
+)
+set(
+    KATANA_COMPONENT_IDENTITY_STAMP
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/component-identity.stamp"
+)
+set(KATANA_COMPONENT_IDENTITY_DEPENDENCIES "")
+foreach(
+    KATANA_COMPONENT_IDENTITY_INPUT
+    IN LISTS
+        KATANA_COMPONENT_IDENTITY_WATCH_INPUTS
+        KATANA_ANALYSIS_IDENTITY_INPUTS
+        KATANA_IR_IDENTITY_INPUTS
+        KATANA_CODEGEN_IDENTITY_INPUTS
+        KATANA_ORCHESTRATION_IDENTITY_INPUTS
+)
+    list(
+        APPEND
+        KATANA_COMPONENT_IDENTITY_DEPENDENCIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/${KATANA_COMPONENT_IDENTITY_INPUT}"
+    )
+endforeach()
+list(REMOVE_DUPLICATES KATANA_COMPONENT_IDENTITY_DEPENDENCIES)
+list(
+    APPEND
+    KATANA_COMPONENT_IDENTITY_DEPENDENCIES
+    "${KATANA_COMPONENT_IDENTITY_INPUTS_FILE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateComponentIdentities.cmake"
+)
+add_custom_command(
+    OUTPUT "${KATANA_COMPONENT_IDENTITY_STAMP}"
+    BYPRODUCTS "${KATANA_COMPONENT_IDENTITY_HEADER}"
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DKATANA_COMPONENT_IDENTITY_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DKATANA_COMPONENT_IDENTITY_INPUTS=${KATANA_COMPONENT_IDENTITY_INPUTS_FILE}"
+        "-DKATANA_COMPONENT_IDENTITY_OUTPUT=${KATANA_COMPONENT_IDENTITY_HEADER}"
+        "-DKATANA_COMPONENT_IDENTITY_STAMP=${KATANA_COMPONENT_IDENTITY_STAMP}"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateComponentIdentities.cmake"
+    DEPENDS ${KATANA_COMPONENT_IDENTITY_DEPENDENCIES}
+    COMMENT "Hash exact analysis, IR and codegen implementation components"
+    VERBATIM
+)
+add_custom_target(
+    katana-component-identities
+    DEPENDS "${KATANA_COMPONENT_IDENTITY_STAMP}"
+)
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in
     ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
@@ -328,6 +509,7 @@ function(katana_enable_warnings target)
 endfunction()
 
 set(KATANA_RUNTIME_CORE_SOURCES
+    src/progress.cpp
     src/io/input_provenance.cpp
     src/io/json_report.cpp
     src/runtime/aica.cpp
@@ -436,6 +618,11 @@ endfunction()
 katana_configure_runtime_objects(katana_runtime_core_objects)
 katana_configure_runtime_objects(katana_sh4_decoder_objects)
 katana_configure_runtime_objects(katana_diagnostic_interpreter_objects)
+target_link_libraries(
+    katana_runtime_core_objects
+    PRIVATE
+        Threads::Threads
+)
 
 add_library(
     katana_runtime_core
@@ -465,6 +652,16 @@ add_library(
 )
 set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)
 set_target_properties(katana_runtime_core PROPERTIES EXPORT_NAME runtime_core)
+target_link_libraries(
+    katana_runtime_core
+    PUBLIC
+        Threads::Threads
+)
+target_link_libraries(
+    katana_runtime
+    PUBLIC
+        Threads::Threads
+)
 
 function(katana_stamp_runtime_contract target)
     set_target_properties(
@@ -574,6 +771,7 @@ add_library(katana_core STATIC
     src/ir/serialize.cpp
     src/ir/verifier.cpp
     src/codegen/backend.cpp
+    src/codegen/boot_analysis_cache.cpp
     src/codegen/cache.cpp
     src/codegen/cpp_emitter.cpp
     src/codegen/latent_aot_analysis_cache.cpp
@@ -1067,7 +1265,9 @@ set_source_files_properties(${KATANA_DIFFERENTIAL_GENERATED_CPP} PROPERTIES GENE
 
 add_executable(katana-recomp
     src/cli/main.cpp
+    src/cli/port_export_orchestration.cpp
 )
+add_dependencies(katana-recomp katana-component-identities)
 
 target_link_libraries(
     katana-recomp
@@ -1770,6 +1970,11 @@ target_link_libraries(katana-pvr-render-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-pvr-render-tests)
 add_test(NAME katana-pvr-render-tests COMMAND katana-pvr-render-tests)
 
+add_executable(katana-pvr-parallel-render-tests tests/runtime/pvr_parallel_render_tests.cpp)
+target_link_libraries(katana-pvr-parallel-render-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-pvr-parallel-render-tests)
+add_test(NAME katana-pvr-parallel-render-tests COMMAND katana-pvr-parallel-render-tests)
+
 add_executable(katana-aica-register-tests tests/runtime/aica_register_tests.cpp)
 target_link_libraries(katana-aica-register-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-aica-register-tests)
@@ -1824,6 +2029,11 @@ add_executable(katana-packed-disc-tests tests/runtime/packed_disc_tests.cpp)
 target_link_libraries(katana-packed-disc-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-packed-disc-tests)
 add_test(NAME katana-packed-disc-tests COMMAND katana-packed-disc-tests)
+
+add_executable(katana-progress-tests tests/progress_tests.cpp)
+target_link_libraries(katana-progress-tests PRIVATE katana_runtime_core)
+katana_enable_warnings(katana-progress-tests)
+add_test(NAME katana-progress-tests COMMAND katana-progress-tests)
 
 add_executable(katana-scheduler-tests tests/runtime/scheduler_tests.cpp)
 target_link_libraries(katana-scheduler-tests PRIVATE katana_runtime)
@@ -2484,17 +2694,49 @@ add_test(
     COMMAND katana-latent-aot-analysis-cache-tests
 )
 
+add_executable(katana-boot-analysis-cache-tests
+    tests/codegen/boot_analysis_cache_tests.cpp
+)
+target_link_libraries(katana-boot-analysis-cache-tests PRIVATE katana_core)
+katana_enable_warnings(katana-boot-analysis-cache-tests)
+add_test(
+    NAME katana-boot-analysis-cache-tests
+    COMMAND katana-boot-analysis-cache-tests
+)
+
 add_executable(katana-port-export-tests tests/codegen/port_export_tests.cpp)
 target_link_libraries(katana-port-export-tests PRIVATE katana_core katana_runtime)
 katana_enable_warnings(katana-port-export-tests)
 add_test(NAME katana-port-export-tests COMMAND katana-port-export-tests)
+set(KATANA_PORT_CLI_TEST_CASES core cache publish runtime-edge)
+foreach(KATANA_PORT_CLI_TEST_CASE IN LISTS KATANA_PORT_CLI_TEST_CASES)
+    set(
+        KATANA_PORT_CLI_TEST_NAME
+        "katana-port-cli-${KATANA_PORT_CLI_TEST_CASE}-tests"
+    )
+    add_test(
+        NAME "${KATANA_PORT_CLI_TEST_NAME}"
+        COMMAND ${CMAKE_COMMAND}
+            -DKATANA_PORT_CLI_CASE=${KATANA_PORT_CLI_TEST_CASE}
+            -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
+            -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+            -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DKATANA_RUNTIME_BUILD_TARGETS_FILE=${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildTargets.cmake
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_port_cli.cmake
+    )
+    set_tests_properties(
+        "${KATANA_PORT_CLI_TEST_NAME}"
+        PROPERTIES
+            TIMEOUT 840
+            RESOURCE_LOCK katana-external-port-build
+    )
+endforeach()
 add_test(
-    NAME katana-port-cli-tests
+    NAME katana-runtime-buildtree-profile-tests
     COMMAND ${CMAKE_COMMAND}
-        -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
         -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
-        -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_port_cli.cmake
+        -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_runtime_buildtree_profile.cmake
 )
 add_test(
     NAME katana-build-contract-configuration-tests
@@ -2504,8 +2746,8 @@ add_test(
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_build_contract_configuration.cmake
 )
 set_tests_properties(
-    katana-port-cli-tests
-    PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
+    katana-runtime-buildtree-profile-tests
+    PROPERTIES TIMEOUT 90 RESOURCE_LOCK katana-external-port-build
 )
 set_tests_properties(
     katana-build-contract-configuration-tests
@@ -4767,6 +5009,11 @@ install(
     COMPONENT runtime-sdk
 )
 install(
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/progress.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
+    COMPONENT runtime-sdk
+)
+install(
     FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
     COMPONENT runtime-sdk
@@ -4788,6 +5035,26 @@ install(
     NAMESPACE KatanaRecomp::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/KatanaRecomp
     COMPONENT runtime-sdk
+)
+get_property(
+    KATANA_RUNTIME_GENERATOR_IS_MULTI_CONFIG
+    GLOBAL
+    PROPERTY GENERATOR_IS_MULTI_CONFIG
+)
+if(KATANA_RUNTIME_GENERATOR_IS_MULTI_CONFIG)
+    set(KATANA_RUNTIME_GENERATOR_IS_MULTI_CONFIG 1)
+else()
+    set(KATANA_RUNTIME_GENERATOR_IS_MULTI_CONFIG 0)
+endif()
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/KatanaRuntimeBuildProfile.txt.in
+    ${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildProfile.txt
+    @ONLY
+)
+export(
+    EXPORT KatanaRuntimeTargets
+    FILE ${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildTargets.cmake
+    NAMESPACE KatanaRecomp::
 )
 install(
     EXPORT KatanaAnalyzerTargets

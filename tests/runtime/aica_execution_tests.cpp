@@ -148,8 +148,18 @@ int main() {
                 pcm_fault_snapshot.channels[1u].phase ==
                     (std::uint64_t{2u} << 32u),
             "Ungueltiger PCM-Bereich beendet den Audiopfad oder die gueltige Nachbarvoice.");
+    const auto expected_audio_jobs =
+        std::min<std::size_t>(2u, fault_registers.render_job_capacity());
+    require(fault_registers.last_render_job_count() == expected_audio_jobs &&
+                fault_registers.parallel_rendered_buffer_count() ==
+                    (expected_audio_jobs > 1u ? 1u : 0u),
+            "Unabhaengige AICA-Voices werden nicht ueber den begrenzten "
+            "Runtime-Executor verteilt.");
 
     fault_registers.reset();
+    require(fault_registers.last_render_job_count() == 1u &&
+                fault_registers.parallel_rendered_buffer_count() == 0u,
+            "AICA-Reset behaelt run-lokale Paralleltelemetrie.");
     fault_registers.write(
         aica_common_register_base, 0x0Fu, MemoryAccessWidth::Byte);
     configure_voice(0u, 0x4100u, 7u, 3u);

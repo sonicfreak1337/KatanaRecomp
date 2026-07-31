@@ -100,6 +100,11 @@ class AicaRegisterFile final {
     [[nodiscard]] std::uint64_t rendered_frame_count() const noexcept;
     [[nodiscard]] std::uint64_t voice_error_count() const noexcept;
     [[nodiscard]] std::optional<AicaVoiceFirstError> first_voice_error() const noexcept;
+    // Run-local host telemetry. These counters are intentionally not part of a
+    // portable guest-state snapshot.
+    [[nodiscard]] std::size_t render_job_capacity() const noexcept;
+    [[nodiscard]] std::size_t last_render_job_count() const noexcept;
+    [[nodiscard]] std::uint64_t parallel_rendered_buffer_count() const noexcept;
     [[nodiscard]] AicaRegisterSnapshot snapshot() const noexcept;
     void validate_state_restore(const AicaRegisterSnapshot& state) const;
     void restore_state_passive(AicaRegisterSnapshot state);
@@ -130,6 +135,8 @@ class AicaRegisterFile final {
     std::uint64_t rendered_frames_ = 0u;
     std::uint64_t voice_errors_ = 0u;
     std::optional<AicaVoiceFirstError> first_voice_error_;
+    std::size_t last_render_jobs_ = 1u;
+    std::uint64_t parallel_rendered_buffers_ = 0u;
 };
 
 class AicaRtc final {

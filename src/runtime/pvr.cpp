@@ -2,6 +2,7 @@
 
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/system_asic.hpp"
+#include "parallel_work.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1305,6 +1306,32 @@ struct Rgba8 {
     std::uint8_t a = 0xFFu;
 };
 
+struct PvrRasterTile {
+    std::uint32_t minimum_x = 0u;
+    std::uint32_t maximum_x = 0u;
+    std::uint32_t minimum_y = 0u;
+    std::uint32_t maximum_y = 0u;
+};
+
+struct PvrRasterCounters {
+    std::uint64_t pixels = 0u;
+    std::uint64_t pixel_writes = 0u;
+    std::uint64_t triangles = 0u;
+    bool opaque_modifier_affected = false;
+    bool translucent_modifier_affected = false;
+};
+
+struct PvrTextureReadRange {
+    std::uint64_t begin = 0u;
+    std::uint64_t end = 0u;
+};
+
+struct PvrRasterPlan {
+    std::vector<PvrRasterTile> tiles;
+    std::vector<PvrRasterCounters> counters;
+    bool parallel_safe = false;
+};
+
 std::uint8_t expand4(const std::uint16_t value) {
     return static_cast<std::uint8_t>((value << 4u) | value);
 }
@@ -1922,6 +1949,7 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
         PvrFrame frame{width_, height_, std::vector<std::uint8_t>(rgba_size)};
         for (std::size_t pixel = 0u; pixel < pixel_count; ++pixel)
             std::copy(solid_color->begin(), solid_color->end(), frame.rgba.begin() + pixel * 4u);
+        last_capture_jobs_ = 1u;
         ++presented_frames_;
         return frame;
     }
@@ -1959,62 +1987,94 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
         return vram[dreamcast_vram_32bit_to_linear_offset(wrapped)];
     };
     PvrFrame frame{width_, height_, std::vector<std::uint8_t>(rgba_size)};
-    for (std::uint32_t y = 0u; y < height_; ++y) {
-        const auto source_line = static_cast<std::uint32_t>(
-            static_cast<std::uint64_t>(y) * source_height_ / height_);
-        const auto source_base = interlaced_ && (source_line & 1u) != 0u
-                                     ? *second_base_offset
-                                     : base_offset;
-        const auto source_row = interlaced_ ? source_line / 2u : source_line;
-        for (std::uint32_t x = 0u; x < width_; ++x) {
-            const auto source_x = static_cast<std::uint32_t>(
-                static_cast<std::uint64_t>(x) * source_width_ / width_);
-            const auto source =
-                source_base + static_cast<std::size_t>(source_row) * stride_ +
-                source_x * bytes_per_pixel(format_);
-            const auto destination = (static_cast<std::size_t>(y) * width_ + x) * 4u;
-            if (format_ == PvrFramebufferFormat::Rgb888) {
-                frame.rgba[destination] = read_vram_byte(source + 2u);
-                frame.rgba[destination + 1u] = read_vram_byte(source + 1u);
-                frame.rgba[destination + 2u] = read_vram_byte(source);
-                frame.rgba[destination + 3u] = 0xFFu;
-                continue;
-            }
-            if (format_ == PvrFramebufferFormat::Rgb0888) {
-                frame.rgba[destination] = read_vram_byte(source + 2u);
-                frame.rgba[destination + 1u] = read_vram_byte(source + 1u);
-                frame.rgba[destination + 2u] = read_vram_byte(source);
-                frame.rgba[destination + 3u] = 0xFFu;
-                continue;
-            }
-            const auto pixel = static_cast<std::uint16_t>(read_vram_byte(source)) |
-                               static_cast<std::uint16_t>(read_vram_byte(source + 1u) << 8u);
-            if (format_ == PvrFramebufferFormat::Rgb565) {
-                frame.rgba[destination] =
-                    static_cast<std::uint8_t>(((pixel >> 11u) & 0x1Fu) << 3u | concat_);
-                frame.rgba[destination + 1u] =
-                    static_cast<std::uint8_t>(((pixel >> 5u) & 0x3Fu) << 2u |
-                                              (concat_ & 3u));
-                frame.rgba[destination + 2u] =
-                    static_cast<std::uint8_t>((pixel & 0x1Fu) << 3u | concat_);
-                frame.rgba[destination + 3u] = 0xFFu;
-            } else {
-                frame.rgba[destination] =
-                    static_cast<std::uint8_t>(((pixel >> 10u) & 0x1Fu) << 3u | concat_);
-                frame.rgba[destination + 1u] =
-                    static_cast<std::uint8_t>(((pixel >> 5u) & 0x1Fu) << 3u | concat_);
-                frame.rgba[destination + 2u] =
-                    static_cast<std::uint8_t>((pixel & 0x1Fu) << 3u | concat_);
-                frame.rgba[destination + 3u] = 0xFFu;
+    const auto source_pixel_bytes = bytes_per_pixel(format_);
+    const auto capture_rows = [&](const std::size_t job,
+                                  const std::size_t job_count) {
+        const auto begin = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(height_) * job / job_count);
+        const auto end = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(height_) * (job + 1u) / job_count);
+        for (auto y = begin; y < end; ++y) {
+            const auto source_line = static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(y) * source_height_ / height_);
+            const auto source_base =
+                interlaced_ && (source_line & 1u) != 0u
+                    ? *second_base_offset
+                    : base_offset;
+            const auto source_row =
+                interlaced_ ? source_line / 2u : source_line;
+            for (std::uint32_t x = 0u; x < width_; ++x) {
+                const auto source_x = static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(x) * source_width_ /
+                    width_);
+                const auto source =
+                    source_base +
+                    static_cast<std::size_t>(source_row) * stride_ +
+                    source_x * source_pixel_bytes;
+                const auto destination =
+                    (static_cast<std::size_t>(y) * width_ + x) * 4u;
+                if (format_ == PvrFramebufferFormat::Rgb888 ||
+                    format_ == PvrFramebufferFormat::Rgb0888) {
+                    frame.rgba[destination] =
+                        read_vram_byte(source + 2u);
+                    frame.rgba[destination + 1u] =
+                        read_vram_byte(source + 1u);
+                    frame.rgba[destination + 2u] =
+                        read_vram_byte(source);
+                    frame.rgba[destination + 3u] = 0xFFu;
+                    continue;
+                }
+                const auto pixel =
+                    static_cast<std::uint16_t>(
+                        read_vram_byte(source)) |
+                    static_cast<std::uint16_t>(
+                        read_vram_byte(source + 1u) << 8u);
+                if (format_ == PvrFramebufferFormat::Rgb565) {
+                    frame.rgba[destination] =
+                        static_cast<std::uint8_t>(
+                            ((pixel >> 11u) & 0x1Fu) << 3u |
+                            concat_);
+                    frame.rgba[destination + 1u] =
+                        static_cast<std::uint8_t>(
+                            ((pixel >> 5u) & 0x3Fu) << 2u |
+                            (concat_ & 3u));
+                    frame.rgba[destination + 2u] =
+                        static_cast<std::uint8_t>(
+                            (pixel & 0x1Fu) << 3u | concat_);
+                    frame.rgba[destination + 3u] = 0xFFu;
+                } else {
+                    frame.rgba[destination] =
+                        static_cast<std::uint8_t>(
+                            ((pixel >> 10u) & 0x1Fu) << 3u |
+                            concat_);
+                    frame.rgba[destination + 1u] =
+                        static_cast<std::uint8_t>(
+                            ((pixel >> 5u) & 0x1Fu) << 3u |
+                            concat_);
+                    frame.rgba[destination + 2u] =
+                        static_cast<std::uint8_t>(
+                            (pixel & 0x1Fu) << 3u | concat_);
+                    frame.rgba[destination + 3u] = 0xFFu;
+                }
             }
         }
-    }
+    };
+    last_capture_jobs_ =
+        detail::run_runtime_parallel_work(height_, capture_rows);
     ++presented_frames_;
     return frame;
 }
 
 std::uint64_t PvrFramebuffer::presented_frames() const noexcept {
     return presented_frames_;
+}
+
+std::size_t PvrFramebuffer::capture_job_capacity() const noexcept {
+    return detail::runtime_parallel_job_capacity();
+}
+
+std::size_t PvrFramebuffer::last_capture_job_count() const noexcept {
+    return last_capture_jobs_;
 }
 
 std::uint8_t TileAccelerator::list_rank(const PvrListType type) noexcept {
@@ -3277,7 +3337,6 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
         throw std::invalid_argument("PVR-Rendergeneration Null ist ungueltig.");
     if (render_generation <= last_render_generation_)
         throw std::logic_error("PVR-Rendergeneration ist nicht streng monoton.");
-    std::uint64_t frame_pixel_writes = 0u;
     const auto x_clip = registers.read(pvr_register::FramebufferXClip);
     const auto y_clip = registers.read(pvr_register::FramebufferYClip);
     const auto minimum_clip_x = x_clip & 0x7FFu;
@@ -3326,8 +3385,9 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     };
     const auto write_pixel = [&](const std::uint32_t offset,
                                  const std::size_t pixel_index,
-                                 const Rgba8 color) {
-        ++frame_pixel_writes;
+                                 const Rgba8 color,
+                                 PvrRasterCounters& counters) {
+        ++counters.pixel_writes;
         if (touched_pixels[pixel_index] == 0u) {
             touched_pixels[pixel_index] = 1u;
             original_pixels[pixel_index] = read_packed_pixel(offset);
@@ -3348,7 +3408,8 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     std::vector<std::uint8_t> volume_material_eligible(shadow_eligible.size(), 0u);
     std::vector<Rgba8> secondary_accumulation(
         shadow_eligible.size(), Rgba8{0u, 0u, 0u, 0u});
-    const std::vector<std::uint8_t>* volume_selection_mask = nullptr;
+    std::vector<std::uint8_t> modifier_volume_result(render_pixel_count, 0u);
+    std::vector<std::uint8_t> modifier_area_one(render_pixel_count, 0u);
 
     const auto edge = [](const PvrVertex& a, const PvrVertex& b, const float x, const float y) {
         return (x - a.x) * (b.y - a.y) - (y - a.y) * (b.x - a.x);
@@ -3488,8 +3549,495 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     const auto channel = [](const std::uint32_t argb, const unsigned shift) {
         return static_cast<float>((argb >> shift) & 0xFFu);
     };
-    for (std::uint32_t y = minimum_clip_y; y <= maximum_clip_y; ++y) {
-        for (std::uint32_t x = minimum_clip_x; x <= maximum_clip_x; ++x) {
+    PvrRasterPlan raster_plan;
+    raster_plan.tiles.push_back(PvrRasterTile{
+        minimum_clip_x,
+        maximum_clip_x + 1u,
+        minimum_clip_y,
+        maximum_clip_y + 1u});
+    raster_plan.counters.resize(1u);
+    const auto classify_parallel_raster = [&]() noexcept {
+        try {
+            if (trace_memory != nullptr ||
+                detail::runtime_parallel_job_capacity() <= 1u)
+                return false;
+            const auto clamp_minimum = decode_register_color(
+                registers.read(pvr_register::ColorClampMinimum));
+            const auto clamp_maximum = decode_register_color(
+                registers.read(pvr_register::ColorClampMaximum));
+            const auto clamp_valid =
+                clamp_minimum.r <= clamp_maximum.r &&
+                clamp_minimum.g <= clamp_maximum.g &&
+                clamp_minimum.b <= clamp_maximum.b;
+            static constexpr auto maximum_safe_coordinate = 1.0e7f;
+            static constexpr auto maximum_safe_texture_coordinate = 1.0e6f;
+            const auto safe_vertex = [&](const PvrVertex& vertex) {
+                return std::isfinite(vertex.x) &&
+                       std::isfinite(vertex.y) &&
+                       std::isfinite(vertex.z) &&
+                       std::isfinite(vertex.u) &&
+                       std::isfinite(vertex.v) &&
+                       std::isfinite(vertex.volume_u) &&
+                       std::isfinite(vertex.volume_v) &&
+                       std::fabs(vertex.x) <= maximum_safe_coordinate &&
+                       std::fabs(vertex.y) <= maximum_safe_coordinate &&
+                       std::fabs(vertex.z) <= maximum_safe_coordinate &&
+                       std::fabs(vertex.u) <=
+                           maximum_safe_texture_coordinate &&
+                       std::fabs(vertex.v) <=
+                           maximum_safe_texture_coordinate &&
+                       std::fabs(vertex.volume_u) <=
+                           maximum_safe_texture_coordinate &&
+                       std::fabs(vertex.volume_v) <=
+                           maximum_safe_texture_coordinate;
+            };
+            std::vector<PvrTextureReadRange> texture_ranges;
+            const auto texture_maximum_index =
+                [](const PvrMaterial& material) noexcept
+                -> std::optional<std::uint64_t> {
+                if (material.texture_width == 0u ||
+                    material.texture_height == 0u)
+                    return std::nullopt;
+                if (!material.texture_twiddled) {
+                    const auto stride =
+                        material.texture_stride_width == 0u
+                            ? material.texture_width
+                            : material.texture_stride_width;
+                    if (stride < material.texture_width)
+                        return std::nullopt;
+                    return static_cast<std::uint64_t>(
+                               material.texture_height - 1u) *
+                               stride +
+                           material.texture_width - 1u;
+                }
+                const auto minimum = std::min(
+                    material.texture_width,
+                    material.texture_height);
+                if (minimum == 0u) return std::nullopt;
+                const auto mask = minimum - 1u;
+                const auto interleaved =
+                    static_cast<std::uint64_t>(twiddle_bits(mask)) |
+                    (static_cast<std::uint64_t>(twiddle_bits(mask)) << 1u);
+                const auto blocks =
+                    static_cast<std::uint64_t>(
+                        (material.texture_width - 1u) / minimum +
+                        (material.texture_height - 1u) / minimum) *
+                    minimum * minimum;
+                return interleaved + blocks;
+            };
+            const auto add_texture_range =
+                [&](const PvrMaterial& material) {
+                if (!material.textured) return true;
+                if (material.texture_width == 0u ||
+                    material.texture_height == 0u ||
+                    material.texture_width > 1024u ||
+                    material.texture_height > 1024u ||
+                    material.texture_filter >= 2u ||
+                    material.texture_format > 6u ||
+                    (material.texture_vq &&
+                     material.texture_format != 4u &&
+                     material.texture_format > 2u) ||
+                    (material.texture_format == 5u &&
+                     material.palette_bank > 63u) ||
+                    (material.texture_format == 6u &&
+                     material.palette_bank > 3u))
+                    return false;
+                std::uint64_t level_offset = 0u;
+                if (material.texture_mipmapped) {
+                    if (material.texture_width !=
+                            material.texture_height ||
+                        !std::has_single_bit(
+                            material.texture_width))
+                        return false;
+                    static constexpr std::array<std::uint32_t, 11u>
+                        offsets{0x00006u,
+                                0x00008u,
+                                0x00010u,
+                                0x00030u,
+                                0x000B0u,
+                                0x002B0u,
+                                0x00AB0u,
+                                0x02AB0u,
+                                0x0AAB0u,
+                                0x2AAB0u,
+                                0xAAAB0u};
+                    const auto level = static_cast<std::size_t>(
+                        std::countr_zero(
+                            material.texture_width));
+                    if (level >= offsets.size()) return false;
+                    level_offset = offsets[level];
+                    if (material.texture_vq)
+                        level_offset /= 8u;
+                    else if (material.texture_format == 5u)
+                        level_offset /= 4u;
+                    else if (material.texture_format == 6u)
+                        level_offset /= 2u;
+                }
+                const auto maximum_index =
+                    texture_maximum_index(material);
+                if (!maximum_index) return false;
+                auto end = static_cast<std::uint64_t>(
+                               material.texture_base) +
+                           level_offset;
+                if (material.texture_vq) {
+                    auto block_material = material;
+                    block_material.texture_width =
+                        std::max(1u,
+                                 material.texture_width / 2u);
+                    block_material.texture_height =
+                        std::max(1u,
+                                 material.texture_height / 2u);
+                    if (block_material.texture_stride_width != 0u)
+                        block_material.texture_stride_width =
+                            std::max(
+                                1u,
+                                block_material
+                                        .texture_stride_width /
+                                    2u);
+                    const auto maximum_block =
+                        texture_maximum_index(block_material);
+                    if (!maximum_block) return false;
+                    end += 2048u + *maximum_block + 1u;
+                    end = std::max<std::uint64_t>(
+                        end,
+                        static_cast<std::uint64_t>(
+                            material.texture_base) +
+                            2048u);
+                } else if (material.texture_format <= 2u ||
+                           material.texture_format == 4u) {
+                    end += *maximum_index * 2u + 2u;
+                } else if (material.texture_format == 3u) {
+                    end += (*maximum_index + 4u) * 2u;
+                } else if (material.texture_format == 5u) {
+                    end += *maximum_index / 2u + 1u;
+                } else {
+                    end += *maximum_index + 1u;
+                }
+                const auto begin = static_cast<std::uint64_t>(
+                    material.texture_base);
+                if (end <= begin || end > vram.size())
+                    return false;
+                texture_ranges.push_back({begin, end});
+                return true;
+            };
+            const auto material_safe =
+                [&](PvrMaterial material,
+                    const std::vector<PvrVertex>& vertices,
+                    const bool volume_coordinates) {
+                if (material.depth_compare > 7u ||
+                    material.culling > 3u ||
+                    material.texture_shading > 3u ||
+                    material.texture_filter > 3u ||
+                    material.fog_mode > 3u ||
+                    material.source_blend > 7u ||
+                    material.destination_blend > 7u ||
+                    material.user_clip_mode > 3u ||
+                    material.user_clip_mode == 1u ||
+                    (material.color_clamp_enabled &&
+                     !clamp_valid))
+                    return false;
+                if (material.blend_source_accumulation)
+                    material.textured = false;
+                if (material.texture_x32_stride) {
+                    material.texture_stride_width =
+                        (registers.read(
+                             pvr_register::TextureModulo) &
+                         0x1Fu) *
+                        32u;
+                    if (material.texture_stride_width <
+                        material.texture_width)
+                        return false;
+                }
+                for (const auto& vertex : vertices)
+                    if (!safe_vertex(vertex)) return false;
+                if (material.textured) {
+                    constexpr auto epsilon =
+                        std::numeric_limits<float>::epsilon();
+                    for (std::size_t index = 2u;
+                         index < vertices.size();
+                         ++index) {
+                        auto* first = &vertices[index - 2u];
+                        auto* second = &vertices[index - 1u];
+                        const auto* third = &vertices[index];
+                        if ((index & 1u) != 0u)
+                            std::swap(first, second);
+                        const auto area =
+                            edge(*first,
+                                 *second,
+                                 third->x,
+                                 third->y);
+                        if (!std::isfinite(area))
+                            return false;
+                        if (area == 0.0f ||
+                            (material.culling == 1u &&
+                             std::fabs(area) < 1.0f) ||
+                            (material.culling == 2u &&
+                             area > 0.0f) ||
+                            (material.culling == 3u &&
+                             area < 0.0f))
+                            continue;
+                        const auto same_positive =
+                            first->z > epsilon &&
+                            second->z > epsilon &&
+                            third->z > epsilon;
+                        const auto same_negative =
+                            first->z < -epsilon &&
+                            second->z < -epsilon &&
+                            third->z < -epsilon;
+                        if (!same_positive &&
+                            !same_negative)
+                            return false;
+                        const auto first_u =
+                            volume_coordinates
+                                ? first->volume_u
+                                : first->u;
+                        const auto first_v =
+                            volume_coordinates
+                                ? first->volume_v
+                                : first->v;
+                        const auto second_u =
+                            volume_coordinates
+                                ? second->volume_u
+                                : second->u;
+                        const auto second_v =
+                            volume_coordinates
+                                ? second->volume_v
+                                : second->v;
+                        const auto third_u =
+                            volume_coordinates
+                                ? third->volume_u
+                                : third->u;
+                        const auto third_v =
+                            volume_coordinates
+                                ? third->volume_v
+                                : third->v;
+                        if (!std::isfinite(first_u * first->z) ||
+                            !std::isfinite(first_v * first->z) ||
+                            !std::isfinite(second_u * second->z) ||
+                            !std::isfinite(second_v * second->z) ||
+                            !std::isfinite(third_u * third->z) ||
+                            !std::isfinite(third_v * third->z))
+                            return false;
+                    }
+                }
+                return add_texture_range(material);
+            };
+            if ((background_material.color_clamp_enabled &&
+                 !clamp_valid) ||
+                !add_texture_range(background_material))
+                return false;
+            if (background_material.textured &&
+                (std::fabs(a.u) >
+                     maximum_safe_texture_coordinate ||
+                 std::fabs(a.v) >
+                     maximum_safe_texture_coordinate ||
+                 std::fabs(b.u) >
+                     maximum_safe_texture_coordinate ||
+                 std::fabs(b.v) >
+                     maximum_safe_texture_coordinate ||
+                 std::fabs(c.u) >
+                     maximum_safe_texture_coordinate ||
+                 std::fabs(c.v) >
+                     maximum_safe_texture_coordinate ||
+                 std::fabs(d.u) >
+                     maximum_safe_texture_coordinate ||
+                 std::fabs(d.v) >
+                     maximum_safe_texture_coordinate))
+                return false;
+            for (const auto& primitive : frame.primitives) {
+                if (!valid_pvr_list_type(primitive.list) ||
+                    !material_safe(primitive.material,
+                                   primitive.vertices,
+                                   false))
+                    return false;
+                if (primitive.material.shadow_enabled &&
+                    primitive.material.volume_material &&
+                    !material_safe(
+                        *primitive.material.volume_material,
+                        primitive.vertices,
+                        true))
+                    return false;
+            }
+            for (const auto& volume : frame.modifier_volumes) {
+                if ((volume.list !=
+                         PvrListType::OpaqueModifier &&
+                     volume.list !=
+                         PvrListType::TranslucentModifier) ||
+                    volume.depth_mode > 3u ||
+                    volume.culling > 3u ||
+                    volume.user_clip_mode > 3u ||
+                    volume.user_clip_mode == 1u)
+                    return false;
+                for (const auto& triangle :
+                     volume.triangles) {
+                    for (const auto& vertex : triangle)
+                        if (!safe_vertex(vertex))
+                            return false;
+                    const auto area = edge(
+                        triangle[0],
+                        triangle[1],
+                        triangle[2].x,
+                        triangle[2].y);
+                    if (!std::isfinite(area))
+                        return false;
+                }
+            }
+            for (const auto list :
+                 {PvrListType::OpaqueModifier,
+                  PvrListType::TranslucentModifier}) {
+                bool volume_open = false;
+                for (const auto& volume :
+                     frame.modifier_volumes) {
+                    if (volume.list != list) continue;
+                    volume_open =
+                        volume.depth_mode == 0u;
+                }
+                if (volume_open) return false;
+            }
+            std::sort(
+                texture_ranges.begin(),
+                texture_ranges.end(),
+                [](const auto& left, const auto& right) {
+                    return left.begin < right.begin;
+                });
+            std::vector<PvrTextureReadRange> merged_ranges;
+            for (const auto range : texture_ranges) {
+                if (!merged_ranges.empty() &&
+                    range.begin <= merged_ranges.back().end)
+                    merged_ranges.back().end =
+                        std::max(merged_ranges.back().end,
+                                 range.end);
+                else
+                    merged_ranges.push_back(range);
+            }
+            const auto target_overlaps_texture =
+                [&](const std::uint64_t begin,
+                    const std::uint64_t end) {
+                const auto position = std::lower_bound(
+                    merged_ranges.begin(),
+                    merged_ranges.end(),
+                    begin,
+                    [](const auto& range,
+                       const auto value) {
+                        return range.end <= value;
+                    });
+                return position != merged_ranges.end() &&
+                       position->begin < end;
+            };
+            for (auto y = minimum_clip_y;
+                 y <= maximum_clip_y;
+                 ++y) {
+                for (auto x = minimum_clip_x;
+                     x <= maximum_clip_x;
+                     ++x) {
+                    const auto logical =
+                        static_cast<std::uint32_t>(
+                            base +
+                            static_cast<std::uint64_t>(y) *
+                                stride +
+                            static_cast<std::uint64_t>(x) *
+                                pixel_bytes);
+                    const auto backing =
+                        dreamcast_vram_32bit_to_linear_offset(
+                            logical);
+                    if (target_overlaps_texture(
+                            backing,
+                            static_cast<std::uint64_t>(
+                                backing) +
+                                pixel_bytes))
+                        return false;
+                }
+            }
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
+    raster_plan.parallel_safe = classify_parallel_raster();
+    if (raster_plan.parallel_safe) {
+        try {
+            raster_plan.tiles.clear();
+            constexpr std::uint32_t tile_size = 32u;
+            for (auto tile_y = minimum_clip_y;
+                 tile_y <= maximum_clip_y;
+                 tile_y += tile_size) {
+                for (auto tile_x = minimum_clip_x;
+                     tile_x <= maximum_clip_x;
+                     tile_x += tile_size) {
+                    raster_plan.tiles.push_back(
+                        PvrRasterTile{
+                            tile_x,
+                            std::min(
+                                maximum_clip_x + 1u,
+                                tile_x + tile_size),
+                            tile_y,
+                            std::min(
+                                maximum_clip_y + 1u,
+                                tile_y + tile_size)});
+                }
+            }
+            raster_plan.counters.assign(
+                raster_plan.tiles.size(), {});
+            if (raster_plan.tiles.size() <= 1u)
+                raster_plan.parallel_safe = false;
+        } catch (...) {
+            raster_plan.parallel_safe = false;
+        }
+    }
+    if (!raster_plan.parallel_safe) {
+        raster_plan.tiles.assign(
+            1u,
+            PvrRasterTile{minimum_clip_x,
+                          maximum_clip_x + 1u,
+                          minimum_clip_y,
+                          maximum_clip_y + 1u});
+        raster_plan.counters.assign(1u, {});
+    }
+    std::vector<PvrPrimitive> prepared_opaque_volume_primitives;
+    std::vector<PvrPrimitive> prepared_translucent_volume_primitives;
+    if (raster_plan.parallel_safe) {
+        try {
+            for (const auto& primitive : frame.primitives) {
+                if (!primitive.material.shadow_enabled ||
+                    !primitive.material.volume_material)
+                    continue;
+                auto selected = primitive;
+                selected.material = *primitive.material.volume_material;
+                selected.material.volume_material.reset();
+                selected.material.depth_compare = 2u;
+                selected.material.depth_write = false;
+                for (auto& vertex : selected.vertices) {
+                    vertex.u = vertex.volume_u;
+                    vertex.v = vertex.volume_v;
+                    vertex.argb = vertex.volume_argb;
+                    vertex.oargb = vertex.volume_oargb;
+                }
+                if (primitive.list == PvrListType::Opaque ||
+                    primitive.list == PvrListType::PunchThrough)
+                    prepared_opaque_volume_primitives.push_back(
+                        std::move(selected));
+                else if (primitive.list == PvrListType::Translucent)
+                    prepared_translucent_volume_primitives.push_back(
+                        std::move(selected));
+            }
+        } catch (...) {
+            raster_plan.parallel_safe = false;
+            raster_plan.tiles.assign(
+                1u,
+                PvrRasterTile{minimum_clip_x,
+                              maximum_clip_x + 1u,
+                              minimum_clip_y,
+                              maximum_clip_y + 1u});
+            raster_plan.counters.assign(1u, {});
+            prepared_opaque_volume_primitives.clear();
+            prepared_translucent_volume_primitives.clear();
+        }
+    }
+
+    const auto render_region = [&](const PvrRasterTile& tile,
+                                   PvrRasterCounters& counters) {
+    for (auto y = tile.minimum_y; y < tile.maximum_y; ++y) {
+        for (auto x = tile.minimum_x; x < tile.maximum_x; ++x) {
             const auto px = static_cast<float>(x) + 0.5f;
             const auto py = static_cast<float>(y) + 0.5f;
             const auto use_first_triangle =
@@ -3586,11 +4134,13 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 base + static_cast<std::uint64_t>(y) * stride +
                 static_cast<std::uint64_t>(x) * pixel_bytes);
             const auto pixel_index = static_cast<std::size_t>(y) * width + x;
-            write_pixel(offset, pixel_index, color);
+            write_pixel(offset, pixel_index, color, counters);
             depth[pixel_index] = w0 * first.z + w1 * second.z + w2 * third.z;
         }
     }
-    const auto render_primitive = [&](const PvrPrimitive& primitive) {
+    const auto render_primitive =
+        [&](const PvrPrimitive& primitive,
+            const std::vector<std::uint8_t>* const volume_selection_mask) {
         auto texture_material = primitive.material;
         if (texture_material.blend_source_accumulation)
             texture_material.textured = false;
@@ -3614,18 +4164,18 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 continue;
             const auto minimum_x = std::clamp(
                 static_cast<int>(std::floor(std::min({a->x, b->x, c->x}))),
-                static_cast<int>(minimum_clip_x),
-                static_cast<int>(maximum_clip_x + 1u));
+                static_cast<int>(tile.minimum_x),
+                static_cast<int>(tile.maximum_x));
             const auto maximum_x = std::clamp(
                 static_cast<int>(std::ceil(std::max({a->x, b->x, c->x}))),
-                static_cast<int>(minimum_clip_x),
-                static_cast<int>(maximum_clip_x + 1u));
+                static_cast<int>(tile.minimum_x),
+                static_cast<int>(tile.maximum_x));
             const auto minimum_y = std::clamp(static_cast<int>(std::floor(std::min({a->y, b->y, c->y}))),
-                                              static_cast<int>(minimum_clip_y),
-                                              static_cast<int>(maximum_clip_y + 1u));
+                                              static_cast<int>(tile.minimum_y),
+                                              static_cast<int>(tile.maximum_y));
             const auto maximum_y = std::clamp(static_cast<int>(std::ceil(std::max({a->y, b->y, c->y}))),
-                                              static_cast<int>(minimum_clip_y),
-                                              static_cast<int>(maximum_clip_y + 1u));
+                                              static_cast<int>(tile.minimum_y),
+                                              static_cast<int>(tile.maximum_y));
             const auto channel = [](const std::uint32_t argb, const unsigned shift) {
                 return static_cast<float>((argb >> shift) & 0xFFu);
             };
@@ -3803,7 +4353,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                     if (primitive.material.blend_destination_accumulation) {
                         secondary_accumulation[pixel_index] = source;
                     } else {
-                        write_pixel(offset, pixel_index, source);
+                        write_pixel(offset, pixel_index, source, counters);
                     }
                     shadow_eligible[pixel_index] = primitive.material.shadow_enabled ? 1u : 0u;
                     volume_material_eligible[pixel_index] =
@@ -3811,17 +4361,26 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                             ? 1u
                             : 0u;
                     if (primitive.material.depth_write) depth[pixel_index] = fragment_depth;
-                    ++metrics_.pixels;
+                    ++counters.pixels;
                 }
             }
-            ++metrics_.triangles;
+            if (!raster_plan.parallel_safe)
+                ++counters.triangles;
         }
     };
 
     const auto apply_modifier_volumes =
-        [&](const PvrListType list) -> std::vector<std::uint8_t> {
-        std::vector<std::uint8_t> volume_result(shadow_eligible.size(), 0u);
-        std::vector<std::uint8_t> area_one(shadow_eligible.size(), 0u);
+        [&](const PvrListType list) -> bool {
+        for (auto y = tile.minimum_y; y < tile.maximum_y; ++y) {
+            const auto begin = static_cast<std::size_t>(y) * width + tile.minimum_x;
+            const auto end = static_cast<std::size_t>(y) * width + tile.maximum_x;
+            std::fill(modifier_volume_result.begin() + begin,
+                      modifier_volume_result.begin() + end,
+                      std::uint8_t{0u});
+            std::fill(modifier_area_one.begin() + begin,
+                      modifier_area_one.begin() + end,
+                      std::uint8_t{0u});
+        }
         bool volume_open = false;
         for (const auto& volume : frame.modifier_volumes) {
             if (volume.list != list) continue;
@@ -3838,20 +4397,20 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                     continue;
                 const auto triangle_minimum_x = std::clamp(
                     static_cast<int>(std::floor(std::min({a.x, b.x, c.x}))),
-                    static_cast<int>(minimum_clip_x),
-                    static_cast<int>(maximum_clip_x + 1u));
+                    static_cast<int>(tile.minimum_x),
+                    static_cast<int>(tile.maximum_x));
                 const auto triangle_maximum_x = std::clamp(
                     static_cast<int>(std::ceil(std::max({a.x, b.x, c.x}))),
-                    static_cast<int>(minimum_clip_x),
-                    static_cast<int>(maximum_clip_x + 1u));
+                    static_cast<int>(tile.minimum_x),
+                    static_cast<int>(tile.maximum_x));
                 const auto triangle_minimum_y = std::clamp(
                     static_cast<int>(std::floor(std::min({a.y, b.y, c.y}))),
-                    static_cast<int>(minimum_clip_y),
-                    static_cast<int>(maximum_clip_y + 1u));
+                    static_cast<int>(tile.minimum_y),
+                    static_cast<int>(tile.maximum_y));
                 const auto triangle_maximum_y = std::clamp(
                     static_cast<int>(std::ceil(std::max({a.y, b.y, c.y}))),
-                    static_cast<int>(minimum_clip_y),
-                    static_cast<int>(maximum_clip_y + 1u));
+                    static_cast<int>(tile.minimum_y),
+                    static_cast<int>(tile.maximum_y));
                 for (auto y = triangle_minimum_y; y < triangle_maximum_y; ++y) {
                     for (auto x = triangle_minimum_x; x < triangle_maximum_x; ++x) {
                         if (volume.user_clip_mode != 0u) {
@@ -3885,9 +4444,9 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                             (w0 * a.z + w1 * b.z + w2 * c.z) / triangle_area;
                         if (modifier_depth <= depth[pixel_index]) continue;
                         if (use_union)
-                            volume_result[pixel_index] = 1u;
+                            modifier_volume_result[pixel_index] = 1u;
                         else
-                            volume_result[pixel_index] ^= 1u;
+                            modifier_volume_result[pixel_index] ^= 1u;
                     }
                 }
             }
@@ -3895,12 +4454,19 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 volume_open = true;
                 continue;
             }
-            for (std::size_t pixel = 0u; pixel < area_one.size(); ++pixel) {
-                if (volume.depth_mode == 1u)
-                    area_one[pixel] |= volume_result[pixel];
-                else
-                    area_one[pixel] &= static_cast<std::uint8_t>(!volume_result[pixel]);
-                volume_result[pixel] = 0u;
+            for (auto y = tile.minimum_y; y < tile.maximum_y; ++y) {
+                for (auto x = tile.minimum_x; x < tile.maximum_x; ++x) {
+                    const auto pixel =
+                        static_cast<std::size_t>(y) * width + x;
+                    if (volume.depth_mode == 1u)
+                        modifier_area_one[pixel] |=
+                            modifier_volume_result[pixel];
+                    else
+                        modifier_area_one[pixel] &=
+                            static_cast<std::uint8_t>(
+                                !modifier_volume_result[pixel]);
+                    modifier_volume_result[pixel] = 0u;
+                }
             }
             volume_open = false;
         }
@@ -3909,19 +4475,24 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 "TA-Modifier-Volume endet ohne Inclusion-/Exclusion-Abschluss.");
 
         bool affected = false;
-        for (std::size_t pixel = 0u; pixel < area_one.size(); ++pixel) {
-            if (area_one[pixel] != 0u && shadow_eligible[pixel] != 0u) {
-                affected = true;
-                break;
+        for (auto y = tile.minimum_y; y < tile.maximum_y && !affected; ++y) {
+            for (auto x = tile.minimum_x; x < tile.maximum_x; ++x) {
+                const auto pixel = static_cast<std::size_t>(y) * width + x;
+                if (modifier_area_one[pixel] != 0u &&
+                    shadow_eligible[pixel] != 0u) {
+                    affected = true;
+                    break;
+                }
             }
         }
-        if (!affected) return area_one;
+        if (!affected) return false;
         const auto shading = registers.read(pvr_register::ShadingScale);
         const auto scale = static_cast<std::uint32_t>(shading & 0xFFu);
-        for (std::uint32_t y = minimum_clip_y; y <= maximum_clip_y; ++y) {
-            for (std::uint32_t x = minimum_clip_x; x <= maximum_clip_x; ++x) {
+        for (auto y = tile.minimum_y; y < tile.maximum_y; ++y) {
+            for (auto x = tile.minimum_x; x < tile.maximum_x; ++x) {
                 const auto pixel_index = static_cast<std::size_t>(y) * width + x;
-                if (area_one[pixel_index] == 0u || shadow_eligible[pixel_index] == 0u ||
+                if (modifier_area_one[pixel_index] == 0u ||
+                    shadow_eligible[pixel_index] == 0u ||
                     volume_material_eligible[pixel_index] != 0u)
                     continue;
                 const auto offset = static_cast<std::uint32_t>(
@@ -3931,20 +4502,26 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 color.r = static_cast<std::uint8_t>((color.r * scale + 127u) / 256u);
                 color.g = static_cast<std::uint8_t>((color.g * scale + 127u) / 256u);
                 color.b = static_cast<std::uint8_t>((color.b * scale + 127u) / 256u);
-                write_pixel(offset, pixel_index, color);
-                ++metrics_.pixels;
+                write_pixel(offset, pixel_index, color, counters);
+                ++counters.pixels;
             }
         }
-        return area_one;
+        return true;
     };
 
     const auto render_volume_materials = [&](const PvrListType list,
-                                              const std::vector<std::uint8_t>& selection) {
-        if (std::none_of(selection.begin(), selection.end(), [](const auto value) {
-                return value != 0u;
-            }))
+                                              const bool affected) {
+        if (!affected) return;
+        if (raster_plan.parallel_safe) {
+            const auto& prepared =
+                list == PvrListType::OpaqueModifier
+                    ? prepared_opaque_volume_primitives
+                    : prepared_translucent_volume_primitives;
+            for (const auto& primitive : prepared)
+                render_primitive(
+                    primitive, &modifier_area_one);
             return;
-        volume_selection_mask = &selection;
+        }
         for (const auto& primitive : frame.primitives) {
             const auto applies =
                 (list == PvrListType::OpaqueModifier &&
@@ -3966,28 +4543,123 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 vertex.argb = vertex.volume_argb;
                 vertex.oargb = vertex.volume_oargb;
             }
-            render_primitive(selected);
+            render_primitive(selected, &modifier_area_one);
         }
-        volume_selection_mask = nullptr;
     };
 
     for (const auto& primitive : frame.primitives) {
         if (primitive.list == PvrListType::Opaque ||
             primitive.list == PvrListType::PunchThrough)
-            render_primitive(primitive);
+            render_primitive(primitive, nullptr);
     }
-    const auto opaque_volume_area = apply_modifier_volumes(PvrListType::OpaqueModifier);
-    render_volume_materials(PvrListType::OpaqueModifier, opaque_volume_area);
-    std::fill(shadow_eligible.begin(), shadow_eligible.end(), std::uint8_t{0u});
-    std::fill(volume_material_eligible.begin(),
-              volume_material_eligible.end(),
-              std::uint8_t{0u});
+    counters.opaque_modifier_affected =
+        apply_modifier_volumes(PvrListType::OpaqueModifier);
+    render_volume_materials(PvrListType::OpaqueModifier,
+                            counters.opaque_modifier_affected);
+    for (auto y = tile.minimum_y; y < tile.maximum_y; ++y) {
+        const auto begin = static_cast<std::size_t>(y) * width + tile.minimum_x;
+        const auto end = static_cast<std::size_t>(y) * width + tile.maximum_x;
+        std::fill(shadow_eligible.begin() + begin,
+                  shadow_eligible.begin() + end,
+                  std::uint8_t{0u});
+        std::fill(volume_material_eligible.begin() + begin,
+                  volume_material_eligible.begin() + end,
+                  std::uint8_t{0u});
+    }
     for (const auto& primitive : frame.primitives) {
-        if (primitive.list == PvrListType::Translucent) render_primitive(primitive);
+        if (primitive.list == PvrListType::Translucent)
+            render_primitive(primitive, nullptr);
     }
-    const auto translucent_volume_area =
+    counters.translucent_modifier_affected =
         apply_modifier_volumes(PvrListType::TranslucentModifier);
-    render_volume_materials(PvrListType::TranslucentModifier, translucent_volume_area);
+    render_volume_materials(PvrListType::TranslucentModifier,
+                            counters.translucent_modifier_affected);
+    };
+
+    if (raster_plan.parallel_safe) {
+        last_render_jobs_ = detail::run_runtime_parallel_work(
+            raster_plan.tiles.size(),
+            [&](const std::size_t lane,
+                const std::size_t lanes) {
+                for (auto tile = lane;
+                     tile < raster_plan.tiles.size();
+                     tile += lanes)
+                    render_region(
+                        raster_plan.tiles[tile],
+                        raster_plan.counters[tile]);
+            });
+    } else {
+        try {
+            render_region(raster_plan.tiles.front(),
+                          raster_plan.counters.front());
+        } catch (...) {
+            metrics_.pixels +=
+                raster_plan.counters.front().pixels;
+            metrics_.triangles +=
+                raster_plan.counters.front().triangles;
+            last_render_jobs_ = 1u;
+            throw;
+        }
+        last_render_jobs_ = 1u;
+    }
+    std::uint64_t frame_pixel_writes = 0u;
+    std::uint64_t frame_pixels = 0u;
+    bool opaque_modifier_affected = false;
+    bool translucent_modifier_affected = false;
+    for (const auto& counters : raster_plan.counters) {
+        frame_pixel_writes += counters.pixel_writes;
+        frame_pixels += counters.pixels;
+        opaque_modifier_affected =
+            opaque_modifier_affected ||
+            counters.opaque_modifier_affected;
+        translucent_modifier_affected =
+            translucent_modifier_affected ||
+            counters.translucent_modifier_affected;
+    }
+    metrics_.pixels += frame_pixels;
+    const auto count_primitive_triangles =
+        [&](const std::vector<PvrVertex>& vertices,
+            const std::uint8_t culling) {
+        std::uint64_t triangles = 0u;
+        for (std::size_t index = 2u; index < vertices.size(); ++index) {
+            auto* first = &vertices[index - 2u];
+            auto* second = &vertices[index - 1u];
+            const auto* third = &vertices[index];
+            if ((index & 1u) != 0u) std::swap(first, second);
+            const auto area = edge(*first, *second, third->x, third->y);
+            if (area == 0.0f ||
+                (culling == 1u && std::fabs(area) < 1.0f) ||
+                (culling == 2u && area > 0.0f) ||
+                (culling == 3u && area < 0.0f))
+                continue;
+            ++triangles;
+        }
+        return triangles;
+    };
+    std::uint64_t frame_triangles = 0u;
+    for (const auto& primitive : frame.primitives) {
+        if (primitive.list == PvrListType::Opaque ||
+            primitive.list == PvrListType::PunchThrough ||
+            primitive.list == PvrListType::Translucent)
+            frame_triangles += count_primitive_triangles(
+                primitive.vertices, primitive.material.culling);
+        const auto opaque_volume =
+            opaque_modifier_affected &&
+            (primitive.list == PvrListType::Opaque ||
+             primitive.list == PvrListType::PunchThrough);
+        const auto translucent_volume =
+            translucent_modifier_affected &&
+            primitive.list == PvrListType::Translucent;
+        if ((opaque_volume || translucent_volume) &&
+            primitive.material.shadow_enabled &&
+            primitive.material.volume_material)
+            frame_triangles += count_primitive_triangles(
+                primitive.vertices,
+                primitive.material.volume_material->culling);
+    }
+    metrics_.triangles += raster_plan.parallel_safe
+                              ? frame_triangles
+                              : raster_plan.counters.front().triangles;
     PvrRenderGenerationEvidence evidence;
     evidence.generation = render_generation;
     evidence.write_base = base;
@@ -4519,6 +5191,14 @@ bool PvrSoftwareRenderer::retain_unpresented_scanout_frame(PvrFrame frame) {
 
 const PvrSoftwareRenderMetrics& PvrSoftwareRenderer::metrics() const noexcept {
     return metrics_;
+}
+
+std::size_t PvrSoftwareRenderer::render_job_capacity() const noexcept {
+    return detail::runtime_parallel_job_capacity();
+}
+
+std::size_t PvrSoftwareRenderer::last_render_job_count() const noexcept {
+    return last_render_jobs_;
 }
 
 std::uint64_t PvrSoftwareRenderer::last_render_generation() const noexcept {

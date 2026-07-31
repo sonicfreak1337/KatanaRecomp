@@ -289,6 +289,11 @@ std::string compile_commands(const std::vector<std::filesystem::path>& sources) 
 ProjectWriteResult write_codegen_project(const std::filesystem::path& output_root,
                                          std::vector<ProjectArtifact> artifacts,
                                          const ProjectWriteOptions& options) {
+    auto write_progress = options.progress.begin(
+        katana::ProgressOperation::ArtifactWrite,
+        katana::ProgressUnit::Files,
+        std::nullopt,
+        "codegen-project");
     if (output_root.empty() || options.parallel_jobs == 0u) {
         throw std::invalid_argument(
             "Codegen-Projektausgabe braucht Ziel und mindestens einen Job.");
@@ -351,6 +356,7 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
         } else {
             write_file(root, artifact.relative_path, artifact.content);
         }
+        write_progress.advance(1u);
         return WriteOutcome{artifact.relative_path, hit};
     };
 
@@ -433,6 +439,7 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
         }
         if (removed) {
             result.removed_files.push_back(relative);
+            write_progress.advance(1u);
             auto parent = stale.parent_path();
             while (parent != root) {
                 std::error_code directory_error;
@@ -445,8 +452,10 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
     }
     for (const auto& build_file : build_files) {
         write_file(root, build_file.relative_path, build_file.content);
+        write_progress.advance(1u);
     }
     write_file(root, artifact_manifest_name, artifact_manifest(current_files));
+    write_progress.advance(1u);
 
     for (const auto& outcome : outcomes) {
         result.written_files.push_back(outcome.path);
@@ -457,6 +466,11 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
     }
     result.written_files.emplace_back(artifact_manifest_name);
     std::sort(result.written_files.begin(), result.written_files.end());
+    katana::ProgressCounterSnapshot counters;
+    counters.cache_hits = result.cache_hits;
+    counters.cache_misses = result.cache_misses;
+    write_progress.update(std::move(counters));
+    write_progress.complete();
     return result;
 }
 

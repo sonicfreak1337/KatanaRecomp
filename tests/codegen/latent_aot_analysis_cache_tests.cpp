@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -364,6 +365,34 @@ int main() {
                     .state ==
                 katana::codegen::LatentAotAnalysisCacheState::Corrupt,
             "Uebergrosses Cacheartefakt wurde akzeptiert.");
+
+        const std::array<std::uint8_t, 4u> allocation_bomb{
+            1u, 0u, 0u, 0u};
+        const katana::codegen::IrProgramCacheLimits tiny_allocation{
+            1'024u,
+            1u,
+            1u,
+            1u,
+            1u,
+            1u,
+            1u,
+            8u,
+            1u};
+        bool allocation_bomb_bounded = false;
+        try {
+            static_cast<void>(
+                katana::codegen::parse_ir_program_cache_payload(
+                    allocation_bomb, tiny_allocation));
+        } catch (const std::bad_alloc&) {
+            throw std::runtime_error(
+                "IR-Codec liess einen Containerzaehler bis bad_alloc "
+                "amplifizieren.");
+        } catch (const std::runtime_error&) {
+            allocation_bomb_bounded = true;
+        }
+        require(
+            allocation_bomb_bounded,
+            "IR-Codec ignorierte sein kumulatives Allokationsbudget.");
 
         const auto minimal = minimal_program();
         const auto minimal_artifact =

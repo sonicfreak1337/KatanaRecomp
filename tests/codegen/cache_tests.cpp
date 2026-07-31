@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -85,6 +86,16 @@ int main() {
     cache.store(key, "unit.cpp", "generated-a\n");
     require(cache.load(key, "unit.cpp") == std::optional<std::string>("generated-a\n"),
             "Gespeichertes Artefakt ist kein bytegleicher Cachetreffer.");
+    CodegenCache nested_cache(
+        fixture.path / "missing-parent" / "cache-root");
+    nested_cache.store_bounded(
+        key, "nested.bin", "nested", 8u);
+    require(
+        nested_cache.load_bounded(
+            key, "nested.bin", 8u) ==
+            std::optional<std::string>{"nested"},
+        "Begrenzter Cache legte fehlende sichere Eltern seines "
+        "Stammverzeichnisses nicht an.");
     require(
         cache.load_bounded(key, "unit.cpp", 12u) ==
             std::optional<std::string>("generated-a\n"),
@@ -230,6 +241,46 @@ int main() {
             "Begrenzter Cache schrieb durch einen verlinkten Key-Ordner "
             "oder veraenderte das externe Ziel.");
 
+        const auto linked_artifact =
+            cache.root() / key / "linked-artifact.bin";
+        link_error.clear();
+        std::filesystem::create_symlink(
+            fixture.external / "artifact.bin",
+            linked_artifact,
+            link_error);
+        if (!link_error) {
+            require(
+                !cache.load_bounded(
+                    key, "linked-artifact.bin", 8u) &&
+                    !cache.erase_bounded_if_matches(
+                        key,
+                        "linked-artifact.bin",
+                        "external",
+                        8u),
+                "Begrenzter Cache folgte einem verlinkten Artefakt "
+                "beim Lesen oder Entfernen.");
+            bool rejected_artifact_link_publish = false;
+            try {
+                cache.store_bounded(
+                    key,
+                    "linked-artifact.bin",
+                    "replaced",
+                    8u);
+            } catch (const std::runtime_error&) {
+                rejected_artifact_link_publish = true;
+            }
+            std::ifstream linked_external(
+                fixture.external / "artifact.bin",
+                std::ios::binary);
+            std::string linked_external_content;
+            linked_external >> linked_external_content;
+            require(
+                rejected_artifact_link_publish &&
+                    linked_external_content == "external",
+                "Begrenzter Cache schrieb durch einen "
+                "Artefaktlink oder veraenderte dessen externes Ziel.");
+        }
+
         const auto linked_root = fixture.path / "linked-root";
         std::filesystem::create_directories(
             fixture.external / "key");
@@ -310,11 +361,28 @@ int main() {
     require(rejected, "Cache erlaubt Pfadausbruch ueber Artefaktnamen.");
 
     std::vector<std::thread> publishers;
+    std::mutex publisher_failure_mutex;
+    std::string publisher_failure;
     for (std::size_t index = 0u; index < 8u; ++index) {
-        publishers.emplace_back([&] { cache.store(key, "concurrent.cpp", "stable-content\n"); });
+        publishers.emplace_back([&] {
+            try {
+                cache.store(
+                    key,
+                    "concurrent.cpp",
+                    "stable-content\n");
+            } catch (const std::exception& error) {
+                const std::lock_guard lock(
+                    publisher_failure_mutex);
+                if (publisher_failure.empty())
+                    publisher_failure = error.what();
+            }
+        });
     }
     for (auto& publisher : publishers)
         publisher.join();
+    require(publisher_failure.empty(),
+            "Paralleler atomarer Publish warf eine Ausnahme: " +
+                publisher_failure);
     require(cache.load(key, "concurrent.cpp") == std::optional<std::string>("stable-content\n") &&
                 std::none_of(std::filesystem::directory_iterator(cache.root() / key),
                              std::filesystem::directory_iterator{},

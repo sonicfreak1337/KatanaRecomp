@@ -1,12 +1,15 @@
 #pragma once
 
 #include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/analysis/graph_export.hpp"
+#include "katana/analysis/hardware_audit.hpp"
 #include "katana/build_contract.hpp"
 #include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/partition.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/ir/ir.hpp"
+#include "katana/progress.hpp"
 #include "katana/runtime/game_project.hpp"
 
 #include <cstddef>
@@ -47,10 +50,15 @@ struct PortExportOptions {
     bool diagnostic_partial = false;
     std::string console_profile = "japan-ntsc";
     PortExportProgressCallback progress_callback = nullptr;
-    // Optional persistent, local-only cache. Each AOT partition is looked up
-    // here before invoking the backend emitter. Caching remains disabled unless
-    // codegen_implementation_identity proves the exact exporter implementation.
+    // Structured, nested progress for CLI/GUI consumers. The legacy phase
+    // callback remains for stable textual checkpoints.
+    katana::ProgressReporter progress;
+    // Optional persistent, local-only caches. Analysis and codegen identities
+    // are build-bound to their respective implementation components so a
+    // runtime/UI-only rebuild does not invalidate native analysis artifacts.
+    std::filesystem::path analysis_cache_root;
     std::filesystem::path codegen_cache_root;
+    std::string analysis_implementation_identity;
     std::string codegen_implementation_identity;
     // Optional external, identity-bound game project. The caller owns the
     // definition and all referenced spans for the complete export call.
@@ -75,6 +83,8 @@ struct PortExportResult {
     std::size_t removed_files = 0u;
     std::size_t codegen_cache_hits = 0u;
     std::size_t codegen_cache_misses = 0u;
+    bool boot_analysis_cache_hit = false;
+    std::size_t boot_analysis_pipeline_runs = 0u;
     bool metadata_cache_hit = false;
     std::filesystem::path disc_install_recipe;
     std::string job_generation;
@@ -100,6 +110,14 @@ struct PreparedPortProgram {
     // the configured shared firmware services. False preserves the historical
     // NativeDiscBoot/firmware-mode mapping.
     bool direct_boot_executable = false;
+    // Optional products precomputed by the persistent boot-analysis layer.
+    // Their owners must outlive the complete export call.
+    const katana::analysis::DreamcastHardwareAudit*
+        precomputed_hardware_audit = nullptr;
+    const katana::analysis::AnalysisGraph*
+        precomputed_control_flow_graph = nullptr;
+    const katana::analysis::AnalysisGraph*
+        precomputed_call_graph = nullptr;
 };
 
 // Validates the one-to-one descriptor/payload binding, including identifier,

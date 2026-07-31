@@ -34,12 +34,16 @@ struct DiscInstallRecipe {
 
 [[nodiscard]] DiscInstallRecipe make_disc_install_recipe(const GdiDiscSource& source,
                                                          std::string job_generation,
-                                                         std::string boot_sha256);
+                                                         std::string boot_sha256,
+                                                         const ProgressReporter& progress = {});
 [[nodiscard]] std::string format_disc_install_recipe(const DiscInstallRecipe& recipe);
 [[nodiscard]] DiscInstallRecipe parse_disc_install_recipe(const std::filesystem::path& path);
-void verify_disc_install_source(const DiscInstallRecipe& recipe, const GdiDiscSource& source);
+void verify_disc_install_source(const DiscInstallRecipe& recipe,
+                                const GdiDiscSource& source,
+                                const ProgressReporter& progress = {});
 [[nodiscard]] PackedDiscInfo install_disc_content(const DiscInstallRecipe& recipe,
                                                   const std::filesystem::path& gdi_path,
-                                                  const std::filesystem::path& destination);
+                                                  const std::filesystem::path& destination,
+                                                  const ProgressReporter& progress = {});
 
 } // namespace katana::runtime

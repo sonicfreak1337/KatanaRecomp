@@ -30,7 +30,7 @@ int main() {
     using namespace katana::runtime;
     static_assert(native_host_runtime_contract_version == 2u);
     static_assert(host_pacing_contract_version == 1u);
-    static_assert(host_workload_limiter_contract_version == 1u);
+    static_assert(host_workload_limiter_contract_version == 2u);
     std::uint64_t host_now = 1'000u;
     std::vector<std::uint64_t> deadlines;
     HostPacer pacer(
@@ -125,8 +125,19 @@ int main() {
                     {50u, 100'000'000u,
                      host_workload_limiter_maximum_wait_ceiling_ns + 1u});
                 static_cast<void>(invalid);
+            }) &&
+            throws<std::invalid_argument>([] {
+                const HostWorkloadLimiter invalid(
+                    {100u, 100'000'000u, 2'000'000u, 0u, 4u});
+                static_cast<void>(invalid);
+            }) &&
+            throws<std::invalid_argument>([] {
+                const HostWorkloadLimiter invalid(
+                    {100u, 100'000'000u, 2'000'000u, 25u, 0u});
+                static_cast<void>(invalid);
             }),
-        "Ungueltige Lastquote, Fenster- oder Wartegrenze wird akzeptiert.");
+        "Ungueltige Thread-/Prozessquote, Kapazitaet, Fenster- oder "
+        "Wartegrenze wird akzeptiert.");
 
     std::uint64_t limiter_wall_ns = 0u;
     std::uint64_t limiter_thread_cpu_ns = 0u;
@@ -162,7 +173,9 @@ int main() {
                 limiter_waits.back() == 1'000'000u,
             "Reset verankert Uhren nicht neu oder verwirft kumulative Telemetrie.");
     const auto limiter_status = limiter.serialize_status_json();
-    require(limiter_status.find("\"target_cpu_percent\":50") != std::string::npos &&
+    require(limiter_status.find("\"schema\":\"katana-host-workload-limiter-v2\"") !=
+                    std::string::npos &&
+                limiter_status.find("\"target_cpu_percent\":50") != std::string::npos &&
                 limiter_status.find("\"wait_calls\":3") != std::string::npos &&
                 limiter_status.find("\"wait_time_ns\":5000000") != std::string::npos &&
                 limiter_status.find("\"measured_wall_time_ns\":") !=
@@ -272,6 +285,64 @@ int main() {
                 burst_limiter.measured_cpu_percent_milli() <= 85'000u,
             "20- bis 50-ms-CPU-Bursts werden nicht vollstaendig in begrenzten "
             "Wait-Chunks auf hoechstens 85 Prozent abgerechnet.");
+
+    std::uint64_t process_wall_ns = 0u;
+    std::uint64_t process_cpu_ns = 0u;
+    std::vector<std::uint64_t> process_waits;
+    bool process_thread_clock_read = false;
+    HostWorkloadLimiter process_limiter(
+        {100u, 100'000'000u, 2'000'000u, 25u, 4u},
+        [&] { return process_wall_ns; },
+        [&] {
+            process_thread_clock_read = true;
+            return std::uint64_t{0u};
+        },
+        [&](const std::uint64_t duration) {
+            process_waits.push_back(duration);
+            process_wall_ns += duration;
+        },
+        [&] { return process_cpu_ns; });
+    process_limiter.limit();
+    process_wall_ns = 2'000'000u;
+    process_cpu_ns = 4'000'000u;
+    process_limiter.limit();
+    require(!process_thread_clock_read &&
+                process_waits == std::vector<std::uint64_t>{2'000'000u} &&
+                process_wall_ns == 4'000'000u &&
+                process_limiter.target_process_cpu_percent() == 25u &&
+                process_limiter.process_cpu_capacity() == 4u &&
+                process_limiter.measured_process_cpu_time_ns() ==
+                    process_cpu_ns &&
+                process_limiter.measured_process_cpu_percent_milli() ==
+                    100'000u &&
+                process_limiter.serialize_status_json().find(
+                    "\"target_process_cpu_percent\":25") !=
+                    std::string::npos,
+            "Prozessweite Lastgrenze erfasst parallele Worker nicht als "
+            "aggregierte CPU-Schuld.");
+
+    std::uint64_t long_run_wall_ns = 0u;
+    std::uint64_t long_run_thread_cpu_ns = 0u;
+    std::uint64_t long_run_process_cpu_ns = 0u;
+    HostWorkloadLimiter long_run_limiter(
+        {99u, 100'000'000u, 2'000'000u, 25u, 24u},
+        [&] { return long_run_wall_ns; },
+        [&] { return long_run_thread_cpu_ns; },
+        [&](const std::uint64_t duration) {
+            long_run_wall_ns += duration;
+        },
+        [&] { return long_run_process_cpu_ns; });
+    long_run_limiter.limit();
+    long_run_wall_ns = 200'000'000'000'000u;
+    long_run_thread_cpu_ns = 190'000'000'000'000u;
+    long_run_process_cpu_ns = 1'000'000'000'000'000u;
+    long_run_limiter.limit();
+    require(
+        long_run_limiter.measured_cpu_percent_milli() == 95'000u &&
+            long_run_limiter.measured_process_cpu_percent_milli() ==
+                500'000u,
+        "Langlauf-Telemetrie kippt nach vielen kumulierten CPU-Stunden "
+        "durch eine vorzeitige Multiplikation in den Ueberlauf.");
 
     EventScheduler scheduler;
     DreamcastMediaClock clock(scheduler, {600u, 60u, 60u, 2u});

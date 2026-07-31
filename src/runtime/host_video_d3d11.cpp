@@ -9,6 +9,7 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <wrl/client.h>
 
 #include <array>
@@ -52,14 +53,35 @@ float4 pixel_main(VertexOutput input) : SV_Target {
 }
 )";
 
-ComPtr<ID3DBlob> compile_shader(const char* entry, const char* target) {
-    static const auto compile = []() noexcept {
-        const auto compiler = LoadLibraryW(L"d3dcompiler_47.dll");
-        return compiler == nullptr
-            ? decltype(&D3DCompile){nullptr}
-            : reinterpret_cast<decltype(&D3DCompile)>(
-                  GetProcAddress(compiler, "D3DCompile"));
+struct ShaderCompilerApi {
+    HMODULE module = nullptr;
+    decltype(&D3DCompile) compile = nullptr;
+};
+
+[[nodiscard]] const ShaderCompilerApi& shader_compiler_api() noexcept {
+    // Keep the selected compiler DLL pinned for the process lifetime because
+    // compiled shaders are created only during presenter construction.
+    static const auto api = []() noexcept {
+        constexpr std::array compiler_names{
+            L"d3dcompiler_47.dll",
+            L"d3dcompiler_46.dll",
+            L"d3dcompiler_43.dll",
+        };
+        for (const auto* compiler_name : compiler_names) {
+            const auto module = LoadLibraryW(compiler_name);
+            if (module == nullptr) continue;
+            const auto compile = reinterpret_cast<decltype(&D3DCompile)>(
+                GetProcAddress(module, "D3DCompile"));
+            if (compile != nullptr) return ShaderCompilerApi{module, compile};
+            FreeLibrary(module);
+        }
+        return ShaderCompilerApi{};
     }();
+    return api;
+}
+
+ComPtr<ID3DBlob> compile_shader(const char* entry, const char* target) {
+    const auto compile = shader_compiler_api().compile;
     if (compile == nullptr)
         throw std::runtime_error("D3D11-Hostvideocompiler ist nicht verfuegbar.");
     ComPtr<ID3DBlob> bytecode;
@@ -89,57 +111,65 @@ class D3d11Presenter final : public Win32D3d11Presenter {
         if (window == nullptr || client_width == 0u || client_height == 0u)
             throw std::invalid_argument("D3D11-Hostvideo besitzt kein gueltiges Fenster.");
 
-        DXGI_SWAP_CHAIN_DESC swap_chain_desc{};
-        swap_chain_desc.BufferDesc.Width = client_width;
-        swap_chain_desc.BufferDesc.Height = client_height;
-        swap_chain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        swap_chain_desc.SampleDesc.Count = 1u;
-        swap_chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        swap_chain_desc.BufferCount = 1u;
-        swap_chain_desc.OutputWindow = window;
-        swap_chain_desc.Windowed = TRUE;
-        swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
         constexpr std::array requested_levels{
             D3D_FEATURE_LEVEL_11_1,
             D3D_FEATURE_LEVEL_11_0,
             D3D_FEATURE_LEVEL_10_1,
             D3D_FEATURE_LEVEL_10_0,
         };
-        D3D_FEATURE_LEVEL selected_level = D3D_FEATURE_LEVEL_10_0;
-        auto result = D3D11CreateDeviceAndSwapChain(
-            nullptr,
-            D3D_DRIVER_TYPE_HARDWARE,
-            nullptr,
-            D3D11_CREATE_DEVICE_SINGLETHREADED,
-            requested_levels.data(),
-            static_cast<UINT>(requested_levels.size()),
-            D3D11_SDK_VERSION,
-            &swap_chain_desc,
-            swap_chain_.GetAddressOf(),
-            device_.GetAddressOf(),
-            &selected_level,
-            context_.GetAddressOf());
-        if (result == E_INVALIDARG) {
+        const auto create_device_and_swap_chain =
+            [&](DXGI_SWAP_CHAIN_DESC& swap_chain_desc,
+                const bool request_feature_level_11_1) {
+            const auto first_level =
+                request_feature_level_11_1 ? 0u : 1u;
+            D3D_FEATURE_LEVEL selected_level = D3D_FEATURE_LEVEL_10_0;
             swap_chain_.Reset();
             device_.Reset();
             context_.Reset();
-            result = D3D11CreateDeviceAndSwapChain(
+            return D3D11CreateDeviceAndSwapChain(
                 nullptr,
                 D3D_DRIVER_TYPE_HARDWARE,
                 nullptr,
                 D3D11_CREATE_DEVICE_SINGLETHREADED,
-                requested_levels.data() + 1u,
-                static_cast<UINT>(requested_levels.size() - 1u),
+                requested_levels.data() + first_level,
+                static_cast<UINT>(requested_levels.size() - first_level),
                 D3D11_SDK_VERSION,
                 &swap_chain_desc,
                 swap_chain_.GetAddressOf(),
                 device_.GetAddressOf(),
                 &selected_level,
                 context_.GetAddressOf());
+        };
+
+        HRESULT result = E_FAIL;
+        for (const auto& configuration :
+             win32_d3d11_swap_chain_configurations) {
+            DXGI_SWAP_CHAIN_DESC swap_chain_desc{};
+            swap_chain_desc.BufferDesc.Width = client_width;
+            swap_chain_desc.BufferDesc.Height = client_height;
+            swap_chain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            swap_chain_desc.SampleDesc.Count = 1u;
+            swap_chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            swap_chain_desc.BufferCount = configuration.buffer_count;
+            swap_chain_desc.OutputWindow = window;
+            swap_chain_desc.Windowed = TRUE;
+            swap_chain_desc.SwapEffect =
+                configuration.mode ==
+                        Win32D3d11SwapChainMode::FlipSequential
+                ? DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+                : DXGI_SWAP_EFFECT_DISCARD;
+            result = create_device_and_swap_chain(swap_chain_desc, true);
+            if (result == E_INVALIDARG)
+                result =
+                    create_device_and_swap_chain(swap_chain_desc, false);
+            if (SUCCEEDED(result)) break;
         }
         if (FAILED(result))
             throw std::runtime_error("Hardware-D3D11-Geraet ist nicht verfuegbar.");
+
+        ComPtr<IDXGIDevice1> dxgi_device;
+        if (SUCCEEDED(device_.As(&dxgi_device)))
+            static_cast<void>(dxgi_device->SetMaximumFrameLatency(1u));
 
         const auto vertex_bytecode = compile_shader("vertex_main", "vs_4_0");
         if (FAILED(device_->CreateVertexShader(vertex_bytecode->GetBufferPointer(),
@@ -210,6 +240,12 @@ class D3d11Presenter final : public Win32D3d11Presenter {
         if (client_width == 0u || client_height == 0u)
             return Win32D3d11PresentResult::NotPresentable;
         if (occluded_) {
+            const auto now_ms = GetTickCount64();
+            if (!win32_d3d11_deadline_reached(
+                    now_ms, next_occlusion_probe_ms_))
+                return Win32D3d11PresentResult::Occluded;
+            next_occlusion_probe_ms_ = win32_d3d11_deadline_after(
+                now_ms, win32_d3d11_occlusion_probe_interval_ms);
             const auto visibility =
                 swap_chain_->Present(0u, DXGI_PRESENT_TEST);
             if (visibility == DXGI_STATUS_OCCLUDED)
@@ -217,6 +253,7 @@ class D3d11Presenter final : public Win32D3d11Presenter {
             if (visibility != S_OK)
                 return Win32D3d11PresentResult::Failed;
             occluded_ = false;
+            next_occlusion_probe_ms_ = 0u;
         }
         if (!resize(client_width, client_height) ||
             !upload_frame(rgba, frame_width, frame_height))
@@ -249,10 +286,14 @@ class D3d11Presenter final : public Win32D3d11Presenter {
         const auto result = swap_chain_->Present(1u, 0u);
         if (result == S_OK) {
             occluded_ = false;
+            next_occlusion_probe_ms_ = 0u;
             return Win32D3d11PresentResult::Presented;
         }
         if (result == DXGI_STATUS_OCCLUDED) {
             occluded_ = true;
+            next_occlusion_probe_ms_ = win32_d3d11_deadline_after(
+                GetTickCount64(),
+                win32_d3d11_occlusion_probe_interval_ms);
             return Win32D3d11PresentResult::Occluded;
         }
         return Win32D3d11PresentResult::Failed;
@@ -336,6 +377,7 @@ class D3d11Presenter final : public Win32D3d11Presenter {
     std::uint32_t client_height_ = 0u;
     std::uint32_t frame_width_ = 0u;
     std::uint32_t frame_height_ = 0u;
+    std::uint64_t next_occlusion_probe_ms_ = 0u;
     bool occluded_ = false;
 };
 

@@ -5,12 +5,15 @@
 #include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -173,9 +176,15 @@ int main() {
     const auto audio_hash_before = hash(audio_path);
     const auto data_hash_before = hash(data_path);
     auto gdi = GdiDiscSource::open(gdi_path);
+    gdi->reset_io_counters();
+    const auto precomputed_content_identity = packed_disc_content_identity(*gdi);
+    require(gdi->io_counters().raw_read_operations == 0u,
+            "Content-Identitaet liest bereits beim Trackhash gebundene Discsektoren erneut.");
     const auto pack_path = fixture.root / "output" / "game.katana-disc";
     const auto generation_a = std::string(64u, 'a');
     const auto info = write_packed_disc(*gdi, pack_path, generation_a);
+    require(info.content_identity == precomputed_content_identity,
+            "Single-Pass-Trackdigests veraendern die Packed-Disc-Identitaet.");
     auto packed = PackedDiscSource::open(pack_path);
     packed->verify_all_chunks();
     require(info.tracks.size() == 2u && info.packed_sectors == 26u &&
@@ -218,10 +227,92 @@ int main() {
     const auto parsed_recipe = parse_disc_install_recipe(recipe_path);
     verify_disc_install_source(parsed_recipe, *gdi);
     const auto installed_path = fixture.root / "output" / "installed.katana-disc";
-    const auto installed = install_disc_content(parsed_recipe, gdi_path, installed_path);
+    std::vector<katana::ProgressEvent> progress_events;
+    const katana::ProgressReporter progress(
+        [&](const katana::ProgressEvent& event) { progress_events.push_back(event); },
+        std::chrono::milliseconds(0));
+    const auto installed = install_disc_content(parsed_recipe, gdi_path, installed_path, progress);
     require(installed.content_identity == info.content_identity &&
                 hash(installed_path) == hash(pack_path) && read_bytes(recipe_path).size() < 4096u,
             "Generische Recipe installiert keinen identischen lokalen Contentcache.");
+    require(!progress_events.empty(), "Discinstallation meldet keinen typisierten Fortschritt.");
+    std::unordered_map<std::uint64_t, std::vector<const katana::ProgressEvent*>> progress_by_scope;
+    std::uint64_t previous_sequence = 0u;
+    std::uint64_t previous_elapsed = 0u;
+    for (const auto& event : progress_events) {
+        require(event.sequence == previous_sequence + 1u,
+                "Progresssequenz ist nicht lueckenlos serialisiert.");
+        require(event.elapsed_milliseconds >= previous_elapsed, "Progresszeit laeuft rueckwaerts.");
+        previous_sequence = event.sequence;
+        previous_elapsed = event.elapsed_milliseconds;
+        progress_by_scope[event.scope_id].push_back(&event);
+    }
+    for (const auto& [scope_id, events] : progress_by_scope) {
+        require(scope_id != 0u && !events.empty() &&
+                    events.front()->state == katana::ProgressState::Started &&
+                    events.back()->state == katana::ProgressState::Completed,
+                "Progressscope besitzt keinen sauberen Start/Abschluss.");
+        std::uint64_t completed = 0u;
+        for (const auto* event : events) {
+            require(event->completed >= completed,
+                    "Progresszaehler innerhalb eines Scopes ist nicht monoton.");
+            completed = event->completed;
+            require(event->operation == events.front()->operation &&
+                        event->unit == events.front()->unit &&
+                        event->total == events.front()->total,
+                    "Progressscope wechselt Operation, Einheit oder Gesamtwert.");
+            if (event->total)
+                require(event->completed <= *event->total,
+                        "Progresszaehler ueberschreitet seinen exakten Gesamtwert.");
+        }
+        if (events.back()->total)
+            require(events.back()->completed == *events.back()->total,
+                    "Progressscope endet vor seinem exakten Gesamtwert.");
+    }
+    const auto completed_scope =
+        [&](const katana::ProgressOperation operation,
+            const katana::ProgressUnit unit,
+            const std::optional<std::uint64_t> total) -> const katana::ProgressEvent* {
+        const auto found =
+            std::find_if(progress_events.begin(), progress_events.end(), [&](const auto& event) {
+                return event.operation == operation &&
+                       event.state == katana::ProgressState::Completed && event.unit == unit &&
+                       event.total == total;
+            });
+        require(found != progress_events.end(), "Erwarteter Progressabschluss fehlt.");
+        return &*found;
+    };
+    const auto* install_done =
+        completed_scope(katana::ProgressOperation::DiscInstall, katana::ProgressUnit::Steps, 3u);
+    const auto* track_hash_done =
+        completed_scope(katana::ProgressOperation::GdiTrackHash, katana::ProgressUnit::Tracks, 2u);
+    const auto* identity_done = completed_scope(
+        katana::ProgressOperation::PackedDiscContentIdentity, katana::ProgressUnit::Sectors, 26u);
+    const auto* write_done = completed_scope(
+        katana::ProgressOperation::PackedDiscWrite, katana::ProgressUnit::Sectors, 26u);
+    const auto* verify_done = completed_scope(
+        katana::ProgressOperation::PackedDiscVerify, katana::ProgressUnit::Chunks, 2u);
+    require(install_done->completed == 3u && track_hash_done->completed == 2u &&
+                identity_done->completed == 26u && write_done->completed == 26u &&
+                verify_done->completed == 2u,
+            "Discprogress meldet ungenaue Schritt-, Track-, Sektor- oder Chunkzaehler.");
+    for (const auto& event : progress_events) {
+        if (event.operation == katana::ProgressOperation::InputProvenance &&
+            event.state == katana::ProgressState::Completed) {
+            require(event.unit == katana::ProgressUnit::Bytes && event.total &&
+                        event.completed == *event.total,
+                    "Dateihash meldet keinen exakten Byteabschluss.");
+        }
+    }
+    const auto install_scope = install_done->scope_id;
+    require(write_done->parent_scope_id == install_scope,
+            "Pack-Schreibphase ist nicht unter der Installation eingeordnet.");
+    require(track_hash_done->parent_scope_id && *track_hash_done->parent_scope_id != install_scope,
+            "Trackhash-Phase ist nicht unter dem GDI-Oeffnen eingeordnet.");
+    require(identity_done->parent_scope_id && *identity_done->parent_scope_id != install_scope,
+            "Content-Identitaet ist nicht unter der Quellenpruefung eingeordnet.");
+    require(verify_done->parent_scope_id == write_done->scope_id,
+            "Pack-Verifikation ist nicht unter der Schreibphase eingeordnet.");
     auto wrong_recipe = parsed_recipe;
     wrong_recipe.tracks[0].lba += 1u;
     require_failure([&] { verify_disc_install_source(wrong_recipe, *gdi); },
@@ -321,11 +412,10 @@ int main() {
     std::filesystem::remove_all(input);
     auto moved = PackedDiscSource::open(portable_pack);
     moved->verify_all_chunks();
-    const auto boot =
-        load_dreamcast_runtime_boot(moved,
-                                    moved->primary_data_lba(),
-                                    moved->info().tracks.size(),
-                                    moved->info().content_identity);
+    const auto boot = load_dreamcast_runtime_boot(moved,
+                                                  moved->primary_data_lba(),
+                                                  moved->info().tracks.size(),
+                                                  moved->info().content_identity);
     require(
         boot.boot_file == std::vector<std::uint8_t>({0x0Bu, 0x00u, 0x09u, 0x00u}) &&
             boot.repeated_reads_match && hash(portable_pack) == read_only_hash &&

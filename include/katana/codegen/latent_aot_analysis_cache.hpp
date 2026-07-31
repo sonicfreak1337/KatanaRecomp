@@ -13,13 +13,16 @@ namespace katana::codegen {
 
 inline constexpr std::uint32_t latent_aot_analysis_cache_schema_version = 2u;
 inline constexpr std::uint32_t latent_aot_analysis_address_layout_schema = 1u;
-// Positive artifacts contain untrusted, unoptimized IR. The registry
-// reconstructs the authoritative graph from the current module bytes and
-// requires exact equality before native code can consume a positive hit.
-inline constexpr std::uint32_t latent_aot_analysis_ir_schema = 2u;
+// Positive artifacts contain untrusted, unoptimized IR. Current bytes can
+// authenticate every retained instruction but cannot prove that the cached
+// program omitted no indirect target or callback. Product discovery therefore
+// neither consumes nor publishes positive entries; safe source-shape-derived
+// negative entries remain enabled.
+inline constexpr bool latent_aot_positive_product_cache_enabled = false;
+inline constexpr std::uint32_t latent_aot_analysis_ir_schema = 3u;
 inline constexpr std::uint32_t latent_aot_analysis_optimizer_schema = 1u;
 inline constexpr std::string_view latent_aot_analysis_implementation_id =
-    "katana-latent-aot-analysis-v3";
+    "katana-latent-aot-analysis-v4";
 
 inline constexpr std::size_t maximum_latent_aot_analysis_cache_artifact_bytes =
     32u * 1024u * 1024u;
@@ -87,13 +90,42 @@ enum class LatentAotAnalysisCacheState : std::uint8_t {
 
 struct LatentAotAnalysisCacheParseResult {
     LatentAotAnalysisCacheState state = LatentAotAnalysisCacheState::Miss;
-    // Positive entries remain untrusted source-faithful, unoptimized candidate
-    // IR. The registry must bind every source-derived field to current bytes,
-    // rerun the current optimizer, and then apply all graph/range/budget/entry
-    // and byte-identity checks before use.
+    // Positive entries remain codec data only. Product discovery must treat
+    // them as a miss and run complete CFA/FVA/lowering.
     std::vector<katana::ir::Function> program;
     LatentAotAnalysisRejection rejection = LatentAotAnalysisRejection::None;
 };
+
+// Shared bounded binary IR codec used by integrity-bound analysis caches.
+// The payload has no envelope of its own: callers must bind it to their
+// schema/key/checksum and must validate it against the current source bytes
+// before treating it as executable input.
+struct IrProgramCacheLimits {
+    std::size_t maximum_payload_bytes = 0u;
+    std::size_t maximum_functions = 0u;
+    std::size_t maximum_blocks = 0u;
+    std::size_t maximum_instructions = 0u;
+    std::size_t maximum_successors = 0u;
+    std::size_t maximum_targets = 0u;
+    std::size_t maximum_callsites = 0u;
+    std::size_t maximum_parser_depth = 0u;
+    // Cumulative capacity reserved by every nested decoded vector. This is
+    // separate from the serialized-byte limit because compact counts can
+    // otherwise amplify into much larger C++ object graphs.
+    std::size_t maximum_allocation_bytes = 0u;
+};
+
+[[nodiscard]] std::vector<std::uint8_t>
+serialize_ir_program_cache_payload(
+    std::span<const katana::ir::Function> program,
+    const IrProgramCacheLimits& limits);
+
+// Throws std::runtime_error for malformed, non-canonical or over-budget
+// payloads. A successful parse consumes the complete payload.
+[[nodiscard]] std::vector<katana::ir::Function>
+parse_ir_program_cache_payload(
+    std::span<const std::uint8_t> payload,
+    const IrProgramCacheLimits& limits);
 
 // The returned artifact is a complete bounded envelope. Invalid keys, invalid
 // IR, non-deterministic rejection values and limit violations throw.

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -34,15 +35,38 @@ struct GuardedNativeEntryShapeStatistics {
 class GuardedNativeEntryShapeCache {
   public:
     explicit GuardedNativeEntryShapeCache(const katana::io::ExecutableImage& image)
-        : image_(image) {
+        : image_(&image),
+          bound_image_identity_(image.analysis_instance_identity()),
+          bound_image_revision_(image.analysis_revision()) {
+        statistics_.work_budget = maximum_total_instructions;
+    }
+
+    // Analysis entrypoints may deliberately retain this cache across rounds.
+    // Rebinding is fail-safe for both an in-place image mutation and a
+    // different image instance; neither may inherit old shape proofs.
+    void bind(const katana::io::ExecutableImage& image) {
+        const auto identity = image.analysis_instance_identity();
+        const auto revision = image.analysis_revision();
+        if (image_ == &image &&
+            bound_image_identity_ == identity &&
+            bound_image_revision_ == revision)
+            return;
+        image_ = &image;
+        bound_image_identity_ = identity;
+        bound_image_revision_ = revision;
+        results_.clear();
+        statistics_ = {};
         statistics_.work_budget = maximum_total_instructions;
     }
 
     [[nodiscard]] GuardedNativeEntryShapeStatus
     classify(const std::uint32_t address) {
+        // Direct users of the cache do not pass the image again. Detect
+        // in-place mutations here as well as at the analysis entrypoint.
+        bind(*image_);
         if (const auto cached = results_.find(address); cached != results_.end())
             return cached->second;
-        const auto validation = validate_decode_candidate(image_, address);
+        const auto validation = validate_decode_candidate(*image_, address);
         if (!validation.valid()) {
             return remember(address,
                             GuardedNativeEntryShapeStatus::OutsideImage);
@@ -102,8 +126,8 @@ class GuardedNativeEntryShapeCache {
 
     [[nodiscard]] DecodeResult
     decode_at(const std::uint32_t address,
-              std::size_t& candidate_work) {
-        const auto validation = validate_decode_candidate(image_, address);
+               std::size_t& candidate_work) {
+        const auto validation = validate_decode_candidate(*image_, address);
         if (!validation.valid() || validation.segment == nullptr)
             return {GuardedNativeEntryShapeStatus::OutsideImage, std::nullopt};
         if (candidate_work >= maximum_instructions ||
@@ -215,9 +239,62 @@ class GuardedNativeEntryShapeCache {
         return GuardedNativeEntryShapeStatus::Valid;
     }
 
-    const katana::io::ExecutableImage& image_;
+    const katana::io::ExecutableImage* image_ = nullptr;
+    std::uint64_t bound_image_identity_ = 0u;
+    std::uint64_t bound_image_revision_ = 0u;
     std::unordered_map<std::uint32_t, GuardedNativeEntryShapeStatus> results_;
     GuardedNativeEntryShapeStatistics statistics_;
+};
+
+// Exact, analysis-scoped memoization for the expensive per-function abstract
+// interpreter. A control-flow analysis keeps one instance alive across every
+// candidate-contract and outer decode/seed round; public one-shot entrypoints
+// create a short-lived instance.
+//
+// Cache limits affect reuse only. Eviction must not change canonical output,
+// diagnostics, logical FIFO order, or any analysis budget.
+struct FunctionValueAnalysisSessionStatistics {
+    std::size_t hits = 0u;
+    std::size_t misses = 0u;
+    std::size_t evictions = 0u;
+    std::size_t entries = 0u;
+    std::size_t bytes = 0u;
+};
+
+class FunctionValueAnalysisSession {
+  public:
+    explicit FunctionValueAnalysisSession(
+        std::size_t maximum_entries = 16'384u,
+        std::size_t maximum_bytes = 1'024u * 1024u * 1024u);
+    ~FunctionValueAnalysisSession();
+
+    FunctionValueAnalysisSession(FunctionValueAnalysisSession&&) noexcept;
+    FunctionValueAnalysisSession& operator=(
+        FunctionValueAnalysisSession&&) noexcept;
+
+    FunctionValueAnalysisSession(const FunctionValueAnalysisSession&) =
+        delete;
+    FunctionValueAnalysisSession& operator=(
+        const FunctionValueAnalysisSession&) = delete;
+
+    [[nodiscard]] FunctionValueAnalysisSessionStatistics
+    statistics() const;
+
+    struct Impl;
+
+  private:
+    std::unique_ptr<Impl> impl_;
+
+    friend FunctionValueAnalysisResult
+    analyze_function_values_with_guarded_entry_cache(
+        const katana::io::ExecutableImage& image,
+        std::span<const katana::sh4::DisassemblyLine> lines,
+        std::span<const FunctionBoundary> function_boundaries,
+        std::span<const ResolvedControlFlowEdge> resolved_edges,
+        const FunctionValueAnalysisProgressCallback& progress_callback,
+        GuardedNativeEntryShapeCache& guarded_native_entry_shapes,
+        FunctionValueAnalysisSession& session,
+        const AbiContractObserver& abi_contract_observer);
 };
 
 [[nodiscard]] FunctionValueAnalysisResult
@@ -228,6 +305,17 @@ analyze_function_values_with_guarded_entry_cache(
     std::span<const ResolvedControlFlowEdge> resolved_edges,
     const FunctionValueAnalysisProgressCallback& progress_callback,
     GuardedNativeEntryShapeCache& guarded_native_entry_shapes,
+    const AbiContractObserver& abi_contract_observer = {});
+
+[[nodiscard]] FunctionValueAnalysisResult
+analyze_function_values_with_guarded_entry_cache(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    std::span<const FunctionBoundary> function_boundaries,
+    std::span<const ResolvedControlFlowEdge> resolved_edges,
+    const FunctionValueAnalysisProgressCallback& progress_callback,
+    GuardedNativeEntryShapeCache& guarded_native_entry_shapes,
+    FunctionValueAnalysisSession& session,
     const AbiContractObserver& abi_contract_observer = {});
 
 } // namespace katana::analysis::detail

@@ -100,8 +100,14 @@ class Win32VideoOutput final : public NativeVideoOutput {
             window_, client_width_, client_height_);
         if (d3d11_presenter_)
             backend_ = NativeVideoBackend::Win32D3d11Hardware;
-        else
+        else {
             backend_fallbacks_ = 1u;
+            d3d11_recovery_pending_ = true;
+            next_d3d11_recovery_ms_ =
+                detail::win32_d3d11_deadline_after(
+                    GetTickCount64(),
+                    detail::win32_d3d11_recovery_delay_ms(0u));
+        }
         if (config.initially_visible) show();
     }
 
@@ -168,6 +174,7 @@ class Win32VideoOutput final : public NativeVideoOutput {
         increment_counter(presentation_telemetry_.submitted_frames);
         frame_width_ = frame.width;
         frame_height_ = frame.height;
+        try_recover_d3d11();
         if (d3d11_presenter_) {
             const auto result = d3d11_presenter_->present(
                 frame.rgba, frame.width, frame.height, client_width_, client_height_);
@@ -320,8 +327,53 @@ class Win32VideoOutput final : public NativeVideoOutput {
         d3d11_presenter_.reset();
         presentation_telemetry_.currently_occluded = false;
         backend_ = NativeVideoBackend::Win32Gdi;
+        d3d11_recovery_pending_ = true;
+        d3d11_recovery_failed_attempts_ = 0u;
+        next_d3d11_recovery_ms_ = detail::win32_d3d11_deadline_after(
+            GetTickCount64(),
+            detail::win32_d3d11_recovery_delay_ms(0u));
         if (backend_fallbacks_ != std::numeric_limits<std::uint64_t>::max())
             ++backend_fallbacks_;
+    }
+
+    void try_recover_d3d11() noexcept {
+        if (!d3d11_recovery_pending_ || window_ == nullptr ||
+            close_requested_ || !visible_ ||
+            IsWindowVisible(window_) == FALSE ||
+            IsIconic(window_) != FALSE)
+            return;
+        const auto now_ms = GetTickCount64();
+        if (!detail::win32_d3d11_deadline_reached(
+                now_ms, next_d3d11_recovery_ms_))
+            return;
+        RECT client{};
+        if (GetClientRect(window_, &client) == FALSE ||
+            client.right <= client.left || client.bottom <= client.top)
+            return;
+        client_width_ =
+            static_cast<std::uint32_t>(client.right - client.left);
+        client_height_ =
+            static_cast<std::uint32_t>(client.bottom - client.top);
+        auto recovered = detail::try_create_win32_d3d11_presenter(
+            window_, client_width_, client_height_);
+        if (recovered) {
+            d3d11_presenter_ = std::move(recovered);
+            backend_ = NativeVideoBackend::Win32D3d11Hardware;
+            d3d11_recovery_pending_ = false;
+            d3d11_recovery_failed_attempts_ = 0u;
+            next_d3d11_recovery_ms_ = 0u;
+            return;
+        }
+        ++d3d11_recovery_failed_attempts_;
+        if (d3d11_recovery_failed_attempts_ >=
+            detail::win32_d3d11_recovery_maximum_attempts) {
+            d3d11_recovery_pending_ = false;
+            return;
+        }
+        next_d3d11_recovery_ms_ = detail::win32_d3d11_deadline_after(
+            now_ms,
+            detail::win32_d3d11_recovery_delay_ms(
+                d3d11_recovery_failed_attempts_));
     }
 
     [[nodiscard]] bool gdi_window_presentable() noexcept {
@@ -520,10 +572,13 @@ class Win32VideoOutput final : public NativeVideoOutput {
     std::uint64_t painted_frame_serial_ = 0u;
     std::uint64_t backend_fallbacks_ = 0u;
     std::uint64_t next_event_sequence_ = 1u;
+    std::uint64_t next_d3d11_recovery_ms_ = 0u;
+    std::uint32_t d3d11_recovery_failed_attempts_ = 0u;
     PaintFailure paint_failure_ = PaintFailure::None;
     DWORD paint_failure_last_error_ = ERROR_SUCCESS;
     NativeVideoPresentationTelemetry presentation_telemetry_;
     NativeVideoBackend backend_ = NativeVideoBackend::Win32Gdi;
+    bool d3d11_recovery_pending_ = false;
     bool visible_ = false;
     bool close_requested_ = false;
 };

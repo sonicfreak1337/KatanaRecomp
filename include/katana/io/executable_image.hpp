@@ -97,6 +97,10 @@ struct ImageSegment {
 class ExecutableImage {
   public:
     explicit ExecutableImage(std::filesystem::path source_path = {});
+    ExecutableImage(const ExecutableImage& other);
+    ExecutableImage& operator=(const ExecutableImage& other);
+    ExecutableImage(ExecutableImage&& other) noexcept;
+    ExecutableImage& operator=(ExecutableImage&& other) noexcept;
 
     void add_segment(ImageSegment segment);
     void add_entry_point(std::uint32_t address);
@@ -118,6 +122,11 @@ class ExecutableImage {
     [[nodiscard]] InitialSnapshotPolicy initial_snapshot_policy() const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> initial_snapshot_entry() const noexcept;
     [[nodiscard]] ImageAddressModel address_model() const noexcept;
+    // O(1) cache binding for analyses that retain artifacts across passes.
+    // The instance identity changes for every independently constructed
+    // object; the revision changes after every successful in-place mutation.
+    [[nodiscard]] std::uint64_t analysis_instance_identity() const noexcept;
+    [[nodiscard]] std::uint64_t analysis_revision() const noexcept;
     [[nodiscard]] std::optional<std::uint32_t>
     resolve_segment_address(std::uint32_t address, std::size_t width = 1u) const noexcept;
     [[nodiscard]] const ImageSymbol* find_symbol(std::string_view name) const noexcept;
@@ -127,6 +136,8 @@ class ExecutableImage {
     void write_u32_le(std::uint32_t address, std::uint32_t value);
 
   private:
+    void mark_analysis_mutation() noexcept;
+
     std::filesystem::path source_path_;
     std::vector<ImageSegment> segments_;
     std::vector<std::uint32_t> entry_points_;
@@ -137,6 +148,8 @@ class ExecutableImage {
     InitialSnapshotPolicy initial_snapshot_policy_ = InitialSnapshotPolicy::ImmutableOnly;
     std::optional<std::uint32_t> initial_snapshot_entry_;
     ImageAddressModel address_model_ = ImageAddressModel::Exact;
+    std::uint64_t analysis_instance_identity_ = 0u;
+    std::uint64_t analysis_revision_ = 0u;
 };
 
 [[nodiscard]] const char* segment_kind_name(SegmentKind kind) noexcept;

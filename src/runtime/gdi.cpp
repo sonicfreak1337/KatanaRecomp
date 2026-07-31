@@ -1,6 +1,7 @@
 #include "katana/runtime/gdi.hpp"
 
 #include "katana/io/input_provenance.hpp"
+#include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
 #include <array>
@@ -67,9 +68,85 @@ Integer parse_integer(const std::string& descriptor,
 bool supported_sector_size(const std::uint32_t value) {
     return value == 2048u || value == 2336u || value == 2352u || value == 2448u;
 }
+
+class PackedTrackHashAccumulator final {
+  public:
+    explicit PackedTrackHashAccumulator(const GdiTrack& track)
+        : first_byte_(track.file_offset), sector_size_(track.sector_size),
+          sector_count_(track.sector_count) {
+        if (sector_count_ > std::numeric_limits<std::uint64_t>::max() / sector_size_)
+            throw std::out_of_range("GDI-Trackgroesse laeuft beim Hashen ueber.");
+        byte_count_ = sector_count_ * sector_size_;
+        if (first_byte_ > std::numeric_limits<std::uint64_t>::max() - byte_count_)
+            throw std::out_of_range("GDI-Trackende laeuft beim Hashen ueber.");
+        end_byte_ = first_byte_ + byte_count_;
+        const auto chunk_count =
+            (sector_count_ + packed_disc_chunk_sectors - 1u) / packed_disc_chunk_sectors;
+        if (chunk_count > std::numeric_limits<std::size_t>::max())
+            throw std::out_of_range("GDI-Track besitzt zu viele Hashchunks fuer den Host.");
+        hashes_.reserve(static_cast<std::size_t>(chunk_count));
+        prepare_chunk();
+    }
+
+    void observe(const std::uint64_t file_offset, const std::string_view bytes) {
+        if (bytes.empty()) return;
+        if (bytes.size() > std::numeric_limits<std::uint64_t>::max() - file_offset)
+            throw std::out_of_range("GDI-Hashblockende laeuft ueber.");
+        const auto block_end = file_offset + bytes.size();
+        const auto relevant_begin = std::max(file_offset, first_byte_);
+        const auto relevant_end = std::min(block_end, end_byte_);
+        if (relevant_begin >= relevant_end) return;
+        auto input_offset = static_cast<std::size_t>(relevant_begin - file_offset);
+        auto remaining = static_cast<std::size_t>(relevant_end - relevant_begin);
+        while (remaining != 0u) {
+            if (chunk_target_bytes_ == 0u || chunk_.size() > chunk_target_bytes_)
+                throw std::runtime_error("GDI-Trackhash besitzt eine inkonsistente Chunkgrenze.");
+            const auto take = std::min(remaining, chunk_target_bytes_ - chunk_.size());
+            chunk_.append(bytes.data() + static_cast<std::ptrdiff_t>(input_offset), take);
+            input_offset += take;
+            remaining -= take;
+            if (chunk_.size() != chunk_target_bytes_) continue;
+            hashes_.push_back(katana::io::sha256_bytes(chunk_));
+            hashed_sectors_ += chunk_target_bytes_ / sector_size_;
+            chunk_.clear();
+            prepare_chunk();
+        }
+    }
+
+    [[nodiscard]] std::vector<std::string> finish() {
+        if (!chunk_.empty() || hashed_sectors_ != sector_count_)
+            throw std::runtime_error("GDI-Trackhash deckt nicht alle Rohsektoren ab.");
+        return std::move(hashes_);
+    }
+
+  private:
+    void prepare_chunk() {
+        if (hashed_sectors_ == sector_count_) {
+            chunk_target_bytes_ = 0u;
+            return;
+        }
+        const auto sectors =
+            std::min<std::uint64_t>(packed_disc_chunk_sectors, sector_count_ - hashed_sectors_);
+        if (sectors > std::numeric_limits<std::size_t>::max() / sector_size_)
+            throw std::out_of_range("GDI-Hashchunk ist fuer den Host zu gross.");
+        chunk_target_bytes_ = static_cast<std::size_t>(sectors) * sector_size_;
+        chunk_.reserve(chunk_target_bytes_);
+    }
+
+    std::uint64_t first_byte_ = 0u;
+    std::uint64_t end_byte_ = 0u;
+    std::uint64_t byte_count_ = 0u;
+    std::uint64_t sector_size_ = 0u;
+    std::uint64_t sector_count_ = 0u;
+    std::uint64_t hashed_sectors_ = 0u;
+    std::size_t chunk_target_bytes_ = 0u;
+    std::string chunk_;
+    std::vector<std::string> hashes_;
+};
 } // namespace
 
-GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path) {
+GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path,
+                                   const ProgressReporter& progress) {
     const auto descriptor_name = descriptor_path.filename().string();
     std::ifstream input(descriptor_path);
     if (!input) {
@@ -97,7 +174,7 @@ GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path)
     }
 
     const auto descriptor_provenance =
-        katana::io::capture_input_provenance("gdi-descriptor", descriptor_path);
+        katana::io::capture_input_provenance("gdi-descriptor", descriptor_path, {}, progress);
     GdiDescriptor result{descriptor_name,
                          descriptor_provenance.local_path,
                          descriptor_provenance.size,
@@ -228,22 +305,45 @@ std::string gdi_content_identity(const GdiDescriptor& descriptor) {
     return katana::io::sha256_bytes(material.str());
 }
 
-std::shared_ptr<GdiDiscSource> GdiDiscSource::open(const std::filesystem::path& descriptor_path) {
-    return std::shared_ptr<GdiDiscSource>(new GdiDiscSource(parse_gdi_descriptor(descriptor_path)));
+std::shared_ptr<GdiDiscSource> GdiDiscSource::open(const std::filesystem::path& descriptor_path,
+                                                   const ProgressReporter& progress) {
+    auto open_progress =
+        progress.begin(ProgressOperation::GdiOpen, ProgressUnit::Tracks, std::nullopt, "gdi");
+    const auto child_progress = open_progress.child_reporter();
+    auto descriptor = parse_gdi_descriptor(descriptor_path, child_progress);
+    const auto track_count = descriptor.tracks.size();
+    auto result =
+        std::shared_ptr<GdiDiscSource>(new GdiDiscSource(std::move(descriptor), child_progress));
+    open_progress.complete(track_count);
+    return result;
 }
 
-GdiDiscSource::GdiDiscSource(GdiDescriptor descriptor) : descriptor_(std::move(descriptor)) {
+GdiDiscSource::GdiDiscSource(GdiDescriptor descriptor, const ProgressReporter& progress)
+    : descriptor_(std::move(descriptor)) {
     std::ostringstream identity_material;
     std::uint64_t maximum_end_lba = 0u;
     track_sources_.reserve(descriptor_.tracks.size());
+    packed_chunk_sha256_.reserve(descriptor_.tracks.size());
     track_number_index_.reserve(descriptor_.tracks.size());
+    auto hash_progress = progress.begin(ProgressOperation::GdiTrackHash,
+                                        ProgressUnit::Tracks,
+                                        descriptor_.tracks.size(),
+                                        "gdi-tracks");
     for (std::size_t index = 0u; index < descriptor_.tracks.size(); ++index) {
         auto& track = descriptor_.tracks[index];
         auto source = std::make_shared<FileDiscSource>(track.resolved_path,
                                                        "gdi-track:" + std::to_string(track.number));
+        PackedTrackHashAccumulator packed_hashes(track);
         track.sha256 = katana::io::capture_input_provenance(
-                           "gdi-track-" + std::to_string(track.number), track.resolved_path)
+                           "gdi-track-" + std::to_string(track.number),
+                           track.resolved_path,
+                           {},
+                           hash_progress.child_reporter(),
+                           [&](const std::uint64_t offset, const std::string_view bytes) {
+                               packed_hashes.observe(offset, bytes);
+                           })
                            .sha256;
+        packed_chunk_sha256_.push_back(packed_hashes.finish());
         identity_material << track.number << ':' << track.lba << ':'
                           << static_cast<unsigned>(track.type) << ':' << track.sector_size << ':'
                           << track.file_offset << ':' << track.sector_count << ':' << track.sha256
@@ -252,6 +352,7 @@ GdiDiscSource::GdiDiscSource(GdiDescriptor descriptor) : descriptor_(std::move(d
         maximum_end_lba = std::max(maximum_end_lba, end_lba);
         track_number_index_.emplace(track.number, index);
         track_sources_.push_back(std::move(source));
+        hash_progress.update(index + 1u);
     }
     if (maximum_end_lba > std::numeric_limits<std::uint64_t>::max() / 2048u) {
         throw std::out_of_range("GDI-logische Groesse laeuft ueber.");
@@ -261,6 +362,7 @@ GdiDiscSource::GdiDiscSource(GdiDescriptor descriptor) : descriptor_(std::move(d
     io_counters_.persistent_track_opens = track_sources_.size();
     sector_cache_.reserve(sector_cache_capacity_);
     sector_cache_order_.reserve(sector_cache_capacity_);
+    hash_progress.complete();
 }
 
 std::uint64_t GdiDiscSource::size() const noexcept {
@@ -276,13 +378,13 @@ std::vector<DiscTrackLayout> GdiDiscSource::layout() const {
     std::uint32_t session = 1u;
     for (const auto& track : descriptor_.tracks) {
         if (!result.empty() && track.lba >= 45000u && result.back().lba < 45000u) session = 2u;
-        result.push_back({track.number,
-                          track.lba,
-                          track.type == GdiTrackType::Data ? DiscTrackKind::Data
-                                                          : DiscTrackKind::Audio,
-                          track.sector_size,
-                          track.sector_count,
-                          session});
+        result.push_back(
+            {track.number,
+             track.lba,
+             track.type == GdiTrackType::Data ? DiscTrackKind::Data : DiscTrackKind::Audio,
+             track.sector_size,
+             track.sector_count,
+             session});
     }
     return result;
 }
@@ -294,13 +396,14 @@ std::uint32_t GdiDiscSource::primary_data_lba() const {
     // A Dreamcast high-density session starts at LBA 45000.  Some retail discs
     // contain further data tracks after the boot track, so selecting the last
     // data track mistakes game content for the IP.BIN/ISO boot track.
-    auto track = std::find_if(descriptor_.tracks.begin(), descriptor_.tracks.end(), [](const auto& value) {
-        return value.type == GdiTrackType::Data && value.lba >= 45000u;
-    });
-    if (track == descriptor_.tracks.end()) {
-        track = std::find_if(descriptor_.tracks.begin(), descriptor_.tracks.end(), [](const auto& value) {
-            return value.type == GdiTrackType::Data;
+    auto track =
+        std::find_if(descriptor_.tracks.begin(), descriptor_.tracks.end(), [](const auto& value) {
+            return value.type == GdiTrackType::Data && value.lba >= 45000u;
         });
+    if (track == descriptor_.tracks.end()) {
+        track = std::find_if(descriptor_.tracks.begin(),
+                             descriptor_.tracks.end(),
+                             [](const auto& value) { return value.type == GdiTrackType::Data; });
     }
     if (track == descriptor_.tracks.end()) {
         throw std::runtime_error("GDI-Quelle besitzt keinen Datentrack.");
