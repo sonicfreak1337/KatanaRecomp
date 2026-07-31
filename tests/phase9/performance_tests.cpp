@@ -175,7 +175,15 @@ int main() {
         const auto generic = cache.dispatch(cpu, table, request, 7u, &profiler);
         const auto cached = cache.dispatch(cpu, table, request, 7u, &profiler);
         require(generic.block == cached.block && cache.misses() == 1u && cache.hits() == 1u &&
-                    cached.diagnostic == "inline-cache" && cpu.pr == 0x8C000104u,
+                    cached.diagnostic == "inline-cache" && cpu.pr == 0x8C000104u &&
+                    cached.execution.block == cached.block &&
+                    cached.execution.function == block &&
+                    cached.execution.virtual_start == 0x8C001000u &&
+                    cached.execution.physical_origin == 0x0C001000u &&
+                    cached.execution.size == 4u &&
+                    cached.execution.variant == variant &&
+                    cached.execution.end_kind == BlockEndKind::Return &&
+                    cached.execution.provenance == "phase9-target",
                 "Monomorphe Callsite behaelt Ziel- oder Callsemantik nicht.");
         static_cast<void>(cache.dispatch(cpu, table, request, 8u, &profiler));
         require(cache.misses() == 2u,

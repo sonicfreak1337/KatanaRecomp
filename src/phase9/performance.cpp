@@ -343,7 +343,25 @@ MonomorphicDispatchCache::dispatch(runtime::CpuState& cpu,
             cpu.pc = target;
             if (request.kind == runtime::IndirectDispatchKind::Call)
                 cpu.pr = request.return_address;
+            runtime::ValidatedBlockExecution execution;
+            execution.block = *handle;
+            execution.function = block->get().function;
+            execution.virtual_start = block->get().virtual_start;
+            execution.physical_origin = block->get().physical_origin;
+            execution.size = block->get().size;
+            execution.variant = block->get().variant;
+            execution.end_kind = block->get().end_kind;
+            execution.runtime_registered = block->get().runtime_registered;
+            execution.provenance = block->get().provenance;
+            execution.aot_template =
+                block->get().aot_template ? &*block->get().aot_template : nullptr;
+            execution.fastpath = block->get().fastpath;
+            execution.generation_guard = {
+                .block = *handle,
+                .runtime_registered = block->get().runtime_registered,
+            };
             return {*handle,
+                    execution,
                     target,
                     runtime::canonical_physical_address(target),
                     cpu.pc,
