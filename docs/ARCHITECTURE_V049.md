@@ -18,15 +18,14 @@ Code endet an einer typisierten Runtimegrenze. Der begrenzte
 Diagnoseinterpreter ist nur Bestandteil eines ausdruecklich als
 `diagnostic_partial` erzeugten Diagnoseports.
 
-Der aktuelle Quellstand `b01586a` versioniert diesen Produktvertrag mit
-Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6, PlatformServices-ABI 13,
-Backend-Interface-ABI 12, Portprojektvertrag 62, Native-AOT-Profil 11 und
-Partitionsschema 5. Die nachfolgend als implementiert bezeichneten
-P0-Vertraege sind damit im generischen Quellpfad vorhanden. Ihre
-Produktabnahme ist bewusst noch offen: Erst der frische Sonic-PAL-
-NativeDisc-Port mit ABI 73, real installierter Disc, 600 Millionen
-Post-Entry-Gastzyklen und separatem Sichtnachweis darf Boot- oder
-Performanceerfolg belegen.
+Source-Checkpoint `18f8537` versioniert diesen Produktvertrag mit
+Runtime-ABI 85, Block-ABI 5, Analyzer-ABI 23, PlatformServices-ABI 13,
+Backend-Interface-ABI 12, Portprojektvertrag 75, Native-AOT-Profil 13 und
+Partitionsschema 5. Der Checkpoint ist kein P0-Abschluss. Der abgebrochene
+NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und keinen
+Produktnachweis. Erst nach KR-4974 bis KR-4984 darf genau ein neuer
+NativeDisc-Port mit real installierter Disc und neuem echtem Screenshot
+Boot- oder Performanceerfolg belegen.
 
 ## Drei Ebenen
 
@@ -79,7 +78,8 @@ Der oeffentliche C++-Vertrag liegt in
 Spielprojekte integrieren Definition, Callbackcode und Registrierung weiter
 selbst in ihr Portbinary.
 
-`GameProjectArtifact` Format 1 ist der besitzende, binaere Transport fuer
+`GameProjectArtifact` Format 4 ist fuer Spielprojektvertrag 5 der besitzende,
+binaere Transport fuer
 rein deklarative Definitionen. Payload und Gesamtartefakt sind jeweils an
 SHA-256 gebunden. Exakte Funktionsgrenzen, Jump-/Callbacktabellen,
 Runtime-AOT-Templates, Symbole, Codeidentitaeten und Bootkonfiguration werden
@@ -101,11 +101,13 @@ den architektonischen CPU-Zustand einschliesslich physischer GPR-/FPU-Baenke,
 MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
 Geraetezustaende und ausstehende Schedulerereignisse.
 
-Der aktuelle Quellvertrag besteht aus Artefaktformat 2, Runtime-ABI 73,
-Portprojektvertrag 62 und Plattformzustandsvertrag 2. Vorhandene private
+Der aktuelle Handoff-Quellvertrag besteht aus Handoff-Artefaktformat 2,
+Runtime-ABI 85, Portprojektvertrag 75 und Plattformzustandsvertrag 2.
+Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
-Evidenz und muessen vor einem weiteren DirectBoot-Produktlauf fuer ABI 73 neu
-erfasst werden. NativeDisc benoetigt keinen Game-Entry-Handoff. Private
+Evidenz und muessen vor einem weiteren DirectBoot-Produktlauf fuer den dann
+aktuellen ABI neu erfasst werden. NativeDisc benoetigt keinen
+Game-Entry-Handoff. Private
 titelgebundene Payloads werden durch den externen Spielprojektprovider
 geliefert. Jede Slice ist an Offset, Groesse und SHA-256 gebunden, wird vor
 der Freigabe vollstaendig validiert und anschliessend aus eigenem
@@ -142,8 +144,8 @@ Hostdiagnostik und setzt PVR-/Audio-/Produktevidenz am Game Entry auf eine
 neue Baseline. Installierte VMU- und Flash-Nutzerdaten bleiben autoritativ und
 werden nicht aus einem alten Capture zurueckgerollt. Diese P0-Vertraege aus
 `KR-4967` und `KR-4970` sind im Quellpfad implementiert; normative
-NativeDisc-/DirectBoot-Digests und die frische ABI-73-Produktabnahme bleiben
-offen.
+NativeDisc-/DirectBoot-Digests und die ABI-passende Produktabnahme bleiben
+offen. Der naechste private Produktlauf folgt erst nach KR-4974 bis KR-4984.
 
 ### Belegter Produktstand
 
@@ -198,7 +200,8 @@ und endet nach 6,701 Sekunden bei exakt demselben Zyklus `553.990.562` sowie
 11.080.283 Zentraldispatches, provisorisch 82,67 MHz und derselben
 KR-4972-Kante `0x8C11088C -> 0x8C64784E` wie DirectBoot-v30. Der sichtbare
 Unterschied ist damit kein abweichender Gastfortschritt. DirectBoot selbst
-braucht fuer den aktuellen Vertrag einen frischen ABI-73-Handoff; IP.BIN und
+braucht fuer einen spaeteren aktuellen Vertrag einen frischen ABI-passenden
+Handoff; IP.BIN und
 damit der Sega-Screen bleiben dort absichtlich uebersprungen. Diese
 ABI-64-v32-Daten sind ausschliesslich historische Evidenz, einschliesslich der
 53.677.056 Byte grossen Produkt-EXE und des sichtbaren Sega-Screens ab 2,032
@@ -214,7 +217,8 @@ Adressprovenienz eines geladenen Objekts wird nicht als
 Codepointerprovenienz des Inhalts vererbt. Der Export verlangt fuer jeden
 akzeptierten Guarded-AOT-Einstieg einen statischen Block, ein natives Template
 oder eine explizite Ablehnung. Ob der reale Sonic-Lauf damit
-`0x8C64784E` passiert, ist bis zur frischen ABI-73-Abnahme offen.
+`0x8C64784E` passiert, ist bis zur nach KR-4974 bis KR-4984 zulaessigen,
+ABI-passenden Produktabnahme offen.
 
 ## Statischer und dynamischer AOT-Dispatch
 

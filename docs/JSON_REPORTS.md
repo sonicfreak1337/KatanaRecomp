@@ -174,7 +174,7 @@ beobachteten erwartbar positiven Klassen. Gesamtzahl, beobachtete Coverage
 und alle exakten zwoelf Klassenzaehler gehen in die finale Digestdomain ein.
 Diese technische Steuerflussevidenz enthaelt keine Spieldaten.
 
-`katana.runtime-probe` verwendet Runtime-Probe-Schema 5 und Device-Schema 5.
+`katana.runtime-probe` verwendet Runtime-Probe-Schema 5 und Device-Schema 6.
 Sein Replayobjekt ergaenzt `retention_capacity` und dieselben Gesamt-, Behalte-,
 Zusammenfassungs-, Exaktheits-, Coverage- und Klassenzaehlerfelder. Ein als
 vollstaendig ausgegebener Digeststrom muss dropfrei sowie Hook- und

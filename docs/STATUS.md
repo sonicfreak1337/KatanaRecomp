@@ -5,10 +5,96 @@ Aktuelle interne Version: `v0.49.0`
 ## Evidenztrennung
 
 ```text
-letzte reale Produktevidenz: b064ee8 Runtime-Relink / ABI 78 / NativeDisc-current
-aktueller Source:            a9cf938 / Runtime-ABI 78 / Analyzer-ABI 11
-hoechster sichtbarer Screen: Sega-Lizenzscreen; danach weiss
-offene Produktabnahme:       PAL-50-/60-Hz-Auswahl und 600M-Post-Entry-Gate
+letzte reale Produktevidenz: historischer ABI-77/78-NativeDisc-Stand
+Source-Checkpoint:           18f8537
+verbindlicher P0-Plan:       ffd45ae / KR-4974 bis KR-4984
+aktueller Source:            Runtime-ABI 85 / Analyzer-ABI 23 /
+                             Portprojektvertrag 75
+letzter Exportversuch:       NativeDisc-v24 nach ca. 3 h 27 min abgebrochen
+aktuelles Portartefakt:      keines
+aktueller Sonic-Lauf:        keiner
+aktueller Screenshot:        keiner
+offene Produktabnahme:       Performancegate, Gesamtpruefung und erst danach
+                             genau ein neuer NativeDisc-Sonic-Lauf
+```
+
+## Aktueller P0-Stand vom 31. Juli 2026
+
+Source-Checkpoint `18f8537` enthaelt umfangreiche Umbauten, ist aber
+ausdruecklich kein vollstaendiger P0-Abschluss. Quellseitig vorhanden sind:
+
+- komponentenbezogene Analyse-, IR-, Codegen- und Orchestrierungsidentitaeten;
+- ein gebundener positiver Boot-Analysecache sowie positiver und negativer
+  Latent-AOT-Modulcache;
+- ExactOnly-Discovery fuer vollstaendig manifestierte Module;
+- getrennte native Templates und mehrere exakte SourceBindings fuer
+  bytegleiche Disc-Extents;
+- ein baseline-, Pixel-, Kachel-, Innenkachel-, Farb- und
+  Luminanzklassen-gebundener Sichtbarkeitsklassifikator;
+- strukturierte Fortschrittsereignisse und Heartbeats in langen
+  Exportpfaden;
+- ein gemeinsamer Runtime-Executor fuer beweisbar unabhaengige AICA- und
+  PVR-Arbeit, eine aggregierte Prozess-CPU-Grenze und ein bevorzugter
+  D3D11-Flip-Presenter mit gebundenem GDI-Fallback;
+- weitere Function-Value-/Guarded-Inventory-Korrekturen und
+  Rootfilterung.
+
+Der fokussierte `katana-function-value-analysis-tests`-Lauf und der
+Release-Build von `katana-recomp` sind gruen. Unabhaengige Teilreviews der
+zuletzt korrigierten Contextual-/Rootfilter- und Runtime-Parallelpfade
+meldeten keine bestaetigten P0/P1-Funde. Das ist **keine** abschliessende
+Gesamtpruefung des gesamten Arbeitsbaums. Insbesondere sind Kaltbuildzeit,
+Runtime-CPU-Entlastung, D3D11-Nutzung und ein moeglicher Analyse-GPU-Offload
+noch nicht end-to-end abgenommen.
+
+Der verbindliche Umsetzungs-, Mess-, GPU- und Abschlussvertrag steht in
+[`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
+KR-4974 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
+belegtem End-to-End-Gewinn; der vorhandene D3D11-Presenter ist
+hardwarebeschleunigte Ausgabe, aber kein Beleg fuer GPU-beschleunigte
+Analyse.
+
+### Abgebrochener NativeDisc-v24-Export
+
+`v24` bezeichnet hier den lokalen Iterationsnamen und das Log
+`v24-real-export.stdout.log`, nicht den wesentlich aelteren historischen
+CompletePlatform-v24-Produktport.
+
+Der Export verwendete den Source-Checkpoint-Arbeitsstand mit installiertem
+Runtime-ABI-85-/Analyzer-ABI-23-SDK und 24 Analysejobs. Er wurde am
+31. Juli 2026 nach etwa `3 h 27 min` auf ausdruecklichen Nutzerwunsch
+beendet. `stderr` blieb leer, doch der Abbruch erfolgte mitten in der dritten
+Function-Value-Neuberechnung. Es existiert weder das angeforderte
+Portverzeichnis noch eine `game.exe`.
+
+| Function-Value-Lauf | Candidate-Scope | Roots | Zustand | Candidate-Zeit | Hits | Misses | Hitquote |
+|---|---:|---:|---|---:|---:|---:|---:|
+| Pass 15 | 14, Parent 13 | 1.192 | abgeschlossen | 89,72 min | 6.801 | 77.745 | 8,04 % |
+| Pass 22 | 16, Parent 15 | 1.416 | abgeschlossen | 110,71 min | 7.646 | 82.440 | 8,49 % |
+| Pass 24 | 18, Parent 17 | 1.426 | bei 7 Roots abgebrochen | 3,56 min bis Abbruch | 503 | 27.244 | 1,81 % partiell |
+
+Die Parent-Scopes und ihre Candidate-Resolution-Child-Scopes melden
+dieselben FunctionEvaluation-Zaehler; sie werden nicht addiert. Die
+Pass-24-Quote ist ein unvollstaendiger Fruehwert und nicht direkt mit den
+abgeschlossenen Laeufen vergleichbar.
+
+Pass 15 erweiterte die Seedmenge von `1.327` auf `1.382`. Weitere rekursive
+Runden fuehrten zu `1.547` Seeds und Pass 22. Dessen Summary-Expansion
+erhoehte die Menge auf `1.554`; rekursive Nacharbeit erreichte `1.557` und
+startete Pass 24 als dritte volle Function-Value-Neuberechnung. Der live
+beobachtete Working-Set-Peak betrug etwa `11,24 GiB`. Diese Messung ist eine
+Prozessbeobachtung, keine abgeschlossene Benchmark.
+
+Der v24-Versuch lieferte damit:
+
+```text
+Portexport:                      nein
+Hostbuild:                       nein
+Discinstallation:               nein
+Sonic-Prozessstart:              nein
+neuer echter Screenshot:        nein
+Fortschritt ueber SEGA->leer:    nicht geprueft
+Performance-P0:                 offen
 ```
 
 Der vorherige ABI-78-NativeDisc-Lauf erreichte noch das vollstaendige
@@ -119,7 +205,7 @@ Restorepfad sowie das invertierte Fenster ab. Fokustest, Runtime-Build,
 `diff --check` und unabhaengiger Finalreview sind sauber; die reale
 Produktabnahme des Fixes steht noch aus.
 
-Der davor liegende reale ABI-74-NativeDisc-v33-Lauf erreicht sichtbar den
+Der davor liegende reale ABI-73-NativeDisc-v33-Lauf erreicht sichtbar den
 Sega-Lizenzscreen der PAL-Disc und passiert das zuvor fehlende statische Ziel
 `0x8C11088C -> 0x8C64784E`. Er stoppt danach fail-closed bei Gesamtzyklus
 `573.987.074` beziehungsweise `158.753.804` Post-Entry-Zyklen an der
@@ -267,7 +353,7 @@ SonicAdventureRecomp
 
 KatanaRecomp und KatanaRuntime bleiben im selben Repository. Das konkrete Spielprojekt wird extern aufgebaut. Generischer Katana-Code darf keine Sonic-spezifischen Adresshacks oder Retailbytes enthalten.
 
-## Reviewstatus
+## Historischer Reviewstatus vor dem aktuellen P0-Umbau
 
 Auf `4983bd1` ohne offene P0/P1/P2 reviewt:
 
@@ -334,8 +420,9 @@ Der Apply-Pfad validiert alle gebundenen Payloads und Restoreplaene vor der
 Mutation und prueft das Ergebnis durch semantischen Recapture. Das beschreibt
 den historischen v24-Befund. Der aktuelle `KR-4967`-Quellvertrag bereitet alle
 falliblen Subsystemzustaende vor Commitbeginn vor, committet atomar und
-publiziert CPU-PC/PR zuletzt. Seine reale ABI-74-Abnahme sowie weitergehende
-normative Digests pro Subsystem stehen noch aus.
+publiziert CPU-PC/PR zuletzt. Seine reale ABI-passende Abnahme nach KR-4974
+bis KR-4984 sowie weitergehende normative Digests pro Subsystem stehen noch
+aus.
 
 Die explizit historischen v24-Vergleichslaeufe:
 
@@ -361,8 +448,8 @@ Hostzeit, obwohl der Lauf erst bei Zyklus 415.233.270 restauriert wurde.
 Tatsaechlich wurden nur 184.766.730 Zyklen ausgefuehrt. Die vergleichbare Rate
 betraegt 36,8425 MHz und belegt keinen Performancegewinn. Das relative
 Post-Entry-Budget und die Pflichtmeilensteinwertung sind im aktuellen
-`KR-4966`-Quellvertrag implementiert; die reale ABI-74-Abnahme steht noch
-aus.
+`KR-4966`-Quellvertrag implementiert; die reale ABI-passende Abnahme nach
+KR-4974 bis KR-4984 steht noch aus.
 
 Der historische v28-Funktionslauf wurde auf der Main-Basis
 `8e5ab3145fb5fcafc056fd87025baf3497085342` mit dem neuen externen
@@ -480,9 +567,10 @@ Sega-Klassifikator meldet wegen des grauen PAL-Hintergrunds irrtuemlich
 Der v32-Lauf endete vor dem 600-Millionen-Budget am damaligen
 KR-4972-Blocker und ist kein Performancegate. Er schliesst KR-4973 als
 historischen sichtbaren Bootfortschritt ab. Der aktuelle
-`KR-4972`-AOT-Vertrag ist vorhanden, der `7ecdefb`-Gesamtexport wird jedoch
-vorher vom Summary-/Inventarbudgetfehler gestoppt. Erst der frische
-ABI-74-Lauf kann zeigen, ob dieser Blocker passiert wird.
+`KR-4972`-AOT-Vertrag ist vorhanden; der anschliessende v24-Iterationslauf
+auf Basis des Checkpoints `18f8537` wurde jedoch nach rund 3 h 27 min ohne
+Portartefakt abgebrochen. Erst der nach KR-4974 bis KR-4984 zulaessige
+ABI-passende Lauf kann zeigen, ob dieser Blocker passiert wird.
 
 ## Abgeschlossene Sound-/AOT-Blocker und historische Produktgrenzen
 
@@ -541,10 +629,11 @@ passendes Runtime-AOT-Template. Die generische Analyse beweist den
 Callback-/Shared-Tail-Pfad inzwischen aus konkreter Codepointer-Provenienz
 und erreicht den gemeinsamen Body `0x8C6478C2`. Der aktuelle Source-Vertrag
 erhaelt bewachte AOT-Einstiege bis in CFG, Source-Map und AOT, behandelt
-Shared Bodies explizit und erzwingt die Exportvollstaendigkeit. Der
-ABI-74-Produktlauf muss noch belegen, ob die historische Grenze damit
-passiert wird. Interpreter, JIT, Runtime-Decoder, Emulationsfallback und eine
-geratene Sonic-Grenze sind keine zulaessige Reparatur.
+Shared Bodies explizit und erzwingt die Exportvollstaendigkeit. Erst der nach
+KR-4974 bis KR-4984 zulaessige ABI-passende Produktlauf kann belegen, ob die
+historische Grenze damit passiert wird. Interpreter, JIT, Runtime-Decoder,
+Emulationsfallback und eine geratene Sonic-Grenze sind keine zulaessige
+Reparatur.
 
 Die zeitlich letzte reale Produktgrenze stammt dagegen aus
 NativeDisc-v33/ABI 73:
@@ -557,8 +646,8 @@ Fehler:               missing-aot / guarded-fallback
 ```
 
 Ob diese scheinbar fruehere AOT-Luecke durch den breiteren aktuellen
-Inventarvertrag geschlossen wird, ist ebenfalls erst im ABI-74-Produktport
-belegbar.
+Inventarvertrag geschlossen wird, ist ebenfalls erst im nach KR-4974 bis
+KR-4984 zulaessigen ABI-passenden Produktport belegbar.
 
 ## GameEntryHandoff-Stand
 
@@ -574,17 +663,18 @@ Historisch belegt:
 - vollstaendiger Capture und realer `CompletePlatform`-Apply im Direct-Produkt
 - vollstaendige Vorvalidierung und semantischer Recapture nach Apply
 
-Fuer den aktuellen ABI-74-Quellstand offen:
+Fuer den aktuellen Source-Checkpoint `18f8537` mit Runtime-ABI 85 offen:
 
 - deterministischer Doppel-Capture
 - Artefakt-Inspect-/Verify-CLI
 - normative NativeDisc-/DirectBoot-Paritaet
-- realer ABI-74-Nachweis des implementierten atomaren Prepare-/Commitpfads
+- realer ABI-passender Nachweis des implementierten atomaren
+  Prepare-/Commitpfads nach KR-4974 bis KR-4984
 - per Subsystem normativ vergleichbare Digests
 
 ## GameProjectArtifact-Stand
 
-`GameProjectArtifact` Format 2 ist ein besitzendes, versioniertes
+`GameProjectArtifact` Format 4 ist ein besitzendes, versioniertes
 Binaerartefakt fuer deklarative externe Spielprojektdaten. `write()` und
 `load()` binden sowohl die Payload als auch das gesamte Artefakt ueber
 SHA-256. Serialisiert werden Identitaet, exakte Funktionsgrenzen,
@@ -612,8 +702,8 @@ Titeladressen im generischen Kern:
 ```
 
 `GameProjectFunctionBoundary::size` erreicht AnalysisOverride/-Seed,
-Funktionskandidaten, CFG, IR und AOT. Der aktuelle Spielprojektvertrag ist 3,
-das Artefaktformat 2 und der Analyzer-ABI 8; die darunter beschriebenen
+Funktionskandidaten, CFG, IR und AOT. Der aktuelle Spielprojektvertrag ist 5,
+das Artefaktformat 4 und der Analyzer-ABI 23; die darunter beschriebenen
 v27-/v28-Artefakte bleiben historische Format-1-Evidenz.
 
 ## Maple-/VMU-Stand
@@ -651,7 +741,7 @@ KR-4973 hat die zugrunde liegende Runtimekopplung inzwischen allgemein
 entfernt: Ein aktueller Scanout kann auch ohne neuen Proof praesentiert
 werden. Der sichtbare historische NativeDisc-v32-Lauf belegt diesen ABI-64-Pfad mit 127
 Hostframes. DirectBoot-v30 enthaelt noch den alten ABI-63-Code und ist daher
-kein Gegenbeweis fuer die aktuellen ABI-74-Vertraege. Ein neuer DirectBoot-
+kein Gegenbeweis fuer die aktuellen Source-Vertraege. Ein neuer DirectBoot-
 Nachweis braucht einen passend gebundenen Handoff und einen eigenen realen
 Sichtlauf. Ein Sega-Screen bleibt dort wegen
 uebersprungener IP.BIN ausdruecklich ungueltig als Pflichtmeilenstein.
@@ -687,7 +777,8 @@ target_cycle = restored_game_entry_cycle + requested_elapsed_guest_cycles
 Das externe Spielprojekt gibt einen erforderlichen Meilenstein an. Bei
 angefordertem Produktbudget ist Exitcode 0 nur zulaessig, wenn Meilenstein,
 vollstaendige Post-Entry-Arbeit und `KATANA_PRODUCT_GATE` gemeinsam erfuellt
-sind. Der frische ABI-74-Produktnachweis steht noch aus.
+sind. Der ABI-passende Produktnachweis nach KR-4974 bis KR-4984 steht noch
+aus.
 
 Empfohlene Exitcodes:
 
@@ -826,39 +917,31 @@ Offen bleiben:
 ## Aktiver kritischer Pfad
 
 ```text
-KR-4965 ADXT-/mwSnd-Sound-Completion
-  [abgeschlossen ueber engeren allgemeinen Blocker]
-
-KR-4971 RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel
-  [abgeschlossen]
-
-KR-4972 Hashgebundene Shared-Callback-/Thunk-AOT-Coverage
-  [abgeschlossen; ABI-77-v37 passiert alle bekannten AOT-Grenzen]
-
-Im realen ABI-77-v37-Produktproof bestaetigt:
-KR-4966 korrektes relatives Post-Entry-Gate
-
-Naechster Schritt:
-den bestehenden ABI-78-NativeDisc-Port nur gegen Runtime `b064ee8`
-relinken und exakt einen 600-Millionen-Post-Entry-Lauf bis zur ersten
-erfolgreichen Maple-DMA beziehungsweise zum naechsten sichtbaren
-Sonic-Meilenstein ausfuehren
-
-Weiterhin quellseitig vorhanden, separater DirectBoot-Produktproof offen:
-KR-4967 strikter globaler Prepare-/Commitvertrag
-KR-4970 allgemeines rollbackfreies Save-/VMU-Produktprofil
-
-Danach weiterhin offen:
-KR-4953 Doppel-Capture und Inspect-/Verify-CLI
-KR-4962 normative NativeDisc-/DirectBoot-Paritaet
-
-Danach:
-KR-4955 -> KR-4956 -> KR-4957 -> KR-4958/KR-4959 -> KR-4960
-KR-4954 -> KR-4961
-KR-4964
+KR-4974 Telemetrie und Miss-Reason-Ledger
+  -> KR-4975 semantische Cachelinsen
+  -> KR-4976 persistente Programm-/SCC-Session
+  -> KR-4977 gemeinsamer Multi-Root-Inventory-Fixpunkt
+  -> KR-4978 inkrementeller CFG-/Seed-Fixpunkt
+  -> KR-4979 priorisierter Executor und RAM-Grenzen
+  -> KR-4980 persistente Buildshards
+  -> KR-4981 8-/12-/24-Thread-Kaltbuildgate
+  -> KR-4982 GPU-Entscheidungsgate
+     -> KR-4983 nur bei positivem GPU-Beweis
+  -> KR-4984 unabhaengige Gesamtpruefung, P0/P1-Schliessung und Re-Review
+  -> genau ein frischer privater NativeDisc-Sonic-Lauf
 ```
 
-## Geplante reale Produktlaeufe
+Vor KR-4984 wird kein weiterer privater Sonic-Port gebaut. Jeder P0-Task
+wird allgemein ueber den gesamten betroffenen Strang umgesetzt, fokussiert
+verifiziert, einzeln committed und gepusht. Die alten KR-496x-Aufgaben
+bleiben als nachgelagerte Produktarchitekturarbeit erhalten, steuern aber
+nicht den naechsten Lauf.
+
+## Historische und gesperrte reale Produktlaeufe
+
+Die Laeufe A bis A4 sind historische Evidenz. Der naechste reale Lauf ist
+bis zum Abschluss von KR-4984 gesperrt und ersetzt keinen der P0-
+Performance- oder Reviewnachweise.
 
 ### Lauf A - nach KR-4965 [ausgefuehrt]
 
@@ -924,6 +1007,15 @@ Zwischen diesen Laeufen sind keine Vollsuiten vorgesehen. Ein kleiner bestehende
 
 Der aktuelle Stand behauptet nicht:
 
+- dass der abgebrochene v24-Export ein Portartefakt erzeugt hat
+- dass aus v24 ein Sonic-Prozess gestartet oder ein Screenshot aufgenommen
+  wurde
+- dass der aktuelle Kaltbuild produktiv nutzbar oder das 8-Minuten-Ziel
+  erreicht ist
+- dass Runtime-CPU-Last, D3D11-Presenter oder Analyse-GPU-Offload bereits
+  end-to-end gemessen und abgenommen sind
+- dass die Teilreviews eine unabhaengige Gesamtpruefung des aktuellen
+  Arbeitsbaums ersetzen
 - dass Sonic Adventure bereits ueber den Speicherkartenhinweis hinaus bootet
 - dass NativeDisc und DirectBoot normativ paritaetisch sind
 - dass der Sega-Screen im DirectBoot erwartet wird
@@ -939,27 +1031,30 @@ Der aktuelle Stand behauptet nicht:
 - dass eine einmal byteidentische Save-Migration ein allgemeines
   No-Rollback-Profil beweist
 
-## Aktuelle Vertraege
+## Aktuelle Source-Vertraege
+
+Diese Werte stammen aus Source-Checkpoint `18f8537`. Sie sind Quellstand,
+kein Produktnachweis.
 
 ```text
-Runtime-ABI:                    78
+Runtime-ABI:                    85
 Block-ABI:                       5
-Analyzer-ABI:                   11
+Analyzer-ABI:                   23
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             67
+Portprojektvertrag:             75
 GameEntryHandoff-Schema:         3
 GameEntryHandoff-Artefakt:       2
 GameEntry-Plattformzustand:       2
-Spielprojektvertrag:             3
-GameProject-Artefaktformat:       2
+Spielprojektvertrag:             5
+GameProject-Artefaktformat:       4
 Gastzyklusvertrag:                2
 Native-AOT-Emissionsprofil:     13
 AOT-Partitionsschema:            5
 Crash-Capsule-Vertrag:           1
 Systemreplay-Schema:              8
 Runtime-Probe-Schema:             5
-Runtime-Probe-Device-Schema:      5
+Runtime-Probe-Device-Schema:      6
 ```
 
 Historische Detailverlaeufe bleiben ueber Git-Historie, Changelog und Task-ID-Registry erhalten. Dieses Dokument ist ab jetzt die kompakte Wahrheit fuer den aktuellen `v0.49`-Produktbring-up.

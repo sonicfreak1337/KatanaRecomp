@@ -1,9 +1,11 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `11`. Der Gesamtvertrag
-dieses Stands verwendet Runtime-ABI 78, Block-ABI 5,
-PlatformServices-ABI 13, Backend-Interface-ABI 12 und Portprojektvertrag 67.
-Analyzer-ABI 11 bindet die engere Provenienz fuer 32-Bit-PC-relative
+Der aktuelle oeffentliche Analyzervertrag ist Version `23`. Source-
+Checkpoint `18f8537` verwendet Runtime-ABI 85, Block-ABI 5,
+PlatformServices-ABI 13, Backend-Interface-ABI 12 und Portprojektvertrag 75.
+Version 23 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
+die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
 bewachten Codepointerargument machen. Normale Objektfeldloads und bedingte
 Owner-Uebergaenge erhalten diesen Beweis nicht. Damit invalidieren Analyse-,

@@ -2,22 +2,23 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller P0-Quellstand: `a9cf938`. Der reale ABI-78-NativeDisc-Pfad zeigt
-den Sega-Lizenzscreen der PAL-Disc und endet danach auf einem weissen Screen;
-der PAL-50-/60-Hz-Auswahlbildschirm ist noch nicht erreicht. Der letzte Lauf
-stoppte bei `0x8C647B38 -> 0x8C010F0E` an einem typisierten `missing-aot`.
-Der allgemeine Analyzer-ABI-11-Quellfix inventarisiert dieses direkt vor
-einem bewachten Tail-Registrar geladene Callbackliteral, ohne den
-Livepointer als feste CFG-Kante einzufrieren. Sein frischer
-Sonic-Produktnachweis steht noch aus.
+Aktueller Source-Checkpoint: `18f8537`; verbindlicher P0-Planstand:
+`ffd45ae`. Der eingecheckte Source traegt Runtime-ABI 85, Analyzer-ABI 23
+und Portprojektvertrag 75. Der private NativeDisc-v24-Export wurde nach
+etwa `3 h 27 min` waehrend der dritten vollstaendigen Function-Value-
+Neuberechnung beendet. Er erzeugte kein Portartefakt, keine `game.exe`,
+keinen Sonic-Lauf und keinen neuen Screenshot. Der Checkpoint ist kein
+P0-Abschluss: Kaltbuild-Performance, abschliessende Gesamtpruefung und
+Produktabnahme bleiben offen. Der verbindliche Fahrplan steht in
+[`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
 
 ```text
-Runtime-ABI:                    78
+Runtime-ABI:                    85
 Block-ABI:                       5
-Analyzer-ABI:                   11
+Analyzer-ABI:                   23
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             67
+Portprojektvertrag:             75
 Native-AOT-Emissionsprofil:     13
 AOT-Partitionsschema:            5
 ```
@@ -132,14 +133,17 @@ Der vollstaendige Discpfad bleibt erhalten:
 `DirectBootExecutable` ist der executable-first Entwicklungspfad. Ein
 bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
-Spielprojekt. Der aktuelle Vertrag verwendet Handoff-Schema 3,
-Artefaktformat 2, Runtime-ABI 73, Portprojektvertrag 62 und
-Plattformzustandsvertrag 2. `CompletePlatform` erfasst und restauriert den
-kanonischen Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die
-exakte typisierte Scheduler-Timeline. Capture und Apply sind im realen
-historischen Produktport belegt; der ABI-73-Nachweis steht noch aus.
+Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
+Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der dokumentierte
+Source-Checkpoint `18f8537` verwendet Runtime-ABI 85 und
+Portprojektvertrag 75. Davon getrennt verwendet `GameProject` Vertrag 5 und
+Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
+Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
+typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
+Produktport belegt. Der naechste private NativeDisc-Lauf ist erst nach
+KR-4974 bis KR-4984 und der dort verlangten Gesamtpruefung zulaessig.
 
-`GameProjectArtifact` Format 1 transportiert die deklarativen,
+`GameProjectArtifact` Format 4 transportiert fuer Spielprojektvertrag 5 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
 Funktionsgrenzen, Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole,
 Codeidentitaeten und Direct-Boot-Konfiguration. Native Hookzeiger und private
@@ -225,8 +229,9 @@ erreichtem Pflichtmeilenstein und echtem `KATANA_PRODUCT_GATE` zulaessig. Die
 Zusammenfassung nennt Gastzyklen, Hostzeit, Dispatches, technische
 Framemarker und das erste neue AOT-, Runtime- oder Geraeteproblem; ein
 sichtbarer Bildschirm wird separat anhand einer realen Ausgabeaufnahme
-klassifiziert. Dieser Vertrag ist im Quellstand `b01586a` implementiert, aber
-noch nicht mit dem frischen ABI-73-Sonic-Port abgenommen.
+klassifiziert. Dieser Vertrag ist im Source-Checkpoint `18f8537`
+implementiert, aber noch nicht mit einem aktuellen Sonic-Port abgenommen.
+Vor dem naechsten privaten Produktlauf stehen KR-4974 bis KR-4984.
 
 Die **historische v24-`CompletePlatform`-Vergleichsbasis** endete in beiden Pfaden bei
 Schedulerzyklus 600.000.000 ohne erstes neues AOT-, Runtime- oder
@@ -262,8 +267,9 @@ auf einen gemeinsamen Codepfad. Die generische Analyse verfolgt den
 Callback jetzt ueber begrenzte Tail-Jump- und Runtime-Frame-Pfade, erkennt
 `0x8C64784E` als Funktion und erreicht `0x8C6478C2` als gemeinsamen Body.
 Der aktuelle Quellstand transportiert solche bewachten AOT-Einstiege durch
-CFG, Source-Map und AOT und erzwingt ihre Exportvollstaendigkeit. Der frische
-ABI-73-Sonic-Nachweis dafuer steht noch aus.
+CFG, Source-Map und AOT und erzwingt ihre Exportvollstaendigkeit. Der
+aktuelle Produktnachweis steht weiterhin aus und darf erst nach dem
+KR-4974-bis-KR-4984-Gate erfolgen.
 Die terminale Diagnose unterscheidet diesen Fall jetzt korrekt als
 `aot-template-mismatch` von echten Byteidentitaetsfehlern.
 
@@ -292,7 +298,8 @@ gleichen Punkt schwarz. Der Lauf dauerte 6,701 Sekunden, fuehrte
 11.080.283 Zentraldispatches aus, erreichte 82,67 MHz bis zum Fehler und
 erzeugte eine 53.677.056 Byte grosse EXE. Er erreichte wegen KR-4972 nicht
 das 600-Millionen-Performancegate. Diese v32-Zahlen bleiben historische
-Vergleichsevidenz und sind kein Nachweis fuer den aktuellen ABI-73-Stand.
+Vergleichsevidenz und sind kein Nachweis fuer den aktuellen
+Source-Checkpoint.
 
 ## Diagnose
 

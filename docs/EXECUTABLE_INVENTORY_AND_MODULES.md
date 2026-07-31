@@ -4,13 +4,13 @@ Dieser KR-4704-Vertrag trennt den Inhalt geladener Bytes von ihren
 Laufzeitberechtigungen und von der Frage, wann ein Block kompiliert sein muss.
 Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
-Quellstand `b01586a` verwendet Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6,
-PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 62,
-Native-AOT-Emissionsprofil 11 und Portpartitionsschema 5. Die vereinbarten
-P0-Umbauten sind im Quellpfad abgeschlossen. Der frische
-ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Gastzyklen und der
-getrennte Sichtnachweis stehen noch aus; der Quellstatus ist kein
-Produkt-Erfolgsnachweis.
+Source-Checkpoint `18f8537` verwendet Runtime-ABI 85, Block-ABI 5,
+Analyzer-ABI 23, PlatformServices-ABI 13, Backend-Interface-ABI 12,
+Portprojektvertrag 75, Native-AOT-Emissionsprofil 13 und
+Portpartitionsschema 5. Der Checkpoint ist kein P0-Abschluss. Der
+abgebrochene NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und
+keinen Produktnachweis; vor dem naechsten privaten Lauf stehen KR-4974 bis
+KR-4984.
 
 ## Byteinventar
 
@@ -278,9 +278,9 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
-abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 73,
-Block-ABI 5, Analyzer-ABI 6, Backend-Interface-ABI 12,
-PlatformServices-ABI 13, Portprojektvertrag 62, Native-AOT-Emissionsprofil 11
+abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 85,
+Block-ABI 5, Analyzer-ABI 23, Backend-Interface-ABI 12,
+PlatformServices-ABI 13, Portprojektvertrag 75, Native-AOT-Emissionsprofil 13
 und Portpartitionsschema 5. Systemreplay-Schema 8
 und Runtime-Probe-Schema 5
 skalieren die Produktbeobachtung, ohne den interpreterfreien

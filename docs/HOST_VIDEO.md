@@ -1,11 +1,12 @@
 # Native Hostvideo-Runtime
 
-KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
+KR-4701 fuehrte `katana-native-video` ein; der aktuelle Runtimevertrag steht
+auf Version 3. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der aktuelle Quellstand `b01586a` verwendet Runtime-ABI 73, Block-ABI 5,
-Analyzer-ABI 6, Backend-Interface-ABI 12, PlatformServices-ABI 13,
-Portprojektvertrag 62, Native-AOT-Profil 11 und Partitionsschema 5.
+Source-Checkpoint `18f8537` verwendet Runtime-ABI 85, Block-ABI 5,
+Analyzer-ABI 23, Backend-Interface-ABI 12, PlatformServices-ABI 13,
+Portprojektvertrag 75, Native-AOT-Profil 13 und Partitionsschema 5.
 
 ## Vertrag
 
@@ -68,12 +69,17 @@ Snapshotfelder und veraendern diese Payloadidentitaet nicht.
 
 ## Produktpfad und Plattformen
 
-Der Windows-Backendpfad verwendet ein echtes Win32-Fenster und eine
-GDI-DIB-Presentation. Sie ist eine vollstaendige, skalierende RGBA-Ausgabe mit
-Aspect-Ratio-Erhalt und kein No-op; die eigentliche allgemeine PVR-
-Rasterisierung arbeitet derzeit jedoch auf der CPU und nutzt eine vorhandene
-Host-GPU noch nicht. GPU-Rasterisierung bleibt daher eine sichtbare
-Performancegrenze, nicht eine behauptete Capability.
+Der Windows-Backendpfad verwendet ein echtes Win32-Fenster und bevorzugt
+eine hardwarebeschleunigte, doppelt gepufferte D3D11-Flip-Swapchain mit
+begrenzter Frame-Latenz. Er faellt auf eine kompatible D3D11-Discard-
+Swapchain und erst bei einem Backendfehler auf die skalierende GDI-DIB-
+Presentation zurueck. Verdeckte Fenster werden nur getaktet geprobt;
+transiente D3D11-Geraetefehler besitzen einen begrenzten Recovery-Backoff.
+Die eigentliche allgemeine PVR-Rasterisierung arbeitet weiterhin auf der
+CPU, kann beweisbar unabhaengige Kacheln jedoch ueber den gemeinsamen
+Runtime-Executor verteilen. Hardwarepresentation ist kein Beleg fuer
+GPU-beschleunigte PVR-Rasterisierung oder Analyse; solche Offloads bleiben
+bis zu einem positiven KR-4982-End-to-End-Gate unbehauptet.
 
 Der generierte Port dekodiert die aktiven PVR-Scanoutregister, einschliesslich
 `VO_CONTROL`-Blanking und `BORDER_COL`, und erzeugt daraus RGBA-Frames aus
@@ -200,13 +206,14 @@ ABI-63-Build blieb mit null Hostframes schwarz. Die v32-Produkt-EXE war
 aber noch kein sichtbarer DirectBoot-Spielbildnachweis und keine aktuelle
 Performanceabnahme.
 
-Die quellseitige Guarded-AOT-/Exportluecke und die P0-Hotpath-/Handoff-
-Vertraege sind inzwischen fuer Runtime-ABI 73 implementiert. Ihre Wirkung auf
-Sonic und den Hostvideopfad ist noch nicht produktbelegt. Die naechste
-Abnahme ist ein frisch exportierter ABI-73-NativeDisc-Port mit realer
-Discinstallation, 600 Millionen Post-Entry-Gastzyklen und separater
-Fensteraufnahme. Ein spaeterer DirectBoot-Sichtlauf benoetigt einen frisch
-erfassten ABI-73-CompletePlatform-Handoff; NativeDisc benoetigt keinen.
+Die damalige Guarded-AOT-/Exportluecke und die P0-Hotpath-/Handoff-
+Vertraege wurden seit Runtime-ABI 73 weiterentwickelt. Ihre aktuelle
+Runtime-ABI-85-/Hostvideo-Vertrag-3-Auswirkung ist noch nicht
+produktabgenommen. Vor der naechsten Abnahme stehen KR-4974 bis KR-4984;
+erst danach folgt genau ein frischer NativeDisc-Port mit realer
+Discinstallation und neuem echtem Fensterscreenshot. Ein spaeterer
+DirectBoot-Sichtlauf benoetigt einen frisch fuer den dann aktuellen ABI
+erfassten CompletePlatform-Handoff; NativeDisc benoetigt keinen.
 
 Der erste private Produktnachweis dieser kombinierten Kette stammt aus einem
 Sonic-Adventure-PAL-AOT-Lauf in der v0.48-Entwicklung. Der recompilierte

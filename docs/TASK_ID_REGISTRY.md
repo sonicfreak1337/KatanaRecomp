@@ -65,12 +65,18 @@ noch nicht implementierte P0-Planung auf Basis der Kaltbuildanalyse vom
 ausdruecklich kein Produkt-Erfolg: Der frische Sonic-PAL-NativeDisc-Lauf ueber
 600 Millionen Post-Entry-Zyklen und der Sichtnachweis stehen noch aus.
 
+Der aktuelle Source-Checkpoint ist `18f8537` mit Runtime-ABI 85,
+Analyzer-ABI 23 und Portprojektvertrag 75. Der abgebrochene
+NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und keinen
+Produktnachweis. Vor dem naechsten privaten Sonic-Port sind KR-4974 bis
+KR-4984 verbindlich abzuschliessen.
+
 | ID | Titel | Status |
 |---|---|---|
 | KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | abgeschlossen, Folgearbeit KR-4966 |
-| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | quellseitig implementiert, Produktabnahme offen; atomarer CompletePlatform-Commit, Product-vs-Diagnostic-Evidenzbaseline und Save-Autoritaet vorhanden, frischer ABI-73-Handoff und normative Paritaet offen |
-| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | quellseitig implementiert, Produktabnahme offen; 22-Geraete-/5-Event-Vertrag vorhanden, DirectBoot benoetigt vor dem naechsten Lauf einen frischen ABI-73-Capture |
-| KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | aktiv P1; binaeres `GameProjectArtifact` Format 1 mit SHA-256, kombinierte `--game-project`-/Handoff-CLI und privater externer CMake-Generator belegt, Textdescriptor und wiederverwendbares Scaffold offen |
+| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | quellseitig implementiert, Produktabnahme offen; atomarer CompletePlatform-Commit, Product-vs-Diagnostic-Evidenzbaseline und Save-Autoritaet vorhanden, frischer ABI-passender Handoff und normative Paritaet nach KR-4974 bis KR-4984 offen |
+| KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | quellseitig implementiert, Produktabnahme offen; 22-Geraete-/5-Event-Vertrag vorhanden, DirectBoot benoetigt fuer den spaeteren Lauf einen frischen ABI-passenden Capture |
+| KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | aktiv P1; binaeres `GameProjectArtifact` Format 4 fuer Spielprojektvertrag 5 mit SHA-256, kombinierte `--game-project`-/Handoff-CLI und privater externer CMake-Generator belegt, Textdescriptor und wiederverwendbares Scaffold offen |
 | KR-4955 | Explizite Funktionsgrenzen und Tabellenhinweise End-to-End | quellseitig implementiert, Produktabnahme offen; Guarded-AOT-Einstiege, Carrier-/Inventar-/Codepointer-Provenienz und Exportvollstaendigkeit reichen bis CFG/IR/AOT |
 | KR-4956 | Static-AOT-Dispatchflucht inventarisieren und schliessen | quellseitig implementiert, Produktabnahme offen; Static-AOT-Seitentabelle, direkt gebundene Fastpaths und zielbezogene Revalidierung nach Codeinvalidierung vorhanden |
 | KR-4957 | Direkte native Calls ueber sichere Timinggrenzen | quellseitig implementiert, Produktabnahme offen; direkte Owner-Einstiege, bekannte Calls und endliche indirekte Ziele umgehen den Zentraldispatcher unter Guards |
@@ -78,14 +84,14 @@ ausdruecklich kein Produkt-Erfolg: Der frische Sonic-PAL-NativeDisc-Lauf ueber
 | KR-4959 | Ereignisgetriebene Scheduler-/IRQ-Safepoints | quellseitig implementiert, Produktabnahme offen; architektonische Grenzepochs, IRQ-Guards und regionsweise Cycle-/State-Commits vorhanden |
 | KR-4960 | 200-MHz-Produkt-Hotpath | geplant P0 Performance-Gate |
 | KR-4961 | Externes SonicAdventureRecomp-Bring-up-Projekt | aktiv P1; privates CMake-Projekt baut gegen das installierte Runtimepaket und erzeugt das hashgebundene v28-Artefakt, wiederverwendbares Scaffold und normaler Hook-/Port-Buildworkflow offen |
-| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | quellseitige P0-Vertraege implementiert, Produktabnahme offen; frischer ABI-73-NativeDisc-Lauf zuerst, DirectBoot spaeter mit neuem ABI-73-Handoff |
+| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | quellseitige P0-Vertraege implementiert, Produktabnahme offen; zuerst KR-4974 bis KR-4984, danach genau ein ABI-passender NativeDisc-Lauf, DirectBoot spaeter mit neuem ABI-passenden Handoff |
 | KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | aktiv P1; v28 warmer MSVC-Gateexport 4,209083 s, unveraenderter Hostbuild 0,219272 s, Runtime-/Hook-Schleifen und aktuelles Compiler-A/B offen |
 | KR-4964 | v0.49 Produktabnahme bis sichtbarem Spielbild | Gate |
 | KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | abgeschlossen ueber Alternativabnahme; allgemeine G2-Ursache repariert, alter Poll verlassen und engerer Blocker belegt |
 | KR-4966 | Post-Entry-Produktgate und erforderliche Meilensteine | quellseitig implementiert, Produktabnahme offen; relatives Post-Entry-Ziel, getrennte Arbeitsmetriken und Gate-Exit nur bei vollem Budget plus Meilenstein |
-| KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | quellseitig implementiert, Produktabnahme offen; alle falliblen Vorbereitungen vor Commit, CPU-PC/PR zuletzt, frischer ABI-73-Handoff offen |
-| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | quellseitig implementiert, Produktabnahme offen; Adapter, Event-/IRQ-Vertrag und historische G2-Completion vorhanden, ABI-73-Paritaet offen |
-| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | quellseitig implementiert, Produktabnahme offen; gastseitiger Zustand und neue Post-Entry-Evidenzbaseline vorhanden, sichtbare ABI-73-Abnahme offen |
+| KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | quellseitig implementiert, Produktabnahme offen; alle falliblen Vorbereitungen vor Commit, CPU-PC/PR zuletzt, frischer ABI-passender Handoff offen |
+| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | quellseitig implementiert, Produktabnahme offen; Adapter, Event-/IRQ-Vertrag und historische G2-Completion vorhanden, ABI-passende Paritaet offen |
+| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | quellseitig implementiert, Produktabnahme offen; gastseitiger Zustand und neue Post-Entry-Evidenzbaseline vorhanden, sichtbare ABI-passende Abnahme offen |
 | KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | quellseitig implementiert, Produktabnahme offen; installierte VMU-/Flashdaten bleiben autoritativ, Hostdiagnostik wird nicht als Gastzustand restauriert |
 | KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze `0x8C010F22 + 0x18`, getrennte AOT-Template-Diagnose belegt |
 | KR-4972 | Hashgebundene Shared-Callback-/Thunk-AOT-Coverage herstellen | quellseitig implementiert, Produktabnahme offen; Guarded-AOT-Entry und Exportinvariante erhalten Ziel/Shared-Body, reale Carrier-Kanten und Codepointerprovenienz ohne erfundene feste CFG-Kante |
@@ -108,17 +114,17 @@ ausdruecklich kein Produkt-Erfolg: Der frische Sonic-PAL-NativeDisc-Lauf ueber
 - `KR-4971` ist durch den v28-Produktlauf abgeschlossen.
 - `KR-4972` ist quellseitig implementiert; Guarded-AOT-Einstieg und
   Exportvollstaendigkeit sind vorhanden. Ob der historische Missing-AOT-
-  Grenzpunkt dadurch real passiert wird, entscheidet erst der frische
-  ABI-73-Sonic-Lauf.
+  Grenzpunkt dadurch real passiert wird, entscheidet erst der nach KR-4974
+  bis KR-4984 zulaessige ABI-passende Sonic-Lauf.
 - `KR-4973` ist durch den sichtbaren v32-NativeDisc-Produktlauf abgeschlossen;
   seine ABI-64-Messwerte bleiben historische Evidenz. DirectBoot benoetigt
-  fuer den aktuellen Runtime-ABI-73-Pfad einen frischen
+  fuer einen spaeteren aktuellen ABI-Pfad einen frischen
   CompletePlatform-Capture und bleibt in KR-4969/KR-4972 offen.
 - `KR-4966` ist quellseitig implementiert; die Produktabnahme des relativen
   600-Millionen-Gates bleibt offen.
 - `KR-4967` bis `KR-4970` sind quellseitig atomar und Save-erhaltend
-  implementiert; ABI-73-Produktabnahme und normative Paritaetsdigests bleiben
-  offen.
+  implementiert; ABI-passende Produktabnahme und normative Paritaetsdigests
+  bleiben offen.
 - `KR-4962` liefert die normative Game-Entry-Paritaet sowie den Sound-/Frame-Nachweis mit relativem 600-Millionen-Budget.
 - `KR-4955` bis `KR-4959` besitzen den aktuellen P0-Quellpfad fuer
   Guarded-AOT, Static-Tier, direkte Owner-/Callziele, Registerlokalisierung,

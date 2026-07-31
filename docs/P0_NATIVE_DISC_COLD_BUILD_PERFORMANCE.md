@@ -1,11 +1,13 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Aufgabenplan
 
-Status: verbindlicher P0-Fahrplan, Implementierung offen
+Status: verbindlicher P0-Fahrplan; KR-4974 bis KR-4984 nicht abgeschlossen
 
-Analysebasis: lokaler `main`-Stand `56a3922` vom 31. Juli 2026 sowie die
-laufenden, noch nicht eingecheckten Analyse-, Cache-, Executor-, Fortschritts-
-und Runtimeumbauten. Alle Aussagen ueber den aktuellen Source muessen deshalb
-vor dem Produktlauf gegen den dann eingecheckten Head neu geprueft werden.
+Analysebasis: P0-Planstand `ffd45ae`, Source-Checkpoint `18f8537` vom
+31. Juli 2026 und der abgebrochene private v24-Export. Der Source-Checkpoint
+enthaelt die bis dahin vorliegenden Analyse-, Cache-, Executor-,
+Fortschritts- und Runtimeumbauten, schliesst KR-4974 bis KR-4984 aber nicht
+ab. Alle Aussagen ueber den Source muessen vor dem Produktlauf gegen den dann
+aktuellen Head neu geprueft werden.
 
 ## Ziel
 
@@ -33,36 +35,49 @@ Die folgenden Zahlen stammen aus den privaten Exportlogs
 Originaldaten oder titelbezogene Adressen werden weder in Caches noch in
 oeffentliche Testartefakte uebernommen.
 
-| Messung | v23, Pass 15 | v24, Pass 15 | v24, Pass 22 im analysierten Zwischenstand |
-|---|---:|---:|---:|
-| Resolution-Roots | 1.328 | 1.192 | 1.416 |
-| Phase Candidate Resolution | 100,56 min | 89,71 min | noch laufend |
-| Evaluation-Hits | 6.352 | 6.801 | 7.617 |
-| Evaluation-Misses | 78.331 | 77.745 | mehr als 81.000 |
-| Hitquote | 7,50 % | 8,04 % | etwa 8,5 % |
-| Zeit bis `committed=16`, phasenlokal | 37,17 min | 37,39 min | 39,35 min |
+| Messung | v23, Pass 15 | v24, Pass 15 | v24, Pass 22 | v24, Pass 24 beim Abbruch |
+|---|---:|---:|---:|---:|
+| Resolution-Roots | 1.328 | 1.192 | 1.416 | 1.426 |
+| Candidate Resolution | 100,56 min | 89,72 min | 110,71 min | nach 3,56 min beendet |
+| kanonisch publizierte Roots | 1.328 | 1.192 | 1.416 | 7 |
+| Evaluation-Hits | 6.352 | 6.801 | 7.646 | 503 |
+| Evaluation-Misses | 78.331 | 77.745 | 82.440 | 27.244 |
+| Hitquote | 7,50 % | 8,04 % | 8,49 % | 1,81 % partiell |
 
 Die v24-Pass-15-Zeit sank gegenueber v23 nur um etwa 10,8 Prozent, waehrend
 die Zahl der Resolution-Roots um etwa 10,2 Prozent sank. Das ist nahezu nur
 weniger Arbeit, keine grundlegende Verbesserung des Durchsatzes.
 
-Der laufende v24-Pass 22 zeigte im am 31. Juli 2026 gegen 08:35 Uhr
-Europe/Berlin erfassten Zwischenstand:
+Der v24-Gesamtlauf wurde am 31. Juli 2026 gegen 09:12 Uhr Europe/Berlin
+nach etwa `3 h 27 min` auf ausdruecklichen Nutzerwunsch beendet. Er zeigte:
 
 - etwa 15 belegte CPU-Kerne im Langzeitmittel auf einem 24-Thread-Host,
   abgeleitet aus `Get-Process.CPU / Prozesswalltime`;
-- mehr als 11 GiB beobachteten Working-Set-Peak aus wiederholten
+- etwa `11,24 GiB` beobachteten Working-Set-Peak aus wiederholten
   `Get-Process`-Snapshots;
-- 16 kanonisch committed Roots nach weit ueber einer Stunde;
-- eine lange Root-17-Tailphase, obwohl spaetere Worker bereits Arbeit
-  erledigt haben koennen.
+- zwei abgeschlossene, jeweils weit ueber 15 Minuten lange
+  Candidate-Resolution-Phasen;
+- nach weiteren Seeds eine dritte vollstaendige Function-Value-Neuberechnung;
+- beim Abbruch `7 / 1.426` kanonisch publizierte Roots in Pass 24.
 
 Cache-/Rootwerte stammen aus den versionierten `KATANA_PROGRESS`-Zeilen des
-zu diesem Zeitpunkt noch wachsenden Logs. Diese Prozessbeobachtung ist keine
-abgeschlossene Benchmarkmessung. Sie reicht
-aber aus, um die Behauptung zu widerlegen, Katana nutze nur einen Kern. Das
-Problem ist primaer mehrfach ausgefuehrte und zu grob geschnittene Arbeit,
-nicht bloss eine fehlende Threadzahl.
+Logs. Die Parent-Scopes 13, 15 und 17 und ihre
+Candidate-Resolution-Child-Scopes 14, 16 und 18 spiegeln jeweils dieselben
+FunctionEvaluation-Zaehler; sie duerfen nicht doppelt addiert werden. Die
+Pass-24-Hitquote ist wegen des Abbruchs nur ein Fruehwert und nicht direkt
+mit den abgeschlossenen Passes vergleichbar. Die Prozessbeobachtung ist keine
+abgeschlossene Benchmarkmessung. Sie reicht aber aus, um die Behauptung zu
+widerlegen, Katana nutze nur einen Kern. Das Problem ist primaer mehrfach
+ausgefuehrte und zu grob geschnittene Arbeit, nicht bloss eine fehlende
+Threadzahl.
+
+Der Abbruch erfolgte vor Abschluss der Analyse. Das angeforderte
+Portverzeichnis wurde nicht publiziert; es gibt keine `game.exe`, keine
+Discinstallation, keinen Sonic-Prozess und keinen neuen Screenshot. Der Lauf
+ist ausschliesslich Performance-Diagnoseevidenz.
+Der lokale Iterationsname v24 und `v24-real-export.stdout.log` bezeichnen
+nicht den wesentlich aelteren historischen CompletePlatform-v24-
+Produktport.
 
 Die Discgroesse ist ebenfalls nicht der aktuelle Hauptblocker. Im v24-Log
 brauchte das Laden und Hashen der GDI etwa 5,4 Sekunden; die anschliessende
@@ -102,7 +117,11 @@ Seeds
 Im v24-Lauf erweiterte Pass 15 die Seedmenge von 1.327 auf 1.382. Weitere
 Runden wuchsen bis Pass 22 auf 1.547 Seeds. Pass 22 begann danach erneut eine
 vollstaendige Function-Value-Analyse mit 1.586 Funktionen, 22.394 Bloecken
-und 1.416 Resolution-Roots.
+und 1.416 Resolution-Roots. Nach deren Abschluss erweiterte die Summary-
+Expansion die Seedmenge von 1.547 auf 1.554; rekursive Nacharbeit erreichte
+1.557 Seeds und startete Pass 24 mit 1.597 Funktionen, 22.431 Bloecken und
+1.426 Resolution-Roots erneut. Der Lauf wurde in diesem dritten Vollansatz
+beendet.
 
 ### Function-Value-Auswertung
 

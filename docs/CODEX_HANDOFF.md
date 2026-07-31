@@ -39,6 +39,21 @@ einen bereits im Sonic-Lauf konkret beobachteten Fehler schneller isoliert
 oder eine deutlich teurere Retailiteration ersetzt. Der anschliessende normale
 Sonic-Lauf bleibt trotzdem der entscheidende Test.
 
+Aktuelle P0-Ausnahme: Der abgebrochene NativeDisc-v24-Export hat gezeigt,
+dass der obige Zyklus mit dem derzeitigen Kaltbuild nicht produktiv nutzbar
+ist. Bis die Tasks KR-4974 bis KR-4984 abgeschlossen sind, wird **kein** weiterer
+privater Sonic-Port gebaut. Die Tasks werden strangweise und allgemein
+implementiert, fokussiert verifiziert, einzeln committed und gepusht.
+Danach prueft ein unabhaengiger Gesamt-Review alle betroffenen Analyse-,
+Cache-, Executor-, Build-, Runtime-CPU- und GPU-Ausgabepfade. Jeder P0/P1-
+Fund wird im gesamten betroffenen Strang geschlossen und erneut reviewt.
+Erst dann folgt genau ein neuer NativeDisc-Sonic-Lauf. Der normative Plan
+steht in `docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`.
+Als sichtbarer Fortschrittsnachweis zaehlt ausschliesslich ein in genau
+diesem neuen Lauf frisch aufgenommener echter Fensterscreenshot jenseits der
+bekannten Sega-/Leergrenze. Alte Captures, technische Direct-Frames,
+Framezaehler oder Telemetrie sind kein Ersatz.
+
 ## Startprozedur
 
 1. nach jedem neuen Lauf und nach jeder Kontextkomprimierung die gebuendelten
@@ -51,9 +66,17 @@ Sonic-Lauf bleibt trotzdem der entscheidende Test.
 5. Abhaengigkeiten, aktuellen Status und vorhandene Gate-Berichte erfassen
 6. erst danach Dateien aendern
 
-Jeder gestartete Prozess besitzt eine harte Laufzeitgrenze von hoechstens
-15 Minuten und wird danach mitsamt seinem Prozessbaum beendet. Fokussierte
-Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
+Jeder gestartete Prozess und jede einzelne Phase besitzt eine harte
+Laufzeitgrenze von hoechstens 15 Minuten und wird danach mitsamt seinem
+Prozessbaum beendet. Nur eine ausdrueckliche, auf genau den benannten Lauf
+begrenzte Nutzerfreigabe darf diese Grenze voruebergehend aufheben; sie gilt
+weder fuer Nachfolger noch dauerhaft. Jeder potentiell lange Prozess
+veroeffentlicht spaetestens alle zehn Sekunden maschinenlesbaren Fortschritt
+oder Heartbeats mit Scope, Phase, geplant, queued, aktiv, fertig,
+kanonisch publiziert sowie relevanten Cache-/Arbeitszaehlern. Ein fehlender
+Fortschrittsindikator ist fuer einen langen P0-Pfad selbst ein Blocker.
+
+Fokussierte Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
 Entwicklungsrechner mit 24 logischen CPUs gilt `--parallel 24`. Der
 CLI-Portbuild verwendet dafuer
 `KATANA_HOST_BUILD_JOBS`; ohne expliziten Wert gilt direkt die gemeldete
@@ -322,10 +345,13 @@ Generierte Quellen werden nur committed, wenn die Roadmap dies fuer ein reproduz
 Regulaerer Implementierungs-Task:
 
 1. Task-ID, Abhaengigkeiten und betroffene Schichten erfassen
-2. minimalen Scope implementieren
+2. den vollstaendigen betroffenen Fehler- und Datenflussstrang implementieren;
+   keine titel- oder fixturegebundene Teilloesung
 3. Erfolgs-, Grenz- und Fehlerfaelle als Testanforderungen dokumentieren
 4. Dokumentation und CHANGELOG aktualisieren
-5. Taskstatus aktualisieren und Commit mit Task-ID erstellen
+5. fokussierte, fuer den Task notwendige Verifikation innerhalb des
+   15-Minuten-Vertrags ausfuehren
+6. Taskstatus aktualisieren, Commit mit Task-ID erstellen und pushen
 
 Letzter Gate-Vorbereitungstask:
 
@@ -404,55 +430,59 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-P0-Produktproof - aus b01586a einen frischen ABI-73-MSVC-NativeDisc-Port
-exportieren, mit der privaten PAL-Original-GDI installieren, exakt
-600 Millionen Gastzyklen ausfuehren, separat sichtbar aufnehmen und danach
-Metriken, ersten Blocker und Roadmap dokumentieren
+KR-4974 bis KR-4984 - NativeDisc-Kaltbuild allgemein auf das verbindliche
+8-/11-/15-Minuten-Gate fuer 24/12/8 Threads bringen, GPU-Offload nur nach
+positivem Entscheidungsgate integrieren, danach unabhaengige Gesamtpruefung
+und P0/P1-Schliessung; erst dann genau ein privater NativeDisc-Sonic-Lauf
 ```
 
 ### Aktueller P0-Quell-Handoff
 
-Der aktuelle committed Stand auf `main` ist `b01586a`. Die P0-Source-
-Vertraege sind implementiert; die Produktabnahme steht noch aus.
+Der funktionale Source-Checkpoint ist `18f8537`; der vorausgehende Commit
+`ffd45ae` dokumentiert den P0-Fahrplan. Keiner der beiden Commits behauptet
+einen abgeschlossenen P0 oder Produktproof. Der Source-Checkpoint traegt:
 
 ```text
-Runtime-ABI:                    73
+Runtime-ABI:                    85
 Block-ABI:                       5
-Analyzer-ABI:                    6
+Analyzer-ABI:                   23
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
-Portprojektvertrag:             62
-Native-AOT-Emissionsprofil:     11
+Portprojektvertrag:             75
+Native-AOT-Emissionsprofil:     13
 AOT-Partitionsschema:            5
 ```
 
-Die aktuelle Runde schliesst im Quellvertrag mehrere allgemeine
-Produktpfadluecken:
+Der Source-Checkpoint implementiert unter anderem Fortschrittsereignisse,
+komponentenbezogene Cacheidentitaeten, Boot-/Latent-AOT-Caches,
+ExactOnly-Discovery, Multi-Extent-Bindings, ein staerkeres
+FirstVisibleGameFrame-Gate, einen gemeinsamen Runtime-Executor,
+aggregierte CPU-Lastbegrenzung und bevorzugte D3D11-Flip-Ausgabe. Der
+fokussierte Function-Value-Test und der Release-CLI-Build sind gruen;
+Teilreviews einzelner Analyse- und Runtimepfade fanden keine bestaetigten
+P0/P1. Eine abschliessende Gesamtpruefung ist damit nicht ersetzt.
 
-- `KR-4972`: Bewachte Tail-/AOT-Einstiege bleiben durch Funktionsanalyse,
-  CFG, IR, Source-Map und statisches AOT erhalten. Shared Bodies und
-  Carrierkanten bleiben getrennt; der Export erzwingt fuer jeden akzeptierten
-  Einstieg Emission, natives Template oder typisierte Ablehnung.
-- `KR-4966`: Das Budget ist relativ zum restaurierten Game Entry. Exitcode 0
-  erfordert vollstaendige Post-Entry-Arbeit, Pflichtmeilenstein und ein echtes
-  `KATANA_PRODUCT_GATE`.
-- `KR-4967`: CPU, Speicher, Scheduler, IRQ und Geraete werden vor Commitbeginn
-  vorbereitet; der Commit ist atomar und CPU-PC/PR werden zuletzt publiziert.
-- `KR-4970`: Product-Handoff und verlustfreie Diagnose sind getrennt;
-  installierte VMU-/Flash-Working-Copies bleiben autoritativ.
-- Der statische Hotpath bindet Ausfuehrungs-/Fastpathdeskriptoren und
-  Owner-Entries direkt, fuehrt endliche indirekte Ziele nativ aus, lokalisiert
-  GPRs sowie T/PR/GBR/MACH/MACL/FPUL planbasiert und batcht bewiesene
-  Haupt-RAM-Writes. FPU-Registerarrays bleiben ausserhalb der Lokalisierung.
+Der private v24-Export wurde am 31. Juli 2026 nach etwa `3 h 27 min`
+abgebrochen. Pass 15 (`1.192` Roots, `89,72 min`) und Pass 22 (`1.416`
+Roots, `110,71 min`) waren abgeschlossen; Pass 24 begann mit `1.426` Roots
+die dritte volle Function-Value-Neuberechnung und stand bei `7` Roots.
+Es gibt kein Portartefakt, keine `game.exe`, keinen Sonic-Prozess und keinen
+neuen Screenshot. Die exakten Scope-, Cache- und Seedwerte stehen in
+`docs/STATUS.md`; Architektur und naechste Tasks stehen im P0-Detailplan.
+Der lokale Iterationsname v24 ist nicht der historische
+CompletePlatform-v24-Produktport.
 
-Diese Aussagen betreffen Source-Vertraege. Sie behaupten weder, dass der
-historische Sonic-Blocker bereits passiert wird, noch einen sichtbaren neuen
-Frame, ein vollstaendiges 600-Millionen-Gate oder 200 MHz.
+Diese Aussagen betreffen Source- und Diagnoseevidenz. Sie behaupten weder
+einen schnellen Kaltbuild noch messbar niedrigere Runtime-CPU-Last,
+GPU-beschleunigte Analyse, einen aktuellen Sonic-Boot oder sichtbaren
+Fortschritt.
 
 ### Historische v24-/v28-/v30-/v32-Produktevidenz
 
 v24, v28, v30 und v32 sind explizit historische Vergleichsports mit aelteren
-ABIs. Sie duerfen nicht als aktueller Produktnachweis fuer `b01586a`
+ABIs. Sie durften schon nicht als damaliger Produktnachweis fuer `b01586a`
+und duerfen erst recht nicht als aktueller Produktnachweis fuer den
+ABI-85-/Analyzer-ABI-23-Source-Checkpoint
 ausgegeben werden. v24 belegt den damaligen CompletePlatform-Apply, v28 und
 v30 die DirectBoot-Grenze, und v32 bleibt die kanonische sichtbare
 NativeDisc-Baseline.
@@ -497,14 +527,15 @@ Installationsdaten und Produktcaptures blieben unangetastet.
 Der allgemeine `KR-4972`-Source-Vertrag ist inzwischen implementiert.
 DirectBoot-v30 bleibt wegen Runtime-ABI 63 historische Schwarzbildevidenz und
 darf weder als Ergebnis des ABI-73-Source-Stands noch als aktueller
-Scanoutnachweis ausgegeben werden. Der naechste Schritt ist ausschliesslich
-der oben beschriebene frische NativeDisc-P0-Produktproof.
+Scanoutnachweis ausgegeben werden. Der naechste reale Produktlauf bleibt bis
+KR-4984 gesperrt.
 
 ## Historischer v0.48-Kontext
 
 Die folgenden Abschnitte bleiben als historische v0.48-Evidenz erhalten. Ihre
 damaligen ABI-Staende, Taskempfehlungen und Produktgrenzen beschreiben nicht
-den aktuellen P0-Stand auf `b01586a`.
+den aktuellen ABI-85-/Analyzer-ABI-23-Source-Checkpoint. `b01586a` war der
+damals aktuelle v0.49-Zwischenstand.
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,

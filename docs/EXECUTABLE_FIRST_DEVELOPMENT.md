@@ -73,13 +73,13 @@ Ein Treffer ist an
 `Analyse-/IR-Cache-Hit: ja` erkennbar. Dieser Whole-Export-Cache gilt fuer
 `port-executable` beziehungsweise `probe-port-executable`; der GDI-basierte
 NativeDiscBoot-Export behaelt seine Partitions- und Metadatencaches.
-Portprojektvertrag 62 bindet den erweiterten Spielprojekt- und
-Game-Entry-Vertrag samt `katana-game-project-v2`-Metadaten in diesen
-Schluessel und invalidiert damit aeltere
+Portprojektvertrag 75 bindet den aktuellen Spielprojektvertrag 5,
+GameProject-Artefaktformat 4, die `katana-game-project-v4`-Metadaten und den
+getrennten Game-Entry-Vertrag in diesen Schluessel und invalidiert damit aeltere
 Whole-Export-Treffer, statt sie mit einer inkompatiblen Runtimegrenze
 wiederzuverwenden.
 
-Der aktuell gemessene v28-Gesamtexport mit unveraenderter Analyse dauerte
+Der historisch gemessene v28-Gesamtexport mit unveraenderter Analyse dauerte
 4,209083 Sekunden; Analyse/IR, Metadaten und alle 42 AOT-Partitionen trafen
 den Cache. Der anschliessende unveraenderte Hostbuild dauerte 0,219272
 Sekunden.
@@ -98,13 +98,15 @@ Der private titelgebundene Artefaktprovider besitzt Descriptor und Payloads
 nach dem Laden selbst und stellt nur vorvalidierte, hashgebundene Slices
 bereit.
 
-Der aktuelle Quellstand `b01586a` verwendet Artefaktformat 2, Runtime-ABI 73,
-Block-ABI 5, Analyzer-ABI 6, PlatformServices-ABI 13,
-Backend-Interface-ABI 12, Portprojektvertrag 62, Native-AOT-Profil 11,
+Der aktuelle Source-Checkpoint `18f8537` verwendet
+GameEntryHandoff-Artefaktformat 2, Runtime-ABI 85, Block-ABI 5,
+Analyzer-ABI 23, PlatformServices-ABI 13,
+Backend-Interface-ABI 12, Portprojektvertrag 75, Native-AOT-Profil 13,
 Partitionsschema 5 und Plattformzustandsvertrag 2. Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
-Evidenz und muessen fuer den naechsten DirectBoot-Produktlauf neu fuer ABI 73
-erzeugt werden. NativeDisc benoetigt keinen Game-Entry-Handoff.
+Evidenz und muessen fuer einen spaeteren DirectBoot-Produktlauf neu fuer den
+dann aktuellen ABI erzeugt werden. NativeDisc benoetigt keinen
+Game-Entry-Handoff.
 `CompletePlatform` ist
 absichtlich nicht teilbar: Der Validator verlangt immer den kanonischen Satz
 aus 22 Geraeteklassen einschliesslich Flash sowie die exakt zugeordneten
@@ -130,12 +132,14 @@ Handoffprofil uebernimmt gastseitigen Plattformzustand, setzt aber
 Hostdiagnostik, PVR-/Audioevidenz und Produktmetriken am Game Entry auf eine
 neue Baseline. Installierte VMU- und Flashdaten bleiben autoritativ; ein
 Capture darf sie nicht zurueckrollen. `KR-4967` und `KR-4970` sind damit
-quellseitig implementiert, ihre frische ABI-73-Produktabnahme und normative
-NativeDisc-/DirectBoot-Digests bleiben offen.
+quellseitig implementiert. Ihre ABI-passende Produktabnahme und normative
+NativeDisc-/DirectBoot-Digests bleiben offen; sie folgen erst nach dem
+Performance- und Gesamtpruefungsgate KR-4974 bis KR-4984.
 
 ### Privates Handoff binden
 
-Das externe `GameProjectArtifact` Format 1 besitzt alle Strings und Arrays
+Das externe `GameProjectArtifact` Format 4 besitzt fuer Spielprojektvertrag 5
+alle Strings und Arrays
 seiner rein deklarativen Definition. Es serialisiert exakte Funktionsgrenzen,
 Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole, Codeidentitaeten und
 Bootkonfiguration mit Payload- und Gesamtartefakt-SHA-256. Native Overrides,
@@ -278,17 +282,18 @@ waehrend die alte DirectBoot-Schwarzausgabe auf den inzwischen in
 Runtime-ABI 64 entkoppelten Scanout-/Proofvertrag zurueckgefuehrt ist.
 DirectBoot erwartet weiterhin keinen Sega-Screen, weil es IP.BIN
 ueberspringt; seine naechste Abnahme ist ein echter Spiel-Framebufferwrite
-oder TA-Frame nach frischem ABI-73-Handoff. Die historische v32-Produkt-EXE
-war 53.677.056 Bytes gross.
+oder TA-Frame nach einem frischen, ABI-passenden Handoff. Die historische
+v32-Produkt-EXE war 53.677.056 Bytes gross.
 
-Seit v32 sind die P0-Umbauten im generischen Quellpfad bis Stand `b01586a`
-implementiert: Guarded-AOT-Einstiege und ihre Exportvollstaendigkeit,
+Im damaligen Stand `b01586a` waren folgende P0-Umbauten im generischen
+Quellpfad implementiert: Guarded-AOT-Einstiege und ihre Exportvollstaendigkeit,
 Carrier-/Inventar-/Codepointer-Provenienz, atomarer und Save-erhaltender
 CompletePlatform-Apply, relatives Produktgate, Static-AOT-Seitentabelle,
 vorverlagerter P1/P2-Cache mit zielbezogener SMC-Revalidierung, direkte
 Owner-Einstiege, endliche indirekte native Ziele, architektonische
 Safepoints, livenessbasierte Registerlokalisierung und gebatchte direkte
-Haupt-RAM-Writes mit zusammengefasster Codeinvalidierung. Das ist noch keine
-Produkt-Erfolgsmeldung. Der frische Sonic-PAL-NativeDisc-Port mit ABI 73 muss
-die Disc neu installieren, 600 Millionen Post-Entry-Zyklen ausfuehren und
-einen getrennten Sichtnachweis liefern.
+Haupt-RAM-Writes mit zusammengefasster Codeinvalidierung. Der aktuelle
+Source-Checkpoint `18f8537` enthaelt weitere Analyse-, Cache-, Fortschritts-
+und Runtimeumbauten, ist aber ebenfalls keine Produkt-Erfolgsmeldung. Der
+naechste private NativeDisc-Port bleibt bis zum Abschluss von KR-4974 bis
+KR-4984 gesperrt.

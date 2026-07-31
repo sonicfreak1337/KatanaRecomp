@@ -2,15 +2,16 @@
 
 Historischer Einfuehrungsstand: KR-4716
 
-Aktueller Quellstand: `b01586a` mit Runtime-ABI 73, Block-ABI 5,
-Analyzer-ABI 6, PlatformServices-ABI 13, Backend-Interface-ABI 12,
-Portprojektvertrag 62, Native-AOT-Emissionsprofil 11 und
-Portpartitionsschema 5. Die vereinbarten P0-Umbauten sind im Quellpfad
-abgeschlossen; der frische ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen
-Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus.
+Aktueller Source-Checkpoint: `18f8537` mit Runtime-ABI 85, Block-ABI 5,
+Analyzer-ABI 23, PlatformServices-ABI 13, Backend-Interface-ABI 12,
+Portprojektvertrag 75, Native-AOT-Emissionsprofil 13 und
+Portpartitionsschema 5. Der Checkpoint ist kein P0-Abschluss. Der
+abgebrochene NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und
+keinen Produktnachweis; vor dem naechsten privaten Lauf stehen KR-4974 bis
+KR-4984.
 
 Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter
-[Analyzer-ABI 6](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
+[Analyzer-ABI 23](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
 Truncation- oder Inventarfelder sind damit vom Runtimevertrag getrennt
 versioniert und koennen nicht mehr unbemerkt mit einem anders gebauten
 Analyzerarchiv gelinkt werden.

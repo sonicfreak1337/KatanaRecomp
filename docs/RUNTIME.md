@@ -6,12 +6,14 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Quellstand `b01586a` verwendet Runtime-ABI `73`, Block-ABI `5`, Analyzer-ABI
-`6`, PlatformServices-ABI `13`, Backend-Interface-ABI `12`,
-Portprojektvertrag `62`, Native-AOT-Emissionsprofil `11` und
-Portpartitionsschema `5`. Die vereinbarten P0-Umbauten sind im Quellpfad
-abgeschlossen. Der frische ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen
-Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus.
+Source-Checkpoint `18f8537` verwendet Runtime-ABI `85`, Block-ABI `5`,
+Analyzer-ABI `23`, PlatformServices-ABI `13`, Backend-Interface-ABI `12`,
+Portprojektvertrag `75`, Native-AOT-Emissionsprofil `13` und
+Portpartitionsschema `5`. Der Checkpoint ist kein P0-Abschluss. Der
+abgebrochene NativeDisc-v24-Iterationslauf erzeugte weder Portartefakt noch
+Sonic-Lauf oder Screenshot. Vor dem naechsten privaten Produktlauf stehen
+das KR-4974-bis-KR-4984-Performancegate und die unabhaengige
+Gesamtpruefung.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -696,12 +698,12 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der aktuelle Quellstand verwendet Runtime-ABI 73,
-Block-ABI 5, Analyzer-ABI 6, Backend-Interface-ABI 12,
-PlatformServices-ABI 13, Portvertrag 62, Native-AOT-Emissionsprofil 11 und
-Portpartitionsschema 5. Der Host-Video-Vertrag steht auf Version 2; die
+umgebenden Wrappers. Der aktuelle Source-Checkpoint verwendet Runtime-ABI 85,
+Block-ABI 5, Analyzer-ABI 23, Backend-Interface-ABI 12,
+PlatformServices-ABI 13, Portvertrag 75, Native-AOT-Emissionsprofil 13 und
+Portpartitionsschema 5. Der Host-Video-Vertrag steht auf Version 3; die
 Beobachtungsgrenze steht auf Systemreplay-Schema 8, Runtime-Probe-Schema 5
-und Device-Schema 5.
+und Device-Schema 6.
 
 Der Produktfortschritt unterscheidet `GuestProgramDispatched` von
 `GuestProgramProgressed`. Progression verlangt mindestens eine retired

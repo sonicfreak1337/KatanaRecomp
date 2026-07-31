@@ -4,6 +4,53 @@
 
 ### Geaendert
 
+- Der am 31. Juli 2026 gestartete private Exportversuch mit dem lokalen
+  Iterationsnamen NativeDisc-v24 wurde nach etwa `3 h 27 min` auf
+  ausdruecklichen Nutzerwunsch beendet. Er erzeugte **kein**
+  Portverzeichnis, keine
+  `game.exe`, keinen Sonic-Lauf und keinen neuen Screenshot. Pass 15
+  schloss `1.192` Candidate-Resolution-Roots nach `89,72 min` ab und
+  erweiterte die Seeds von `1.327` auf `1.382`. Pass 22 berechnete danach
+  `1.416` Roots in weiteren `110,71 min`, erweiterte `1.547` Seeds auf
+  `1.554` und fuehrte ueber die rekursive Nacharbeit zu `1.557` Seeds.
+  Pass 24 begann deshalb eine dritte vollstaendige Function-Value-Runde mit
+  `1.426` Roots und stand beim Abbruch bei `7` kanonisch publizierten Roots.
+  Der live beobachtete Working-Set-Peak lag bei etwa `11,24 GiB`.
+  Die Cachezaehler sind pro Function-Value-Scope zu lesen: Pass 15 meldete
+  `6.801` Hits und `77.745` Misses (`8,04 %`), Pass 22 `7.646` Hits und
+  `82.440` Misses (`8,49 %`), der unvollstaendige Pass 24 `503` Hits und
+  `27.244` Misses (`1,81 %`). Parent- und Candidate-Resolution-Child-Scope
+  spiegeln dieselben Zaehler und werden nicht addiert. Der Kaltbuild bleibt
+  damit ein offener P0. Dieser Iterationsname ist nicht mit dem wesentlich
+  aelteren historischen CompletePlatform-v24-Produktport gleichzusetzen.
+- Source-Checkpoint `18f8537` traegt Runtime-ABI 85, Analyzer-ABI 23 und
+  Portprojektvertrag 75. Er
+  implementiert quellseitig unter anderem ExactOnly-Latent-AOT, positive
+  und negative Modulcaches, einen gebundenen Boot-Analysecache,
+  komponentenbezogene Cacheidentitaeten, Fortschrittsereignisse fuer lange
+  Exportpfade, bytegleiche Multi-Extent-SourceBindings und einen
+  baseline-/kachelgebundenen Sichtbarkeitsklassifikator. Runtime-seitig sind
+  ein gemeinsamer AICA-/PVR-Executor, eine aggregierte CPU-Lastgrenze sowie
+  ein bevorzugter D3D11-Flip-Presenter mit GDI-Fallback vorhanden. Der
+  fokussierte Function-Value-Regressionstest und der Release-CLI-Build sind
+  gruen; einzelne betroffene Analyse- und Runtimepfade wurden unabhaengig
+  ohne bestaetigte P0/P1-Funde reviewt. Eine abschliessende
+  repositoryweite Gesamtpruefung, das 8-/12-/24-Thread-Performancegate,
+  ein belegter Analyse-GPU-Offload und ein aktueller Sonic-Produktnachweis
+  fehlen weiterhin. Der Checkpoint ist kein P0-Abschluss;
+  Quellimplementierung ist nicht mit Produktabnahme gleichzusetzen.
+- `ffd45ae` dokumentiert den verbindlichen P0-Fahrplan KR-4974 bis KR-4984
+  fuer den NativeDisc-Kaltbuild. Er umfasst messbare Missgruende,
+  semantische Cachelinsen, eine persistente Programm-/SCC-Session, einen
+  gemeinsamen Multi-Root-Fixpunkt, inkrementelle Seedinvalidierung,
+  priorisierte und speicherbegrenzte Arbeit, persistente Buildshards,
+  8-/12-/24-Thread-Gates sowie ein beweispflichtiges GPU-
+  Entscheidungsgate. Nach der Implementierung ist eine unabhaengige
+  Gesamtpruefung aller beruehrten Analyse-, Cache-, Executor-, Build-,
+  Runtime-CPU- und GPU-Ausgabepfade Pflicht. Erst nach Schliessung und
+  Re-Review aller P0/P1-Funde darf genau ein neuer privater
+  NativeDisc-Sonic-Lauf stattfinden. Der Detailvertrag steht in
+  `docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`.
 - `20228a1` macht die Area-4-Direct-Texture-Fenster vom echten
   Systembuszustand abhaengig. `0x11`/`0x118` folgen `SB_LMMODE0`,
   `0x13`/`0x138` folgen `SB_LMMODE1`; Wert 0 verwendet Raw-/64-Bit-VRAM,

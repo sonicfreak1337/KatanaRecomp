@@ -2,14 +2,14 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle Quellstand `b01586a` verwendet Portprojektvertrag 62, Runtime-ABI 73,
-Analyzer-ABI 6, PlatformServices-ABI 13, Block-ABI 5,
-Backend-Interface-ABI 12, Native-AOT-Emissionsprofil 11 und
-Portpartitionsschema 5. Die vereinbarten P0-Umbauten sind im Quellpfad
-abgeschlossen; der frische ABI-73-Sonic-NativeDisc-Lauf ueber 600 Millionen
-Post-Entry-Gastzyklen und der getrennte Sichtnachweis stehen noch aus. Keine der
-Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
-Hostprozesses abgeleitet.
+aktuelle Source-Checkpoint `18f8537` verwendet Portprojektvertrag 75,
+Runtime-ABI 85, Analyzer-ABI 23, PlatformServices-ABI 13, Block-ABI 5,
+Backend-Interface-ABI 12, Native-AOT-Emissionsprofil 13 und
+Portpartitionsschema 5. Der Checkpoint ist kein P0-Abschluss; der
+abgebrochene NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und
+keinen Produktnachweis. Erst nach KR-4974 bis KR-4984 darf genau ein neuer
+privater NativeDisc-Lauf stattfinden. Keine der Vertrauensaussagen wird aus
+der blossen Erzeugung oder dem Start eines Hostprozesses abgeleitet.
 
 ## Eingabeidentitaet
 
