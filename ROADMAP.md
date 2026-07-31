@@ -38,6 +38,75 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 - keine neuen breiten Testmatrizen waehrend des Spiel-Bring-ups
 - Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach fixer Hostzeit
 
+## Neuer P0-Block: NativeDisc-Kaltbuild in Minuten statt Stunden
+
+Der aktuelle reale Exportpfad ist trotz eines gemeinsamen Workerpools,
+Whole-Export-, Boot-Analysis-, Latent-AOT-, Codegen- und Hostbuildcaches nicht
+produktiviaetstauglich. Im privaten v24-Lauf benoetigte allein die
+Candidate-Resolution von CFG-Pass 15 `89,71 min`. CFG-Pass 22 startete nach
+spaet entdeckten Seeds erneut eine vollstaendige Function-Value-Analyse und
+stand nach weit ueber einer Stunde noch am kanonischen Root-Praefix 16.
+
+Der Prozess nutzte im Langzeitmittel etwa 15 CPU-Kerne auf dem
+24-Thread-Host. Der P0 ist deshalb kein blosser Schalter auf mehr Threads:
+ProgramGraph, SCCs und ABI-Vertraege werden mehrfach aufgebaut, semantisch
+gleiche Guarded-Inventory-Kontexte werden root-lokal wiederholt, exakte
+Evaluationkeys treffen nur etwa acht Prozent und grobe Rootjobs erzeugen
+lange Head-of-Line-Tails.
+
+Der verbindliche Architektur-, Mess-, GPU- und Gatevertrag steht in
+[`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
+Die Aufgaben sind:
+
+| ID | Titel | Ergebnis |
+|---|---|---|
+| KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | Phasen, Workset, CPU/RAM, Cacheevictions und jeder Missgrund sind belastbar sichtbar |
+| KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | nur tatsaechlich beobachtbare ABI-/Stateeingaben invalidieren Evaluationen |
+| KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | ProgramGraph, SCC-DAG, ABI-Vertraege und stabile Zustande ueberleben CFG-/Candidate-Runden |
+| KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | identische Kontexte werden rootuebergreifend einmal ausgewertet, ohne Korrelation zu erfinden |
+| KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | spaete Seeds invalidieren nur betroffene SCCs, Caller und Inventory-Sinks |
+| KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | teilbare Critical-Path-Jobs nutzen die CPU ohne Paging oder semantisches Truncation |
+| KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | ProgramGraph-, SCC-, Inventory- und IR-Shards ueberleben sichere Whole-Analysis-Misses |
+| KR-4981 | 8-/12-/24-Thread-Kaltbuild-Performancegate | voller Kaltport bleibt auf 24/12/8 Threads unter 8/11/15 Minuten |
+| KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | GPU-Kandidaten werden inklusive Setup, Transfer, RAM/VRAM und CPU-Referenz ehrlich gemessen |
+| KR-4983 | Deterministische capability-gated GPU-Beschleunigung | nur ein mindestens 15 Prozent end-to-end schneller GPU-Pfad wird optional integriert |
+| KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | alle betroffenen Analyse-, Cache-, Executor-, Build-, Runtime-CPU- und GPU-Ausgabepfade sind reviewed und P0/P1-frei |
+
+Die Reihenfolge ist normativ:
+
+```text
+Telemetrie
+  -> semantische Cachelinsen
+  -> persistente Programm-/SCC-Session
+  -> globaler Multi-Root-Fixpunkt
+  -> inkrementeller Seed-/CFG-Fixpunkt
+  -> Executor/RAM und persistente Shards
+  -> 8-/12-/24-Thread-Gate
+  -> unabhaengige Gesamtpruefung und P0/P1-Schliessung
+  -> genau ein frischer realer NativeDisc-Sonic-Lauf
+```
+
+Das GPU-Kernelinventar und ein frueher Reject duerfen nach KR-4974 parallel
+beginnen. Der finale KR-4982-Prototypvergleich wartet auf die optimierten
+Cachelinsen, Multi-Root-Daten und Executorarbeit aus KR-4975, KR-4977 und
+KR-4979. KR-4983 wird nur aktiviert, wenn ein Prototyp nach
+Geraeteerzeugung, Shadercompile und Transfers mindestens zweifachen
+Phasendurchsatz sowie mindestens 15 Prozent End-to-End-Kaltportgewinn
+belegt. Der CPU-only-Pfad bleibt vollstaendig und deterministisch; GPU-Waits
+sind gebunden, unbekannte oder langsamere Devices bleiben auf CPU und
+erkannte API-/Device-/Strukturfehler berechnen das ganze Batch erneut auf
+der CPU. Ein negatives GPU-Ergebnis schliesst das Entscheidungsgate und
+hinterlaesst keinen ungenutzten Produktbackend.
+
+Kein Performancewert darf durch weniger Funktionen, Bloecke, Resolutionen,
+Guarded-AOT-Einstiege oder Inventory-Sinks erreicht werden. Alle
+fail-closed Budget- und Vollstaendigkeitsdiagnosen bleiben erhalten.
+KR-4984 vergleicht ausserdem Runtime-CPU-Zeit, CPU pro Gastzyklus,
+Busy-Wait/Framepacing, Hostframes, Presenterfallbacks und GPU-Uploads bei
+derselben Gastarbeit. Bestaetigte Runtime-Hotspotarbeit muss mindestens
+20 Prozent sinken; Multicore oder GPU gilt nur mit end-to-end CPU- oder
+Walltimegewinn als Verbesserung.
+
 ## Verifizierter Ausgangsstand
 
 Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:

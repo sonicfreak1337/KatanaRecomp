@@ -1165,6 +1165,319 @@ Produktpfad abgenommen werden.
 
 ---
 
+## P0 NativeDisc-Kaltbuild-Architektur
+
+Der vollstaendige Befund, die Messbasis, gemeinsamen Korrektheitsinvarianten,
+GPU-Schwellen, RAM-/Zeitgates sowie Migrations- und Rollbackregeln stehen in
+[`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
+Die folgenden Tasks werden nicht durch einen weiteren langen Sonic-Export
+unterbrochen. Nach dem Performancegate folgt KR-4984; erst danach wird genau
+ein neuer realer NativeDisc-Port gebaut.
+
+## [ ] KR-4974 - Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger
+
+Prioritaet: P0
+
+Abhaengigkeiten: keine
+
+Status: Geplant.
+
+### Umfang
+
+- Phasen-/Subphasentimings, wachsendes Workset und echte CPU-/RAM-Metriken
+- geplant, queued, aktiv, ready und kanonisch committed getrennt
+- Cachehits, Evictions, In-Flight-Coalesces und vollstaendiges
+  Evaluation-Miss-Reason-Ledger
+- Referenzhost-/Toolchain-/Buildprofilmanifest und Prozessbaumressourcen
+- stabile JSONL-Ausgabe und retailfreie Stressform
+
+### Akzeptanz
+
+- keine mehr als zehn Sekunden lange Phase ohne Heartbeat
+- `lookups = ready_hits + in_flight_coalesces + misses`; primaere
+  Missgruende summieren sich exakt zu `misses`
+- Head-of-Line-Stall und dynamischer Seedzuwachs sind messbar
+
+---
+
+## [ ] KR-4975 - Semantische FunctionEvaluation-Key-Projektion und Cachelinsen
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4974
+
+Status: Geplant.
+
+### Umfang
+
+- versionierte Linsen fuer Summary, Candidate Contract, Guarded Inventory,
+  Contextual Return und isolierte Observation
+- ABI-Read-Set-basierte Projektion von Register-, Stack- und Memoryfacts
+- komponentisierte Keydigests und internierte Candidate-/Evidence-Sets
+
+### Akzeptanz
+
+- irrelevante Eingangsaenderung erzeugt keinen Miss
+- relevante Eingangsaenderung kann keinen falschen Hit erzeugen
+- unvollstaendige Read-/Stack-/Sink-Evidenz verwendet Vollzustand oder
+  deaktiviert den Cache
+- projizierte und konservative Vollzustandsauswertung sind kanonisch gleich
+
+---
+
+## [ ] KR-4976 - Persistente FunctionValue-Programm-/SCC-Session
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4974, KR-4975
+
+Status: Geplant.
+
+### Umfang
+
+- immutable FunctionProgramGraph-Arena mit stabilen Fingerprints
+- persistenter SCC-DAG, Callergraph und ABI-Vertraege
+- versionierte Dependency-/Summaryzustande und atomare Analysis-Epoch
+- bestehende direkte Callee-Stackprojektion erhalten; Register-/Memoryfacts
+  nur bei vollstaendiger Read-Evidenz weiter verengen
+
+### Akzeptanz
+
+- unveraenderte Funktionen bauen Graph- und ABI-Daten nicht erneut
+- lokale Aenderung invalidiert nur den nachweisbaren Dependency-Closure
+- unvollstaendige Register-/Memory-Read-Evidenz bleibt konservativ
+- fehlerhafte oder abgebrochene Epoch wird nicht teilweise publiziert
+
+---
+
+## [ ] KR-4977 - Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4975, KR-4976
+
+Status: Geplant.
+
+### Umfang
+
+- globaler ContextKey und internierte Rootprovenienz
+- gemeinsame forwarded/contextual Worklist
+- explizite Isolation-/Korrelationspartitionen
+- teilbare Fortsetzungen fuer lange transitive Contextketten
+
+### Akzeptanz
+
+- identischer Context wird pro Dependency-Version einmal ausgewertet
+- keine Root-, Callsite- oder Ownerkorrelation wird erfunden
+- physische Deduplication aendert keine logische per-Root-/per-Isolations-
+  Budget-, FIFO- oder Truncationdiagnostik
+- bestehende Forwarding-/Contextbudgets bleiben seriell/parallel identisch
+  und fail-closed
+
+---
+
+## [ ] KR-4978 - Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4976, KR-4977
+
+Status: Geplant.
+
+### Umfang
+
+- monotone Seedfakten mit Ursache
+- Dirty-SCC-/Caller-/Inventory-Sink-Invalidierung
+- inkrementelle ProgramGraph-Erweiterung und stabile Finalmaterialisierung
+
+### Akzeptanz
+
+- spaete Seeds starten keine unbetroffene Vollanalyse neu
+- Funktionen, Bloecke, Resolutionen und AOT-Inventar bleiben exakt
+- nicht darstellbarer Zustand faellt konservativ auf CPU-Neuberechnung
+  zurueck
+
+---
+
+## [ ] KR-4979 - Priorisierter Analyseexecutor und begrenzter Speicherhaushalt
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4974, KR-4977, KR-4978
+
+Status: Geplant.
+
+### Umfang
+
+- typisierte, kosten- und critical-path-priorisierte Workitems
+- teilbare SCC-/Context-/Root-Continuations im gemeinsamen Workerpool
+- globales RAM-/Cache-/Contextbudget mit sicherer Eviction und Spill
+
+### Akzeptanz
+
+- schwere Fenster nutzen mindestens 75 Prozent der konfigurierten Kerne
+- 16-GiB-Hosts geraten nicht in Paging-Sturm oder OOM
+- RAM-Druck erzeugt kein semantisches Truncation
+
+---
+
+## [ ] KR-4980 - Schichtweiser persistenter NativeDisc-Buildcache
+
+Prioritaet: P0
+
+Abhaengigkeiten: KR-4975, KR-4976, KR-4978
+
+Status: Geplant.
+
+### Umfang
+
+- atomare ProgramGraph-, ABI-, SCC-, Inventory- und IR-Shards
+- komponentenbezogene Implementierungsidentitaeten
+- positive/negative Ergebnisse, Korruptionsdiagnose, LRU und Groessenlimit
+- vorhandene Whole-Export-, Latent-AOT-, Codegen- und Hostcaches integrieren
+
+### Akzeptanz
+
+- fehlender, alter oder beschaedigter Shard ist ein sicherer Miss
+- lokale Aenderung invalidiert nur semantisch gebundene Ebenen
+- exakter Warmexport bleibt unter 30 Sekunden
+
+---
+
+## [ ] KR-4981 - 8-/12-/24-Thread-Kaltbuild-Performancegate
+
+Prioritaet: P0 Performance-Gate
+
+Abhaengigkeiten: KR-4974 bis KR-4980, KR-4982 und bei positivem GPU-Gate
+KR-4983
+
+Status: Geplant als Gate-Vorbereitung.
+
+### Akzeptanz
+
+- nur retailfreie oeffentliche/synthetische Last; noch kein privater
+  Sonic-Port vor KR-4984
+- festes Referenzhostmanifest mit CPU/SMT/RAM/SSD/OS/Compiler/Buildprofil
+  und exakt dokumentiertem Kaltzustand
+- voller kalter Port auf 24 Threads hoechstens 8 Minuten und 12 GiB
+  Process-Tree-Private/Commit-Peak
+- voller kalter Port auf 12 Threads hoechstens 11 Minuten und 10 GiB
+  Process-Tree-Private/Commit-Peak
+- voller kalter Port auf 8 Threads hoechstens 15 Minuten und 8 GiB
+  Process-Tree-Private/Commit-Peak
+- Analyse plus Codegen hoechstens 6/9/12 Minuten
+- drei oeffentliche Wiederholungen je Threadklasse, Median und Maximum
+- kein Einzelprozess und keine Phase laenger als 15 Minuten
+- rund 84.000 logische Evaluationrequests/-kontexte; physische
+  Evaluationen duerfen durch sichere Deduplication sinken
+- keine reduzierte Funktions-, Block-, Resolution- oder AOT-Abdeckung
+
+---
+
+## [ ] KR-4982 - GPU-Offload-Entscheidungsgate und repraesentativer Prototyp
+
+Prioritaet: P0 Entscheidungsgate
+
+Abhaengigkeiten: KR-4974, KR-4975, KR-4977, KR-4979
+
+Status: Profil-/Reject-Inventar darf nach KR-4974 beginnen; finaler
+Prototypvergleich und Gateabschluss warten auf den optimierten CPU-Pfad.
+
+### Umfang
+
+- nur profilbelegte homogene Batchkerne untersuchen
+- optimierte CPU-SIMD-/Threadpool-Referenz und begrenzter
+  D3D11-Compute-Prototyp
+- Setup, Shadercompile, H2D, Kernel, D2H, RAM und VRAM messen
+- gebundene Waits, Device-Lost, Timeout sowie nachweisbare Struktur-/
+  Digestfehler und CPU-Fallback pruefen
+- per-Device-/Batch-Crossover; unbekannte oder langsamere Devices bleiben
+  auf CPU
+
+### Akzeptanz
+
+- mindestens zweifacher Phasendurchsatz inklusive Transfers
+- mindestens 15 Prozent medianer End-to-End-Kaltportgewinn auf zwei
+  repraesentativen diskreten GPUs
+- keine iGPU-, CPU-only- oder Unsupported-Regression
+- hoechstens 1 GiB zusaetzlicher Analyzer-VRAM
+- unterhalb der Schwelle wird der Prototyp verworfen und das negative
+  Entscheidungsergebnis dokumentiert
+
+---
+
+## [ ] KR-4983 - Deterministische capability-gated GPU-Beschleunigung
+
+Prioritaet: bedingtes P0
+
+Abhaengigkeiten: positives KR-4982-Gate
+
+Status: Nur bei positivem Gate geplant.
+
+### Umfang
+
+- separates Analyse-Compute-Backend, keine Runtime-Presenter-Kopplung
+- Capability-, Treiber- und Speicherpruefung
+- per-Device-Crossover und gebundener GPU-Wait
+- atomare Batchuebernahme und vollstaendige CPU-Neuberechnung bei erkannten
+  API-/Timeout-/Device-Lost-/Struktur-/Digestfehlern
+- GPU-an/aus-Telemetrie und Abschaltoption
+
+### Akzeptanz
+
+- CPU und GPU liefern bytegleiche kanonische Artefakte
+- Device-Lost, Timeout oder erkannter Struktur-/Digestfehler kann nie
+  teilweise publiziert werden
+- KR-4982-Schwellen bleiben im integrierten End-to-End-Pfad erfuellt
+
+---
+
+## [ ] KR-4984 - Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf
+
+Prioritaet: P0, letzter Gate-Vorbereitungstask
+
+Abhaengigkeiten: KR-4981, KR-4982 und gegebenenfalls KR-4983
+
+Status: Geplant. Der naechste reale NativeDisc-Lauf ist bis zum Abschluss
+gesperrt.
+
+### Umfang
+
+- unabhaengiger End-to-End-Review von CFG/Seeds, Function Value, SCC,
+  Candidate Contract, Guarded Inventory und Rootkorrelation
+- Review von Cachelinsen, Shards, Executor, Fortschritt, RAM, IR, Codegen,
+  Hostbuild und Packaging
+- Review exakter Latent-AOT-Hints, bytegleicher Multi-Extent-Bindings und
+  sichtbarer-Frame-Baseline/-Pixelverteilung
+- Review des optionalen Analyse-GPU-Pfads und seines CPU-Fallbacks
+- Review der beruehrten Runtime-CPU-/Parallelwork- und
+  CPU-/D3D11-Ausgabepfade
+- Runtime-Vorher/Nachher bei gleicher Gastarbeit: Gesamt-CPU-Zeit,
+  CPU/Gastzyklus, effektive Kerne, Threadhotspots, Busy-Wait/Framepacing,
+  Hostframes und Speicher
+- Presenterbackend/Fallback, Uploadbytes/-anzahl, Upload-/Present-/Blockzeit
+  sowie verfuegbare GPU-Zeit-/Auslastungs-/VRAM-Metriken
+- pfadbezogenes Finding-Ledger und erneute Pruefung jeder Reparatur
+
+### Akzeptanz
+
+- alle P0/P1-Funde geschlossen und nachreviewed
+- betroffene Korrektheits- und Performancegates nach jeder Reparatur erneut
+  gruen
+- keine unverdrahtete Option, Identitaet, Telemetrie oder Fallbackgrenze
+- kein ungebundener Runtime-Busy-Spin; bestaetigte Runtime-Hotspotarbeit pro
+  gleicher Gastarbeit mindestens 20 Prozent unter Vorher-Baseline
+- Runtime-Multicore/GPU nur bei gemessenem Hotspot und end-to-end
+  CPU-/Walltimegewinn, nicht fuer eine schoene Auslastungszahl
+- erst dann genau ein frischer NativeDisc-Port, Installation und echter
+  Screenshot-Nachweis ueber die bekannte Sega-/Schwarzgrenze
+- der private 24-Thread-Kaltport bestaetigt das 8-Minuten-Gesamtziel; eine
+  Verfehlung laesst den P0 offen und erzwingt vor einem weiteren Versuch den
+  betroffenen Implementierungs-/Reviewzyklus
+- Gesamtbuildzeit und alle Phasen-/CPU-/RAM-/GPU-Messwerte berichtet
+
+---
+
 ## Geplante Produktlaeufe
 
 ### Lauf A - nach KR-4965 [ausgefuehrt]

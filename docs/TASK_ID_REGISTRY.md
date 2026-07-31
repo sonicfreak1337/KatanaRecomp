@@ -56,10 +56,12 @@
 
 ## v0.49 Sonic-Adventure-Produktaufgaben
 
-Quellstatus in dieser Tabelle bezieht sich auf `b01586a` mit Runtime-ABI 73,
-Block-ABI 5, Analyzer-ABI 6, PlatformServices-ABI 13,
-Backend-Interface-ABI 12, Portprojektvertrag 62, Native-AOT-Profil 11 und
-Partitionsschema 5. `quellseitig implementiert, Produktabnahme offen` ist
+Der historische Quellstatus fuer KR-4951 bis KR-4973 in dieser Tabelle
+bezieht sich auf `b01586a` mit Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6,
+PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 62,
+Native-AOT-Profil 11 und Partitionsschema 5. KR-4974 bis KR-4984 sind neue,
+noch nicht implementierte P0-Planung auf Basis der Kaltbuildanalyse vom
+31. Juli 2026. `quellseitig implementiert, Produktabnahme offen` ist
 ausdruecklich kein Produkt-Erfolg: Der frische Sonic-PAL-NativeDisc-Lauf ueber
 600 Millionen Post-Entry-Zyklen und der Sichtnachweis stehen noch aus.
 
@@ -88,6 +90,17 @@ ausdruecklich kein Produkt-Erfolg: Der frische Sonic-PAL-NativeDisc-Lauf ueber
 | KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze `0x8C010F22 + 0x18`, getrennte AOT-Template-Diagnose belegt |
 | KR-4972 | Hashgebundene Shared-Callback-/Thunk-AOT-Coverage herstellen | quellseitig implementiert, Produktabnahme offen; Guarded-AOT-Entry und Exportinvariante erhalten Ziel/Shared-Body, reale Carrier-Kanten und Codepointerprovenienz ohne erfundene feste CFG-Kante |
 | KR-4973 | NativeDisc-Sichtregression und proof-unabhaengige PVR-Ausgabe | abgeschlossen durch historische ABI-64-v32-Evidenz; Sega ab 2,032 s, 127 Hostframes, Fehler bei `553.990.562` / `11.080.283` an `0x8C11088C -> 0x8C64784E` |
+| KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | geplant P0 |
+| KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | geplant P0 |
+| KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | geplant P0 |
+| KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | geplant P0 |
+| KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | geplant P0 |
+| KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | geplant P0 |
+| KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | geplant P0 |
+| KR-4981 | 8-/12-/24-Thread-Kaltbuild-Performancegate | geplant P0 Gate-Vorbereitung |
+| KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | geplant P0 Entscheidungsgate |
+| KR-4983 | Deterministische capability-gated GPU-Beschleunigung | bedingt geplant P0 nach positivem KR-4982-Gate |
+| KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | geplant, letzter P0 Gate-Vorbereitungstask |
 
 ## Aktuelle Meilensteinzuordnung
 
