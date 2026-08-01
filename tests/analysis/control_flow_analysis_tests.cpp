@@ -725,6 +725,7 @@ int main() {
     bool explicit_candidate_iterations = true;
     bool exact_round_seed_accounting = true;
     bool exact_cache_accounting = true;
+    bool observed_multi_root_cfa_bridge = false;
     const auto silent_progress_before =
         katana::analysis::detail::
             function_value_progress_runtime_statistics_for_testing();
@@ -779,7 +780,22 @@ int main() {
                                 progress.function_value_session_cache_in_flight_coalesces +
                                 progress.function_value_session_cache_misses &&
                         explained_misses ==
-                            progress.function_value_session_cache_misses;
+                            progress.function_value_session_cache_misses &&
+                        progress.function_value_multi_root_context_requests ==
+                            progress.function_value_multi_root_unique_contexts +
+                                progress.function_value_multi_root_ready_reuses +
+                                progress.function_value_multi_root_in_flight_reuses &&
+                        progress.function_value_multi_root_retained_contexts ==
+                            progress.function_value_multi_root_unique_contexts;
+                    observed_multi_root_cfa_bridge =
+                        observed_multi_root_cfa_bridge ||
+                        (progress.function_value_multi_root_context_requests > 0u &&
+                         progress.function_value_multi_root_unique_contexts > 0u &&
+                         progress.function_value_multi_root_retained_contexts ==
+                             progress.function_value_multi_root_unique_contexts &&
+                         progress
+                                 .function_value_multi_root_retained_payload_bytes >
+                             0u);
                 }
                 if (progress.phase != "function-values-start" &&
                     progress.phase !=
@@ -908,6 +924,7 @@ int main() {
             explicit_candidate_iterations &&
             exact_round_seed_accounting &&
             exact_cache_accounting &&
+            observed_multi_root_cfa_bridge &&
             maximum_candidate_contract_passes >= 1u &&
             maximum_candidate_contract_passes <= 2u,
         "Spaet entdeckter Function-Summary-Callcarrier wurde nicht bis zum "

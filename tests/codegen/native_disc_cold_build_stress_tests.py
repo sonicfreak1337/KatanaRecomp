@@ -2003,6 +2003,11 @@ def main() -> int:
                 )
         if not (
             result.get("logical_evaluations", 0) > 0
+            and result.get("logical_evaluations")
+            == result.get("cache_lookups", 0)
+            + result.get("multi_root_ready_reuses", 0)
+            + result.get("multi_root_in_flight_reuses", 0)
+            + result.get("cache_diagnostic_bypass_evaluations", 0)
             and result.get("cache_lookups", 0)
             == result.get("cache_hits", 0) + result.get("cache_misses", 0)
             and result.get("cache_ready_hits", 0)
@@ -2014,6 +2019,16 @@ def main() -> int:
             + result.get("cache_diagnostic_bypass_evaluations", 0)
             and result.get("logical_evaluations", 0)
             >= result.get("physical_evaluations", 0)
+            and result.get("multi_root_context_requests", 0) > 0
+            and result.get("multi_root_context_requests")
+            == result.get("multi_root_unique_contexts", 0)
+            + result.get("multi_root_ready_reuses", 0)
+            + result.get("multi_root_in_flight_reuses", 0)
+            and result.get("multi_root_retained_contexts")
+            == result.get("multi_root_unique_contexts")
+            and result.get("multi_root_retained_payload_bytes", 0) > 0
+            and isinstance(result.get("multi_root_provenance_links"), int)
+            and result.get("multi_root_provenance_links", -1) >= 0
             and result.get("cache_hits", 0) > 0
             and result.get("cache_misses", 0) > 0
             and isinstance(result.get("cache_evictions"), int)
@@ -2054,7 +2069,11 @@ def main() -> int:
             if not (
                 wave.get("index") == index
                 and wave.get("boundaries") == wave.get("summaries")
-                and wave.get("logical_evaluations") == wave.get("cache_lookups")
+                and wave.get("logical_evaluations")
+                == wave.get("cache_lookups")
+                + wave.get("multi_root_ready_reuses")
+                + wave.get("multi_root_in_flight_reuses")
+                + wave.get("cache_diagnostic_bypass_evaluations")
                 and wave.get("cache_lookups")
                 == wave.get("cache_hits") + wave.get("cache_misses")
                 and wave.get("cache_hits")
@@ -2064,6 +2083,16 @@ def main() -> int:
                 == wave.get("cache_misses")
                 + wave.get("cache_replay_fallback_recomputes")
                 + wave.get("cache_diagnostic_bypass_evaluations")
+                and wave.get("multi_root_context_requests")
+                == wave.get("multi_root_unique_contexts")
+                + wave.get("multi_root_ready_reuses")
+                + wave.get("multi_root_in_flight_reuses")
+                and wave.get("multi_root_retained_contexts")
+                == wave.get("multi_root_unique_contexts")
+                and isinstance(wave.get("multi_root_provenance_links"), int)
+                and isinstance(wave.get("multi_root_retained_payload_bytes"), int)
+                and (wave.get("multi_root_retained_contexts") == 0)
+                == (wave.get("multi_root_retained_payload_bytes") == 0)
                 and set(wave.get("miss_reasons", {})) == miss_reason_names
                 and sum(wave["miss_reasons"].values()) == wave["cache_misses"]
                 and wave.get("cache_diagnostic_bypass_evaluations") == 0

@@ -879,6 +879,24 @@ void verify_function_evaluation_cache_telemetry() {
         "Die exakte Eviction-/Oversize-Historie ist nicht durch ein "
         "hartes Bytebudget begrenzt.");
     require(
+        !probe.bounded_exact_replay_available &&
+            probe.unbounded_exact_replay_available &&
+            probe.unbounded_exact_replay_preserved &&
+            probe.coordinator_requests == 2u &&
+            probe.coordinator_producers == 1u &&
+            probe.coordinator_ready_reuses +
+                    probe.coordinator_in_flight_reuses ==
+                1u &&
+            probe.coordinator_entries == 1u &&
+            probe.coordinator_session_lookups == 1u &&
+            probe.coordinator_session_entries == 0u &&
+            probe.coordinator_physical_computations == 1u &&
+            probe.coordinator_collision_safe &&
+            probe.coordinator_failure_pinned,
+        "Der Multi-Root-Coordinator verlor bei verweigerter Session-"
+        "Admission oder normalem Replay-Ueberlauf sein unbegrenztes "
+        "exaktes Journal bzw. startete denselben Producer erneut.");
+    require(
         probe.inline_only_artifact_bytes ==
                 probe.inline_only_artifact_owner_bytes &&
             probe.controlled_artifact_bytes >
@@ -1558,8 +1576,17 @@ multi_owner_inventory_start_values() {
         image, lines, boundaries, edges);
 }
 
-katana::analysis::FunctionValueAnalysisResult
-duplicate_forwarded_context_values() {
+struct DuplicateForwardedContextRun final {
+    katana::analysis::FunctionValueAnalysisResult values;
+    katana::analysis::FunctionValueAnalysisProgress progress;
+    katana::analysis::detail::FunctionValueAnalysisSessionStatistics
+        session_statistics;
+};
+
+DuplicateForwardedContextRun
+duplicate_forwarded_context_values(
+    const std::size_t maximum_session_entries = 0u,
+    const std::size_t maximum_session_bytes = 0u) {
     std::vector<std::uint8_t> bytes(0x80u, 0x09u);
     const auto put_u16 = [&bytes](const std::size_t offset,
                                   const std::uint16_t value) {
@@ -1574,17 +1601,18 @@ duplicate_forwarded_context_values() {
         bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
         bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
     };
-    put_u16(0x00u, 0xA002u); // owner A -> shared 0x08
-    put_u16(0x02u, 0x0009u);
-    put_u16(0x04u, 0xA000u); // owner B -> shared 0x08
-    put_u16(0x06u, 0x0009u);
-    put_u16(0x08u, 0xD402u); // identical callback literal 0x14 -> r4
-    put_u16(0x0Au, 0x412Bu); // shared candidate-only tail -> 0x20
-    put_u16(0x0Cu, 0x0009u);
-    put_u32(0x14u, 0x70u);
+    put_u16(0x00u, 0xD40Bu); // owner A: callback literal 0x30 -> r4
+    put_u16(0x02u, 0x412Bu); // candidate-only tail A -> 0x20
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x10u, 0xD407u); // owner B: same literal 0x30 -> r4
+    put_u16(0x12u, 0x412Bu); // candidate-only tail B -> 0x20
+    put_u16(0x14u, 0x0009u);
+    put_u16(0x16u, 0x000Bu);
     put_u16(0x20u, 0x2742u); // persistent callback store
     put_u16(0x22u, 0x000Bu);
     put_u16(0x24u, 0x0009u);
+    put_u32(0x30u, 0x70u);
     put_u16(0x70u, 0x000Bu);
     put_u16(0x72u, 0x0009u);
 
@@ -1602,13 +1630,20 @@ duplicate_forwarded_context_values() {
     const auto lines = katana::sh4::disassemble(bytes, 0u);
     constexpr std::array<katana::analysis::FunctionBoundary, 3u>
         boundaries{{
-            {0x00u, 0x0Eu},
-            {0x04u, 0x0Au},
+            {0x00u, 0x08u},
+            {0x10u, 0x08u},
             {0x20u, 0x06u},
         }};
-    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u>
         edges{{
-            {0x0Au,
+            {0x02u,
+             0x20u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+            {0x12u,
              0x20u,
              katana::analysis::ResolvedControlFlowKind::Call,
              true,
@@ -1616,8 +1651,108 @@ duplicate_forwarded_context_values() {
              {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
              true},
         }};
-    return katana::analysis::analyze_function_values(
-        image, lines, boundaries, edges);
+    katana::analysis::detail::FunctionValueAnalysisSession session(
+        maximum_session_entries,
+        maximum_session_bytes,
+        false);
+    katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+    DuplicateForwardedContextRun run;
+    run.values = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            edges,
+            [&run](const auto& progress) {
+                run.progress = progress;
+            },
+            shapes,
+            session);
+    run.session_statistics = session.statistics();
+    return run;
+}
+
+struct DuplicateIsolatedContextRun final {
+    katana::analysis::FunctionValueAnalysisResult values;
+    katana::analysis::FunctionValueAnalysisProgress progress;
+    katana::analysis::detail::FunctionValueAnalysisSessionStatistics
+        session_statistics;
+};
+
+DuplicateIsolatedContextRun
+duplicate_isolated_context_values(
+    const std::size_t maximum_session_entries = 0u,
+    const std::size_t maximum_session_bytes = 0u) {
+    std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    put_u16(0x00u, 0xD40Bu); // owner A: callback literal 0x30 -> r4
+    put_u16(0x02u, 0xB00Du); // bsr 0x20
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0x000Bu);
+    put_u16(0x10u, 0xD407u); // owner B: same literal 0x30 -> r4
+    put_u16(0x12u, 0xB005u); // bsr 0x20
+    put_u16(0x14u, 0x0009u);
+    put_u16(0x16u, 0x000Bu);
+    put_u16(0x20u, 0x2742u); // persistent callback store
+    put_u16(0x22u, 0x000Bu);
+    put_u16(0x24u, 0x0009u);
+    put_u32(0x30u, 0x70u);
+    put_u16(0x70u, 0x000Bu);
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(
+        katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".duplicate-isolated-context",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    image.add_entry_point(0x10u);
+    // Independent callee entry => unknown ingress => both concrete callers
+    // require initial Isolated Store Harvest.
+    image.add_entry_point(0x20u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, 0x08u},
+            {0x10u, 0x08u},
+            {0x20u, 0x06u},
+        }};
+    katana::analysis::detail::FunctionValueAnalysisSession session(
+        maximum_session_entries,
+        maximum_session_bytes,
+        false);
+    katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+    DuplicateIsolatedContextRun run;
+    run.values = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            [&run](const auto& progress) {
+                run.progress = progress;
+            },
+            shapes,
+            session);
+    run.session_statistics = session.statistics();
+    return run;
 }
 
 katana::analysis::FunctionValueAnalysisResult
@@ -4910,9 +5045,22 @@ int main() {
                      .candidate_inventory_truncated,
             "Ein Guarded-Inventareinstieg mit mehreren Funktionsownern "
             "wurde verworfen oder faelschlich als trunciert gemeldet.");
-
-        const auto duplicate_forwarded =
+        const auto duplicate_forwarded_run =
             duplicate_forwarded_context_values();
+        const auto duplicate_forwarded_reference =
+            duplicate_forwarded_context_values(
+                16'384u,
+                1'024u * 1024u * 1024u);
+        require_same_function_value_semantics(
+            duplicate_forwarded_run.values,
+            duplicate_forwarded_reference.values,
+            false);
+        const auto& duplicate_forwarded =
+            duplicate_forwarded_run.values;
+        const auto& duplicate_forwarded_progress =
+            duplicate_forwarded_run.progress;
+        const auto& duplicate_forwarded_session =
+            duplicate_forwarded_run.session_statistics;
         const auto& duplicate_forwarded_diagnostics =
             duplicate_forwarded.guarded_code_inventory
                 .walk_diagnostics;
@@ -4935,17 +5083,44 @@ int main() {
                         ->store_instruction_addresses ==
                     std::vector<std::uint32_t>{0x20u} &&
                 duplicate_forwarded_candidate->evidence_call_sites ==
-                    std::vector<std::uint32_t>{0x0Au} &&
+                    std::vector<std::uint32_t>{0x02u, 0x12u} &&
+                duplicate_forwarded_candidate->evidence_callees.empty() &&
                 duplicate_forwarded_diagnostics
                         .forwarded_store_evaluation_cache_hits ==
                     1u &&
                 duplicate_forwarded_diagnostics
                         .forwarded_store_evaluation_cache_misses ==
                     1u &&
+                duplicate_forwarded_progress
+                        .multi_root_context_requests ==
+                    2u &&
+                duplicate_forwarded_progress
+                        .multi_root_unique_contexts ==
+                    1u &&
+                duplicate_forwarded_progress
+                            .multi_root_ready_reuses +
+                        duplicate_forwarded_progress
+                            .multi_root_in_flight_reuses ==
+                    1u &&
+                duplicate_forwarded_progress
+                        .multi_root_retained_contexts ==
+                    1u &&
+                duplicate_forwarded_session.entries == 0u &&
+                duplicate_forwarded_session
+                        .retained_payload_bytes ==
+                    0u &&
+                duplicate_forwarded_progress.logical_evaluations ==
+                    duplicate_forwarded_progress
+                            .session_cache_lookups +
+                        duplicate_forwarded_progress
+                            .multi_root_ready_reuses +
+                        duplicate_forwarded_progress
+                            .multi_root_in_flight_reuses &&
                 !duplicate_forwarded_diagnostics.truncated(),
-            "Zwei exakt gleiche passweite Forwarded-Kontexte wurden erneut "
-            "ausgewertet oder ihr Guarded-Inventar/Fail-closed-Zustand "
-            "wich beim Memo-Replay ab (candidate=" +
+            "Zwei semantisch gleiche Forwarded-Kontexte mit verschiedenen "
+            "Root-Callsites wurden physisch erneut ausgewertet oder ihre "
+            "exakte Provenienz/Fail-closed-Semantik wich beim Replay ab "
+            "(candidate=" +
                 std::to_string(
                     has_stored_code_address(duplicate_forwarded, 0x70u)) +
                 ", hits=" +
@@ -4995,6 +5170,174 @@ int main() {
                         ? 0u
                         : duplicate_forwarded_candidate
                               ->evidence_callees.size()) +
+                ").");
+
+        const auto duplicate_isolated =
+            duplicate_isolated_context_values();
+        const auto duplicate_isolated_reference =
+            duplicate_isolated_context_values(
+                16'384u,
+                1'024u * 1024u * 1024u);
+        require_same_function_value_semantics(
+            duplicate_isolated.values,
+            duplicate_isolated_reference.values,
+            false);
+        const auto& isolated_progress =
+            duplicate_isolated.progress;
+        const auto& isolated_session =
+            duplicate_isolated.session_statistics;
+        const auto& isolated_diagnostics =
+            duplicate_isolated.values.guarded_code_inventory
+                .walk_diagnostics;
+        const auto isolated_candidate = std::find_if(
+            duplicate_isolated.values.guarded_code_inventory
+                .stored_code_addresses.begin(),
+            duplicate_isolated.values.guarded_code_inventory
+                .stored_code_addresses.end(),
+            [](const auto& candidate) {
+                return candidate.target_address == 0x70u;
+            });
+        const auto isolated_reuses =
+            isolated_progress.multi_root_ready_reuses +
+            isolated_progress.multi_root_in_flight_reuses;
+        const auto isolated_lens_index = static_cast<std::size_t>(
+            katana::analysis::EvaluationLens::IsolatedObservation);
+        require(
+            isolated_candidate !=
+                    duplicate_isolated.values.guarded_code_inventory
+                        .stored_code_addresses.end() &&
+                isolated_candidate->guarded &&
+                !isolated_candidate->complete &&
+                isolated_candidate->store_instruction_addresses ==
+                    std::vector<std::uint32_t>{0x20u} &&
+                isolated_candidate->evidence_call_sites ==
+                    std::vector<std::uint32_t>{0x02u, 0x12u} &&
+                isolated_candidate->evidence_callees.empty() &&
+                isolated_progress.phase == "complete" &&
+                isolated_progress.multi_root_context_requests >= 2u &&
+                isolated_progress.multi_root_unique_contexts >= 1u &&
+                isolated_reuses >= 1u &&
+                isolated_progress.multi_root_context_requests ==
+                    isolated_progress.multi_root_unique_contexts +
+                        isolated_reuses &&
+                isolated_progress.multi_root_retained_contexts ==
+                    isolated_progress.multi_root_unique_contexts &&
+                isolated_progress.multi_root_retained_payload_bytes != 0u &&
+                isolated_progress.multi_root_provenance_links >= 2u &&
+                isolated_progress.evaluation_lenses
+                        .requests[isolated_lens_index] ==
+                    1u &&
+                isolated_session.entries == 0u &&
+                isolated_session.retained_payload_bytes == 0u &&
+                isolated_session.hits == 0u &&
+                isolated_session.evictions == 0u &&
+                isolated_session.lookups == isolated_session.misses &&
+                isolated_progress.logical_evaluations ==
+                    isolated_progress.session_cache_lookups +
+                        isolated_reuses &&
+                isolated_progress.physical_evaluations ==
+                    isolated_progress.session_cache_misses +
+                        isolated_progress
+                            .cache_replay_fallback_recomputes +
+                isolated_progress
+                            .cache_diagnostic_bypass_evaluations &&
+                isolated_progress.cache_replay_fallback_recomputes == 0u &&
+                !isolated_diagnostics.truncated(),
+            "Initial Isolated Store Harvest fuehrte denselben kanonischen "
+            "Kontext trotz cacheloser Session mehrfach aus, verlor echte "
+            "Callsite-/Callee-Provenienz oder meldete ein inkonsistentes "
+            "Multi-Root-Ledger (requests=" +
+                std::to_string(
+                    isolated_progress.multi_root_context_requests) +
+                ", unique=" +
+                std::to_string(
+                    isolated_progress.multi_root_unique_contexts) +
+                ", reuses=" + std::to_string(isolated_reuses) +
+                ", retained=" +
+                std::to_string(
+                    isolated_progress.multi_root_retained_contexts) +
+                ", provenance=" +
+                std::to_string(
+                    isolated_progress.multi_root_provenance_links) +
+                ", session_hits=" +
+                std::to_string(isolated_session.hits) +
+                ", isolated_lens_requests=" +
+                std::to_string(
+                    isolated_progress.evaluation_lenses
+                        .requests[isolated_lens_index]) +
+                ", logical=" +
+                std::to_string(isolated_progress.logical_evaluations) +
+                ", physical=" +
+                std::to_string(isolated_progress.physical_evaluations) +
+                ", lookups=" +
+                std::to_string(isolated_progress.session_cache_lookups) +
+                ", misses=" +
+                std::to_string(isolated_progress.session_cache_misses) +
+                ", store_sites=" +
+                std::to_string(
+                    isolated_candidate ==
+                            duplicate_isolated.values.guarded_code_inventory
+                                .stored_code_addresses.end()
+                        ? 0u
+                        : isolated_candidate->store_instruction_addresses
+                              .size()) +
+                ", calls=" +
+                std::to_string(
+                    isolated_candidate ==
+                            duplicate_isolated.values.guarded_code_inventory
+                                .stored_code_addresses.end()
+                        ? 0u
+                        : isolated_candidate->evidence_call_sites.size()) +
+                ", callees=" +
+                std::to_string(
+                    isolated_candidate ==
+                            duplicate_isolated.values.guarded_code_inventory
+                                .stored_code_addresses.end()
+                        ? 0u
+                        : isolated_candidate->evidence_callees.size()) +
+                ", guarded=" +
+                std::to_string(
+                    isolated_candidate !=
+                            duplicate_isolated.values.guarded_code_inventory
+                                .stored_code_addresses.end() &&
+                    isolated_candidate->guarded) +
+                ", complete=" +
+                std::to_string(
+                    isolated_candidate !=
+                            duplicate_isolated.values.guarded_code_inventory
+                                .stored_code_addresses.end() &&
+                    isolated_candidate->complete) +
+                ", phase=" + isolated_progress.phase +
+                ", retained_bytes=" +
+                std::to_string(
+                    isolated_progress.multi_root_retained_payload_bytes) +
+                ", session_entries=" +
+                std::to_string(isolated_session.entries) +
+                ", session_bytes=" +
+                std::to_string(isolated_session.retained_payload_bytes) +
+                ", session_evictions=" +
+                std::to_string(isolated_session.evictions) +
+                ", fallbacks=" +
+                std::to_string(
+                    isolated_progress.cache_replay_fallback_recomputes) +
+                ", diagnostic_bypasses=" +
+                std::to_string(
+                    isolated_progress.cache_diagnostic_bypass_evaluations) +
+                ", forwarded_hits=" +
+                std::to_string(
+                    isolated_diagnostics
+                        .forwarded_store_evaluation_cache_hits) +
+                ", forwarded_misses=" +
+                std::to_string(
+                    isolated_diagnostics
+                        .forwarded_store_evaluation_cache_misses) +
+                ", truncated=" +
+                std::to_string(isolated_diagnostics.truncated()) +
+                ", candidate=" +
+                std::to_string(
+                    isolated_candidate !=
+                    duplicate_isolated.values.guarded_code_inventory
+                        .stored_code_addresses.end()) +
                 ").");
 
         const auto parameterized = parameterized_candidate_return_values();

@@ -154,12 +154,14 @@ class StructuredControlFlowProgress final {
                 progress.function_value_resolution_functions_committed;
             resolution_counters.configured_workers =
                 progress.function_value_configured_workers;
+            // The producer maintains `resolution_functions_ready` as the
+            // current ready-queue occupancy: it increments when a result is
+            // published and decrements when that result leaves the queue for
+            // canonical commit. It is therefore already the exact
+            // head-of-line lead and must not be reduced by the cumulative
+            // committed count a second time.
             resolution_counters.ready_ahead =
-                progress.function_value_resolution_functions_ready -
-                std::min(
-                    progress.function_value_resolution_functions_ready,
-                    progress
-                        .function_value_resolution_functions_committed);
+                progress.function_value_resolution_functions_ready;
             if (progress.function_value_resolution_functions_committed <
                 progress
                     .function_value_resolution_functions_total) {
@@ -339,6 +341,21 @@ class StructuredControlFlowProgress final {
         counters.cache_diagnostic_bypass_evaluations =
             progress
                 .function_value_session_cache_diagnostic_bypass_evaluations;
+        counters.multi_root_context_requests =
+            progress.function_value_multi_root_context_requests;
+        counters.multi_root_unique_contexts =
+            progress.function_value_multi_root_unique_contexts;
+        counters.multi_root_ready_reuses =
+            progress.function_value_multi_root_ready_reuses;
+        counters.multi_root_in_flight_reuses =
+            progress.function_value_multi_root_in_flight_reuses;
+        counters.multi_root_provenance_links =
+            progress.function_value_multi_root_provenance_links;
+        counters.multi_root_retained_contexts =
+            progress.function_value_multi_root_retained_contexts;
+        counters.multi_root_retained_payload_bytes =
+            progress
+                .function_value_multi_root_retained_payload_bytes;
         counters.cache_evictions =
             progress.function_value_session_cache_evictions;
         counters.cache_entries =

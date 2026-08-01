@@ -42,14 +42,14 @@ resolution_progress(const std::size_t round,
     progress.function_value_summarized_functions = 1'600u;
     progress.function_value_pending = 11u;
     progress.function_value_active_workers = 24u;
-    progress.function_value_logical_evaluations = 84'000u;
-    progress.function_value_physical_evaluations = 80'000u;
+    progress.function_value_logical_evaluations = 13u;
+    progress.function_value_physical_evaluations = 5u;
     progress.function_value_active_evaluation_requests = 7u;
     progress.function_value_evaluation_request_nanoseconds =
         8'400'000u;
     progress.function_value_maximum_evaluation_request_nanoseconds =
         1'000u;
-    progress.function_value_cache_key_builds = 84'000u;
+    progress.function_value_cache_key_builds = 10u;
     progress.function_value_active_cache_key_builds = 2u;
     progress.function_value_cache_key_build_nanoseconds = 840'000u;
     progress.function_value_maximum_cache_key_build_nanoseconds = 500u;
@@ -61,7 +61,7 @@ resolution_progress(const std::size_t round,
     progress.function_value_active_cache_replays = 1u;
     progress.function_value_cache_replay_nanoseconds = 1'000u;
     progress.function_value_maximum_cache_replay_nanoseconds = 1'000u;
-    progress.function_value_active_physical_evaluations = 6u;
+    progress.function_value_active_physical_evaluations = 4u;
     progress.function_value_physical_evaluation_nanoseconds =
         8'000'000u;
     progress.function_value_maximum_physical_evaluation_nanoseconds =
@@ -86,6 +86,14 @@ resolution_progress(const std::size_t round,
         .function_value_session_cache_in_flight_coalesces = 3u;
     progress.function_value_session_cache_hits = 5u;
     progress.function_value_session_cache_misses = 5u;
+    progress.function_value_multi_root_context_requests = 5u;
+    progress.function_value_multi_root_unique_contexts = 2u;
+    progress.function_value_multi_root_ready_reuses = 2u;
+    progress.function_value_multi_root_in_flight_reuses = 1u;
+    progress.function_value_multi_root_provenance_links = 6u;
+    progress.function_value_multi_root_retained_contexts = 2u;
+    progress.function_value_multi_root_retained_payload_bytes =
+        2'048u;
     progress.function_value_session_cache_evictions = 1u;
     progress.function_value_session_cache_entries = 8u;
     progress.function_value_session_cache_retained_payload_bytes =
@@ -162,6 +170,14 @@ int main() {
         abi_stack_progress.function_value_subphase_iterations = 5u;
         progress.update(abi_stack_progress);
         progress.update(
+            resolution_progress(
+                1u,
+                1u,
+                "function-values-resolution-progress",
+                3u,
+                0u,
+                3u));
+        progress.update(
             inactive_function_value_completion(1u, 1u));
         progress.update(
             resolution_progress(
@@ -216,19 +232,34 @@ int main() {
                                .cache_in_flight_coalesces ==
                            std::optional<std::uint64_t>{3u} &&
                        event.counters.evaluation_requests ==
-                           std::optional<std::uint64_t>{84'000u} &&
+                           std::optional<std::uint64_t>{13u} &&
                        event.counters.active_evaluation_requests ==
                            std::optional<std::uint64_t>{7u} &&
                        event.counters.cache_key_builds ==
-                           std::optional<std::uint64_t>{84'000u} &&
+                           std::optional<std::uint64_t>{10u} &&
                        event.counters.cache_waits ==
                            std::optional<std::uint64_t>{3u} &&
                        event.counters.cache_replays ==
                            std::optional<std::uint64_t>{2u} &&
                        event.counters.physical_evaluations ==
-                           std::optional<std::uint64_t>{80'000u} &&
+                           std::optional<std::uint64_t>{5u} &&
                        event.counters.cache_commits ==
                            std::optional<std::uint64_t>{5u} &&
+                       event.counters.multi_root_context_requests ==
+                           std::optional<std::uint64_t>{5u} &&
+                       event.counters.multi_root_unique_contexts ==
+                           std::optional<std::uint64_t>{2u} &&
+                       event.counters.multi_root_ready_reuses ==
+                           std::optional<std::uint64_t>{2u} &&
+                       event.counters.multi_root_in_flight_reuses ==
+                           std::optional<std::uint64_t>{1u} &&
+                       event.counters.multi_root_provenance_links ==
+                           std::optional<std::uint64_t>{6u} &&
+                       event.counters.multi_root_retained_contexts ==
+                           std::optional<std::uint64_t>{2u} &&
+                       event.counters
+                               .multi_root_retained_payload_bytes ==
+                           std::optional<std::uint64_t>{2'048u} &&
                        katana::progress_event_telemetry_complete(
                            event);
             });
@@ -250,12 +281,32 @@ int main() {
                        event.counters.committed_work ==
                            std::optional<std::uint64_t>{1u} &&
                        event.counters.ready_ahead ==
-                           std::optional<std::uint64_t>{1u};
+                           std::optional<std::uint64_t>{2u};
             });
     require(
         observed_saturated_ready_ahead,
-        "Candidate-Resolution meldete Ready statt Ready-minus-Committed "
-        "als Head-of-Line-Vorsprung.");
+        "Candidate-Resolution zog den kumulativen Commitstand erneut von "
+        "der aktuellen Ready-Queue-Belegung ab.");
+
+    const auto observed_drained_ready_queue =
+        std::any_of(
+            events.begin(),
+            events.end(),
+            [](const auto& event) {
+                return event.operation ==
+                           katana::ProgressOperation::
+                               CandidateResolution &&
+                       event.counters.ready_work ==
+                           std::optional<std::uint64_t>{0u} &&
+                       event.counters.committed_work ==
+                           std::optional<std::uint64_t>{3u} &&
+                       event.counters.ready_ahead ==
+                           std::optional<std::uint64_t>{0u};
+            });
+    require(
+        observed_drained_ready_queue,
+        "Candidate-Resolution verlor den leeren Ready-Queue-Endzustand "
+        "nach dem letzten kanonischen Commit.");
 
     const auto observed_real_subphase =
         std::find_if(

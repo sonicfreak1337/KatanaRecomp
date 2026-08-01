@@ -210,10 +210,11 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t inventory_region_block_limited_regions = 0u;
     std::size_t forwarded_store_context_budget = 0u;
     std::size_t forwarded_store_context_limited_functions = 0u;
-    // Pass-local exact memoization is an optimization only. These two
-    // performance counters are scheduling- and run-local, not canonical
-    // analysis output. Misses above the private cache budget are evaluated
-    // normally and never truncate results.
+    // Run-local coordinator reuse is an optimization only. A hit is a logical
+    // subscriber that reused a ready or in-flight coordinator artifact; a
+    // miss is the first producer for that exact context, independently of
+    // whether the persistent session cache serves that producer. These
+    // counters are scheduling- and run-local, not canonical analysis output.
     std::size_t forwarded_store_evaluation_cache_hits = 0u;
     std::size_t forwarded_store_evaluation_cache_misses = 0u;
     std::vector<ForwardedStoreContextLimitDiagnostic>
@@ -384,6 +385,16 @@ struct FunctionValueAnalysisProgress {
     // this separate preserves the exact physical-work identity:
     // misses + replay fallbacks + diagnostic bypasses.
     std::size_t cache_diagnostic_bypass_evaluations = 0u;
+    // Run-local physical-work fanout. A unique context invokes the persistent
+    // session cache once; ready/in-flight subscribers replay that pinned
+    // artifact without another interpreter execution.
+    std::size_t multi_root_context_requests = 0u;
+    std::size_t multi_root_unique_contexts = 0u;
+    std::size_t multi_root_ready_reuses = 0u;
+    std::size_t multi_root_in_flight_reuses = 0u;
+    std::size_t multi_root_provenance_links = 0u;
+    std::size_t multi_root_retained_contexts = 0u;
+    std::size_t multi_root_retained_payload_bytes = 0u;
     std::size_t resolution_functions_total = 0u;
     std::size_t resolution_functions_started = 0u;
     std::size_t resolution_functions_ready = 0u;

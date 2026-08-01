@@ -125,6 +125,13 @@ struct ProgressCounterSnapshot final {
     // Physical evaluations intentionally bypassing the cache for opt-in
     // analyzer diagnostics. Product performance runs require this to be zero.
     std::optional<std::uint64_t> cache_diagnostic_bypass_evaluations;
+    std::optional<std::uint64_t> multi_root_context_requests;
+    std::optional<std::uint64_t> multi_root_unique_contexts;
+    std::optional<std::uint64_t> multi_root_ready_reuses;
+    std::optional<std::uint64_t> multi_root_in_flight_reuses;
+    std::optional<std::uint64_t> multi_root_provenance_links;
+    std::optional<std::uint64_t> multi_root_retained_contexts;
+    std::optional<std::uint64_t> multi_root_retained_payload_bytes;
     std::optional<std::uint64_t> cache_evictions;
     std::optional<std::uint64_t> cache_entries;
     // Deterministic retained-payload admission budget; never process RSS.

@@ -1103,7 +1103,7 @@ struct NamedCounterMember final {
     OptionalCounterMember member;
 };
 
-constexpr std::array<NamedCounterMember, 93u> progress_counter_members{{
+constexpr std::array<NamedCounterMember, 100u> progress_counter_members{{
     {"iteration", &ProgressCounterSnapshot::iteration},
     {"pass", &ProgressCounterSnapshot::pass},
     {"active_workers", &ProgressCounterSnapshot::active_workers},
@@ -1171,6 +1171,20 @@ constexpr std::array<NamedCounterMember, 93u> progress_counter_members{{
      &ProgressCounterSnapshot::cache_replay_fallback_recomputes},
     {"cache_diagnostic_bypass_evaluations",
      &ProgressCounterSnapshot::cache_diagnostic_bypass_evaluations},
+    {"multi_root_context_requests",
+     &ProgressCounterSnapshot::multi_root_context_requests},
+    {"multi_root_unique_contexts",
+     &ProgressCounterSnapshot::multi_root_unique_contexts},
+    {"multi_root_ready_reuses",
+     &ProgressCounterSnapshot::multi_root_ready_reuses},
+    {"multi_root_in_flight_reuses",
+     &ProgressCounterSnapshot::multi_root_in_flight_reuses},
+    {"multi_root_provenance_links",
+     &ProgressCounterSnapshot::multi_root_provenance_links},
+    {"multi_root_retained_contexts",
+     &ProgressCounterSnapshot::multi_root_retained_contexts},
+    {"multi_root_retained_payload_bytes",
+     &ProgressCounterSnapshot::multi_root_retained_payload_bytes},
     {"cache_evictions", &ProgressCounterSnapshot::cache_evictions},
     {"cache_entries", &ProgressCounterSnapshot::cache_entries},
     {"cache_retained_payload_bytes",
@@ -1429,6 +1443,40 @@ bool progress_cache_accounting_valid(const ProgressCounterSnapshot& counters) no
         if (!counters.cache_misses || explained_misses != *counters.cache_misses) return false;
     } else if (split_accounting_present && counters.cache_misses && *counters.cache_misses != 0u) {
         return false;
+    }
+
+    const auto multi_root_accounting_present =
+        counters.multi_root_context_requests.has_value() ||
+        counters.multi_root_unique_contexts.has_value() ||
+        counters.multi_root_ready_reuses.has_value() ||
+        counters.multi_root_in_flight_reuses.has_value() ||
+        counters.multi_root_provenance_links.has_value() ||
+        counters.multi_root_retained_contexts.has_value() ||
+        counters.multi_root_retained_payload_bytes.has_value();
+    if (multi_root_accounting_present) {
+        if (!counters.multi_root_context_requests ||
+            !counters.multi_root_unique_contexts ||
+            !counters.multi_root_ready_reuses ||
+            !counters.multi_root_in_flight_reuses ||
+            !counters.multi_root_provenance_links ||
+            !counters.multi_root_retained_contexts ||
+            !counters.multi_root_retained_payload_bytes)
+            return false;
+        std::uint64_t reuses = 0u;
+        if (!checked_add(*counters.multi_root_ready_reuses, reuses) ||
+            !checked_add(*counters.multi_root_in_flight_reuses, reuses))
+            return false;
+        std::uint64_t coordinator_requests = reuses;
+        if (!checked_add(
+                *counters.multi_root_unique_contexts,
+                coordinator_requests) ||
+            coordinator_requests !=
+                *counters.multi_root_context_requests ||
+            *counters.multi_root_retained_contexts !=
+                *counters.multi_root_unique_contexts ||
+            ((*counters.multi_root_retained_contexts == 0u) !=
+             (*counters.multi_root_retained_payload_bytes == 0u)))
+            return false;
     }
     return true;
 }

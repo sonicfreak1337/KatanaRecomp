@@ -360,6 +360,13 @@ struct RealFvaWaveLedger final {
     std::size_t cache_misses = 0u;
     std::size_t cache_replay_fallback_recomputes = 0u;
     std::size_t cache_diagnostic_bypass_evaluations = 0u;
+    std::size_t multi_root_context_requests = 0u;
+    std::size_t multi_root_unique_contexts = 0u;
+    std::size_t multi_root_ready_reuses = 0u;
+    std::size_t multi_root_in_flight_reuses = 0u;
+    std::size_t multi_root_provenance_links = 0u;
+    std::size_t multi_root_retained_contexts = 0u;
+    std::size_t multi_root_retained_payload_bytes = 0u;
     std::array<std::size_t,
                katana::analysis::detail::
                    function_evaluation_cache_miss_reason_count>
@@ -371,6 +378,13 @@ struct RealFvaStressResult final {
     katana::analysis::detail::FunctionValueAnalysisSessionStatistics statistics;
     std::size_t logical_evaluations = 0u;
     std::size_t physical_evaluations = 0u;
+    std::size_t multi_root_context_requests = 0u;
+    std::size_t multi_root_unique_contexts = 0u;
+    std::size_t multi_root_ready_reuses = 0u;
+    std::size_t multi_root_in_flight_reuses = 0u;
+    std::size_t multi_root_provenance_links = 0u;
+    std::size_t multi_root_retained_contexts = 0u;
+    std::size_t multi_root_retained_payload_bytes = 0u;
     std::size_t replay_hits = 0u;
     std::size_t replay_misses = 0u;
     std::size_t runs = 0u;
@@ -414,6 +428,13 @@ struct RealFvaStressResult final {
             std::size_t session_cache_misses = 0u;
             std::size_t cache_replay_fallback_recomputes = 0u;
             std::size_t cache_diagnostic_bypass_evaluations = 0u;
+            std::size_t multi_root_context_requests = 0u;
+            std::size_t multi_root_unique_contexts = 0u;
+            std::size_t multi_root_ready_reuses = 0u;
+            std::size_t multi_root_in_flight_reuses = 0u;
+            std::size_t multi_root_provenance_links = 0u;
+            std::size_t multi_root_retained_contexts = 0u;
+            std::size_t multi_root_retained_payload_bytes = 0u;
         } last_progress;
         bool saw_progress = false;
         std::string last_phase;
@@ -465,6 +486,20 @@ struct RealFvaStressResult final {
                             progress.cache_replay_fallback_recomputes;
                         last_progress.cache_diagnostic_bypass_evaluations =
                             progress.cache_diagnostic_bypass_evaluations;
+                        last_progress.multi_root_context_requests =
+                            progress.multi_root_context_requests;
+                        last_progress.multi_root_unique_contexts =
+                            progress.multi_root_unique_contexts;
+                        last_progress.multi_root_ready_reuses =
+                            progress.multi_root_ready_reuses;
+                        last_progress.multi_root_in_flight_reuses =
+                            progress.multi_root_in_flight_reuses;
+                        last_progress.multi_root_provenance_links =
+                            progress.multi_root_provenance_links;
+                        last_progress.multi_root_retained_contexts =
+                            progress.multi_root_retained_contexts;
+                        last_progress.multi_root_retained_payload_bytes =
+                            progress.multi_root_retained_payload_bytes;
                         saw_progress = true;
                         const std::array milestones{
                             std::string_view{"start"},
@@ -530,10 +565,15 @@ struct RealFvaStressResult final {
         const auto lookup_delta = after.lookups - before.lookups;
         const auto hit_delta = after.hits - before.hits;
         const auto miss_delta = after.misses - before.misses;
+        const auto multi_root_reuses =
+            last_progress.multi_root_ready_reuses +
+            last_progress.multi_root_in_flight_reuses;
         require(last_progress.phase == "complete" &&
                     last_progress.functions == boundaries.size() &&
                     last_progress.summarized_functions == boundaries.size() &&
-                    last_progress.logical_evaluations == lookup_delta &&
+                    last_progress.logical_evaluations ==
+                        lookup_delta + multi_root_reuses +
+                            last_progress.cache_diagnostic_bypass_evaluations &&
                     last_progress.session_cache_lookups == lookup_delta &&
                     last_progress.session_cache_hits == hit_delta &&
                     last_progress.session_cache_misses == miss_delta &&
@@ -544,6 +584,13 @@ struct RealFvaStressResult final {
                         miss_delta +
                             last_progress.cache_replay_fallback_recomputes +
                             last_progress.cache_diagnostic_bypass_evaluations &&
+                    last_progress.multi_root_context_requests ==
+                        last_progress.multi_root_unique_contexts +
+                            multi_root_reuses &&
+                    last_progress.multi_root_retained_contexts ==
+                        last_progress.multi_root_unique_contexts &&
+                    ((last_progress.multi_root_retained_contexts == 0u) ==
+                     (last_progress.multi_root_retained_payload_bytes == 0u)) &&
                     last_progress.cache_diagnostic_bypass_evaluations == 0u,
                 "reale FVA-Progress-/Session-/Physical-Bilanz driftet");
         RealFvaWaveLedger ledger;
@@ -564,6 +611,20 @@ struct RealFvaStressResult final {
             last_progress.cache_replay_fallback_recomputes;
         ledger.cache_diagnostic_bypass_evaluations =
             last_progress.cache_diagnostic_bypass_evaluations;
+        ledger.multi_root_context_requests =
+            last_progress.multi_root_context_requests;
+        ledger.multi_root_unique_contexts =
+            last_progress.multi_root_unique_contexts;
+        ledger.multi_root_ready_reuses =
+            last_progress.multi_root_ready_reuses;
+        ledger.multi_root_in_flight_reuses =
+            last_progress.multi_root_in_flight_reuses;
+        ledger.multi_root_provenance_links =
+            last_progress.multi_root_provenance_links;
+        ledger.multi_root_retained_contexts =
+            last_progress.multi_root_retained_contexts;
+        ledger.multi_root_retained_payload_bytes =
+            last_progress.multi_root_retained_payload_bytes;
         for (std::size_t reason = 0u; reason < ledger.miss_reasons.size(); ++reason)
             ledger.miss_reasons[reason] =
                 after.miss_reasons[reason] - before.miss_reasons[reason];
@@ -589,6 +650,20 @@ struct RealFvaStressResult final {
         aggregate.waves.push_back(ledger);
         aggregate.logical_evaluations += last_progress.logical_evaluations;
         aggregate.physical_evaluations += last_progress.physical_evaluations;
+        aggregate.multi_root_context_requests +=
+            last_progress.multi_root_context_requests;
+        aggregate.multi_root_unique_contexts +=
+            last_progress.multi_root_unique_contexts;
+        aggregate.multi_root_ready_reuses +=
+            last_progress.multi_root_ready_reuses;
+        aggregate.multi_root_in_flight_reuses +=
+            last_progress.multi_root_in_flight_reuses;
+        aggregate.multi_root_provenance_links +=
+            last_progress.multi_root_provenance_links;
+        aggregate.multi_root_retained_contexts +=
+            last_progress.multi_root_retained_contexts;
+        aggregate.multi_root_retained_payload_bytes +=
+            last_progress.multi_root_retained_payload_bytes;
         ++aggregate.runs;
         if (replay) {
             aggregate.replay_hits = hit_delta;
@@ -650,6 +725,13 @@ struct SemanticFvaStressResult final {
         targeted_miss_reasons{};
     std::size_t logical_evaluations = 0u;
     std::size_t physical_evaluations = 0u;
+    std::size_t multi_root_context_requests = 0u;
+    std::size_t multi_root_unique_contexts = 0u;
+    std::size_t multi_root_ready_reuses = 0u;
+    std::size_t multi_root_in_flight_reuses = 0u;
+    std::size_t multi_root_provenance_links = 0u;
+    std::size_t multi_root_retained_contexts = 0u;
+    std::size_t multi_root_retained_payload_bytes = 0u;
     std::size_t targeted_misses = 0u;
     std::size_t targeted_hits = 0u;
     std::size_t replay_hits = 0u;
@@ -776,6 +858,13 @@ struct SemanticFvaStressResult final {
         std::size_t terminal_physical = 0u;
         std::size_t terminal_fallbacks = 0u;
         std::size_t terminal_diagnostic_bypasses = 0u;
+        std::size_t terminal_multi_root_context_requests = 0u;
+        std::size_t terminal_multi_root_unique_contexts = 0u;
+        std::size_t terminal_multi_root_ready_reuses = 0u;
+        std::size_t terminal_multi_root_in_flight_reuses = 0u;
+        std::size_t terminal_multi_root_provenance_links = 0u;
+        std::size_t terminal_multi_root_retained_contexts = 0u;
+        std::size_t terminal_multi_root_retained_payload_bytes = 0u;
         bool stack_observed = false;
         bool persistent_observed = false;
         const auto result =
@@ -796,15 +885,26 @@ struct SemanticFvaStressResult final {
                             progress.cache_replay_fallback_recomputes;
                         terminal_diagnostic_bypasses =
                             progress.cache_diagnostic_bypass_evaluations;
+                        terminal_multi_root_context_requests =
+                            progress.multi_root_context_requests;
+                        terminal_multi_root_unique_contexts =
+                            progress.multi_root_unique_contexts;
+                        terminal_multi_root_ready_reuses =
+                            progress.multi_root_ready_reuses;
+                        terminal_multi_root_in_flight_reuses =
+                            progress.multi_root_in_flight_reuses;
+                        terminal_multi_root_provenance_links =
+                            progress.multi_root_provenance_links;
+                        terminal_multi_root_retained_contexts =
+                            progress.multi_root_retained_contexts;
+                        terminal_multi_root_retained_payload_bytes =
+                            progress.multi_root_retained_payload_bytes;
                         aggregate.maximum_head_of_line_milliseconds = std::max(
                             aggregate.maximum_head_of_line_milliseconds,
                             progress.resolution_head_of_line_elapsed_milliseconds);
-                        if (progress.resolution_functions_ready >=
-                            progress.resolution_functions_committed)
-                            aggregate.maximum_ready_ahead = std::max(
-                                aggregate.maximum_ready_ahead,
-                                progress.resolution_functions_ready -
-                                    progress.resolution_functions_committed);
+                        aggregate.maximum_ready_ahead = std::max(
+                            aggregate.maximum_ready_ahead,
+                            progress.resolution_functions_ready);
                         katana::ProgressCounterSnapshot counters;
                         counters.pass = run_index + 1u;
                         counters.active_workers = progress.active_workers;
@@ -828,9 +928,7 @@ struct SemanticFvaStressResult final {
                         counters.head_of_line_elapsed_milliseconds =
                             progress.resolution_head_of_line_elapsed_milliseconds;
                         counters.ready_ahead =
-                            progress.resolution_functions_ready -
-                            std::min(progress.resolution_functions_ready,
-                                     progress.resolution_functions_committed);
+                            progress.resolution_functions_ready;
                         counters.evaluation_requests =
                             progress.logical_evaluations;
                         counters.active_evaluation_requests =
@@ -890,6 +988,20 @@ struct SemanticFvaStressResult final {
                             progress.cache_replay_fallback_recomputes;
                         counters.cache_diagnostic_bypass_evaluations =
                             progress.cache_diagnostic_bypass_evaluations;
+                        counters.multi_root_context_requests =
+                            progress.multi_root_context_requests;
+                        counters.multi_root_unique_contexts =
+                            progress.multi_root_unique_contexts;
+                        counters.multi_root_ready_reuses =
+                            progress.multi_root_ready_reuses;
+                        counters.multi_root_in_flight_reuses =
+                            progress.multi_root_in_flight_reuses;
+                        counters.multi_root_provenance_links =
+                            progress.multi_root_provenance_links;
+                        counters.multi_root_retained_contexts =
+                            progress.multi_root_retained_contexts;
+                        counters.multi_root_retained_payload_bytes =
+                            progress.multi_root_retained_payload_bytes;
                         counters.cache_evictions =
                             progress.session_cache_evictions;
                         counters.cache_entries =
@@ -976,9 +1088,20 @@ struct SemanticFvaStressResult final {
         const auto lookups = after.lookups - before.lookups;
         const auto hits = after.hits - before.hits;
         const auto misses = after.misses - before.misses;
-        require(terminal_logical == lookups &&
-                    terminal_physical == misses + terminal_fallbacks +
-                        terminal_diagnostic_bypasses &&
+        const auto terminal_multi_root_reuses =
+            terminal_multi_root_ready_reuses +
+            terminal_multi_root_in_flight_reuses;
+        require(terminal_logical == lookups + terminal_multi_root_reuses +
+                         terminal_diagnostic_bypasses &&
+                     terminal_physical == misses + terminal_fallbacks +
+                         terminal_diagnostic_bypasses &&
+                    terminal_multi_root_context_requests ==
+                        terminal_multi_root_unique_contexts +
+                            terminal_multi_root_reuses &&
+                    terminal_multi_root_retained_contexts ==
+                        terminal_multi_root_unique_contexts &&
+                    ((terminal_multi_root_retained_contexts == 0u) ==
+                     (terminal_multi_root_retained_payload_bytes == 0u)) &&
                     terminal_diagnostic_bypasses == 0u,
                 "semantische FVA-Cache-/Physical-Bilanz driftet");
         if (exact_replay)
@@ -1017,6 +1140,20 @@ struct SemanticFvaStressResult final {
         }
         aggregate.logical_evaluations += terminal_logical;
         aggregate.physical_evaluations += terminal_physical;
+        aggregate.multi_root_context_requests +=
+            terminal_multi_root_context_requests;
+        aggregate.multi_root_unique_contexts +=
+            terminal_multi_root_unique_contexts;
+        aggregate.multi_root_ready_reuses +=
+            terminal_multi_root_ready_reuses;
+        aggregate.multi_root_in_flight_reuses +=
+            terminal_multi_root_in_flight_reuses;
+        aggregate.multi_root_provenance_links +=
+            terminal_multi_root_provenance_links;
+        aggregate.multi_root_retained_contexts +=
+            terminal_multi_root_retained_contexts;
+        aggregate.multi_root_retained_payload_bytes +=
+            terminal_multi_root_retained_payload_bytes;
         aggregate.cache_replay_fallback_recomputes += terminal_fallbacks;
         aggregate.cache_diagnostic_bypass_evaluations +=
             terminal_diagnostic_bypasses;
@@ -1281,6 +1418,13 @@ struct StructuredProgressEvidence final {
                 counters.cache_misses && counters.physical_evaluations &&
                 counters.cache_replay_fallback_recomputes &&
                 counters.cache_diagnostic_bypass_evaluations &&
+                counters.multi_root_context_requests &&
+                counters.multi_root_unique_contexts &&
+                counters.multi_root_ready_reuses &&
+                counters.multi_root_in_flight_reuses &&
+                counters.multi_root_provenance_links &&
+                counters.multi_root_retained_contexts &&
+                counters.multi_root_retained_payload_bytes &&
                 counters.cache_evictions && counters.cache_entries &&
                 counters.cache_retained_payload_bytes && complete_miss_reasons &&
                 *counters.cache_lookups ==
@@ -1294,7 +1438,15 @@ struct StructuredProgressEvidence final {
                 *counters.physical_evaluations ==
                     *counters.cache_misses +
                         *counters.cache_replay_fallback_recomputes +
-                        *counters.cache_diagnostic_bypass_evaluations;
+                        *counters.cache_diagnostic_bypass_evaluations &&
+                *counters.multi_root_context_requests ==
+                    *counters.multi_root_unique_contexts +
+                        *counters.multi_root_ready_reuses +
+                        *counters.multi_root_in_flight_reuses &&
+                *counters.multi_root_retained_contexts ==
+                    *counters.multi_root_unique_contexts &&
+                ((*counters.multi_root_retained_contexts == 0u) ==
+                 (*counters.multi_root_retained_payload_bytes == 0u));
             const auto terminal_quiescent =
                 counters.active_workers &&
                 *counters.active_workers == 0u &&
@@ -1317,7 +1469,14 @@ struct StructuredProgressEvidence final {
                 *counters.ready_work == 0u &&
                 *counters.committed_work == *counters.planned_work &&
                 *counters.queued_work == 0u;
-            if (ledger_balanced &&
+            const auto terminal_logical_balanced =
+                ledger_balanced && counters.evaluation_requests &&
+                *counters.evaluation_requests ==
+                    *counters.cache_lookups +
+                        *counters.multi_root_ready_reuses +
+                        *counters.multi_root_in_flight_reuses +
+                        *counters.cache_diagnostic_bypass_evaluations;
+            if (terminal_logical_balanced &&
                 event.state == katana::ProgressState::Completed &&
                 *counters.cache_lookups > 0u && terminal_quiescent)
                 evidence.function_value_cache_ledger = true;
@@ -1750,8 +1909,49 @@ int main(const int argc, char** argv) {
         const auto combined_diagnostic_bypasses =
             throughput_diagnostic_bypasses +
             semantic.cache_diagnostic_bypass_evaluations;
-        require(combined_diagnostic_bypasses == 0u,
-                "Produktstress lief unerwartet im Diagnose-Bypassmodus");
+        const auto combined_logical_evaluations =
+            fva.logical_evaluations + semantic.logical_evaluations;
+        const auto combined_physical_evaluations =
+            fva.physical_evaluations + semantic.physical_evaluations;
+        const auto combined_multi_root_context_requests =
+            fva.multi_root_context_requests +
+            semantic.multi_root_context_requests;
+        const auto combined_multi_root_unique_contexts =
+            fva.multi_root_unique_contexts +
+            semantic.multi_root_unique_contexts;
+        const auto combined_multi_root_ready_reuses =
+            fva.multi_root_ready_reuses + semantic.multi_root_ready_reuses;
+        const auto combined_multi_root_in_flight_reuses =
+            fva.multi_root_in_flight_reuses +
+            semantic.multi_root_in_flight_reuses;
+        const auto combined_multi_root_provenance_links =
+            fva.multi_root_provenance_links +
+            semantic.multi_root_provenance_links;
+        const auto combined_multi_root_retained_contexts =
+            fva.multi_root_retained_contexts +
+            semantic.multi_root_retained_contexts;
+        const auto combined_multi_root_retained_payload_bytes =
+            fva.multi_root_retained_payload_bytes +
+            semantic.multi_root_retained_payload_bytes;
+        require(
+            combined_logical_evaluations ==
+                    combined_statistics.lookups +
+                        combined_multi_root_ready_reuses +
+                        combined_multi_root_in_flight_reuses +
+                        combined_diagnostic_bypasses &&
+                combined_physical_evaluations ==
+                    combined_statistics.misses + combined_replay_fallbacks +
+                        combined_diagnostic_bypasses &&
+                combined_multi_root_context_requests ==
+                    combined_multi_root_unique_contexts +
+                        combined_multi_root_ready_reuses +
+                        combined_multi_root_in_flight_reuses &&
+                combined_multi_root_retained_contexts ==
+                    combined_multi_root_unique_contexts &&
+                ((combined_multi_root_retained_contexts == 0u) ==
+                 (combined_multi_root_retained_payload_bytes == 0u)) &&
+                combined_diagnostic_bypasses == 0u,
+            "kombinierter realer Multi-Root-/Cacheledger ist unausgeglichen");
         constexpr std::array miss_reason_names{
             std::string_view{"cold"},
             std::string_view{"evicted"},
@@ -1773,7 +1973,7 @@ int main(const int argc, char** argv) {
                   << ",\"fva_runs\":" << fva.runs
                   << ",\"replay_passes\":" << profile.replay_passes
                   << ",\"logical_evaluations\":"
-                  << fva.logical_evaluations + semantic.logical_evaluations
+                  << combined_logical_evaluations
                   << ",\"cache_lookups\":" << combined_statistics.lookups
                   << ",\"cache_hits\":" << combined_statistics.hits
                   << ",\"cache_ready_hits\":" << combined_statistics.ready_hits
@@ -1785,11 +1985,25 @@ int main(const int argc, char** argv) {
                   << ",\"cache_retained_payload_bytes\":"
                   << combined_statistics.retained_payload_bytes
                   << ",\"physical_evaluations\":"
-                  << fva.physical_evaluations + semantic.physical_evaluations
+                  << combined_physical_evaluations
                   << ",\"cache_replay_fallback_recomputes\":"
                   << combined_replay_fallbacks
                   << ",\"cache_diagnostic_bypass_evaluations\":"
                   << combined_diagnostic_bypasses
+                  << ",\"multi_root_context_requests\":"
+                  << combined_multi_root_context_requests
+                  << ",\"multi_root_unique_contexts\":"
+                  << combined_multi_root_unique_contexts
+                  << ",\"multi_root_ready_reuses\":"
+                  << combined_multi_root_ready_reuses
+                  << ",\"multi_root_in_flight_reuses\":"
+                  << combined_multi_root_in_flight_reuses
+                  << ",\"multi_root_provenance_links\":"
+                  << combined_multi_root_provenance_links
+                  << ",\"multi_root_retained_contexts\":"
+                  << combined_multi_root_retained_contexts
+                  << ",\"multi_root_retained_payload_bytes\":"
+                  << combined_multi_root_retained_payload_bytes
                   << ",\"replay_hits\":" << fva.replay_hits
                   << ",\"replay_misses\":" << fva.replay_misses
                   << ",\"functions\":" << program.size()
@@ -1878,6 +2092,20 @@ int main(const int argc, char** argv) {
                      << ledger.cache_replay_fallback_recomputes
                      << ",\"cache_diagnostic_bypass_evaluations\":"
                      << ledger.cache_diagnostic_bypass_evaluations
+                     << ",\"multi_root_context_requests\":"
+                     << ledger.multi_root_context_requests
+                     << ",\"multi_root_unique_contexts\":"
+                     << ledger.multi_root_unique_contexts
+                     << ",\"multi_root_ready_reuses\":"
+                     << ledger.multi_root_ready_reuses
+                     << ",\"multi_root_in_flight_reuses\":"
+                     << ledger.multi_root_in_flight_reuses
+                     << ",\"multi_root_provenance_links\":"
+                     << ledger.multi_root_provenance_links
+                     << ",\"multi_root_retained_contexts\":"
+                     << ledger.multi_root_retained_contexts
+                     << ",\"multi_root_retained_payload_bytes\":"
+                     << ledger.multi_root_retained_payload_bytes
                      << ",\"miss_reasons\":{";
             for (std::size_t reason = 0u;
                  reason < miss_reason_names.size(); ++reason) {

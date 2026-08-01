@@ -370,6 +370,19 @@ struct FunctionEvaluationCacheTelemetryProbe final {
     std::size_t bounded_absent_history_entries = 0u;
     std::size_t bounded_absent_history_accounted_bytes = 0u;
     std::size_t bounded_absent_history_byte_limit = 0u;
+    bool bounded_exact_replay_available = false;
+    bool unbounded_exact_replay_available = false;
+    bool unbounded_exact_replay_preserved = false;
+    std::size_t coordinator_requests = 0u;
+    std::size_t coordinator_producers = 0u;
+    std::size_t coordinator_ready_reuses = 0u;
+    std::size_t coordinator_in_flight_reuses = 0u;
+    std::size_t coordinator_entries = 0u;
+    std::size_t coordinator_session_lookups = 0u;
+    std::size_t coordinator_session_entries = 0u;
+    std::size_t coordinator_physical_computations = 0u;
+    bool coordinator_collision_safe = false;
+    bool coordinator_failure_pinned = false;
     bool throwing_observer_semantics_preserved = false;
 };
 

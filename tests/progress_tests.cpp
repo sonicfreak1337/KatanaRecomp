@@ -228,6 +228,14 @@ int main() {
     formatted.scope_elapsed_milliseconds = 456u;
     formatted.label = std::string("candidate \"A\"\n") + static_cast<char>(1);
     formatted.counters.active_workers = 2u;
+    formatted.counters.evaluation_requests = 13u;
+    formatted.counters.active_evaluation_requests = 0u;
+    formatted.counters.evaluation_request_nanoseconds = 13u;
+    formatted.counters.maximum_evaluation_request_nanoseconds = 1u;
+    formatted.counters.physical_evaluations = 5u;
+    formatted.counters.active_physical_evaluations = 0u;
+    formatted.counters.physical_evaluation_nanoseconds = 5u;
+    formatted.counters.maximum_physical_evaluation_nanoseconds = 1u;
     formatted.counters.queued_work = 4u;
     formatted.counters.cache_hits = 8u;
     formatted.counters.cache_misses = 2u;
@@ -245,6 +253,13 @@ int main() {
     formatted.counters.cache_in_flight_coalesces = 2u;
     formatted.counters.cache_replay_fallback_recomputes = 3u;
     formatted.counters.cache_diagnostic_bypass_evaluations = 0u;
+    formatted.counters.multi_root_context_requests = 5u;
+    formatted.counters.multi_root_unique_contexts = 2u;
+    formatted.counters.multi_root_ready_reuses = 2u;
+    formatted.counters.multi_root_in_flight_reuses = 1u;
+    formatted.counters.multi_root_provenance_links = 6u;
+    formatted.counters.multi_root_retained_contexts = 2u;
+    formatted.counters.multi_root_retained_payload_bytes = 2048u;
     formatted.counters.cache_evictions = 1u;
     formatted.counters.cache_entries = 64u;
     formatted.counters.cache_retained_payload_bytes = 4096u;
@@ -258,7 +273,16 @@ int main() {
                               "\"sequence\":9,\"elapsed_ms\":1234,"
                               "\"scope_elapsed_ms\":456,\"scope_id\":44,"
                               "\"parent_scope_id\":7,\"completed\":8,\"total\":10,"
-                              "\"counters\":{\"active_workers\":2,\"queued_work\":4,"
+                              "\"counters\":{\"active_workers\":2,"
+                              "\"evaluation_requests\":13,"
+                              "\"active_evaluation_requests\":0,"
+                              "\"evaluation_request_nanoseconds\":13,"
+                              "\"maximum_evaluation_request_nanoseconds\":1,"
+                              "\"physical_evaluations\":5,"
+                              "\"active_physical_evaluations\":0,"
+                              "\"physical_evaluation_nanoseconds\":5,"
+                              "\"maximum_physical_evaluation_nanoseconds\":1,"
+                              "\"queued_work\":4,"
                               "\"cache_hits\":8,\"cache_misses\":2,\"planned_work\":10,"
                               "\"ready_work\":1,\"committed_work\":3,"
                               "\"configured_workers\":24,\"added_work\":2,"
@@ -268,6 +292,13 @@ int main() {
                               "\"cache_ready_hits\":6,\"cache_in_flight_coalesces\":2,"
                               "\"cache_replay_fallback_recomputes\":3,"
                               "\"cache_diagnostic_bypass_evaluations\":0,"
+                              "\"multi_root_context_requests\":5,"
+                              "\"multi_root_unique_contexts\":2,"
+                              "\"multi_root_ready_reuses\":2,"
+                              "\"multi_root_in_flight_reuses\":1,"
+                              "\"multi_root_provenance_links\":6,"
+                              "\"multi_root_retained_contexts\":2,"
+                              "\"multi_root_retained_payload_bytes\":2048,"
                               "\"cache_evictions\":1,\"cache_entries\":64,"
                               "\"cache_retained_payload_bytes\":4096,"
                               "\"cache_miss_cold\":1,"
@@ -279,7 +310,14 @@ int main() {
                                "state=heartbeat schema=katana-progress-v1 schema_version=1 "
                                "elapsed_ms=1234 scope_elapsed_ms=456 scope=44 parent=7 "
                                "unit=functions completed=8 total=10 percent_milli=80000 "
-                               "active_workers=2 queued_work=4 cache_hits=8 cache_misses=2 "
+                               "active_workers=2 evaluation_requests=13 "
+                               "active_evaluation_requests=0 "
+                               "evaluation_request_nanoseconds=13 "
+                               "maximum_evaluation_request_nanoseconds=1 "
+                               "physical_evaluations=5 active_physical_evaluations=0 "
+                               "physical_evaluation_nanoseconds=5 "
+                               "maximum_physical_evaluation_nanoseconds=1 "
+                               "queued_work=4 cache_hits=8 cache_misses=2 "
                                "planned_work=10 ready_work=1 committed_work=3 "
                                "configured_workers=24 added_work=2 growing_workset=true "
                                "head_of_line_index=3 "
@@ -287,7 +325,15 @@ int main() {
                                "cache_lookups=10 cache_ready_hits=6 "
                                "cache_in_flight_coalesces=2 "
                                "cache_replay_fallback_recomputes=3 "
-                               "cache_diagnostic_bypass_evaluations=0 cache_evictions=1 "
+                               "cache_diagnostic_bypass_evaluations=0 "
+                               "multi_root_context_requests=5 "
+                               "multi_root_unique_contexts=2 "
+                               "multi_root_ready_reuses=2 "
+                               "multi_root_in_flight_reuses=1 "
+                               "multi_root_provenance_links=6 "
+                               "multi_root_retained_contexts=2 "
+                               "multi_root_retained_payload_bytes=2048 "
+                               "cache_evictions=1 "
                                "cache_entries=64 "
                                "cache_retained_payload_bytes=4096 "
                                "cache_miss_cold=1 "
@@ -387,6 +433,50 @@ int main() {
                 invalid_hit_aggregate),
         "Ein falsches Cachehit-Aggregat blieb trotz exakter Splitzaehler "
         "telemetrisch vollstaendig.");
+    auto invalid_multi_root_ledger = formatted;
+    invalid_multi_root_ledger.counters.multi_root_context_requests = 6u;
+    require(
+        !katana::progress_cache_accounting_valid(
+            invalid_multi_root_ledger.counters) &&
+            !katana::progress_event_telemetry_complete(
+                invalid_multi_root_ledger),
+        "Ein widerspruechliches Multi-Root-Fanout-Ledger blieb "
+        "telemetrisch vollstaendig.");
+    auto invalid_multi_root_retention = formatted;
+    invalid_multi_root_retention.counters.multi_root_retained_contexts = 3u;
+    require(
+        !katana::progress_cache_accounting_valid(
+            invalid_multi_root_retention.counters),
+        "Ein vom Unique-Ledger abweichender Multi-Root-Retentionzaehler "
+        "blieb gruen.");
+    auto invalid_multi_root_zero_retention = formatted;
+    invalid_multi_root_zero_retention.counters.multi_root_context_requests = 3u;
+    invalid_multi_root_zero_retention.counters.multi_root_unique_contexts = 0u;
+    invalid_multi_root_zero_retention.counters.multi_root_retained_contexts = 0u;
+    require(
+        !katana::progress_cache_accounting_valid(
+            invalid_multi_root_zero_retention.counters),
+        "Ein leerer Multi-Root-Retentionzaehler mit Payload blieb gruen.");
+    auto overflowing_multi_root_ledger = formatted;
+    overflowing_multi_root_ledger.counters.multi_root_context_requests =
+        std::numeric_limits<std::uint64_t>::max();
+    overflowing_multi_root_ledger.counters.multi_root_unique_contexts =
+        std::numeric_limits<std::uint64_t>::max();
+    overflowing_multi_root_ledger.counters.multi_root_ready_reuses = 1u;
+    overflowing_multi_root_ledger.counters.multi_root_in_flight_reuses = 0u;
+    overflowing_multi_root_ledger.counters.multi_root_retained_contexts =
+        std::numeric_limits<std::uint64_t>::max();
+    require(
+        !katana::progress_cache_accounting_valid(
+            overflowing_multi_root_ledger.counters),
+        "Ein ueberlaufender Multi-Root-Ledger blieb gruen.");
+    auto incomplete_multi_root_ledger = formatted;
+    incomplete_multi_root_ledger.counters
+        .multi_root_provenance_links.reset();
+    require(
+        !katana::progress_cache_accounting_valid(
+            incomplete_multi_root_ledger.counters),
+        "Ein unvollstaendiges Multi-Root-Ledger blieb gruen.");
     katana::ProgressCounterSnapshot legacy_cache;
     legacy_cache.cache_hits = 42u;
     legacy_cache.cache_misses = 7u;

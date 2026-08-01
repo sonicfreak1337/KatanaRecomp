@@ -215,6 +215,14 @@ constexpr std::size_t maximum_forwarded_store_context_root_call_sites =
     64u;
 constexpr std::size_t maximum_forwarded_store_context_evaluations =
     64u;
+// Root/callsite/callee provenance is observational metadata, but it used to
+// make otherwise identical forwarded-inventory states physically distinct.
+// A bounded, collision-free symbolic token space lets the shared evaluation
+// cache interpret the semantic state once and expand the exact provenance for
+// every logical root afterwards. Exhausting this optimization budget is a
+// cache miss/fallback only; it never truncates analysis evidence.
+constexpr std::size_t maximum_forwarded_evidence_tokens =
+    maximum_guarded_code_inventory * 8u;
 constexpr std::size_t maximum_contextual_return_evaluations =
     maximum_fixpoint_iterations;
 constexpr std::size_t maximum_inventory_stack_coordinates = 64u;
@@ -620,6 +628,234 @@ struct AbstractState {
     }
 
     bool operator==(const AbstractState&) const = default;
+};
+
+enum class EvidenceProvenanceDomain : std::uint8_t {
+    CallSite,
+    Callee,
+};
+
+template <typename Callback>
+void for_each_evidence_set(AbstractValue& value, Callback&& callback) {
+    callback(EvidenceProvenanceDomain::CallSite, value.call_sites);
+    callback(EvidenceProvenanceDomain::Callee, value.callees);
+    for (auto& slot : value.inventory_saved_stack_epoch.slots) {
+        callback(EvidenceProvenanceDomain::CallSite, slot.call_sites);
+        callback(EvidenceProvenanceDomain::Callee, slot.callees);
+    }
+}
+
+template <typename Callback>
+void for_each_evidence_set(AbstractState& state, Callback&& callback) {
+    for (auto& value : state.registers)
+        for_each_evidence_set(value, callback);
+    for (auto& [slot, value] : state.stack_values) {
+        static_cast<void>(slot);
+        for_each_evidence_set(value, callback);
+    }
+    for (auto& [address, value] : state.memory_values) {
+        static_cast<void>(address);
+        for_each_evidence_set(value, callback);
+    }
+}
+
+// One domain lens alpha-renames concrete evidence atoms by their complete
+// membership signature across the ingress state. This preserves the complete
+// set equality/overlap/union algebra while making the physical state
+// independent of actual root addresses and group cardinality. Atoms with an
+// identical signature are represented by one token because every transfer
+// observes them together; replay expands that token back to every concrete
+// address before any result becomes visible.
+class EvidenceProvenanceDomainLens final {
+  public:
+    [[nodiscard]] bool canonicalize(
+        const std::span<std::set<std::uint32_t>*> fields,
+        const std::span<const std::uint32_t> available_tokens,
+        const std::unordered_set<std::uint32_t>&
+            locally_observable_constants) {
+        std::map<std::uint32_t, std::vector<std::size_t>> memberships;
+        for (std::size_t field_index = 0u;
+             field_index < fields.size();
+             ++field_index) {
+            for (const auto evidence : *fields[field_index])
+                memberships[evidence].push_back(field_index);
+        }
+        if (memberships.empty()) return true;
+        std::map<std::vector<std::size_t>,
+                 std::vector<std::uint32_t>>
+            atoms_by_membership;
+        for (auto& [concrete, membership] : memberships) {
+            if (locally_observable_constants.contains(concrete))
+                continue;
+            atoms_by_membership[std::move(membership)].push_back(
+                concrete);
+        }
+        if (atoms_by_membership.size() > available_tokens.size())
+            return false;
+
+        // A token may never alias input evidence. Tokens are also selected
+        // outside every image/program address before this lens is built; the
+        // local evaluator can therefore add real callsites/callees without
+        // making reverse expansion ambiguous.
+        std::size_t token_index = 0u;
+        for (auto& [membership, concrete_atoms] :
+             atoms_by_membership) {
+            static_cast<void>(membership);
+            const auto token = available_tokens[token_index++];
+            if (memberships.contains(token)) return false;
+            for (const auto concrete : concrete_atoms)
+                concrete_to_token_.emplace(concrete, token);
+            token_to_concrete_.emplace(
+                token, std::move(concrete_atoms));
+        }
+        for (auto* const field : fields) {
+            std::set<std::uint32_t> canonical;
+            for (const auto concrete : *field) {
+                const auto token = concrete_to_token_.find(concrete);
+                canonical.insert(token == concrete_to_token_.end()
+                                     ? concrete
+                                     : token->second);
+            }
+            *field = std::move(canonical);
+        }
+        return true;
+    }
+
+    void restore(std::set<std::uint32_t>& evidence) const {
+        std::set<std::uint32_t> restored;
+        for (const auto value : evidence) {
+            const auto concrete = token_to_concrete_.find(value);
+            if (concrete == token_to_concrete_.end()) {
+                restored.insert(value);
+            } else {
+                restored.insert(concrete->second.begin(),
+                                concrete->second.end());
+            }
+        }
+        evidence = std::move(restored);
+    }
+
+    void restore(std::vector<std::uint32_t>& evidence) const {
+        std::vector<std::uint32_t> restored;
+        restored.reserve(evidence.size());
+        for (const auto value : evidence) {
+            const auto concrete = token_to_concrete_.find(value);
+            if (concrete == token_to_concrete_.end()) {
+                restored.push_back(value);
+            } else {
+                restored.insert(restored.end(),
+                                concrete->second.begin(),
+                                concrete->second.end());
+            }
+        }
+        std::sort(restored.begin(), restored.end());
+        restored.erase(
+            std::unique(restored.begin(), restored.end()),
+            restored.end());
+        evidence = std::move(restored);
+    }
+
+    [[nodiscard]] std::size_t link_count() const noexcept {
+        std::size_t links = 0u;
+        for (const auto& [token, concrete] : token_to_concrete_) {
+            static_cast<void>(token);
+            links += concrete.size();
+        }
+        return links;
+    }
+
+  private:
+    std::map<std::uint32_t, std::uint32_t> concrete_to_token_;
+    std::map<std::uint32_t, std::vector<std::uint32_t>>
+        token_to_concrete_;
+};
+
+class EvidenceProvenanceLens final {
+  public:
+    EvidenceProvenanceLens(
+        AbstractState ingress,
+        const std::set<std::uint32_t>* const isolated_call_sites,
+        const std::span<const std::uint32_t> available_tokens,
+        const std::unordered_set<std::uint32_t>&
+            locally_observable_call_sites,
+        const std::unordered_set<std::uint32_t>&
+            locally_observable_callees)
+        : ingress_(std::move(ingress)),
+          isolated_(isolated_call_sites != nullptr) {
+        if (isolated_)
+            isolated_call_sites_ = *isolated_call_sites;
+        std::vector<std::set<std::uint32_t>*> call_site_fields;
+        std::vector<std::set<std::uint32_t>*> callee_fields;
+        for_each_evidence_set(
+            ingress_,
+            [&](const EvidenceProvenanceDomain domain,
+                std::set<std::uint32_t>& evidence) {
+                (domain == EvidenceProvenanceDomain::CallSite
+                     ? call_site_fields
+                     : callee_fields)
+                    .push_back(&evidence);
+            });
+        if (isolated_)
+            call_site_fields.push_back(&isolated_call_sites_);
+        valid_ = call_sites_.canonicalize(
+                     call_site_fields,
+                     available_tokens,
+                     locally_observable_call_sites) &&
+                 callees_.canonicalize(
+                     callee_fields,
+                     available_tokens,
+                     locally_observable_callees);
+    }
+
+    [[nodiscard]] bool valid() const noexcept {
+        return valid_;
+    }
+
+    [[nodiscard]] const AbstractState& ingress() const noexcept {
+        return ingress_;
+    }
+
+    [[nodiscard]] const std::set<std::uint32_t>* isolated_call_sites()
+        const noexcept {
+        return isolated_ ? &isolated_call_sites_ : nullptr;
+    }
+
+    void restore(AbstractState& state) const {
+        for_each_evidence_set(
+            state,
+            [&](const EvidenceProvenanceDomain domain,
+                std::set<std::uint32_t>& evidence) {
+                (domain == EvidenceProvenanceDomain::CallSite
+                     ? call_sites_
+                     : callees_)
+                    .restore(evidence);
+            });
+    }
+
+    void restore_call_sites(std::vector<std::uint32_t>& evidence) const {
+        call_sites_.restore(evidence);
+    }
+
+    void restore_callees(std::vector<std::uint32_t>& evidence) const {
+        callees_.restore(evidence);
+    }
+
+    void restore(InterproceduralTargetResolution& resolution) const {
+        restore_call_sites(resolution.call_sites);
+        restore_callees(resolution.callees);
+    }
+
+    [[nodiscard]] std::size_t link_count() const noexcept {
+        return call_sites_.link_count() + callees_.link_count();
+    }
+
+  private:
+    AbstractState ingress_;
+    std::set<std::uint32_t> isolated_call_sites_;
+    EvidenceProvenanceDomainLens call_sites_;
+    EvidenceProvenanceDomainLens callees_;
+    bool isolated_ = false;
+    bool valid_ = false;
 };
 
 struct InventoryStackOffsetLossDiagnostic {
@@ -1236,6 +1472,33 @@ struct FunctionEvaluation {
     std::vector<InventoryTransfer> inventory_transfers;
 };
 
+void restore_evaluation_evidence_provenance(
+    FunctionEvaluation& evaluation,
+    const EvidenceProvenanceLens& lens) {
+    for (auto& summary : evaluation.summary.registers)
+        lens.restore_callees(summary.evidence_callees);
+    for (auto& resolution : evaluation.resolutions)
+        lens.restore(resolution);
+    for (auto& call : evaluation.call_arguments)
+        lens.restore(call.state);
+    for (auto& transfer : evaluation.inventory_transfers)
+        lens.restore(transfer.state);
+}
+
+void restore_candidate_evidence_provenance(
+    StoredCodeAddressCandidate& candidate,
+    const EvidenceProvenanceLens& lens) {
+    lens.restore_call_sites(candidate.evidence_call_sites);
+    lens.restore_callees(candidate.evidence_callees);
+}
+
+void restore_candidate_evidence_provenance(
+    ReturnedCodeAddressTableCandidate& candidate,
+    const EvidenceProvenanceLens& lens) {
+    lens.restore_call_sites(candidate.evidence_call_sites);
+    lens.restore_callees(candidate.evidence_callees);
+}
+
 struct IndirectCalleeCandidates {
     std::vector<std::uint32_t> targets;
     bool guarded = false;
@@ -1586,13 +1849,16 @@ class GuardedCodeInventoryCollector {
     // changing the bounded top-K collector algebra on a miss and makes a hit
     // replay precisely the same state transitions.
     void begin_exact_replay_capture(
-        GuardedCodeInventoryCollector& destination) {
+        GuardedCodeInventoryCollector& destination,
+        const std::size_t replay_byte_budget =
+            maximum_evaluation_inventory_replay_bytes) {
         if (replay_destination_ != nullptr ||
             captures_exact_replay_)
             throw std::logic_error(
                 "Guarded-Code-Inventar-Replay wurde doppelt gestartet.");
         replay_destination_ = &destination;
         captures_exact_replay_ = true;
+        exact_replay_byte_budget_ = replay_byte_budget;
     }
 
     void finish_exact_replay_capture() noexcept {
@@ -1742,6 +2008,97 @@ class GuardedCodeInventoryCollector {
         destination.table_scan_truncated_ =
             destination.table_scan_truncated_ ||
             table_scan_truncated_;
+    }
+
+    void replay_deferred_copy_into(
+        GuardedCodeInventoryCollector& destination,
+        const EvidenceProvenanceLens& lens) const {
+        if (!defer_stored_admission_ ||
+            !destination.defer_stored_admission_)
+            throw std::logic_error(
+                "Guarded-Code-Inventar besitzt einen ungueltigen "
+                "Provenienz-Replay-Vertrag.");
+        if (captures_exact_replay_) {
+            if (!exact_replay_available_)
+                throw std::logic_error(
+                    "Exaktes Guarded-Code-Inventar-Replay ist nicht "
+                    "verfuegbar.");
+            for (const auto& event : replay_events_) {
+                if (event.returned_table) {
+                    std::vector<ReturnedCodeAddressTableCandidate>
+                        candidates{
+                            replay_returned_candidates_.begin() +
+                                static_cast<std::ptrdiff_t>(event.begin),
+                            replay_returned_candidates_.begin() +
+                                static_cast<std::ptrdiff_t>(
+                                    event.begin + event.count)};
+                    for (auto& candidate : candidates)
+                        restore_candidate_evidence_provenance(
+                            candidate, lens);
+                    destination.collect(std::move(candidates));
+                } else {
+                    std::vector<StoredCodeAddressCandidate> candidates{
+                        replay_stored_candidates_.begin() +
+                            static_cast<std::ptrdiff_t>(event.begin),
+                        replay_stored_candidates_.begin() +
+                            static_cast<std::ptrdiff_t>(
+                                event.begin + event.count)};
+                    for (auto& candidate : candidates)
+                        restore_candidate_evidence_provenance(
+                            candidate, lens);
+                    destination.collect(std::move(candidates));
+                }
+            }
+            return;
+        }
+        for (const auto& [target, cached_candidate] :
+             stored_candidates_) {
+            auto candidate = cached_candidate;
+            restore_candidate_evidence_provenance(candidate, lens);
+            destination.collect_stored_candidate(
+                std::move(candidate),
+                complete_stored_targets_.contains(target));
+        }
+        for (const auto& [table_address, cached_candidate] :
+             returned_tables_) {
+            static_cast<void>(table_address);
+            auto candidate = cached_candidate;
+            restore_candidate_evidence_provenance(candidate, lens);
+            destination.collect_returned_candidate(
+                std::move(candidate));
+        }
+        destination.candidate_inventory_truncated_ =
+            destination.candidate_inventory_truncated_ ||
+            candidate_inventory_truncated_;
+        destination.candidate_budget_exhausted_ =
+            destination.candidate_budget_exhausted_ ||
+            candidate_budget_exhausted_;
+        destination.raw_stored_candidates_truncated_ =
+            destination.raw_stored_candidates_truncated_ ||
+            raw_stored_candidates_truncated_;
+        destination.table_scan_truncated_ =
+            destination.table_scan_truncated_ ||
+            table_scan_truncated_;
+    }
+
+    void restore_evidence_provenance(
+        const EvidenceProvenanceLens& lens) {
+        if (replay_destination_ != nullptr)
+            throw std::logic_error(
+                "Aktiver Guarded-Code-Inventar-Replay darf nicht "
+                "umgeschrieben werden.");
+        for (auto& [target, candidate] : stored_candidates_) {
+            static_cast<void>(target);
+            restore_candidate_evidence_provenance(candidate, lens);
+        }
+        for (auto& [table_address, candidate] : returned_tables_) {
+            static_cast<void>(table_address);
+            restore_candidate_evidence_provenance(candidate, lens);
+        }
+        for (auto& candidate : replay_stored_candidates_)
+            restore_candidate_evidence_provenance(candidate, lens);
+        for (auto& candidate : replay_returned_candidates_)
+            restore_candidate_evidence_provenance(candidate, lens);
     }
 
     void replay_deferred_into(
@@ -1981,9 +2338,9 @@ class GuardedCodeInventoryCollector {
             const auto candidate_bytes =
                 replay_bytes(candidate);
             if (additional >
-                maximum_evaluation_inventory_replay_bytes -
+                exact_replay_byte_budget_ -
                     std::min(
-                        maximum_evaluation_inventory_replay_bytes,
+                        exact_replay_byte_budget_,
                         candidate_bytes)) {
                 abandon_exact_replay();
                 return;
@@ -1991,9 +2348,9 @@ class GuardedCodeInventoryCollector {
             additional += candidate_bytes;
         }
         if (exact_replay_bytes_ >
-            maximum_evaluation_inventory_replay_bytes -
+            exact_replay_byte_budget_ -
                 std::min(
-                    maximum_evaluation_inventory_replay_bytes,
+                    exact_replay_byte_budget_,
                     additional)) {
             abandon_exact_replay();
             return;
@@ -2206,6 +2563,8 @@ class GuardedCodeInventoryCollector {
     bool defer_stored_admission_ = false;
     bool captures_exact_replay_ = false;
     bool exact_replay_available_ = true;
+    std::size_t exact_replay_byte_budget_ =
+        maximum_evaluation_inventory_replay_bytes;
     std::size_t exact_replay_bytes_ = 0u;
     bool raw_stored_candidates_truncated_ = false;
     bool candidate_budget_exhausted_ = false;
@@ -11988,12 +12347,12 @@ class FunctionEvaluationCache {
                 make_room_for(entry_base_payload_bytes, true);
                 const auto retainable_key =
                     maximum_entries_ != 0u &&
-                    maximum_retained_payload_bytes_ >=
-                        entry_base_payload_bytes &&
-                    entries_ < maximum_entries_ &&
-                    retained_payload_bytes_ <=
-                        maximum_retained_payload_bytes_ -
-                            entry_base_payload_bytes;
+                     maximum_retained_payload_bytes_ >=
+                         entry_base_payload_bytes &&
+                     entries_ < maximum_entries_ &&
+                     retained_payload_bytes_ <=
+                         maximum_retained_payload_bytes_ -
+                             entry_base_payload_bytes;
                 const auto miss_reason =
                     retainable_key
                         ? classify_miss(key)
@@ -12137,8 +12496,7 @@ class FunctionEvaluationCache {
                 producer_entry->retained_payload_bytes <=
                     maximum_retained_payload_bytes_;
             const auto retained =
-                artifact_retainable &&
-                touch_ready(*producer_entry);
+                artifact_retainable && touch_ready(*producer_entry);
             if (!retained) {
                 reclassify_miss(
                     producer_entry->miss_reason,
@@ -12174,8 +12532,7 @@ class FunctionEvaluationCache {
                 global_analysis_executor().notify_waiters();
                 std::rethrow_exception(error);
             }
-            if (retained)
-                make_room_for(0u, false);
+            if (retained) make_room_for(0u, false);
         }
         observe_decision(decision);
         global_analysis_executor().notify_waiters();
@@ -12643,6 +13000,170 @@ class FunctionEvaluationCache {
     detail::FunctionEvaluationCacheDecisionObserver decision_observer_;
 };
 
+// A run-local physical-work registry for multi-root inventory evaluation.
+// It deliberately has no admission, eviction, miss-classification, or LRU
+// policy: the persistent FunctionEvaluationCache remains the only semantic
+// cache. The registry merely ensures that all logical subscribers in one
+// analysis transaction invoke that cache once for an identical collision-
+// checked key, then pin the resulting artifact/future until the transaction
+// ends.
+class MultiRootEvaluationCoordinator final {
+  public:
+    struct Statistics final {
+        std::size_t requests = 0u;
+        std::size_t producers = 0u;
+        std::size_t ready_reuses = 0u;
+        std::size_t in_flight_reuses = 0u;
+        std::size_t entries = 0u;
+        std::size_t retained_payload_bytes = 0u;
+    };
+
+    template <typename Compute>
+    [[nodiscard]] std::pair<
+        std::shared_ptr<const CachedFunctionEvaluation>,
+        bool>
+    get_or_compute(const FunctionEvaluationCacheKey& key,
+                   Compute&& compute,
+                   EvaluationActivityTelemetry* const activity = nullptr) {
+        using Result =
+            std::shared_ptr<const CachedFunctionEvaluation>;
+        std::shared_future<Result> future;
+        Result ready;
+        std::shared_ptr<std::promise<Result>> producer;
+        Entry* producer_entry = nullptr;
+        {
+            const std::lock_guard lock(mutex_);
+            ++statistics_.requests;
+            const auto bucket = buckets_.find(key.hash);
+            if (bucket != buckets_.end()) {
+                const auto found = std::find_if(
+                    bucket->second.begin(),
+                    bucket->second.end(),
+                    [&](const auto& candidate) {
+                        return candidate->key_bytes == key.bytes;
+                    });
+                if (found != bucket->second.end()) {
+                    auto* const entry = found->get();
+                    if (entry->ready) {
+                        ready = entry->ready_result;
+                        ++statistics_.ready_reuses;
+                    } else {
+                        future = entry->result;
+                        ++statistics_.in_flight_reuses;
+                    }
+                }
+            }
+            if (ready == nullptr && !future.valid()) {
+                producer =
+                    std::make_shared<std::promise<Result>>();
+                future = producer->get_future().share();
+                auto entry = std::make_unique<Entry>();
+                entry->key_bytes = key.bytes;
+                entry->result = future;
+                producer_entry = entry.get();
+                buckets_[key.hash].push_back(std::move(entry));
+                ++statistics_.producers;
+                ++statistics_.entries;
+                saturating_add(
+                    statistics_.retained_payload_bytes,
+                    sizeof(Entry) + key.bytes.capacity());
+            }
+        }
+        if (ready != nullptr) return {std::move(ready), true};
+        if (producer == nullptr) {
+            const EvaluationActivityScope wait{
+                activity, EvaluationActivityKind::CacheWait};
+            auto& executor = global_analysis_executor();
+            if (executor.current_thread_is_worker()) {
+                executor.help_until([&] {
+                    return future.wait_for(
+                               std::chrono::seconds{0}) ==
+                           std::future_status::ready;
+                });
+            }
+            return {future.get(), true};
+        }
+
+        Result result;
+        try {
+            result = compute();
+            if (result == nullptr)
+                throw std::logic_error(
+                    "Multi-Root-Auswertung lieferte kein Artefakt.");
+        } catch (...) {
+            const auto error = std::current_exception();
+            try {
+                producer->set_exception(error);
+            } catch (...) {
+                // Preserve the authoritative producer failure.
+            }
+            // Keep the exceptional shared future pinned as well. Erasing it
+            // would allow a later subscriber in this same analysis wave to
+            // launch a second physical producer for an identical key.
+            global_analysis_executor().notify_waiters();
+            std::rethrow_exception(error);
+        }
+
+        {
+            const std::lock_guard lock(mutex_);
+            producer_entry->ready = true;
+            producer_entry->ready_result = result;
+            saturating_add(
+                statistics_.retained_payload_bytes,
+                result->retained_payload_budget_bytes());
+            try {
+                producer->set_value(result);
+                producer_entry->result = {};
+            } catch (...) {
+                const auto error = std::current_exception();
+                try {
+                    producer->set_exception(error);
+                } catch (...) {
+                    // Preserve the promise publication failure.
+                }
+                // Never reopen this key for a second producer. A promise
+                // publication failure is terminal for the analysis wave.
+                global_analysis_executor().notify_waiters();
+                std::rethrow_exception(error);
+            }
+        }
+        global_analysis_executor().notify_waiters();
+        return {std::move(result), false};
+    }
+
+    [[nodiscard]] Statistics statistics() const noexcept {
+        const std::lock_guard lock(mutex_);
+        return statistics_;
+    }
+
+  private:
+    struct Entry final {
+        std::vector<std::uint8_t> key_bytes;
+        std::shared_future<
+            std::shared_ptr<const CachedFunctionEvaluation>>
+            result;
+        std::shared_ptr<const CachedFunctionEvaluation>
+            ready_result;
+        bool ready = false;
+    };
+
+    static void saturating_add(std::size_t& destination,
+                               const std::size_t value) noexcept {
+        destination =
+            value > std::numeric_limits<std::size_t>::max() -
+                        destination
+                ? std::numeric_limits<std::size_t>::max()
+                : destination + value;
+    }
+
+    std::unordered_map<
+        std::uint64_t,
+        std::vector<std::unique_ptr<Entry>>>
+        buckets_;
+    mutable std::mutex mutex_;
+    Statistics statistics_;
+};
+
 } // namespace
 
 detail::FunctionEvaluationCacheTelemetryProbe
@@ -13046,6 +13567,180 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
         add_statistics_to(
             probe.observer_statistics,
             short_limit.statistics());
+    }
+
+    // The ordinary journal cap must be able to reject an exact replay, while
+    // the run-local coordinator pins one unbounded journal and one persistent
+    // cache lookup even when that cache refuses every entry.
+    {
+        const auto replay_artifact = [](
+            const std::size_t replay_budget) {
+            auto result =
+                std::make_shared<CachedFunctionEvaluation>();
+            GuardedCodeInventoryCollector live_destination{true};
+            result->inventory.begin_exact_replay_capture(
+                live_destination, replay_budget);
+            StoredCodeAddressCandidate candidate;
+            candidate.target_address = 0x1234u;
+            candidate.complete = false;
+            candidate.guarded = true;
+            candidate.store_instruction_addresses = {0x20u};
+            candidate.evidence_call_sites = {0x02u};
+            candidate.evidence_callees = {0x40u};
+            result->inventory.collect(
+                std::vector<StoredCodeAddressCandidate>{candidate});
+            result->inventory.finish_exact_replay_capture();
+            result->inventory.discard_transient_caches();
+            return std::shared_ptr<
+                const CachedFunctionEvaluation>{
+                std::move(result)};
+        };
+        const auto bounded = replay_artifact(1u);
+        const auto unbounded = replay_artifact(
+            std::numeric_limits<std::size_t>::max());
+        probe.bounded_exact_replay_available =
+            bounded->inventory.exact_replay_available();
+        probe.unbounded_exact_replay_available =
+            unbounded->inventory.exact_replay_available();
+        GuardedCodeInventoryCollector deferred_replay{true};
+        unbounded->inventory.replay_deferred_copy_into(
+            deferred_replay);
+        GuardedCodeInventoryCollector replay_result;
+        std::move(deferred_replay).replay_into(replay_result);
+        const auto replayed_inventory = replay_result.finish();
+        probe.unbounded_exact_replay_preserved =
+            replayed_inventory.stored_code_addresses ==
+                std::vector<StoredCodeAddressCandidate>{
+                    {0x1234u,
+                     false,
+                     true,
+                     {0x20u},
+                     {0x02u},
+                     {0x40u}}};
+
+        FunctionEvaluationCache zero_budget_cache(0u, 0u, true);
+        MultiRootEvaluationCoordinator coordinator;
+        const auto key = make_key(950u, 0u);
+        std::atomic_size_t coordinator_physical = 0u;
+        const auto coordinated_lookup = [&] {
+            return coordinator.get_or_compute(
+                key,
+                [&] {
+                    auto persistent =
+                        zero_budget_cache.get_or_compute(
+                            key,
+                            [&] {
+                                coordinator_physical.fetch_add(
+                                    1u,
+                                    std::memory_order_relaxed);
+                                physical_computations.fetch_add(
+                                    1u,
+                                    std::memory_order_relaxed);
+                                return replay_artifact(
+                                    std::numeric_limits<
+                                        std::size_t>::max());
+                            });
+                    return std::move(persistent.first);
+                });
+        };
+        const auto first = coordinated_lookup();
+        const auto second = coordinated_lookup();
+        const auto coordinator_statistics =
+            coordinator.statistics();
+        const auto coordinator_cache_statistics =
+            zero_budget_cache.statistics();
+        probe.coordinator_requests =
+            coordinator_statistics.requests;
+        probe.coordinator_producers =
+            coordinator_statistics.producers;
+        probe.coordinator_ready_reuses =
+            coordinator_statistics.ready_reuses;
+        probe.coordinator_in_flight_reuses =
+            coordinator_statistics.in_flight_reuses;
+        probe.coordinator_entries =
+            coordinator_statistics.entries;
+        probe.coordinator_session_lookups =
+            coordinator_cache_statistics.lookups;
+        probe.coordinator_session_entries =
+            coordinator_cache_statistics.entries;
+        probe.coordinator_physical_computations =
+            coordinator_physical.load(
+                std::memory_order_relaxed);
+        probe.unbounded_exact_replay_preserved =
+            probe.unbounded_exact_replay_preserved &&
+            first.first == second.first && !first.second &&
+            second.second;
+        add_statistics(coordinator_cache_statistics);
+    }
+
+    {
+        MultiRootEvaluationCoordinator coordinator;
+        auto first_key = make_key(960u, 0u);
+        auto colliding_key = make_key(961u, 1u);
+        colliding_key.hash = first_key.hash;
+        std::atomic_size_t computations = 0u;
+        const auto first = coordinator.get_or_compute(
+            first_key,
+            [&] {
+                computations.fetch_add(
+                    1u, std::memory_order_relaxed);
+                return artifact();
+            });
+        const auto colliding = coordinator.get_or_compute(
+            colliding_key,
+            [&] {
+                computations.fetch_add(
+                    1u, std::memory_order_relaxed);
+                return artifact();
+            });
+        const auto repeated = coordinator.get_or_compute(
+            first_key,
+            [&] {
+                computations.fetch_add(
+                    1u, std::memory_order_relaxed);
+                return artifact();
+            });
+        const auto statistics = coordinator.statistics();
+        probe.coordinator_collision_safe =
+            !first.second && !colliding.second && repeated.second &&
+            first.first != colliding.first &&
+            first.first == repeated.first &&
+            computations.load(std::memory_order_relaxed) == 2u &&
+            statistics.requests == 3u &&
+            statistics.producers == 2u &&
+            statistics.ready_reuses == 1u;
+    }
+
+    {
+        MultiRootEvaluationCoordinator coordinator;
+        const auto key = make_key(970u, 0u);
+        std::atomic_size_t computations = 0u;
+        std::size_t observed_failures = 0u;
+        for (std::size_t attempt = 0u; attempt < 2u; ++attempt) {
+            try {
+                static_cast<void>(coordinator.get_or_compute(
+                    key,
+                    [&]() -> std::shared_ptr<
+                        const CachedFunctionEvaluation> {
+                        computations.fetch_add(
+                            1u, std::memory_order_relaxed);
+                        throw std::runtime_error(
+                            "synthetic-multi-root-producer-failure");
+                    }));
+            } catch (const std::runtime_error& error) {
+                if (std::string_view{error.what()} ==
+                    "synthetic-multi-root-producer-failure")
+                    ++observed_failures;
+            }
+        }
+        const auto statistics = coordinator.statistics();
+        probe.coordinator_failure_pinned =
+            observed_failures == 2u &&
+            computations.load(std::memory_order_relaxed) == 1u &&
+            statistics.requests == 2u &&
+            statistics.producers == 1u &&
+            statistics.in_flight_reuses == 1u &&
+            statistics.entries == 1u;
     }
 
     if (!probe.statistics.balanced())
@@ -13839,6 +14534,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::atomic_size_t physical_evaluations = 0u;
     std::atomic_size_t cache_replay_fallback_recomputes = 0u;
     std::atomic_size_t cache_diagnostic_bypass_evaluations = 0u;
+    // Multi-root inventory contexts are a run-scoped physical arena, not an
+    // opportunistic layer in the bounded persistent session cache. Every
+    // canonical dependency-version key remains resident until this complete
+    // analysis transaction ends, so eviction or a large exact replay can
+    // never cause a second interpreter execution for another logical root.
+    MultiRootEvaluationCoordinator multi_root_context_evaluations;
+    std::atomic_size_t multi_root_provenance_links = 0u;
     EvaluationActivityTelemetry evaluation_activity;
     ParallelWorkActivity function_value_parallel_activity;
     auto* const evaluation_activity_if_observed =
@@ -13875,6 +14577,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         try {
             const auto session_statistics =
                 session.statistics();
+            const auto multi_root_statistics =
+                multi_root_context_evaluations.statistics();
             const auto cache_delta =
                 [](const std::size_t current,
                    const std::size_t initial) noexcept {
@@ -14000,6 +14704,21 @@ detail::analyze_function_values_with_guarded_entry_cache(
             progress.cache_diagnostic_bypass_evaluations =
                 cache_diagnostic_bypass_evaluations.load(
                     std::memory_order_relaxed);
+            progress.multi_root_context_requests =
+                multi_root_statistics.requests;
+            progress.multi_root_unique_contexts =
+                multi_root_statistics.producers;
+            progress.multi_root_ready_reuses =
+                multi_root_statistics.ready_reuses;
+            progress.multi_root_in_flight_reuses =
+                multi_root_statistics.in_flight_reuses;
+            progress.multi_root_provenance_links =
+                multi_root_provenance_links.load(
+                    std::memory_order_relaxed);
+            progress.multi_root_retained_contexts =
+                multi_root_statistics.entries;
+            progress.multi_root_retained_payload_bytes =
+                multi_root_statistics.retained_payload_bytes;
             progress.resolution_functions_total =
                 progress_resolution_functions_total.load(
                     std::memory_order_relaxed);
@@ -16362,7 +17081,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 evaluation_abi_stack_argument_reads,
             const std::uint8_t inventory_sink_sources,
             const bool replay_outputs = true,
-            const bool account_request = true) {
+            const bool account_request = true,
+            MultiRootEvaluationCoordinator* const multi_root_coordinator =
+                nullptr,
+            const bool retain_unbounded_exact_replay = false) {
+            auto& evaluation_cache = session.impl_->evaluations;
             const EvaluationActivityScope request_activity{
                 account_request
                     ? evaluation_activity_if_observed
@@ -16386,7 +17109,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
             // Detailed stack diagnostics include deliberately repeated
             // per-evaluation trace side effects. Do not let memoization erase
             // those observations; this mode is already forced to one worker
-            // and is not the product performance path.
+            // and is not the product performance path. Consequently the
+            // MultiRoot single-flight guarantee is a normal-product contract;
+            // this opt-in trace mode intentionally remains outside it.
             if (analyzer_stack_diagnostics_enabled()) {
                 cache_diagnostic_bypass_evaluations.fetch_add(
                     1u, std::memory_order_relaxed);
@@ -16461,15 +17186,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     walk_diagnostics != nullptr,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
-                    session.impl_->evaluations
+                    evaluation_cache
                         .detailed_telemetry_enabled());
             }
-            auto cached =
-                session.impl_->evaluations.get_or_compute(
-                    std::move(key),
-                    projection.requested_lens,
-                    projection.full_state_fallback,
-                    [&]() {
+            const auto compute_artifact = [&]() {
                         const PhysicalEvaluationScope physical{
                             evaluation_activity_if_observed,
                             physical_evaluations};
@@ -16482,7 +17202,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         if (guarded_inventory_collector != nullptr) {
                             artifact->inventory
                                 .begin_exact_replay_capture(
-                                    *guarded_inventory_collector);
+                                    *guarded_inventory_collector,
+                                    retain_unbounded_exact_replay
+                                        ? std::numeric_limits<
+                                              std::size_t>::max()
+                                        : maximum_evaluation_inventory_replay_bytes);
                         }
                         try {
                             artifact->evaluation =
@@ -16515,7 +17239,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                 abi_stack_argument_reads);
                             if (projection.effective_lens !=
                                 EvaluationLens::FullState)
-                                session.impl_->evaluations
+                                evaluation_cache
                                     .record_reconstructed_result();
                         } catch (...) {
                             artifact->inventory
@@ -16529,13 +17253,55 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         return std::shared_ptr<
                             const CachedFunctionEvaluation>{
                             std::move(artifact)};
+                    };
+            std::pair<
+                std::shared_ptr<const CachedFunctionEvaluation>,
+                bool> cached;
+            if (multi_root_coordinator != nullptr) {
+                cached = multi_root_coordinator->get_or_compute(
+                    key,
+                    [&]() {
+                        auto persistent =
+                            evaluation_cache.get_or_compute(
+                                std::move(key),
+                                projection.requested_lens,
+                                projection.full_state_fallback,
+                                compute_artifact,
+                                evaluation_activity_if_observed);
+                        if (persistent.second && replay_outputs &&
+                            guarded_inventory_collector != nullptr) {
+                            if (!persistent.first->inventory
+                                     .exact_replay_available())
+                                throw std::logic_error(
+                                    "Multi-Root-Artefakt besitzt kein "
+                                    "exaktes Inventarjournal.");
+                            const EvaluationActivityScope replay_activity{
+                                evaluation_activity_if_observed,
+                                EvaluationActivityKind::ExactReplay};
+                            persistent.first->inventory
+                                .replay_deferred_copy_into(
+                                    *guarded_inventory_collector);
+                        }
+                        return std::move(persistent.first);
                     },
                     evaluation_activity_if_observed);
+            } else {
+                cached = evaluation_cache.get_or_compute(
+                    std::move(key),
+                    projection.requested_lens,
+                    projection.full_state_fallback,
+                    compute_artifact,
+                    evaluation_activity_if_observed);
+            }
             const auto& artifact = *cached.first;
             if (cached.second && replay_outputs &&
                 guarded_inventory_collector != nullptr &&
                 !artifact.inventory
                      .exact_replay_available()) {
+                if (multi_root_coordinator != nullptr)
+                    throw std::logic_error(
+                        "Multi-Root-Artefakt verlor sein exaktes "
+                        "Inventarjournal.");
                 cache_replay_fallback_recomputes.fetch_add(
                     1u, std::memory_order_relaxed);
                 auto fallback =
@@ -16571,7 +17337,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     abi_stack_argument_reads);
                 if (projection.effective_lens !=
                     EvaluationLens::FullState)
-                    session.impl_->evaluations
+                    evaluation_cache
                         .record_reconstructed_result();
                 if (walk_diagnostics != nullptr) {
                     merge_fixpoint_diagnostics(
@@ -17064,13 +17830,182 @@ detail::analyze_function_values_with_guarded_entry_cache(
               });
     resolution_functions_total =
         resolution_functions.size();
+    std::unordered_set<std::uint32_t>
+        forwarded_evidence_reserved_addresses;
+    forwarded_evidence_reserved_addresses.reserve(
+        functions.size() * 2u + blocks.size() * 4u);
+    for (const auto& candidate : functions) {
+        forwarded_evidence_reserved_addresses.insert(
+            candidate.entry_address);
+        forwarded_evidence_reserved_addresses.insert(
+            candidate.direct_callees.begin(),
+            candidate.direct_callees.end());
+    }
+    for (const auto& block : blocks) {
+        forwarded_evidence_reserved_addresses.insert(
+            block.start_address);
+        forwarded_evidence_reserved_addresses.insert(
+            block.end_address);
+        forwarded_evidence_reserved_addresses.insert(
+            block.successors.begin(), block.successors.end());
+        for (const auto& line : block.lines) {
+            forwarded_evidence_reserved_addresses.insert(
+                line.address);
+            if (line.target_address.has_value())
+                forwarded_evidence_reserved_addresses.insert(
+                    *line.target_address);
+        }
+    }
+    const auto reserve_candidate_map =
+        [&](const auto& candidates) {
+            for (const auto& [site, values] : candidates) {
+                forwarded_evidence_reserved_addresses.insert(site);
+                forwarded_evidence_reserved_addresses.insert(
+                    values.targets.begin(), values.targets.end());
+            }
+        };
+    reserve_candidate_map(inventory_indirect_callees);
+    reserve_candidate_map(tail_ingresses);
+    for (const auto& [entry, ingresses] :
+         final_inventory_region_tail_ingresses_by_entry) {
+        forwarded_evidence_reserved_addresses.insert(entry);
+        reserve_candidate_map(ingresses);
+    }
+    std::unordered_map<std::uint32_t,
+                       std::unordered_set<std::uint32_t>>
+        locally_observable_call_sites_by_function;
+    std::unordered_map<std::uint32_t,
+                       std::unordered_set<std::uint32_t>>
+        locally_observable_callees_by_function;
+    locally_observable_call_sites_by_function.reserve(
+        functions.size() +
+        final_inventory_region_by_address.size());
+    locally_observable_callees_by_function.reserve(
+        functions.size() +
+        final_inventory_region_by_address.size());
+    const auto collect_locally_observable_evidence =
+        [&](const FunctionInfo& candidate) {
+        auto& local_call_sites =
+            locally_observable_call_sites_by_function[
+                candidate.entry_address];
+        auto& local_callees =
+            locally_observable_callees_by_function[
+                candidate.entry_address];
+        const auto add_local_callee =
+            [&](const std::uint32_t callee) {
+                local_callees.insert(callee);
+                const auto summary = summaries.find(callee);
+                if (summary == summaries.end()) return;
+                for (const auto& value : summary->second.registers)
+                    local_callees.insert(
+                        value.evidence_callees.begin(),
+                        value.evidence_callees.end());
+            };
+        for (const auto callee : candidate.direct_callees)
+            add_local_callee(callee);
+        for (const auto block_address :
+             candidate.block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end()) continue;
+            for (const auto& line : block->second->lines) {
+                // Keeping every local instruction address concrete is a
+                // deliberately conservative correlation partition. The
+                // evaluator can only add call/tail sites from this finite
+                // superset, so a tokenized root can never accidentally alias
+                // a newly introduced local evidence constant.
+                local_call_sites.insert(line.address);
+                if (line.target_address.has_value())
+                    add_local_callee(*line.target_address);
+                const auto indirect =
+                    inventory_indirect_callees.find(line.address);
+                if (indirect != inventory_indirect_callees.end()) {
+                    for (const auto callee : indirect->second.targets)
+                        add_local_callee(callee);
+                }
+                const auto tail = tail_ingresses.find(line.address);
+                if (tail != tail_ingresses.end()) {
+                    for (const auto callee : tail->second.targets)
+                        add_local_callee(callee);
+                }
+            }
+        }
+        const auto local_tail_ingresses =
+            final_inventory_region_tail_ingresses_by_entry.find(
+                candidate.entry_address);
+        if (local_tail_ingresses !=
+            final_inventory_region_tail_ingresses_by_entry.end()) {
+            for (const auto& [site, ingress] :
+                 local_tail_ingresses->second) {
+                local_call_sites.insert(site);
+                for (const auto callee : ingress.targets)
+                    add_local_callee(callee);
+            }
+        }
+    };
+    for (const auto& candidate : functions)
+        collect_locally_observable_evidence(candidate);
+    // Inventory regions are executable FunctionInfo slices as well. They may
+    // begin at an internal shared tail which has no ordinary function entry,
+    // so excluding them leaves a real coordinator context unregistered and
+    // loses the conservative local-evidence partition.
+    for (const auto& [entry, candidate] :
+         final_inventory_region_by_address) {
+        static_cast<void>(entry);
+        collect_locally_observable_evidence(*candidate);
+    }
+    std::vector<std::uint32_t> forwarded_evidence_tokens;
+    forwarded_evidence_tokens.reserve(
+        maximum_forwarded_evidence_tokens);
+    constexpr std::size_t maximum_token_search_attempts =
+        maximum_forwarded_evidence_tokens * 64u;
+    auto token_candidate =
+        std::numeric_limits<std::uint32_t>::max();
+    for (std::size_t attempts = 0u;
+         attempts < maximum_token_search_attempts &&
+         forwarded_evidence_tokens.size() <
+             maximum_forwarded_evidence_tokens;
+         ++attempts) {
+        if (!image.resolve_segment_address(token_candidate, 1u)
+                 .has_value() &&
+            !forwarded_evidence_reserved_addresses.contains(
+                token_candidate))
+            forwarded_evidence_tokens.push_back(token_candidate);
+        if (token_candidate == 0u) break;
+        --token_candidate;
+    }
+    const auto make_multi_root_provenance_lens =
+        [&](const std::uint32_t function_entry,
+            const AbstractState& input,
+            const EvaluationLens requested_lens,
+            const std::set<std::uint32_t>* const isolated_call_sites)
+            -> std::optional<EvidenceProvenanceLens> {
+            if (forwarded_evidence_tokens.empty())
+                return std::nullopt;
+            const auto projection =
+                make_function_evaluation_projection(
+                    input,
+                    requested_lens,
+                    function_entry,
+                    forwarded_register_reads,
+                    abi_stack_argument_reads,
+                    !result.budget_exhausted);
+            auto lens = EvidenceProvenanceLens(
+                projection.ingress,
+                isolated_call_sites,
+                forwarded_evidence_tokens,
+                std::as_const(
+                    locally_observable_call_sites_by_function)
+                    .at(function_entry),
+                std::as_const(
+                    locally_observable_callees_by_function)
+                    .at(function_entry));
+            if (!lens.valid()) return std::nullopt;
+            return lens;
+        };
     report_progress("resolution-dispatch-start");
     struct ForwardedContextEvaluation final {
         std::shared_ptr<const CachedFunctionEvaluation> artifact;
-        // A producer miss forwards every inventory observation live even if
-        // the bounded exact-replay stream overflows. Preserve that completed
-        // collector instead of running the abstract interpreter twice.
-        std::optional<GuardedCodeInventoryCollector> live_inventory;
+        std::optional<EvidenceProvenanceLens> evidence_lens;
         bool cache_hit = false;
     };
     const auto evaluate_forwarded_context =
@@ -17082,6 +18017,23 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 EvaluationActivityKind::Request};
             logical_evaluations.fetch_add(
                 1u, std::memory_order_relaxed);
+            auto evidence_lens = make_multi_root_provenance_lens(
+                context.function->entry_address,
+                context.input,
+                context.isolated
+                    ? EvaluationLens::IsolatedObservation
+                    : EvaluationLens::GuardedInventory,
+                context.isolated ? &root_call_sites : nullptr);
+            const auto& evaluation_input =
+                evidence_lens.has_value()
+                    ? evidence_lens->ingress()
+                    : context.input;
+            const auto* const evaluation_root_call_sites =
+                context.isolated
+                    ? evidence_lens.has_value()
+                          ? evidence_lens->isolated_call_sites()
+                          : &root_call_sites
+                    : nullptr;
             GuardedCodeInventoryCollector replay_target{true};
             GuardedCodeInventoryWalkDiagnostics diagnostics;
             auto cached = cached_evaluate_function(
@@ -17089,11 +18041,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 inventory_indirect_callees,
                 tail_ingresses,
                 summaries,
-                context.input,
+                evaluation_input,
                 ResolutionCollectionMode::GuardedInventory,
                 true,
                 &replay_target,
-                context.isolated ? &root_call_sites : nullptr,
+                evaluation_root_call_sites,
                 nullptr,
                 local_tail_ingresses,
                 &diagnostics,
@@ -17101,80 +18053,22 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 target_abi_inventory_sink_sources(
                     context.target),
                 false,
-                false);
-            if (cached.first->inventory
-                    .exact_replay_available()) {
-                return ForwardedContextEvaluation{
-                    std::move(cached.first),
-                    std::nullopt,
-                    cached.second};
-            }
-
-            if (!cached.second) {
-                // The miss producer already forwarded the full successful
-                // evaluation into replay_target. Replay overflow discarded
-                // only the cacheable event stream, never this live result.
-                return ForwardedContextEvaluation{
-                    std::move(cached.first),
-                    std::move(replay_target),
-                    false};
-            }
-
-            // A non-retainable artifact can only be observed by a waiter
-            // which coalesced while the producer was still in flight. Its
-            // own target stayed empty, so this one consumer must recompute.
-            cache_replay_fallback_recomputes.fetch_add(
-                1u, std::memory_order_relaxed);
-            auto fallback =
-                std::make_shared<CachedFunctionEvaluation>();
-            fallback->walk_diagnostics
-                .local_fixpoint_iteration_budget =
-                maximum_local_fixpoint_iterations;
-            const PhysicalEvaluationScope physical{
-                evaluation_activity_if_observed,
-                physical_evaluations};
-            const auto fallback_projection =
-                make_function_evaluation_projection(
-                    context.input,
-                    context.isolated
-                        ? EvaluationLens::IsolatedObservation
-                        : EvaluationLens::GuardedInventory,
-                    context.function->entry_address,
-                    forwarded_register_reads,
-                    abi_stack_argument_reads,
-                    !result.budget_exhausted);
-            fallback->evaluation = evaluate_function(
-                image,
-                *context.function,
-                block_index,
-                inventory_indirect_callees,
-                tail_ingresses,
-                summaries,
-                fallback_projection.ingress,
-                ResolutionCollectionMode::GuardedInventory,
-                true,
-                &fallback->inventory,
-                context.isolated ? &root_call_sites : nullptr,
-                nullptr,
-                local_tail_ingresses,
-                &fallback->walk_diagnostics,
-                &abi_stack_argument_reads,
-                target_abi_inventory_sink_sources(
-                    context.target));
-            canonicalize_evaluation_outputs(
-                fallback->evaluation,
-                forwarded_register_reads,
-                abi_stack_argument_reads);
-            if (fallback_projection.effective_lens !=
-                EvaluationLens::FullState)
-                session.impl_->evaluations
-                    .record_reconstructed_result();
+                false,
+                &multi_root_context_evaluations,
+                true);
+            if (evidence_lens.has_value())
+                multi_root_provenance_links.fetch_add(
+                    evidence_lens->link_count(),
+                    std::memory_order_relaxed);
+            if (!cached.first->inventory
+                     .exact_replay_available())
+                throw std::logic_error(
+                    "Multi-Root-Forwarding verlor sein exaktes "
+                    "Inventarjournal.");
             return ForwardedContextEvaluation{
-                std::shared_ptr<
-                    const CachedFunctionEvaluation>{
-                    std::move(fallback)},
-                std::nullopt,
-                true};
+                std::move(cached.first),
+                std::move(evidence_lens),
+                cached.second};
         };
     const auto evaluate_resolution_function = [&](const std::size_t function_index) {
         progress_resolution_functions_started.fetch_add(
@@ -17933,14 +18827,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         record_local_fixpoint_limit();
                         return;
                     }
-                    if (item.evaluation->live_inventory) {
-                        std::move(*item.evaluation->live_inventory)
-                            .replay_deferred_into(
-                                function_result.inventory);
+                    const EvaluationActivityScope replay_activity{
+                        evaluation_activity_if_observed,
+                        EvaluationActivityKind::ExactReplay};
+                    if (item.evaluation->evidence_lens.has_value()) {
+                        item.evaluation->artifact->inventory
+                            .replay_deferred_copy_into(
+                                function_result.inventory,
+                                *item.evaluation->evidence_lens);
                     } else {
-                        const EvaluationActivityScope replay_activity{
-                            evaluation_activity_if_observed,
-                            EvaluationActivityKind::ExactReplay};
                         item.evaluation->artifact->inventory
                             .replay_deferred_copy_into(
                                 function_result.inventory);
@@ -17949,24 +18844,39 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     context.evaluation_dirty = false;
                     context.resolutions =
                         item.evaluation->artifact->evaluation.resolutions;
+                    if (item.evaluation->evidence_lens.has_value()) {
+                        for (auto& resolution : context.resolutions)
+                            item.evaluation->evidence_lens->restore(
+                                resolution);
+                    }
                     const auto propagated_root_call_sites =
                         context.root_call_sites;
                     const auto context_isolated =
                         context.isolated;
-                    for (const auto& forwarded :
+                    for (const auto& cached_forwarded :
                          item.evaluation->artifact->evaluation
-                             .call_arguments)
+                             .call_arguments) {
+                        auto forwarded = cached_forwarded;
+                        if (item.evaluation->evidence_lens.has_value())
+                            item.evaluation->evidence_lens->restore(
+                                forwarded.state);
                         enqueue_forwarded_call(
                             forwarded,
                             context_isolated,
                             propagated_root_call_sites);
-                    for (const auto& forwarded :
+                    }
+                    for (const auto& cached_forwarded :
                          item.evaluation->artifact->evaluation
-                             .inventory_transfers)
+                             .inventory_transfers) {
+                        auto forwarded = cached_forwarded;
+                        if (item.evaluation->evidence_lens.has_value())
+                            item.evaluation->evidence_lens->restore(
+                                forwarded.state);
                         enqueue_forwarded_tail(
                             forwarded,
                             context_isolated,
                             propagated_root_call_sites);
+                    }
                     if (function_result
                             .local_fixpoint_budget_exhausted)
                         return;
@@ -18086,8 +18996,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 const auto evaluate_contextual_item =
                     [&](ContextualBatchItem& item) noexcept {
                         try {
-                            item.evaluation.emplace(
-                                cached_evaluate_function(
+                            auto cached = cached_evaluate_function(
                                     *fixpoint_functions[
                                         item.function_index],
                                     inventory_indirect_callees,
@@ -18102,8 +19011,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                     nullptr,
                                     &item.diagnostics,
                                     &abi_stack_argument_reads,
-                                    0u)
-                                    .first->evaluation);
+                                    0u,
+                                    true,
+                                    true,
+                                    &multi_root_context_evaluations,
+                                    true);
+                            item.evaluation.emplace(
+                                cached.first->evaluation);
                         } catch (...) {
                             item.error = std::current_exception();
                         }
@@ -18319,8 +19233,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         stable.diagnostics
                             .local_fixpoint_iteration_budget =
                             maximum_local_fixpoint_iterations;
-                        stable.evaluation =
-                            cached_evaluate_function(
+                        auto cached = cached_evaluate_function(
                             *final_function_by_address.at(address),
                             inventory_indirect_callees,
                             tail_ingresses,
@@ -18335,8 +19248,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
                             &stable.diagnostics,
                             &abi_stack_argument_reads,
                             target_abi_inventory_sink_sources(
-                                address))
-                                .first->evaluation;
+                                address),
+                            true,
+                            true,
+                            &multi_root_context_evaluations,
+                            true);
+                        stable.evaluation =
+                            cached.first->evaluation;
                     } catch (...) {
                         stable.error = std::current_exception();
                     }
@@ -18466,6 +19384,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 FunctionEvaluation evaluation;
                 GuardedCodeInventoryCollector inventory{true};
                 GuardedCodeInventoryWalkDiagnostics diagnostics;
+                std::optional<EvidenceProvenanceLens>
+                    evidence_lens;
                 std::exception_ptr error;
             };
             std::vector<IsolatedEvaluationResult> isolated_results(
@@ -18481,30 +19401,62 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         isolated.diagnostics
                             .local_fixpoint_iteration_budget =
                             maximum_local_fixpoint_iterations;
-                        isolated.evaluation =
-                            cached_evaluate_function(
-                            *function,
-                            inventory_indirect_callees,
-                            tail_ingresses,
-                            summaries,
+                        const auto concrete_input =
                             isolated_store_input(
                                 call_site,
                                 *observation,
                                 required_register_reads,
                                 true,
-                                required_stack_reads),
+                                required_stack_reads);
+                        isolated.evidence_lens =
+                            make_multi_root_provenance_lens(
+                                function->entry_address,
+                                concrete_input,
+                                EvaluationLens::IsolatedObservation,
+                                &root_call_sites);
+                        const auto& evaluation_input =
+                            isolated.evidence_lens.has_value()
+                                ? isolated.evidence_lens->ingress()
+                                : concrete_input;
+                        const auto* const evaluation_root_call_sites =
+                            isolated.evidence_lens.has_value()
+                                ? isolated.evidence_lens
+                                      ->isolated_call_sites()
+                                : &root_call_sites;
+                        auto cached = cached_evaluate_function(
+                            *function,
+                            inventory_indirect_callees,
+                            tail_ingresses,
+                            summaries,
+                            evaluation_input,
                             ResolutionCollectionMode::
                                 GuardedInventory,
                             true,
                             &isolated.inventory,
-                            &root_call_sites,
+                            evaluation_root_call_sites,
                             nullptr,
                             nullptr,
                             &isolated.diagnostics,
                             &abi_stack_argument_reads,
                             target_abi_inventory_sink_sources(
-                                function->entry_address))
-                                .first->evaluation;
+                                function->entry_address),
+                            true,
+                            true,
+                            &multi_root_context_evaluations,
+                            true);
+                        isolated.evaluation =
+                            cached.first->evaluation;
+                        if (isolated.evidence_lens.has_value()) {
+                            multi_root_provenance_links.fetch_add(
+                                isolated.evidence_lens->link_count(),
+                                std::memory_order_relaxed);
+                            isolated.inventory
+                                .restore_evidence_provenance(
+                                    *isolated.evidence_lens);
+                            restore_evaluation_evidence_provenance(
+                                isolated.evaluation,
+                                *isolated.evidence_lens);
+                        }
                     } catch (...) {
                         isolated.error =
                             std::current_exception();

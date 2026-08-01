@@ -1060,6 +1060,21 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             progress
                 .function_value_session_cache_diagnostic_bypass_evaluations =
                 function_values->cache_diagnostic_bypass_evaluations;
+            progress.function_value_multi_root_context_requests =
+                function_values->multi_root_context_requests;
+            progress.function_value_multi_root_unique_contexts =
+                function_values->multi_root_unique_contexts;
+            progress.function_value_multi_root_ready_reuses =
+                function_values->multi_root_ready_reuses;
+            progress.function_value_multi_root_in_flight_reuses =
+                function_values->multi_root_in_flight_reuses;
+            progress.function_value_multi_root_provenance_links =
+                function_values->multi_root_provenance_links;
+            progress.function_value_multi_root_retained_contexts =
+                function_values->multi_root_retained_contexts;
+            progress
+                .function_value_multi_root_retained_payload_bytes =
+                function_values->multi_root_retained_payload_bytes;
             progress.function_value_resolution_functions_total =
                 function_values->resolution_functions_total;
             progress.function_value_resolution_functions_started =

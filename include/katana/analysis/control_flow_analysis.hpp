@@ -211,6 +211,14 @@ struct ControlFlowAnalysisProgress {
         function_value_session_cache_replay_fallback_recomputes = 0u;
     std::size_t
         function_value_session_cache_diagnostic_bypass_evaluations = 0u;
+    std::size_t function_value_multi_root_context_requests = 0u;
+    std::size_t function_value_multi_root_unique_contexts = 0u;
+    std::size_t function_value_multi_root_ready_reuses = 0u;
+    std::size_t function_value_multi_root_in_flight_reuses = 0u;
+    std::size_t function_value_multi_root_provenance_links = 0u;
+    std::size_t function_value_multi_root_retained_contexts = 0u;
+    std::size_t
+        function_value_multi_root_retained_payload_bytes = 0u;
     std::size_t function_value_resolution_functions_total = 0u;
     std::size_t function_value_resolution_functions_started = 0u;
     std::size_t function_value_resolution_functions_ready = 0u;
