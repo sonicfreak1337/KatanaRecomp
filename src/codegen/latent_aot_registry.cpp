@@ -1483,8 +1483,21 @@ LatentAotDiscovery discover_latent_aot_modules(
             katana::ProgressUnit::Modules,
             candidates.size(),
             "latent-aot-candidates");
+    const auto configured_candidate_workers = std::min(
+        {candidates.size(),
+         options.maximum_workers,
+         katana::analysis::global_analysis_executor().maximum_jobs()});
     std::atomic_size_t active_candidates = 0u;
     std::atomic_size_t started_candidates = 0u;
+    {
+        katana::ProgressCounterSnapshot counters;
+        counters.configured_workers = configured_candidate_workers;
+        counters.active_workers = 0u;
+        counters.queued_work = candidates.size();
+        counters.started = 0u;
+        counters.committed_work = 0u;
+        candidate_progress.update(std::move(counters));
+    }
     katana::analysis::parallel_analysis_for(
         candidates.size(),
         options.maximum_workers,
@@ -1500,6 +1513,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                 counters.active_workers =
                     active_candidates.load(
                         std::memory_order_relaxed);
+                counters.configured_workers =
+                    configured_candidate_workers;
                 counters.queued_work =
                     candidates.size() - started;
                 counters.started = started;
@@ -1542,6 +1557,8 @@ LatentAotDiscovery discover_latent_aot_modules(
             counters.active_workers =
                 active_candidates.load(
                     std::memory_order_relaxed);
+            counters.configured_workers =
+                configured_candidate_workers;
             counters.queued_work =
                 candidates.size() -
                 started_candidates.load(
@@ -1549,6 +1566,8 @@ LatentAotDiscovery discover_latent_aot_modules(
             counters.started =
                 started_candidates.load(
                     std::memory_order_relaxed);
+            counters.committed_work =
+                candidate_progress.completed();
             counters.cache_hits =
                 cache_counters.positive_hits.load(
                     std::memory_order_relaxed) +

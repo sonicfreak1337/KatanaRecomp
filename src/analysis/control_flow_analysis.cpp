@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <deque>
 #include <iomanip>
 #include <limits>
@@ -883,7 +884,8 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
                                                const AnalysisOverrides* overrides,
                                                const ControlFlowAnalysisProgressCallback&
-                                                   progress_callback) {
+                                                   progress_callback,
+                                               const bool detailed_cache_miss_telemetry) {
     std::map<std::uint32_t, SeedEvidence> seeds;
     const bool hints = overrides != nullptr && overrides->mode == AnalysisDirectiveMode::Hint;
     std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
@@ -941,56 +943,213 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     ControlFlowAnalysisResult analysis;
     GuardedCodeInventory final_guarded_code_inventory;
     detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
-    detail::FunctionValueAnalysisSession function_value_session;
+    detail::FunctionValueAnalysisSession function_value_session(
+        16'384u,
+        1'024u * 1024u * 1024u,
+        detailed_cache_miss_telemetry);
     JumpTableSnapshotCache jump_table_cache;
+    std::size_t candidate_contract_iteration = 0u;
+    std::size_t round_seed_baseline = seeds.size();
+    std::atomic_bool progress_callback_failed = false;
     const auto report_progress_detail =
         [&](const std::string_view phase,
             const FunctionValueAnalysisProgress* const function_values) {
         if (!progress_callback) return;
-        progress_callback({phase,
-                           analysis.fixpoint_iterations,
-                           seeds.size(),
-                           analysis.recursive.instructions.size(),
-                           analysis.recursive.contextual_instructions.size(),
-                           analysis.indirect_control_flow.size(),
-                           function_values != nullptr,
-                           function_values != nullptr
-                               ? function_values->functions
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->blocks
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->fixpoint_iterations
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->completed_functions
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->pending
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->active_workers
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->logical_evaluations
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->physical_evaluations
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values
-                                     ->resolution_functions_total
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->session_cache_hits
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->session_cache_misses
-                               : 0u,
-                           function_values != nullptr
-                               ? function_values->session_cache_evictions
-                               : 0u});
+        ControlFlowAnalysisProgress progress;
+        progress.phase = phase;
+        progress.iteration = analysis.fixpoint_iterations;
+        progress.seeds = seeds.size();
+        progress.instructions =
+            analysis.recursive.instructions.size();
+        progress.contexts =
+            analysis.recursive.contextual_instructions.size();
+        progress.resolutions =
+            analysis.indirect_control_flow.size();
+        progress.candidate_contract_iteration =
+            candidate_contract_iteration;
+        progress.candidate_contract_iteration_budget =
+            maximum_function_value_candidate_contract_iterations;
+        progress.round_seed_baseline = round_seed_baseline;
+        progress.round_added_seeds =
+            seeds.size() >= round_seed_baseline
+                ? seeds.size() - round_seed_baseline
+                : 0u;
+        progress.growing_workset =
+            progress.round_added_seeds != 0u;
+        progress.function_value_active =
+            function_values != nullptr;
+        if (function_values != nullptr) {
+            progress.function_value_subphase =
+                function_values->subphase;
+            progress.function_value_subphase_planned =
+                function_values->subphase_planned;
+            progress.function_value_subphase_processed =
+                function_values->subphase_processed;
+            progress.function_value_subphase_queued =
+                function_values->subphase_queued;
+            progress.function_value_subphase_iterations =
+                function_values->subphase_iterations;
+            progress.function_value_functions =
+                function_values->functions;
+            progress.function_value_blocks =
+                function_values->blocks;
+            progress.function_value_iterations =
+                function_values->fixpoint_iterations;
+            progress.function_value_summarized_functions =
+                function_values->summarized_functions;
+            progress.function_value_pending =
+                function_values->pending;
+            progress.function_value_active_workers =
+                function_values->active_workers;
+            progress.function_value_logical_evaluations =
+                function_values->logical_evaluations;
+            progress.function_value_physical_evaluations =
+                function_values->physical_evaluations;
+            progress.function_value_active_evaluation_requests =
+                function_values->active_evaluation_requests;
+            progress.function_value_evaluation_request_nanoseconds =
+                function_values->evaluation_request_nanoseconds;
+            progress
+                .function_value_maximum_evaluation_request_nanoseconds =
+                function_values
+                    ->maximum_evaluation_request_nanoseconds;
+            progress.function_value_cache_key_builds =
+                function_values->cache_key_builds;
+            progress.function_value_active_cache_key_builds =
+                function_values->active_cache_key_builds;
+            progress.function_value_cache_key_build_nanoseconds =
+                function_values->cache_key_build_nanoseconds;
+            progress.function_value_maximum_cache_key_build_nanoseconds =
+                function_values
+                    ->maximum_cache_key_build_nanoseconds;
+            progress.function_value_cache_waits =
+                function_values->cache_waits;
+            progress.function_value_active_cache_waits =
+                function_values->active_cache_waits;
+            progress.function_value_cache_wait_nanoseconds =
+                function_values->cache_wait_nanoseconds;
+            progress.function_value_maximum_cache_wait_nanoseconds =
+                function_values->maximum_cache_wait_nanoseconds;
+            progress.function_value_cache_replays =
+                function_values->cache_replays;
+            progress.function_value_active_cache_replays =
+                function_values->active_cache_replays;
+            progress.function_value_cache_replay_nanoseconds =
+                function_values->cache_replay_nanoseconds;
+            progress.function_value_maximum_cache_replay_nanoseconds =
+                function_values->maximum_cache_replay_nanoseconds;
+            progress.function_value_active_physical_evaluations =
+                function_values->active_physical_evaluations;
+            progress.function_value_physical_evaluation_nanoseconds =
+                function_values->physical_evaluation_nanoseconds;
+            progress
+                .function_value_maximum_physical_evaluation_nanoseconds =
+                function_values
+                    ->maximum_physical_evaluation_nanoseconds;
+            progress.function_value_cache_commits =
+                function_values->cache_commits;
+            progress.function_value_active_cache_commits =
+                function_values->active_cache_commits;
+            progress.function_value_cache_commit_nanoseconds =
+                function_values->cache_commit_nanoseconds;
+            progress.function_value_maximum_cache_commit_nanoseconds =
+                function_values->maximum_cache_commit_nanoseconds;
+            progress
+                .function_value_session_cache_replay_fallback_recomputes =
+                function_values->cache_replay_fallback_recomputes;
+            progress
+                .function_value_session_cache_diagnostic_bypass_evaluations =
+                function_values->cache_diagnostic_bypass_evaluations;
+            progress.function_value_resolution_functions_total =
+                function_values->resolution_functions_total;
+            progress.function_value_resolution_functions_started =
+                function_values->resolution_functions_started;
+            progress.function_value_resolution_functions_ready =
+                function_values->resolution_functions_ready;
+            progress.function_value_resolution_functions_committed =
+                function_values->resolution_functions_committed;
+            progress
+                .function_value_resolution_head_of_line_index =
+                function_values->resolution_head_of_line_index;
+            progress
+                .function_value_resolution_head_of_line_elapsed_milliseconds =
+                function_values
+                    ->resolution_head_of_line_elapsed_milliseconds;
+            progress.function_value_configured_workers =
+                function_values->configured_workers;
+            progress.function_value_session_cache_lookups =
+                function_values->session_cache_lookups;
+            progress.function_value_session_cache_ready_hits =
+                function_values->session_cache_ready_hits;
+            progress
+                .function_value_session_cache_in_flight_coalesces =
+                function_values
+                    ->session_cache_in_flight_coalesces;
+            progress.function_value_session_cache_hits =
+                function_values->session_cache_hits;
+            progress.function_value_session_cache_misses =
+                function_values->session_cache_misses;
+            progress.function_value_session_cache_evictions =
+                function_values->session_cache_evictions;
+            progress.function_value_session_cache_entries =
+                function_values->session_cache_entries;
+            progress
+                .function_value_session_cache_retained_payload_bytes =
+                function_values
+                    ->session_cache_retained_payload_bytes;
+            progress.function_value_session_cache_miss_cold =
+                function_values->session_cache_miss_cold;
+            progress.function_value_session_cache_miss_evicted =
+                function_values->session_cache_miss_evicted;
+            progress
+                .function_value_session_cache_miss_oversize_or_no_exact_replay =
+                function_values
+                    ->session_cache_miss_oversize_or_no_exact_replay;
+            progress
+                .function_value_session_cache_miss_function_shape_changed =
+                function_values
+                    ->session_cache_miss_function_shape_changed;
+            progress
+                .function_value_session_cache_miss_projected_ingress_changed =
+                function_values
+                    ->session_cache_miss_projected_ingress_changed;
+            progress
+                .function_value_session_cache_miss_summary_dependency_changed =
+                function_values
+                    ->session_cache_miss_summary_dependency_changed;
+            progress
+                .function_value_session_cache_miss_abi_contract_changed =
+                function_values
+                    ->session_cache_miss_abi_contract_changed;
+            progress
+                .function_value_session_cache_miss_resolution_lens_changed =
+                function_values
+                    ->session_cache_miss_resolution_lens_changed;
+            progress
+                .function_value_session_cache_miss_inventory_sink_changed =
+                function_values
+                    ->session_cache_miss_inventory_sink_changed;
+            progress
+                .function_value_session_cache_miss_isolation_partition_changed =
+                function_values
+                    ->session_cache_miss_isolation_partition_changed;
+            progress
+                .function_value_session_cache_miss_contextual_summary_changed =
+                function_values
+                    ->session_cache_miss_contextual_summary_changed;
+            progress
+                .function_value_session_cache_miss_tail_ingress_changed =
+                function_values
+                    ->session_cache_miss_tail_ingress_changed;
+        }
+        try {
+            progress_callback(progress);
+        } catch (...) {
+            // Observation must never decide product analysis. Preserve the
+            // loss so the structured telemetry terminal can fail closed.
+            progress_callback_failed.store(
+                true, std::memory_order_relaxed);
+        }
     };
     const auto report_progress =
         [&](const std::string_view phase) {
@@ -1049,6 +1208,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         return changed;
     };
     for (;;) {
+        round_seed_baseline = seeds.size();
+        candidate_contract_iteration = 0u;
         ++analysis.fixpoint_iterations;
         report_progress("iteration-start");
         auto recursive_options = make_options(seeds);
@@ -1426,6 +1587,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             maximum_function_value_candidate_contract_iterations);
         while (!function_values_stable && !changed &&
                !analysis.function_budget_exhausted) {
+            candidate_contract_iteration =
+                seen_function_value_contract_states.size() + 1u;
             const auto provisional_edges = collect_function_value_edges(
                 analysis.indirect_control_flow, analysis.jump_tables);
             const auto contract_state =
@@ -1448,39 +1611,62 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 break;
             }
             seen_function_value_contract_states.push_back(contract_state);
+            candidate_contract_iteration =
+                seen_function_value_contract_states.size();
             report_progress(
                 seen_function_value_contract_states.size() == 1u
                     ? "function-values-start"
                     : "function-values-candidate-contract-reconcile");
-            auto function_values =
-                detail::analyze_function_values_with_guarded_entry_cache(
-                    image,
-                    analysis.recursive.instructions,
-                    function_boundaries,
-                    provisional_edges,
-                    [&report_progress_detail](
+            std::optional<FunctionValueAnalysisProgress>
+                latest_function_value_progress;
+            FunctionValueAnalysisProgressCallback
+                function_value_progress_callback;
+            if (progress_callback) {
+                function_value_progress_callback =
+                    [&report_progress_detail,
+                     &latest_function_value_progress](
                         const FunctionValueAnalysisProgress& progress) {
+                        latest_function_value_progress = progress;
                         std::string phase = "function-values-";
                         phase += progress.phase;
                         phase += "-f" +
                                  std::to_string(progress.functions);
-                        phase += "-b" + std::to_string(progress.blocks);
+                        phase += "-b" +
+                                 std::to_string(progress.blocks);
                         phase +=
                             "-k" +
                             std::to_string(progress.fixpoint_iterations);
                         phase +=
-                            "-d" +
-                            std::to_string(progress.completed_functions);
-                        phase += "-p" + std::to_string(progress.pending);
+                            "-s" +
+                            std::to_string(
+                                progress.summarized_functions);
+                        phase +=
+                            "-c" +
+                            std::to_string(
+                                progress.resolution_functions_committed);
+                        phase += "-p" +
+                                 std::to_string(progress.pending);
                         phase +=
                             "-r" +
                             std::to_string(progress.resolutions);
                         report_progress_detail(
                             phase,
                             &progress);
-                    },
+                    };
+            }
+            auto function_values =
+                detail::analyze_function_values_with_guarded_entry_cache(
+                    image,
+                    analysis.recursive.instructions,
+                    function_boundaries,
+                    provisional_edges,
+                    function_value_progress_callback,
                     guarded_native_entry_shapes,
                     function_value_session);
+            if (function_values.progress_callback_failed) {
+                progress_callback_failed.store(
+                    true, std::memory_order_relaxed);
+            }
             if (function_values.budget_exhausted) {
                 analysis.function_summary_iterations =
                     function_values.fixpoint_iterations;
@@ -1498,7 +1684,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 analysis.guarded_code_inventory_walk =
                     function_values.guarded_code_inventory
                         .walk_diagnostics;
-                report_progress("function-values-budget-exhausted");
+                report_progress_detail(
+                    "function-values-budget-exhausted",
+                    latest_function_value_progress
+                        ? &*latest_function_value_progress
+                        : nullptr);
                 break;
             }
 
@@ -1661,7 +1851,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             analysis.function_value_summaries =
                 std::move(function_values.summaries);
             function_values_stable = true;
-            report_progress("function-values-complete");
+            report_progress_detail(
+                "function-values-complete",
+                latest_function_value_progress
+                    ? &*latest_function_value_progress
+                    : nullptr);
         }
         if (analysis.function_budget_exhausted) {
             // Product export rejects both an internal summary-budget loss and
@@ -1889,12 +2083,23 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         static_cast<void>(analysis.evidence_ids.intern(evidence));
     analysis.jump_table_cache = jump_table_cache.counters();
     report_progress("complete");
+    analysis.progress_callback_failed =
+        progress_callback_failed.load(
+            std::memory_order_relaxed);
     return analysis;
 }
 
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
                                                const AnalysisOverrides* overrides) {
-    return analyze_control_flow(image, overrides, {});
+    return analyze_control_flow(image, overrides, {}, false);
+}
+
+ControlFlowAnalysisResult analyze_control_flow(
+    const katana::io::ExecutableImage& image,
+    const AnalysisOverrides* overrides,
+    const ControlFlowAnalysisProgressCallback& progress_callback) {
+    return analyze_control_flow(
+        image, overrides, progress_callback, false);
 }
 
 const char*

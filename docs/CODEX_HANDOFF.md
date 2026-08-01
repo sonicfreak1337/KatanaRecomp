@@ -2,6 +2,11 @@
 
 Dieses Dokument definiert, wie Codex oder ein anderer automatisierter Bearbeiter an KatanaRecomp arbeiten soll.
 
+Die repositoryweiten Kurzregeln in `../AGENTS.md` sind verbindlich. Besonders
+der dort festgelegte Vorrang des echten Endprodukts vor Testinfrastruktur darf
+nicht durch eine breite synthetische Abnahme, Testmatrix oder wiederholte
+Vorsichtsläufe umgangen werden.
+
 ## Pflichtlekture vor jeder Aenderung
 
 1. `README.md`
@@ -75,6 +80,11 @@ veroeffentlicht spaetestens alle zehn Sekunden maschinenlesbaren Fortschritt
 oder Heartbeats mit Scope, Phase, geplant, queued, aktiv, fertig,
 kanonisch publiziert sowie relevanten Cache-/Arbeitszaehlern. Ein fehlender
 Fortschrittsindikator ist fuer einen langen P0-Pfad selbst ein Blocker.
+Die Ausgabe muss waehrend des Laufs live sichtbar sein. Ein Heartbeat ohne
+Aenderung von Phase oder Arbeitszaehlern belegt nur Liveness; nach 60 Sekunden
+ohne echte Arbeitsbewegung gilt der Prozess als festgefahren und sein
+Prozessbaum wird sofort quiesziert. Die 15-Minuten-Grenze ist eine absolute
+Obergrenze und keine Mindestwartezeit.
 
 Fokussierte Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
 Entwicklungsrechner mit 24 logischen CPUs gilt `--parallel 24`. Der

@@ -218,7 +218,12 @@ void CodegenCache::store_bounded(const std::string_view key,
     if (existing.kind == detail::SecureArtifactKind::Unsafe)
         throw std::runtime_error(
             "Begrenzter Codegen-Cache verweigert ein unsicheres "
-            "bestehendes Artefakt.");
+            "bestehendes Artefakt (key=" + std::string(key) +
+            ", artifact=" + std::string(artifact_name) +
+            ", native_error=" +
+            std::to_string(existing.native_error) +
+            ", native_stage=" +
+            std::to_string(existing.native_stage) + ").");
     if (existing.kind == detail::SecureArtifactKind::Oversized) {
         if (!detail::secure_cache_erase_oversized(
                 root_, path, maximum_bytes))

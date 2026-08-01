@@ -23,10 +23,102 @@
 namespace katana::analysis {
 
 class ParallelWorkExecutor;
+class ParallelWorkActivity;
 
 namespace detail {
 
+class ParallelWorkActivityScope;
+
 inline thread_local ParallelWorkExecutor* current_analysis_executor = nullptr;
+inline thread_local std::size_t current_analysis_executor_task_depth = 0u;
+inline thread_local ParallelWorkActivity* current_parallel_work_activity =
+    nullptr;
+inline thread_local std::size_t current_parallel_work_activity_depth = 0u;
+
+} // namespace detail
+
+// Per-analysis activity domain. Unlike ParallelWorkExecutor::active_worker_count,
+// this excludes unrelated groups sharing the process-wide executor. Nested
+// help for the same domain counts the OS worker once.
+class ParallelWorkActivity final {
+  public:
+    [[nodiscard]] std::size_t active_worker_count() const noexcept {
+        return active_workers_.load(std::memory_order_acquire);
+    }
+
+  private:
+    std::atomic_size_t active_workers_ = 0u;
+
+    friend class detail::ParallelWorkActivityScope;
+};
+
+namespace detail {
+
+class ParallelWorkActivityScope final {
+  public:
+    explicit ParallelWorkActivityScope(
+        ParallelWorkActivity* const activity) noexcept
+        : activity_(activity),
+          previous_activity_(current_parallel_work_activity),
+          previous_depth_(current_parallel_work_activity_depth),
+          changed_activity_(previous_activity_ != activity_) {
+        if (!changed_activity_) {
+            if (activity_ == nullptr) return;
+            activated_current_ =
+                current_parallel_work_activity_depth++ == 0u;
+            if (activated_current_)
+                activity_->active_workers_.fetch_add(
+                    1u, std::memory_order_release);
+            return;
+        }
+
+        // A worker helping another activity is no longer executing the
+        // suspended domain while that nested task runs. Count it in exactly
+        // one domain, including an explicitly unobserved/null domain.
+        if (previous_activity_ != nullptr && previous_depth_ != 0u) {
+            previous_activity_->active_workers_.fetch_sub(
+                1u, std::memory_order_release);
+            suspended_previous_ = true;
+        }
+        current_parallel_work_activity = activity_;
+        current_parallel_work_activity_depth = 0u;
+        if (activity_ != nullptr) {
+            current_parallel_work_activity_depth = 1u;
+            activity_->active_workers_.fetch_add(
+                1u, std::memory_order_release);
+            activated_current_ = true;
+        }
+    }
+
+    ~ParallelWorkActivityScope() {
+        if (!changed_activity_) {
+            if (activity_ == nullptr) return;
+            if (current_parallel_work_activity_depth != 0u)
+                --current_parallel_work_activity_depth;
+            if (activated_current_)
+                activity_->active_workers_.fetch_sub(
+                    1u, std::memory_order_release);
+            return;
+        }
+
+        if (activated_current_)
+            activity_->active_workers_.fetch_sub(
+                1u, std::memory_order_release);
+        current_parallel_work_activity = previous_activity_;
+        current_parallel_work_activity_depth = previous_depth_;
+        if (suspended_previous_)
+            previous_activity_->active_workers_.fetch_add(
+                1u, std::memory_order_release);
+    }
+
+  private:
+    ParallelWorkActivity* activity_ = nullptr;
+    ParallelWorkActivity* previous_activity_ = nullptr;
+    std::size_t previous_depth_ = 0u;
+    bool changed_activity_ = false;
+    bool activated_current_ = false;
+    bool suspended_previous_ = false;
+};
 
 } // namespace detail
 
@@ -81,7 +173,21 @@ class ParallelWorkExecutor final {
         return worker_count_;
     }
 
+    // Exact number of executor threads currently running a task. Nested
+    // help-while-waiting work on the same OS thread is counted once, so this
+    // remains a worker-utilization signal rather than a recursion counter.
+    [[nodiscard]] std::size_t active_worker_count() const noexcept {
+        return active_workers_.load(std::memory_order_relaxed);
+    }
+
     void submit(Task task) {
+        submit(std::move(task), {});
+    }
+
+    // Completion runs after the executor has left the task's active-worker
+    // scope. Group waiters therefore cannot observe a logically completed
+    // batch while its worker is still counted as busy.
+    void submit(Task task, Task after_activity) {
         if (!task)
             throw std::invalid_argument(
                 "Analysis-Executor akzeptiert keinen leeren Task.");
@@ -90,7 +196,8 @@ class ParallelWorkExecutor final {
             if (stopping_)
                 throw std::runtime_error(
                     "Analysis-Executor wird bereits beendet.");
-            tasks_.push_back(std::move(task));
+            tasks_.push_back(
+                {std::move(task), std::move(after_activity)});
         }
         task_available_.notify_one();
     }
@@ -102,7 +209,7 @@ class ParallelWorkExecutor final {
     template <typename Done>
     void help_until(Done&& done) {
         while (!done()) {
-            Task task;
+            QueuedTask task;
             {
                 std::unique_lock lock(queue_mutex_);
                 task_available_.wait(
@@ -115,7 +222,7 @@ class ParallelWorkExecutor final {
                 task = std::move(tasks_.front());
                 tasks_.pop_front();
             }
-            task();
+            execute_task(task);
         }
     }
 
@@ -127,11 +234,77 @@ class ParallelWorkExecutor final {
     }
 
   private:
+    struct QueuedTask final {
+        Task work;
+        Task after_activity;
+    };
+
+    void execute_task(QueuedTask& task) {
+        std::exception_ptr work_error;
+        struct ActiveTaskScope final {
+            ParallelWorkExecutor& executor;
+            ParallelWorkExecutor* previous_executor = nullptr;
+            std::size_t previous_depth = 0u;
+            bool outermost = false;
+
+            explicit ActiveTaskScope(
+                ParallelWorkExecutor& owner) noexcept
+                : executor(owner),
+                  previous_executor(
+                      detail::current_analysis_executor),
+                  previous_depth(
+                      detail::current_analysis_executor_task_depth) {
+                if (previous_executor != &executor) {
+                    detail::current_analysis_executor = &executor;
+                    detail::current_analysis_executor_task_depth = 0u;
+                }
+                outermost =
+                    detail::current_analysis_executor_task_depth++ == 0u;
+                if (outermost)
+                    executor.active_workers_.fetch_add(
+                        1u, std::memory_order_relaxed);
+            }
+
+            ~ActiveTaskScope() {
+                if (detail::current_analysis_executor_task_depth != 0u)
+                    --detail::current_analysis_executor_task_depth;
+                if (outermost)
+                    executor.active_workers_.fetch_sub(
+                        1u, std::memory_order_relaxed);
+                if (previous_executor != &executor) {
+                    detail::current_analysis_executor =
+                        previous_executor;
+                    detail::current_analysis_executor_task_depth =
+                        previous_depth;
+                }
+            }
+        };
+        {
+            ActiveTaskScope active{*this};
+            try {
+                task.work();
+            } catch (...) {
+                work_error = std::current_exception();
+            }
+        }
+        std::exception_ptr completion_error;
+        if (task.after_activity) {
+            try {
+                task.after_activity();
+            } catch (...) {
+                completion_error = std::current_exception();
+            }
+        }
+        if (work_error) std::rethrow_exception(work_error);
+        if (completion_error)
+            std::rethrow_exception(completion_error);
+    }
+
     void worker_loop() noexcept {
         auto* const previous =
             std::exchange(detail::current_analysis_executor, this);
         for (;;) {
-            Task task;
+            QueuedTask task;
             {
                 std::unique_lock lock(queue_mutex_);
                 task_available_.wait(
@@ -145,7 +318,7 @@ class ParallelWorkExecutor final {
                 tasks_.pop_front();
             }
             try {
-                task();
+                execute_task(task);
             } catch (...) {
                 // Submitted wrappers are required to contain task failures.
                 // Never let a defensive last resort terminate the worker pool.
@@ -155,9 +328,10 @@ class ParallelWorkExecutor final {
     }
 
     std::size_t worker_count_ = 1u;
+    std::atomic_size_t active_workers_ = 0u;
     std::mutex queue_mutex_;
     std::condition_variable task_available_;
-    std::deque<Task> tasks_;
+    std::deque<QueuedTask> tasks_;
     bool stopping_ = false;
     std::vector<std::thread> workers_;
 };
@@ -169,9 +343,11 @@ class ParallelWorkGroup final {
   public:
     ParallelWorkGroup(ParallelWorkExecutor& executor,
                       const std::size_t item_count,
-                      Work work)
+                      Work work,
+                      ParallelWorkActivity* const activity)
         : executor_(executor), item_count_(item_count),
-          work_(std::move(work)), errors_(item_count) {}
+          work_(std::move(work)), errors_(item_count),
+          activity_(activity) {}
 
     void add_drain() noexcept {
         remaining_drains_.fetch_add(1u, std::memory_order_relaxed);
@@ -180,10 +356,7 @@ class ParallelWorkGroup final {
     void cancel_drain() noexcept { complete_drain(); }
 
     void drain() noexcept {
-        struct Completion final {
-            ParallelWorkGroup* group;
-            ~Completion() { group->complete_drain(); }
-        } completion{this};
+        const ParallelWorkActivityScope activity_scope{activity_};
         for (;;) {
             const auto index =
                 next_item_.fetch_add(1u, std::memory_order_relaxed);
@@ -215,7 +388,6 @@ class ParallelWorkGroup final {
         }
     }
 
-  private:
     void complete_drain() noexcept {
         bool completed = false;
         {
@@ -230,12 +402,14 @@ class ParallelWorkGroup final {
         executor_.notify_waiters();
     }
 
+  private:
     ParallelWorkExecutor& executor_;
     std::size_t item_count_ = 0u;
     Work work_;
     std::atomic_size_t next_item_ = 0u;
     std::atomic_size_t remaining_drains_ = 0u;
     std::vector<std::exception_ptr> errors_;
+    ParallelWorkActivity* activity_ = nullptr;
     mutable std::mutex completion_mutex_;
     std::condition_variable completion_;
 };
@@ -289,6 +463,7 @@ template <typename Work>
 void parallel_analysis_for(ParallelWorkExecutor& executor,
                            const std::size_t item_count,
                            const std::size_t maximum_local_jobs,
+                           ParallelWorkActivity* const activity,
                            Work&& work) {
     if (item_count == 0u) return;
     if (maximum_local_jobs == 0u)
@@ -301,14 +476,19 @@ void parallel_analysis_for(ParallelWorkExecutor& executor,
         std::make_shared<detail::ParallelWorkGroup<WorkType>>(
             executor,
             item_count,
-            std::forward<Work>(work));
+            std::forward<Work>(work),
+            activity);
     std::exception_ptr submit_error;
     for (std::size_t index = 0u; index < local_jobs; ++index) {
         ParallelWorkExecutor::Task task =
             [group]() noexcept { group->drain(); };
         group->add_drain();
         try {
-            executor.submit(std::move(task));
+            executor.submit(
+                std::move(task),
+                [group]() noexcept {
+                    group->complete_drain();
+                });
         } catch (...) {
             group->cancel_drain();
             submit_error = std::current_exception();
@@ -318,6 +498,18 @@ void parallel_analysis_for(ParallelWorkExecutor& executor,
     group->wait();
     if (submit_error) std::rethrow_exception(submit_error);
     group->rethrow_first_error();
+}
+
+template <typename Work>
+void parallel_analysis_for(ParallelWorkExecutor& executor,
+                           const std::size_t item_count,
+                           const std::size_t maximum_local_jobs,
+                           Work&& work) {
+    parallel_analysis_for(executor,
+                          item_count,
+                          maximum_local_jobs,
+                          nullptr,
+                          std::forward<Work>(work));
 }
 
 template <typename Work>

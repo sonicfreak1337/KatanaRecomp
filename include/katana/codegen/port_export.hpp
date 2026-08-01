@@ -15,6 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -31,7 +33,19 @@ inline constexpr std::uint32_t port_project_contract_version =
 inline constexpr std::uint32_t port_partition_emission_schema_version = 5u;
 inline constexpr std::uint32_t port_metadata_cache_schema_version = 2u;
 
-using PortExportProgressCallback = void (*)(std::string_view phase);
+using PortExportProgressCallback =
+    std::function<void(std::string_view phase)>;
+
+// One authoritative code-generation budget contract is shared by the actual
+// partition workers and post-configure telemetry. The global value is the
+// primary request; the legacy port-local value remains a restricting cap.
+[[nodiscard]] std::size_t resolve_port_codegen_jobs(
+    std::size_t partition_count,
+    std::size_t detected_jobs,
+    std::optional<std::string_view> global_requested,
+    std::optional<std::string_view> legacy_port_cap);
+[[nodiscard]] std::size_t configured_port_codegen_jobs(
+    std::size_t partition_count);
 
 // Private export-time payload for one descriptor-only game-project runtime
 // image. The caller owns both the identifier and bytes for the complete
@@ -49,10 +63,13 @@ struct PortExportOptions {
     std::filesystem::path forbidden_source_root;
     bool diagnostic_partial = false;
     std::string console_profile = "japan-ntsc";
-    PortExportProgressCallback progress_callback = nullptr;
+    PortExportProgressCallback progress_callback;
     // Structured, nested progress for CLI/GUI consumers. The legacy phase
     // callback remains for stable textual checkpoints.
     katana::ProgressReporter progress;
+    // Enables component-level FunctionValue cache miss diagnostics. Basic
+    // progress remains cheap and must not retain the detailed key history.
+    bool detailed_analysis_telemetry = false;
     // Optional persistent, local-only caches. Analysis and codegen identities
     // are build-bound to their respective implementation components so a
     // runtime/UI-only rebuild does not invalidate native analysis artifacts.

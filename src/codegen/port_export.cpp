@@ -36,6 +36,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <compare>
 #include <cstdlib>
@@ -66,7 +67,12 @@ namespace katana::codegen {
 namespace {
 
 void report_progress(const PortExportOptions& options, const std::string_view phase) {
-    if (options.progress_callback != nullptr) options.progress_callback(phase);
+    if (!options.progress_callback) return;
+    try {
+        options.progress_callback(phase);
+    } catch (...) {
+        options.progress.record_observation_loss();
+    }
 }
 
 bool valid_target_name(const std::string_view value) noexcept {
@@ -145,27 +151,7 @@ std::string_view console_profile_enumerator(const std::string_view profile) {
 }
 
 std::size_t port_codegen_jobs(const std::size_t partition_count) {
-    auto requested = static_cast<std::size_t>(std::max(1u, std::thread::hardware_concurrency()));
-    std::optional<std::string> configured;
-#ifdef _WIN32
-    char* value = nullptr;
-    std::size_t value_size = 0u;
-    if (_dupenv_s(&value, &value_size, "KATANA_PORT_CODEGEN_JOBS") == 0 && value != nullptr)
-        configured = value;
-    std::free(value);
-#else
-    if (const auto* value = std::getenv("KATANA_PORT_CODEGEN_JOBS");
-        value != nullptr && *value != '\0')
-        configured = value;
-#endif
-    if (configured && !configured->empty()) {
-        std::size_t parsed = 0u;
-        const auto jobs = std::stoull(*configured, &parsed, 10);
-        if (parsed != configured->size() || jobs == 0u)
-            throw std::invalid_argument("KATANA_PORT_CODEGEN_JOBS ist ungueltig.");
-        requested = static_cast<std::size_t>(jobs);
-    }
-    return std::min(partition_count, requested);
+    return configured_port_codegen_jobs(partition_count);
 }
 
 std::vector<katana::ir::Function>
@@ -11954,6 +11940,70 @@ void require_unique_loaded_module_template_ids(
 
 } // namespace
 
+std::size_t resolve_port_codegen_jobs(
+    const std::size_t partition_count,
+    const std::size_t detected_jobs,
+    const std::optional<std::string_view> global_requested,
+    const std::optional<std::string_view> legacy_port_cap) {
+    constexpr std::size_t maximum_jobs = 256u;
+    const auto parse = [](const std::string_view value,
+                          const std::string_view name) {
+        std::uint64_t parsed = 0u;
+        const auto conversion = std::from_chars(
+            value.data(), value.data() + value.size(), parsed, 10);
+        if (value.empty() || conversion.ec != std::errc{} ||
+            conversion.ptr != value.data() + value.size() ||
+            parsed == 0u || parsed > maximum_jobs)
+            throw std::invalid_argument(
+                std::string(name) + " ist ungueltig.");
+        return static_cast<std::size_t>(parsed);
+    };
+    auto requested = std::clamp<std::size_t>(
+        detected_jobs, 1u, maximum_jobs);
+    if (global_requested)
+        requested = parse(*global_requested, "KATANA_CODEGEN_JOBS");
+    if (legacy_port_cap)
+        requested = std::min(
+            requested,
+            parse(*legacy_port_cap, "KATANA_PORT_CODEGEN_JOBS"));
+    return std::min(partition_count, requested);
+}
+
+std::size_t configured_port_codegen_jobs(
+    const std::size_t partition_count) {
+    const auto configured_environment = [](const char* name)
+        -> std::optional<std::string> {
+#ifdef _WIN32
+        char* value = nullptr;
+        std::size_t value_size = 0u;
+        std::optional<std::string> result;
+        if (_dupenv_s(&value, &value_size, name) == 0 &&
+            value != nullptr && *value != '\0')
+            result = value;
+        std::free(value);
+        return result;
+#else
+        if (const auto* value = std::getenv(name);
+            value != nullptr && *value != '\0')
+            return std::string(value);
+        return std::nullopt;
+#endif
+    };
+    const auto global = configured_environment("KATANA_CODEGEN_JOBS");
+    const auto legacy =
+        configured_environment("KATANA_PORT_CODEGEN_JOBS");
+    return resolve_port_codegen_jobs(
+        partition_count,
+        static_cast<std::size_t>(
+            std::max(1u, std::thread::hardware_concurrency())),
+        global
+            ? std::optional<std::string_view>(*global)
+            : std::nullopt,
+        legacy
+            ? std::optional<std::string_view>(*legacy)
+            : std::nullopt);
+}
+
 void validate_game_project_runtime_image_payloads(
     const katana::runtime::GameProjectDefinition* const game_project,
     const std::span<const GameProjectRuntimeImagePayload> payloads) {
@@ -12747,6 +12797,16 @@ static PortExportResult export_dreamcast_port_project_impl(
     std::atomic_size_t next_partition = 0u;
     std::atomic_size_t started_partitions = 0u;
     std::atomic_size_t active_partitions = 0u;
+    std::atomic_size_t committed_partitions = 0u;
+    {
+        katana::ProgressCounterSnapshot counters;
+        counters.configured_workers = codegen_jobs;
+        counters.active_workers = 0u;
+        counters.queued_work = partitions.size();
+        counters.started = 0u;
+        counters.committed_work = 0u;
+        source_progress.update(std::move(counters));
+    }
     std::vector<std::future<void>> workers;
     workers.reserve(codegen_jobs);
     for (std::size_t worker = 0u; worker < codegen_jobs; ++worker) {
@@ -12765,9 +12825,13 @@ static PortExportResult export_dreamcast_port_project_impl(
                     counters.active_workers =
                         active_partitions.load(
                             std::memory_order_relaxed);
+                    counters.configured_workers = codegen_jobs;
                     counters.queued_work =
                         partitions.size() - started;
                     counters.started = started;
+                    counters.committed_work =
+                        committed_partitions.load(
+                            std::memory_order_relaxed);
                     counters.cache_hits =
                         partition_cache_hits.load(
                             std::memory_order_relaxed);
@@ -12780,11 +12844,16 @@ static PortExportResult export_dreamcast_port_project_impl(
                 generated[index] = emit_partition(partitions[index]);
                 active_partitions.fetch_sub(
                     1u, std::memory_order_relaxed);
+                const auto committed =
+                    committed_partitions.fetch_add(
+                        1u, std::memory_order_relaxed) +
+                    1u;
                 source_progress.advance(1u);
                 katana::ProgressCounterSnapshot counters;
                 counters.active_workers =
                     active_partitions.load(
                         std::memory_order_relaxed);
+                counters.configured_workers = codegen_jobs;
                 counters.queued_work =
                     partitions.size() -
                     started_partitions.load(
@@ -12792,6 +12861,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                 counters.started =
                     started_partitions.load(
                         std::memory_order_relaxed);
+                counters.committed_work = committed;
                 counters.cache_hits =
                     partition_cache_hits.load(
                         std::memory_order_relaxed);
@@ -13361,29 +13431,40 @@ PreparedBootAnalysisRun prepare_boot_analysis(
         std::string(progress_label));
     const auto analysis_started =
         std::chrono::steady_clock::now();
+    katana::analysis::ControlFlowAnalysisProgressCallback
+        analysis_progress_callback;
+    if (options.progress.enabled() ||
+        options.progress_callback) {
+        analysis_progress_callback =
+            [&options,
+             &control_flow_progress,
+             analysis_started](
+                const katana::analysis::
+                    ControlFlowAnalysisProgress& progress) {
+                control_flow_progress.update(progress);
+                if (!options.progress_callback) return;
+                std::ostringstream marker;
+                marker << "control-flow-" << progress.phase << "-i"
+                       << progress.iteration << "-s"
+                       << progress.seeds << "-n"
+                       << progress.instructions << "-c"
+                       << progress.contexts << "-r"
+                       << progress.resolutions << "-ms"
+                       << std::chrono::duration_cast<
+                              std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() -
+                              analysis_started)
+                              .count();
+                report_progress(options, marker.str());
+            };
+    }
     auto analysis = katana::analysis::analyze_control_flow(
         image,
         overrides,
-        [&options,
-         &control_flow_progress,
-         analysis_started](
-            const katana::analysis::ControlFlowAnalysisProgress&
-                progress) {
-            control_flow_progress.update(progress);
-            if (options.progress_callback == nullptr) return;
-            std::ostringstream marker;
-            marker << "control-flow-" << progress.phase << "-i"
-                   << progress.iteration << "-s" << progress.seeds
-                   << "-n" << progress.instructions << "-c"
-                   << progress.contexts << "-r"
-                   << progress.resolutions << "-ms"
-                   << std::chrono::duration_cast<
-                          std::chrono::milliseconds>(
-                          std::chrono::steady_clock::now() -
-                          analysis_started)
-                          .count();
-            report_progress(options, marker.str());
-        });
+        analysis_progress_callback,
+        options.detailed_analysis_telemetry);
+    if (analysis.progress_callback_failed)
+        options.progress.record_observation_loss();
     control_flow_progress.complete(analysis.fixpoint_iterations);
     report_progress(options, "ir-lowering");
     const auto architectural_safepoints =

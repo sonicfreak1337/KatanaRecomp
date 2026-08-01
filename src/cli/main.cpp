@@ -5,6 +5,7 @@
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/hardware_audit.hpp"
+#include "katana/analysis/parallel_work.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
 #include "katana/app/application.hpp"
 #include "katana/cli/exit_code.hpp"
@@ -29,6 +30,7 @@
 #include "katana/platform/firmware_diagnostics.hpp"
 #include "katana/runtime/abi.hpp"
 #include "katana/runtime/disc_install.hpp"
+#include "katana/runtime/gdi.hpp"
 #include "katana/runtime/game_entry_handoff_artifact.hpp"
 #include "katana/runtime/game_project_artifact.hpp"
 #include "katana/sh4/decoder.hpp"
@@ -36,6 +38,8 @@
 #include "katana/sh4/isa_coverage.hpp"
 
 #include "port_export_orchestration.hpp"
+#include "port_build_telemetry.hpp"
+#include "host_build_progress.hpp"
 
 #include <algorithm>
 #include <array>
@@ -44,15 +48,20 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <span>
@@ -62,6 +71,7 @@
 #include <string_view>
 #include <syncstream>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -73,9 +83,17 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/file.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <sys/sysctl.h>
+#endif
 #endif
 
 namespace {
@@ -89,35 +107,44 @@ using katana::cli::port_ir_contract_version;
 
 class PortPhaseTimingRecorder final {
   public:
-    PortPhaseTimingRecorder()
+    explicit PortPhaseTimingRecorder(
+        katana::cli::PortBuildTelemetryRecorder* telemetry = nullptr)
         : started_(std::chrono::steady_clock::now()),
-          phase_started_(started_) {}
+          phase_started_(started_),
+          telemetry_(telemetry) {}
 
     PortPhaseTimingRecorder(const PortPhaseTimingRecorder&) = delete;
     PortPhaseTimingRecorder& operator=(const PortPhaseTimingRecorder&) = delete;
 
     ~PortPhaseTimingRecorder() {
         try {
-            emit();
+            static_cast<void>(emit());
         } catch (...) {
         }
     }
 
     void transition(const std::string_view phase) {
         const auto now = std::chrono::steady_clock::now();
-        finish_current(now);
-        current_phase_ = std::string(phase);
-        phase_started_ = now;
+        {
+            const std::scoped_lock lock(mutex_);
+            finish_current(now);
+            current_phase_ = std::string(phase);
+            phase_started_ = now;
+        }
+        if (telemetry_ != nullptr)
+            telemetry_->sample_resources(phase);
     }
 
     void record_parallel_sample(const std::string_view phase,
                                 const std::int64_t duration_ms) {
+        const std::scoped_lock lock(mutex_);
         pending_parallel_samples_.push_back(
             {std::string(phase), duration_ms, true});
     }
 
     [[nodiscard]] bool should_emit_dynamic_progress(
         const bool force = false) noexcept {
+        const std::scoped_lock lock(mutex_);
         const auto now = std::chrono::steady_clock::now();
         if (!force &&
             now - last_dynamic_progress_ <
@@ -127,31 +154,80 @@ class PortPhaseTimingRecorder final {
         return true;
     }
 
-    void emit() {
-        if (emitted_) return;
-        const auto now = std::chrono::steady_clock::now();
-        finish_current(now);
-        emitted_ = true;
-        std::ostringstream output;
-        output << "{\"schema\":\"katana-port-phase-timings-v1\","
-                  "\"total_ms\":"
-               << std::chrono::duration_cast<std::chrono::milliseconds>(
-                      now - started_)
-                      .count()
-               << ",\"phases\":[";
-        for (std::size_t index = 0u; index < samples_.size(); ++index) {
-            if (index != 0u) output << ',';
-            output << "{\"phase\":"
-                   << katana::io::quote_json(samples_[index].phase)
-                   << ",\"duration_ms\":"
-                   << samples_[index].duration_ms
-                   << ",\"parallel\":"
-                   << (samples_[index].parallel ? "true" : "false")
-                   << '}';
+    [[nodiscard]] bool emit() noexcept {
+        try {
+            const std::scoped_lock lock(mutex_);
+            if (emitted_) return telemetry_recorded_;
+            const auto now = std::chrono::steady_clock::now();
+            finish_current(now);
+            emitted_ = true;
+            std::ostringstream output;
+            output << "{\"schema\":\"katana-port-phase-timings-v1\","
+                      "\"total_ms\":"
+                   << std::chrono::duration_cast<
+                          std::chrono::milliseconds>(now - started_)
+                          .count()
+                   << ",\"phases\":[";
+            for (std::size_t index = 0u;
+                 index < samples_.size();
+                 ++index) {
+                if (index != 0u) output << ',';
+                output << "{\"phase\":"
+                       << katana::io::quote_json(
+                              samples_[index].phase)
+                       << ",\"duration_ms\":"
+                       << samples_[index].duration_ms
+                       << ",\"parallel\":"
+                       << (samples_[index].parallel
+                               ? "true"
+                               : "false")
+                       << '}';
+            }
+            output << "]}";
+            std::osyncstream(std::cout)
+                << "KATANA_PORT_PHASE_TIMINGS "
+                << output.str() << '\n' << std::flush;
+            telemetry_recorded_ =
+                telemetry_ == nullptr || !telemetry_->enabled();
+            if (telemetry_ != nullptr && telemetry_->enabled()) {
+                std::vector<
+                    katana::cli::PortBuildPhaseTimingSample>
+                    telemetry_samples;
+                telemetry_samples.reserve(samples_.size());
+                for (const auto& sample : samples_)
+                    telemetry_samples.push_back({
+                        sample.phase,
+                        sample.duration_ms < 0
+                            ? 0u
+                            : static_cast<std::uint64_t>(
+                                  sample.duration_ms),
+                        sample.parallel});
+                telemetry_recorded_ =
+                    telemetry_->record_phase_timings(
+                        static_cast<std::uint64_t>(
+                            std::max<std::int64_t>(
+                                0,
+                                std::chrono::duration_cast<
+                                    std::chrono::milliseconds>(
+                                    now - started_)
+                                    .count())),
+                        telemetry_samples);
+            }
+            return telemetry_recorded_;
+        } catch (...) {
+            try {
+                const std::scoped_lock lock(mutex_);
+                emitted_ = true;
+                telemetry_recorded_ = false;
+            } catch (...) {
+            }
+            return false;
         }
-        output << "]}";
-        std::cout << "KATANA_PORT_PHASE_TIMINGS "
-                  << output.str() << '\n' << std::flush;
+    }
+
+    [[nodiscard]] std::string current_phase() const {
+        const std::scoped_lock lock(mutex_);
+        return current_phase_.empty() ? last_phase_ : current_phase_;
     }
 
   private:
@@ -164,6 +240,7 @@ class PortPhaseTimingRecorder final {
     void finish_current(
         const std::chrono::steady_clock::time_point now) {
         if (!current_phase_.empty()) {
+            last_phase_ = current_phase_;
             samples_.push_back(
                 {current_phase_,
                  std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -180,33 +257,152 @@ class PortPhaseTimingRecorder final {
     std::chrono::steady_clock::time_point started_;
     std::chrono::steady_clock::time_point phase_started_;
     std::chrono::steady_clock::time_point last_dynamic_progress_{};
+    mutable std::mutex mutex_;
     std::string current_phase_;
+    std::string last_phase_;
     std::vector<Sample> samples_;
     std::vector<Sample> pending_parallel_samples_;
+    katana::cli::PortBuildTelemetryRecorder* telemetry_ = nullptr;
     bool emitted_ = false;
+    bool telemetry_recorded_ = false;
 };
 
-thread_local PortPhaseTimingRecorder* active_port_phase_timings = nullptr;
-
-class PortPhaseTimingBinding final {
+class PortBuildTelemetryRun final {
   public:
-    explicit PortPhaseTimingBinding(PortPhaseTimingRecorder& recorder)
-        : previous_(std::exchange(
-              active_port_phase_timings, &recorder)) {}
-    ~PortPhaseTimingBinding() {
-        active_port_phase_timings = previous_;
+    PortBuildTelemetryRun(
+        katana::cli::PortBuildTelemetryRecorder& telemetry,
+        PortPhaseTimingRecorder& phase_timings,
+        const katana::ProgressReporter& reporter,
+        katana::ProgressScope& progress,
+        const bool telemetry_required) noexcept
+        : telemetry_(telemetry),
+          phase_timings_(phase_timings),
+          reporter_(reporter),
+          progress_(progress),
+          telemetry_required_(telemetry_required) {}
+
+    PortBuildTelemetryRun(const PortBuildTelemetryRun&) = delete;
+    PortBuildTelemetryRun& operator=(const PortBuildTelemetryRun&) = delete;
+
+    ~PortBuildTelemetryRun() noexcept {
+        if (finished_) return;
+        static_cast<void>(
+            fail(katana::cli::exit_status(
+                katana::cli::ExitCode::InternalError)));
+    }
+
+    void complete() {
+        if (finished_) return;
+        progress_.complete();
+        const auto phase_timings_recorded =
+            phase_timings_.emit();
+        const auto progress_sealed = reporter_.seal_and_flush();
+        if (!progress_sealed)
+            static_cast<void>(
+                telemetry_.mark_upstream_incomplete(
+                    "progress-seal-failed",
+                    reporter_.dropped_observations()));
+        const auto preterminal = telemetry_.status();
+        if (telemetry_required_ &&
+            (!phase_timings_recorded || !progress_sealed ||
+             !preterminal.enabled ||
+             preterminal.io_failed ||
+             !preterminal.telemetry_complete)) {
+            telemetry_.finish(
+                katana::cli::PortBuildTerminalOutcome::Failed,
+                katana::cli::exit_status(
+                    katana::cli::ExitCode::InputOutput),
+                phase_timings_.current_phase());
+            finished_ = true;
+            throw katana::cli::Error(
+                katana::cli::ExitCode::InputOutput,
+                "Explizit angeforderte Portbuild-Telemetrie ist "
+                "unvollstaendig.");
+        }
+        telemetry_.finish(
+            katana::cli::PortBuildTerminalOutcome::Completed,
+            0,
+            phase_timings_.current_phase());
+        finished_ = true;
+        const auto terminal = telemetry_.status();
+        if (telemetry_required_ &&
+            (!terminal.terminal_emitted ||
+             terminal.io_failed ||
+             !terminal.telemetry_complete))
+            throw katana::cli::Error(
+                katana::cli::ExitCode::InputOutput,
+                "Explizit angeforderte Portbuild-Telemetrie konnte "
+                "nicht vollstaendig abgeschlossen werden.");
+    }
+
+    [[nodiscard]] bool fail(const int exit_code) noexcept {
+        if (finished_) {
+            const auto terminal = telemetry_.status();
+            return !telemetry_required_ ||
+                   (terminal.terminal_emitted &&
+                    terminal.telemetry_complete &&
+                    !terminal.io_failed);
+        }
+        progress_.fail();
+        const auto phase_timings_recorded =
+            phase_timings_.emit();
+        if (telemetry_required_ && !phase_timings_recorded)
+            static_cast<void>(
+                telemetry_.mark_upstream_incomplete(
+                    "phase-timings-record-failed"));
+        const auto progress_sealed = reporter_.seal_and_flush();
+        if (!progress_sealed)
+            static_cast<void>(
+                telemetry_.mark_upstream_incomplete(
+                    "progress-seal-failed",
+                    reporter_.dropped_observations()));
+        try {
+            telemetry_.finish(
+                katana::cli::PortBuildTerminalOutcome::Failed,
+                exit_code,
+                phase_timings_.current_phase());
+        } catch (...) {
+            telemetry_.finish(
+                katana::cli::PortBuildTerminalOutcome::Failed,
+                exit_code,
+                "unknown");
+        }
+        finished_ = true;
+        const auto terminal = telemetry_.status();
+        return !telemetry_required_ ||
+               (progress_sealed &&
+                phase_timings_recorded &&
+                terminal.terminal_emitted &&
+                terminal.telemetry_complete &&
+                !terminal.io_failed);
     }
 
   private:
-    PortPhaseTimingRecorder* previous_ = nullptr;
+    katana::cli::PortBuildTelemetryRecorder& telemetry_;
+    PortPhaseTimingRecorder& phase_timings_;
+    const katana::ProgressReporter& reporter_;
+    katana::ProgressScope& progress_;
+    bool telemetry_required_ = false;
+    bool finished_ = false;
 };
 
-void observe_port_export_progress(const std::string_view phase) {
+void require_requested_failure_telemetry(
+    const bool complete) {
+    if (complete) return;
+    throw katana::cli::Error(
+        katana::cli::ExitCode::InputOutput,
+        "Der Portbuild ist fehlgeschlagen und die explizit "
+        "angeforderte Fehlertelemetrie konnte nicht vollstaendig "
+        "und atomar veroeffentlicht werden.");
+}
+
+void observe_port_export_progress(
+    PortPhaseTimingRecorder& phase_timings,
+    const std::string_view phase) {
     constexpr std::string_view module_timing_prefix{
         "latent-aot-module-analysis-ms:"};
     bool recorded_module_timing = false;
-    if (active_port_phase_timings != nullptr &&
-        phase.starts_with(module_timing_prefix)) {
+    if (phase.starts_with(module_timing_prefix)) {
         const auto payload = phase.substr(module_timing_prefix.size());
         const auto delimiter = payload.find(':');
         if (delimiter != std::string_view::npos) {
@@ -230,7 +426,7 @@ void observe_port_export_progress(const std::string_view phase) {
                 duration_ms <=
                     static_cast<std::uint64_t>(
                         std::numeric_limits<std::int64_t>::max())) {
-                active_port_phase_timings->record_parallel_sample(
+                phase_timings.record_parallel_sample(
                     "export:latent-aot-module-analysis-" +
                         std::to_string(candidate_index),
                     static_cast<std::int64_t>(duration_ms));
@@ -259,9 +455,8 @@ void observe_port_export_progress(const std::string_view phase) {
             timing_boundaries.begin(),
             timing_boundaries.end(),
             phase) != timing_boundaries.end();
-    if (active_port_phase_timings != nullptr &&
-        !recorded_module_timing && timing_boundary)
-        active_port_phase_timings->transition(
+    if (!recorded_module_timing && timing_boundary)
+        phase_timings.transition(
             std::string("export:") + std::string(phase));
     const bool terminal_dynamic =
         phase.find("budget-exhausted") !=
@@ -270,69 +465,18 @@ void observe_port_export_progress(const std::string_view phase) {
             std::string_view::npos ||
         phase.ends_with("-complete");
     if (!recorded_module_timing && !timing_boundary &&
-        active_port_phase_timings != nullptr &&
-        !active_port_phase_timings
-             ->should_emit_dynamic_progress(
+        !phase_timings.should_emit_dynamic_progress(
                  terminal_dynamic))
         return;
-    std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n'
-              << std::flush;
+    std::osyncstream(std::cout)
+        << "KATANA_PORT_SUBPHASE " << phase << '\n'
+        << std::flush;
 }
 
 void observe_structured_progress(
     const katana::ProgressEvent& event) {
-    std::ostringstream line;
-    line << "KATANA_PROGRESS"
-         << " operation="
-         << katana::progress_operation_name(event.operation)
-         << " state="
-         << katana::progress_state_name(event.state)
-         << " elapsed_ms=" << event.elapsed_milliseconds
-         << " scope=" << event.scope_id;
-    if (event.parent_scope_id)
-        line << " parent=" << *event.parent_scope_id;
-    line << " unit="
-         << katana::progress_unit_name(event.unit)
-         << " completed=" << event.completed;
-    if (event.total) {
-        line << " total=" << *event.total;
-        const auto percent_milli =
-            *event.total == 0u
-                ? (event.state == katana::ProgressState::Completed ||
-                           event.state ==
-                               katana::ProgressState::Cached
-                       ? 100'000u
-                       : 0u)
-                : static_cast<std::uint64_t>(
-                      std::min<long double>(
-                          100'000.0L,
-                          static_cast<long double>(
-                              event.completed) *
-                              100'000.0L /
-                              static_cast<long double>(
-                                  *event.total)));
-        line << " percent_milli=" << percent_milli;
-    }
-    const auto append_counter =
-        [&line](const std::string_view name,
-                const std::optional<std::uint64_t> value) {
-            if (value) line << ' ' << name << '=' << *value;
-        };
-    append_counter("iteration", event.counters.iteration);
-    append_counter("pass", event.counters.pass);
-    append_counter(
-        "active_workers",
-        event.counters.active_workers);
-    append_counter("queued_work", event.counters.queued_work);
-    append_counter("discovered", event.counters.discovered);
-    append_counter("started", event.counters.started);
-    append_counter("requeued", event.counters.requeued);
-    append_counter("cache_hits", event.counters.cache_hits);
-    append_counter("cache_misses", event.counters.cache_misses);
-    if (!event.label.empty())
-        line << " label="
-             << katana::io::quote_json(event.label);
-    std::osyncstream(std::cout) << line.str() << '\n'
+    std::osyncstream(std::cout)
+        << katana::format_progress_event_human(event) << '\n'
                                 << std::flush;
 }
 
@@ -1704,23 +1848,492 @@ discover_runtime_binding_for_build(const std::filesystem::path& source_root) {
 
 std::string normalized_host_command(const std::string& command) {
 #ifdef _WIN32
-    // Some launchers provide both Path and PATH. MSBuild's case-insensitive
-    // environment import rejects that otherwise valid Windows environment.
-    return "cmd.exe /d /v:on /c \"set KATANA_SAVED_PATH=!PATH!& set Path=& set "
-           "PATH=!KATANA_SAVED_PATH!& " +
-           command + '"';
+    // Windows transports this raw command in a dedicated, deduplicated child
+    // environment value. cmd expands that outer value once; '%' embedded in
+    // the resulting command is therefore not recursively expanded, while
+    // /v:off preserves literal '!'.
+    return command;
 #else
     return command;
 #endif
 }
 
+#ifdef _WIN32
+[[nodiscard]] bool regular_reparse_free_windows_path(
+    const std::filesystem::path& path) noexcept {
+    try {
+        const auto normalized =
+            std::filesystem::absolute(path).lexically_normal();
+        const auto root = normalized.root_path();
+        if (root.empty()) return false;
+        auto current = root;
+        const auto relative = normalized.lexically_relative(root);
+        for (const auto& component : relative) {
+            if (component == "." || component == "..") return false;
+            current /= component;
+            const auto attributes = GetFileAttributesW(current.c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES ||
+                (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u)
+                return false;
+        }
+        std::error_code status_error;
+        const auto status =
+            std::filesystem::symlink_status(normalized, status_error);
+        if (status_error || !std::filesystem::is_regular_file(status) ||
+            std::filesystem::is_symlink(status))
+            return false;
+        const auto handle = CreateFileW(
+            normalized.c_str(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr);
+        if (handle == INVALID_HANDLE_VALUE) return false;
+        BY_HANDLE_FILE_INFORMATION identity{};
+        FILE_ATTRIBUTE_TAG_INFO final_attributes{};
+        const auto valid =
+            GetFileType(handle) == FILE_TYPE_DISK &&
+            GetFileInformationByHandle(handle, &identity) &&
+            GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInfo,
+                &final_attributes,
+                sizeof(final_attributes)) &&
+            identity.nNumberOfLinks == 1u &&
+            (final_attributes.FileAttributes &
+             (FILE_ATTRIBUTE_DIRECTORY |
+              FILE_ATTRIBUTE_REPARSE_POINT)) == 0u;
+        static_cast<void>(CloseHandle(handle));
+        return valid;
+    } catch (...) {
+        return false;
+    }
+}
+
+struct WindowsConfiguredHostTools final {
+    std::string compiler;
+    std::string archiver;
+    std::string linker;
+};
+
+[[nodiscard]] WindowsConfiguredHostTools
+configured_windows_host_tools(
+    const std::filesystem::path& cache_path) {
+    if (!regular_reparse_free_windows_path(cache_path))
+        throw std::runtime_error(
+            "Port-Hostbuild-CMakeCache ist keine sichere regulaere "
+            "Datei.");
+    const auto require_tool = [&](const std::string_view key) {
+        const auto cached = cmake_cache_value(cache_path, key);
+        if (!cached || cached->empty())
+            throw std::runtime_error(
+                "Port-Hostbuild besitzt kein gebundenes Tool fuer " +
+                std::string(key) + '.');
+        if (cached->find_first_of("\"\r\n%^&|<>") !=
+            std::string::npos)
+            throw std::runtime_error(
+                "Port-Hostbuild-Toolpfad ist nicht sicher an die "
+                "Wrapper-Umgebung bindbar.");
+        const auto tool =
+            std::filesystem::path(*cached).lexically_normal();
+        if (!tool.is_absolute() ||
+            !regular_reparse_free_windows_path(tool))
+            throw std::runtime_error(
+                "Port-Hostbuild-Tool ist keine sichere regulaere "
+                "Datei: " + std::string(key));
+        return tool.string();
+    };
+    return {
+        require_tool("CMAKE_CXX_COMPILER"),
+        require_tool("CMAKE_AR"),
+        require_tool("CMAKE_LINKER")};
+}
+
+[[nodiscard]] std::filesystem::path
+discover_msvc_developer_environment_script() {
+    std::vector<std::filesystem::path> roots;
+    for (const auto* variable : {"ProgramFiles(x86)", "ProgramFiles"}) {
+        if (const auto configured =
+                configured_environment_value(variable))
+            roots.emplace_back(*configured);
+    }
+    constexpr std::array<std::string_view, 2u> versions{
+        "2022", "2019"};
+    constexpr std::array<std::string_view, 4u> editions{
+        "BuildTools", "Community", "Professional", "Enterprise"};
+    for (const auto& root : roots) {
+        for (const auto version : versions) {
+            for (const auto edition : editions) {
+                const auto candidate =
+                    root / "Microsoft Visual Studio" / version /
+                    edition / "Common7" / "Tools" /
+                    "VsDevCmd.bat";
+                if (regular_reparse_free_windows_path(candidate))
+                    return std::filesystem::canonical(candidate);
+            }
+        }
+    }
+    throw std::runtime_error(
+        "Vollstaendige MSVC-Developer-Umgebung fehlt: "
+        "kein sicherer VsDevCmd.bat aus Visual Studio 2019/2022 gefunden.");
+}
+
+[[nodiscard]] std::string prepare_windows_host_command(
+    std::string command,
+    const bool needs_msvc_environment) {
+    std::string prefix;
+    if (needs_msvc_environment &&
+        (!configured_environment_value("INCLUDE") ||
+         !configured_environment_value("LIB"))) {
+        const auto script =
+            discover_msvc_developer_environment_script();
+        const auto script_text = script.string();
+        if (script_text.find('"') != std::string::npos)
+            throw std::runtime_error(
+                "VsDevCmd-Pfad ist nicht sicher quotierbar.");
+        // This is the top-level /c command, not a batch-file caller. Direct
+        // invocation returns to the remaining && command without CALL's
+        // additional percent-expansion pass.
+        prefix = "\"" + script_text +
+                 "\" -arch=x64 -host_arch=x64 >nul && ";
+    }
+    return prefix + command;
+}
+
+[[nodiscard]] bool windows_msvc_mp_token(
+    std::string_view token) noexcept {
+    if (token.size() >= 2u && token.front() == '"' &&
+        token.back() == '"') {
+        token.remove_prefix(1u);
+        token.remove_suffix(1u);
+    }
+    if (token.size() < 3u ||
+        (token.front() != '/' && token.front() != '-') ||
+        std::toupper(static_cast<unsigned char>(token[1])) != 'M' ||
+        std::toupper(static_cast<unsigned char>(token[2])) != 'P')
+        return false;
+    return std::all_of(
+        token.begin() + 3,
+        token.end(),
+        [](const unsigned char character) {
+            return std::isdigit(character) != 0;
+        });
+}
+
+[[nodiscard]] std::string strip_windows_msvc_mp_options(
+    const std::string_view value) {
+    std::vector<std::string_view> retained;
+    std::size_t cursor = 0u;
+    while (cursor < value.size()) {
+        while (cursor < value.size() &&
+               std::isspace(
+                   static_cast<unsigned char>(value[cursor])))
+            ++cursor;
+        if (cursor == value.size()) break;
+        const auto begin = cursor;
+        bool quoted = false;
+        for (; cursor < value.size(); ++cursor) {
+            const auto character = value[cursor];
+            if (character == '"') quoted = !quoted;
+            if (!quoted &&
+                std::isspace(
+                    static_cast<unsigned char>(character)))
+                break;
+        }
+        if (quoted)
+            throw std::invalid_argument(
+                "MSVC-Optionsvariable besitzt ein nicht geschlossenes "
+                "Anfuehrungszeichen.");
+        const auto token = value.substr(begin, cursor - begin);
+        if (!windows_msvc_mp_token(token)) retained.push_back(token);
+    }
+    std::string normalized;
+    for (const auto token : retained) {
+        if (!normalized.empty()) normalized += ' ';
+        normalized.append(token);
+    }
+    return normalized;
+}
+
+[[nodiscard]] std::vector<char>
+windows_child_environment(
+    const std::optional<std::size_t> cl_jobs,
+    const std::string_view raw_host_command) {
+    constexpr std::string_view raw_command_name{
+        "KATANA_RAW_HOST_COMMAND"};
+    constexpr std::string_view mspdbsrv_options_name{
+        "_MSPDBSRV_"};
+    constexpr std::string_view mspdbsrv_endpoint_name{
+        "_MSPDBSRV_ENDPOINT_"};
+    constexpr std::size_t maximum_raw_command_bytes = 24u * 1'024u;
+    constexpr std::size_t maximum_environment_block_bytes = 32'767u;
+    if (cl_jobs && *cl_jobs > 256u)
+        throw std::invalid_argument(
+            "Exaktes MSVC-Compilerbudget ist ungueltig.");
+    if (raw_host_command.empty() ||
+        raw_host_command.size() > maximum_raw_command_bytes ||
+        raw_host_command.find('\0') != std::string_view::npos)
+        throw std::invalid_argument(
+            "Windows-Hostkommando ist leer, enthaelt NUL oder "
+            "ueberschreitet das sichere Transportlimit.");
+    const auto environment = GetEnvironmentStringsA();
+    if (environment == nullptr)
+        throw std::runtime_error(
+            "Windows-Hostumgebung konnte nicht gelesen werden.");
+    std::vector<std::string> entries;
+    try {
+        for (auto cursor = environment; *cursor != '\0';) {
+            const auto size = std::strlen(cursor);
+            entries.emplace_back(cursor, size);
+            cursor += size + 1u;
+        }
+    } catch (...) {
+        FreeEnvironmentStringsA(environment);
+        throw;
+    }
+    FreeEnvironmentStringsA(environment);
+
+    const auto variable_matches = [](
+        const std::string_view entry,
+        const std::string_view name) noexcept {
+        if (entry.size() <= name.size() ||
+            entry[name.size()] != '=')
+            return false;
+        return std::equal(
+            name.begin(), name.end(), entry.begin(),
+            [](const unsigned char left,
+               const unsigned char right) {
+                return std::toupper(left) ==
+                       std::toupper(right);
+            });
+    };
+    std::string cl_value;
+    std::string trailing_cl_value;
+    bool cl_seen = false;
+    bool trailing_cl_seen = false;
+    bool path_seen = false;
+    std::string path_value;
+    std::vector<std::string> filtered;
+    filtered.reserve(entries.size() + 5u);
+    for (auto& entry : entries) {
+        // Never inherit a spoofed transport value. Windows environment names
+        // are case-insensitive, so remove every spelling before binding the
+        // exact command owned by this supervision attempt.
+        if (variable_matches(entry, raw_command_name) ||
+            variable_matches(entry, mspdbsrv_options_name) ||
+            variable_matches(entry, mspdbsrv_endpoint_name))
+            continue;
+        if (variable_matches(entry, "PATH")) {
+            if (!path_seen) {
+                path_seen = true;
+                path_value = std::string_view(entry).substr(5u);
+            }
+            continue;
+        }
+        if (cl_jobs && variable_matches(entry, "CL")) {
+            if (cl_seen)
+                throw std::runtime_error(
+                    "Windows-Hostumgebung besitzt mehrere CL-Werte.");
+            cl_seen = true;
+            cl_value = strip_windows_msvc_mp_options(
+                std::string_view(entry).substr(3u));
+            continue;
+        }
+        if (cl_jobs && variable_matches(entry, "_CL_")) {
+            if (trailing_cl_seen)
+                throw std::runtime_error(
+                    "Windows-Hostumgebung besitzt mehrere _CL_-Werte.");
+            trailing_cl_seen = true;
+            trailing_cl_value = strip_windows_msvc_mp_options(
+                std::string_view(entry).substr(5u));
+            continue;
+        }
+        filtered.push_back(std::move(entry));
+    }
+    if (path_seen) {
+        if (const auto effective_path =
+                configured_environment_value("PATH"))
+            path_value = *effective_path;
+        filtered.push_back("PATH=" + path_value);
+    }
+    if (cl_jobs) {
+        filtered.push_back("CL=" + cl_value);
+        if (*cl_jobs != 0u) {
+            if (!trailing_cl_value.empty()) trailing_cl_value += ' ';
+            trailing_cl_value +=
+                "/MP" + std::to_string(*cl_jobs);
+        }
+        filtered.push_back("_CL_=" + trailing_cl_value);
+    }
+    filtered.push_back(
+        std::string(raw_command_name) + '=' +
+        std::string(raw_host_command));
+    std::random_device endpoint_random;
+    std::ostringstream endpoint_seed;
+    endpoint_seed
+        << GetCurrentProcessId() << ':' << GetCurrentThreadId() << ':'
+        << std::chrono::steady_clock::now().time_since_epoch().count()
+        << ':' << endpoint_random() << ':' << endpoint_random()
+        << ':' << endpoint_random() << ':' << endpoint_random();
+    filtered.push_back(
+        std::string(mspdbsrv_options_name) + "=-shutdowntime 1");
+    filtered.push_back(
+        std::string(mspdbsrv_endpoint_name) + "=katana-" +
+        katana::io::sha256_bytes(endpoint_seed.str()).substr(0u, 32u));
+    std::sort(
+        filtered.begin(), filtered.end(),
+        [](const std::string& left, const std::string& right) {
+            return std::lexicographical_compare(
+                left.begin(), left.end(),
+                right.begin(), right.end(),
+                [](const unsigned char first,
+                   const unsigned char second) {
+                    return std::toupper(first) <
+                           std::toupper(second);
+                });
+        });
+    std::vector<char> block;
+    const auto total_size = std::accumulate(
+        filtered.begin(), filtered.end(), std::size_t{1u},
+        [](const std::size_t total, const std::string& entry) {
+            return total + entry.size() + 1u;
+        });
+    if (total_size > maximum_environment_block_bytes)
+        throw std::invalid_argument(
+            "Windows-Hostumgebung ueberschreitet mit dem atomaren "
+            "Rohkommando das CreateProcess-Limit.");
+    block.reserve(total_size);
+    for (const auto& entry : filtered) {
+        block.insert(block.end(), entry.begin(), entry.end());
+        block.push_back('\0');
+    }
+    block.push_back('\0');
+    return block;
+}
+#endif
+
+[[nodiscard]] std::filesystem::path
+current_process_executable_path() {
+    std::filesystem::path executable;
+#ifdef _WIN32
+    std::vector<wchar_t> buffer(32'768u, L'\0');
+    const auto length = GetModuleFileNameW(
+        nullptr,
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()));
+    if (length == 0u || length >= buffer.size())
+        throw std::runtime_error(
+            "Pfad des laufenden Katana-Werkzeugs konnte nicht gelesen "
+            "werden.");
+    executable = std::filesystem::path(
+        std::wstring_view(buffer.data(), length));
+    if (!regular_reparse_free_windows_path(executable))
+        throw std::runtime_error(
+            "Laufendes Katana-Werkzeug ist kein sicherer regulaerer "
+            "Windows-Pfad.");
+#elif defined(__APPLE__)
+    std::uint32_t required = 0u;
+    static_cast<void>(_NSGetExecutablePath(nullptr, &required));
+    if (required == 0u)
+        throw std::runtime_error(
+            "Pfad des laufenden Katana-Werkzeugs konnte nicht gelesen "
+            "werden.");
+    std::vector<char> buffer(required, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &required) != 0)
+        throw std::runtime_error(
+            "Pfad des laufenden Katana-Werkzeugs ist instabil.");
+    executable = buffer.data();
+#else
+    std::array<char, 32'768u> buffer{};
+    const auto length = ::readlink(
+        "/proc/self/exe", buffer.data(), buffer.size() - 1u);
+    if (length <= 0 ||
+        static_cast<std::size_t>(length) >= buffer.size() - 1u)
+        throw std::runtime_error(
+            "Pfad des laufenden Katana-Werkzeugs konnte nicht gelesen "
+            "werden.");
+    executable = std::string_view(
+        buffer.data(), static_cast<std::size_t>(length));
+#endif
+    std::error_code canonical_error;
+    const auto canonical =
+        std::filesystem::canonical(executable, canonical_error);
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(canonical, status_error);
+    if (canonical_error || status_error ||
+        !std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status))
+        throw std::runtime_error(
+            "Laufendes Katana-Werkzeug besitzt keine sichere "
+            "Dateiidentitaet.");
+    return canonical;
+}
+
 struct SupervisedHostCommandResult final {
     int exit_code = 1;
+    bool exit_code_available = false;
     bool timed_out = false;
+    bool interrupted = false;
+    std::optional<int> forwarded_signal;
+    bool process_tree_quiescent = false;
+};
+
+class SupervisedHostCommandTelemetryAttempt final {
+  public:
+    SupervisedHostCommandTelemetryAttempt(
+        katana::cli::PortBuildTelemetryRecorder* telemetry,
+        const std::string_view phase,
+        const SupervisedHostCommandResult& result)
+        : telemetry_(telemetry), result_(result) {
+        if (telemetry_ != nullptr)
+            observation_.stage = std::string(
+                phase.empty()
+                    ? std::string_view("host-command")
+                    : phase);
+    }
+
+    ~SupervisedHostCommandTelemetryAttempt() noexcept {
+        if (telemetry_ == nullptr) return;
+        if (result_.exit_code_available)
+            observation_.host_exit_code = result_.exit_code;
+        observation_.timed_out = result_.timed_out;
+        observation_.interrupted = result_.interrupted;
+        observation_.forwarded_signal = result_.forwarded_signal;
+        observation_.process_tree_quiescent =
+            result_.process_tree_quiescent;
+#ifdef _WIN32
+        observation_.process_tree_scope = "job-object-tree";
+        observation_.process_tree_query_complete =
+            result_.process_tree_quiescent;
+#elif defined(__linux__)
+        observation_.process_tree_scope =
+            "subreaper-descendant-tree";
+        observation_.process_tree_query_complete =
+            result_.process_tree_quiescent;
+#else
+        observation_.process_tree_scope = "process-group-only";
+        observation_.process_tree_query_complete = false;
+#endif
+        static_cast<void>(telemetry_->record_host_command(
+            std::move(observation_)));
+    }
+
+    SupervisedHostCommandTelemetryAttempt(
+        const SupervisedHostCommandTelemetryAttempt&) = delete;
+    SupervisedHostCommandTelemetryAttempt& operator=(
+        const SupervisedHostCommandTelemetryAttempt&) = delete;
+
+  private:
+    katana::cli::PortBuildTelemetryRecorder* telemetry_ = nullptr;
+    const SupervisedHostCommandResult& result_;
+    katana::cli::PortBuildHostCommandObservation observation_;
 };
 
 inline constexpr auto maximum_port_host_command_runtime =
-    std::chrono::seconds(840);
+    std::chrono::minutes(15);
 
 using PortHostCommandTimeout =
     std::optional<std::chrono::milliseconds>;
@@ -1745,17 +2358,16 @@ PortHostCommandTimeout configured_port_host_command_runtime(
             conversion.ptr != value->data() + value->size())
             throw std::invalid_argument(
                 "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS ist ungueltig.");
-        // Zero is an explicit caller opt-in for an unbounded supervised
-        // process. The process tree remains owned by the job object/process
-        // group and is still terminated if the CLI itself exits.
-        if (milliseconds == 0u) return std::nullopt;
-        constexpr auto maximum_wait_milliseconds =
+        const auto maximum_wait_milliseconds =
             static_cast<std::uint64_t>(
-                std::numeric_limits<std::uint32_t>::max() -
-                1u);
-        if (milliseconds > maximum_wait_milliseconds)
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    maximum_port_host_command_runtime)
+                    .count());
+        if (milliseconds == 0u ||
+            milliseconds > maximum_wait_milliseconds)
             throw std::invalid_argument(
-                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS ist zu gross.");
+                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS muss zwischen 1 und "
+                "900000 liegen.");
         return std::chrono::milliseconds(milliseconds);
     }();
     const auto test_stage =
@@ -1783,13 +2395,1081 @@ PortHostCommandTimeout configured_port_host_command_runtime(
     return std::chrono::milliseconds(milliseconds);
 }
 
+#ifdef _WIN32
+enum class WindowsJobQuiescenceResult {
+    Quiescent,
+    TerminationFailed,
+    ProcessWaitFailed,
+    JobQueryFailed,
+    DeadlineExpired,
+};
+
+struct WindowsJobEmptyProbe final {
+    bool query_succeeded = false;
+    bool empty = false;
+};
+
+WindowsJobEmptyProbe query_windows_job_empty(const HANDLE job) noexcept {
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+    if (!QueryInformationJobObject(
+            job,
+            JobObjectBasicAccountingInformation,
+            &accounting,
+            sizeof(accounting),
+            nullptr))
+        return {};
+    if (accounting.ActiveProcesses != 0u)
+        return {true, false};
+
+    JOBOBJECT_BASIC_PROCESS_ID_LIST process_ids{};
+    if (!QueryInformationJobObject(
+            job,
+            JobObjectBasicProcessIdList,
+            &process_ids,
+            sizeof(process_ids),
+            nullptr)) {
+        // A fixed one-entry buffer is intentionally sufficient for the empty
+        // proof. ERROR_MORE_DATA proves that at least one process remains.
+        if (GetLastError() == ERROR_MORE_DATA)
+            return {true, false};
+        return {};
+    }
+    return {
+        true,
+        process_ids.NumberOfAssignedProcesses == 0u &&
+            process_ids.NumberOfProcessIdsInList == 0u};
+}
+
+WindowsJobQuiescenceResult terminate_windows_job_and_wait(
+    const HANDLE job,
+    const HANDLE root_process,
+    const DWORD exit_code) noexcept {
+    const auto initial_probe = query_windows_job_empty(job);
+    if (!initial_probe.query_succeeded)
+        return WindowsJobQuiescenceResult::JobQueryFailed;
+    const auto initial_root_wait =
+        WaitForSingleObject(root_process, 0u);
+    if (initial_root_wait == WAIT_FAILED)
+        return WindowsJobQuiescenceResult::ProcessWaitFailed;
+    if (initial_probe.empty &&
+        initial_root_wait == WAIT_OBJECT_0)
+        return WindowsJobQuiescenceResult::Quiescent;
+
+    const auto termination_requested =
+        TerminateJobObject(job, exit_code) != FALSE;
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::seconds(5);
+    for (;;) {
+        const auto root_wait =
+            WaitForSingleObject(root_process, 0u);
+        if (root_wait == WAIT_FAILED)
+            return WindowsJobQuiescenceResult::ProcessWaitFailed;
+        const auto probe = query_windows_job_empty(job);
+        if (!probe.query_succeeded)
+            return WindowsJobQuiescenceResult::JobQueryFailed;
+        if (root_wait == WAIT_OBJECT_0 && probe.empty)
+            return WindowsJobQuiescenceResult::Quiescent;
+        if (!termination_requested)
+            return WindowsJobQuiescenceResult::TerminationFailed;
+        if (std::chrono::steady_clock::now() >= deadline)
+            return WindowsJobQuiescenceResult::DeadlineExpired;
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(10));
+    }
+}
+
+bool terminate_windows_process_and_wait(
+    const HANDLE process,
+    const DWORD exit_code) noexcept {
+    const auto initial_wait = WaitForSingleObject(process, 0u);
+    if (initial_wait == WAIT_OBJECT_0) return true;
+    if (initial_wait == WAIT_FAILED) return false;
+    if (!TerminateProcess(process, exit_code)) {
+        const auto raced_wait = WaitForSingleObject(process, 0u);
+        if (raced_wait == WAIT_OBJECT_0) return true;
+        return false;
+    }
+    return WaitForSingleObject(process, 5'000u) ==
+           WAIT_OBJECT_0;
+}
+#else
+
+std::mutex posix_host_signal_mutex;
+volatile sig_atomic_t posix_host_pending_signal = 0;
+
+void capture_posix_host_signal(const int signal) noexcept {
+    if (posix_host_pending_signal == 0)
+        posix_host_pending_signal = signal;
+}
+
+class ScopedPosixHostSignals final {
+  public:
+    ScopedPosixHostSignals()
+        : lock_(posix_host_signal_mutex) {
+        posix_host_pending_signal = 0;
+        struct sigaction action {};
+        action.sa_handler = capture_posix_host_signal;
+        ::sigemptyset(&action.sa_mask);
+        action.sa_flags = 0;
+        if (::sigaction(SIGINT, &action, &previous_interrupt_) != 0)
+            throw std::runtime_error(
+                "SIGINT-Aufsicht fuer Port-Hostprozess konnte nicht "
+                "installiert werden.");
+        interrupt_installed_ = true;
+        if (::sigaction(SIGTERM, &action, &previous_terminate_) != 0) {
+            static_cast<void>(
+                ::sigaction(SIGINT, &previous_interrupt_, nullptr));
+            interrupt_installed_ = false;
+            throw std::runtime_error(
+                "SIGTERM-Aufsicht fuer Port-Hostprozess konnte nicht "
+                "installiert werden.");
+        }
+        terminate_installed_ = true;
+        action.sa_handler = SIG_IGN;
+        if (::sigaction(SIGPIPE, &action, &previous_pipe_) != 0) {
+            static_cast<void>(
+                ::sigaction(SIGTERM, &previous_terminate_, nullptr));
+            static_cast<void>(
+                ::sigaction(SIGINT, &previous_interrupt_, nullptr));
+            terminate_installed_ = false;
+            interrupt_installed_ = false;
+            throw std::runtime_error(
+                "SIGPIPE-Aufsicht fuer Port-Hostprozess konnte nicht "
+                "installiert werden.");
+        }
+        pipe_installed_ = true;
+    }
+
+    ~ScopedPosixHostSignals() noexcept {
+        if (pipe_installed_)
+            static_cast<void>(
+                ::sigaction(SIGPIPE, &previous_pipe_, nullptr));
+        if (terminate_installed_)
+            static_cast<void>(
+                ::sigaction(SIGTERM, &previous_terminate_, nullptr));
+        if (interrupt_installed_)
+            static_cast<void>(
+                ::sigaction(SIGINT, &previous_interrupt_, nullptr));
+        posix_host_pending_signal = 0;
+    }
+
+    ScopedPosixHostSignals(const ScopedPosixHostSignals&) = delete;
+    ScopedPosixHostSignals& operator=(
+        const ScopedPosixHostSignals&) = delete;
+
+    [[nodiscard]] int pending_signal() const noexcept {
+        return static_cast<int>(posix_host_pending_signal);
+    }
+
+    static void restore_defaults_in_child() noexcept {
+        struct sigaction action {};
+        action.sa_handler = SIG_DFL;
+        ::sigemptyset(&action.sa_mask);
+        action.sa_flags = 0;
+        static_cast<void>(::sigaction(SIGINT, &action, nullptr));
+        static_cast<void>(::sigaction(SIGTERM, &action, nullptr));
+        static_cast<void>(::sigaction(SIGPIPE, &action, nullptr));
+    }
+
+  private:
+    std::unique_lock<std::mutex> lock_;
+    struct sigaction previous_interrupt_ {};
+    struct sigaction previous_terminate_ {};
+    struct sigaction previous_pipe_ {};
+    bool interrupt_installed_ = false;
+    bool terminate_installed_ = false;
+    bool pipe_installed_ = false;
+};
+
+#if defined(__linux__)
+class ScopedLinuxChildSubreaper final {
+  public:
+    ScopedLinuxChildSubreaper() {
+        if (::prctl(
+                PR_GET_CHILD_SUBREAPER,
+                &previous_,
+                0,
+                0,
+                0) != 0)
+            throw std::runtime_error(
+                "Linux-Subreaper-Zustand fuer den Hostprozessbaum "
+                "konnte nicht gelesen werden.");
+        if (previous_ == 0 &&
+            ::prctl(
+                PR_SET_CHILD_SUBREAPER,
+                1,
+                0,
+                0,
+                0) != 0)
+            throw std::runtime_error(
+                "Linux-Subreaper fuer den Hostprozessbaum konnte "
+                "nicht aktiviert werden.");
+        restore_ = previous_ == 0;
+    }
+
+    ~ScopedLinuxChildSubreaper() noexcept {
+        if (restore_)
+            static_cast<void>(::prctl(
+                PR_SET_CHILD_SUBREAPER,
+                previous_,
+                0,
+                0,
+                0));
+    }
+
+    ScopedLinuxChildSubreaper(
+        const ScopedLinuxChildSubreaper&) = delete;
+    ScopedLinuxChildSubreaper& operator=(
+        const ScopedLinuxChildSubreaper&) = delete;
+
+  private:
+    int previous_ = 0;
+    bool restore_ = false;
+};
+
+struct LinuxChildrenSnapshot final {
+    std::vector<pid_t> children;
+    bool process_present = true;
+    bool complete = true;
+};
+
+[[nodiscard]] bool linux_process_exists(
+    const pid_t process) noexcept {
+    for (;;) {
+        if (::kill(process, 0) == 0 || errno == EPERM) return true;
+        if (errno == EINTR) continue;
+        return false;
+    }
+}
+
+[[nodiscard]] LinuxChildrenSnapshot
+capture_linux_children(const pid_t process) noexcept {
+    LinuxChildrenSnapshot result;
+    try {
+        const auto task_root =
+            std::filesystem::path("/proc") /
+            std::to_string(process) / "task";
+        std::error_code iteration_error;
+        const std::filesystem::directory_iterator end;
+        for (std::filesystem::directory_iterator task(
+                 task_root, iteration_error);
+             !iteration_error && task != end;
+             task.increment(iteration_error)) {
+            const auto task_name =
+                task->path().filename().string();
+            std::int64_t task_id = 0;
+            const auto parsed = std::from_chars(
+                task_name.data(),
+                task_name.data() + task_name.size(),
+                task_id);
+            if (parsed.ec != std::errc{} ||
+                parsed.ptr != task_name.data() + task_name.size() ||
+                task_id <= 0)
+                continue;
+            const auto children_path = task->path() / "children";
+            std::ifstream children_file(
+                children_path, std::ios::binary);
+            if (!children_file) {
+                std::error_code task_status_error;
+                const auto task_status =
+                    std::filesystem::symlink_status(
+                        task->path(), task_status_error);
+                if (!task_status_error &&
+                    task_status.type() !=
+                        std::filesystem::file_type::not_found) {
+                    result.complete = false;
+                    return result;
+                }
+                continue;
+            }
+            std::string child_text;
+            while (children_file >> child_text) {
+                std::int64_t child = 0;
+                const auto child_parse = std::from_chars(
+                    child_text.data(),
+                    child_text.data() + child_text.size(),
+                    child);
+                if (child_parse.ec != std::errc{} ||
+                    child_parse.ptr !=
+                        child_text.data() + child_text.size() ||
+                    child <= 0 ||
+                    child > static_cast<std::int64_t>(
+                                std::numeric_limits<pid_t>::max())) {
+                    result.complete = false;
+                    return result;
+                }
+                result.children.push_back(
+                    static_cast<pid_t>(child));
+            }
+            if (!children_file.eof()) {
+                result.complete = false;
+                return result;
+            }
+        }
+        if (iteration_error) {
+            result.process_present =
+                linux_process_exists(process);
+            result.complete = !result.process_present;
+            return result;
+        }
+        std::sort(
+            result.children.begin(), result.children.end());
+        result.children.erase(
+            std::unique(
+                result.children.begin(), result.children.end()),
+            result.children.end());
+        return result;
+    } catch (...) {
+        result.process_present = linux_process_exists(process);
+        result.complete = !result.process_present;
+        return result;
+    }
+}
+
+[[nodiscard]] std::vector<pid_t>
+capture_linux_baseline_children() {
+    const auto snapshot = capture_linux_children(::getpid());
+    if (!snapshot.complete || !snapshot.process_present)
+        throw std::runtime_error(
+            "Linux-Kindprozessbasis konnte nicht vollstaendig "
+            "erfasst werden.");
+    return snapshot.children;
+}
+
+enum class LinuxDescendantState {
+    Empty,
+    Present,
+    Failed,
+};
+
+[[nodiscard]] LinuxDescendantState
+probe_linux_descendants(
+    const pid_t root,
+    const std::vector<pid_t>& baseline_children,
+    std::vector<pid_t>* const descendant_processes = nullptr) noexcept {
+    try {
+        constexpr std::size_t maximum_descendants = 65'536u;
+        std::vector<pid_t> queue{root};
+        std::unordered_set<pid_t> discovered{root};
+        bool descendant_seen = false;
+        const auto enqueue_direct_children = [&]() {
+            const auto direct =
+                capture_linux_children(::getpid());
+            if (!direct.complete || !direct.process_present)
+                return false;
+            if (std::find(
+                    direct.children.begin(),
+                    direct.children.end(),
+                    root) == direct.children.end())
+                return false;
+            for (const auto child : direct.children) {
+                if (child == root ||
+                    std::binary_search(
+                        baseline_children.begin(),
+                        baseline_children.end(),
+                        child))
+                    continue;
+                descendant_seen = true;
+                if (discovered.insert(child).second) {
+                    queue.push_back(child);
+                    if (descendant_processes != nullptr)
+                        descendant_processes->push_back(child);
+                }
+            }
+            return true;
+        };
+        if (!enqueue_direct_children())
+            return LinuxDescendantState::Failed;
+        for (std::size_t index = 0u; index < queue.size(); ++index) {
+            if (queue.size() > maximum_descendants)
+                return LinuxDescendantState::Failed;
+            const auto children =
+                capture_linux_children(queue[index]);
+            if (!children.complete)
+                return LinuxDescendantState::Failed;
+            if (!children.process_present) continue;
+            for (const auto child : children.children) {
+                descendant_seen = true;
+                if (discovered.insert(child).second) {
+                    queue.push_back(child);
+                    if (descendant_processes != nullptr)
+                        descendant_processes->push_back(child);
+                }
+            }
+        }
+        // A process can exit and be adopted by this subreaper while its old
+        // parent is traversed. A second direct-child snapshot closes that
+        // race; any newly observed child forces another supervisor round.
+        if (!enqueue_direct_children())
+            return LinuxDescendantState::Failed;
+        return descendant_seen
+                   ? LinuxDescendantState::Present
+                   : LinuxDescendantState::Empty;
+    } catch (...) {
+        return LinuxDescendantState::Failed;
+    }
+}
+#endif
+
+enum class PosixRootState {
+    Running,
+    Terminal,
+    Failed,
+};
+
+enum class PosixGroupState {
+    RootOnly,
+    OtherMembers,
+    Failed,
+};
+
+enum class PosixTreeQuiescenceState {
+    Pending,
+    Quiescent,
+    Failed,
+};
+
+#if defined(__linux__)
+[[nodiscard]] bool parse_linux_process_group(
+    const std::string_view stat,
+    std::int64_t& process_group) noexcept {
+    try {
+        const auto closing_name = stat.rfind(')');
+        if (closing_name == std::string_view::npos ||
+            closing_name + 3u >= stat.size())
+            return false;
+        std::istringstream fields(
+            std::string(stat.substr(closing_name + 2u)));
+        char state = 0;
+        std::int64_t parent = 0;
+        return static_cast<bool>(
+            fields >> state >> parent >> process_group);
+    } catch (...) {
+        return false;
+    }
+}
+#endif
+
+[[nodiscard]] PosixGroupState probe_posix_process_group(
+    const pid_t process_group,
+    const pid_t root) noexcept {
+    try {
+#if defined(__linux__)
+        bool root_seen = false;
+        std::error_code iteration_error;
+        const std::filesystem::directory_iterator end;
+        for (std::filesystem::directory_iterator entry(
+                 "/proc", iteration_error);
+             !iteration_error && entry != end;
+             entry.increment(iteration_error)) {
+            const auto name = entry->path().filename().string();
+            if (name.empty()) continue;
+            std::int64_t parsed_pid = 0;
+            const auto parsed = std::from_chars(
+                name.data(), name.data() + name.size(), parsed_pid);
+            if (parsed.ec != std::errc{} ||
+                parsed.ptr != name.data() + name.size() ||
+                parsed_pid <= 0 ||
+                parsed_pid >
+                    static_cast<std::int64_t>(
+                        std::numeric_limits<pid_t>::max()))
+                continue;
+            const auto candidate_pid =
+                static_cast<pid_t>(parsed_pid);
+            const auto stat_path = entry->path() / "stat";
+            std::ifstream stat_file(stat_path, std::ios::binary);
+            std::string stat;
+            std::int64_t observed_group = 0;
+            const auto stat_resolved =
+                stat_file &&
+                static_cast<bool>(std::getline(stat_file, stat)) &&
+                parse_linux_process_group(stat, observed_group);
+            if (!stat_resolved) {
+                pid_t fallback_group = -1;
+                do {
+                    fallback_group = ::getpgid(candidate_pid);
+                } while (fallback_group < 0 && errno == EINTR);
+                if (fallback_group < 0) {
+                    // A process disappearing between readdir/open/getpgid is
+                    // ordinary /proc churn and cannot have remained a member
+                    // of the group being proved empty.
+                    if (errno == ESRCH) continue;
+                    return PosixGroupState::Failed;
+                }
+                observed_group =
+                    static_cast<std::int64_t>(fallback_group);
+            }
+            if (observed_group !=
+                static_cast<std::int64_t>(process_group))
+                continue;
+            if (parsed_pid == static_cast<std::int64_t>(root)) {
+                root_seen = true;
+                continue;
+            }
+            return PosixGroupState::OtherMembers;
+        }
+        if (iteration_error || !root_seen)
+            return PosixGroupState::Failed;
+        return PosixGroupState::RootOnly;
+#elif defined(__APPLE__)
+        const int query[] = {
+            CTL_KERN, KERN_PROC, KERN_PROC_PGRP, process_group};
+        std::size_t byte_count = 0u;
+        if (::sysctl(
+                const_cast<int*>(query),
+                4u,
+                nullptr,
+                &byte_count,
+                nullptr,
+                0u) != 0)
+            return PosixGroupState::Failed;
+        std::vector<kinfo_proc> processes(
+            byte_count / sizeof(kinfo_proc) + 1u);
+        byte_count = processes.size() * sizeof(kinfo_proc);
+        if (::sysctl(
+                const_cast<int*>(query),
+                4u,
+                processes.data(),
+                &byte_count,
+                nullptr,
+                0u) != 0 ||
+            byte_count % sizeof(kinfo_proc) != 0u)
+            return PosixGroupState::Failed;
+        bool root_seen = false;
+        const auto count = byte_count / sizeof(kinfo_proc);
+        for (std::size_t index = 0u; index < count; ++index) {
+            const auto pid = processes[index].kp_proc.p_pid;
+            if (pid == root) {
+                root_seen = true;
+                continue;
+            }
+            return PosixGroupState::OtherMembers;
+        }
+        return root_seen
+                   ? PosixGroupState::RootOnly
+                   : PosixGroupState::Failed;
+#else
+        static_cast<void>(process_group);
+        static_cast<void>(root);
+        return PosixGroupState::Failed;
+#endif
+    } catch (...) {
+        return PosixGroupState::Failed;
+    }
+}
+
+// Owns the forked child only while the two-way launch handshake still
+// prevents exec and descendant creation. In this narrow state direct-PID
+// kill/wait is a complete process-tree cleanup proof; after the commit byte,
+// ownership must first move to PosixChildSupervisor.
+class PosixUncommittedChildGuard final {
+  public:
+    explicit PosixUncommittedChildGuard(const pid_t child) noexcept
+        : child_(child) {}
+
+    ~PosixUncommittedChildGuard() noexcept {
+        if (owned_)
+            static_cast<void>(terminate_and_reap());
+    }
+
+    PosixUncommittedChildGuard(
+        const PosixUncommittedChildGuard&) = delete;
+    PosixUncommittedChildGuard& operator=(
+        const PosixUncommittedChildGuard&) = delete;
+
+    [[nodiscard]] bool terminate_and_reap() noexcept {
+        if (!owned_) return true;
+        for (;;) {
+            if (::kill(child_, SIGKILL) == 0 || errno == ESRCH)
+                break;
+            if (errno == EINTR) continue;
+            break;
+        }
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(5);
+        for (;;) {
+            int status = 0;
+            const auto waited =
+                ::waitpid(child_, &status, WNOHANG);
+            if (waited == child_ ||
+                (waited < 0 && errno == ECHILD)) {
+                owned_ = false;
+                return true;
+            }
+            if (waited < 0 && errno != EINTR)
+                return false;
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(10));
+        }
+    }
+
+    void release() noexcept { owned_ = false; }
+
+  private:
+    pid_t child_ = -1;
+    bool owned_ = true;
+};
+
+class PosixChildSupervisor final {
+  public:
+    PosixChildSupervisor(
+        const pid_t child,
+        katana::cli::PortBuildTelemetryRecorder* telemetry,
+        const std::string_view telemetry_phase,
+        std::vector<pid_t> baseline_children = {}) noexcept
+        : child_(child),
+          telemetry_(telemetry),
+          telemetry_phase_(telemetry_phase)
+#if defined(__linux__)
+          , baseline_children_(std::move(baseline_children))
+#endif
+          {
+#if !defined(__linux__)
+        static_cast<void>(baseline_children);
+#endif
+        if (telemetry_ != nullptr)
+            telemetry_->register_posix_process_group(
+                static_cast<std::int64_t>(child_));
+    }
+
+    ~PosixChildSupervisor() noexcept {
+        if (!reaped_)
+            static_cast<void>(terminate_and_reap(SIGKILL));
+        finish_telemetry();
+    }
+
+    PosixChildSupervisor(const PosixChildSupervisor&) = delete;
+    PosixChildSupervisor& operator=(
+        const PosixChildSupervisor&) = delete;
+
+    [[nodiscard]] PosixRootState observe_root() noexcept {
+        if (root_terminal_) return PosixRootState::Terminal;
+        for (;;) {
+            siginfo_t information {};
+            if (::waitid(
+                    P_PID,
+                    static_cast<id_t>(child_),
+                    &information,
+                    WEXITED | WNOHANG | WNOWAIT) == 0) {
+                if (information.si_pid == 0)
+                    return PosixRootState::Running;
+                if (information.si_pid != child_)
+                    return PosixRootState::Failed;
+                root_terminal_ = true;
+                return PosixRootState::Terminal;
+            }
+            if (errno == EINTR) continue;
+            return PosixRootState::Failed;
+        }
+    }
+
+    [[nodiscard]] bool refresh_descendant_telemetry() noexcept {
+#if defined(__linux__)
+        if (telemetry_ == nullptr || !telemetry_->enabled())
+            return true;
+        std::vector<pid_t> descendants;
+        const auto state = probe_linux_descendants(
+            child_, baseline_children_, &descendants);
+        if (state == LinuxDescendantState::Failed) return false;
+        publish_linux_descendants(descendants);
+#endif
+        return true;
+    }
+
+    [[nodiscard]] bool terminate_and_reap(
+        const int initial_signal) noexcept {
+        if (reaped_) return process_tree_quiescent_;
+        const auto initial_group_signal_sent =
+            signal_group(initial_signal);
+#if defined(__linux__)
+        const auto initial_descendant_signal_sent =
+            signal_linux_descendants(initial_signal);
+#else
+        constexpr bool initial_descendant_signal_sent = false;
+#endif
+        if (initial_signal == SIGKILL &&
+            (initial_group_signal_sent ||
+             initial_descendant_signal_sent))
+            hard_group_kill_sent_ = true;
+        const auto grace_deadline =
+            std::chrono::steady_clock::now() +
+            (initial_signal == SIGKILL
+                 ? std::chrono::milliseconds(0)
+                 : std::chrono::seconds(2));
+        while (std::chrono::steady_clock::now() <= grace_deadline) {
+            if (try_quiescent_reap() ==
+                PosixTreeQuiescenceState::Quiescent)
+                return true;
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(10));
+        }
+
+        // The unreaped direct child remains the PGID identity anchor while
+        // SIGKILL is issued and while OS process-table evidence is sampled.
+        // Consequently this can never target a recycled unrelated group.
+        if (signal_group(SIGKILL))
+            hard_group_kill_sent_ = true;
+#if defined(__linux__)
+        if (signal_linux_descendants(SIGKILL))
+            hard_group_kill_sent_ = true;
+#endif
+        static_cast<void>(signal_root(SIGKILL));
+        const auto kill_deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() <= kill_deadline) {
+            if (try_quiescent_reap() ==
+                PosixTreeQuiescenceState::Quiescent)
+                return true;
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(10));
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool process_tree_quiescent() const noexcept {
+        return process_tree_quiescent_ && reaped_;
+    }
+
+    // A successful command is complete only after its direct child is
+    // terminal and every remaining member of the anchored process group has
+    // exited naturally. This probe never signals the group.
+    [[nodiscard]] PosixTreeQuiescenceState
+    try_natural_quiescent_reap() noexcept {
+        return try_quiescent_reap();
+    }
+
+    [[nodiscard]] int exit_code() const noexcept {
+        if (!reaped_) return 1;
+        if (WIFEXITED(status_)) return WEXITSTATUS(status_);
+        if (WIFSIGNALED(status_))
+            return 128 + WTERMSIG(status_);
+        return 1;
+    }
+
+    void finish_telemetry() noexcept {
+        if (telemetry_finished_ || telemetry_ == nullptr) return;
+        telemetry_finished_ = true;
+        if (usage_available_)
+            record_final_usage();
+        telemetry_->clear_process_tree();
+        telemetry_->sample_resources(telemetry_phase_);
+    }
+
+  private:
+#if defined(__linux__)
+    [[nodiscard]] bool signal_linux_descendants(
+        const int signal) noexcept {
+        std::vector<pid_t> descendants;
+        const auto state = probe_linux_descendants(
+            child_, baseline_children_, &descendants);
+        if (state == LinuxDescendantState::Failed) return false;
+        publish_linux_descendants(descendants);
+        for (const auto descendant : descendants) {
+            for (;;) {
+                if (::kill(descendant, signal) == 0 ||
+                    errno == ESRCH)
+                    break;
+                if (errno == EINTR) continue;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void publish_linux_descendants(
+        const std::span<const pid_t> descendants) noexcept {
+        if (telemetry_ == nullptr) return;
+        try {
+            std::vector<std::int64_t> telemetry_processes;
+            telemetry_processes.reserve(descendants.size());
+            for (const auto process : descendants)
+                telemetry_processes.push_back(
+                    static_cast<std::int64_t>(process));
+            telemetry_->update_posix_process_tree_members(
+                telemetry_processes);
+        } catch (...) {
+            static_cast<void>(
+                telemetry_->mark_upstream_incomplete(
+                    "posix-descendant-telemetry-allocation-failed"));
+        }
+    }
+
+    [[nodiscard]] bool reap_terminal_linux_adoptees(
+        bool& reaped_any) noexcept {
+        reaped_any = false;
+        const auto direct = capture_linux_children(::getpid());
+        if (!direct.complete || !direct.process_present)
+            return false;
+        for (const auto process : direct.children) {
+            if (process == child_ ||
+                std::binary_search(
+                    baseline_children_.begin(),
+                    baseline_children_.end(),
+                    process))
+                continue;
+            for (;;) {
+                int status = 0;
+                struct rusage usage {};
+                const auto waited =
+                    ::wait4(process, &status, WNOHANG, &usage);
+                if (waited == process) {
+                    accumulate_final_usage(usage);
+                    reaped_any = true;
+                    break;
+                }
+                if (waited == 0 ||
+                    (waited < 0 && errno == ECHILD))
+                    break;
+                if (waited < 0 && errno == EINTR) continue;
+                return false;
+            }
+        }
+        return true;
+    }
+#endif
+
+    [[nodiscard]] bool signal_group(const int signal) noexcept {
+        for (;;) {
+            if (::kill(-child_, signal) == 0) return true;
+            if (errno == EINTR) continue;
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool signal_root(const int signal) noexcept {
+        for (;;) {
+            if (::kill(child_, signal) == 0) return true;
+            if (errno == EINTR) continue;
+            return errno == ESRCH && root_terminal_;
+        }
+    }
+
+    [[nodiscard]] PosixTreeQuiescenceState
+    try_quiescent_reap() noexcept {
+        const auto root_state = observe_root();
+        if (root_state == PosixRootState::Failed)
+            return PosixTreeQuiescenceState::Failed;
+        if (root_state != PosixRootState::Terminal &&
+            !hard_group_kill_sent_)
+            return PosixTreeQuiescenceState::Pending;
+        const auto group_state =
+            probe_posix_process_group(child_, child_);
+        if (group_state == PosixGroupState::Failed)
+            return PosixTreeQuiescenceState::Failed;
+        if (group_state != PosixGroupState::RootOnly)
+            return PosixTreeQuiescenceState::Pending;
+#if defined(__linux__)
+        bool adopted_reaped = false;
+        if (!reap_terminal_linux_adoptees(adopted_reaped))
+            return PosixTreeQuiescenceState::Failed;
+        std::vector<pid_t> descendant_processes;
+        const auto descendants = probe_linux_descendants(
+            child_, baseline_children_, &descendant_processes);
+        if (descendants == LinuxDescendantState::Failed)
+            return PosixTreeQuiescenceState::Failed;
+        publish_linux_descendants(descendant_processes);
+        if (adopted_reaped ||
+            descendants == LinuxDescendantState::Present) {
+            empty_descendant_observations_ = 0u;
+            return PosixTreeQuiescenceState::Pending;
+        }
+        // Two consecutive complete empty snapshots prevent an adoption race
+        // between the process-group proof and the final root reap.
+        if (++empty_descendant_observations_ < 2u)
+            return PosixTreeQuiescenceState::Pending;
+#endif
+        // A waitid failure cannot silently leak a process tree. Once SIGKILL
+        // was successfully delivered to the still anchored group and the OS
+        // proves only the direct child remains, wait4(WNOHANG) may safely
+        // observe/reap it. The ordinary terminal path stays blocking and both
+        // paths release the PID/PGID anchor only after the group proof.
+        const auto wait_options =
+            root_state == PosixRootState::Terminal ? 0 : WNOHANG;
+        for (;;) {
+            struct rusage usage {};
+            const auto waited =
+                ::wait4(child_, &status_, wait_options, &usage);
+            if (waited == child_) {
+                accumulate_final_usage(usage);
+                reaped_ = true;
+                process_tree_quiescent_ = true;
+                return PosixTreeQuiescenceState::Quiescent;
+            }
+            if (waited < 0 && errno == EINTR) continue;
+            if (waited == 0)
+                return PosixTreeQuiescenceState::Pending;
+            return PosixTreeQuiescenceState::Failed;
+        }
+    }
+
+    static void accumulate_usage_time(
+        timeval& destination,
+        const timeval source) noexcept {
+        if (source.tv_sec < 0 || source.tv_usec < 0) return;
+        using Seconds = decltype(destination.tv_sec);
+        constexpr auto microseconds_per_second = 1'000'000;
+        const auto maximum_seconds =
+            std::numeric_limits<Seconds>::max();
+        if (destination.tv_sec < 0 || destination.tv_usec < 0) {
+            destination = {};
+        }
+        const auto carry =
+            (destination.tv_usec + source.tv_usec) /
+            microseconds_per_second;
+        const auto remaining =
+            (destination.tv_usec + source.tv_usec) %
+            microseconds_per_second;
+        if (source.tv_sec > maximum_seconds - destination.tv_sec ||
+            carry > maximum_seconds - destination.tv_sec -
+                        source.tv_sec) {
+            destination.tv_sec = maximum_seconds;
+            destination.tv_usec =
+                microseconds_per_second - 1;
+            return;
+        }
+        destination.tv_sec += source.tv_sec + carry;
+        destination.tv_usec = remaining;
+    }
+
+    [[nodiscard]] static long accumulate_usage_counter(
+        const long destination,
+        const long source) noexcept {
+        const auto normalized_destination =
+            std::max<long>(0, destination);
+        const auto normalized_source =
+            std::max<long>(0, source);
+        if (normalized_source >
+            std::numeric_limits<long>::max() -
+                normalized_destination)
+            return std::numeric_limits<long>::max();
+        return normalized_destination + normalized_source;
+    }
+
+    void accumulate_final_usage(
+        const struct rusage& usage) noexcept {
+        if (!usage_available_) {
+            final_usage_ = usage;
+            usage_available_ = true;
+            return;
+        }
+        accumulate_usage_time(
+            final_usage_.ru_utime, usage.ru_utime);
+        accumulate_usage_time(
+            final_usage_.ru_stime, usage.ru_stime);
+        final_usage_.ru_minflt = accumulate_usage_counter(
+            final_usage_.ru_minflt, usage.ru_minflt);
+        final_usage_.ru_majflt = accumulate_usage_counter(
+            final_usage_.ru_majflt, usage.ru_majflt);
+        final_usage_.ru_inblock = accumulate_usage_counter(
+            final_usage_.ru_inblock, usage.ru_inblock);
+        final_usage_.ru_oublock = accumulate_usage_counter(
+            final_usage_.ru_oublock, usage.ru_oublock);
+        final_usage_.ru_maxrss = std::max<long>(
+            final_usage_.ru_maxrss, usage.ru_maxrss);
+    }
+
+    void record_final_usage() noexcept {
+        const auto milliseconds = [](const timeval value) noexcept {
+            if (value.tv_sec < 0 || value.tv_usec < 0)
+                return std::uint64_t{0u};
+            const auto seconds =
+                static_cast<std::uint64_t>(value.tv_sec);
+            const auto microseconds =
+                static_cast<std::uint64_t>(value.tv_usec);
+            if (seconds >
+                (std::numeric_limits<std::uint64_t>::max() -
+                 microseconds / 1'000u) /
+                    1'000u)
+                return std::numeric_limits<std::uint64_t>::max();
+            return seconds * 1'000u + microseconds / 1'000u;
+        };
+        katana::cli::PortBuildPosixProcessTreeFinalSample sample;
+        sample.cpu_available = true;
+        sample.user_cpu_ms = milliseconds(final_usage_.ru_utime);
+        sample.kernel_cpu_ms = milliseconds(final_usage_.ru_stime);
+        sample.faults_available = true;
+        sample.page_faults =
+            static_cast<std::uint64_t>(
+                std::max<long>(0, final_usage_.ru_minflt)) +
+            static_cast<std::uint64_t>(
+                std::max<long>(0, final_usage_.ru_majflt));
+        sample.io_blocks_available = true;
+        sample.io_input_blocks =
+            static_cast<std::uint64_t>(
+                std::max<long>(0, final_usage_.ru_inblock));
+        sample.io_output_blocks =
+            static_cast<std::uint64_t>(
+                std::max<long>(0, final_usage_.ru_oublock));
+        if (final_usage_.ru_maxrss > 0) {
+            sample.working_set_peak_available = true;
+            const auto resident = static_cast<std::uint64_t>(
+                final_usage_.ru_maxrss);
+#if defined(__APPLE__)
+            sample.working_set_peak_bytes = resident;
+#else
+            sample.working_set_peak_bytes =
+                resident >
+                        std::numeric_limits<std::uint64_t>::max() /
+                            1'024u
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : resident * 1'024u;
+#endif
+        }
+        telemetry_->record_posix_process_tree_final_sample(sample);
+    }
+
+    pid_t child_ = -1;
+    katana::cli::PortBuildTelemetryRecorder* telemetry_ = nullptr;
+    std::string telemetry_phase_;
+    int status_ = 0;
+    struct rusage final_usage_ {};
+    bool root_terminal_ = false;
+    bool hard_group_kill_sent_ = false;
+    bool process_tree_quiescent_ = false;
+    bool reaped_ = false;
+    bool usage_available_ = false;
+    bool telemetry_finished_ = false;
+#if defined(__linux__)
+    std::vector<pid_t> baseline_children_;
+    std::size_t empty_descendant_observations_ = 0u;
+#endif
+};
+#endif
+
 SupervisedHostCommandResult run_supervised_host_command(
     const std::string& command,
-    const PortHostCommandTimeout timeout) {
-    if (timeout && timeout->count() <= 0)
+    const PortHostCommandTimeout timeout,
+    katana::cli::PortBuildTelemetryRecorder* telemetry = nullptr,
+    const std::string_view telemetry_phase = {},
+    // nullopt preserves CL/_CL_; zero strips all /MP options for an external
+    // scheduler such as Ninja; N strips conflicts and appends exact /MPN as
+    // the final _CL_ option seen by cl.exe.
+    const std::optional<std::size_t> windows_cl_jobs =
+        std::nullopt,
+    const std::function<void()>& supervision_heartbeat = {}) {
+    if (!timeout || timeout->count() <= 0 ||
+        *timeout > maximum_port_host_command_runtime)
         throw std::invalid_argument(
-            "Port-Hostprozess besitzt ein ungueltiges Zeitlimit.");
+            "Port-Hostprozess braucht ein Zeitlimit von hoechstens "
+            "15 Minuten.");
+    SupervisedHostCommandResult result;
+    const SupervisedHostCommandTelemetryAttempt telemetry_attempt(
+        telemetry, telemetry_phase, result);
 #ifdef _WIN32
+    // Until CreateProcess succeeds there is no child tree to drain. Once a
+    // suspended child exists every exit path must replace this trivial proof
+    // with a checked job/direct-process quiescence proof.
+    result.process_tree_quiescent = true;
+    const auto clear_telemetry_process_tree = [&]() noexcept {
+        if (telemetry == nullptr) return;
+        telemetry->clear_process_tree();
+        telemetry->sample_resources(telemetry_phase);
+    };
     const auto job = CreateJobObjectW(nullptr, nullptr);
     if (job == nullptr)
         throw std::runtime_error(
@@ -1807,95 +3487,367 @@ SupervisedHostCommandResult run_supervised_host_command(
             "Port-Hostprozess-Job konnte nicht begrenzt werden.");
     }
 
-    auto command_line = command;
-    STARTUPINFOA startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    auto command_line = std::string(
+        "cmd.exe /d /v:off /s /c "
+        "\"%KATANA_RAW_HOST_COMMAND%\"");
+    const auto child_environment =
+        windows_child_environment(windows_cl_jobs, command);
+    std::array<HANDLE, 3u> inherited_standard_handles{
+        INVALID_HANDLE_VALUE,
+        INVALID_HANDLE_VALUE,
+        INVALID_HANDLE_VALUE};
+    const auto close_inherited_standard_handles = [&]() noexcept {
+        for (auto& handle : inherited_standard_handles) {
+            if (handle != nullptr &&
+                handle != INVALID_HANDLE_VALUE)
+                static_cast<void>(CloseHandle(handle));
+            handle = INVALID_HANDLE_VALUE;
+        }
+    };
+    const auto inheritable_standard_handle = [](
+        const DWORD identifier,
+        const DWORD fallback_access) noexcept -> HANDLE {
+        const auto parent = GetCurrentProcess();
+        const auto source = GetStdHandle(identifier);
+        HANDLE duplicate = INVALID_HANDLE_VALUE;
+        if (source != nullptr && source != INVALID_HANDLE_VALUE &&
+            DuplicateHandle(
+                parent,
+                source,
+                parent,
+                &duplicate,
+                0u,
+                TRUE,
+                DUPLICATE_SAME_ACCESS))
+            return duplicate;
+        SECURITY_ATTRIBUTES security{};
+        security.nLength = sizeof(security);
+        security.bInheritHandle = TRUE;
+        return CreateFileW(
+            L"NUL",
+            fallback_access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+    };
+    inherited_standard_handles[0] =
+        inheritable_standard_handle(
+            STD_INPUT_HANDLE, GENERIC_READ);
+    inherited_standard_handles[1] =
+        inheritable_standard_handle(
+            STD_OUTPUT_HANDLE, GENERIC_WRITE);
+    inherited_standard_handles[2] =
+        inheritable_standard_handle(
+            STD_ERROR_HANDLE, GENERIC_WRITE);
+    if (std::any_of(
+            inherited_standard_handles.begin(),
+            inherited_standard_handles.end(),
+            [](const HANDLE handle) {
+                return handle == nullptr ||
+                       handle == INVALID_HANDLE_VALUE;
+            })) {
+        close_inherited_standard_handles();
+        CloseHandle(job);
+        throw std::runtime_error(
+            "Port-Hostprozess-Standardhandles konnten nicht sicher "
+            "gebunden werden.");
+    }
+    SIZE_T attribute_bytes = 0u;
+    static_cast<void>(InitializeProcThreadAttributeList(
+        nullptr, 1u, 0u, &attribute_bytes));
+    if (attribute_bytes == 0u) {
+        close_inherited_standard_handles();
+        CloseHandle(job);
+        throw std::runtime_error(
+            "Port-Hostprozess-Handle-Whitelist konnte nicht bemessen "
+            "werden.");
+    }
+    std::vector<std::byte> attribute_storage(attribute_bytes);
+    auto* const attributes =
+        reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
+            attribute_storage.data());
+    if (!InitializeProcThreadAttributeList(
+            attributes, 1u, 0u, &attribute_bytes)) {
+        close_inherited_standard_handles();
+        CloseHandle(job);
+        throw std::runtime_error(
+            "Port-Hostprozess-Handle-Whitelist konnte nicht "
+            "initialisiert werden.");
+    }
+    if (!UpdateProcThreadAttribute(
+            attributes,
+            0u,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inherited_standard_handles.data(),
+            inherited_standard_handles.size() * sizeof(HANDLE),
+            nullptr,
+            nullptr)) {
+        DeleteProcThreadAttributeList(attributes);
+        close_inherited_standard_handles();
+        CloseHandle(job);
+        throw std::runtime_error(
+            "Port-Hostprozess-Handle-Whitelist konnte nicht erstellt "
+            "werden.");
+    }
+    STARTUPINFOEXA startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = inherited_standard_handles[0];
+    startup.StartupInfo.hStdOutput = inherited_standard_handles[1];
+    startup.StartupInfo.hStdError = inherited_standard_handles[2];
+    startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
-    if (!CreateProcessA(nullptr,
-                        command_line.data(),
-                        nullptr,
-                        nullptr,
-                        TRUE,
-                        CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                        nullptr,
-                        nullptr,
-                        &startup,
-                        &process)) {
+    const auto process_created =
+        CreateProcessA(nullptr,
+                       command_line.data(),
+                       nullptr,
+                       nullptr,
+                       TRUE,
+                       CREATE_NO_WINDOW | CREATE_SUSPENDED |
+                           EXTENDED_STARTUPINFO_PRESENT,
+                       static_cast<void*>(
+                           const_cast<char*>(
+                               child_environment.data())),
+                       nullptr,
+                       &startup.StartupInfo,
+                       &process) != FALSE;
+    DeleteProcThreadAttributeList(attributes);
+    close_inherited_standard_handles();
+    if (!process_created) {
         CloseHandle(job);
         throw std::runtime_error(
             "Port-Hostprozess konnte nicht gestartet werden.");
     }
-    const auto terminate_failed_start = [&]() noexcept {
-        static_cast<void>(TerminateProcess(process.hProcess, 125u));
-        static_cast<void>(WaitForSingleObject(process.hProcess, 5'000u));
+    result.process_tree_quiescent = false;
+    const auto close_supervision_handles = [&]() noexcept {
+        clear_telemetry_process_tree();
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
         CloseHandle(job);
     };
     if (!AssignProcessToJobObject(job, process.hProcess)) {
-        terminate_failed_start();
+        const auto process_quiescent =
+            terminate_windows_process_and_wait(
+                process.hProcess,
+                125u);
+        close_supervision_handles();
+        if (!process_quiescent)
+            throw std::runtime_error(
+                "Port-Hostprozess konnte nach fehlgeschlagener "
+                "Jobbindung nicht sicher beendet werden.");
+        result.process_tree_quiescent = true;
         throw std::runtime_error(
             "Port-Hostprozess konnte nicht an seinen Prozessbaum-Job "
             "gebunden werden.");
     }
+    if (telemetry != nullptr)
+        telemetry->register_windows_job(
+            reinterpret_cast<std::uintptr_t>(job));
     if (ResumeThread(process.hThread) == static_cast<DWORD>(-1)) {
-        terminate_failed_start();
+        const auto quiescence =
+            terminate_windows_job_and_wait(
+                job,
+                process.hProcess,
+                125u);
+        close_supervision_handles();
+        if (quiescence !=
+            WindowsJobQuiescenceResult::Quiescent)
+            throw std::runtime_error(
+                "Port-Hostprozess konnte nach fehlgeschlagenem Start "
+                "nicht sicher beendet werden.");
+        result.process_tree_quiescent = true;
         throw std::runtime_error(
             "Port-Hostprozess konnte nicht sicher gestartet werden.");
     }
 
-    const auto wait = WaitForSingleObject(
-        process.hProcess,
-        timeout
-            ? static_cast<DWORD>(timeout->count())
-            : INFINITE);
-    SupervisedHostCommandResult result;
-    if (wait == WAIT_TIMEOUT) {
-        result.exit_code = 124;
-        result.timed_out = true;
-        static_cast<void>(TerminateJobObject(job, 124u));
-        static_cast<void>(
-            WaitForSingleObject(process.hProcess, 5'000u));
-    } else if (wait == WAIT_OBJECT_0) {
-        DWORD exit_code = 1u;
-        if (!GetExitCodeProcess(process.hProcess, &exit_code)) {
-            static_cast<void>(TerminateJobObject(job, 125u));
-            static_cast<void>(
-                WaitForSingleObject(process.hProcess, 5'000u));
-            CloseHandle(process.hThread);
-            CloseHandle(process.hProcess);
-            CloseHandle(job);
+    const auto deadline =
+        std::chrono::steady_clock::now() + *timeout;
+    bool root_terminal = false;
+    DWORD root_exit_code = 1u;
+    for (;;) {
+        if (supervision_heartbeat) supervision_heartbeat();
+        const auto root_wait =
+            WaitForSingleObject(process.hProcess, 0u);
+        if (root_wait == WAIT_FAILED ||
+            (root_wait != WAIT_TIMEOUT &&
+             root_wait != WAIT_OBJECT_0)) {
+            const auto quiescence =
+                terminate_windows_job_and_wait(
+                    job,
+                    process.hProcess,
+                    125u);
+            close_supervision_handles();
+            if (quiescence !=
+                WindowsJobQuiescenceResult::Quiescent)
+                throw std::runtime_error(
+                    "Port-Hostprozessaufsicht schlug fehl und der "
+                    "Prozessbaum konnte nicht nachweislich geleert "
+                    "werden.");
+            result.process_tree_quiescent = true;
             throw std::runtime_error(
-                "Port-Hostprozessstatus konnte nicht gelesen werden.");
+                "Port-Hostprozess konnte nicht sicher beaufsichtigt "
+                "werden; sein Prozessbaum wurde vollstaendig beendet.");
         }
-        result.exit_code = static_cast<int>(exit_code);
-    } else {
-        static_cast<void>(TerminateJobObject(job, 125u));
-        static_cast<void>(
-            WaitForSingleObject(process.hProcess, 5'000u));
-        CloseHandle(process.hThread);
-        CloseHandle(process.hProcess);
-        CloseHandle(job);
-        throw std::runtime_error(
-            "Port-Hostprozess konnte nicht sicher beaufsichtigt werden.");
+
+        if (root_wait == WAIT_OBJECT_0 && !root_terminal) {
+            if (!GetExitCodeProcess(
+                    process.hProcess, &root_exit_code)) {
+                const auto quiescence =
+                    terminate_windows_job_and_wait(
+                        job,
+                        process.hProcess,
+                        125u);
+                close_supervision_handles();
+                if (quiescence !=
+                    WindowsJobQuiescenceResult::Quiescent)
+                    throw std::runtime_error(
+                        "Port-Hostprozessstatus war unlesbar und sein "
+                        "Prozessbaum konnte nicht nachweislich geleert "
+                        "werden.");
+                result.process_tree_quiescent = true;
+                throw std::runtime_error(
+                    "Port-Hostprozessstatus konnte nicht gelesen "
+                    "werden; sein Prozessbaum wurde beendet.");
+            }
+            root_terminal = true;
+        }
+
+        const auto empty = query_windows_job_empty(job);
+        if (!empty.query_succeeded) {
+            const auto quiescence =
+                terminate_windows_job_and_wait(
+                    job,
+                    process.hProcess,
+                    125u);
+            close_supervision_handles();
+            if (quiescence !=
+                WindowsJobQuiescenceResult::Quiescent)
+                throw std::runtime_error(
+                    "Port-Hostprozessbaumstatus war unlesbar und der "
+                    "Prozessbaum konnte nicht nachweislich geleert "
+                    "werden.");
+            result.process_tree_quiescent = true;
+            throw std::runtime_error(
+                "Port-Hostprozessbaumstatus konnte nicht gelesen "
+                "werden; der Prozessbaum wurde beendet.");
+        }
+        if (root_terminal && empty.empty) {
+            result.exit_code = static_cast<int>(root_exit_code);
+            result.exit_code_available = true;
+            result.process_tree_quiescent = true;
+            break;
+        }
+
+        if (std::chrono::steady_clock::now() >= deadline) {
+            result.exit_code = 124;
+            result.exit_code_available = true;
+            result.timed_out = true;
+            const auto quiescence =
+                terminate_windows_job_and_wait(
+                    job,
+                    process.hProcess,
+                    124u);
+            if (quiescence !=
+                WindowsJobQuiescenceResult::Quiescent) {
+                close_supervision_handles();
+                throw std::runtime_error(
+                    "Port-Hostprozess-Timeout konnte den Prozessbaum "
+                    "nicht nachweislich leeren.");
+            }
+            result.process_tree_quiescent = true;
+            break;
+        }
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(10));
     }
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    // KILL_ON_JOB_CLOSE beendet auch bei einem bereits beendeten Shellprozess
-    // noch lebende Compiler-/Build-Nachkommen.
-    CloseHandle(job);
+    close_supervision_handles();
     return result;
 #else
+    if (windows_cl_jobs)
+        throw std::invalid_argument(
+            "MSVC-Compilerbudget wurde auf einer Nicht-Windows-Plattform "
+            "angefordert.");
+    result.process_tree_quiescent = true;
+    ScopedPosixHostSignals forwarding_signals;
+#if defined(__linux__)
+    ScopedLinuxChildSubreaper child_subreaper;
+    auto baseline_children = capture_linux_baseline_children();
+#else
+    std::vector<pid_t> baseline_children;
+#endif
+    int launch_ready_pipe[2] = {-1, -1};
+    int launch_commit_pipe[2] = {-1, -1};
+    if (::pipe(launch_ready_pipe) != 0)
+        throw std::runtime_error(
+            "Port-Hostprozess-Startvertrag konnte nicht erstellt "
+            "werden.");
+    if (::pipe(launch_commit_pipe) != 0) {
+        static_cast<void>(::close(launch_ready_pipe[0]));
+        static_cast<void>(::close(launch_ready_pipe[1]));
+        throw std::runtime_error(
+            "Port-Hostprozess-Commitvertrag konnte nicht erstellt "
+            "werden.");
+    }
+    const auto close_launch_pipes = [&]() noexcept {
+        for (auto& descriptor : launch_ready_pipe) {
+            if (descriptor < 0) continue;
+            static_cast<void>(::close(descriptor));
+            descriptor = -1;
+        }
+        for (auto& descriptor : launch_commit_pipe) {
+            if (descriptor < 0) continue;
+            static_cast<void>(::close(descriptor));
+            descriptor = -1;
+        }
+    };
+    const std::array launch_descriptors{
+        launch_ready_pipe[0],
+        launch_ready_pipe[1],
+        launch_commit_pipe[0],
+        launch_commit_pipe[1]};
+    for (const auto descriptor : launch_descriptors) {
+        const auto flags = ::fcntl(descriptor, F_GETFD);
+        if (flags < 0 ||
+            ::fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) != 0) {
+            close_launch_pipes();
+            throw std::runtime_error(
+                "Port-Hostprozess-Startvertrag konnte nicht "
+                "close-on-exec gebunden werden.");
+        }
+    }
     const auto child = ::fork();
-    if (child < 0)
+    if (child < 0) {
+        close_launch_pipes();
         throw std::runtime_error(
             "Port-Hostprozess konnte nicht gestartet werden.");
+    }
     if (child == 0) {
-        if (::setpgid(0, 0) != 0) ::_exit(126);
+        static_cast<void>(::close(launch_ready_pipe[0]));
+        static_cast<void>(::close(launch_commit_pipe[1]));
+        ScopedPosixHostSignals::restore_defaults_in_child();
+        const auto group_ready = ::setpgid(0, 0) == 0;
+        const char launch_state = group_ready ? 'R' : 'E';
+        ssize_t written = -1;
+        do {
+            written = ::write(
+                launch_ready_pipe[1], &launch_state, 1u);
+        } while (written < 0 && errno == EINTR);
+        static_cast<void>(::close(launch_ready_pipe[1]));
+        if (!group_ready || written != 1) {
+            static_cast<void>(::close(launch_commit_pipe[0]));
+            ::_exit(126);
+        }
+        char launch_commit = 0;
+        ssize_t commit_read = -1;
+        do {
+            commit_read = ::read(
+                launch_commit_pipe[0], &launch_commit, 1u);
+        } while (commit_read < 0 && errno == EINTR);
+        static_cast<void>(::close(launch_commit_pipe[0]));
+        if (commit_read != 1 || launch_commit != 'C')
+            ::_exit(126);
         ::execl("/bin/sh",
                 "sh",
                 "-c",
@@ -1903,14 +3855,53 @@ SupervisedHostCommandResult run_supervised_host_command(
                 static_cast<char*>(nullptr));
         ::_exit(127);
     }
-    if (::setpgid(child, child) != 0 &&
-        errno != EACCES && errno != ESRCH) {
-        static_cast<void>(::kill(child, SIGKILL));
-        int discarded_status = 0;
-        static_cast<void>(::waitpid(child, &discarded_status, 0));
+    result.process_tree_quiescent = false;
+    PosixUncommittedChildGuard uncommitted_child(child);
+    static_cast<void>(::close(launch_ready_pipe[1]));
+    launch_ready_pipe[1] = -1;
+    static_cast<void>(::close(launch_commit_pipe[0]));
+    launch_commit_pipe[0] = -1;
+    char launch_state = 0;
+    ssize_t launch_read = -1;
+    do {
+        launch_read = ::read(
+            launch_ready_pipe[0], &launch_state, 1u);
+    } while (launch_read < 0 && errno == EINTR);
+    if (launch_read != 1 || launch_state != 'R') {
+        close_launch_pipes();
+        if (!uncommitted_child.terminate_and_reap())
+            throw std::runtime_error(
+                "Port-Hostprozess konnte vor dem Exec-Commit nicht "
+                "nachweislich beendet und reap-ed werden.");
+        result.process_tree_quiescent = true;
         throw std::runtime_error(
-            "Port-Hostprozess konnte nicht an seine Prozessgruppe "
-            "gebunden werden.");
+            "Port-Hostprozess konnte keine nachweislich eigene "
+            "Prozessgruppe vorbereiten.");
+    }
+
+    PosixChildSupervisor supervisor(
+        child,
+        telemetry,
+        telemetry_phase,
+        std::move(baseline_children));
+    uncommitted_child.release();
+    const char launch_commit = 'C';
+    ssize_t commit_written = -1;
+    do {
+        commit_written = ::write(
+            launch_commit_pipe[1], &launch_commit, 1u);
+    } while (commit_written < 0 && errno == EINTR);
+    close_launch_pipes();
+    if (commit_written != 1) {
+        if (!supervisor.terminate_and_reap(SIGKILL))
+            throw std::runtime_error(
+                "Port-Hostprozess konnte nach fehlgeschlagenem "
+                "Exec-Commit nicht nachweislich beendet und reap-ed "
+                "werden.");
+        result.process_tree_quiescent = true;
+        throw std::runtime_error(
+            "Port-Hostprozess-Exec-Commit konnte nicht zugestellt "
+            "werden.");
     }
 
     const auto deadline =
@@ -1919,94 +3910,141 @@ SupervisedHostCommandResult run_supervised_host_command(
                   std::chrono::steady_clock::now() +
                   *timeout)
             : std::nullopt;
-    int status = 0;
-    bool reaped = false;
     for (;;) {
-        const auto waited = ::waitpid(child, &status, WNOHANG);
-        if (waited == child) {
-            reaped = true;
+        if (!supervisor.refresh_descendant_telemetry()) {
+            if (!supervisor.terminate_and_reap(SIGKILL))
+                throw std::runtime_error(
+                    "Linux-Descendant-Telemetrie schlug fehl; auch "
+                    "der Failsafe konnte den Prozessbaum nicht "
+                    "nachweislich leeren.");
+            result.process_tree_quiescent = true;
+            throw std::runtime_error(
+                "Linux-Descendant-Telemetrie konnte den aktiven "
+                "Prozessbaum nicht vollstaendig erfassen.");
+        }
+        if (supervision_heartbeat) supervision_heartbeat();
+        const auto forwarded_signal =
+            forwarding_signals.pending_signal();
+        if (forwarded_signal == SIGINT ||
+            forwarded_signal == SIGTERM) {
+            result.exit_code = 128 + forwarded_signal;
+            result.exit_code_available = true;
+            result.interrupted = true;
+            result.forwarded_signal = forwarded_signal;
+            if (!supervisor.terminate_and_reap(
+                    forwarded_signal))
+                throw std::runtime_error(
+                    "Unterbrechung konnte den Port-Hostprozessbaum "
+                    "nicht nachweislich leeren und reap-en.");
             break;
         }
-        if (waited < 0 && errno != EINTR) {
-            static_cast<void>(::kill(-child, SIGKILL));
-            static_cast<void>(::kill(child, SIGKILL));
+
+        const auto root_state = supervisor.observe_root();
+        if (root_state == PosixRootState::Failed) {
+            if (!supervisor.terminate_and_reap(SIGKILL))
+                throw std::runtime_error(
+                    "Port-Hostprozessaufsicht schlug fehl; auch der "
+                    "Failsafe konnte den Prozessbaum nicht "
+                    "nachweislich leeren und reap-en.");
+            result.process_tree_quiescent = true;
             throw std::runtime_error(
-                "Port-Hostprozess konnte nicht sicher beaufsichtigt werden.");
+                "Port-Hostprozess konnte nicht sicher beaufsichtigt "
+                "werden; sein Prozessbaum wurde vollstaendig beendet.");
+        }
+        if (root_state == PosixRootState::Terminal) {
+            // The direct child intentionally remains waitable via WNOWAIT
+            // until all remaining PGID members are gone naturally. Only the
+            // overall deadline or an external interruption may signal them.
+            const auto quiescence =
+                supervisor.try_natural_quiescent_reap();
+            if (quiescence ==
+                PosixTreeQuiescenceState::Failed) {
+                if (!supervisor.terminate_and_reap(SIGKILL))
+                    throw std::runtime_error(
+                        "Port-Hostprozessaufsicht verlor ihren "
+                        "Quieszenzbeweis; auch der Failsafe konnte den "
+                        "Prozessbaum nicht sicher leeren.");
+                result.process_tree_quiescent = true;
+                throw std::runtime_error(
+                    "Port-Hostprozessbaum konnte nicht sicher "
+                    "beaufsichtigt werden; er wurde vollstaendig "
+                    "beendet.");
+            }
+            if (quiescence ==
+                PosixTreeQuiescenceState::Quiescent) {
+                result.exit_code = supervisor.exit_code();
+                result.exit_code_available = true;
+                break;
+            }
         }
         if (deadline &&
-            std::chrono::steady_clock::now() >= *deadline)
+            std::chrono::steady_clock::now() >= *deadline) {
+            result.exit_code = 124;
+            result.exit_code_available = true;
+            result.timed_out = true;
+            if (!supervisor.terminate_and_reap(SIGTERM))
+                throw std::runtime_error(
+                    "Port-Hostprozess-Timeout konnte den Prozessbaum "
+                    "nicht nachweislich leeren und reap-en.");
             break;
+        }
         std::this_thread::sleep_for(
             std::chrono::milliseconds(20));
     }
-
-    SupervisedHostCommandResult result;
-    if (!reaped) {
-        result.exit_code = 124;
-        result.timed_out = true;
-        static_cast<void>(::kill(-child, SIGTERM));
-        const auto term_deadline =
-            std::chrono::steady_clock::now() +
-            std::chrono::seconds(2);
-        while (std::chrono::steady_clock::now() < term_deadline) {
-            const auto waited =
-                ::waitpid(child, &status, WNOHANG);
-            if (waited == child) {
-                reaped = true;
-                break;
-            }
-            if (waited < 0 && errno != EINTR) break;
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(20));
-        }
-        // Auch wenn der direkte Shellprozess bereits auf SIGTERM reagiert
-        // hat, koennen weitere Mitglieder der Build-Prozessgruppe das Signal
-        // ignorieren. Der harte Timeout beendet deshalb die ganze Gruppe.
-        static_cast<void>(::kill(-child, SIGKILL));
-        if (!reaped) {
-            static_cast<void>(::kill(child, SIGKILL));
-            const auto kill_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(3);
-            while (std::chrono::steady_clock::now() <
-                   kill_deadline) {
-                const auto waited =
-                    ::waitpid(child, &status, WNOHANG);
-                if (waited == child) {
-                    reaped = true;
-                    break;
-                }
-                if (waited < 0 && errno != EINTR) break;
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(20));
-            }
-        }
-        return result;
-    }
-
-    // Ein Shellprozess darf keine abgekoppelten Nachkommen ueber die
-    // beaufsichtigte Buildphase hinaus am Leben lassen.
-    static_cast<void>(::kill(-child, SIGKILL));
-    if (WIFEXITED(status))
-        result.exit_code = WEXITSTATUS(status);
-    else if (WIFSIGNALED(status))
-        result.exit_code = 128 + WTERMSIG(status);
+    result.process_tree_quiescent =
+        supervisor.process_tree_quiescent();
+    supervisor.finish_telemetry();
+    if (!result.process_tree_quiescent)
+        throw std::runtime_error(
+            "Port-Hostprozessbaum besitzt keinen beweisbar "
+            "quieszenten Endzustand.");
     return result;
 #endif
 }
 
-std::size_t configured_host_build_jobs() {
+struct HostCompileBudget final {
+    std::size_t requested = 1u;
+    std::size_t effective = 1u;
+};
+
+HostCompileBudget configured_host_compile_budget() {
     constexpr std::size_t maximum_jobs = 256u;
-    auto configured = configured_environment_value("KATANA_HOST_BUILD_JOBS");
-    if (!configured) {
-        return std::min<std::size_t>(maximum_jobs,
-                                     std::max(1u, std::thread::hardware_concurrency()));
-    }
-    std::size_t parsed = 0u;
-    const auto jobs = std::stoull(*configured, &parsed, 10);
-    if (parsed != configured->size() || jobs == 0u || jobs > maximum_jobs)
-        throw std::invalid_argument("KATANA_HOST_BUILD_JOBS ist ungueltig.");
-    return static_cast<std::size_t>(jobs);
+    const auto detected = std::clamp<std::size_t>(
+        std::max(1u, std::thread::hardware_concurrency()),
+        1u,
+        maximum_jobs);
+    const auto configured = configured_environment_value(
+        "KATANA_HOST_COMPILE_JOBS");
+    const auto legacy = configured_environment_value(
+        "KATANA_HOST_BUILD_JOBS");
+    const auto parse = [](const std::string& value,
+                          const std::string_view name) {
+        std::size_t jobs = 0u;
+        const auto conversion = std::from_chars(
+            value.data(), value.data() + value.size(), jobs, 10);
+        if (conversion.ec != std::errc{} ||
+            conversion.ptr != value.data() + value.size() ||
+            jobs == 0u || jobs > maximum_jobs)
+            throw std::invalid_argument(
+                std::string(name) + " ist ungueltig.");
+        return jobs;
+    };
+    if (configured && legacy &&
+        parse(*configured, "KATANA_HOST_COMPILE_JOBS") !=
+            parse(*legacy, "KATANA_HOST_BUILD_JOBS"))
+        throw std::invalid_argument(
+            "KATANA_HOST_COMPILE_JOBS und das Legacy-Alias "
+            "KATANA_HOST_BUILD_JOBS widersprechen sich.");
+    const auto requested = configured
+                               ? parse(
+                                     *configured,
+                                     "KATANA_HOST_COMPILE_JOBS")
+                               : legacy
+                                     ? parse(
+                                           *legacy,
+                                           "KATANA_HOST_BUILD_JOBS")
+                                     : detected;
+    return {requested, std::min(requested, detected)};
 }
 
 bool valid_port_target_name(const std::string_view value) noexcept {
@@ -2249,6 +4287,145 @@ void require_safe_replaceable_port_file(
             std::string(description) +
             " ist keine sicher ersetzbare regulaere Datei.");
 }
+
+void reset_host_build_event_root(
+    const std::filesystem::path& port_root,
+    const std::filesystem::path& event_root) {
+    remove_safe_port_tree(
+        event_root, "Hostbuild-Ereignisverzeichnis");
+    ensure_safe_port_directory_chain(
+        port_root,
+        event_root,
+        "Hostbuild-Ereignisverzeichnis");
+}
+
+#ifdef _WIN32
+struct WindowsHostToolWrappers final {
+    std::filesystem::path directory;
+    std::filesystem::path compiler;
+    std::filesystem::path archiver;
+    std::filesystem::path linker;
+};
+
+[[nodiscard]] WindowsHostToolWrappers
+prepare_windows_host_tool_wrappers(
+    const std::filesystem::path& port_root,
+    const std::filesystem::path& directory) {
+    ensure_safe_port_directory_chain(
+        port_root, directory, "Windows-Hosttool-Wrapper");
+    const auto source = current_process_executable_path();
+    const auto source_identity =
+        katana::io::capture_input_provenance(
+            "host-tool-wrapper-source", source);
+    const auto prepare = [&](const std::string_view name) {
+        const auto target = directory / std::string(name);
+        require_safe_replaceable_port_file(
+            port_root, target, "Windows-Hosttool-Wrapper");
+        bool current = false;
+        std::error_code status_error;
+        const auto status =
+            std::filesystem::symlink_status(target, status_error);
+        if (!status_error && std::filesystem::is_regular_file(status) &&
+            regular_reparse_free_windows_path(target)) {
+            const auto target_identity =
+                katana::io::capture_input_provenance(
+                    "host-tool-wrapper-target", target);
+            current =
+                target_identity.size == source_identity.size &&
+                target_identity.sha256 == source_identity.sha256;
+        } else if (status_error !=
+                       std::errc::no_such_file_or_directory &&
+                   (status_error ||
+                    status.type() !=
+                        std::filesystem::file_type::not_found)) {
+            throw std::runtime_error(
+                "Windows-Hosttool-Wrapper konnte nicht sicher "
+                "geprueft werden.");
+        }
+        if (!current) {
+            std::filesystem::copy_file(
+                source,
+                target,
+                std::filesystem::copy_options::overwrite_existing);
+            if (!regular_reparse_free_windows_path(target))
+                throw std::runtime_error(
+                    "Windows-Hosttool-Wrapper wurde nicht als sichere "
+                    "regulaere Datei erzeugt.");
+            const auto copied_identity =
+                katana::io::capture_input_provenance(
+                    "host-tool-wrapper-copy", target);
+            if (copied_identity.size != source_identity.size ||
+                copied_identity.sha256 != source_identity.sha256)
+                throw std::runtime_error(
+                    "Windows-Hosttool-Wrapper ist nicht byteidentisch.");
+        }
+        return target;
+    };
+    return {
+        directory,
+        prepare("katana-host-cl-wrapper.exe"),
+        prepare("katana-host-archive-wrapper.exe"),
+        prepare("katana-host-link-wrapper.exe")};
+}
+#else
+[[nodiscard]] std::filesystem::path
+prepare_posix_host_archive_wrapper(
+    const std::filesystem::path& port_root,
+    const std::filesystem::path& directory) {
+    ensure_safe_port_directory_chain(
+        port_root, directory, "POSIX-Hostarchive-Wrapper");
+    const auto source = current_process_executable_path();
+    const auto target = directory / "katana-host-archive-wrapper";
+    require_safe_replaceable_port_file(
+        port_root, target, "POSIX-Hostarchive-Wrapper");
+    const auto source_identity =
+        katana::io::capture_input_provenance(
+            "host-archive-wrapper-source", source);
+    bool current = false;
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(target, status_error);
+    if (!status_error && std::filesystem::is_regular_file(status) &&
+        !std::filesystem::is_symlink(status)) {
+        struct stat identity {};
+        if (::lstat(target.c_str(), &identity) != 0 ||
+            !S_ISREG(identity.st_mode) || identity.st_nlink != 1)
+            throw std::runtime_error(
+                "POSIX-Hostarchive-Wrapper besitzt keine sichere "
+                "Dateiidentitaet.");
+        const auto target_identity =
+            katana::io::capture_input_provenance(
+                "host-archive-wrapper-target", target);
+        current = target_identity.size == source_identity.size &&
+                  target_identity.sha256 == source_identity.sha256;
+    } else if (status_error !=
+                   std::errc::no_such_file_or_directory &&
+               (status_error ||
+                status.type() !=
+                    std::filesystem::file_type::not_found)) {
+        throw std::runtime_error(
+            "POSIX-Hostarchive-Wrapper konnte nicht sicher geprueft "
+            "werden.");
+    }
+    if (!current) {
+        std::filesystem::copy_file(
+            source,
+            target,
+            std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::permissions(
+            target,
+            std::filesystem::status(source).permissions());
+        const auto copied_identity =
+            katana::io::capture_input_provenance(
+                "host-archive-wrapper-copy", target);
+        if (copied_identity.size != source_identity.size ||
+            copied_identity.sha256 != source_identity.sha256)
+            throw std::runtime_error(
+                "POSIX-Hostarchive-Wrapper ist nicht byteidentisch.");
+    }
+    return target;
+}
+#endif
 
 class ExclusivePortExportLock final {
   public:
@@ -3042,18 +5219,66 @@ ActivePortPublishTransaction begin_port_publish_transaction(
 }
 
 void maybe_hold_port_publish_lock_for_test() {
-    const auto configured =
+    const auto configured_duration =
         configured_environment_value(
             "KATANA_PORT_PUBLISH_TEST_HOLD_LOCK_MS");
-    if (!configured) return;
+    const auto configured_release_file =
+        configured_environment_value(
+            "KATANA_PORT_PUBLISH_TEST_RELEASE_FILE");
+    if (!configured_duration && !configured_release_file) return;
+    if (configured_duration && configured_release_file)
+        throw std::invalid_argument(
+            "Port-Publish-Lock-Test darf nur einen Freigabemodus "
+            "verwenden.");
+    std::cout << "KATANA_PORT_PUBLISH_TEST_OUTPUT_LOCK_HELD\n"
+              << std::flush;
+    if (configured_release_file) {
+        const auto release_file =
+            std::filesystem::absolute(*configured_release_file)
+                .lexically_normal();
+        if (release_file.empty() ||
+            release_file == release_file.root_path() ||
+            release_file.filename().empty())
+            throw std::invalid_argument(
+                "KATANA_PORT_PUBLISH_TEST_RELEASE_FILE ist "
+                "ungueltig.");
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(120);
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::error_code status_error;
+            const auto status =
+                std::filesystem::symlink_status(
+                    release_file, status_error);
+            const bool missing =
+                status_error ==
+                    std::errc::no_such_file_or_directory ||
+                (!status_error &&
+                 status.type() ==
+                     std::filesystem::file_type::not_found);
+            if (!status_error &&
+                std::filesystem::is_regular_file(status) &&
+                !unsafe_port_filesystem_link(
+                    release_file, status))
+                return;
+            if (!missing)
+                throw std::runtime_error(
+                    "Port-Publish-Lock-Testfreigabe ist kein "
+                    "sicheres regulaeres Dateiartefakt.");
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(10));
+        }
+        throw std::runtime_error(
+            "Port-Publish-Lock-Testfreigabe wurde nicht rechtzeitig "
+            "signalisiert.");
+    }
     std::size_t parsed = 0u;
-    const auto duration = std::stoull(*configured, &parsed, 10);
-    if (parsed != configured->size() || duration == 0u ||
+    const auto duration =
+        std::stoull(*configured_duration, &parsed, 10);
+    if (parsed != configured_duration->size() || duration == 0u ||
         duration > 10000u)
         throw std::invalid_argument(
             "KATANA_PORT_PUBLISH_TEST_HOLD_LOCK_MS ist ungueltig.");
-    std::cout << "KATANA_PORT_PUBLISH_TEST_OUTPUT_LOCK_HELD\n"
-              << std::flush;
     std::this_thread::sleep_for(
         std::chrono::milliseconds(duration));
 }
@@ -3168,6 +5393,49 @@ bool path_is_within(const std::filesystem::path& path,
 #endif
     }
     return true;
+}
+
+bool port_paths_alias(const std::filesystem::path& left,
+                      const std::filesystem::path& right) {
+    if (left.empty() || right.empty()) return false;
+    const auto normalized_left =
+        std::filesystem::absolute(left).lexically_normal();
+    const auto normalized_right =
+        std::filesystem::absolute(right).lexically_normal();
+    if (path_is_within(normalized_left, normalized_right) &&
+        path_is_within(normalized_right, normalized_left))
+        return true;
+
+    std::error_code equivalent_error;
+    const auto equivalent =
+        std::filesystem::equivalent(normalized_left,
+                                    normalized_right,
+                                    equivalent_error);
+    return !equivalent_error && equivalent;
+}
+
+void require_telemetry_path_disjoint_from_file(
+    const std::filesystem::path& telemetry_path,
+    const std::filesystem::path& protected_path,
+    const std::string_view description) {
+    if (!port_paths_alias(telemetry_path, protected_path)) return;
+    throw std::invalid_argument(
+        "--telemetry-jsonl darf " + std::string(description) +
+        " weder direkt noch ueber einen Hardlink ueberschreiben.");
+}
+
+void require_telemetry_path_outside_tree(
+    const std::filesystem::path& telemetry_path,
+    const std::filesystem::path& protected_root,
+    const std::string_view description) {
+    if (protected_root.empty() ||
+        !path_is_within(
+            std::filesystem::absolute(telemetry_path).lexically_normal(),
+            std::filesystem::absolute(protected_root).lexically_normal()))
+        return;
+    throw std::invalid_argument(
+        "--telemetry-jsonl muss ausserhalb von " +
+        std::string(description) + " liegen.");
 }
 
 inline constexpr std::uintmax_t maximum_port_export_cache_state_bytes =
@@ -4224,6 +6492,29 @@ std::vector<std::uint8_t> load_runtime_image_payload(
     return bytes;
 }
 
+std::size_t resolved_runtime_jobs() noexcept {
+    constexpr std::size_t maximum_jobs = 64u;
+    const auto detected = std::clamp<std::size_t>(
+        std::max(1u, std::thread::hardware_concurrency()),
+        1u,
+        maximum_jobs);
+    const auto configured =
+        configured_environment_value("KATANA_RUNTIME_JOBS");
+    if (!configured) return detected;
+    std::size_t requested = 0u;
+    const auto conversion = std::from_chars(
+        configured->data(),
+        configured->data() + configured->size(),
+        requested,
+        10);
+    if (conversion.ec != std::errc{} ||
+        conversion.ptr !=
+            configured->data() + configured->size() ||
+        requested == 0u)
+        return detected;
+    return std::clamp<std::size_t>(requested, 1u, detected);
+}
+
 int export_port_project(const std::filesystem::path& source_path,
                         const std::filesystem::path& output_path,
                         const std::string& target_name,
@@ -4241,17 +6532,14 @@ int export_port_project(const std::filesystem::path& source_path,
                         const LatentAotDiscoveryModeArgument
                             latent_aot_discovery_mode =
                                 LatentAotDiscoveryModeArgument::
-                                     HintsAndHeuristics) {
-    PortPhaseTimingRecorder phase_timings;
-    PortPhaseTimingBinding phase_timing_binding(phase_timings);
-    const katana::ProgressReporter port_progress(
-        observe_structured_progress,
-        std::chrono::milliseconds(250),
-        std::chrono::seconds(1));
-    phase_timings.transition("setup");
+                                     HintsAndHeuristics,
+                        const std::optional<std::filesystem::path>&
+                            telemetry_jsonl_path = std::nullopt) {
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
             "--target-name ist kein sicherer CMake-Targetname.");
+    const auto host_compile_budget =
+        configured_host_compile_budget();
     const auto normalized_latent_aot_entry_hints =
         normalize_latent_aot_entry_hints(latent_aot_entry_hints);
     if (!normalized_latent_aot_entry_hints.empty() &&
@@ -4266,6 +6554,203 @@ int export_port_project(const std::filesystem::path& source_path,
         absolute_output.filename().empty())
         throw std::invalid_argument(
             "Port-Ausgabe darf kein Dateisystemstamm sein.");
+    ensure_safe_absolute_directory_chain(
+        absolute_output.parent_path(), "Port-Ausgabeelternpfad");
+    const auto publish_paths =
+        port_publish_output_paths(absolute_output);
+    std::optional<std::filesystem::path>
+        normalized_telemetry_jsonl_path;
+    if (telemetry_jsonl_path.has_value()) {
+        const auto telemetry_path =
+            std::filesystem::absolute(*telemetry_jsonl_path).
+                lexically_normal();
+        if (telemetry_path.empty() ||
+            telemetry_path == telemetry_path.root_path() ||
+            telemetry_path.filename().empty() ||
+            path_is_within(telemetry_path, absolute_output))
+            throw std::invalid_argument(
+                "--telemetry-jsonl muss eine Datei ausserhalb des "
+                "publizierten Portpakets bezeichnen.");
+        ensure_safe_absolute_directory_chain(
+            telemetry_path.parent_path(),
+            "Portbuild-Telemetriepfad");
+        std::error_code telemetry_status_error;
+        const auto telemetry_status =
+            std::filesystem::symlink_status(
+                telemetry_path, telemetry_status_error);
+        const bool telemetry_missing =
+            telemetry_status_error ==
+                std::errc::no_such_file_or_directory ||
+            (!telemetry_status_error &&
+             telemetry_status.type() ==
+                 std::filesystem::file_type::not_found);
+        if (!telemetry_missing &&
+            (telemetry_status_error ||
+             !std::filesystem::is_regular_file(
+                 telemetry_status) ||
+             unsafe_port_filesystem_link(
+                 telemetry_path, telemetry_status)))
+            throw std::invalid_argument(
+                "--telemetry-jsonl ist keine sicher ersetzbare "
+                "regulaere Datei.");
+
+        const auto telemetry_writer_lock =
+            katana::cli::port_build_telemetry_writer_lock_path(
+                telemetry_path);
+
+        require_telemetry_path_disjoint_from_file(
+            telemetry_path,
+            source_path,
+            "die Portquelle");
+        require_telemetry_path_outside_tree(
+            telemetry_path,
+            publish_paths.output,
+            "dem publizierten Portpaket");
+        require_telemetry_path_disjoint_from_file(
+            telemetry_path,
+            std::filesystem::path(
+                publish_paths.lock_base.string() +
+                ".lock"),
+            "die Port-Publish-Sperre");
+        require_telemetry_path_outside_tree(
+            telemetry_path,
+            publish_paths.journal,
+            "dem Port-Publish-Journal");
+        require_telemetry_path_outside_tree(
+            telemetry_path,
+            source_root,
+            "dem KatanaRecomp-Quellbaum");
+        require_telemetry_path_outside_tree(
+            telemetry_path,
+            runtime_binding.package_prefix,
+            "dem Runtime-Paket");
+        require_telemetry_path_outside_tree(
+            telemetry_path,
+            runtime_binding.source_root,
+            "dem Runtime-Quellbaum");
+        require_telemetry_path_outside_tree(
+            telemetry_path,
+            port_export_workspace_root(
+                absolute_output.parent_path()),
+            "dem globalen Port-Arbeitscache");
+        if (!runtime_binding.build_targets_file.empty()) {
+            require_telemetry_path_outside_tree(
+                telemetry_path,
+                runtime_binding.build_targets_file.parent_path(),
+                "dem Runtime-Buildbaum");
+        }
+        if (game_project_path.has_value())
+            require_telemetry_path_disjoint_from_file(
+                telemetry_path,
+                *game_project_path,
+                "das Game-Project");
+        if (game_entry_handoff_path.has_value())
+            require_telemetry_path_disjoint_from_file(
+                telemetry_path,
+                *game_entry_handoff_path,
+                "den Game-Entry-Handoff");
+        for (const auto& [image_id, payload_path] :
+             runtime_image_payload_arguments) {
+            static_cast<void>(image_id);
+            require_telemetry_path_disjoint_from_file(
+                telemetry_path,
+                payload_path,
+                "ein Runtime-Image-Payload");
+        }
+        if (!boot_executable_artifact) {
+            const auto descriptor =
+                katana::runtime::parse_gdi_descriptor(source_path);
+            require_telemetry_path_disjoint_from_file(
+                telemetry_path,
+                descriptor.resolved_path,
+                "den GDI-Descriptor");
+            require_telemetry_path_disjoint_from_file(
+                telemetry_writer_lock,
+                descriptor.resolved_path,
+                "den GDI-Descriptor");
+            for (const auto& track : descriptor.tracks)
+            {
+                require_telemetry_path_disjoint_from_file(
+                    telemetry_path,
+                    track.resolved_path,
+                    "einen GDI-Track");
+                require_telemetry_path_disjoint_from_file(
+                    telemetry_writer_lock,
+                    track.resolved_path,
+                    "einen GDI-Track");
+            }
+        }
+
+        // The persistent sibling lock is opened with exclusive ownership for
+        // the recorder lifetime. Protect it with exactly the same alias and
+        // tree boundaries as the JSONL payload itself; otherwise a crafted
+        // lock pathname could pin or alias an input/publish artifact before
+        // the recorder ever touches the requested output.
+        require_telemetry_path_disjoint_from_file(
+            telemetry_writer_lock,
+            telemetry_path,
+            "das Portbuild-Telemetrieziel");
+        require_telemetry_path_disjoint_from_file(
+            telemetry_writer_lock,
+            source_path,
+            "die Portquelle");
+        require_telemetry_path_outside_tree(
+            telemetry_writer_lock,
+            publish_paths.output,
+            "dem publizierten Portpaket");
+        require_telemetry_path_disjoint_from_file(
+            telemetry_writer_lock,
+            std::filesystem::path(
+                publish_paths.lock_base.string() +
+                ".lock"),
+            "die Port-Publish-Sperre");
+        require_telemetry_path_outside_tree(
+            telemetry_writer_lock,
+            publish_paths.journal,
+            "dem Port-Publish-Journal");
+        require_telemetry_path_outside_tree(
+            telemetry_writer_lock,
+            source_root,
+            "dem KatanaRecomp-Quellbaum");
+        require_telemetry_path_outside_tree(
+            telemetry_writer_lock,
+            runtime_binding.package_prefix,
+            "dem Runtime-Paket");
+        require_telemetry_path_outside_tree(
+            telemetry_writer_lock,
+            runtime_binding.source_root,
+            "dem Runtime-Quellbaum");
+        require_telemetry_path_outside_tree(
+            telemetry_writer_lock,
+            port_export_workspace_root(
+                absolute_output.parent_path()),
+            "dem globalen Port-Arbeitscache");
+        if (!runtime_binding.build_targets_file.empty()) {
+            require_telemetry_path_outside_tree(
+                telemetry_writer_lock,
+                runtime_binding.build_targets_file.parent_path(),
+                "dem Runtime-Buildbaum");
+        }
+        if (game_project_path.has_value())
+            require_telemetry_path_disjoint_from_file(
+                telemetry_writer_lock,
+                *game_project_path,
+                "das Game-Project");
+        if (game_entry_handoff_path.has_value())
+            require_telemetry_path_disjoint_from_file(
+                telemetry_writer_lock,
+                *game_entry_handoff_path,
+                "den Game-Entry-Handoff");
+        for (const auto& [image_id, payload_path] :
+             runtime_image_payload_arguments) {
+            static_cast<void>(image_id);
+            require_telemetry_path_disjoint_from_file(
+                telemetry_writer_lock,
+                payload_path,
+                "ein Runtime-Image-Payload");
+        }
+        normalized_telemetry_jsonl_path = telemetry_path;
+    }
     if (!source_root.empty()) {
         const auto relative_to_source = absolute_output.lexically_relative(source_root);
         if (!relative_to_source.empty() && !relative_to_source.is_absolute() &&
@@ -4274,6 +6759,56 @@ int export_port_project(const std::filesystem::path& source_path,
                 "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
         }
     }
+    katana::cli::PortBuildTelemetryOptions telemetry_options;
+    telemetry_options.jsonl_path =
+        normalized_telemetry_jsonl_path;
+    telemetry_options.require_phase_timings =
+        normalized_telemetry_jsonl_path.has_value();
+    telemetry_options.build_profile =
+        configured_environment_value("KATANA_PORT_BUILD_PROFILE")
+            .value_or("bringup");
+    telemetry_options.host_compile_jobs_requested =
+        host_compile_budget.requested;
+    telemetry_options.host_compile_jobs_effective =
+        host_compile_budget.effective;
+    telemetry_options.job_kind =
+        boot_executable_artifact
+            ? (diagnostic_partial
+                   ? "probe-port-executable"
+                   : "port-executable")
+            : (diagnostic_partial ? "probe-port" : "native-disc-port");
+    const auto build_job_kind = telemetry_options.job_kind;
+    katana::cli::PortBuildTelemetryRecorder
+        build_telemetry(std::move(telemetry_options));
+    if (normalized_telemetry_jsonl_path.has_value() &&
+        !build_telemetry.enabled())
+        throw katana::cli::Error(
+            katana::cli::ExitCode::InputOutput,
+            "Explizit angeforderte Portbuild-Telemetrie konnte "
+            "nicht initialisiert werden.");
+    PortPhaseTimingRecorder phase_timings(&build_telemetry);
+    const katana::ProgressReporter port_progress(
+        [&build_telemetry](
+            const katana::ProgressEvent& event) {
+            build_telemetry.observe_progress(event);
+            observe_structured_progress(event);
+        },
+        std::chrono::milliseconds(250),
+        std::chrono::seconds(1));
+    auto port_build_progress =
+        port_progress.begin(
+            katana::ProgressOperation::PortBuild,
+            katana::ProgressUnit::Steps,
+            1u,
+            build_job_kind);
+    PortBuildTelemetryRun telemetry_run(
+        build_telemetry,
+        phase_timings,
+        port_progress,
+        port_build_progress,
+        normalized_telemetry_jsonl_path.has_value());
+    try {
+        phase_timings.transition("setup");
     const auto shell_quote = [](const std::filesystem::path& path) {
         const auto text = path.string();
 #ifdef _WIN32
@@ -4289,16 +6824,14 @@ int export_port_project(const std::filesystem::path& source_path,
         return quoted + "'";
 #endif
     };
-    ensure_safe_absolute_directory_chain(
-        absolute_output.parent_path(), "Port-Ausgabeelternpfad");
-    const auto publish_paths =
-        port_publish_output_paths(absolute_output);
     const ExclusivePortExportLock publish_lock(
         publish_paths.lock_base);
     maybe_hold_port_publish_lock_for_test();
     recover_port_publish_transaction(publish_paths);
-    if (exit_after_port_publish_recovery_for_test())
+    if (exit_after_port_publish_recovery_for_test()) {
+        telemetry_run.complete();
         return 0;
+    }
     static_cast<void>(
         safe_regular_port_directory_exists(
             publish_paths.output, "Bestehendes Portpaket"));
@@ -4644,8 +7177,17 @@ int export_port_project(const std::filesystem::path& source_path,
             source_root,
             diagnostic_partial,
             console_profile,
-            observe_port_export_progress};
+            [&phase_timings](const std::string_view phase) {
+                observe_port_export_progress(
+                    phase_timings, phase);
+            }};
         export_options.progress = port_progress;
+        // Detailed miss-reason key comparisons are intentionally opt-in: a
+        // normal human progress stream must stay on the zero-overhead key
+        // path, while an explicitly requested JSONL performance trace must
+        // contain the complete primary miss ledger.
+        export_options.detailed_analysis_telemetry =
+            normalized_telemetry_jsonl_path.has_value();
         export_options.analysis_cache_root =
             component_cache_root;
         export_options.codegen_cache_root = workspace / ".katana-codegen-cache";
@@ -4846,10 +7388,17 @@ int export_port_project(const std::filesystem::path& source_path,
                     runtime_binding.build_configuration;
             runtime_build +=
                 " --parallel " +
-                std::to_string(configured_host_build_jobs());
+                std::to_string(host_compile_budget.effective);
 #ifdef _WIN32
-            if (runtime_binding.msbuild_generator)
-                runtime_build += " -- /nodeReuse:false";
+            if (runtime_binding.msbuild_generator) {
+                runtime_build +=
+                    " -- /nodeReuse:false /p:UseMultiToolTask=true "
+                    "/p:EnforceProcessCountAcrossBuilds=true "
+                    "/p:MultiProcMaxCount=" +
+                    std::to_string(host_compile_budget.effective) +
+                    " /p:CL_MPCount=" +
+                    std::to_string(host_compile_budget.effective);
+            }
 #endif
             phase_timings.transition("runtime-sdk-build");
             std::cout
@@ -4858,24 +7407,64 @@ int export_port_project(const std::filesystem::path& source_path,
                 << runtime_binding.build_configuration
                 << " generator="
                 << (runtime_binding.multi_config ? "multi" : "single")
+                << " compile_jobs_requested="
+                << host_compile_budget.requested
+                << " compile_jobs_effective="
+                << host_compile_budget.effective
                 << '\n'
                 << std::flush;
             auto runtime_build_progress =
                 port_progress.begin(
                     katana::ProgressOperation::HostRuntimeBuild,
                     katana::ProgressUnit::Steps,
-                    1u,
+                    std::nullopt,
                     "build-tree-runtime");
+            katana::ProgressCounterSnapshot runtime_build_counters;
+            runtime_build_counters.configured_workers =
+                host_compile_budget.effective;
+            runtime_build_progress.heartbeat(
+                std::move(runtime_build_counters));
             const auto runtime_build_result =
                 run_supervised_host_command(
+#ifdef _WIN32
+                    prepare_windows_host_command(
+                        runtime_build,
+                        true),
+#else
                     normalized_host_command(runtime_build),
+#endif
                     configured_port_host_command_runtime(
-                        "runtime-sdk-build"));
-            if (runtime_build_result.timed_out)
+                        "runtime-sdk-build"),
+                    &build_telemetry,
+                    "runtime-sdk-build"
+#ifdef _WIN32
+                    , runtime_binding.msbuild_generator
+                          ? std::optional<std::size_t>(
+                                host_compile_budget.effective)
+                          : std::optional<std::size_t>(0u)
+#else
+                    , std::nullopt
+#endif
+                    , [&runtime_build_progress,
+                       &host_compile_budget] {
+                          katana::ProgressCounterSnapshot counters;
+                          counters.configured_workers =
+                              host_compile_budget.effective;
+                          runtime_build_progress.heartbeat(
+                              std::move(counters));
+                      }
+                    );
+            if (!runtime_build_result.process_tree_quiescent)
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    "Runtime-SDK-Hostprozessbaum ist nicht "
+                    "nachweislich quieszent.");
+            if (runtime_build_result.timed_out) {
                 throw katana::cli::Error(
                     katana::cli::ExitCode::BuildFailure,
                     "KATANA_PORT_HOST_COMMAND_TIMEOUT "
                     "stage=runtime-sdk-build process_tree=terminated");
+            }
             if (runtime_build_result.exit_code != 0)
                 throw katana::cli::Error(
                     katana::cli::ExitCode::BuildFailure,
@@ -4883,6 +7472,60 @@ int export_port_project(const std::filesystem::path& source_path,
                     "aktualisiert werden.");
             runtime_build_progress.complete();
         }
+        const auto host_build_event_root =
+            build_path / ".katana-host-build-events";
+        const auto host_build_tool_root =
+            build_path / ".katana-host-build-tools";
+        ensure_safe_port_directory_chain(
+            report.output_root,
+            build_path,
+            "Inkrementeller Hostbuild-Cache");
+        reset_host_build_event_root(
+            report.output_root, host_build_event_root);
+        const auto katana_cli_path =
+            current_process_executable_path();
+        const auto require_launcher_component = [](
+            const std::string_view value,
+            const std::string_view description) {
+            if (value.empty() ||
+                value.find_first_of(";\r\n\"") !=
+                    std::string_view::npos)
+                throw std::invalid_argument(
+                    std::string(description) +
+                    " ist nicht sicher als CMake-Launcher bindbar.");
+        };
+        const auto cli_component = katana_cli_path.generic_string();
+        const auto event_component =
+            host_build_event_root.generic_string();
+        require_launcher_component(
+            cli_component, "Katana-Hostbuild-Launcher");
+        require_launcher_component(
+            event_component, "Hostbuild-Ereignisverzeichnis");
+        if (compiler_launcher)
+            require_launcher_component(
+                *compiler_launcher, "Compiler-Cache-Launcher");
+        auto instrumented_compiler_launcher =
+            cli_component + ";__host-build-tool;" +
+            event_component + ";compile;";
+        if (compiler_launcher)
+            instrumented_compiler_launcher +=
+                "--chain;" + *compiler_launcher;
+        else
+            instrumented_compiler_launcher += "--direct";
+        const auto instrumented_linker_launcher =
+            cli_component + ";__host-build-tool;" +
+            event_component + ";link;--direct";
+#ifdef _WIN32
+        const auto windows_host_tool_wrappers =
+            prepare_windows_host_tool_wrappers(
+                report.output_root, host_build_tool_root);
+        const auto archive_launcher_path =
+            windows_host_tool_wrappers.archiver;
+#else
+        const auto archive_launcher_path =
+            prepare_posix_host_archive_wrapper(
+                report.output_root, host_build_tool_root);
+#endif
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
 #ifdef _WIN32
@@ -4906,6 +7549,11 @@ int export_port_project(const std::filesystem::path& source_path,
         configure +=
             " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_PORT_BUILD_PROFILE=" +
             build_profile;
+        configure +=
+            " -DKATANA_HOST_COMPILE_JOBS_REQUESTED=" +
+            std::to_string(host_compile_budget.requested) +
+            " -DKATANA_HOST_COMPILE_JOBS=" +
+            std::to_string(host_compile_budget.effective);
         if (!runtime_binding.package_prefix.empty()) {
             configure +=
                 " -DKATANA_RUNTIME_BUILD_TARGETS= "
@@ -4929,15 +7577,25 @@ int export_port_project(const std::filesystem::path& source_path,
         if (host_linker != "default")
             configure += " -DCMAKE_LINKER_TYPE=" +
                          std::string(host_linker == "msvc" ? "MSVC" : "LLD");
-        if (compiler_launcher) {
+        if (use_ninja) {
             configure +=
                 " -DCMAKE_CXX_COMPILER_LAUNCHER=" +
-                shell_quote(std::filesystem::path(*compiler_launcher));
+                shell_quote(std::filesystem::path(
+                    instrumented_compiler_launcher));
+            configure +=
+                " -DCMAKE_CXX_LINKER_LAUNCHER=" +
+                shell_quote(std::filesystem::path(
+                    instrumented_linker_launcher));
+            configure +=
+                " -DKATANA_HOST_ARCHIVE_LAUNCHER=" +
+                shell_quote(archive_launcher_path);
         } else {
             // The incremental build directory survives exports. Clear a
             // previously configured launcher when this invocation requests
             // none instead of silently retaining stale host-build state.
             configure += " -DCMAKE_CXX_COMPILER_LAUNCHER=";
+            configure += " -DCMAKE_CXX_LINKER_LAUNCHER=";
+            configure += " -DKATANA_HOST_ARCHIVE_LAUNCHER=";
         }
         // Refresh or clear the cached source assertion on every configure.
         // Dirty/local exporters use the sentinel identity and must not retain
@@ -4948,8 +7606,18 @@ int export_port_project(const std::filesystem::path& source_path,
             configure +=
                 std::string(katana::build_contract::katana_git_commit);
         phase_timings.transition("configure");
-        std::cout << "KATANA_PORT_PHASE configure\n" << std::flush;
-        const auto configure_command = normalized_host_command(configure);
+        std::cout
+            << "KATANA_PORT_PHASE configure compile_jobs_requested="
+            << host_compile_budget.requested
+            << " compile_jobs_effective="
+            << host_compile_budget.effective << '\n'
+            << std::flush;
+        const auto configure_command =
+#ifdef _WIN32
+            prepare_windows_host_command(configure, true);
+#else
+            normalized_host_command(configure);
+#endif
         const auto configure_runtime =
             configured_port_host_command_runtime("configure");
         auto configure_progress =
@@ -4963,7 +7631,13 @@ int export_port_project(const std::filesystem::path& source_path,
             configure_result =
                 run_supervised_host_command(
                     configure_command,
-                    configure_runtime);
+                    configure_runtime,
+                    &build_telemetry,
+                    "configure"
+#ifdef _WIN32
+                    , std::optional<std::size_t>(0u)
+#endif
+                    );
         } catch (const std::exception& process_error) {
             try {
                 remove_failed_port_host_build_state(report.output_root, build_path);
@@ -4985,6 +7659,11 @@ int export_port_project(const std::filesystem::path& source_path,
                     "entfernt: ") +
                     process_error.what());
         }
+        if (!configure_result.process_tree_quiescent)
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                "Configure-Hostprozessbaum ist nicht nachweislich "
+                "quieszent.");
         if (configure_result.exit_code != 0) {
             const auto failure =
                 configure_result.timed_out
@@ -5031,30 +7710,201 @@ int export_port_project(const std::filesystem::path& source_path,
                 std::string("Unsicherer Port-Hostbuild-Configure wurde verworfen: ") +
                     configuration_error.what());
         }
+        const auto windows_configured_host_tools =
+            use_ninja
+                ? std::optional<WindowsConfiguredHostTools>{}
+                : std::optional<WindowsConfiguredHostTools>{
+                      configured_windows_host_tools(
+                          build_path / "CMakeCache.txt")};
 #endif
         configure_progress.complete();
+        if (normalized_telemetry_jsonl_path.has_value() &&
+            !build_telemetry.record_resolved_environment(
+                katana::cli::resolve_port_build_cmake_environment(
+                    build_path,
+                    katana::analysis::
+                        configured_analysis_parallel_jobs(),
+                    katana::codegen::configured_port_codegen_jobs(
+                        report.partitions),
+                    host_compile_budget.requested,
+                    host_compile_budget.effective,
+                    resolved_runtime_jobs())))
+            throw katana::cli::Error(
+                katana::cli::ExitCode::InputOutput,
+                "Der kritische post-Configure-Umgebungsrecord "
+                "konnte nicht vollstaendig gebunden werden.");
+        reset_host_build_event_root(
+            report.output_root, host_build_event_root);
+        const auto generated_artifacts =
+            validated_generated_artifact_files(report.output_root);
+        const auto generated_sources =
+            validated_generated_source_files(report.output_root);
+        if (!generated_artifacts || !generated_sources)
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                "Hostbuild-TU-Plan besitzt kein exaktes "
+                "generiertes Quellinventar.");
+        const auto is_cpp_source = [](const std::filesystem::path& path) {
+            auto extension = path.extension().string();
+            std::transform(
+                extension.begin(), extension.end(), extension.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            return extension == ".c" || extension == ".cc" ||
+                   extension == ".cpp" || extension == ".cxx" ||
+                   extension == ".c++";
+        };
+        const auto generated_translation_units =
+            static_cast<std::uint64_t>(std::count_if(
+                generated_artifacts->begin(),
+                generated_artifacts->end(),
+                is_cpp_source));
+        const auto support_translation_units =
+            static_cast<std::uint64_t>(std::count_if(
+                generated_sources->begin(),
+                generated_sources->end(),
+                is_cpp_source));
+        if (generated_translation_units == 0u ||
+            support_translation_units == 0u)
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                "Hostbuild-TU-Plan ist unerwartet leer.");
+        // katana_generated always enables one CMake-generated PCH compile
+        // edge in addition to every listed generated/support source.
+        const auto planned_translation_units =
+            generated_translation_units + support_translation_units + 1u;
+        auto built_executable = build_path / target_name;
+#ifdef _WIN32
+        built_executable += ".exe";
+#endif
+        std::optional<katana::io::InputProvenance>
+            previous_executable_identity;
+        std::error_code previous_status_error;
+        const auto previous_status = std::filesystem::symlink_status(
+            built_executable, previous_status_error);
+        if (!previous_status_error &&
+            std::filesystem::is_regular_file(previous_status) &&
+            !unsafe_port_filesystem_link(
+                built_executable, previous_status))
+            previous_executable_identity =
+                katana::io::capture_input_provenance(
+                    "previous-host-executable", built_executable);
+        else if (previous_status_error !=
+                     std::errc::no_such_file_or_directory &&
+                 (previous_status_error ||
+                  previous_status.type() !=
+                      std::filesystem::file_type::not_found))
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                "Vorheriges Hostartefakt konnte nicht sicher geprueft "
+                "werden.");
+        katana::cli::HostBuildProgressObserver host_build_progress(
+            host_build_event_root,
+            katana::cli::HostBuildProgressPlan{
+                planned_translation_units,
+                1u,
+                1u,
+                host_compile_budget.effective},
+            port_progress);
         auto build =
             std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
-        build += " --parallel " + std::to_string(configured_host_build_jobs());
+        build += " --parallel " +
+                 std::to_string(host_compile_budget.effective);
 #ifdef _WIN32
-        if (!use_ninja) build += " --config RelWithDebInfo -- /nodeReuse:false";
+        if (!use_ninja) {
+            auto wrapper_directory =
+                windows_host_tool_wrappers.directory.string();
+            if (wrapper_directory.find('"') != std::string::npos)
+                throw std::invalid_argument(
+                    "Windows-Hosttool-Wrapperpfad ist nicht sicher "
+                    "quotierbar.");
+            if (!wrapper_directory.ends_with('\\'))
+                wrapper_directory += '\\';
+            build +=
+                " --config RelWithDebInfo -- /nodeReuse:false "
+                "/p:UseMultiToolTask=true "
+                "/p:EnforceProcessCountAcrossBuilds=true "
+                "/p:MultiProcMaxCount=" +
+                std::to_string(host_compile_budget.effective) +
+                " /p:CL_MPCount=" +
+                std::to_string(host_compile_budget.effective) +
+                " /p:CLToolPath=\"" + wrapper_directory +
+                "\" /p:CLToolExe=katana-host-cl-wrapper.exe"
+                " /p:LibToolPath=\"" + wrapper_directory +
+                "\" /p:LibToolExe=katana-host-archive-wrapper.exe"
+                " /p:LinkToolPath=\"" + wrapper_directory +
+                "\" /p:LinkToolExe=katana-host-link-wrapper.exe";
+        }
 #endif
         phase_timings.transition("host-build");
-        std::cout << "KATANA_PORT_PHASE host-build\n" << std::flush;
-        const auto build_command = normalized_host_command(build);
+        std::cout
+            << "KATANA_PORT_PHASE host-build compile_jobs_requested="
+            << host_compile_budget.requested
+            << " compile_jobs_effective="
+            << host_compile_budget.effective << '\n'
+            << std::flush;
+#ifdef _WIN32
+        auto windows_host_build_environment =
+            "set \"KATANA_HOST_BUILD_EVENT_ROOT=" +
+            host_build_event_root.string() + "\" && ";
+        if (!use_ninja) {
+            if (!windows_configured_host_tools)
+                throw std::runtime_error(
+                    "Visual-Studio-Hosttools wurden nicht gebunden.");
+            windows_host_build_environment +=
+                "set \"KATANA_HOST_BUILD_REAL_COMPILER=" +
+                windows_configured_host_tools->compiler +
+                "\" && set \"KATANA_HOST_BUILD_REAL_ARCHIVER=" +
+                windows_configured_host_tools->archiver +
+                "\" && set \"KATANA_HOST_BUILD_REAL_LINKER=" +
+                windows_configured_host_tools->linker +
+                "\" && ";
+        }
+#endif
+        const auto build_command =
+#ifdef _WIN32
+            prepare_windows_host_command(
+                windows_host_build_environment + build,
+                true);
+#else
+            normalized_host_command(
+                "KATANA_HOST_BUILD_EVENT_ROOT=" +
+                shell_quote(host_build_event_root) + ' ' + build);
+#endif
         const auto build_runtime =
             configured_port_host_command_runtime("host-build");
-        auto compilation_progress =
-            port_progress.begin(
-                katana::ProgressOperation::Compilation,
-                katana::ProgressUnit::Steps,
-                1u,
-                "port-host-compile-and-link");
-        const auto build_result =
-            run_supervised_host_command(
-                build_command,
-                build_runtime);
+        SupervisedHostCommandResult build_result;
+        try {
+            build_result = run_supervised_host_command(
+                    build_command,
+                    build_runtime,
+                    &build_telemetry,
+                    "host-build"
+#ifdef _WIN32
+                    , std::optional<std::size_t>(
+                          use_ninja
+                              ? 0u
+                              : host_compile_budget.effective)
+#else
+                    , std::nullopt
+#endif
+                    , [&host_build_progress] {
+                          host_build_progress.poll();
+                      });
+        } catch (...) {
+            host_build_progress.fail();
+            throw;
+        }
+        if (!build_result.process_tree_quiescent) {
+            host_build_progress.fail();
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                "Hostbuild-Prozessbaum ist nicht nachweislich "
+                "quieszent.");
+        }
         if (build_result.timed_out) {
+            host_build_progress.fail();
             const auto failure =
                 std::string(
                     "KATANA_PORT_HOST_COMMAND_TIMEOUT "
@@ -5079,24 +7929,47 @@ int export_port_project(const std::filesystem::path& source_path,
                     "; unvollstaendiger Buildzustand wurde entfernt.");
         }
         if (build_result.exit_code != 0) {
+            host_build_progress.fail();
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hosttarget konnte nicht gebaut werden.");
         }
-        compilation_progress.complete();
-        auto link_progress =
-            port_progress.begin(
-                katana::ProgressOperation::Linking,
-                katana::ProgressUnit::Files,
-                1u,
-                "port-host-link-validation");
-        auto built_executable = build_path / target_name;
-#ifdef _WIN32
-        built_executable += ".exe";
-#endif
-        if (!std::filesystem::is_regular_file(built_executable))
+        std::error_code built_status_error;
+        const auto built_status = std::filesystem::symlink_status(
+            built_executable, built_status_error);
+        if (built_status_error ||
+            !std::filesystem::is_regular_file(built_status) ||
+            unsafe_port_filesystem_link(
+                built_executable, built_status)) {
+            host_build_progress.fail();
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hostbuild besitzt kein ausfuehrbares Artefakt.");
-        link_progress.complete();
+        }
+        const auto built_executable_identity =
+            katana::io::capture_input_provenance(
+                "built-host-executable", built_executable);
+        const auto unchanged_existing_artifact =
+            previous_executable_identity &&
+            previous_executable_identity->size ==
+                built_executable_identity.size &&
+            previous_executable_identity->sha256 ==
+                built_executable_identity.sha256;
+        // The successful, instrumented target build is authoritative for
+        // graph edges which did not admit a real tool invocation. The
+        // observer derives their exact count atomically from its strict final
+        // scan, so a late terminal event cannot race a caller-side snapshot.
+        const auto host_build_completion_proof =
+            katana::cli::HostBuildCompletionProof{
+                true,
+                build_result.process_tree_quiescent,
+                true,
+                true,
+                unchanged_existing_artifact};
+        if (!host_build_progress.finish_success(
+                host_build_completion_proof))
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                "Hostbuild-Werkzeugfortschritt ist unvollstaendig oder "
+                "widerspruechlich.");
         auto packaging_progress =
             port_progress.begin(
                 katana::ProgressOperation::Packaging,
@@ -5236,7 +8109,7 @@ int export_port_project(const std::filesystem::path& source_path,
                    << "Inkrementeller Hostbuild-Cache: " << build_path.string() << '\n'
                    << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
         phase_timings.transition("complete");
-        phase_timings.emit();
+        telemetry_run.complete();
         return 0;
     } catch (...) {
         const auto original_error = std::current_exception();
@@ -5251,6 +8124,42 @@ int export_port_project(const std::filesystem::path& source_path,
                 recovery_error.what());
         }
         std::rethrow_exception(original_error);
+    }
+    } catch (const katana::cli::Error& error) {
+        require_requested_failure_telemetry(
+            telemetry_run.fail(
+                katana::cli::exit_status(error.code())));
+        throw;
+    } catch (const std::invalid_argument&) {
+        require_requested_failure_telemetry(
+            telemetry_run.fail(
+                katana::cli::exit_status(
+                    katana::cli::ExitCode::InvalidInput)));
+        throw;
+    } catch (const std::filesystem::filesystem_error&) {
+        require_requested_failure_telemetry(
+            telemetry_run.fail(
+                katana::cli::exit_status(
+                    katana::cli::ExitCode::InputOutput)));
+        throw;
+    } catch (const katana::io::InputOutputError&) {
+        require_requested_failure_telemetry(
+            telemetry_run.fail(
+                katana::cli::exit_status(
+                    katana::cli::ExitCode::InputOutput)));
+        throw;
+    } catch (const std::runtime_error&) {
+        require_requested_failure_telemetry(
+            telemetry_run.fail(
+                katana::cli::exit_status(
+                    katana::cli::ExitCode::ProcessingFailure)));
+        throw;
+    } catch (...) {
+        require_requested_failure_telemetry(
+            telemetry_run.fail(
+                katana::cli::exit_status(
+                    katana::cli::ExitCode::InternalError)));
+        throw;
     }
 }
 
@@ -5288,19 +8197,22 @@ void print_usage(std::ostream& output) {
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
               "[--game-project <Descriptor-Artefakt>] "
               "[--runtime-image-payload <Image-ID>=<private-Datei>] "
+              "[--telemetry-jsonl <Datei>] "
               "[--latent-aot-mode <heuristic|exact-only>] "
               "[--latent-aot-entry "
               "<sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
               "<module-relative-offset>>]...\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
-              "[--console-profile <...>]\n"
+              "[--console-profile <...>] [--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
               "--target-name <Name> [--console-profile <...>] "
               "[--game-project <Descriptor-Artefakt>] "
               "[--runtime-image-payload <Image-ID>=<private-Datei>]... "
-              "[--game-entry-handoff <privates-Artefakt>]\n"
+              "[--game-entry-handoff <privates-Artefakt>] "
+              "[--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp probe-port-executable <boot.katana-executable> --output "
-              "<Ordner> --target-name <Name> [--console-profile <...>]\n\n"
+              "<Ordner> --target-name <Name> [--console-profile <...>] "
+              "[--telemetry-jsonl <Datei>]\n\n"
            << "  katana-recomp workflow <validate|analyze|codegen|build|run-preflight> "
               "<Projektmanifest> --output <Ordner>\n\n"
            << "Beispiel:\n"
@@ -5313,6 +8225,297 @@ int main(const int argc, char* argv[]) {
     using katana::cli::exit_status;
     using katana::cli::ExitCode;
     try {
+        {
+            auto invoked_name =
+                std::filesystem::path(argv[0]).filename().string();
+            std::transform(
+                invoked_name.begin(),
+                invoked_name.end(),
+                invoked_name.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            if (invoked_name == "katana-host-archive-wrapper" ||
+                invoked_name ==
+                    "katana-host-archive-wrapper.exe") {
+                const auto event_root = configured_environment_value(
+                    "KATANA_HOST_BUILD_EVENT_ROOT");
+                const auto real_tool = configured_environment_value(
+                    "KATANA_HOST_BUILD_REAL_ARCHIVER");
+                if (!event_root || argc < 2) return 125;
+                const auto tool = real_tool
+                                      ? *real_tool
+                                      : std::string(argv[1]);
+                const auto first_argument = real_tool ? 1 : 2;
+                std::vector<const char*> arguments;
+                arguments.reserve(static_cast<std::size_t>(
+                    std::max(0, argc - first_argument)));
+                for (int index = first_argument; index < argc; ++index)
+                    arguments.push_back(argv[index]);
+                return katana::cli::run_host_build_tool_launcher(
+                    katana::cli::HostBuildToolKind::Archive,
+                    *event_root,
+                    tool,
+                    arguments);
+            }
+        }
+#ifdef _WIN32
+        {
+            auto invoked_name =
+                std::filesystem::path(argv[0]).filename().string();
+            std::transform(
+                invoked_name.begin(),
+                invoked_name.end(),
+                invoked_name.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            const auto wrapper_kind =
+                invoked_name == "katana-host-cl-wrapper.exe"
+                    ? std::optional(
+                          katana::cli::HostBuildToolKind::Compile)
+                    : invoked_name ==
+                              "katana-host-link-wrapper.exe"
+                          ? std::optional(
+                                katana::cli::HostBuildToolKind::Link)
+                          : std::nullopt;
+            if (wrapper_kind) {
+                const auto event_root = configured_environment_value(
+                    "KATANA_HOST_BUILD_EVENT_ROOT");
+                const auto real_tool = configured_environment_value(
+                    *wrapper_kind ==
+                            katana::cli::HostBuildToolKind::Compile
+                        ? "KATANA_HOST_BUILD_REAL_COMPILER"
+                        : "KATANA_HOST_BUILD_REAL_LINKER");
+                if (!event_root || !real_tool || argc < 2) return 125;
+                std::vector<const char*> arguments;
+                arguments.reserve(static_cast<std::size_t>(argc - 1));
+                for (int index = 1; index < argc; ++index)
+                    arguments.push_back(argv[index]);
+                return katana::cli::run_host_build_tool_launcher(
+                    *wrapper_kind,
+                    *event_root,
+                    *real_tool,
+                    arguments);
+            }
+        }
+#endif
+        if (argc >= 6 &&
+            std::string_view(argv[1]) == "__host-build-tool") {
+            const auto kind_text = std::string_view(argv[3]);
+            const auto kind = kind_text == "compile"
+                                  ? std::optional(
+                                        katana::cli::HostBuildToolKind::
+                                            Compile)
+                                  : kind_text == "link"
+                                        ? std::optional(
+                                              katana::cli::
+                                                  HostBuildToolKind::Link)
+                                        : kind_text == "archive"
+                                              ? std::optional(
+                                                    katana::cli::
+                                                        HostBuildToolKind::
+                                                            Archive)
+                                              : std::nullopt;
+            const auto mode = std::string_view(argv[4]);
+            if (!kind ||
+                (mode != "--direct" && mode != "--chain"))
+                return 125;
+            std::vector<const char*> arguments;
+            arguments.reserve(static_cast<std::size_t>(argc - 6));
+            for (int index = 6; index < argc; ++index)
+                arguments.push_back(argv[index]);
+            return katana::cli::run_host_build_tool_launcher(
+                *kind,
+                std::filesystem::path(argv[2]),
+                argv[5],
+                arguments);
+        }
+        // Test-only product entry which exercises the exact process-tree
+        // supervisor used by configure/runtime/host-build. It deliberately
+        // accepts one already-formed host command so regression tests can
+        // prove descendant quiescence without exposing this in --help.
+        if ((argc == 4 || argc == 5 || argc == 6) &&
+            std::string_view(argv[1]) ==
+                "__host-supervision-probe") {
+            std::uint64_t timeout_milliseconds = 0u;
+            const auto timeout_text = std::string_view(argv[2]);
+            const auto conversion = std::from_chars(
+                timeout_text.data(),
+                timeout_text.data() + timeout_text.size(),
+                timeout_milliseconds,
+                10);
+            if (conversion.ec != std::errc{} ||
+                conversion.ptr !=
+                    timeout_text.data() + timeout_text.size() ||
+                timeout_milliseconds >
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max()))
+                throw std::invalid_argument(
+                    "Host-Supervision-Probe besitzt ein ungueltiges "
+                    "Zeitlimit.");
+            std::optional<std::size_t> windows_cl_jobs;
+            std::optional<std::filesystem::path>
+                probe_telemetry_path;
+            if (argc == 5) {
+                std::uint64_t parsed_jobs = 0u;
+                const auto jobs_text = std::string_view(argv[4]);
+                const auto jobs_conversion = std::from_chars(
+                    jobs_text.data(),
+                    jobs_text.data() + jobs_text.size(),
+                    parsed_jobs,
+                    10);
+                if (jobs_conversion.ec != std::errc{} ||
+                    jobs_conversion.ptr !=
+                        jobs_text.data() + jobs_text.size() ||
+                    parsed_jobs > 256u)
+                    throw std::invalid_argument(
+                        "Host-Supervision-Probe besitzt ein "
+                        "ungueltiges MSVC-Budget.");
+                windows_cl_jobs =
+                    static_cast<std::size_t>(parsed_jobs);
+            } else if (argc == 6) {
+                if (std::string_view(argv[4]) !=
+                    "--telemetry-jsonl")
+                    throw std::invalid_argument(
+                        "Host-Supervision-Probe besitzt eine "
+                        "ungueltige Telemetrieoption.");
+                probe_telemetry_path =
+                    std::filesystem::absolute(argv[5]).
+                        lexically_normal();
+            }
+
+            std::unique_ptr<
+                katana::cli::PortBuildTelemetryRecorder>
+                probe_telemetry;
+            if (probe_telemetry_path) {
+                katana::cli::PortBuildTelemetryOptions options;
+                options.jsonl_path = *probe_telemetry_path;
+                options.job_kind = "host-supervision-probe";
+                options.require_resolved_environment = false;
+                options.resource_sample_interval =
+                    std::chrono::milliseconds(100);
+                probe_telemetry = std::make_unique<
+                    katana::cli::PortBuildTelemetryRecorder>(
+                    std::move(options));
+                if (!probe_telemetry->enabled())
+                    throw katana::cli::Error(
+                        katana::cli::ExitCode::InputOutput,
+                        "Host-Supervision-Probe konnte die "
+                        "Telemetrie nicht initialisieren.");
+            }
+            auto supervised_command = std::string(argv[3]);
+#ifdef _WIN32
+            // Exercise the same cmd normalization as configure/runtime/build,
+            // including literal ! and % path/argument handling.
+            supervised_command =
+                normalized_host_command(supervised_command);
+#endif
+            auto next_probe_resource_sample =
+                std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(100);
+            const auto result = run_supervised_host_command(
+                supervised_command,
+                std::chrono::milliseconds(timeout_milliseconds),
+                probe_telemetry.get(),
+                "host-supervision-probe",
+                windows_cl_jobs,
+                [&] {
+                    if (probe_telemetry == nullptr) return;
+                    const auto now =
+                        std::chrono::steady_clock::now();
+                    if (now < next_probe_resource_sample) return;
+                    next_probe_resource_sample =
+                        now + std::chrono::milliseconds(100);
+                    probe_telemetry->sample_resources(
+                        "host-supervision-probe");
+                });
+            if (probe_telemetry != nullptr) {
+                probe_telemetry->finish(
+                    result.exit_code == 0
+                        ? katana::cli::
+                              PortBuildTerminalOutcome::Completed
+                        : katana::cli::
+                              PortBuildTerminalOutcome::Failed,
+                    result.exit_code,
+                    "host-supervision-probe");
+                const auto status = probe_telemetry->status();
+                if (!status.terminal_emitted ||
+                    !status.telemetry_complete ||
+                    status.io_failed)
+                    throw katana::cli::Error(
+                        katana::cli::ExitCode::InputOutput,
+                        "Host-Supervision-Probe konnte keine "
+                        "vollstaendige Telemetrie publizieren.");
+            }
+            std::cout
+                << "host_exit=" << result.exit_code
+                << " timed_out=" << (result.timed_out ? 1 : 0)
+                << " process_tree_quiescent="
+                << (result.process_tree_quiescent ? 1 : 0)
+                << '\n';
+            return result.exit_code;
+        }
+#ifdef _WIN32
+        if (argc == 5 &&
+            std::string_view(argv[1]) ==
+                "__host-msvc-environment-probe") {
+            const auto source =
+                std::filesystem::absolute(argv[2]).lexically_normal();
+            const auto executable =
+                std::filesystem::absolute(argv[3]).lexically_normal();
+            if (!std::filesystem::is_regular_file(source) ||
+                !executable.has_parent_path())
+                throw std::invalid_argument(
+                    "MSVC-Umgebungsprobe besitzt ungueltige Pfade.");
+            std::uint64_t parsed_jobs = 0u;
+            const auto jobs_text = std::string_view(argv[4]);
+            const auto jobs_conversion = std::from_chars(
+                jobs_text.data(),
+                jobs_text.data() + jobs_text.size(),
+                parsed_jobs,
+                10);
+            if (jobs_conversion.ec != std::errc{} ||
+                jobs_conversion.ptr !=
+                    jobs_text.data() + jobs_text.size() ||
+                parsed_jobs == 0u || parsed_jobs > 256u)
+                throw std::invalid_argument(
+                    "MSVC-Umgebungsprobe besitzt ein ungueltiges "
+                    "Compilerbudget.");
+            const auto quote = [](const std::filesystem::path& path) {
+                const auto text = path.string();
+                if (text.find('"') != std::string::npos)
+                    throw std::invalid_argument(
+                        "MSVC-Umgebungsprobepfad ist nicht sicher "
+                        "quotierbar.");
+                return '"' + text + '"';
+            };
+            auto object = executable;
+            object.replace_extension(".obj");
+            auto pdb = executable;
+            pdb.replace_extension(".pdb");
+            const auto command =
+                std::string("cl.exe /nologo /std:c++20 /EHsc ") +
+                quote(source) + " /Fo:" + quote(object) +
+                " /Fe:" + quote(executable) +
+                " /link /PDB:" + quote(pdb);
+            const auto result = run_supervised_host_command(
+                prepare_windows_host_command(command, true),
+                std::chrono::minutes(2),
+                nullptr,
+                {},
+                static_cast<std::size_t>(parsed_jobs));
+            if (!result.process_tree_quiescent)
+                throw std::runtime_error(
+                    "MSVC-Umgebungsprobe endete ohne leeren "
+                    "Prozessbaum.");
+            if (result.exit_code != 0) return result.exit_code;
+            if (!std::filesystem::is_regular_file(executable))
+                throw std::runtime_error(
+                    "MSVC-Umgebungsprobe erzeugte kein Linkartefakt.");
+            return 0;
+        }
+#endif
         if (argc == 2 &&
             (std::string_view(argv[1]) == "--help" || std::string_view(argv[1]) == "-h")) {
             print_usage(std::cout);
@@ -5482,6 +8685,8 @@ int main(const int argc, char* argv[]) {
             std::optional<std::filesystem::path>
                 game_entry_handoff_path;
             std::optional<std::filesystem::path> game_project_path;
+            std::optional<std::filesystem::path>
+                telemetry_jsonl_path;
             std::vector<RuntimeImagePayloadArgument>
                 runtime_image_payload_arguments;
             std::vector<LatentAotEntryHintArgument>
@@ -5501,6 +8706,11 @@ int main(const int argc, char* argv[]) {
                 } else if (option == "--console-profile" && !console_profile_seen) {
                     console_profile = argv[argument + 1u];
                     console_profile_seen = true;
+                } else if (option == "--telemetry-jsonl" &&
+                           !telemetry_jsonl_path.has_value()) {
+                    telemetry_jsonl_path =
+                        std::filesystem::path(
+                            argv[argument + 1u]);
                 } else if (option == "--game-entry-handoff" &&
                            port_command == "port-executable" &&
                            !game_entry_handoff_path.has_value()) {
@@ -5565,7 +8775,8 @@ int main(const int argc, char* argv[]) {
                                        game_entry_handoff_path,
                                        runtime_image_payload_arguments,
                                        latent_aot_entry_hints,
-                                       latent_aot_discovery_mode);
+                                       latent_aot_discovery_mode,
+                                       telemetry_jsonl_path);
         }
 
         if ((argc == 3 || argc == 4) &&

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -37,6 +39,10 @@ enum class SecureArtifactKind : std::uint8_t {
 struct SecureArtifactRead {
     SecureArtifactKind kind = SecureArtifactKind::Missing;
     std::string content;
+    // Platform error captured at the failed open boundary. Zero means the
+    // object was opened and rejected by the structural/content checks.
+    std::uint32_t native_error = 0u;
+    std::uint32_t native_stage = 0u;
 };
 
 [[nodiscard]] inline bool cache_path_within(
@@ -118,7 +124,8 @@ win_file_information(const HANDLE handle) {
 [[nodiscard]] inline bool win_safe_regular_information(
     const BY_HANDLE_FILE_INFORMATION& information) noexcept {
     return (information.dwFileAttributes &
-            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0u;
+            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0u &&
+           information.nNumberOfLinks == 1u;
 }
 
 struct WinDirectoryChain {
@@ -129,7 +136,164 @@ struct WinDirectoryChain {
 struct WinDirectoryChainResult {
     SecureArtifactKind kind = SecureArtifactKind::Unsafe;
     WinDirectoryChain chain;
+    DWORD native_error = ERROR_SUCCESS;
+    std::uint32_t native_stage = 0u;
 };
+
+[[nodiscard]] inline WinHandle win_open_directory_direct(
+    const std::filesystem::path& path) {
+    return WinHandle(CreateFileW(
+        path.c_str(),
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS |
+            FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+}
+
+[[nodiscard]] inline std::optional<std::filesystem::path>
+win_final_dos_path(const HANDLE handle) {
+    constexpr DWORD flags =
+        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+    const auto required = GetFinalPathNameByHandleW(
+        handle, nullptr, 0u, flags);
+    if (required == 0u) return std::nullopt;
+    std::wstring value(required, L'\0');
+    const auto written = GetFinalPathNameByHandleW(
+        handle, value.data(), required, flags);
+    if (written == 0u || written >= required)
+        return std::nullopt;
+    value.resize(written);
+    constexpr std::wstring_view extended_unc{L"\\\\?\\UNC\\"};
+    constexpr std::wstring_view extended{L"\\\\?\\"};
+    if (value.starts_with(extended_unc))
+        value = L"\\\\" + value.substr(extended_unc.size());
+    else if (value.starts_with(extended))
+        value.erase(0u, extended.size());
+    return std::filesystem::path(std::move(value)).lexically_normal();
+}
+
+[[nodiscard]] inline bool win_paths_equal_case_insensitive(
+    const std::filesystem::path& left,
+    const std::filesystem::path& right) noexcept {
+    try {
+        const auto left_value = left.lexically_normal().native();
+        const auto right_value = right.lexically_normal().native();
+        if (left_value.size() >
+                static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()) ||
+            right_value.size() >
+                static_cast<std::size_t>(
+                    std::numeric_limits<int>::max()))
+            return false;
+        return CompareStringOrdinal(
+                   left_value.data(),
+                   static_cast<int>(left_value.size()),
+                   right_value.data(),
+                   static_cast<int>(right_value.size()),
+                   TRUE) == CSTR_EQUAL;
+    } catch (...) {
+        return false;
+    }
+}
+
+[[nodiscard]] inline bool win_validate_named_directory(
+    const std::filesystem::path& requested,
+    const HANDLE handle,
+    BY_HANDLE_FILE_INFORMATION& information) {
+    const auto final_path = win_final_dos_path(handle);
+    return GetFileType(handle) == FILE_TYPE_DISK &&
+           GetFileInformationByHandle(handle, &information) &&
+           win_safe_directory_information(information) &&
+           final_path &&
+           win_paths_equal_case_insensitive(requested, *final_path);
+}
+
+[[nodiscard]] inline WinDirectoryChainResult win_open_cache_root(
+    const std::filesystem::path& root,
+    const bool create) {
+    std::vector<std::filesystem::path> missing_components;
+    auto existing = root;
+    WinHandle handle;
+    DWORD open_error = ERROR_SUCCESS;
+    for (;;) {
+        handle = win_open_directory_direct(existing);
+        if (handle) break;
+        open_error = GetLastError();
+        const bool missing =
+            open_error == ERROR_FILE_NOT_FOUND ||
+            open_error == ERROR_PATH_NOT_FOUND;
+        if (!missing || !create)
+            return {
+                missing ? SecureArtifactKind::Missing
+                        : SecureArtifactKind::Unsafe,
+                {},
+                open_error,
+                1u};
+        if (existing == existing.root_path() ||
+            existing.filename().empty())
+            return {
+                SecureArtifactKind::Unsafe,
+                {},
+                open_error,
+                2u};
+        missing_components.push_back(existing.filename());
+        existing = existing.parent_path();
+    }
+
+    WinDirectoryChain result;
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!win_validate_named_directory(
+            existing, handle.get(), information))
+        return {
+            SecureArtifactKind::Unsafe,
+            {},
+            GetLastError(),
+            3u};
+    result.identities.push_back(win_file_identity(information));
+    result.handles.push_back(std::move(handle));
+
+    for (auto component = missing_components.rbegin();
+         component != missing_components.rend();
+         ++component) {
+        existing /= *component;
+        if (!CreateDirectoryW(existing.c_str(), nullptr)) {
+            const auto create_error = GetLastError();
+            if (create_error != ERROR_ALREADY_EXISTS)
+                return {
+                    SecureArtifactKind::Unsafe,
+                    {},
+                    create_error,
+                    4u};
+        }
+        handle = win_open_directory_direct(existing);
+        if (!handle)
+            return {
+                SecureArtifactKind::Unsafe,
+                {},
+                GetLastError(),
+                5u};
+        if (!win_validate_named_directory(
+                existing, handle.get(), information))
+            return {
+                SecureArtifactKind::Unsafe,
+                {},
+                GetLastError(),
+                6u};
+        result.identities.push_back(win_file_identity(information));
+        result.handles.push_back(std::move(handle));
+    }
+    // Once the requested root itself is open, its no-FILE_SHARE_DELETE
+    // handle pins the complete subtree name. Ancestor handles were needed
+    // only while creating a previously missing root; do not retain a
+    // platform-dependent prefix in the chain identity contract.
+    WinDirectoryChain pinned_root;
+    pinned_root.identities.push_back(result.identities.back());
+    pinned_root.handles.push_back(std::move(result.handles.back()));
+    return {SecureArtifactKind::Regular, std::move(pinned_root)};
+}
 
 [[nodiscard]] inline WinDirectoryChainResult win_open_directory_chain(
     const std::filesystem::path& root,
@@ -140,78 +304,108 @@ struct WinDirectoryChainResult {
          directory != root))
         return {};
 
-    const auto root_path = directory.root_path();
-    if (root_path.empty() || root.root_path() != root_path)
+    if (root.root_path().empty() ||
+        root.root_path() != directory.root_path())
         return {};
+    auto result = win_open_cache_root(root, create);
+    if (result.kind != SecureArtifactKind::Regular ||
+        directory == root)
+        return result;
 
-    std::size_t root_component_count = 0u;
-    for (const auto& component : root.relative_path()) {
-        if (!component.empty() && component != ".")
-            ++root_component_count;
-    }
-
-    WinDirectoryChain result;
-    auto open_directory =
-        [](const std::filesystem::path& path) {
-            return WinHandle(CreateFileW(
-                path.c_str(),
-                FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                nullptr,
-                OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS |
-                    FILE_FLAG_OPEN_REPARSE_POINT,
-                nullptr));
-        };
-
-    auto current = root_path;
-    auto handle = open_directory(current);
-    if (!handle) {
-        return {
-            GetLastError() == ERROR_FILE_NOT_FOUND ||
-                    GetLastError() == ERROR_PATH_NOT_FOUND
-                ? SecureArtifactKind::Missing
-                : SecureArtifactKind::Unsafe,
-            {}};
-    }
-    auto information = win_file_information(handle.get());
-    if (!information ||
-        !win_safe_directory_information(*information))
-        return {};
-    result.identities.push_back(win_file_identity(*information));
-    result.handles.push_back(std::move(handle));
-
-    std::size_t component_index = 0u;
-    for (const auto& component : directory.relative_path()) {
+    auto current = root;
+    auto handle = WinHandle{};
+    BY_HANDLE_FILE_INFORMATION information{};
+    for (const auto& component :
+         directory.lexically_relative(root)) {
         if (component.empty() || component == ".") continue;
         current /= component;
-        handle = open_directory(current);
+        handle = win_open_directory_direct(current);
         if (!handle) {
             const auto error = GetLastError();
             const bool missing =
                 error == ERROR_FILE_NOT_FOUND ||
                 error == ERROR_PATH_NOT_FOUND;
-            const bool may_create = create && missing;
-            if (!may_create)
+            if (!missing || !create)
                 return {
                     missing ? SecureArtifactKind::Missing
                             : SecureArtifactKind::Unsafe,
-                    {}};
-            if (!CreateDirectoryW(current.c_str(), nullptr) &&
-                GetLastError() != ERROR_ALREADY_EXISTS)
-                return {};
-            handle = open_directory(current);
-            if (!handle) return {};
+                    {},
+                    error,
+                    7u};
+            if (!CreateDirectoryW(current.c_str(), nullptr)) {
+                const auto create_error = GetLastError();
+                if (create_error != ERROR_ALREADY_EXISTS)
+                    return {
+                        SecureArtifactKind::Unsafe,
+                        {},
+                        create_error,
+                        8u};
+            }
+            handle = win_open_directory_direct(current);
+            if (!handle)
+                return {
+                    SecureArtifactKind::Unsafe,
+                    {},
+                    GetLastError(),
+                    9u};
         }
-        information = win_file_information(handle.get());
-        if (!information ||
-            !win_safe_directory_information(*information))
-            return {};
-        result.identities.push_back(win_file_identity(*information));
-        result.handles.push_back(std::move(handle));
-        ++component_index;
+        if (!win_validate_named_directory(
+                current, handle.get(), information))
+            return {
+                SecureArtifactKind::Unsafe,
+                {},
+                GetLastError(),
+                10u};
+        result.chain.identities.push_back(
+            win_file_identity(information));
+        result.chain.handles.push_back(std::move(handle));
     }
-    return {SecureArtifactKind::Regular, std::move(result)};
+    return result;
+}
+
+// Revalidate both the pinned handle identities and their current named path.
+// Directory handles are deliberately opened without FILE_SHARE_DELETE, so a
+// successful check also keeps every component non-renamable across the
+// immediately following path-based Win32 operation.
+[[nodiscard]] inline bool win_revalidate_directory_chain(
+    const std::filesystem::path& root,
+    const std::filesystem::path& directory,
+    const WinDirectoryChain& chain) noexcept {
+    try {
+        if (chain.handles.empty() ||
+            chain.handles.size() != chain.identities.size())
+            return false;
+        std::size_t index = 0u;
+        const auto validate =
+            [&](const std::filesystem::path& expected) {
+                if (index >= chain.handles.size() ||
+                    !chain.handles[index])
+                    return false;
+                BY_HANDLE_FILE_INFORMATION information{};
+                if (!win_validate_named_directory(
+                        expected,
+                        chain.handles[index].get(),
+                        information) ||
+                    win_file_identity(information) !=
+                        chain.identities[index])
+                    return false;
+                ++index;
+                return true;
+            };
+        auto current = root;
+        if (!validate(current)) return false;
+        if (directory != root) {
+            for (const auto& component :
+                 directory.lexically_relative(root)) {
+                if (component.empty() || component == ".") continue;
+                current /= component;
+                if (!validate(current)) return false;
+            }
+        }
+        return index == chain.handles.size();
+    } catch (...) {
+        return false;
+    }
 }
 
 [[nodiscard]] inline WinHandle win_open_regular_file(
@@ -274,7 +468,10 @@ struct WinDirectoryChainResult {
         return {SecureArtifactKind::Unsafe, {}};
     const auto after = win_file_information(handle);
     if (!after ||
+        !win_safe_regular_information(*after) ||
         win_file_identity(*before) != win_file_identity(*after) ||
+        before->nNumberOfLinks != after->nNumberOfLinks ||
+        before->dwFileAttributes != after->dwFileAttributes ||
         before->nFileSizeHigh != after->nFileSizeHigh ||
         before->nFileSizeLow != after->nFileSizeLow ||
         CompareFileTime(
@@ -291,7 +488,18 @@ struct WinDirectoryChainResult {
     const auto chain = win_open_directory_chain(
         root, path.parent_path(), false);
     if (chain.kind != SecureArtifactKind::Regular)
-        return {chain.kind, {}};
+        return {
+            chain.kind,
+            {},
+            chain.native_error,
+            chain.native_stage};
+    if (!win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return {
+            SecureArtifactKind::Unsafe,
+            {},
+            ERROR_INVALID_DATA,
+            11u};
     const auto file = win_open_regular_file(path, GENERIC_READ);
     if (!file) {
         const auto error = GetLastError();
@@ -300,9 +508,26 @@ struct WinDirectoryChainResult {
                     error == ERROR_PATH_NOT_FOUND
                 ? SecureArtifactKind::Missing
                 : SecureArtifactKind::Unsafe,
-            {}};
+            {},
+            error,
+            5u};
     }
-    return win_read_open_file(file.get(), maximum_bytes);
+    if (!win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return {
+            SecureArtifactKind::Unsafe,
+            {},
+            ERROR_INVALID_DATA,
+            12u};
+    auto read = win_read_open_file(file.get(), maximum_bytes);
+    if (!win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return {
+            SecureArtifactKind::Unsafe,
+            {},
+            ERROR_INVALID_DATA,
+            13u};
+    return read;
 }
 
 [[nodiscard]] inline bool win_delete_open_file(
@@ -324,13 +549,24 @@ struct WinDirectoryChainResult {
     const auto chain = win_open_directory_chain(
         root, path.parent_path(), false);
     if (chain.kind != SecureArtifactKind::Regular) return false;
+    if (!win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return false;
     const auto file =
         win_open_regular_file(path, GENERIC_READ | DELETE);
     if (!file) return false;
+    if (!win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return false;
     const auto read = win_read_open_file(file.get(), maximum_bytes);
-    return read.kind == SecureArtifactKind::Regular &&
-           read.content == expected_content &&
-           win_delete_open_file(file.get());
+    if (read.kind != SecureArtifactKind::Regular ||
+        read.content != expected_content ||
+        !win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return false;
+    if (!win_delete_open_file(file.get())) return false;
+    return win_revalidate_directory_chain(
+        root, path.parent_path(), chain.chain);
 }
 
 [[nodiscard]] inline bool secure_cache_erase_oversized(
@@ -340,18 +576,29 @@ struct WinDirectoryChainResult {
     const auto chain = win_open_directory_chain(
         root, path.parent_path(), false);
     if (chain.kind != SecureArtifactKind::Regular) return false;
+    if (!win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return false;
     const auto file =
         win_open_regular_file(path, GENERIC_READ | DELETE);
     if (!file) return false;
+    if (!win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return false;
     const auto information = win_file_information(file.get());
     LARGE_INTEGER size{};
-    return information &&
-           win_safe_regular_information(*information) &&
-           GetFileSizeEx(file.get(), &size) &&
-           size.QuadPart >= 0 &&
-           static_cast<std::uint64_t>(size.QuadPart) >
-               maximum_bytes &&
-           win_delete_open_file(file.get());
+    if (!information ||
+        !win_safe_regular_information(*information) ||
+        !GetFileSizeEx(file.get(), &size) ||
+        size.QuadPart < 0 ||
+        static_cast<std::uint64_t>(size.QuadPart) <=
+            maximum_bytes ||
+        !win_revalidate_directory_chain(
+            root, path.parent_path(), chain.chain))
+        return false;
+    if (!win_delete_open_file(file.get())) return false;
+    return win_revalidate_directory_chain(
+        root, path.parent_path(), chain.chain);
 }
 
 inline void win_write_all(
@@ -391,12 +638,25 @@ inline void secure_cache_publish(
     if (chain.kind != SecureArtifactKind::Regular)
         throw std::runtime_error(
             "Begrenzter Cache besitzt keinen sicheren Zielordner.");
+    const auto target_directory = path.parent_path();
+    const auto require_target_chain = [&] {
+        if (!win_revalidate_directory_chain(
+                root, target_directory, chain.chain))
+            throw std::runtime_error(
+                "Begrenzter Cache verlor seine Windows-"
+                "Verzeichnisidentitaet.");
+    };
+    require_target_chain();
 
     std::filesystem::path staging;
     for (std::size_t attempt = 0u; attempt < 32u; ++attempt) {
         staging = root /
                   (".publish-bounded-" + secure_cache_nonce());
-        if (CreateDirectoryW(staging.c_str(), nullptr)) break;
+        require_target_chain();
+        if (CreateDirectoryW(staging.c_str(), nullptr)) {
+            require_target_chain();
+            break;
+        }
         staging.clear();
     }
     if (staging.empty())
@@ -413,12 +673,16 @@ inline void secure_cache_publish(
         FILE_FLAG_BACKUP_SEMANTICS |
             FILE_FLAG_OPEN_REPARSE_POINT,
         nullptr));
-    const auto staging_information =
+    auto staging_information =
         staging_handle
             ? win_file_information(staging_handle.get())
             : std::nullopt;
     if (!staging_information ||
-        !win_safe_directory_information(*staging_information)) {
+        !win_safe_directory_information(*staging_information) ||
+        !win_validate_named_directory(
+            staging,
+            staging_handle.get(),
+            *staging_information)) {
         if (staging_handle)
             static_cast<void>(
                 win_delete_open_file(staging_handle.get()));
@@ -426,8 +690,23 @@ inline void secure_cache_publish(
         throw std::runtime_error(
             "Begrenztes Cache-Staging ist kein sicherer Ordner.");
     }
+    const auto staging_identity =
+        win_file_identity(*staging_information);
+    const auto require_staging_directory = [&] {
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (!win_validate_named_directory(
+                staging,
+                staging_handle.get(),
+                information) ||
+            win_file_identity(information) != staging_identity)
+            throw std::runtime_error(
+                "Begrenztes Cache-Staging verlor seine Windows-"
+                "Verzeichnisidentitaet.");
+    };
 
     const auto temporary = staging / "artifact.tmp";
+    require_target_chain();
+    require_staging_directory();
     WinHandle temporary_handle(CreateFileW(
         temporary.c_str(),
         GENERIC_READ | GENERIC_WRITE | DELETE,
@@ -446,11 +725,29 @@ inline void secure_cache_publish(
             "Begrenztes Cache-Stagingartefakt konnte nicht angelegt "
             "werden.");
     }
+    require_target_chain();
+    require_staging_directory();
 
+    bool temporary_named = true;
+    std::optional<WinFileIdentity> temporary_identity;
     const auto cleanup = [&]() noexcept {
-        if (temporary_handle)
+        if (temporary_handle) {
             static_cast<void>(
                 win_delete_open_file(temporary_handle.get()));
+        } else if (temporary_named && temporary_identity) {
+            const auto candidate = win_open_regular_file(
+                temporary, GENERIC_READ | DELETE);
+            const auto information =
+                candidate
+                    ? win_file_information(candidate.get())
+                    : std::nullopt;
+            if (information &&
+                win_safe_regular_information(*information) &&
+                win_file_identity(*information) ==
+                    *temporary_identity)
+                static_cast<void>(
+                    win_delete_open_file(candidate.get()));
+        }
         temporary_handle.reset();
         if (staging_handle)
             static_cast<void>(
@@ -465,9 +762,20 @@ inline void secure_cache_publish(
             !win_safe_regular_information(*temporary_information))
             throw std::runtime_error(
                 "Begrenztes Cache-Stagingartefakt ist unsicher.");
+        temporary_identity =
+            win_file_identity(*temporary_information);
 
-        if (!CreateHardLinkW(
-                path.c_str(), temporary.c_str(), nullptr)) {
+        // Close the only writable handle before the name becomes public. A
+        // no-replace same-volume rename publishes the complete bytes without
+        // the transient two-hardlink/delete-pending state which makes a
+        // legitimate concurrent Windows reader fail with ACCESS_DENIED.
+        temporary_handle.reset();
+        require_target_chain();
+        require_staging_directory();
+        if (!MoveFileExW(
+                temporary.c_str(),
+                path.c_str(),
+                MOVEFILE_WRITE_THROUGH)) {
             const auto error = GetLastError();
             cleanup();
             const auto concurrent = secure_cache_read(
@@ -483,18 +791,11 @@ inline void secure_cache_publish(
                     "unsicheren oder abweichenden Artefakt.");
             throw std::runtime_error(
                 "Begrenzter Cache-Publish konnte keinen atomaren "
-                "Hardlink anlegen.");
+                "No-Replace-Move ausfuehren.");
         }
-
-        // The published hardlink now owns the immutable bytes. Closing the
-        // writable staging handle before reopening the target both removes
-        // Windows share-mode ambiguity for concurrent readers and ensures
-        // verification observes an object that no cache handle can mutate.
-        if (!win_delete_open_file(temporary_handle.get()))
-            throw std::runtime_error(
-                "Begrenztes Cache-Stagingartefakt konnte nicht "
-                "entfernt werden.");
-        temporary_handle.reset();
+        temporary_named = false;
+        require_target_chain();
+        require_staging_directory();
         WinHandle published(CreateFileW(
             path.c_str(),
             GENERIC_READ,
@@ -503,25 +804,42 @@ inline void secure_cache_publish(
             OPEN_EXISTING,
             FILE_FLAG_OPEN_REPARSE_POINT,
             nullptr));
+        require_target_chain();
+        require_staging_directory();
         const auto published_information =
             published ? win_file_information(published.get())
                       : std::nullopt;
-        if (!published_information ||
-            !win_safe_regular_information(*published_information) ||
-            win_file_identity(*published_information) !=
-                win_file_identity(*temporary_information) ||
+        const auto verified = published_information &&
+            win_safe_regular_information(*published_information) &&
+            win_file_identity(*published_information) ==
+                win_file_identity(*temporary_information) &&
             [&]() {
-                const auto verified = win_read_open_file(
+                const auto read = win_read_open_file(
                     published.get(), maximum_bytes);
-                return verified.kind !=
-                           SecureArtifactKind::Regular ||
-                       verified.content != content;
-            }()) {
+                return read.kind ==
+                           SecureArtifactKind::Regular &&
+                       read.content == content;
+            }();
+        if (!verified) {
+            published.reset();
+            const auto suspect = win_open_regular_file(
+                path, GENERIC_READ | DELETE);
+            const auto suspect_information =
+                suspect ? win_file_information(suspect.get())
+                        : std::nullopt;
+            if (suspect_information &&
+                win_file_identity(*suspect_information) ==
+                    win_file_identity(*temporary_information))
+                static_cast<void>(
+                    win_delete_open_file(suspect.get()));
             throw std::runtime_error(
                 "Begrenzter Cache-Publish verlor seine "
                 "Dateiidentitaet.");
         }
+        require_target_chain();
+        require_staging_directory();
         cleanup();
+        require_target_chain();
     } catch (...) {
         cleanup();
         throw;
@@ -591,6 +909,26 @@ struct PosixFileIdentity {
            left.st_ctim.tv_sec == right.st_ctim.tv_sec &&
            left.st_ctim.tv_nsec == right.st_ctim.tv_nsec;
 #endif
+}
+
+// An opened descriptor proves which inode was consumed, but POSIX permits the
+// public directory entry to be renamed while that descriptor remains valid.
+// Rebind the commit point to the exact name and full post-I/O snapshot so a
+// concurrent A-away/B-in swap cannot return or publish A as the value of B.
+[[nodiscard]] inline bool posix_named_regular_file_matches_snapshot(
+    const int parent,
+    const std::filesystem::path& filename,
+    const struct stat& expected) noexcept {
+    if (parent < 0 || filename.empty() || filename.has_parent_path())
+        return false;
+    struct stat named{};
+    return fstatat(
+               parent,
+               filename.c_str(),
+               &named,
+               AT_SYMLINK_NOFOLLOW) == 0 &&
+           S_ISREG(named.st_mode) && named.st_nlink == 1 &&
+           posix_same_snapshot(named, expected);
 }
 
 struct PosixDirectoryChain {
@@ -693,13 +1031,52 @@ posix_open_directory_chain(
            current.chain.identities == expected;
 }
 
+[[nodiscard]] inline bool posix_public_file_matches_snapshot(
+    const std::filesystem::path& root,
+    const std::filesystem::path& path,
+    const std::vector<PosixFileIdentity>& expected_directories,
+    const struct stat& expected_file) {
+    const auto current = posix_open_directory_chain(
+        root, path.parent_path(), false);
+    return current.kind == SecureArtifactKind::Regular &&
+           current.chain.identities == expected_directories &&
+           posix_named_regular_file_matches_snapshot(
+               current.chain.parent.get(),
+               path.filename(),
+               expected_file);
+}
+
+// Internal synchronization seam for deterministic commit-point regressions.
+// Production callers leave this null; the hook deliberately runs only after
+// the opened artifact has been read and immediately before its public name is
+// rebound to the captured directory/file identity.
+enum class PosixSecureCacheCommitPointForTesting : std::uint8_t {
+    Read,
+    Publish,
+};
+
+struct PosixSecureCacheCommitHookForTesting final {
+    void* context = nullptr;
+    void (*wait)(
+        void* context,
+        PosixSecureCacheCommitPointForTesting point) = nullptr;
+};
+
+inline void posix_wait_at_secure_cache_commit_for_testing(
+    const PosixSecureCacheCommitHookForTesting* const hook,
+    const PosixSecureCacheCommitPointForTesting point) {
+    if (hook != nullptr && hook->wait != nullptr)
+        hook->wait(hook->context, point);
+}
+
 [[nodiscard]] inline SecureArtifactRead posix_read_open_file(
     const int descriptor,
     const std::size_t maximum_bytes,
     struct stat* const snapshot = nullptr) {
     struct stat before{};
     if (fstat(descriptor, &before) != 0 ||
-        !S_ISREG(before.st_mode) || before.st_size < 0)
+        !S_ISREG(before.st_mode) || before.st_nlink != 1 ||
+        before.st_size < 0)
         return {SecureArtifactKind::Unsafe, {}};
     if (static_cast<std::uint64_t>(before.st_size) >
         maximum_bytes) {
@@ -746,7 +1123,9 @@ posix_open_directory_chain(
 [[nodiscard]] inline SecureArtifactRead secure_cache_read(
     const std::filesystem::path& root,
     const std::filesystem::path& path,
-    const std::size_t maximum_bytes) {
+    const std::size_t maximum_bytes,
+    const PosixSecureCacheCommitHookForTesting* const commitpoint_hook =
+        nullptr) {
     const auto chain = posix_open_directory_chain(
         root, path.parent_path(), false);
     if (chain.kind != SecureArtifactKind::Regular)
@@ -760,12 +1139,19 @@ posix_open_directory_chain(
             errno == ENOENT ? SecureArtifactKind::Missing
                             : SecureArtifactKind::Unsafe,
             {}};
-    auto read = posix_read_open_file(file.get(), maximum_bytes);
+    struct stat snapshot{};
+    auto read =
+        posix_read_open_file(file.get(), maximum_bytes, &snapshot);
+    if (read.kind == SecureArtifactKind::Regular)
+        posix_wait_at_secure_cache_commit_for_testing(
+            commitpoint_hook,
+            PosixSecureCacheCommitPointForTesting::Read);
     if (read.kind == SecureArtifactKind::Regular &&
-        !posix_directory_chain_matches(
+        !posix_public_file_matches_snapshot(
             root,
-            path.parent_path(),
-            chain.chain.identities))
+            path,
+            chain.chain.identities,
+            snapshot))
         return {SecureArtifactKind::Unsafe, {}};
     return read;
 }
@@ -912,7 +1298,9 @@ inline void secure_cache_publish(
     const std::filesystem::path& root,
     const std::filesystem::path& path,
     const std::string_view content,
-    const std::size_t maximum_bytes) {
+    const std::size_t maximum_bytes,
+    const PosixSecureCacheCommitHookForTesting* const commitpoint_hook =
+        nullptr) {
     auto chain = posix_open_directory_chain(
         root, path.parent_path(), true);
     if (chain.kind != SecureArtifactKind::Regular)
@@ -976,8 +1364,21 @@ inline void secure_cache_publish(
             const auto error = errno;
             cleanup();
             if (error == EEXIST) {
-                const auto concurrent = secure_cache_read(
+                auto concurrent = secure_cache_read(
                     root, path, maximum_bytes);
+                // A POSIX no-replace publish uses a hardlink only as its
+                // atomic primitive. The winner removes the private link
+                // immediately; retry only this proven EEXIST collision while
+                // the exact one-link invariant is transiently unresolved.
+                for (std::size_t attempt = 0u;
+                     concurrent.kind == SecureArtifactKind::Unsafe &&
+                     attempt < 32u;
+                     ++attempt) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(1));
+                    concurrent = secure_cache_read(
+                        root, path, maximum_bytes);
+                }
                 if (concurrent.kind ==
                         SecureArtifactKind::Regular &&
                     concurrent.content == content)
@@ -990,6 +1391,21 @@ inline void secure_cache_publish(
                 "Begrenzter Cache-Publish konnte keinen atomaren "
                 "Hardlink anlegen.");
         }
+        // The hardlink is only the atomic no-replace primitive. Remove the
+        // private staging name before any general cache read can observe the
+        // artifact, so the published contract remains exactly one-link and a
+        // pre-existing attacker-controlled hardlink stays fail-closed.
+        if (unlinkat(
+                staging_directory.get(), "artifact.tmp", 0) != 0) {
+            static_cast<void>(posix_remove_name_if_identity(
+                chain.chain,
+                path.filename(),
+                temporary_status));
+            throw std::runtime_error(
+                "Begrenztes Cache-Stagingartefakt konnte nicht "
+                "entfernt werden.");
+        }
+        temporary.reset();
         PosixFd published(openat(
             chain.chain.parent.get(),
             path.filename().c_str(),
@@ -1015,17 +1431,21 @@ inline void secure_cache_publish(
                 "Begrenzter Cache-Publish verlor seine "
                 "Dateiidentitaet.");
         }
-        if (!posix_directory_chain_matches(
+        posix_wait_at_secure_cache_commit_for_testing(
+            commitpoint_hook,
+            PosixSecureCacheCommitPointForTesting::Publish);
+        if (!posix_public_file_matches_snapshot(
                 root,
-                path.parent_path(),
-                chain.chain.identities)) {
+                path,
+                chain.chain.identities,
+                published_status)) {
             static_cast<void>(posix_remove_name_if_identity(
                 chain.chain,
                 path.filename(),
                 temporary_status));
             throw std::runtime_error(
-                "Begrenzter Cache-Publish verlor seine "
-                Elternverzeichnisidentitaet.");
+                "Begrenzter Cache-Publish verlor seine oeffentliche "
+                "Pfad- oder Dateiidentitaet.");
         }
         cleanup();
     } catch (...) {

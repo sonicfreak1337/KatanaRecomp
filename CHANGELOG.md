@@ -4,8 +4,7 @@
 
 ### Geaendert
 
-- KR-4974 befindet sich im aktuellen Arbeitsbaum in Umsetzung und ist noch
-  kein abgeschlossener Performance-P0. Vorhanden sind eine opt-in
+- KR-4974 ist abgeschlossen. Vorhanden sind eine opt-in
   Portbuild-JSONL-Telemetrie mit Manifest-, Fortschritts-, Ressourcen- und
   Terminaldatensaetzen, genaue FunctionEvaluation-Cachezaehler samt
   primaerem Miss-Reason-Ledger, Head-of-Line-/Seedwachstumsindikatoren sowie
@@ -14,8 +13,11 @@
   erfasst beaufsichtigte Hostprozessbaeume und publiziert die Zieldatei erst
   nach einem terminalen Flush atomar. Eingabe-, Ausgabe-, Workspace-,
   Publishlock-, GDI-Track- und Windows-Geraetenamen-Aliase werden fail-closed
-  abgelehnt. Diese Quellimplementierung ist weder der
-  8-/12-/24-Thread-Performancebeweis noch eine Produktabnahme.
+  abgelehnt. Beaufsichtigte Windows-Hostbefehle isolieren ausserdem ihren
+  MSVC-PDB-Server und lassen ihn nach dem letzten Client binnen einer Sekunde
+  natuerlich aus dem weiterhin autoritativen Jobbaum verschwinden. Die
+  8-/12-/24-Thread-Performancegates folgen separat in KR-4981; die
+  Produktabnahme bleibt der spaetere reale Kaltport.
 - Fuer KR-4974 existiert ausserdem eine deterministische, retailfreie
   NativeDisc-Stressfixture mit `smoke`- und `reference`-Profil. Sie modelliert
   unter anderem Seedwellen, einen Head-of-Line-Root, 84.000 logische

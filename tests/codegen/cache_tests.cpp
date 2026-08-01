@@ -1,7 +1,13 @@
 #include "katana/codegen/cache.hpp"
+#include "../../src/codegen/cache_secure_io.hpp"
 
 #include <algorithm>
+#include <barrier>
+#include <chrono>
+#include <cstddef>
+#include <condition_variable>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -61,6 +67,94 @@ std::optional<std::filesystem::path> find_regular_file_containing(
     return std::nullopt;
 }
 
+#ifndef _WIN32
+struct PosixCommitpointFileSwap final {
+    std::filesystem::path public_path;
+    std::filesystem::path moved_path;
+    std::string replacement;
+
+    void apply() const {
+        std::filesystem::rename(public_path, moved_path);
+        std::ofstream output(public_path, std::ios::binary);
+        output << replacement;
+        if (!output)
+            throw std::runtime_error(
+                "POSIX-Commitpunkt-Swap konnte Ersatz B nicht schreiben.");
+    }
+};
+
+struct PosixCommitBarrier final {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool reached = false;
+    bool released = false;
+    std::size_t count = 0u;
+    detail::PosixSecureCacheCommitPointForTesting actual =
+        detail::PosixSecureCacheCommitPointForTesting::Read;
+
+    static void wait(
+        void* const opaque,
+        const detail::PosixSecureCacheCommitPointForTesting point) {
+        auto& barrier = *static_cast<PosixCommitBarrier*>(opaque);
+        std::unique_lock lock(barrier.mutex);
+        barrier.actual = point;
+        ++barrier.count;
+        barrier.reached = true;
+        barrier.changed.notify_all();
+        barrier.changed.wait(
+            lock, [&barrier] { return barrier.released; });
+    }
+
+    bool wait_until_reached() {
+        std::unique_lock lock(mutex);
+        return changed.wait_for(
+            lock,
+            std::chrono::seconds(5),
+            [this] { return reached; });
+    }
+
+    void release() {
+        const std::lock_guard lock(mutex);
+        released = true;
+        changed.notify_all();
+    }
+};
+
+struct PosixRegularFileSnapshot final {
+    detail::PosixFileIdentity identity;
+    nlink_t links = 0;
+};
+
+PosixRegularFileSnapshot posix_regular_file_snapshot(
+    const std::filesystem::path& path) {
+    struct stat status{};
+    if (lstat(path.c_str(), &status) != 0 ||
+        !S_ISREG(status.st_mode))
+        throw std::runtime_error(
+            "POSIX-Commitpunkt-Test fand keine regulaere Ersatzdatei.");
+    return {detail::posix_file_identity(status), status.st_nlink};
+}
+
+std::string read_binary_file(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()};
+}
+
+bool contains_bounded_cache_scratch(
+    const std::filesystem::path& root) {
+    for (const auto& entry :
+         std::filesystem::recursive_directory_iterator(root)) {
+        const auto name = entry.path().filename().string();
+        if (name.starts_with(".publish-bounded-") ||
+            name.starts_with(".erase-bounded-"))
+            return true;
+    }
+    return false;
+}
+#endif
+
 } // namespace
 
 int main() {
@@ -96,6 +190,174 @@ int main() {
             std::optional<std::string>{"nested"},
         "Begrenzter Cache legte fehlende sichere Eltern seines "
         "Stammverzeichnisses nicht an.");
+#ifdef _WIN32
+    {
+        const auto root =
+            std::filesystem::absolute(
+                fixture.path / "win-chain-root")
+                .lexically_normal();
+        const auto directory = root / "nested";
+        auto chain = detail::win_open_directory_chain(
+            root, directory, true);
+        const bool initially_valid =
+            chain.kind == detail::SecureArtifactKind::Regular &&
+            detail::win_revalidate_directory_chain(
+                root, directory, chain.chain);
+        const auto renamed = root / "renamed";
+        const bool rename_blocked =
+            MoveFileExW(
+                directory.c_str(), renamed.c_str(), 0u) == FALSE;
+        const bool remained_valid =
+            detail::win_revalidate_directory_chain(
+                root, directory, chain.chain);
+        const bool rename_was_safely_resolved =
+            rename_blocked ? remained_valid : !remained_valid;
+        chain.chain.identities.back().index_low ^= 1u;
+        const bool identity_tamper_rejected =
+            !detail::win_revalidate_directory_chain(
+                root, directory, chain.chain);
+        require(
+            initially_valid && rename_was_safely_resolved &&
+                identity_tamper_rejected,
+            "Windows-Cachekette blockierte beziehungsweise erkannte ein "
+            "Rename-Race nicht oder revalidierte gespeicherte Identitaeten "
+            "nicht fail-closed (initial=" +
+                std::to_string(initially_valid) +
+                ", rename_blocked=" +
+                std::to_string(rename_blocked) +
+                ", remained=" +
+                std::to_string(remained_valid) +
+                ", tamper_rejected=" +
+                std::to_string(identity_tamper_rejected) + ").");
+    }
+#else
+    {
+        const auto root =
+            std::filesystem::absolute(
+                fixture.path / "posix-read-commit-root")
+                .lexically_normal();
+        const auto directory = root / "nested";
+        std::filesystem::create_directories(directory);
+        const auto target = directory / "artifact.bin";
+        {
+            std::ofstream output(target, std::ios::binary);
+            output << "read-a";
+            require(
+                static_cast<bool>(output),
+                "POSIX-Cache-Read-Commitpunkt konnte A nicht schreiben.");
+        }
+        PosixCommitpointFileSwap swap{
+            target,
+            directory / "artifact.moved",
+            "read-b"};
+        PosixCommitBarrier barrier;
+        const detail::PosixSecureCacheCommitHookForTesting hook{
+            &barrier, &PosixCommitBarrier::wait};
+        detail::SecureArtifactRead raced;
+        std::exception_ptr worker_error;
+        std::thread worker([&] {
+            try {
+                raced = detail::secure_cache_read(
+                    root, target, 1'024u, &hook);
+            } catch (...) {
+                worker_error = std::current_exception();
+            }
+        });
+        const auto reached = barrier.wait_until_reached();
+        std::optional<PosixRegularFileSnapshot> replacement_before;
+        std::exception_ptr swap_error;
+        if (reached) {
+            try {
+                swap.apply();
+                replacement_before =
+                    posix_regular_file_snapshot(target);
+            } catch (...) {
+                swap_error = std::current_exception();
+            }
+        }
+        barrier.release();
+        worker.join();
+        if (swap_error) std::rethrow_exception(swap_error);
+        if (worker_error) std::rethrow_exception(worker_error);
+        const auto replacement_after =
+            posix_regular_file_snapshot(target);
+        require(
+            reached && barrier.count == 1u &&
+                barrier.actual ==
+                    detail::PosixSecureCacheCommitPointForTesting::Read &&
+                raced.kind == detail::SecureArtifactKind::Unsafe &&
+                raced.content.empty() &&
+                replacement_before.has_value() &&
+                replacement_before->links == 1 &&
+                replacement_after.links == 1 &&
+                replacement_before->identity ==
+                    replacement_after.identity &&
+                read_binary_file(target) == "read-b" &&
+                read_binary_file(swap.moved_path) == "read-a" &&
+                !contains_bounded_cache_scratch(root),
+            "Echter POSIX-Cache-Read akzeptierte nach A-away/B-in den "
+            "alten FD oder veraenderte Ersatz B.");
+    }
+    {
+        const auto root =
+            std::filesystem::absolute(
+                fixture.path / "posix-publish-commit-root")
+                .lexically_normal();
+        const auto directory = root / "nested";
+        const auto target = directory / "artifact.bin";
+        PosixCommitpointFileSwap swap{
+            target,
+            directory / "artifact.moved",
+            "publish-b"};
+        PosixCommitBarrier barrier;
+        const detail::PosixSecureCacheCommitHookForTesting hook{
+            &barrier, &PosixCommitBarrier::wait};
+        bool rejected = false;
+        std::exception_ptr worker_error;
+        std::thread worker([&] {
+            try {
+                detail::secure_cache_publish(
+                    root, target, "publish-a", 1'024u, &hook);
+            } catch (const std::runtime_error&) {
+                rejected = true;
+            } catch (...) {
+                worker_error = std::current_exception();
+            }
+        });
+        const auto reached = barrier.wait_until_reached();
+        std::optional<PosixRegularFileSnapshot> replacement_before;
+        std::exception_ptr swap_error;
+        if (reached) {
+            try {
+                swap.apply();
+                replacement_before =
+                    posix_regular_file_snapshot(target);
+            } catch (...) {
+                swap_error = std::current_exception();
+            }
+        }
+        barrier.release();
+        worker.join();
+        if (swap_error) std::rethrow_exception(swap_error);
+        if (worker_error) std::rethrow_exception(worker_error);
+        const auto replacement_after =
+            posix_regular_file_snapshot(target);
+        require(
+            reached && barrier.count == 1u &&
+                barrier.actual ==
+                    detail::PosixSecureCacheCommitPointForTesting::Publish &&
+                rejected && replacement_before.has_value() &&
+                replacement_before->links == 1 &&
+                replacement_after.links == 1 &&
+                replacement_before->identity ==
+                    replacement_after.identity &&
+                read_binary_file(target) == "publish-b" &&
+                read_binary_file(swap.moved_path) == "publish-a" &&
+                !contains_bounded_cache_scratch(root),
+            "Echter POSIX-Cache-Publish blieb nach A-away/B-in nicht "
+            "fail-closed, beruehrte Ersatz B oder leakte Scratchdaten.");
+    }
+#endif
     require(
         cache.load_bounded(key, "unit.cpp", 12u) ==
             std::optional<std::string>("generated-a\n"),
@@ -215,6 +477,57 @@ int main() {
             std::ios::binary | std::ios::trunc);
         external << "external";
     }
+    cache.store_bounded(
+        key,
+        "hardlinked-artifact.bin",
+        "hardlink-origin",
+        32u);
+    const auto hardlink_source = find_regular_file_containing(
+        cache.root(), "hardlink-origin");
+    require(
+        hardlink_source.has_value(),
+        "Hardlink-Fixture fand ihr Cache-Artefakt nicht.");
+    const auto hardlink_alias =
+        fixture.external / "cache-hardlink-alias.bin";
+    std::error_code hardlink_error;
+    std::filesystem::create_hard_link(
+        *hardlink_source, hardlink_alias, hardlink_error);
+    require(
+        !hardlink_error,
+        "Testdateisystem konnte keinen Cache-Hardlink erzeugen: " +
+            hardlink_error.message());
+    require(
+        !cache.load_bounded(
+            key, "hardlinked-artifact.bin", 32u),
+        "Begrenzter Cache akzeptierte ein mehrfach verlinktes Artefakt.");
+    bool rejected_hardlink_publish = false;
+    try {
+        cache.store_bounded(
+            key,
+            "hardlinked-artifact.bin",
+            "replacement",
+            32u);
+    } catch (const std::runtime_error&) {
+        rejected_hardlink_publish = true;
+    }
+    std::ifstream hardlink_external(hardlink_alias, std::ios::binary);
+    const std::string hardlink_external_content{
+        std::istreambuf_iterator<char>(hardlink_external),
+        std::istreambuf_iterator<char>()};
+    require(
+        rejected_hardlink_publish &&
+            hardlink_external_content == "hardlink-origin",
+        "Begrenzter Cache ersetzte ein mehrfach verlinktes Artefakt oder "
+        "veraenderte dessen Alias.");
+    hardlink_external.close();
+    std::filesystem::remove(hardlink_alias);
+    require(
+        cache.load_bounded(
+            key, "hardlinked-artifact.bin", 32u) ==
+            std::optional<std::string>{"hardlink-origin"},
+        "Cache-Artefakt blieb nach Entfernen des fremden Hardlinks "
+        "ungueltig.");
+
     std::error_code link_error;
     std::filesystem::create_directory_symlink(
         fixture.external, fixture.path / "linked-key", link_error);
@@ -360,16 +673,27 @@ int main() {
     }
     require(rejected, "Cache erlaubt Pfadausbruch ueber Artefaktnamen.");
 
+    constexpr std::size_t publisher_count = 16u;
+    std::barrier publish_start(
+        static_cast<std::ptrdiff_t>(publisher_count));
+    const std::string concurrent_content(
+        512u * 1024u, 'p');
     std::vector<std::thread> publishers;
+    publishers.reserve(publisher_count);
     std::mutex publisher_failure_mutex;
     std::string publisher_failure;
-    for (std::size_t index = 0u; index < 8u; ++index) {
+    for (std::size_t index = 0u;
+         index < publisher_count;
+         ++index) {
         publishers.emplace_back([&] {
             try {
-                cache.store(
+                publish_start.arrive_and_wait();
+                CodegenCache concurrent_cache(fixture.path);
+                concurrent_cache.store_integrity_bounded(
                     key,
                     "concurrent.cpp",
-                    "stable-content\n");
+                    concurrent_content,
+                    concurrent_content.size());
             } catch (const std::exception& error) {
                 const std::lock_guard lock(
                     publisher_failure_mutex);
@@ -383,8 +707,12 @@ int main() {
     require(publisher_failure.empty(),
             "Paralleler atomarer Publish warf eine Ausnahme: " +
                 publisher_failure);
-    require(cache.load(key, "concurrent.cpp") == std::optional<std::string>("stable-content\n") &&
-                std::none_of(std::filesystem::directory_iterator(cache.root() / key),
+    require(cache.load_integrity_bounded(
+                key,
+                "concurrent.cpp",
+                concurrent_content.size()) ==
+                std::optional<std::string>(concurrent_content) &&
+                std::none_of(std::filesystem::directory_iterator(cache.root()),
                              std::filesystem::directory_iterator{},
                              [](const auto& entry) {
                                  return entry.path().filename().string().starts_with(".publish-");

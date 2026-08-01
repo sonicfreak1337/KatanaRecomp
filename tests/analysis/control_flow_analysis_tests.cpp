@@ -722,12 +722,65 @@ int main() {
     std::size_t candidate_contract_iteration = 0u;
     std::size_t candidate_contract_passes = 0u;
     std::size_t maximum_candidate_contract_passes = 0u;
+    bool explicit_candidate_iterations = true;
+    bool exact_round_seed_accounting = true;
+    bool exact_cache_accounting = true;
+    const auto silent_progress_before =
+        katana::analysis::detail::
+            function_value_progress_runtime_statistics_for_testing();
+    const auto silent_reconciled_candidate_call =
+        katana::analysis::analyze_control_flow(
+            reconciled_candidate_call_image, nullptr);
+    const auto silent_progress_after =
+        katana::analysis::detail::
+            function_value_progress_runtime_statistics_for_testing();
+    require(
+        !silent_reconciled_candidate_call.function_budget_exhausted &&
+            silent_progress_after.callback_activations ==
+                silent_progress_before.callback_activations &&
+            silent_progress_after.pulse_threads_started ==
+                silent_progress_before.pulse_threads_started,
+        "Deaktivierter CFA-Progress aktivierte trotzdem den internen "
+        "Function-Value-Callback oder Heartbeat-Thread.");
+    const auto enabled_progress_before = silent_progress_after;
     const auto reconciled_candidate_call =
         katana::analysis::analyze_control_flow(
             reconciled_candidate_call_image,
             nullptr,
             [&](const katana::analysis::ControlFlowAnalysisProgress&
                     progress) {
+                exact_round_seed_accounting =
+                    exact_round_seed_accounting &&
+                    progress.seeds >=
+                        progress.round_seed_baseline &&
+                    progress.round_added_seeds ==
+                        progress.seeds -
+                            progress.round_seed_baseline &&
+                    progress.growing_workset ==
+                        (progress.round_added_seeds != 0u);
+                if (progress.function_value_active) {
+                    const auto explained_misses =
+                        progress.function_value_session_cache_miss_cold +
+                        progress.function_value_session_cache_miss_evicted +
+                        progress.function_value_session_cache_miss_oversize_or_no_exact_replay +
+                        progress.function_value_session_cache_miss_function_shape_changed +
+                        progress.function_value_session_cache_miss_projected_ingress_changed +
+                        progress.function_value_session_cache_miss_summary_dependency_changed +
+                        progress.function_value_session_cache_miss_abi_contract_changed +
+                        progress.function_value_session_cache_miss_resolution_lens_changed +
+                        progress.function_value_session_cache_miss_inventory_sink_changed +
+                        progress.function_value_session_cache_miss_isolation_partition_changed +
+                        progress.function_value_session_cache_miss_contextual_summary_changed +
+                        progress.function_value_session_cache_miss_tail_ingress_changed;
+                    exact_cache_accounting =
+                        exact_cache_accounting &&
+                        progress.function_value_session_cache_lookups ==
+                            progress.function_value_session_cache_ready_hits +
+                                progress.function_value_session_cache_in_flight_coalesces +
+                                progress.function_value_session_cache_misses &&
+                        explained_misses ==
+                            progress.function_value_session_cache_misses;
+                }
                 if (progress.phase != "function-values-start" &&
                     progress.phase !=
                         "function-values-candidate-contract-reconcile")
@@ -739,13 +792,68 @@ int main() {
                     candidate_contract_passes = 0u;
                 }
                 ++candidate_contract_passes;
+                explicit_candidate_iterations =
+                    explicit_candidate_iterations &&
+                    progress.candidate_contract_iteration ==
+                        candidate_contract_passes &&
+                    progress.candidate_contract_iteration_budget ==
+                        64u;
                 maximum_candidate_contract_passes =
                     std::max(maximum_candidate_contract_passes,
                              candidate_contract_passes);
             });
+    const auto enabled_progress_after =
+        katana::analysis::detail::
+            function_value_progress_runtime_statistics_for_testing();
+    require(
+        enabled_progress_after.callback_activations >
+                enabled_progress_before.callback_activations &&
+            enabled_progress_after.pulse_threads_started >
+                enabled_progress_before.pulse_threads_started &&
+            enabled_progress_after.detailed_cache_sessions_started ==
+                enabled_progress_before.detailed_cache_sessions_started,
+        "Aktiver CFA-Progress erreichte Callback-/Heartbeat-Bruecke nicht.");
+    const auto detailed_progress_before = enabled_progress_after;
+    const auto detailed_reconciled_candidate_call =
+        katana::analysis::analyze_control_flow(
+            reconciled_candidate_call_image,
+            nullptr,
+            [](const katana::analysis::ControlFlowAnalysisProgress&) {},
+            true);
+    const auto detailed_progress_after =
+        katana::analysis::detail::
+            function_value_progress_runtime_statistics_for_testing();
+    require(
+        detailed_progress_after.detailed_cache_sessions_started ==
+                detailed_progress_before.detailed_cache_sessions_started +
+                    1u &&
+            detailed_progress_after.callback_activations >
+                detailed_progress_before.callback_activations &&
+            !detailed_reconciled_candidate_call.function_budget_exhausted,
+        "Explizite Detailed-Telemetrie blieb aus oder Basic-Progress "
+        "aktivierte sie implizit.");
+    const auto throwing_progress_analysis =
+        katana::analysis::analyze_control_flow(
+            reconciled_candidate_call_image,
+            nullptr,
+            [](const katana::analysis::ControlFlowAnalysisProgress&) {
+                throw std::runtime_error(
+                    "synthetic-cfa-progress-observer-failure");
+            });
+    require(
+        throwing_progress_analysis.progress_callback_failed &&
+            !throwing_progress_analysis.function_budget_exhausted,
+        "Ein werfender CFA-Beobachter brach Produktanalyse ab oder blieb "
+        "in der Verlusttelemetrie unsichtbar.");
     const auto reconciled_call = std::find_if(
         reconciled_candidate_call.indirect_control_flow.begin(),
         reconciled_candidate_call.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x14Cu;
+        });
+    const auto detailed_reconciled_call = std::find_if(
+        detailed_reconciled_candidate_call.indirect_control_flow.begin(),
+        detailed_reconciled_candidate_call.indirect_control_flow.end(),
         [](const auto& resolution) {
             return resolution.instruction_address == 0x14Cu;
         });
@@ -754,6 +862,15 @@ int main() {
     require(
         reconciled_call !=
                 reconciled_candidate_call.indirect_control_flow.end() &&
+            detailed_reconciled_call !=
+                detailed_reconciled_candidate_call
+                    .indirect_control_flow.end() &&
+            detailed_reconciled_call->evidence ==
+                reconciled_call->evidence &&
+            detailed_reconciled_call->targets ==
+                reconciled_call->targets &&
+            detailed_reconciled_call->analysis_candidates ==
+                reconciled_call->analysis_candidates &&
             !reconciled_candidate_call.function_budget_exhausted &&
             katana::analysis::guarded_aot_inventory_complete(
                 reconciled_candidate_call) &&
@@ -788,6 +905,9 @@ int main() {
                     .abi_stack_argument_projection_truncated_functions == 0u &&
             find_guarded_aot_entry(reconciled_candidate_call, 0x1E0u) !=
                 nullptr &&
+            explicit_candidate_iterations &&
+            exact_round_seed_accounting &&
+            exact_cache_accounting &&
             maximum_candidate_contract_passes >= 1u &&
             maximum_candidate_contract_passes <= 2u,
         "Spaet entdeckter Function-Summary-Callcarrier wurde nicht bis zum "

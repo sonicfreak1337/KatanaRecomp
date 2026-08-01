@@ -5,12 +5,15 @@
 #include "katana/io/binary_reader.hpp"
 #include "katana/sh4/decoder.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -253,19 +256,120 @@ class GuardedNativeEntryShapeCache {
 //
 // Cache limits affect reuse only. Eviction must not change canonical output,
 // diagnostics, logical FIFO order, or any analysis budget.
+enum class FunctionEvaluationCacheMissReason : std::uint8_t {
+    Cold,
+    Evicted,
+    OversizeOrNoExactReplay,
+    FunctionShapeChanged,
+    ProjectedIngressChanged,
+    SummaryDependencyChanged,
+    AbiContractChanged,
+    ResolutionLensChanged,
+    InventorySinkChanged,
+    IsolationPartitionChanged,
+    ContextualSummaryChanged,
+    TailIngressChanged,
+    Count,
+};
+
+inline constexpr auto function_evaluation_cache_miss_reason_count =
+    static_cast<std::size_t>(
+        FunctionEvaluationCacheMissReason::Count);
+
+enum class FunctionEvaluationCacheLookupOutcome : std::uint8_t {
+    ReadyHit,
+    InFlightCoalesce,
+    Miss,
+};
+
+struct FunctionEvaluationCacheDecision final {
+    std::uint32_t function_entry = 0u;
+    FunctionEvaluationCacheLookupOutcome outcome =
+        FunctionEvaluationCacheLookupOutcome::Miss;
+    std::optional<FunctionEvaluationCacheMissReason> miss_reason;
+};
+
+// Test/performance-gate observer for exact invalidation-closure evidence.
+// It is empty in product sessions and therefore does not retain per-key
+// histories or add synchronization to the normal hot path. A supplied
+// observer may run concurrently and must treat the decision as ephemeral.
+// Miss decisions are delivered after any retainability reclassification, so
+// their one primary reason matches the aggregate session ledger exactly.
+using FunctionEvaluationCacheDecisionObserver =
+    std::function<void(const FunctionEvaluationCacheDecision&)>;
+
 struct FunctionValueAnalysisSessionStatistics {
+    std::size_t lookups = 0u;
+    std::size_t ready_hits = 0u;
+    std::size_t in_flight_coalesces = 0u;
+    // Compatibility aggregate for existing diagnostics. It is always the
+    // exact sum of ready_hits and in_flight_coalesces.
     std::size_t hits = 0u;
     std::size_t misses = 0u;
     std::size_t evictions = 0u;
     std::size_t entries = 0u;
-    std::size_t bytes = 0u;
+    // Deterministic admission budget for retained entry owners, key storage
+    // and evaluation payloads. This is deliberately not process RSS and does
+    // not claim allocator/container/control-block overhead.
+    std::size_t retained_payload_bytes = 0u;
+    std::array<std::size_t,
+               function_evaluation_cache_miss_reason_count>
+        miss_reasons{};
+
+    [[nodiscard]] std::size_t classified_misses() const noexcept {
+        std::size_t total = 0u;
+        for (const auto count : miss_reasons) total += count;
+        return total;
+    }
+
+    [[nodiscard]] bool balanced() const noexcept {
+        return lookups == ready_hits + in_flight_coalesces + misses &&
+               hits == ready_hits + in_flight_coalesces &&
+               misses == classified_misses();
+    }
 };
+
+struct FunctionEvaluationCacheTelemetryProbe final {
+    FunctionValueAnalysisSessionStatistics statistics;
+    FunctionValueAnalysisSessionStatistics observer_statistics;
+    std::size_t physical_computations = 0u;
+    std::vector<FunctionEvaluationCacheDecision> decisions;
+    // A heap-empty artifact must account its inline owner once and only once.
+    // The exact/short limits exercise the same measured retained-byte value as
+    // the production admission path instead of a parallel test estimate.
+    std::size_t inline_only_artifact_bytes = 0u;
+    std::size_t inline_only_artifact_owner_bytes = 0u;
+    std::size_t controlled_artifact_bytes = 0u;
+    std::size_t controlled_entry_retained_payload_bytes = 0u;
+    std::size_t exact_limit_entries = 0u;
+    std::size_t exact_limit_retained_payload_bytes = 0u;
+    std::size_t one_byte_short_entries = 0u;
+    std::size_t one_byte_short_retained_payload_bytes = 0u;
+    std::size_t in_flight_waits = 0u;
+    std::uint64_t in_flight_wait_nanoseconds = 0u;
+    std::uint64_t maximum_in_flight_wait_nanoseconds = 0u;
+    std::size_t bounded_context_history_entries = 0u;
+    std::size_t bounded_context_history_limit = 0u;
+    std::size_t bounded_absent_history_entries = 0u;
+    std::size_t bounded_absent_history_accounted_bytes = 0u;
+    std::size_t bounded_absent_history_byte_limit = 0u;
+    bool throwing_observer_semantics_preserved = false;
+};
+
+// Deterministic retail-free stress probe for the cache-observability
+// contract. It exercises every lookup outcome and every primary miss reason
+// without exposing the private evaluation artifact type to tests.
+[[nodiscard]] FunctionEvaluationCacheTelemetryProbe
+probe_function_evaluation_cache_telemetry_for_testing();
 
 class FunctionValueAnalysisSession {
   public:
     explicit FunctionValueAnalysisSession(
         std::size_t maximum_entries = 16'384u,
-        std::size_t maximum_bytes = 1'024u * 1024u * 1024u);
+        std::size_t maximum_retained_payload_bytes =
+            1'024u * 1024u * 1024u,
+        bool detailed_telemetry = false,
+        FunctionEvaluationCacheDecisionObserver decision_observer = {});
     ~FunctionValueAnalysisSession();
 
     FunctionValueAnalysisSession(FunctionValueAnalysisSession&&) noexcept;

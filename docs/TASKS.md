@@ -4,6 +4,7 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 
 ## Verbindliche Regeln
 
+- `AGENTS.md` gilt fuer jeden Task und jeden automatisierten Bearbeiter.
 - Oberste Prioritaet ist ein lauffaehiger Sonic-Adventure-PAL-Produktport.
 - Das echte Endprodukt ist die Bring-up-Abnahme.
 - Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach fixer Hostzeit.
@@ -1186,20 +1187,20 @@ Die folgenden Tasks werden nicht durch einen weiteren langen Sonic-Export
 unterbrochen. Nach dem Performancegate folgt KR-4984; erst danach wird genau
 ein neuer realer NativeDisc-Port gebaut.
 
-## [ ] KR-4974 - Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger
+## [x] KR-4974 - Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger
 
 Prioritaet: P0
 
 Abhaengigkeiten: keine
 
-Status: In Arbeit. Die Aufgabe bleibt offen, bis die oeffentliche Stresslast
-durch die realen Analyse-, Cache-, IR- und Partitionspfade gelaufen ist, alle
-fokussierten Gates nach den letzten Writer-/Pfadschutzkorrekturen erneut gruen
-sind und das unabhaengige Review keine offenen P0/P1-Funde mehr meldet.
+Status: Abgeschlossen. Die Telemetrie ist durch die realen Analyse-, Cache-,
+IR-, Partitions-, Hostconfigure- und Hostbuildpfade verdrahtet. Der
+produktweite Nachweis bleibt gemaess `AGENTS.md` der spaetere reale Kaltport;
+KR-4981 wertet dessen harte Zeit-/Ressourcengates aus.
 
-### Aktueller Arbeitsstand
+### Abschlussstand
 
-Quellseitig vorhanden:
+Implementiert:
 
 - versionierte opt-in JSONL-Telemetrie mit Manifest-, Progress-, Resource-
   und Terminalrecords;
@@ -1216,13 +1217,15 @@ Quellseitig vorhanden:
 - eine deterministische retailfreie NativeDisc-Stressfixture mit `smoke`-
   und `reference`-Profil.
 
-Noch offen:
-
-- reale konsumierende Verdrahtung aller Root-, Request-, Modul-, IR- und
-  Partitionslasten der Fixture;
-- fokussierter Build, Tests und erneutes Review nach dem letzten
-  Telemetrie-Sicherheitsumbau;
-- Referenzmessung und die eigentlichen 8-/12-/24-Thread-Gates.
+Abgenommen wurden der kombinierte Build aller betroffenen Targets, die engen
+Progress-/Hostprozessvertraege sowie der reale Komponentenpfad der
+retailfreien Fixture einschliesslich beider Codegen-Worker-Praezedenzfaelle.
+Der dabei sichtbar gewordene Windows-Stall nach bereits abgeschlossenem CMake-
+Configure wurde im Produktpfad geschlossen: jeder beaufsichtigte Hostbefehl
+besitzt einen privaten MSPDB-Endpunkt mit einsekuendiger natuerlicher
+Shutdownfrist; die Job-Leere bleibt weiterhin der Quieszenzbeweis. Eine
+erneute breite Matrix wurde gemaess der verbindlichen Produkt-vor-Test-Regel
+nicht gestartet. Die 8-/12-/24-Thread-Gates gehoeren unveraendert zu KR-4981.
 
 ### Umfang
 

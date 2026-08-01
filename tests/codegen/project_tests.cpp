@@ -120,7 +120,14 @@ int main() {
     require(serial_snapshot.at("CMakeLists.txt").find("code/unit-00000.cpp") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/bigobj") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/FS") != std::string::npos &&
-                serial_snapshot.at("CMakeLists.txt").find("/MP") != std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("/MP${KATANA_HOST_COMPILE_JOBS}") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt").find("PRIVATE /bigobj /FS /MP)") ==
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("CMAKE_GENERATOR MATCHES \"^Visual Studio\"") !=
+                    std::string::npos &&
                 serial_snapshot.at("build.ninja").find("libkatana_generated.a") !=
                     std::string::npos &&
                 serial_snapshot.at("compile_commands.json").find("\"directory\":\".\"") !=

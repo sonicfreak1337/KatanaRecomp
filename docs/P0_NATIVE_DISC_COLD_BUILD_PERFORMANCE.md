@@ -1,6 +1,6 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Aufgabenplan
 
-Status: verbindlicher P0-Fahrplan; KR-4974 in Arbeit, KR-4975 bis KR-4984
+Status: verbindlicher P0-Fahrplan; KR-4974 abgeschlossen, KR-4975 bis KR-4984
 nicht abgeschlossen
 
 Analysebasis: P0-Planstand `ffd45ae`, Source-Checkpoint `18f8537` vom
@@ -29,10 +29,9 @@ betroffenen Pfade. Alle P0- und P1-Funde werden geschlossen und die betroffenen
 Gates erneut ausgefuehrt. Erst danach darf genau ein neuer realer
 NativeDisc-Sonic-Port gebaut, installiert und sichtbar ausgefuehrt werden.
 
-## Aktueller KR-4974-Arbeitsstand
+## KR-4974-Abschlussstand
 
-Im Arbeitsbaum existieren inzwischen die grundlegenden Beobachtungs- und
-Reproduzierbarkeitsbausteine:
+Der Beobachtungs- und Reproduzierbarkeitspfad ist implementiert:
 
 - versionierte Manifest-, Progress-, Resource- und Terminalrecords in einer
   opt-in JSONL-Ausgabe;
@@ -50,13 +49,14 @@ Reproduzierbarkeitsbausteine:
 - eine deterministische retailfreie NativeDisc-Stressfixture mit kleinem
   `smoke`- und gatefaehigem `reference`-Profil.
 
-Diese Liste beschreibt Quellimplementierung, keinen abgeschlossenen Task.
-Insbesondere muss der Stresspfad alle modellierten Roots, Requests, Module,
-IR- und Partitionsdaten durch die realen Katana-Pfade verbrauchen. Danach
-folgen die fokussierten Tests, das erneute Review und erst in KR-4981 die
-8-/12-/24-Thread-Gates. GPU-Offload bleibt ein eigenes beweispflichtiges
-Entscheidungsgate in KR-4982. Die Abschluss-Gesamtpruefung KR-4984 bleibt
-unveraendert Pflicht.
+Die modellierten Roots, Requests, Module, IR- und Partitionsdaten laufen durch
+reale Katana-Pfade. Ein waehrend der Abnahme gefundener zehnminuetiger
+Windows-MSPDB-Nachlauf nach beendetem CMake-Configure ist durch einen privaten
+Endpoint und eine einsekuendige Helper-Shutdownfrist geschlossen; der
+Supervisor wartet weiterhin fail-closed auf Job-Leere. Die eigentlichen
+8-/12-/24-Thread-Gates folgen in KR-4981. GPU-Offload bleibt ein eigenes
+beweispflichtiges Entscheidungsgate in KR-4982. Die Abschluss-Gesamtpruefung
+KR-4984 bleibt unveraendert Pflicht.
 
 ## Gemessene Ausgangslage
 

@@ -132,6 +132,8 @@ void verify_persistent_function_value_session() {
     katana::analysis::detail::FunctionValueAnalysisSession session;
     katana::analysis::detail::GuardedNativeEntryShapeCache
         first_shapes{image};
+    std::vector<katana::analysis::FunctionValueAnalysisProgress>
+        cold_progress;
     const auto first =
         katana::analysis::detail::
             analyze_function_values_with_guarded_entry_cache(
@@ -139,7 +141,9 @@ void verify_persistent_function_value_session() {
                 lines,
                 boundaries,
                 {},
-                {},
+                [&cold_progress](const auto& progress) {
+                    cold_progress.push_back(progress);
+                },
                 first_shapes,
                 session);
     const auto first_stats = session.statistics();
@@ -165,21 +169,123 @@ void verify_persistent_function_value_session() {
     require(
         second_stats.hits > first_stats.hits &&
             second_stats.entries != 0u &&
-            second_stats.bytes != 0u,
+            second_stats.retained_payload_bytes != 0u,
         "Die analyseweite Function-Value-Session lieferte im identischen "
         "zweiten Kandidatenvertrag keinen echten Warm-Hit.");
     require(
-        !warm_progress.empty() &&
+        !cold_progress.empty() &&
+            cold_progress.back().phase == "complete" &&
+            cold_progress.back().active_evaluation_requests == 0u &&
+            cold_progress.back().active_cache_key_builds == 0u &&
+            cold_progress.back().active_cache_waits == 0u &&
+            cold_progress.back().active_cache_replays == 0u &&
+            cold_progress.back().active_physical_evaluations == 0u &&
+            cold_progress.back().active_cache_commits == 0u &&
+            cold_progress.back().logical_evaluations != 0u &&
+            cold_progress.back().cache_key_builds ==
+                cold_progress.back().logical_evaluations &&
+            cold_progress.back().physical_evaluations != 0u &&
+            cold_progress.back().cache_commits != 0u &&
+            cold_progress.back().evaluation_request_nanoseconds != 0u &&
+            cold_progress.back().cache_key_build_nanoseconds != 0u &&
+            cold_progress.back().physical_evaluation_nanoseconds != 0u &&
+            cold_progress.back().cache_commit_nanoseconds != 0u &&
+            !warm_progress.empty() &&
             warm_progress.front().phase == "start" &&
             warm_progress.back().phase == "complete" &&
+            warm_progress.back().summarized_functions ==
+                warm_progress.back().functions &&
+            warm_progress.back().resolution_functions_committed <=
+                warm_progress.back().resolution_functions_total &&
             warm_progress.back().active_workers == 0u &&
             warm_progress.back().logical_evaluations != 0u &&
             warm_progress.back().physical_evaluations <=
                 warm_progress.back().logical_evaluations &&
-            warm_progress.back().session_cache_hits != 0u,
+            warm_progress.back().session_cache_hits != 0u &&
+            warm_progress.back().cache_key_builds ==
+                warm_progress.back().logical_evaluations &&
+            warm_progress.back().evaluation_request_nanoseconds != 0u &&
+            warm_progress.back().cache_key_build_nanoseconds != 0u,
         "Der Function-Value-Progress meldete keinen sauberen "
-        "analyse-lokalen Start/Abschluss oder verlor seine Cache-/"
-        "Workerzaehler.");
+        "analyse-lokalen Start/Abschluss oder verlor seine getrennten "
+        "Cache-/Aktivitaets-/Zeitzaehler.");
+
+    const auto public_progress_before =
+        katana::analysis::detail::
+            function_value_progress_runtime_statistics_for_testing();
+    const auto public_progress = katana::analysis::analyze_function_values(
+        image,
+        lines,
+        boundaries,
+        {},
+        [](const katana::analysis::FunctionValueAnalysisProgress&) {});
+    const auto public_progress_after =
+        katana::analysis::detail::
+            function_value_progress_runtime_statistics_for_testing();
+    require_same_function_value_semantics(first, public_progress);
+    require(
+        public_progress_after.callback_activations >
+                public_progress_before.callback_activations &&
+            public_progress_after.pulse_threads_started >
+                public_progress_before.pulse_threads_started &&
+            public_progress_after.detailed_cache_sessions_started ==
+                public_progress_before.detailed_cache_sessions_started,
+        "Ein einfacher oeffentlicher FVA-Progresscallback aktivierte "
+        "implizit die teure Detailed-Cachehistorie oder blieb unwirksam.");
+
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        throwing_shapes{image};
+    const auto throwing_progress =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                {},
+                [](const auto&) {
+                    throw std::runtime_error(
+                        "synthetic-progress-observer-failure");
+                },
+                throwing_shapes,
+                session);
+    require_same_function_value_semantics(first, throwing_progress);
+    require(
+        throwing_progress.progress_callback_failed,
+        "Ein werfender Function-Value-Beobachter veraenderte die Analyse "
+        "oder blieb in der Verlusttelemetrie unsichtbar.");
+
+    std::vector<katana::analysis::FunctionValueAnalysisProgress>
+        diagnostic_progress;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        diagnostic_shapes{image};
+    set_stack_diagnostics_for_serial_fixpoint(true);
+    const auto diagnostic =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                {},
+                [&diagnostic_progress](const auto& progress) {
+                    diagnostic_progress.push_back(progress);
+                },
+                diagnostic_shapes,
+                session);
+    set_stack_diagnostics_for_serial_fixpoint(false);
+    require_same_function_value_semantics(first, diagnostic);
+    require(
+        !diagnostic_progress.empty() &&
+            diagnostic_progress.back().phase == "complete" &&
+            diagnostic_progress.back()
+                    .cache_diagnostic_bypass_evaluations != 0u &&
+            diagnostic_progress.back().physical_evaluations ==
+                diagnostic_progress.back()
+                    .cache_diagnostic_bypass_evaluations +
+                    diagnostic_progress.back()
+                        .cache_replay_fallback_recomputes +
+                    diagnostic_progress.back().session_cache_misses,
+        "Der opt-in Diagnose-Cachebypass verletzte die exakte "
+        "Physical=Miss+ReplayFallback+DiagnosticBypass-Bilanz.");
 
     std::vector<std::uint8_t> inventory_bytes(0x48u, 0x09u);
     const auto put_inventory_u16 =
@@ -262,6 +368,8 @@ void verify_persistent_function_value_session() {
 
     katana::analysis::detail::GuardedNativeEntryShapeCache
         warm_inventory_shapes{inventory_image};
+    std::vector<katana::analysis::FunctionValueAnalysisProgress>
+        warm_inventory_progress;
     const auto warm_inventory =
         katana::analysis::detail::
             analyze_function_values_with_guarded_entry_cache(
@@ -269,7 +377,9 @@ void verify_persistent_function_value_session() {
                 inventory_lines,
                 inventory_boundaries,
                 {},
-                {},
+                [&warm_inventory_progress](const auto& progress) {
+                    warm_inventory_progress.push_back(progress);
+                },
                 warm_inventory_shapes,
                 inventory_session);
     const auto warm_inventory_stats =
@@ -279,9 +389,17 @@ void verify_persistent_function_value_session() {
     require(
         warm_inventory_stats.hits > cold_inventory_stats.hits &&
             !warm_inventory.guarded_code_inventory
-                 .stored_code_addresses.empty(),
+                 .stored_code_addresses.empty() &&
+            !warm_inventory_progress.empty() &&
+            warm_inventory_progress.back().phase == "complete" &&
+            warm_inventory_progress.back().cache_replays != 0u &&
+            warm_inventory_progress.back().cache_replay_nanoseconds != 0u &&
+            warm_inventory_progress.back()
+                    .maximum_cache_replay_nanoseconds != 0u &&
+            warm_inventory_progress.back().active_cache_replays == 0u,
         "Ein echter Function-Value-Warmtreffer spielte das nichtleere "
-        "Guarded-AOT-Inventar nicht exakt wieder ein.");
+        "Guarded-AOT-Inventar nicht exakt wieder ein oder verlor seine "
+        "Replay-Zeittelemetrie.");
 
     inventory_image.write_u32_le(0x18u, 0x44u);
     katana::analysis::detail::GuardedNativeEntryShapeCache
@@ -497,6 +615,139 @@ void verify_persistent_function_value_session() {
         evicting_session.statistics().evictions != 0u,
         "Ein Eintrag grosser Session-Cache uebte den deterministischen "
         "LRU-Eviction-Pfad nicht aus.");
+}
+
+void verify_function_evaluation_cache_telemetry() {
+    const auto probe =
+        katana::analysis::detail::
+            probe_function_evaluation_cache_telemetry_for_testing();
+    const auto& statistics = probe.statistics;
+    require(
+        statistics.balanced() &&
+            statistics.lookups ==
+                statistics.ready_hits +
+                    statistics.in_flight_coalesces +
+                    statistics.misses &&
+            statistics.hits ==
+                statistics.ready_hits +
+                    statistics.in_flight_coalesces &&
+            probe.physical_computations == statistics.misses,
+        "Das Function-Evaluation-Cache-Ledger verletzte seine exakte "
+        "Lookup-/Miss-/Physical-Compute-Bilanz.");
+    require(
+        statistics.ready_hits != 0u &&
+            statistics.in_flight_coalesces != 0u &&
+            statistics.evictions != 0u &&
+            probe.in_flight_waits ==
+                statistics.in_flight_coalesces &&
+            probe.in_flight_wait_nanoseconds != 0u &&
+            probe.maximum_in_flight_wait_nanoseconds != 0u &&
+            probe.maximum_in_flight_wait_nanoseconds <=
+                probe.in_flight_wait_nanoseconds,
+        "Der retailfreie Cache-Probe uebte ReadyHit, "
+        "InFlight-Coalescing samt Wait-Zeit oder Eviction nicht aus.");
+    for (std::size_t index = 0u;
+         index < statistics.miss_reasons.size();
+         ++index) {
+        require(
+            statistics.miss_reasons[index] != 0u,
+            "Der retailfreie Cache-Probe liess einen primaeren "
+            "Missgrund ungetestet (Index " +
+                std::to_string(index) + ").");
+    }
+    using katana::analysis::detail::FunctionEvaluationCacheLookupOutcome;
+    using katana::analysis::detail::FunctionEvaluationCacheMissReason;
+    const std::array expected_context_reasons{
+        FunctionEvaluationCacheMissReason::Cold,
+        FunctionEvaluationCacheMissReason::ProjectedIngressChanged,
+        FunctionEvaluationCacheMissReason::SummaryDependencyChanged,
+        FunctionEvaluationCacheMissReason::AbiContractChanged,
+    };
+    std::size_t contextual_decision = 0u;
+    bool final_oversize_observed = false;
+    for (const auto& decision : probe.decisions) {
+        require(
+            decision.outcome ==
+                    FunctionEvaluationCacheLookupOutcome::Miss &&
+                decision.miss_reason.has_value(),
+            "Der Cache-Observer erhielt keinen final klassifizierten Miss.");
+        if (decision.function_entry == 700u) {
+            require(
+                contextual_decision < expected_context_reasons.size() &&
+                    decision.miss_reason ==
+                        expected_context_reasons[contextual_decision],
+                "Die bounded Multi-Context-Historie erklaerte einen "
+                "alternierenden Kontext gegen die falsche Baseline.");
+            ++contextual_decision;
+        }
+        if (decision.function_entry == 900u &&
+            decision.miss_reason ==
+                FunctionEvaluationCacheMissReason::
+                    OversizeOrNoExactReplay)
+            final_oversize_observed = true;
+    }
+    require(
+        contextual_decision == expected_context_reasons.size() &&
+            final_oversize_observed &&
+            probe.observer_statistics.balanced() &&
+            probe.observer_statistics.lookups ==
+                probe.decisions.size() &&
+            probe.observer_statistics.misses ==
+                probe.decisions.size() &&
+            probe.observer_statistics.miss_reasons[
+                static_cast<std::size_t>(
+                    FunctionEvaluationCacheMissReason::Cold)] == 1u &&
+            probe.observer_statistics.miss_reasons[
+                static_cast<std::size_t>(
+                    FunctionEvaluationCacheMissReason::
+                        ProjectedIngressChanged)] == 1u &&
+            probe.observer_statistics.miss_reasons[
+                static_cast<std::size_t>(
+                    FunctionEvaluationCacheMissReason::
+                        SummaryDependencyChanged)] == 1u &&
+            probe.observer_statistics.miss_reasons[
+                static_cast<std::size_t>(
+                    FunctionEvaluationCacheMissReason::
+                        AbiContractChanged)] == 1u &&
+            probe.observer_statistics.miss_reasons[
+                static_cast<std::size_t>(
+                    FunctionEvaluationCacheMissReason::
+                        OversizeOrNoExactReplay)] == 1u,
+        "Observer-/Missgrund-Evidence verlor entweder den genauen "
+        "Multi-Context-Pfad, die Aggregatbilanz oder die finale "
+        "Oversize-Reklassifizierung.");
+    require(
+        probe.throwing_observer_semantics_preserved,
+        "Eine Observer-Exception veraenderte Cache-Semantik oder Reuse.");
+    require(
+        probe.bounded_context_history_limit == 64u &&
+            probe.bounded_context_history_entries ==
+                probe.bounded_context_history_limit,
+        "Die kausale Multi-Context-Historie ueberschritt ihr "
+        "funktionales Retentionslimit.");
+    require(
+        probe.bounded_absent_history_entries != 0u &&
+            probe.bounded_absent_history_entries < 5'000u &&
+            probe.bounded_absent_history_accounted_bytes <=
+                probe.bounded_absent_history_byte_limit &&
+            probe.bounded_absent_history_accounted_bytes ==
+                probe.bounded_absent_history_byte_limit,
+        "Die exakte Eviction-/Oversize-Historie ist nicht durch ein "
+        "hartes Bytebudget begrenzt.");
+    require(
+        probe.inline_only_artifact_bytes ==
+                probe.inline_only_artifact_owner_bytes &&
+            probe.controlled_artifact_bytes >
+                probe.inline_only_artifact_bytes &&
+            probe.controlled_entry_retained_payload_bytes >
+                probe.controlled_artifact_bytes &&
+            probe.exact_limit_entries == 1u &&
+            probe.exact_limit_retained_payload_bytes ==
+                probe.controlled_entry_retained_payload_bytes &&
+            probe.one_byte_short_entries == 0u &&
+            probe.one_byte_short_retained_payload_bytes == 0u,
+        "Das Function-Evaluation-Payloadbudget zaehlte Inline-Owner "
+        "doppelt oder verletzte seine deklarierte Admission-Grenze.");
 }
 
 katana::io::ExecutableImage image_with_callee(const std::vector<std::uint8_t>& callee) {
@@ -1377,6 +1628,7 @@ struct MultiOwnerContextualResult {
     katana::analysis::FunctionValueAnalysisResult values;
     std::size_t resolution_roots = 0u;
     std::size_t function_count = 0u;
+    katana::analysis::FunctionValueAnalysisProgress final_progress;
 };
 
 MultiOwnerContextualResult
@@ -1489,20 +1741,19 @@ multi_owner_contextual_return_values() {
          {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
          true},
     }};
-    std::atomic_size_t resolution_roots = 0u;
+    katana::analysis::FunctionValueAnalysisProgress final_progress;
     auto values = katana::analysis::analyze_function_values(
         image,
         lines,
         boundaries,
         edges,
-        [&resolution_roots](const auto& progress) {
-            resolution_roots.store(
-                progress.resolution_functions_total,
-                std::memory_order_relaxed);
+        [&final_progress](const auto& progress) {
+            final_progress = progress;
         });
     return {std::move(values),
-            resolution_roots.load(std::memory_order_relaxed),
-            boundaries.size()};
+            final_progress.resolution_functions_total,
+            boundaries.size(),
+            final_progress};
 }
 
 katana::analysis::FunctionValueAnalysisResult
@@ -4029,6 +4280,7 @@ multi_callee_memory_saved_stack_alias_values() {
 
 int main() {
     verify_persistent_function_value_session();
+    verify_function_evaluation_cache_telemetry();
 
     {
         katana::analysis::ParallelWorkExecutor executor(2u);
@@ -4205,34 +4457,87 @@ int main() {
     }
     {
         katana::analysis::ParallelWorkExecutor single_worker(1u);
+        katana::analysis::ParallelWorkActivity activity_a;
+        katana::analysis::ParallelWorkActivity activity_b;
         std::atomic_size_t nested_items = 0u;
         katana::analysis::parallel_analysis_for(
             single_worker,
             4u,
             1u,
+            &activity_a,
             [&](const std::size_t) {
                 katana::analysis::parallel_analysis_for(
                     single_worker,
                     3u,
                     1u,
+                    &activity_a,
                     [&](const std::size_t) {
+                        require(
+                            activity_a.active_worker_count() == 1u &&
+                                activity_b.active_worker_count() == 0u,
+                            "Verschachtelte Arbeit derselben Activity "
+                            "wurde doppelt als Worker gezaehlt.");
                         nested_items.fetch_add(
                             1u, std::memory_order_relaxed);
                     });
+                require(
+                    activity_a.active_worker_count() == 1u &&
+                        activity_b.active_worker_count() == 0u,
+                    "Die aeussere Activity wurde nach gleichartiger "
+                    "Nested-Hilfe nicht wiederhergestellt.");
+                katana::analysis::parallel_analysis_for(
+                    single_worker,
+                    1u,
+                    1u,
+                    [&](const std::size_t) {
+                        require(
+                            activity_a.active_worker_count() == 0u &&
+                                activity_b.active_worker_count() == 0u,
+                            "Ein Null-Domain-Task wurde faelschlich der "
+                            "wartenden Activity zugerechnet.");
+                    });
+                require(
+                    activity_a.active_worker_count() == 1u,
+                    "Die aeussere Activity wurde nach Null-Domain-Hilfe "
+                    "nicht wiederhergestellt.");
+                katana::analysis::parallel_analysis_for(
+                    single_worker,
+                    1u,
+                    1u,
+                    &activity_b,
+                    [&](const std::size_t) {
+                        require(
+                            activity_a.active_worker_count() == 0u &&
+                                activity_b.active_worker_count() == 1u,
+                            "Ein Worker wurde beim Activity-Wechsel in "
+                            "zwei Domains gleichzeitig gezaehlt.");
+                    });
+                require(
+                    activity_a.active_worker_count() == 1u &&
+                        activity_b.active_worker_count() == 0u,
+                    "Die aeussere Activity wurde nach fremder Nested-Hilfe "
+                    "nicht exakt wiederhergestellt.");
             });
         require(
-            nested_items.load(std::memory_order_relaxed) == 12u,
+            nested_items.load(std::memory_order_relaxed) == 12u &&
+                activity_a.active_worker_count() == 0u &&
+                activity_b.active_worker_count() == 0u &&
+                single_worker.active_worker_count() == 0u,
             "Der Analysis-Executor deadlockt oder verliert Nested-Arbeit "
-            "mit genau einem Worker.");
+            "mit genau einem Worker beziehungsweise publiziert den "
+            "Batchabschluss vor dem Activity-Abbau.");
     }
     {
         katana::analysis::ParallelWorkExecutor four_workers(4u);
+        katana::analysis::ParallelWorkActivity local_activity;
         std::atomic_size_t active_jobs = 0u;
         std::atomic_size_t peak_jobs = 0u;
+        std::atomic_size_t peak_reported_workers = 0u;
         katana::analysis::parallel_analysis_for(
             four_workers,
             16u,
             2u,
+            &local_activity,
             [&](const std::size_t) {
                 const auto active =
                     active_jobs.fetch_add(
@@ -4246,6 +4551,17 @@ int main() {
                            active,
                            std::memory_order_relaxed))
                     ;
+                const auto reported =
+                    local_activity.active_worker_count();
+                auto reported_peak =
+                    peak_reported_workers.load(
+                        std::memory_order_relaxed);
+                while (reported_peak < reported &&
+                       !peak_reported_workers.compare_exchange_weak(
+                           reported_peak,
+                           reported,
+                           std::memory_order_relaxed))
+                    ;
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(1));
                 active_jobs.fetch_sub(
@@ -4253,8 +4569,64 @@ int main() {
             });
         require(
             peak_jobs.load(std::memory_order_relaxed) <= 2u &&
-                active_jobs.load(std::memory_order_relaxed) == 0u,
-            "Der Analysis-Executor ignoriert das lokale Zwei-Job-Limit.");
+                active_jobs.load(std::memory_order_relaxed) == 0u &&
+                peak_reported_workers.load(
+                    std::memory_order_relaxed) >= 1u &&
+                peak_reported_workers.load(
+                    std::memory_order_relaxed) <= 2u &&
+                local_activity.active_worker_count() == 0u &&
+                four_workers.active_worker_count() == 0u,
+            "Der Analysis-Executor ignoriert das lokale Zwei-Job-Limit "
+            "oder meldet verschachtelte Tasks als zusaetzliche Worker.");
+    }
+    {
+        katana::analysis::ParallelWorkExecutor shared_executor(4u);
+        katana::analysis::ParallelWorkActivity activity_a;
+        katana::analysis::ParallelWorkActivity activity_b;
+        std::atomic_size_t started = 0u;
+        std::atomic_bool release = false;
+        const auto wait_for_release = [&](const std::size_t) {
+            started.fetch_add(1u, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        };
+        auto first_group = std::async(
+            std::launch::async,
+            [&] {
+                katana::analysis::parallel_analysis_for(
+                    shared_executor,
+                    1u,
+                    1u,
+                    &activity_a,
+                    wait_for_release);
+            });
+        auto second_group = std::async(
+            std::launch::async,
+            [&] {
+                katana::analysis::parallel_analysis_for(
+                    shared_executor,
+                    2u,
+                    2u,
+                    &activity_b,
+                    wait_for_release);
+            });
+        while (started.load(std::memory_order_acquire) != 3u)
+            std::this_thread::yield();
+        const bool domains_are_isolated =
+            shared_executor.active_worker_count() == 3u &&
+            activity_a.active_worker_count() == 1u &&
+            activity_b.active_worker_count() == 2u;
+        release.store(true, std::memory_order_release);
+        first_group.get();
+        second_group.get();
+        require(
+            domains_are_isolated &&
+                shared_executor.active_worker_count() == 0u &&
+                activity_a.active_worker_count() == 0u &&
+                activity_b.active_worker_count() == 0u,
+            "Der globale Executor und zwei unabhaengige lokale "
+            "Activity-Domains wurden vermischt oder nicht vor dem "
+            "Batchabschluss abgebaut.");
     }
     {
         set_stack_diagnostics_for_serial_fixpoint(true);
@@ -4528,7 +4900,16 @@ int main() {
                     multi_owner_contextual_parallel.resolution_roots &&
                 multi_owner_contextual_parallel.resolution_roots == 5u &&
                 multi_owner_contextual_parallel.resolution_roots <
-                    multi_owner_contextual_parallel.function_count,
+                    multi_owner_contextual_parallel.function_count &&
+                multi_owner_contextual_parallel.final_progress.phase ==
+                    "complete" &&
+                multi_owner_contextual_parallel.final_progress
+                        .summarized_functions ==
+                    multi_owner_contextual_parallel.final_progress.functions &&
+                multi_owner_contextual_parallel.final_progress
+                        .resolution_functions_committed ==
+                    multi_owner_contextual_parallel.final_progress
+                        .resolution_functions_total,
             "Die syntaktische Resolution-Root-Auswahl verwarf einen lokalen "
             "Long-Store/Load oder wertete weiterhin reine RTS-Funktionen aus "
             "(roots=" +

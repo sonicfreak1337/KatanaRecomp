@@ -272,14 +272,27 @@ struct FunctionValueAnalysisResult {
     std::size_t maximum_fixpoint_batch_size = 1u;
     std::size_t iteration_budget = 0u;
     bool budget_exhausted = false;
+    // Observational callback failures never change canonical analysis, but
+    // callers can propagate the sticky telemetry-loss state.
+    bool progress_callback_failed = false;
 };
 
 struct FunctionValueAnalysisProgress {
-    std::string_view phase;
+    // Owned because callbacks commonly enqueue or retain snapshots after the
+    // synchronous producer call returns.
+    std::string phase;
+    std::string subphase;
+    std::size_t subphase_planned = 0u;
+    std::size_t subphase_processed = 0u;
+    std::size_t subphase_queued = 0u;
+    std::size_t subphase_iterations = 0u;
     std::size_t functions = 0u;
     std::size_t blocks = 0u;
     std::size_t fixpoint_iterations = 0u;
-    std::size_t completed_functions = 0u;
+    // These counters intentionally describe two different work domains.
+    // `summarized_functions` is bounded by `functions`; resolution commits
+    // are bounded by `resolution_functions_total` below.
+    std::size_t summarized_functions = 0u;
     std::size_t pending = 0u;
     std::size_t resolutions = 0u;
     // Run-local live telemetry. These counters never participate in
@@ -287,10 +300,69 @@ struct FunctionValueAnalysisProgress {
     std::size_t active_workers = 0u;
     std::size_t logical_evaluations = 0u;
     std::size_t physical_evaluations = 0u;
+    // Exact run-local activity domains. Counts are logical admissions into
+    // that domain; active values are instantaneous. Durations are cumulative
+    // and maximum wall-clock nanoseconds across possibly parallel work.
+    std::size_t active_evaluation_requests = 0u;
+    std::uint64_t evaluation_request_nanoseconds = 0u;
+    std::uint64_t maximum_evaluation_request_nanoseconds = 0u;
+    std::size_t cache_key_builds = 0u;
+    std::size_t active_cache_key_builds = 0u;
+    std::uint64_t cache_key_build_nanoseconds = 0u;
+    std::uint64_t maximum_cache_key_build_nanoseconds = 0u;
+    std::size_t cache_waits = 0u;
+    std::size_t active_cache_waits = 0u;
+    std::uint64_t cache_wait_nanoseconds = 0u;
+    std::uint64_t maximum_cache_wait_nanoseconds = 0u;
+    std::size_t cache_replays = 0u;
+    std::size_t active_cache_replays = 0u;
+    std::uint64_t cache_replay_nanoseconds = 0u;
+    std::uint64_t maximum_cache_replay_nanoseconds = 0u;
+    std::size_t active_physical_evaluations = 0u;
+    std::uint64_t physical_evaluation_nanoseconds = 0u;
+    std::uint64_t maximum_physical_evaluation_nanoseconds = 0u;
+    std::size_t cache_commits = 0u;
+    std::size_t active_cache_commits = 0u;
+    std::uint64_t cache_commit_nanoseconds = 0u;
+    std::uint64_t maximum_cache_commit_nanoseconds = 0u;
+    // Extra interpreter executions forced by an in-flight cache hit whose
+    // bounded inventory artifact could not retain an exact replay stream.
+    // This is independent of the primary cache hit/miss partition.
+    std::size_t cache_replay_fallback_recomputes = 0u;
+    // Physical interpreter executions intentionally performed outside the
+    // session cache while the opt-in stack diagnostic is active. Keeping
+    // this separate preserves the exact physical-work identity:
+    // misses + replay fallbacks + diagnostic bypasses.
+    std::size_t cache_diagnostic_bypass_evaluations = 0u;
     std::size_t resolution_functions_total = 0u;
+    std::size_t resolution_functions_started = 0u;
+    std::size_t resolution_functions_ready = 0u;
+    std::size_t resolution_functions_committed = 0u;
+    std::size_t resolution_head_of_line_index = 0u;
+    std::size_t resolution_head_of_line_elapsed_milliseconds = 0u;
+    std::size_t configured_workers = 1u;
+    std::size_t session_cache_lookups = 0u;
+    std::size_t session_cache_ready_hits = 0u;
+    std::size_t session_cache_in_flight_coalesces = 0u;
     std::size_t session_cache_hits = 0u;
     std::size_t session_cache_misses = 0u;
     std::size_t session_cache_evictions = 0u;
+    std::size_t session_cache_entries = 0u;
+    // Deterministic cache admission payload, not allocator bytes or process
+    // RSS. OS/process resource telemetry remains authoritative for RAM.
+    std::size_t session_cache_retained_payload_bytes = 0u;
+    std::size_t session_cache_miss_cold = 0u;
+    std::size_t session_cache_miss_evicted = 0u;
+    std::size_t session_cache_miss_oversize_or_no_exact_replay = 0u;
+    std::size_t session_cache_miss_function_shape_changed = 0u;
+    std::size_t session_cache_miss_projected_ingress_changed = 0u;
+    std::size_t session_cache_miss_summary_dependency_changed = 0u;
+    std::size_t session_cache_miss_abi_contract_changed = 0u;
+    std::size_t session_cache_miss_resolution_lens_changed = 0u;
+    std::size_t session_cache_miss_inventory_sink_changed = 0u;
+    std::size_t session_cache_miss_isolation_partition_changed = 0u;
+    std::size_t session_cache_miss_contextual_summary_changed = 0u;
+    std::size_t session_cache_miss_tail_ingress_changed = 0u;
 };
 
 using FunctionValueAnalysisProgressCallback =
@@ -323,6 +395,18 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         const FunctionValueAnalysisProgressCallback& progress_callback);
 
 namespace detail {
+
+// Process-local instrumentation used by regressions to prove that callers
+// which disable progress do not accidentally activate the callback bridge or
+// its heartbeat thread. It is observational and never enters analysis output.
+struct FunctionValueProgressRuntimeStatistics {
+    std::size_t callback_activations = 0u;
+    std::size_t pulse_threads_started = 0u;
+    std::size_t detailed_cache_sessions_started = 0u;
+};
+
+[[nodiscard]] FunctionValueProgressRuntimeStatistics
+function_value_progress_runtime_statistics_for_testing() noexcept;
 
 // Narrow test observer for the already-computed ABI fixed points. The normal
 // product analysis neither retains nor copies these per-function contracts.

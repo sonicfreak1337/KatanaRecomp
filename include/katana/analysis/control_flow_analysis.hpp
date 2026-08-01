@@ -137,6 +137,7 @@ struct ControlFlowAnalysisResult {
     std::size_t guarded_code_shape_budget_exceeded_candidates = 0u;
     bool candidate_inventory_truncated = false;
     bool returned_table_scan_truncated = false;
+    bool progress_callback_failed = false;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
     std::vector<SymbolicAddress> symbolic_addresses;
 };
@@ -155,25 +156,108 @@ guarded_aot_inventory_complete(
 }
 
 struct ControlFlowAnalysisProgress {
-    std::string_view phase;
+    // Owned snapshots are safe for asynchronous UI/logger queues.
+    std::string phase;
     std::size_t iteration = 0u;
     std::size_t seeds = 0u;
     std::size_t instructions = 0u;
     std::size_t contexts = 0u;
     std::size_t resolutions = 0u;
+    std::size_t candidate_contract_iteration = 0u;
+    std::size_t candidate_contract_iteration_budget = 0u;
+    std::size_t round_seed_baseline = 0u;
+    std::size_t round_added_seeds = 0u;
+    bool growing_workset = false;
     bool function_value_active = false;
+    std::string function_value_subphase;
+    std::size_t function_value_subphase_planned = 0u;
+    std::size_t function_value_subphase_processed = 0u;
+    std::size_t function_value_subphase_queued = 0u;
+    std::size_t function_value_subphase_iterations = 0u;
     std::size_t function_value_functions = 0u;
     std::size_t function_value_blocks = 0u;
     std::size_t function_value_iterations = 0u;
-    std::size_t function_value_completed_functions = 0u;
+    std::size_t function_value_summarized_functions = 0u;
     std::size_t function_value_pending = 0u;
     std::size_t function_value_active_workers = 0u;
     std::size_t function_value_logical_evaluations = 0u;
     std::size_t function_value_physical_evaluations = 0u;
+    std::size_t function_value_active_evaluation_requests = 0u;
+    std::uint64_t function_value_evaluation_request_nanoseconds = 0u;
+    std::uint64_t
+        function_value_maximum_evaluation_request_nanoseconds = 0u;
+    std::size_t function_value_cache_key_builds = 0u;
+    std::size_t function_value_active_cache_key_builds = 0u;
+    std::uint64_t function_value_cache_key_build_nanoseconds = 0u;
+    std::uint64_t
+        function_value_maximum_cache_key_build_nanoseconds = 0u;
+    std::size_t function_value_cache_waits = 0u;
+    std::size_t function_value_active_cache_waits = 0u;
+    std::uint64_t function_value_cache_wait_nanoseconds = 0u;
+    std::uint64_t function_value_maximum_cache_wait_nanoseconds = 0u;
+    std::size_t function_value_cache_replays = 0u;
+    std::size_t function_value_active_cache_replays = 0u;
+    std::uint64_t function_value_cache_replay_nanoseconds = 0u;
+    std::uint64_t function_value_maximum_cache_replay_nanoseconds = 0u;
+    std::size_t function_value_active_physical_evaluations = 0u;
+    std::uint64_t function_value_physical_evaluation_nanoseconds = 0u;
+    std::uint64_t
+        function_value_maximum_physical_evaluation_nanoseconds = 0u;
+    std::size_t function_value_cache_commits = 0u;
+    std::size_t function_value_active_cache_commits = 0u;
+    std::uint64_t function_value_cache_commit_nanoseconds = 0u;
+    std::uint64_t function_value_maximum_cache_commit_nanoseconds = 0u;
+    std::size_t
+        function_value_session_cache_replay_fallback_recomputes = 0u;
+    std::size_t
+        function_value_session_cache_diagnostic_bypass_evaluations = 0u;
     std::size_t function_value_resolution_functions_total = 0u;
+    std::size_t function_value_resolution_functions_started = 0u;
+    std::size_t function_value_resolution_functions_ready = 0u;
+    std::size_t function_value_resolution_functions_committed = 0u;
+    std::size_t function_value_resolution_head_of_line_index = 0u;
+    std::size_t
+        function_value_resolution_head_of_line_elapsed_milliseconds = 0u;
+    std::size_t function_value_configured_workers = 1u;
+    std::size_t function_value_session_cache_lookups = 0u;
+    std::size_t function_value_session_cache_ready_hits = 0u;
+    std::size_t
+        function_value_session_cache_in_flight_coalesces = 0u;
     std::size_t function_value_session_cache_hits = 0u;
     std::size_t function_value_session_cache_misses = 0u;
     std::size_t function_value_session_cache_evictions = 0u;
+    std::size_t function_value_session_cache_entries = 0u;
+    std::size_t
+        function_value_session_cache_retained_payload_bytes = 0u;
+    std::size_t function_value_session_cache_miss_cold = 0u;
+    std::size_t function_value_session_cache_miss_evicted = 0u;
+    std::size_t
+        function_value_session_cache_miss_oversize_or_no_exact_replay =
+            0u;
+    std::size_t
+        function_value_session_cache_miss_function_shape_changed = 0u;
+    std::size_t
+        function_value_session_cache_miss_projected_ingress_changed =
+            0u;
+    std::size_t
+        function_value_session_cache_miss_summary_dependency_changed =
+            0u;
+    std::size_t
+        function_value_session_cache_miss_abi_contract_changed = 0u;
+    std::size_t
+        function_value_session_cache_miss_resolution_lens_changed =
+            0u;
+    std::size_t
+        function_value_session_cache_miss_inventory_sink_changed =
+            0u;
+    std::size_t
+        function_value_session_cache_miss_isolation_partition_changed =
+            0u;
+    std::size_t
+        function_value_session_cache_miss_contextual_summary_changed =
+            0u;
+    std::size_t
+        function_value_session_cache_miss_tail_ingress_changed = 0u;
 };
 
 using ControlFlowAnalysisProgressCallback =
@@ -195,5 +279,14 @@ analyze_control_flow(const katana::io::ExecutableImage& image,
 analyze_control_flow(const katana::io::ExecutableImage& image,
                      const AnalysisOverrides* overrides,
                      const ControlFlowAnalysisProgressCallback& progress_callback);
+
+// Detailed miss-reason history performs extra component hashing and is
+// intentionally independent from basic live progress.
+[[nodiscard]] ControlFlowAnalysisResult
+analyze_control_flow(
+    const katana::io::ExecutableImage& image,
+    const AnalysisOverrides* overrides,
+    const ControlFlowAnalysisProgressCallback& progress_callback,
+    bool detailed_cache_miss_telemetry);
 
 } // namespace katana::analysis

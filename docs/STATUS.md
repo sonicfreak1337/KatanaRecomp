@@ -49,16 +49,14 @@ noch nicht end-to-end abgenommen.
 
 Der verbindliche Umsetzungs-, Mess-, GPU- und Abschlussvertrag steht in
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-KR-4974 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
+KR-4974 ist abgeschlossen; KR-4975 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
 belegtem End-to-End-Gewinn; der vorhandene D3D11-Presenter ist
 hardwarebeschleunigte Ausgabe, aber kein Beleg fuer GPU-beschleunigte
 Analyse.
 
-### KR-4974-Arbeitsstand
+### KR-4974-Abschlussstand
 
-KR-4974 ist im aktuellen Arbeitsbaum in Arbeit und bleibt bis zu seinem
-eigenen fokussierten Build, den realen Stresspfad-Gates und dem erneuten
-Review offen. Quellseitig vorhanden sind:
+KR-4974 ist implementiert. Vorhanden sind:
 
 - versionierte opt-in JSONL-Datensaetze fuer Manifest, Fortschritt,
   Prozessbaumressourcen und terminalen Abschluss;
@@ -77,18 +75,17 @@ Review offen. Quellseitig vorhanden sind:
 - eine deterministische retailfreie NativeDisc-Stressfixture in den Profilen
   `smoke` und `reference`.
 
-Nicht abgeschlossen oder nicht abgenommen sind weiterhin:
-
-- der vollstaendige reale Verbraucher fuer alle Root-, Request-, Modul-,
-  IR- und Partitionslasten der Stressfixture;
-- der fokussierte Gesamtbuild und die Wiederholung aller betroffenen Tests
-  nach den letzten Writer-/Pfadschutzkorrekturen;
-- die Referenzmessungen auf 8, 12 und 24 Threads samt Zeit-, CPU-, RAM- und
-  Cacheinvarianten;
-- KR-4975 bis KR-4980, das GPU-Entscheidungsgate KR-4982 und gegebenenfalls
-  KR-4983;
-- die verpflichtende unabhaengige Abschluss-Gesamtpruefung KR-4984 und der
-  erst danach zulaessige einzelne neue Sonic-Lauf.
+Der kombinierte Build der betroffenen Targets, die engen Progress- und
+Hostprozessvertraege sowie der reale Komponentenpfad der Fixture waren gruen.
+Die anschliessende breite CLI-Matrix wurde nicht wiederholt: Sie hatte nach
+einem in zwei Sekunden abgeschlossenen CMake-Configure einen zehnminuetigen
+MSPDB-Helper-Stall offengelegt. Der Windows-Produktpfad isoliert MSPDB jetzt
+pro Hostkommando und setzt dessen natuerliche Shutdownfrist auf eine Sekunde,
+ohne die Job-Leere als Prozessbaumbeweis aufzuweichen. Diese letzte Aenderung
+baut in `katana-recomp`; ihre massgebliche Abnahme erfolgt gemaess `AGENTS.md`
+am spaeteren realen Produktpfad. Offen bleiben KR-4975 bis KR-4980, die
+8-/12-/24-Thread-Gates KR-4981, das GPU-Gate KR-4982, gegebenenfalls KR-4983,
+die Gesamtpruefung KR-4984 und erst danach der einzelne neue Sonic-Lauf.
 
 ### Abgebrochener NativeDisc-v24-Export
 

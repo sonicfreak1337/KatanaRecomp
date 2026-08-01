@@ -1265,6 +1265,8 @@ set_source_files_properties(${KATANA_DIFFERENTIAL_GENERATED_CPP} PROPERTIES GENE
 
 add_executable(katana-recomp
     src/cli/main.cpp
+    src/cli/host_build_progress.cpp
+    src/cli/port_build_telemetry.cpp
     src/cli/port_export_orchestration.cpp
 )
 add_dependencies(katana-recomp katana-component-identities)
@@ -1329,6 +1331,7 @@ if(KATANA_DESKTOP_GUI_AVAILABLE)
 endif()
 
 enable_testing()
+find_package(Python3 COMPONENTS Interpreter QUIET)
 
 add_executable(
     katana-sh4-sst-parser-tests
@@ -2034,6 +2037,218 @@ add_executable(katana-progress-tests tests/progress_tests.cpp)
 target_link_libraries(katana-progress-tests PRIVATE katana_runtime_core)
 katana_enable_warnings(katana-progress-tests)
 add_test(NAME katana-progress-tests COMMAND katana-progress-tests)
+
+add_executable(
+    katana-port-build-telemetry-tests
+    tests/codegen/port_build_telemetry_tests.cpp
+    src/cli/port_build_telemetry.cpp
+)
+target_include_directories(
+    katana-port-build-telemetry-tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+)
+target_link_libraries(
+    katana-port-build-telemetry-tests
+    PRIVATE
+        katana_runtime_core
+)
+katana_enable_warnings(katana-port-build-telemetry-tests)
+add_test(
+    NAME katana-port-build-telemetry-tests
+    COMMAND katana-port-build-telemetry-tests
+)
+
+add_executable(
+    katana-port-codegen-jobs-tests
+    tests/codegen/port_codegen_jobs_tests.cpp
+)
+target_link_libraries(
+    katana-port-codegen-jobs-tests
+    PRIVATE
+        katana_core
+)
+katana_enable_warnings(katana-port-codegen-jobs-tests)
+add_test(
+    NAME katana-port-codegen-jobs-tests
+    COMMAND katana-port-codegen-jobs-tests
+)
+
+add_executable(
+    katana-host-build-progress-tests
+    tests/codegen/host_build_progress_tests.cpp
+    src/cli/host_build_progress.cpp
+)
+target_include_directories(
+    katana-host-build-progress-tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+)
+target_link_libraries(
+    katana-host-build-progress-tests
+    PRIVATE
+        katana_runtime_core
+)
+katana_enable_warnings(katana-host-build-progress-tests)
+add_test(
+    NAME katana-host-build-progress-tests
+    COMMAND katana-host-build-progress-tests
+)
+
+add_executable(
+    katana-structured-control-flow-progress-tests
+    tests/codegen/structured_control_flow_progress_tests.cpp
+)
+target_include_directories(
+    katana-structured-control-flow-progress-tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen
+)
+target_link_libraries(
+    katana-structured-control-flow-progress-tests
+    PRIVATE
+        katana_core
+)
+katana_enable_warnings(
+    katana-structured-control-flow-progress-tests)
+add_test(
+    NAME katana-structured-control-flow-progress-tests
+    COMMAND katana-structured-control-flow-progress-tests
+)
+
+add_executable(
+    katana-native-disc-cold-build-stress
+    tools/performance/native_disc_cold_build_stress.cpp
+)
+target_include_directories(
+    katana-native-disc-cold-build-stress
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/analysis
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen
+)
+target_link_libraries(
+    katana-native-disc-cold-build-stress
+    PRIVATE
+        katana_core
+        katana_runtime
+)
+katana_enable_warnings(katana-native-disc-cold-build-stress)
+
+if(Python3_Interpreter_FOUND)
+    set(KATANA_COLD_BUILD_STRESS_PLATFORM_ARGUMENTS)
+    set(KATANA_COLD_BUILD_STRESS_TOOL_ARGUMENTS)
+    if(EXISTS "${CMAKE_CXX_COMPILER}")
+        list(
+            APPEND
+            KATANA_COLD_BUILD_STRESS_TOOL_ARGUMENTS
+            --cxx-compiler
+            "${CMAKE_CXX_COMPILER}"
+        )
+    endif()
+    if(EXISTS "${CMAKE_MAKE_PROGRAM}")
+        list(
+            APPEND
+            KATANA_COLD_BUILD_STRESS_TOOL_ARGUMENTS
+            --make-program
+            "${CMAKE_MAKE_PROGRAM}"
+        )
+    endif()
+    if(NOT "${CMAKE_GENERATOR_PLATFORM}" STREQUAL "")
+        list(
+            APPEND
+            KATANA_COLD_BUILD_STRESS_PLATFORM_ARGUMENTS
+            --generator-platform
+            "${CMAKE_GENERATOR_PLATFORM}"
+        )
+    endif()
+    add_test(
+        NAME katana-native-disc-cold-build-stress-tests
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/native_disc_cold_build_stress_tests.py
+            --writer
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/performance/write_native_disc_cold_build_stress.py
+            --verifier
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/performance/verify_native_disc_cold_build_stress.py
+            --katana-cli
+            $<TARGET_FILE:katana-recomp>
+            --stress-runner
+            $<TARGET_FILE:katana-native-disc-cold-build-stress>
+            --cmake
+            ${CMAKE_COMMAND}
+            --generator
+            "${CMAKE_GENERATOR}"
+            ${KATANA_COLD_BUILD_STRESS_PLATFORM_ARGUMENTS}
+            ${KATANA_COLD_BUILD_STRESS_TOOL_ARGUMENTS}
+            --runtime-targets
+            ${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildTargets.cmake
+            --workers
+            4
+    )
+    set_tests_properties(
+        katana-native-disc-cold-build-stress-tests
+        PROPERTIES
+            TIMEOUT 900
+    )
+    add_test(
+        NAME katana-port-telemetry-input-safety-tests
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/port_telemetry_input_safety_tests.py
+            --writer
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/performance/write_native_disc_cold_build_stress.py
+            --katana-cli
+            $<TARGET_FILE:katana-recomp>
+            --source-root
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    set_tests_properties(
+        katana-port-telemetry-input-safety-tests
+        PROPERTIES
+            TIMEOUT 60
+    )
+    add_test(
+        NAME katana-host-process-supervision-contract-tests
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/host_process_supervision_contract_tests.py
+            --source-root
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            --katana-cli
+            $<TARGET_FILE:katana-recomp>
+    )
+    set_tests_properties(
+        katana-host-process-supervision-contract-tests
+        PROPERTIES
+            TIMEOUT 180
+    )
+else()
+    foreach(
+        KATANA_REQUIRED_PYTHON_TEST
+        IN ITEMS
+            katana-native-disc-cold-build-stress-tests
+            katana-port-telemetry-input-safety-tests
+            katana-host-process-supervision-contract-tests
+    )
+        add_test(
+            NAME ${KATANA_REQUIRED_PYTHON_TEST}
+            COMMAND
+                ${CMAKE_COMMAND}
+                -DREQUIRED_PREREQUISITE=Python3_Interpreter
+                -DREQUIRED_TEST=${KATANA_REQUIRED_PYTHON_TEST}
+                -P
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/require_test_prerequisite.cmake
+        )
+        set_tests_properties(
+            ${KATANA_REQUIRED_PYTHON_TEST}
+            PROPERTIES
+                TIMEOUT 30
+        )
+    endforeach()
+endif()
 
 add_executable(katana-scheduler-tests tests/runtime/scheduler_tests.cpp)
 target_link_libraries(katana-scheduler-tests PRIVATE katana_runtime)

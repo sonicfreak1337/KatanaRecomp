@@ -77,10 +77,12 @@ $firstArguments = @(
     "--latent-aot-mode", "exact-only",
     "--latent-aot-entry", $LatentAotEntry
 )
+$releasePath = Join-Path $WorkingDirectory "publish-lock-release.signal"
+Remove-Item -LiteralPath $releasePath -Force -ErrorAction SilentlyContinue
 $first = New-RedirectedProcess `
     $firstArguments `
     @{
-        KATANA_PORT_PUBLISH_TEST_HOLD_LOCK_MS = "10000"
+        KATANA_PORT_PUBLISH_TEST_RELEASE_FILE = $releasePath
         KATANA_PORT_PUBLISH_TEST_EXIT_AFTER_RECOVERY = "1"
     }
 $firstLineTask = $first.StandardOutput.ReadLineAsync()
@@ -142,6 +144,8 @@ if ($second.ExitCode -eq 0 -or
     exit 93
 }
 
+[System.IO.File]::WriteAllText($releasePath, "release`n")
+
 if (-not $first.WaitForExit(180000)) {
     Stop-TestProcess $first
     Stop-TestProcess $second
@@ -154,5 +158,7 @@ if ($first.ExitCode -ne 0) {
     Write-Trace "first" $firstOutput $firstError
     exit 95
 }
+
+Remove-Item -LiteralPath $releasePath -Force -ErrorAction SilentlyContinue
 
 exit 0
