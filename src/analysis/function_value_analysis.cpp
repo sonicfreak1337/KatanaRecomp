@@ -403,8 +403,9 @@ bool merge_abi_stack_argument_reads(
     return destination != previous;
 }
 
+template <typename FunctionRange>
 std::vector<std::vector<std::uint32_t>>
-strong_components(const std::span<const FunctionInfo> functions) {
+strong_components(const FunctionRange& functions) {
     std::unordered_map<std::uint32_t, const FunctionInfo*> by_address;
     by_address.reserve(functions.size());
     for (const auto& function : functions)
@@ -1252,7 +1253,8 @@ struct CandidateInput {
     bool unknown_ingress = false;
 };
 
-void normalize(std::vector<std::uint32_t>& values) {
+template <typename T>
+void normalize(std::vector<T>& values) {
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
@@ -13066,6 +13068,536 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
             std::memory_order_relaxed)};
 }
 
+namespace {
+
+inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 1u;
+
+[[nodiscard]] std::string digest_evaluation_key_material(
+    EvaluationKeyEncoder&& encoder) {
+    const auto bytes = std::move(encoder).finish();
+    return katana::io::sha256_bytes(
+        bytes.empty()
+            ? std::string_view{}
+            : std::string_view{
+                  reinterpret_cast<const char*>(bytes.data()),
+                  bytes.size()});
+}
+
+void encode_program_edge(EvaluationKeyEncoder& key,
+                         const ResolvedControlFlowEdge& edge) {
+    key.append(edge.instruction_address);
+    key.append(edge.target_address);
+    key.append(edge.kind);
+    key.append(edge.guarded);
+    key.append(edge.evidence);
+    key.append_range(
+        edge.evidence_origins,
+        [&](const auto origin) { key.append(origin); });
+}
+
+[[nodiscard]] std::string function_program_graph_identity(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const FunctionBoundary> boundaries,
+    const std::span<const ResolvedControlFlowEdge> semantic_edges) {
+    auto canonical_boundaries =
+        std::vector<FunctionBoundary>{boundaries.begin(), boundaries.end()};
+    std::sort(
+        canonical_boundaries.begin(),
+        canonical_boundaries.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.entry_address, left.size) <
+                   std::tie(right.entry_address, right.size);
+        });
+    auto canonical_edges = std::vector<ResolvedControlFlowEdge>{
+        semantic_edges.begin(), semantic_edges.end()};
+    for (auto& edge : canonical_edges) normalize(edge.evidence_origins);
+    std::sort(
+        canonical_edges.begin(),
+        canonical_edges.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.instruction_address,
+                            left.target_address,
+                            left.kind,
+                            left.guarded,
+                            left.evidence,
+                            left.evidence_origins) <
+                   std::tie(right.instruction_address,
+                            right.target_address,
+                            right.kind,
+                            right.guarded,
+                            right.evidence,
+                            right.evidence_origins);
+        });
+    canonical_edges.erase(
+        std::unique(canonical_edges.begin(), canonical_edges.end()),
+        canonical_edges.end());
+    EvaluationKeyEncoder key;
+    key.append(function_program_graph_schema_version);
+    key.append_range(lines, [&](const auto& line) { encode(key, line); });
+    key.append_range(canonical_boundaries, [&](const auto& boundary) {
+        key.append(boundary.entry_address);
+        key.append(boundary.size);
+    });
+    key.append_range(
+        canonical_edges,
+        [&](const auto& edge) { encode_program_edge(key, edge); });
+    return digest_evaluation_key_material(std::move(key));
+}
+
+template <typename T>
+class ImmutableShardArena final {
+  public:
+    class const_iterator final {
+      public:
+        using Inner = typename std::vector<
+            std::shared_ptr<const T>>::const_iterator;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = T;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const T*;
+        using reference = const T&;
+
+        explicit const_iterator(const Inner inner) : inner_(inner) {}
+        [[nodiscard]] reference operator*() const { return **inner_; }
+        [[nodiscard]] pointer operator->() const { return inner_->get(); }
+        const_iterator& operator++() {
+            ++inner_;
+            return *this;
+        }
+        [[nodiscard]] bool operator==(const const_iterator&) const = default;
+
+      private:
+        Inner inner_;
+    };
+
+    void reserve(const std::size_t size) { shards_.reserve(size); }
+    void push_back(std::shared_ptr<const T> shard) {
+        shards_.push_back(std::move(shard));
+    }
+    [[nodiscard]] std::size_t size() const noexcept {
+        return shards_.size();
+    }
+    [[nodiscard]] bool empty() const noexcept { return shards_.empty(); }
+    [[nodiscard]] const T& operator[](const std::size_t index) const {
+        return *shards_[index];
+    }
+    [[nodiscard]] const_iterator begin() const {
+        return const_iterator{shards_.begin()};
+    }
+    [[nodiscard]] const_iterator end() const {
+        return const_iterator{shards_.end()};
+    }
+
+  private:
+    std::vector<std::shared_ptr<const T>> shards_;
+};
+
+struct FunctionProgramGraph final {
+    std::string identity;
+    ImmutableShardArena<BasicBlock> blocks;
+    ImmutableShardArena<FunctionInfo> functions;
+    std::unordered_map<std::uint32_t, const BasicBlock*> block_by_address;
+    std::unordered_map<std::uint32_t, const FunctionInfo*> function_by_address;
+    std::unordered_map<std::uint32_t, std::shared_ptr<const BasicBlock>>
+        block_shards_by_address;
+    std::unordered_map<std::uint32_t, std::shared_ptr<const FunctionInfo>>
+        function_shards_by_address;
+    std::vector<std::uint32_t> sorted_block_addresses;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        owners_by_block;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        owners_by_control;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        callers_by_callee;
+    std::vector<std::vector<std::uint32_t>> strongly_connected_components;
+    std::unordered_map<std::uint32_t, std::size_t> scc_by_function;
+    std::vector<std::vector<std::size_t>> caller_sccs;
+    std::vector<std::vector<std::size_t>> callee_sccs;
+    std::vector<std::string> scc_fingerprints;
+    std::vector<std::uint64_t> scc_dependency_versions;
+    std::unordered_map<std::uint32_t, std::string> function_fingerprints;
+    std::unordered_map<std::uint32_t, std::string> block_fingerprints;
+    std::unordered_map<std::uint32_t, std::uint64_t> dependency_versions;
+    std::size_t physically_built_blocks = 0u;
+    std::size_t physically_reused_blocks = 0u;
+    std::size_t physically_built_functions = 0u;
+    std::size_t physically_reused_functions = 0u;
+};
+
+[[nodiscard]] std::string basic_block_fingerprint(
+    const BasicBlock& block) {
+    EvaluationKeyEncoder key;
+    key.append(function_program_graph_schema_version);
+    encode(key, block);
+    return digest_evaluation_key_material(std::move(key));
+}
+
+[[nodiscard]] std::string function_program_fingerprint(
+    const FunctionInfo& function,
+    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    EvaluationKeyEncoder key;
+    key.append(function_program_graph_schema_version);
+    encode(key, function);
+    key.append_range(
+        function.block_addresses,
+        [&](const auto address) {
+            key.append(address);
+            const auto block = blocks.find(address);
+            key.append(block != blocks.end());
+            if (block != blocks.end()) encode(key, *block->second);
+        });
+    return digest_evaluation_key_material(std::move(key));
+}
+
+[[nodiscard]] std::shared_ptr<FunctionProgramGraph>
+build_function_program_graph(
+    std::string identity,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const FunctionBoundary> function_boundaries,
+    const std::span<const ResolvedControlFlowEdge> semantic_edges,
+    const FunctionProgramGraph* const previous) {
+    auto graph = std::make_shared<FunctionProgramGraph>();
+    graph->identity = std::move(identity);
+    std::vector<std::uint32_t> leaders;
+    leaders.reserve(function_boundaries.size() * 2u);
+    for (const auto& boundary : function_boundaries) {
+        leaders.push_back(boundary.entry_address);
+        if (boundary.size == 0u) continue;
+        const auto end = static_cast<std::uint64_t>(boundary.entry_address) +
+                         boundary.size;
+        if (end <= std::numeric_limits<std::uint32_t>::max())
+            leaders.push_back(static_cast<std::uint32_t>(end));
+    }
+    auto decoded_blocks =
+        build_basic_blocks(lines, semantic_edges, leaders);
+    auto discovered_functions = discover_functions_from_blocks(
+        decoded_blocks, function_boundaries, semantic_edges);
+    graph->blocks.reserve(decoded_blocks.size());
+    graph->block_by_address.reserve(decoded_blocks.size());
+    graph->block_shards_by_address.reserve(decoded_blocks.size());
+    graph->block_fingerprints.reserve(decoded_blocks.size());
+    auto next_block_id = std::size_t{0u};
+    if (previous != nullptr) {
+        for (const auto& block : previous->blocks)
+            next_block_id = std::max(next_block_id, block.id + 1u);
+    }
+    for (auto& block : decoded_blocks) {
+        const auto address = block.start_address;
+        auto fingerprint = basic_block_fingerprint(block);
+        std::shared_ptr<const BasicBlock> shard;
+        if (previous != nullptr) {
+            const auto old_fingerprint =
+                previous->block_fingerprints.find(address);
+            const auto old_shard =
+                previous->block_shards_by_address.find(address);
+            if (old_fingerprint != previous->block_fingerprints.end() &&
+                old_shard != previous->block_shards_by_address.end() &&
+                old_fingerprint->second == fingerprint) {
+                shard = old_shard->second;
+                ++graph->physically_reused_blocks;
+            }
+        }
+        if (shard == nullptr) {
+            if (previous != nullptr) {
+                const auto old =
+                    previous->block_shards_by_address.find(address);
+                if (old != previous->block_shards_by_address.end())
+                    block.id = old->second->id;
+                else
+                    block.id = next_block_id++;
+            }
+            shard = std::make_shared<const BasicBlock>(std::move(block));
+            ++graph->physically_built_blocks;
+        }
+        graph->block_fingerprints.emplace(address, std::move(fingerprint));
+        graph->block_by_address.emplace(address, shard.get());
+        graph->block_shards_by_address.emplace(address, shard);
+        graph->blocks.push_back(std::move(shard));
+        graph->sorted_block_addresses.push_back(address);
+    }
+    normalize(graph->sorted_block_addresses);
+    graph->functions.reserve(discovered_functions.size());
+    graph->function_by_address.reserve(graph->functions.size());
+    graph->owners_by_block.reserve(graph->blocks.size());
+    graph->owners_by_control.reserve(graph->blocks.size());
+    graph->callers_by_callee.reserve(graph->functions.size());
+    graph->function_shards_by_address.reserve(discovered_functions.size());
+    graph->function_fingerprints.reserve(discovered_functions.size());
+    auto next_function_id = std::size_t{0u};
+    if (previous != nullptr) {
+        for (const auto& function : previous->functions)
+            next_function_id = std::max(next_function_id, function.id + 1u);
+    }
+    for (auto& function : discovered_functions) {
+        const auto address = function.entry_address;
+        auto fingerprint =
+            function_program_fingerprint(function, graph->block_by_address);
+        std::shared_ptr<const FunctionInfo> shard;
+        if (previous != nullptr) {
+            const auto old_fingerprint =
+                previous->function_fingerprints.find(address);
+            const auto old_shard =
+                previous->function_shards_by_address.find(address);
+            if (old_fingerprint != previous->function_fingerprints.end() &&
+                old_shard != previous->function_shards_by_address.end() &&
+                old_fingerprint->second == fingerprint) {
+                shard = old_shard->second;
+                ++graph->physically_reused_functions;
+            } else if (old_shard !=
+                       previous->function_shards_by_address.end()) {
+                function.id = old_shard->second->id;
+            } else {
+                function.id = next_function_id++;
+            }
+        }
+        if (shard == nullptr) {
+            shard = std::make_shared<const FunctionInfo>(
+                std::move(function));
+            ++graph->physically_built_functions;
+        }
+        graph->function_fingerprints.emplace(
+            address, std::move(fingerprint));
+        graph->function_by_address.emplace(address, shard.get());
+        graph->function_shards_by_address.emplace(address, shard);
+        graph->functions.push_back(std::move(shard));
+    }
+    graph->function_by_address.reserve(graph->functions.size());
+    graph->owners_by_block.reserve(graph->blocks.size());
+    graph->owners_by_control.reserve(graph->blocks.size());
+    graph->callers_by_callee.reserve(graph->functions.size());
+    for (const auto& function : graph->functions) {
+        for (const auto callee : function.direct_callees)
+            graph->callers_by_callee[callee].push_back(
+                function.entry_address);
+        for (const auto block_address : function.block_addresses) {
+            const auto block = graph->block_by_address.find(block_address);
+            if (block == graph->block_by_address.end() ||
+                block->second->lines.empty())
+                continue;
+            graph->owners_by_block[block_address].push_back(
+                function.entry_address);
+            graph->owners_by_control[controlling_line(*block->second).address]
+                .push_back(function.entry_address);
+        }
+    }
+    for (auto& [address, owners] : graph->owners_by_block) {
+        static_cast<void>(address);
+        normalize(owners);
+    }
+    for (auto& [address, owners] : graph->owners_by_control) {
+        static_cast<void>(address);
+        normalize(owners);
+    }
+    for (auto& [address, callers] : graph->callers_by_callee) {
+        static_cast<void>(address);
+        normalize(callers);
+    }
+    graph->strongly_connected_components =
+        strong_components(graph->functions);
+    graph->caller_sccs.resize(
+        graph->strongly_connected_components.size());
+    graph->callee_sccs.resize(
+        graph->strongly_connected_components.size());
+    for (std::size_t index = 0u;
+         index < graph->strongly_connected_components.size();
+         ++index) {
+        for (const auto member :
+             graph->strongly_connected_components[index])
+            graph->scc_by_function.emplace(member, index);
+    }
+    for (const auto& function : graph->functions) {
+        const auto caller_component =
+            graph->scc_by_function.at(function.entry_address);
+        for (const auto callee : function.direct_callees) {
+            const auto callee_component = graph->scc_by_function.find(callee);
+            if (callee_component == graph->scc_by_function.end() ||
+                callee_component->second == caller_component)
+                continue;
+            graph->caller_sccs[callee_component->second].push_back(
+                caller_component);
+            graph->callee_sccs[caller_component].push_back(
+                callee_component->second);
+        }
+    }
+    for (auto& callers : graph->caller_sccs) normalize(callers);
+    for (auto& callees : graph->callee_sccs) normalize(callees);
+    graph->scc_fingerprints.reserve(
+        graph->strongly_connected_components.size());
+    for (std::size_t component = 0u;
+         component < graph->strongly_connected_components.size();
+         ++component) {
+        EvaluationKeyEncoder key;
+        key.append(function_program_graph_schema_version);
+        key.append_range(
+            graph->strongly_connected_components[component],
+            [&](const auto member) {
+                key.append(member);
+                key.append(std::string_view{
+                    graph->function_fingerprints.at(member)});
+            });
+        std::vector<std::string> caller_fingerprints;
+        for (const auto caller : graph->caller_sccs[component]) {
+            EvaluationKeyEncoder edge;
+            edge.append_range(
+                graph->strongly_connected_components[caller],
+                [&](const auto member) {
+                    edge.append(member);
+                    edge.append(std::string_view{
+                        graph->function_fingerprints.at(member)});
+                    const auto function =
+                        graph->function_by_address.find(member);
+                    if (function == graph->function_by_address.end())
+                        return;
+                    std::vector<std::uint32_t> exact_targets;
+                    for (const auto target :
+                         function->second->direct_callees) {
+                        const auto target_component =
+                            graph->scc_by_function.find(target);
+                        if (target_component !=
+                                graph->scc_by_function.end() &&
+                            target_component->second == component)
+                            exact_targets.push_back(target);
+                    }
+                    normalize(exact_targets);
+                    edge.append_range(
+                        exact_targets,
+                        [&](const auto target) { edge.append(target); });
+                });
+            caller_fingerprints.push_back(
+                digest_evaluation_key_material(std::move(edge)));
+        }
+        std::sort(caller_fingerprints.begin(),
+                  caller_fingerprints.end());
+        key.append_range(
+            caller_fingerprints,
+            [&](const auto& fingerprint) {
+                key.append(std::string_view{fingerprint});
+            });
+        graph->scc_fingerprints.push_back(
+            digest_evaluation_key_material(std::move(key)));
+    }
+    return graph;
+}
+
+[[nodiscard]] std::unordered_set<std::uint32_t>
+scc_caller_closure(
+    const FunctionProgramGraph& current,
+    const std::span<const std::uint32_t> seeds) {
+    std::unordered_set<std::size_t> dirty_components;
+    std::deque<std::size_t> pending;
+    for (const auto seed : seeds) {
+        const auto component = current.scc_by_function.find(seed);
+        if (component != current.scc_by_function.end() &&
+            dirty_components.insert(component->second).second)
+            pending.push_back(component->second);
+    }
+    while (!pending.empty()) {
+        const auto component = pending.front();
+        pending.pop_front();
+        for (const auto caller : current.caller_sccs[component]) {
+            if (dirty_components.insert(caller).second)
+                pending.push_back(caller);
+        }
+    }
+    std::unordered_set<std::uint32_t> dirty_functions;
+    for (const auto component : dirty_components) {
+        const auto& members =
+            current.strongly_connected_components[component];
+        dirty_functions.insert(members.begin(), members.end());
+    }
+    return dirty_functions;
+}
+
+[[nodiscard]] std::unordered_set<std::uint32_t>
+caller_scc_dirty_closure(
+    const FunctionProgramGraph* const previous,
+    const FunctionProgramGraph& current) {
+    std::vector<std::uint32_t> seeds;
+    if (previous == nullptr) {
+        seeds.reserve(current.functions.size());
+        for (const auto& function : current.functions)
+            seeds.push_back(function.entry_address);
+    } else {
+        seeds.reserve(current.functions.size());
+        for (const auto& [address, fingerprint] :
+             current.function_fingerprints) {
+            const auto old = previous->function_fingerprints.find(address);
+            if (old == previous->function_fingerprints.end() ||
+                old->second != fingerprint) {
+                seeds.push_back(address);
+                const auto old_function =
+                    previous->function_by_address.find(address);
+                const auto new_function =
+                    current.function_by_address.find(address);
+                if (old_function != previous->function_by_address.end() &&
+                    new_function != current.function_by_address.end()) {
+                    std::vector<std::uint32_t> changed_callees;
+                    std::set_symmetric_difference(
+                        old_function->second->direct_callees.begin(),
+                        old_function->second->direct_callees.end(),
+                        new_function->second->direct_callees.begin(),
+                        new_function->second->direct_callees.end(),
+                        std::back_inserter(changed_callees));
+                    for (const auto callee : changed_callees) {
+                        if (current.scc_by_function.contains(callee))
+                            seeds.push_back(callee);
+                    }
+                }
+            }
+        }
+        // A removed callee is observable only through its surviving callers;
+        // their own FunctionInfo fingerprint normally changes as well, but
+        // retaining this explicit edge makes the fail-closed dependency
+        // contract independent of that representation detail.
+        for (const auto& [address, fingerprint] :
+             previous->function_fingerprints) {
+            static_cast<void>(fingerprint);
+            if (current.function_fingerprints.contains(address)) continue;
+            const auto removed =
+                previous->function_by_address.find(address);
+            if (removed != previous->function_by_address.end()) {
+                for (const auto callee :
+                     removed->second->direct_callees) {
+                    if (current.scc_by_function.contains(callee))
+                        seeds.push_back(callee);
+                }
+            }
+            const auto callers = previous->callers_by_callee.find(address);
+            if (callers == previous->callers_by_callee.end()) continue;
+            seeds.insert(seeds.end(),
+                         callers->second.begin(),
+                         callers->second.end());
+        }
+    }
+    normalize(seeds);
+    return scc_caller_closure(current, seeds);
+}
+
+struct FunctionAnalysisEpoch final {
+    std::uint64_t version = 0u;
+    std::uint32_t schema_version = function_analysis_epoch_schema_version;
+    std::shared_ptr<const FunctionProgramGraph> program;
+    std::string abi_identity;
+    std::unordered_map<std::uint32_t, std::string>
+        abi_input_fingerprints;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        abi_callers_by_callee;
+    AbiReturnSourceMap abi_return_sources;
+    AbiStackArgumentReadMap abi_stack_argument_reads;
+    ForwardedRegisterReadMap forwarded_register_reads;
+    std::unordered_map<std::uint32_t, std::uint8_t>
+        abi_persistent_store_sources;
+    AbiIndirectDispatchSourceMap abi_indirect_dispatch_sources;
+    AbiPersistentStoreSiteMap direct_local_persistent_store_sites;
+    std::map<std::uint32_t, FunctionValueSummary> summaries;
+    std::map<std::uint32_t, CandidateInput> candidate_inputs;
+    std::unordered_map<std::uint32_t, std::uint64_t> summary_versions;
+    std::unordered_map<std::uint32_t, std::uint64_t> input_versions;
+};
+
+} // namespace
+
 struct detail::FunctionValueAnalysisSession::Impl {
     Impl(const std::size_t maximum_entries,
          const std::size_t maximum_retained_payload_bytes,
@@ -13089,12 +13621,32 @@ struct detail::FunctionValueAnalysisSession::Impl {
             bound_image_revision == revision)
             return;
         evaluations.clear();
+        published_epoch.reset();
+        program_graph_builds.store(0u, std::memory_order_relaxed);
+        program_graph_reuses.store(0u, std::memory_order_relaxed);
+        program_graph_functions_built.store(0u, std::memory_order_relaxed);
+        program_graph_functions_reused.store(0u, std::memory_order_relaxed);
+        caller_scc_invalidations.store(0u, std::memory_order_relaxed);
+        abi_contract_epoch_reuses.store(0u, std::memory_order_relaxed);
+        summary_state_reuses.store(0u, std::memory_order_relaxed);
+        analysis_epochs_published.store(0u, std::memory_order_relaxed);
+        analysis_epochs_discarded.store(0u, std::memory_order_relaxed);
         bound_image_identity = identity;
         bound_image_revision = revision;
     }
 
     std::mutex analysis_mutex;
     FunctionEvaluationCache evaluations;
+    std::shared_ptr<const FunctionAnalysisEpoch> published_epoch;
+    std::atomic_size_t program_graph_builds = 0u;
+    std::atomic_size_t program_graph_reuses = 0u;
+    std::atomic_size_t program_graph_functions_built = 0u;
+    std::atomic_size_t program_graph_functions_reused = 0u;
+    std::atomic_size_t caller_scc_invalidations = 0u;
+    std::atomic_size_t abi_contract_epoch_reuses = 0u;
+    std::atomic_size_t summary_state_reuses = 0u;
+    std::atomic_size_t analysis_epochs_published = 0u;
+    std::atomic_size_t analysis_epochs_discarded = 0u;
     std::uint64_t bound_image_identity = 0u;
     std::uint64_t bound_image_revision = 0u;
 };
@@ -13122,7 +13674,32 @@ detail::FunctionValueAnalysisSession::operator=(
 
 detail::FunctionValueAnalysisSessionStatistics
 detail::FunctionValueAnalysisSession::statistics() const {
-    return impl_->evaluations.statistics();
+    auto statistics = impl_->evaluations.statistics();
+    statistics.program_graph_builds = impl_->program_graph_builds.load(
+        std::memory_order_relaxed);
+    statistics.program_graph_reuses = impl_->program_graph_reuses.load(
+        std::memory_order_relaxed);
+    statistics.program_graph_functions_built =
+        impl_->program_graph_functions_built.load(
+            std::memory_order_relaxed);
+    statistics.program_graph_functions_reused =
+        impl_->program_graph_functions_reused.load(
+            std::memory_order_relaxed);
+    statistics.caller_scc_invalidations =
+        impl_->caller_scc_invalidations.load(
+            std::memory_order_relaxed);
+    statistics.abi_contract_epoch_reuses =
+        impl_->abi_contract_epoch_reuses.load(
+            std::memory_order_relaxed);
+    statistics.summary_state_reuses =
+        impl_->summary_state_reuses.load(std::memory_order_relaxed);
+    statistics.analysis_epochs_published =
+        impl_->analysis_epochs_published.load(
+            std::memory_order_relaxed);
+    statistics.analysis_epochs_discarded =
+        impl_->analysis_epochs_discarded.load(
+            std::memory_order_relaxed);
+    return statistics;
 }
 
 FunctionValueAnalysisResult
@@ -13590,6 +14167,35 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         .key_interned_references,
                     session_statistics_at_start.evaluation_lenses
                         .key_interned_references);
+            progress.program_graph_builds = cache_delta(
+                session_statistics.program_graph_builds,
+                session_statistics_at_start.program_graph_builds);
+            progress.program_graph_reuses = cache_delta(
+                session_statistics.program_graph_reuses,
+                session_statistics_at_start.program_graph_reuses);
+            progress.program_graph_functions_built = cache_delta(
+                session_statistics.program_graph_functions_built,
+                session_statistics_at_start
+                    .program_graph_functions_built);
+            progress.program_graph_functions_reused = cache_delta(
+                session_statistics.program_graph_functions_reused,
+                session_statistics_at_start
+                    .program_graph_functions_reused);
+            progress.caller_scc_invalidations = cache_delta(
+                session_statistics.caller_scc_invalidations,
+                session_statistics_at_start.caller_scc_invalidations);
+            progress.abi_contract_epoch_reuses = cache_delta(
+                session_statistics.abi_contract_epoch_reuses,
+                session_statistics_at_start.abi_contract_epoch_reuses);
+            progress.summary_state_reuses = cache_delta(
+                session_statistics.summary_state_reuses,
+                session_statistics_at_start.summary_state_reuses);
+            progress.analysis_epochs_published = cache_delta(
+                session_statistics.analysis_epochs_published,
+                session_statistics_at_start.analysis_epochs_published);
+            progress.analysis_epochs_discarded = cache_delta(
+                session_statistics.analysis_epochs_discarded,
+                session_statistics_at_start.analysis_epochs_discarded);
             progress_callback(progress);
         } catch (...) {
             // Progress is observational. A failing UI/logger callback must
@@ -13804,58 +14410,178 @@ detail::analyze_function_values_with_guarded_entry_cache(
             function_edges.push_back(edge);
     }
 
-    std::vector<std::uint32_t> block_leaders;
-    block_leaders.reserve(function_boundaries.size() * 2u +
-                          candidate_tail_carriers.size());
-    for (const auto& boundary : function_boundaries) {
-        block_leaders.push_back(boundary.entry_address);
-        if (boundary.size != 0u) {
+    const auto previous_epoch = session.impl_->published_epoch;
+    struct AnalysisEpochPublicationGuard final {
+        std::atomic_size_t* discarded = nullptr;
+        bool finished = false;
+        void discard_now() noexcept {
+            if (finished) return;
+            finished = true;
+            if (discarded != nullptr)
+                discarded->fetch_add(1u, std::memory_order_relaxed);
+        }
+        void mark_published() noexcept { finished = true; }
+        ~AnalysisEpochPublicationGuard() {
+            discard_now();
+        }
+    } epoch_publication_guard{
+        &session.impl_->analysis_epochs_discarded, false};
+    const auto previous_program =
+        previous_epoch == nullptr ? nullptr : previous_epoch->program;
+    const auto program_identity = function_program_graph_identity(
+        lines, function_boundaries, function_edges);
+    std::shared_ptr<const FunctionProgramGraph> program_graph;
+    std::unordered_set<std::uint32_t> graph_dirty_functions;
+    bool staged_program_graph_build = false;
+    std::size_t staged_program_functions_built = 0u;
+    std::size_t staged_program_functions_reused = 0u;
+    if (previous_program != nullptr &&
+        previous_program->identity == program_identity) {
+        program_graph = previous_program;
+        staged_program_functions_reused = program_graph->functions.size();
+    } else {
+        auto staged_program = build_function_program_graph(
+            program_identity,
+            lines,
+            function_boundaries,
+            function_edges,
+            previous_program.get());
+        graph_dirty_functions = caller_scc_dirty_closure(
+            previous_program.get(), *staged_program);
+        staged_program_functions_built =
+            staged_program->physically_built_functions;
+        staged_program_functions_reused =
+            staged_program->physically_reused_functions;
+        for (const auto& function : staged_program->functions) {
+            auto previous_version = std::uint64_t{0u};
+            if (previous_program != nullptr) {
+                const auto old_version =
+                    previous_program->dependency_versions.find(
+                        function.entry_address);
+                if (old_version !=
+                    previous_program->dependency_versions.end())
+                    previous_version = old_version->second;
+            }
+            staged_program->dependency_versions.emplace(
+                function.entry_address,
+                graph_dirty_functions.contains(function.entry_address)
+                    ? previous_version + 1u
+                    : previous_version);
+        }
+        auto next_scc_version = std::uint64_t{1u};
+        std::unordered_map<std::string, std::uint64_t>
+            previous_scc_versions;
+        if (previous_program != nullptr) {
+            for (std::size_t index = 0u;
+                 index < previous_program->scc_fingerprints.size();
+                 ++index) {
+                const auto version =
+                    index < previous_program->scc_dependency_versions.size()
+                        ? previous_program->scc_dependency_versions[index]
+                        : 0u;
+                previous_scc_versions.emplace(
+                    previous_program->scc_fingerprints[index], version);
+                next_scc_version =
+                    std::max(next_scc_version, version + 1u);
+            }
+        }
+        staged_program->scc_dependency_versions.reserve(
+            staged_program->scc_fingerprints.size());
+        for (const auto& fingerprint :
+             staged_program->scc_fingerprints) {
+            const auto previous =
+                previous_scc_versions.find(fingerprint);
+            staged_program->scc_dependency_versions.push_back(
+                previous == previous_scc_versions.end()
+                    ? next_scc_version
+                    : previous->second);
+        }
+        program_graph = std::move(staged_program);
+        staged_program_graph_build = true;
+    }
+    const auto& blocks = program_graph->blocks;
+    const auto& functions = program_graph->functions;
+    const auto& components =
+        program_graph->strongly_connected_components;
+    const auto& function_owners_by_block =
+        program_graph->owners_by_block;
+    const auto& function_owners_by_control =
+        program_graph->owners_by_control;
+    std::unordered_map<std::uint32_t, const BasicBlock*> block_index =
+        program_graph->block_by_address;
+
+    // Candidate-only tail targets are an inventory overlay. They may require
+    // a legal mid-block entry without changing the semantic function graph.
+    // Retain the immutable core block for ordinary function evaluation and
+    // publish only missing overlay leaders into the mixed lookup map.
+    std::vector<std::uint32_t> overlay_leaders;
+    for (const auto& carrier : candidate_tail_carriers) {
+        if (!block_index.contains(carrier.target))
+            overlay_leaders.push_back(carrier.target);
+    }
+    normalize(overlay_leaders);
+    std::vector<BasicBlock> inventory_overlay_blocks;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        inventory_overlay_owners_by_block;
+    if (!overlay_leaders.empty()) {
+        std::vector<std::uint32_t> split_leaders = overlay_leaders;
+        split_leaders.reserve(
+            split_leaders.size() + function_boundaries.size() * 2u);
+        for (const auto& boundary : function_boundaries) {
+            split_leaders.push_back(boundary.entry_address);
+            if (boundary.size == 0u) continue;
             const auto end =
                 static_cast<std::uint64_t>(boundary.entry_address) +
                 boundary.size;
             if (end <= std::numeric_limits<std::uint32_t>::max())
-                block_leaders.push_back(static_cast<std::uint32_t>(end));
+                split_leaders.push_back(static_cast<std::uint32_t>(end));
         }
-    }
-    for (const auto& carrier : candidate_tail_carriers)
-        block_leaders.push_back(carrier.target);
-    const auto blocks =
-        build_basic_blocks(lines, function_edges, block_leaders);
-    block_count = blocks.size();
-    report_progress("blocks-complete");
-    std::unordered_map<std::uint32_t, const BasicBlock*> block_index;
-    block_index.reserve(blocks.size());
-    for (const auto& block : blocks)
-        block_index.emplace(block.start_address, &block);
-    const auto functions = discover_functions_from_blocks(
-        blocks, function_boundaries, function_edges);
-    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
-        function_owners_by_block;
-    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
-        function_owners_by_control;
-    function_owners_by_block.reserve(blocks.size());
-    function_owners_by_control.reserve(blocks.size());
-    for (const auto& function : functions) {
-        for (const auto block_address : function.block_addresses) {
-            const auto block = block_index.find(block_address);
-            if (block == block_index.end() || block->second->lines.empty())
+        normalize(split_leaders);
+        auto split_blocks =
+            build_basic_blocks(lines, function_edges, split_leaders);
+        inventory_overlay_blocks.reserve(overlay_leaders.size());
+        for (auto& block : split_blocks) {
+            if (program_graph->block_by_address.contains(
+                    block.start_address))
                 continue;
-            function_owners_by_block[block_address].push_back(
-                function.entry_address);
-            function_owners_by_control
-                [controlling_line(*block->second).address]
-                    .push_back(function.entry_address);
+            if (!std::binary_search(
+                    overlay_leaders.begin(),
+                    overlay_leaders.end(),
+                    block.start_address))
+                continue;
+            inventory_overlay_blocks.push_back(std::move(block));
+        }
+        for (const auto& block : inventory_overlay_blocks)
+            block_index.emplace(block.start_address, &block);
+        inventory_overlay_owners_by_block.reserve(
+            inventory_overlay_blocks.size());
+        for (const auto& block : inventory_overlay_blocks) {
+            const auto upper = std::upper_bound(
+                program_graph->sorted_block_addresses.begin(),
+                program_graph->sorted_block_addresses.end(),
+                block.start_address);
+            if (upper ==
+                program_graph->sorted_block_addresses.begin())
+                continue;
+            const auto containing_address = *std::prev(upper);
+            const auto containing =
+                program_graph->block_by_address.find(
+                    containing_address);
+            if (containing ==
+                    program_graph->block_by_address.end() ||
+                block.start_address > containing->second->end_address)
+                continue;
+            const auto owners =
+                function_owners_by_block.find(containing_address);
+            if (owners != function_owners_by_block.end())
+                inventory_overlay_owners_by_block.emplace(
+                    block.start_address, owners->second);
         }
     }
-    for (auto& [block, owners] : function_owners_by_block) {
-        static_cast<void>(block);
-        normalize(owners);
-    }
-    for (auto& [control, owners] : function_owners_by_control) {
-        static_cast<void>(control);
-        normalize(owners);
-    }
-    const auto components = strong_components(functions);
+    block_count = blocks.size() + inventory_overlay_blocks.size();
+    report_progress(staged_program_graph_build
+                        ? "program-graph-built"
+                        : "program-graph-reused");
     function_count = functions.size();
     result.strongly_connected_components = components.size();
     report_progress("functions-complete");
@@ -13967,8 +14693,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
     const auto owners_for_block =
         [&](const std::uint32_t address) -> const std::vector<std::uint32_t>& {
             const auto owners = function_owners_by_block.find(address);
-            return owners == function_owners_by_block.end() ? no_function_owners
-                                                            : owners->second;
+            if (owners != function_owners_by_block.end())
+                return owners->second;
+            const auto overlay =
+                inventory_overlay_owners_by_block.find(address);
+            return overlay == inventory_overlay_owners_by_block.end()
+                       ? no_function_owners
+                       : overlay->second;
         };
     std::size_t inventory_region_iterations = 0u;
     report_subphase_progress(
@@ -14461,6 +15192,229 @@ detail::analyze_function_values_with_guarded_entry_cache(
     // external/tail exit remains top, so the pruning pass never hides a
     // possible callback route merely because a function's return shape is not
     // statically complete.
+    EvaluationKeyEncoder abi_identity_key;
+    abi_identity_key.append(function_analysis_epoch_schema_version);
+    abi_identity_key.append_range(
+        candidate_call_carriers,
+        [&](const auto& carrier) {
+            abi_identity_key.append(carrier.call_site);
+            abi_identity_key.append(carrier.target);
+        });
+    abi_identity_key.append_range(
+        candidate_tail_carriers,
+        [&](const auto& carrier) {
+            abi_identity_key.append(carrier.transfer_site);
+            abi_identity_key.append(carrier.target);
+        });
+    const auto encode_candidate_map =
+        [&](const auto& candidates_by_site) {
+            std::vector<std::uint32_t> sites;
+            sites.reserve(candidates_by_site.size());
+            for (const auto& [site, candidates] : candidates_by_site) {
+                static_cast<void>(candidates);
+                sites.push_back(site);
+            }
+            normalize(sites);
+            abi_identity_key.append_range(
+                sites,
+                [&](const auto site) {
+                    abi_identity_key.append(site);
+                    encode(abi_identity_key,
+                           candidates_by_site.at(site));
+                });
+        };
+    encode_candidate_map(inventory_indirect_callees);
+    encode_candidate_map(indirect_jump_candidates);
+    encode_candidate_map(abi_contract_tail_ingresses);
+    const auto abi_identity =
+        digest_evaluation_key_material(std::move(abi_identity_key));
+    std::unordered_map<std::uint32_t, std::string>
+        abi_input_fingerprints;
+    abi_input_fingerprints.reserve(
+        abi_contract_function_by_address.size());
+    for (const auto& [address, function] :
+         abi_contract_function_by_address) {
+        EvaluationKeyEncoder key;
+        key.append(function_analysis_epoch_schema_version);
+        const auto semantic_fingerprint =
+            program_graph->function_fingerprints.find(address);
+        key.append(semantic_fingerprint !=
+                   program_graph->function_fingerprints.end());
+        if (semantic_fingerprint !=
+            program_graph->function_fingerprints.end()) {
+            key.append(std::string_view{semantic_fingerprint->second});
+        } else {
+            encode(key, *function);
+            for (const auto block_address : function->block_addresses) {
+                const auto block = block_index.find(block_address);
+                key.append(block_address);
+                key.append(block != block_index.end());
+                if (block != block_index.end())
+                    encode(key, *block->second);
+            }
+        }
+        for (const auto block_address : function->block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end() || block->second->lines.empty())
+                continue;
+            const auto site = controlling_line(*block->second).address;
+            const auto calls = inventory_indirect_callees.find(site);
+            key.append(site);
+            key.append(calls != inventory_indirect_callees.end());
+            if (calls != inventory_indirect_callees.end())
+                encode(key, calls->second);
+            const auto tail = abi_contract_tail_ingresses.find(site);
+            key.append(tail != abi_contract_tail_ingresses.end());
+            if (tail != abi_contract_tail_ingresses.end())
+                encode(key, tail->second);
+        }
+        abi_input_fingerprints.emplace(
+            address,
+            digest_evaluation_key_material(std::move(key)));
+    }
+    std::vector<std::uint32_t> abi_dirty_seeds;
+    std::unordered_set<std::uint32_t> abi_contract_dirty;
+    if (previous_epoch == nullptr ||
+        previous_epoch->schema_version !=
+            function_analysis_epoch_schema_version) {
+        for (const auto& [address, fingerprint] :
+             abi_input_fingerprints) {
+            static_cast<void>(fingerprint);
+            abi_contract_dirty.insert(address);
+            if (program_graph->scc_by_function.contains(address))
+                abi_dirty_seeds.push_back(address);
+        }
+    } else {
+        for (const auto& [address, fingerprint] :
+             abi_input_fingerprints) {
+            const auto previous =
+                previous_epoch->abi_input_fingerprints.find(address);
+            const auto complete_previous_contract =
+                previous_epoch->abi_stack_argument_reads.contains(address) &&
+                previous_epoch->forwarded_register_reads.contains(address) &&
+                (!program_graph->function_by_address.contains(address) ||
+                 (previous_epoch->abi_return_sources.contains(address) &&
+                  previous_epoch->abi_persistent_store_sources.contains(
+                      address) &&
+                  previous_epoch->abi_indirect_dispatch_sources.contains(
+                      address)));
+            if (previous !=
+                    previous_epoch->abi_input_fingerprints.end() &&
+                previous->second == fingerprint &&
+                complete_previous_contract)
+                continue;
+            abi_contract_dirty.insert(address);
+            if (program_graph->scc_by_function.contains(address)) {
+                abi_dirty_seeds.push_back(address);
+                continue;
+            }
+            const auto callers =
+                abi_contract_callers_by_callee.find(address);
+            if (callers != abi_contract_callers_by_callee.end())
+                abi_dirty_seeds.insert(abi_dirty_seeds.end(),
+                                       callers->second.begin(),
+                                       callers->second.end());
+        }
+        for (const auto& [address, fingerprint] :
+             previous_epoch->abi_input_fingerprints) {
+            static_cast<void>(fingerprint);
+            if (abi_input_fingerprints.contains(address)) continue;
+            const auto callers =
+                previous_epoch->abi_callers_by_callee.find(address);
+            if (callers !=
+                previous_epoch->abi_callers_by_callee.end())
+                abi_dirty_seeds.insert(abi_dirty_seeds.end(),
+                                       callers->second.begin(),
+                                       callers->second.end());
+            for (const auto& [target, old_callers] :
+                 previous_epoch->abi_callers_by_callee) {
+                if (!std::binary_search(old_callers.begin(),
+                                        old_callers.end(),
+                                        address))
+                    continue;
+                if (program_graph->scc_by_function.contains(target))
+                    abi_dirty_seeds.push_back(target);
+                else if (abi_input_fingerprints.contains(target))
+                    abi_contract_dirty.insert(target);
+            }
+        }
+    }
+    if (previous_epoch != nullptr) {
+        std::vector<std::uint32_t> relation_targets;
+        relation_targets.reserve(
+            abi_contract_callers_by_callee.size() +
+            previous_epoch->abi_callers_by_callee.size());
+        for (const auto& [target, callers] :
+             abi_contract_callers_by_callee) {
+            static_cast<void>(callers);
+            relation_targets.push_back(target);
+        }
+        for (const auto& [target, callers] :
+             previous_epoch->abi_callers_by_callee) {
+            static_cast<void>(callers);
+            relation_targets.push_back(target);
+        }
+        normalize(relation_targets);
+        const std::vector<std::uint32_t> no_callers;
+        for (const auto target : relation_targets) {
+            const auto current =
+                abi_contract_callers_by_callee.find(target);
+            const auto previous =
+                previous_epoch->abi_callers_by_callee.find(target);
+            const auto& current_callers =
+                current == abi_contract_callers_by_callee.end()
+                    ? no_callers
+                    : current->second;
+            const auto& previous_callers =
+                previous == previous_epoch->abi_callers_by_callee.end()
+                    ? no_callers
+                    : previous->second;
+            std::vector<std::uint32_t> changed_callers;
+            std::set_symmetric_difference(
+                current_callers.begin(), current_callers.end(),
+                previous_callers.begin(), previous_callers.end(),
+                std::back_inserter(changed_callers));
+            if (changed_callers.empty()) continue;
+            if (program_graph->scc_by_function.contains(target))
+                abi_dirty_seeds.push_back(target);
+            else if (abi_input_fingerprints.contains(target))
+                abi_contract_dirty.insert(target);
+            for (const auto caller : changed_callers) {
+                if (program_graph->scc_by_function.contains(caller))
+                    abi_dirty_seeds.push_back(caller);
+                else if (abi_input_fingerprints.contains(caller))
+                    abi_contract_dirty.insert(caller);
+            }
+        }
+    }
+    std::deque<std::uint32_t> pending_abi_dirty_callers{
+        abi_contract_dirty.begin(), abi_contract_dirty.end()};
+    while (!pending_abi_dirty_callers.empty()) {
+        const auto changed = pending_abi_dirty_callers.front();
+        pending_abi_dirty_callers.pop_front();
+        const auto callers =
+            abi_contract_callers_by_callee.find(changed);
+        if (callers == abi_contract_callers_by_callee.end()) continue;
+        for (const auto caller : callers->second) {
+            if (program_graph->scc_by_function.contains(caller)) {
+                abi_dirty_seeds.push_back(caller);
+                continue;
+            }
+            if (abi_contract_dirty.insert(caller).second)
+                pending_abi_dirty_callers.push_back(caller);
+        }
+    }
+    normalize(abi_dirty_seeds);
+    const auto abi_main_dirty =
+        scc_caller_closure(*program_graph, abi_dirty_seeds);
+    abi_contract_dirty.insert(
+        abi_main_dirty.begin(), abi_main_dirty.end());
+    const bool reuse_abi_contract_epoch =
+        previous_epoch != nullptr &&
+        previous_epoch->schema_version ==
+            function_analysis_epoch_schema_version &&
+        previous_epoch->abi_identity == abi_identity &&
+        abi_contract_dirty.empty();
     AbiReturnSourceMap abi_return_sources;
     std::unordered_map<std::uint32_t, std::uint8_t>
         abi_persistent_store_sources;
@@ -14472,10 +15426,39 @@ detail::analyze_function_values_with_guarded_entry_cache(
     abi_indirect_dispatch_sources.reserve(functions.size());
     abi_return_callers_by_callee.reserve(functions.size());
     for (const auto& function : functions) {
-        abi_return_sources.emplace(function.entry_address, abi_argument_taint_mask);
-        abi_persistent_store_sources.emplace(function.entry_address, std::uint8_t{0u});
-        abi_indirect_dispatch_sources.emplace(function.entry_address,
-                                              std::uint8_t{0u});
+        const auto clean = previous_epoch != nullptr &&
+                           !abi_contract_dirty.contains(
+                               function.entry_address);
+        if (clean) {
+            if (const auto value =
+                    previous_epoch->abi_return_sources.find(
+                        function.entry_address);
+                value != previous_epoch->abi_return_sources.end())
+                abi_return_sources.emplace(
+                    function.entry_address, value->second);
+            if (const auto value =
+                    previous_epoch->abi_persistent_store_sources.find(
+                        function.entry_address);
+                value != previous_epoch
+                             ->abi_persistent_store_sources.end())
+                abi_persistent_store_sources.emplace(
+                    function.entry_address, value->second);
+            if (const auto value =
+                    previous_epoch->abi_indirect_dispatch_sources.find(
+                        function.entry_address);
+                value != previous_epoch
+                             ->abi_indirect_dispatch_sources.end())
+                abi_indirect_dispatch_sources.emplace(
+                    function.entry_address, value->second);
+        }
+        if (!abi_return_sources.contains(function.entry_address)) {
+            abi_return_sources.emplace(
+                function.entry_address, abi_argument_taint_mask);
+            abi_persistent_store_sources.emplace(
+                function.entry_address, std::uint8_t{0u});
+            abi_indirect_dispatch_sources.emplace(
+                function.entry_address, std::uint8_t{0u});
+        }
         for (const auto block_address : function.block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end() || block->second->lines.empty())
@@ -14497,9 +15480,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::deque<std::uint32_t> pending_abi_signatures;
     std::unordered_set<std::uint32_t> queued_abi_signatures;
     queued_abi_signatures.reserve(functions.size());
-    for (const auto& function : functions) {
-        pending_abi_signatures.push_back(function.entry_address);
-        queued_abi_signatures.insert(function.entry_address);
+    if (!reuse_abi_contract_epoch) {
+        for (const auto& function : functions) {
+            if (!abi_contract_dirty.contains(function.entry_address))
+                continue;
+            pending_abi_signatures.push_back(function.entry_address);
+            queued_abi_signatures.insert(function.entry_address);
+        }
     }
     std::size_t abi_signature_iterations = 0u;
     report_subphase_progress(
@@ -14566,11 +15553,25 @@ detail::analyze_function_values_with_guarded_entry_cache(
     for (const auto& [address, function] :
          abi_contract_function_by_address) {
         static_cast<void>(function);
+        const auto previous = previous_epoch == nullptr ||
+                                      abi_contract_dirty.contains(address)
+                                  ? nullptr
+                                  : [&]()
+                                        -> const AbiStackArgumentReadSet* {
+                                        const auto found = previous_epoch
+                                                               ->abi_stack_argument_reads
+                                                               .find(address);
+                                        return found == previous_epoch
+                                                            ->abi_stack_argument_reads
+                                                            .end()
+                                                   ? nullptr
+                                                   : &found->second;
+                                    }();
         abi_stack_argument_reads.emplace(
             address,
-            AbiStackArgumentReadSet{});
+            previous == nullptr ? AbiStackArgumentReadSet{} : *previous);
     }
-    if (!result.budget_exhausted) {
+    if (!result.budget_exhausted && !reuse_abi_contract_epoch) {
         std::deque<std::uint32_t> pending_abi_stack_reads;
         std::unordered_set<std::uint32_t> queued_abi_stack_reads;
         queued_abi_stack_reads.reserve(
@@ -14578,6 +15579,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         for (const auto& [address, function] :
              abi_contract_function_by_address) {
             static_cast<void>(function);
+            if (!abi_contract_dirty.contains(address)) continue;
             pending_abi_stack_reads.push_back(address);
             queued_abi_stack_reads.insert(address);
         }
@@ -14676,10 +15678,18 @@ detail::analyze_function_values_with_guarded_entry_cache(
     for (const auto& [address, function] :
          abi_contract_function_by_address) {
         static_cast<void>(function);
-        forwarded_register_reads.emplace(
-            address, std::uint16_t{0u});
+        auto value = std::uint16_t{0u};
+        if (previous_epoch != nullptr &&
+            !abi_contract_dirty.contains(address)) {
+            const auto previous =
+                previous_epoch->forwarded_register_reads.find(address);
+            if (previous !=
+                previous_epoch->forwarded_register_reads.end())
+                value = previous->second;
+        }
+        forwarded_register_reads.emplace(address, value);
     }
-    if (!result.budget_exhausted) {
+    if (!result.budget_exhausted && !reuse_abi_contract_epoch) {
         std::deque<std::uint32_t> pending_forwarded_register_reads;
         std::unordered_set<std::uint32_t>
             queued_forwarded_register_reads;
@@ -14688,6 +15698,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         for (const auto& [address, function] :
              abi_contract_function_by_address) {
             static_cast<void>(function);
+            if (!abi_contract_dirty.contains(address)) continue;
             pending_forwarded_register_reads.push_back(
                 address);
             queued_forwarded_register_reads.insert(
@@ -14771,12 +15782,25 @@ detail::analyze_function_values_with_guarded_entry_cache(
     AbiPersistentStoreSiteMap direct_local_persistent_store_sites;
     direct_local_persistent_store_sites.reserve(functions.size());
     for (const auto& function : functions) {
-        auto signature = analyze_abi_persistent_store_signature(
-            image, function, block_index, &abi_return_sources);
-        if (signature.local_persistent_store_sites.empty()) continue;
-        direct_local_persistent_store_sites.emplace(
-            function.entry_address,
-            std::move(signature.local_persistent_store_sites));
+        if (previous_epoch != nullptr &&
+            !abi_contract_dirty.contains(function.entry_address)) {
+            const auto previous =
+                previous_epoch->direct_local_persistent_store_sites.find(
+                    function.entry_address);
+            if (previous != previous_epoch
+                                ->direct_local_persistent_store_sites.end())
+                direct_local_persistent_store_sites.emplace(
+                    previous->first, previous->second);
+            continue;
+        }
+        if (!reuse_abi_contract_epoch) {
+            auto signature = analyze_abi_persistent_store_signature(
+                image, function, block_index, &abi_return_sources);
+            if (signature.local_persistent_store_sites.empty()) continue;
+            direct_local_persistent_store_sites.emplace(
+                function.entry_address,
+                std::move(signature.local_persistent_store_sites));
+        }
     }
 
     // The store slice uses the same inventory-only indirect-call candidates as
@@ -14802,11 +15826,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
     // through the caller's current ABI flow state, so a wrapper contributes
     // only the original formal arguments which can reach a persistent callback
     // store. Tail transfers stay outside this slice and remain conservative.
-    if (!result.budget_exhausted) {
+    if (!result.budget_exhausted && !reuse_abi_contract_epoch) {
         std::deque<std::uint32_t> pending_abi_store_signatures;
         std::unordered_set<std::uint32_t> queued_abi_store_signatures;
         queued_abi_store_signatures.reserve(functions.size());
         for (const auto& function : functions) {
+            if (!abi_contract_dirty.contains(function.entry_address))
+                continue;
             pending_abi_store_signatures.push_back(function.entry_address);
             queued_abi_store_signatures.insert(function.entry_address);
         }
@@ -14891,6 +15917,51 @@ detail::analyze_function_values_with_guarded_entry_cache(
                  reads->second.slots,
                  abi_persistent_store_sources.at(
                      function.entry_address)});
+        }
+    }
+
+    std::unordered_set<std::uint32_t> summary_dirty_functions;
+    summary_dirty_functions.reserve(functions.size());
+    if (previous_epoch == nullptr ||
+        previous_epoch->schema_version !=
+            function_analysis_epoch_schema_version) {
+        for (const auto& function : functions)
+            summary_dirty_functions.insert(function.entry_address);
+    } else {
+        for (const auto address : abi_contract_dirty) {
+            if (program_graph->function_by_address.contains(address))
+                summary_dirty_functions.insert(address);
+        }
+    }
+    std::size_t staged_summary_state_reuses = 0u;
+    if (previous_epoch != nullptr) {
+        for (const auto& function : functions) {
+            const auto address = function.entry_address;
+            if (summary_dirty_functions.contains(address)) continue;
+            const auto previous_summary =
+                previous_epoch->summaries.find(address);
+            const auto previous_input =
+                previous_epoch->candidate_inputs.find(address);
+            if (previous_summary == previous_epoch->summaries.end() ||
+                previous_input == previous_epoch->candidate_inputs.end()) {
+                summary_dirty_functions.insert(address);
+                continue;
+            }
+            summaries.at(address) = previous_summary->second;
+            candidate_inputs.at(address) = previous_input->second;
+            ++staged_summary_state_reuses;
+        }
+    }
+    std::size_t staged_caller_scc_invalidations = 0u;
+    if (previous_epoch != nullptr) {
+        for (const auto& component : components) {
+            if (std::any_of(
+                    component.begin(),
+                    component.end(),
+                    [&](const auto address) {
+                        return summary_dirty_functions.contains(address);
+                    }))
+                ++staged_caller_scc_invalidations;
         }
     }
 
@@ -15201,6 +16272,23 @@ detail::analyze_function_values_with_guarded_entry_cache(
         functions.size(), 0u);
     std::vector<std::uint64_t> fixpoint_input_versions(
         functions.size(), 0u);
+    if (previous_epoch != nullptr) {
+        for (std::size_t index = 0u; index < functions.size(); ++index) {
+            const auto address = functions[index].entry_address;
+            if (const auto previous =
+                    previous_epoch->summary_versions.find(address);
+                previous != previous_epoch->summary_versions.end())
+                fixpoint_summary_versions[index] = previous->second;
+            if (const auto previous =
+                    previous_epoch->input_versions.find(address);
+                previous != previous_epoch->input_versions.end())
+                fixpoint_input_versions[index] = previous->second;
+            if (summary_dirty_functions.contains(address)) {
+                ++fixpoint_summary_versions[index];
+                ++fixpoint_input_versions[index];
+            }
+        }
+    }
     struct GlobalFixpointBatchItem {
         std::uint32_t address = 0u;
         std::size_t function_index = 0u;
@@ -15522,6 +16610,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
     queued.reserve(functions.size());
     for (const auto& component : components) {
         for (const auto address : component) {
+            if (!summary_dirty_functions.contains(address)) continue;
             pending.push_back(address);
             queued.insert(address);
         }
@@ -15769,6 +16858,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         result.guarded_code_inventory.walk_diagnostics =
             inventory_walk_diagnostics;
         stop_progress_pulse();
+        epoch_publication_guard.discard_now();
         report_progress("resolution-skipped-budget-exhausted");
         result.progress_callback_failed =
             progress_callback_failed.load(
@@ -17728,6 +18818,74 @@ detail::analyze_function_values_with_guarded_entry_cache(
     result.guarded_code_inventory.walk_diagnostics = inventory_walk_diagnostics;
     coalesce_resolutions(result.resolutions);
     resolution_count = result.resolutions.size();
+    if (!result.budget_exhausted) {
+        auto staged_epoch = std::make_shared<FunctionAnalysisEpoch>();
+        staged_epoch->version =
+            previous_epoch == nullptr
+                ? 1u
+                : previous_epoch->version + 1u;
+        staged_epoch->program = program_graph;
+        staged_epoch->abi_identity = abi_identity;
+        staged_epoch->abi_input_fingerprints =
+            std::move(abi_input_fingerprints);
+        staged_epoch->abi_callers_by_callee =
+            std::move(abi_contract_callers_by_callee);
+        staged_epoch->abi_return_sources =
+            std::move(abi_return_sources);
+        staged_epoch->abi_stack_argument_reads =
+            std::move(abi_stack_argument_reads);
+        staged_epoch->forwarded_register_reads =
+            std::move(forwarded_register_reads);
+        staged_epoch->abi_persistent_store_sources =
+            std::move(abi_persistent_store_sources);
+        staged_epoch->abi_indirect_dispatch_sources =
+            std::move(abi_indirect_dispatch_sources);
+        staged_epoch->direct_local_persistent_store_sites =
+            std::move(direct_local_persistent_store_sites);
+        staged_epoch->summaries = std::move(summaries);
+        staged_epoch->candidate_inputs = std::move(candidate_inputs);
+        staged_epoch->summary_versions.reserve(functions.size());
+        staged_epoch->input_versions.reserve(functions.size());
+        for (std::size_t index = 0u; index < functions.size(); ++index) {
+            const auto address = functions[index].entry_address;
+            staged_epoch->summary_versions.emplace(
+                address, fixpoint_summary_versions[index]);
+            staged_epoch->input_versions.emplace(
+                address, fixpoint_input_versions[index]);
+        }
+
+        // One pointer publication is the only mutation of the canonical
+        // epoch. Every object above was staged privately; any exception or
+        // budget exit before this assignment leaves the previous epoch whole.
+        session.impl_->published_epoch = std::move(staged_epoch);
+        if (staged_program_graph_build) {
+            session.impl_->program_graph_builds.fetch_add(
+                1u, std::memory_order_relaxed);
+        } else {
+            session.impl_->program_graph_reuses.fetch_add(
+                1u, std::memory_order_relaxed);
+        }
+        session.impl_->program_graph_functions_built.fetch_add(
+            staged_program_functions_built,
+            std::memory_order_relaxed);
+        session.impl_->program_graph_functions_reused.fetch_add(
+            staged_program_functions_reused,
+            std::memory_order_relaxed);
+        session.impl_->caller_scc_invalidations.fetch_add(
+            staged_caller_scc_invalidations,
+            std::memory_order_relaxed);
+        if (reuse_abi_contract_epoch)
+            session.impl_->abi_contract_epoch_reuses.fetch_add(
+                1u, std::memory_order_relaxed);
+        session.impl_->summary_state_reuses.fetch_add(
+            staged_summary_state_reuses,
+            std::memory_order_relaxed);
+        session.impl_->analysis_epochs_published.fetch_add(
+            1u, std::memory_order_relaxed);
+        epoch_publication_guard.mark_published();
+    }
+    if (result.budget_exhausted)
+        epoch_publication_guard.discard_now();
     stop_progress_pulse();
     report_progress("complete");
     result.progress_callback_failed =

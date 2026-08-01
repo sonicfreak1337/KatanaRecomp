@@ -259,6 +259,15 @@ struct ControlFlowAnalysisProgress {
     std::size_t
         function_value_session_cache_miss_tail_ingress_changed = 0u;
     EvaluationLensTelemetry function_value_evaluation_lenses;
+    std::size_t function_value_program_graph_builds = 0u;
+    std::size_t function_value_program_graph_reuses = 0u;
+    std::size_t function_value_program_graph_functions_built = 0u;
+    std::size_t function_value_program_graph_functions_reused = 0u;
+    std::size_t function_value_caller_scc_invalidations = 0u;
+    std::size_t function_value_abi_contract_epoch_reuses = 0u;
+    std::size_t function_value_summary_state_reuses = 0u;
+    std::size_t function_value_analysis_epochs_published = 0u;
+    std::size_t function_value_analysis_epochs_discarded = 0u;
 };
 
 using ControlFlowAnalysisProgressCallback =

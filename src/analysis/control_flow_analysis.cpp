@@ -1143,6 +1143,24 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     ->session_cache_miss_tail_ingress_changed;
             progress.function_value_evaluation_lenses =
                 function_values->evaluation_lenses;
+            progress.function_value_program_graph_builds =
+                function_values->program_graph_builds;
+            progress.function_value_program_graph_reuses =
+                function_values->program_graph_reuses;
+            progress.function_value_program_graph_functions_built =
+                function_values->program_graph_functions_built;
+            progress.function_value_program_graph_functions_reused =
+                function_values->program_graph_functions_reused;
+            progress.function_value_caller_scc_invalidations =
+                function_values->caller_scc_invalidations;
+            progress.function_value_abi_contract_epoch_reuses =
+                function_values->abi_contract_epoch_reuses;
+            progress.function_value_summary_state_reuses =
+                function_values->summary_state_reuses;
+            progress.function_value_analysis_epochs_published =
+                function_values->analysis_epochs_published;
+            progress.function_value_analysis_epochs_discarded =
+                function_values->analysis_epochs_discarded;
         }
         try {
             progress_callback(progress);

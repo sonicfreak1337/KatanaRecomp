@@ -53,8 +53,9 @@ Die modellierten Roots, Requests, Module, IR- und Partitionsdaten laufen durch
 reale Katana-Pfade. Ein waehrend der Abnahme gefundener zehnminuetiger
 Windows-MSPDB-Nachlauf nach beendetem CMake-Configure ist durch einen privaten
 Endpoint und eine einsekuendige Helper-Shutdownfrist geschlossen; der
-Supervisor wartet weiterhin fail-closed auf Job-Leere. Die eigentlichen
-8-/12-/24-Thread-Gates folgen in KR-4981. GPU-Offload bleibt ein eigenes
+Supervisor wartet weiterhin fail-closed auf Job-Leere. KR-4981 erzeugt keine
+separate Threadklassenmatrix, sondern misst genau den ohnehin vorgeschriebenen
+finalen 24-Thread-Sonic-Export. GPU-Offload bleibt ein eigenes
 beweispflichtiges Entscheidungsgate in KR-4982. Die Abschluss-Gesamtpruefung
 KR-4984 bleibt unveraendert Pflicht.
 
@@ -506,10 +507,10 @@ Alle Aufgaben dieses Plans muessen folgende Invarianten gemeinsam erfuellen:
 4. Alle Budget- und Verlustdiagnosen bleiben fail-closed, insbesondere
    Candidate-, Raw-Inventory-, Tabellen-, Shape-, Forwarding-, Context-,
    Stackbasis- und lokale Fixpunktverluste.
-5. Seriell sowie mit 8, 12 und 24 Threads entstehen bytegleiche kanonische
-   Analyse-JSONs, IR, Source-Maps, generierte TUs und Produktartefakte;
-   ausgenommen sind ausdruecklich nichtkanonische Timing- und
-   Provenienzfelder.
+5. Fokussierte Referenz- und Parallelpfade erzeugen bytegleiche kanonische
+   Analyse-JSONs, IR, Source-Maps und generierte TUs; ausgenommen sind
+   ausdruecklich nichtkanonische Timing- und Provenienzfelder. Dafuer wird
+   keine zusaetzliche Produktbuildmatrix gestartet.
 6. Ein Performancegate darf nicht durch weniger Funktionen, Bloecke,
    Guarded-AOT-Einstiege, Resolutionen oder Inventory-Sinks erreicht werden.
 7. Cachekeys binden Sourceinhalt, relevante ABI-/Schema-/Optionswerte und
@@ -639,9 +640,9 @@ explizit ist.
 Jeder Gatebericht bindet ein Referenzhostmanifest mit CPU-Modell,
 physischen/logischen Kernen, SMT-Status, RAM-Kapazitaet, SSD/Dateisystem,
 OS-Build, Energieprofil, Compiler-/Linker-/CMake-/Generatorversion,
-Katana-Buildprofil und allen Job-/Cacheoptionen. Die 8-/12-/24-
-Konfiguration bezeichnet die explizite Analyzer- und Buildjobgrenze auf
-diesem Host, nicht drei unbeschriebene Rechner.
+Katana-Buildprofil und allen Job-/Cacheoptionen. Fuer die finale
+Produktmessung bezeichnet die Konfiguration das normale 24-Thread-Budget
+dieses Hosts; weitere Threadklassen werden vor Sonic nicht vermessen.
 
 `cold-port` bedeutet:
 
@@ -652,8 +653,8 @@ diesem Host, nicht drei unbeschriebene Rechner.
   oder spielbezogenen Compilerobjekte aus einem frueheren Lauf;
 - das stabile vorgebaute Runtime-SDK darf und soll wiederverwendet werden,
   sofern seine exakte Komponentenidentitaet passt;
-- OS-Dateicache wird nicht kuenstlich global geleert, aber sein Einfluss
-  wird durch drei Wiederholungen und getrennte Disc-I/O-Zeit sichtbar;
+- OS-Dateicache wird nicht kuenstlich global geleert; Kaltzustand und
+  getrennte Disc-I/O-Zeit werden fuer den einzelnen Produktlauf berichtet;
 - Walltime umfasst Analyse, IR, Codegen, Hostcompile, Link und Packaging
   samt allen Childprozessen.
 
@@ -869,37 +870,28 @@ Akzeptanz:
   abhaengig;
 - identischer Warmexport erreicht das Warmgate.
 
-### KR-4981 - 8-/12-/24-Thread-Kaltbuild-Performancegate
+### KR-4981 - Einmaliges 24-Thread-Sonic-Produktzeitgate
 
-Typ: P0 Gate-Vorbereitung
+Typ: finale P0-Produktmessung
 
-Abhaengigkeiten: KR-4974 bis KR-4980 sowie KR-4982; KR-4983 nur bei positivem
-GPU-Entscheidungsgate
+Abhaengigkeiten: KR-4984
 
-Ziel: Die neue Architektur wird vor dem unabhaengigen Schlussreview mit
-reproduzierbarer, retailfreier oeffentlicher Last gegen harte Zeit-, RAM- und
-Korrektheitsgrenzen abgenommen. Dieser Task baut noch keinen privaten
-Sonic-Port.
+Ziel: Der ohnehin vorgeschriebene einzelne frische NativeDisc-Sonic-Export
+nach der unabhaengigen Schlussreview ist gleichzeitig die einzige reale
+Buildzeitmessung. KR-4981 startet keinen separaten Vollbuild und keine
+8-/12-/24-Thread-Matrix.
 
 Akzeptanz:
 
-| Konfiguration | Analyse und Codegen | voller kalter Port | Process-Tree Private/Commit-Peak |
-|---|---:|---:|---:|
-| 24 Threads | hoechstens 6 min | hoechstens 8 min | hoechstens 12 GiB |
-| 12 Threads | hoechstens 9 min | hoechstens 11 min | hoechstens 10 GiB |
-| 8 Threads | hoechstens 12 min | hoechstens 15 min | hoechstens 8 GiB |
-
-Zusaetzlich:
-
-- unveraenderter exakter Warmexport hoechstens 30 Sekunden;
-- drei Wiederholungen je oeffentlicher Threadklasse, Median und Maximum
-  dokumentiert;
-- kein Einzelprozess und keine Phase laenger als 15 Minuten;
-- etwa 1.600 Funktionen, 22.400 Bloecke, 1.400 Roots, 84.000 logische
-  Evaluationrequests/-kontexte und spaete Seeds sind in einer retailfreien
-  Stressform abbildbar;
-- die Stressform prueft gleiche Funktions-/Block-/AOT-Vollstaendigkeit
-  zwischen Referenz- und Performancepfad.
+- aktueller Host, normales 24-Thread-Budget, dokumentiertes Host-/Toolchain-
+  und Kaltzustandsmanifest;
+- voller frischer Port Zielwert hoechstens acht Minuten;
+- Analyse, Codegen, Hostbuild, Packaging, Gesamtzeit, Cachewirkung und
+  Process-Tree-Ressourcen werden aus der vorhandenen Telemetrie berichtet;
+- keine reduzierte Funktions-, Block-, Resolution- oder AOT-Abdeckung;
+- keine Wiederholung allein fuer Timingdaten und keine 8-/12-Thread-Laeufe;
+- Skalierungsarbeit fuer schwaechere Rechner ist bis nach dem nachweislich
+  weiter bootenden Sonic-Port vertagt.
 
 ### KR-4982 - GPU-Offload-Entscheidungsgate und repraesentativer Prototyp
 
@@ -957,7 +949,7 @@ Akzeptanz:
 
 Typ: letzter P0 Gate-Vorbereitungstask
 
-Abhaengigkeiten: KR-4981, KR-4982 und gegebenenfalls KR-4983
+Abhaengigkeiten: KR-4974 bis KR-4980, KR-4982 und gegebenenfalls KR-4983
 
 Ziel: Ein unabhaengiger Reviewer verfolgt alle geaenderten Daten- und
 Fehlerpfade end-to-end. Der reale NativeDisc-Lauf bleibt gesperrt, bis jeder
@@ -1030,9 +1022,9 @@ KR-4974 Telemetrie
            +--> KR-4983 nur bei positivem Gate
 
 KR-4974 bis KR-4980 + GPU-Entscheidung
-  -> KR-4981 8/12/24-Thread-Performancegate
   -> KR-4984 unabhaengige Gesamtpruefung und P0/P1-Schliessung
-  -> genau ein frischer realer NativeDisc-Sonic-Lauf
+  -> genau ein frischer realer 24-Thread-NativeDisc-Sonic-Lauf
+     -> zugleich einzige KR-4981-Produktzeitmessung
 ```
 
 KR-4975 bis KR-4980 sind keine voneinander isolierten Mikrooptimierungen.
@@ -1071,15 +1063,15 @@ persistente Shards denselben kanonischen Vertrag verwenden.
 
 Dieser P0-Block ist erst abgeschlossen, wenn:
 
-1. KR-4974 bis KR-4980 implementiert und die harten Gates aus KR-4981
-   bestanden sind;
+1. KR-4974 bis KR-4980 implementiert sind;
 2. KR-4982 eine belastbare GPU-Entscheidung liefert und KR-4983 nur bei
    positivem Ergebnis vollstaendig integriert ist;
 3. alle kanonischen Ergebnisse und fail-closed Diagnosen gegen den
    Referenzpfad identisch sind;
 4. KR-4984 alle betroffenen Pfade unabhaengig reviewed und alle P0/P1
    geschlossen hat;
-5. erst danach ein frischer echter NativeDisc-Sonic-Lauf gebaut und mit
-   echten Screenshots ausgewertet wurde;
+5. erst danach genau ein frischer echter 24-Thread-NativeDisc-Sonic-Lauf
+   gebaut, als einzige KR-4981-Zeitmessung erfasst und mit echten Screenshots
+   ausgewertet wurde;
 6. Buildzeit, Phasezeiten, Ressourcen, Cachewirkung und sichtbares Ergebnis
    ehrlich berichtet und der abgeschlossene Stand auf `main` gepusht wurde.

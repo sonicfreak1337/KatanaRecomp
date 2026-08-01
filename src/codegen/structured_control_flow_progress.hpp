@@ -455,6 +455,24 @@ class StructuredControlFlowProgress final {
         counters.key_interned_sets = lenses.key_interned_sets;
         counters.key_interned_references =
             lenses.key_interned_references;
+        counters.program_graph_builds =
+            progress.function_value_program_graph_builds;
+        counters.program_graph_reuses =
+            progress.function_value_program_graph_reuses;
+        counters.program_graph_functions_built =
+            progress.function_value_program_graph_functions_built;
+        counters.program_graph_functions_reused =
+            progress.function_value_program_graph_functions_reused;
+        counters.caller_scc_invalidations =
+            progress.function_value_caller_scc_invalidations;
+        counters.abi_contract_epoch_reuses =
+            progress.function_value_abi_contract_epoch_reuses;
+        counters.summary_state_reuses =
+            progress.function_value_summary_state_reuses;
+        counters.analysis_epochs_published =
+            progress.function_value_analysis_epochs_published;
+        counters.analysis_epochs_discarded =
+            progress.function_value_analysis_epochs_discarded;
     }
 
     void ensure_round(

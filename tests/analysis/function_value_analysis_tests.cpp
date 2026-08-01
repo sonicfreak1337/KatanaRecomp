@@ -20,6 +20,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -56,7 +57,8 @@ void set_stack_diagnostics_for_serial_fixpoint(const bool enabled) {
 
 void require_same_function_value_semantics(
     const katana::analysis::FunctionValueAnalysisResult& serial,
-    const katana::analysis::FunctionValueAnalysisResult& parallel) {
+    const katana::analysis::FunctionValueAnalysisResult& parallel,
+    const bool compare_work_counters = true) {
     const auto& serial_inventory = serial.guarded_code_inventory;
     const auto& parallel_inventory = parallel.guarded_code_inventory;
     auto serial_walk_diagnostics = serial_inventory.walk_diagnostics;
@@ -65,6 +67,71 @@ void require_same_function_value_semantics(
     serial_walk_diagnostics.forwarded_store_evaluation_cache_misses = 0u;
     parallel_walk_diagnostics.forwarded_store_evaluation_cache_hits = 0u;
     parallel_walk_diagnostics.forwarded_store_evaluation_cache_misses = 0u;
+    const auto report_mismatch = [](const bool mismatch,
+                                    const std::string_view field) {
+        if (mismatch)
+            std::cerr << "FUNCTION-VALUE-DIFFERENZ: " << field << '\n';
+    };
+    report_mismatch(serial.summaries != parallel.summaries, "summaries");
+    report_mismatch(serial.resolutions != parallel.resolutions, "resolutions");
+    report_mismatch(
+        serial_inventory.stored_code_addresses !=
+            parallel_inventory.stored_code_addresses,
+        "stored_code_addresses");
+    report_mismatch(
+        serial_inventory.returned_code_address_tables !=
+            parallel_inventory.returned_code_address_tables,
+        "returned_code_address_tables");
+    report_mismatch(
+        serial_walk_diagnostics != parallel_walk_diagnostics,
+        "walk_diagnostics");
+    report_mismatch(
+        compare_work_counters &&
+            serial.fixpoint_iterations != parallel.fixpoint_iterations,
+        "fixpoint_iterations");
+    if (compare_work_counters &&
+        serial.fixpoint_iterations != parallel.fixpoint_iterations)
+        std::cerr << "  serial=" << serial.fixpoint_iterations
+                  << " parallel=" << parallel.fixpoint_iterations << '\n';
+    report_mismatch(
+        compare_work_counters &&
+            serial.unchanged_ingress_skips !=
+                parallel.unchanged_ingress_skips,
+        "unchanged_ingress_skips");
+    if (compare_work_counters &&
+        serial.unchanged_ingress_skips != parallel.unchanged_ingress_skips)
+        std::cerr << "  serial=" << serial.unchanged_ingress_skips
+                  << " parallel=" << parallel.unchanged_ingress_skips
+                  << '\n';
+    if (compare_work_counters &&
+        (serial.fixpoint_iterations != parallel.fixpoint_iterations ||
+         serial.unchanged_ingress_skips !=
+             parallel.unchanged_ingress_skips)) {
+        std::cerr
+            << "  scheduler serial={workers="
+            << serial.fixpoint_worker_count
+            << ", batches=" << serial.fixpoint_parallel_batches
+            << ", speculative="
+            << serial.fixpoint_speculative_evaluations
+            << ", stale=" << serial.fixpoint_stale_repairs
+            << ", max_batch="
+            << serial.maximum_fixpoint_batch_size
+            << "} parallel={workers="
+            << parallel.fixpoint_worker_count
+            << ", batches=" << parallel.fixpoint_parallel_batches
+            << ", speculative="
+            << parallel.fixpoint_speculative_evaluations
+            << ", stale=" << parallel.fixpoint_stale_repairs
+            << ", max_batch="
+            << parallel.maximum_fixpoint_batch_size << "}\n";
+    }
+    report_mismatch(
+        serial.strongly_connected_components !=
+            parallel.strongly_connected_components,
+        "strongly_connected_components");
+    report_mismatch(
+        serial.budget_exhausted != parallel.budget_exhausted,
+        "budget_exhausted");
     require(
         serial.summaries == parallel.summaries &&
             serial.resolutions == parallel.resolutions &&
@@ -96,12 +163,13 @@ void require_same_function_value_semantics(
                 parallel_inventory.table_scan_truncated &&
             serial_walk_diagnostics ==
                 parallel_walk_diagnostics &&
-            serial.fixpoint_iterations ==
-                parallel.fixpoint_iterations &&
+            (!compare_work_counters ||
+             (serial.fixpoint_iterations ==
+                  parallel.fixpoint_iterations &&
+              serial.unchanged_ingress_skips ==
+                  parallel.unchanged_ingress_skips)) &&
             serial.strongly_connected_components ==
                 parallel.strongly_connected_components &&
-            serial.unchanged_ingress_skips ==
-                parallel.unchanged_ingress_skips &&
             serial.iteration_budget ==
                 parallel.iteration_budget &&
             serial.budget_exhausted ==
@@ -165,13 +233,26 @@ void verify_persistent_function_value_session() {
                 second_shapes,
                 session);
     const auto second_stats = session.statistics();
-    require_same_function_value_semantics(first, second);
+    require_same_function_value_semantics(first, second, false);
     require(
         second_stats.hits > first_stats.hits &&
             second_stats.entries != 0u &&
-            second_stats.retained_payload_bytes != 0u,
+            second_stats.retained_payload_bytes != 0u &&
+            first_stats.program_graph_builds == 1u &&
+            first_stats.program_graph_reuses == 0u &&
+            first_stats.analysis_epochs_published == 1u &&
+            first_stats.analysis_epochs_discarded == 0u &&
+            second_stats.program_graph_builds == 1u &&
+            second_stats.program_graph_reuses == 1u &&
+            second_stats.program_graph_functions_reused >=
+                boundaries.size() &&
+            second_stats.abi_contract_epoch_reuses == 1u &&
+            second_stats.summary_state_reuses >= boundaries.size() &&
+            second_stats.analysis_epochs_published == 2u &&
+            second_stats.analysis_epochs_discarded == 0u,
         "Die analyseweite Function-Value-Session lieferte im identischen "
-        "zweiten Kandidatenvertrag keinen echten Warm-Hit.");
+        "zweiten Kandidatenvertrag keinen echten Warm-Hit oder keine "
+        "atomar wiederverwendete Graph-/ABI-/Summary-Epoch.");
     require(
         !cold_progress.empty() &&
             cold_progress.back().phase == "complete" &&
@@ -202,6 +283,15 @@ void verify_persistent_function_value_session() {
             warm_progress.back().physical_evaluations <=
                 warm_progress.back().logical_evaluations &&
             warm_progress.back().session_cache_hits != 0u &&
+            warm_progress.back().program_graph_builds == 0u &&
+            warm_progress.back().program_graph_reuses == 1u &&
+            warm_progress.back().program_graph_functions_reused >=
+                boundaries.size() &&
+            warm_progress.back().abi_contract_epoch_reuses == 1u &&
+            warm_progress.back().summary_state_reuses >=
+                boundaries.size() &&
+            warm_progress.back().analysis_epochs_published == 1u &&
+            warm_progress.back().analysis_epochs_discarded == 0u &&
             warm_progress.back().cache_key_builds ==
                 warm_progress.back().logical_evaluations &&
             warm_progress.back().evaluation_request_nanoseconds != 0u &&
@@ -210,18 +300,72 @@ void verify_persistent_function_value_session() {
         "analyse-lokalen Start/Abschluss oder verlor seine getrennten "
         "Cache-/Aktivitaets-/Zeitzaehler.");
 
+    katana::analysis::ResolvedControlFlowEdge local_edge;
+    local_edge.instruction_address = 4u;
+    local_edge.target_address = 0x10u;
+    local_edge.kind = katana::analysis::ResolvedControlFlowKind::Jump;
+    local_edge.evidence =
+        katana::analysis::ControlFlowEvidence::ProvenComplete;
+    const std::array local_edges{local_edge};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        extended_shapes{image};
+    const auto extended =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                local_edges,
+                {},
+                extended_shapes,
+                session);
+    const auto extended_stats = session.statistics();
+    require(
+        !extended.budget_exhausted &&
+            extended_stats.program_graph_builds == 2u &&
+            extended_stats.program_graph_functions_reused >
+                second_stats.program_graph_functions_reused &&
+            extended_stats.program_graph_functions_built >
+                second_stats.program_graph_functions_built &&
+            extended_stats.summary_state_reuses >
+                second_stats.summary_state_reuses &&
+            extended_stats.caller_scc_invalidations != 0u &&
+            extended_stats.caller_scc_invalidations <
+                extended.summaries.size() &&
+            extended_stats.analysis_epochs_published == 3u &&
+            extended_stats.analysis_epochs_discarded == 0u,
+        "Eine lokale Funktionserweiterung baute unveraenderte immutable "
+        "Shards neu oder invalidierte ausserhalb ihres beweisbaren "
+        "Caller-SCC-Closure.");
+
     const auto public_progress_before =
         katana::analysis::detail::
             function_value_progress_runtime_statistics_for_testing();
+    std::vector<katana::analysis::FunctionValueAnalysisProgress>
+        public_progress_events;
     const auto public_progress = katana::analysis::analyze_function_values(
         image,
         lines,
         boundaries,
         {},
-        [](const katana::analysis::FunctionValueAnalysisProgress&) {});
+        [&public_progress_events](
+            const katana::analysis::FunctionValueAnalysisProgress& progress) {
+            public_progress_events.push_back(progress);
+        });
     const auto public_progress_after =
         katana::analysis::detail::
             function_value_progress_runtime_statistics_for_testing();
+    require(
+        !public_progress_events.empty() &&
+            public_progress_events.back().phase == "complete" &&
+            public_progress_events.back().program_graph_builds == 1u &&
+            public_progress_events.back().program_graph_reuses == 0u &&
+            public_progress_events.back().abi_contract_epoch_reuses == 0u &&
+            public_progress_events.back().summary_state_reuses == 0u &&
+            public_progress_events.back().analysis_epochs_published == 1u,
+        "Ein frischer oeffentlicher Function-Value-Aufruf erbte eine "
+        "Session-Epoch oder meldete keinen vollstaendigen kalten "
+        "Programmgraphaufbau.");
     require_same_function_value_semantics(first, public_progress);
     require(
         public_progress_after.callback_activations >
@@ -248,7 +392,7 @@ void verify_persistent_function_value_session() {
                 },
                 throwing_shapes,
                 session);
-    require_same_function_value_semantics(first, throwing_progress);
+    require_same_function_value_semantics(first, throwing_progress, false);
     require(
         throwing_progress.progress_callback_failed,
         "Ein werfender Function-Value-Beobachter veraenderte die Analyse "
@@ -272,7 +416,7 @@ void verify_persistent_function_value_session() {
                 diagnostic_shapes,
                 session);
     set_stack_diagnostics_for_serial_fixpoint(false);
-    require_same_function_value_semantics(first, diagnostic);
+    require_same_function_value_semantics(first, diagnostic, false);
     require(
         !diagnostic_progress.empty() &&
             diagnostic_progress.back().phase == "complete" &&
@@ -385,7 +529,7 @@ void verify_persistent_function_value_session() {
     const auto warm_inventory_stats =
         inventory_session.statistics();
     require_same_function_value_semantics(
-        cold_inventory, warm_inventory);
+        cold_inventory, warm_inventory, false);
     require(
         warm_inventory_stats.hits > cold_inventory_stats.hits &&
             !warm_inventory.guarded_code_inventory
@@ -534,7 +678,7 @@ void verify_persistent_function_value_session() {
                 expanded_fresh_shapes,
                 expanded_fresh_session);
     require_same_function_value_semantics(
-        expanded_cached, expanded_fresh);
+        expanded_cached, expanded_fresh, false);
 
     constexpr std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
         changed_edges{{{
@@ -578,7 +722,7 @@ void verify_persistent_function_value_session() {
                 fresh_shapes,
                 fresh_session);
     require_same_function_value_semantics(
-        changed_cached, changed_fresh);
+        changed_cached, changed_fresh, false);
 
     katana::analysis::detail::FunctionValueAnalysisSession
         tiny_session{1u, 1u};

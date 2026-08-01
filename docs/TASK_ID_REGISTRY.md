@@ -98,12 +98,12 @@ KR-4984 verbindlich abzuschliessen.
 | KR-4973 | NativeDisc-Sichtregression und proof-unabhaengige PVR-Ausgabe | abgeschlossen durch historische ABI-64-v32-Evidenz; Sega ab 2,032 s, 127 Hostframes, Fehler bei `553.990.562` / `11.080.283` an `0x8C11088C -> 0x8C64784E` |
 | KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | abgeschlossen; JSONL-, Prozessbaum-, Phasen-, Workset- und Cache-Miss-Telemetrie produktiv verdrahtet |
 | KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | abgeschlossen; versionierte fail-closed Register-/Stackprojektion, kanonische Ausgaenge, Set-Interning und Lens-Telemetrie produktiv verdrahtet |
-| KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | geplant P0 |
+| KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | abgeschlossen; immutable Graphshards, persistente SCC-/ABI-/Summary-Epoch und gerichtete Invalidierung produktiv verdrahtet |
 | KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | geplant P0 |
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | geplant P0 |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | geplant P0 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | geplant P0 |
-| KR-4981 | 8-/12-/24-Thread-Kaltbuild-Performancegate | geplant P0 Gate-Vorbereitung |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | geplant P0 als finale Produktmessung nach KR-4984; keine Vorab-Buildmatrix |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | geplant P0 Entscheidungsgate |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | bedingt geplant P0 nach positivem KR-4982-Gate |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | geplant, letzter P0 Gate-Vorbereitungstask |

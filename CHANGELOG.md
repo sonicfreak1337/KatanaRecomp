@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- KR-4976 ist abgeschlossen. Function Value verwendet nun content-
+  adressierte immutable Programmgraphshards und eine sessiongebundene,
+  atomar publizierte Analysis-Epoch fuer SCC-/Caller-DAG, ABI-Vertraege,
+  Summaries, Candidate-Inputs und Versionen. Lokale Aenderungen invalidieren
+  den gerichteten Caller-SCC-Closure; unvollstaendige ABI-Evidenz bleibt
+  fail-closed. Progress meldet Graph-/Funktionsreuse, SCC-Invalidierungen,
+  ABI-/Summary-Reuse sowie publizierte und verworfene Epochen. Der fokussierte
+  kombinierte MSVC-Build und der bestehende Function-Value-Regressionslauf
+  sind gruen.
 - KR-4974 ist abgeschlossen. Vorhanden sind eine opt-in
   Portbuild-JSONL-Telemetrie mit Manifest-, Fortschritts-, Ressourcen- und
   Terminaldatensaetzen, genaue FunctionEvaluation-Cachezaehler samt
@@ -15,9 +24,9 @@
   Publishlock-, GDI-Track- und Windows-Geraetenamen-Aliase werden fail-closed
   abgelehnt. Beaufsichtigte Windows-Hostbefehle isolieren ausserdem ihren
   MSVC-PDB-Server und lassen ihn nach dem letzten Client binnen einer Sekunde
-  natuerlich aus dem weiterhin autoritativen Jobbaum verschwinden. Die
-  8-/12-/24-Thread-Performancegates folgen separat in KR-4981; die
-  Produktabnahme bleibt der spaetere reale Kaltport.
+  natuerlich aus dem weiterhin autoritativen Jobbaum verschwinden. KR-4981
+  verwendet keine separate Threadklassenmatrix, sondern misst genau
+  den spaeteren einzelnen 24-Thread-Sonic-Kaltport als Produktabnahme.
 - Fuer KR-4974 existiert ausserdem eine deterministische, retailfreie
   NativeDisc-Stressfixture mit `smoke`- und `reference`-Profil. Sie modelliert
   unter anderem Seedwellen, einen Head-of-Line-Root, 84.000 logische
@@ -58,7 +67,7 @@
   fokussierte Function-Value-Regressionstest und der Release-CLI-Build sind
   gruen; einzelne betroffene Analyse- und Runtimepfade wurden unabhaengig
   ohne bestaetigte P0/P1-Funde reviewt. Eine abschliessende
-  repositoryweite Gesamtpruefung, das 8-/12-/24-Thread-Performancegate,
+  repositoryweite Gesamtpruefung, die einmalige 24-Thread-Produktzeitmessung,
   ein belegter Analyse-GPU-Offload und ein aktueller Sonic-Produktnachweis
   fehlen weiterhin. Der Checkpoint ist kein P0-Abschluss;
   Quellimplementierung ist nicht mit Produktabnahme gleichzusetzen.
@@ -67,7 +76,7 @@
   semantische Cachelinsen, eine persistente Programm-/SCC-Session, einen
   gemeinsamen Multi-Root-Fixpunkt, inkrementelle Seedinvalidierung,
   priorisierte und speicherbegrenzte Arbeit, persistente Buildshards,
-  8-/12-/24-Thread-Gates sowie ein beweispflichtiges GPU-
+  eine einzelne finale 24-Thread-Sonic-Produktmessung sowie ein beweispflichtiges GPU-
   Entscheidungsgate. Nach der Implementierung ist eine unabhaengige
   Gesamtpruefung aller beruehrten Analyse-, Cache-, Executor-, Build-,
   Runtime-CPU- und GPU-Ausgabepfade Pflicht. Erst nach Schliessung und

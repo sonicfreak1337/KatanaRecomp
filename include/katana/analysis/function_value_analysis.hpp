@@ -414,6 +414,18 @@ struct FunctionValueAnalysisProgress {
     std::size_t session_cache_miss_contextual_summary_changed = 0u;
     std::size_t session_cache_miss_tail_ingress_changed = 0u;
     EvaluationLensTelemetry evaluation_lenses;
+    // Run-local reuse telemetry for the persistent program graph and the
+    // incrementally published analysis epochs. These counters are
+    // observational only and never participate in semantic identities.
+    std::size_t program_graph_builds = 0u;
+    std::size_t program_graph_reuses = 0u;
+    std::size_t program_graph_functions_built = 0u;
+    std::size_t program_graph_functions_reused = 0u;
+    std::size_t caller_scc_invalidations = 0u;
+    std::size_t abi_contract_epoch_reuses = 0u;
+    std::size_t summary_state_reuses = 0u;
+    std::size_t analysis_epochs_published = 0u;
+    std::size_t analysis_epochs_discarded = 0u;
 };
 
 using FunctionValueAnalysisProgressCallback =

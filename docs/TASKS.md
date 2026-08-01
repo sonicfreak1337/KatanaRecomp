@@ -43,7 +43,7 @@ Diese drei Staende duerfen nicht als derselbe Fortschritt berichtet werden:
    keinen Sonic-Lauf und keinen Screenshot.
 
 Der naechste kritische Pfad ist ausschliesslich KR-4974 bis KR-4984. Erst
-nach bestandenem 8-/12-/24-Thread-Performancegate, beweispflichtiger
+nach den Sonic-kritischen Performanceumbauten, beweispflichtiger
 GPU-Entscheidung und unabhaengiger Gesamtpruefung folgt genau ein frischer
 NativeDisc-Port mit realer Discinstallation, Produktlauf und neuem echten
 Fensterscreenshot. DirectBoot wird spaeter mit einem an den dann aktuellen
@@ -279,12 +279,12 @@ Source-Checkpoint 18f8537 [kein P0-Abschluss, kein Produktartefakt]
   +--> KR-4978 inkrementeller CFG-/Seed-/Candidate-Fixpunkt
   +--> KR-4979 priorisierter globaler Executor und Speicherbudget
   +--> KR-4980 schichtweiser persistenter NativeDisc-Buildcache
-  +--> KR-4981 8-/12-/24-Thread-Performancegate
   +--> KR-4982 GPU-Entscheidungsgate
   +--> KR-4983 nur bei positivem Gate: capability-gated GPU-Pfad
   +--> KR-4984 unabhaengige Gesamtpruefung und P0/P1-Schliessung
          |
-         +--> genau ein ABI-passender NativeDisc-Sonic-Port
+         +--> genau ein ABI-passender 24-Thread-NativeDisc-Sonic-Port
+                +--> KR-4981 einmalige Produktzeitmessung
                 +--> Originaldisc installieren
                 +--> realen Lauf und frische Fenster-Screenshots auswerten
                 +--> erst danach naechsten realen Blocker bestimmen
@@ -1196,7 +1196,7 @@ Abhaengigkeiten: keine
 Status: Abgeschlossen. Die Telemetrie ist durch die realen Analyse-, Cache-,
 IR-, Partitions-, Hostconfigure- und Hostbuildpfade verdrahtet. Der
 produktweite Nachweis bleibt gemaess `AGENTS.md` der spaetere reale Kaltport;
-KR-4981 wertet dessen harte Zeit-/Ressourcengates aus.
+KR-4981 wertet genau diesen einen finalen 24-Thread-Sonic-Export aus.
 
 ### Abschlussstand
 
@@ -1225,7 +1225,8 @@ Configure wurde im Produktpfad geschlossen: jeder beaufsichtigte Hostbefehl
 besitzt einen privaten MSPDB-Endpunkt mit einsekuendiger natuerlicher
 Shutdownfrist; die Job-Leere bleibt weiterhin der Quieszenzbeweis. Eine
 erneute breite Matrix wurde gemaess der verbindlichen Produkt-vor-Test-Regel
-nicht gestartet. Die 8-/12-/24-Thread-Gates gehoeren unveraendert zu KR-4981.
+nicht gestartet. KR-4981 erzeugt ebenfalls keine Vorabmatrix, sondern misst
+genau den einzelnen finalen 24-Thread-Sonic-Export nach KR-4984.
 
 ### Umfang
 
@@ -1275,13 +1276,20 @@ Evaluationzeit werden je Linse getrennt ausgegeben.
 
 ---
 
-## [ ] KR-4976 - Persistente FunctionValue-Programm-/SCC-Session
+## [x] KR-4976 - Persistente FunctionValue-Programm-/SCC-Session
 
 Prioritaet: P0
 
 Abhaengigkeiten: KR-4974, KR-4975
 
-Status: Geplant.
+Status: Abgeschlossen. Content-adressierte immutable Programmgraphshards,
+persistente ABI-/Summary-/Candidate-Zustaende, SCC-Abhaengigkeiten und
+atomare Analysis-Epochen sind produktiv verdrahtet. Lokale Graph- oder
+ABI-Aenderungen invalidieren den gerichteten Caller-SCC-Closure; fehlende
+ABI-Evidenz erzwingt konservative Neuberechnung. Der fokussierte kombinierte
+Build und der vollstaendige bestehende Function-Value-Regressionslauf sind
+gruen. Reine Warm-/Kalt-Arbeitszaehler sind bewusst nicht kanonisch; alle
+Produktresultate und fail-closed Verlustdiagnosen bleiben streng verglichen.
 
 ### Umfang
 
@@ -1394,33 +1402,28 @@ Status: Geplant.
 
 ---
 
-## [ ] KR-4981 - 8-/12-/24-Thread-Kaltbuild-Performancegate
+## [ ] KR-4981 - Einmaliges 24-Thread-Sonic-Produktzeitgate
 
 Prioritaet: P0 Performance-Gate
 
-Abhaengigkeiten: KR-4974 bis KR-4980, KR-4982 und bei positivem GPU-Gate
-KR-4983
+Abhaengigkeiten: KR-4984
 
-Status: Geplant als Gate-Vorbereitung.
+Status: Geplant als finale Produktmessung. Der Task erzeugt keinen separaten
+Vorabbuild und keine Threadklassenmatrix.
 
 ### Akzeptanz
 
-- nur retailfreie oeffentliche/synthetische Last; noch kein privater
-  Sonic-Port vor KR-4984
-- festes Referenzhostmanifest mit CPU/SMT/RAM/SSD/OS/Compiler/Buildprofil
-  und exakt dokumentiertem Kaltzustand
-- voller kalter Port auf 24 Threads hoechstens 8 Minuten und 12 GiB
-  Process-Tree-Private/Commit-Peak
-- voller kalter Port auf 12 Threads hoechstens 11 Minuten und 10 GiB
-  Process-Tree-Private/Commit-Peak
-- voller kalter Port auf 8 Threads hoechstens 15 Minuten und 8 GiB
-  Process-Tree-Private/Commit-Peak
-- Analyse plus Codegen hoechstens 6/9/12 Minuten
-- drei oeffentliche Wiederholungen je Threadklasse, Median und Maximum
-- kein Einzelprozess und keine Phase laenger als 15 Minuten
-- rund 84.000 logische Evaluationrequests/-kontexte; physische
-  Evaluationen duerfen durch sichere Deduplication sinken
+- genau der ohnehin vorgeschriebene eine frische private NativeDisc-Sonic-
+  Export nach KR-4984 ist die Messung; kein zweiter Produktbuild nur fuer
+  Timing und keine 8-/12-Thread-Wiederholung
+- Export nutzt die aktuelle Maschine mit ihrem normalen 24-Thread-Budget;
+  CPU/SMT/RAM/SSD/OS/Compiler/Buildprofil und Kaltzustand werden dokumentiert
+- voller frischer Port auf 24 Threads Zielwert hoechstens 8 Minuten; Analyse,
+  Codegen, Hostbuild, Packaging, Gesamtzeit und Ressourcen werden aus der
+  bereits verdrahteten Telemetrie ehrlich berichtet
 - keine reduzierte Funktions-, Block-, Resolution- oder AOT-Abdeckung
+- Skalierung und Optimierung fuer schwaechere Rechner beginnen erst nach
+  einem nachweislich weiter bootenden Sonic-Port
 
 ---
 
@@ -1486,7 +1489,7 @@ Status: Nur bei positivem Gate geplant.
 
 Prioritaet: P0, letzter Gate-Vorbereitungstask
 
-Abhaengigkeiten: KR-4981, KR-4982 und gegebenenfalls KR-4983
+Abhaengigkeiten: KR-4974 bis KR-4980, KR-4982 und gegebenenfalls KR-4983
 
 Status: Geplant. Der naechste reale NativeDisc-Lauf ist bis zum Abschluss
 gesperrt.

@@ -319,6 +319,19 @@ struct FunctionValueAnalysisSessionStatistics {
                function_evaluation_cache_miss_reason_count>
         miss_reasons{};
     EvaluationLensTelemetry evaluation_lenses;
+    // KR-4976 program/session observability. Build/reuse counters describe
+    // only atomically published product-analysis epochs. Discarded counts
+    // failed staging attempts (including exceptions), none of which makes a
+    // graph, ABI contract, or summary appear reusable.
+    std::size_t program_graph_builds = 0u;
+    std::size_t program_graph_reuses = 0u;
+    std::size_t program_graph_functions_built = 0u;
+    std::size_t program_graph_functions_reused = 0u;
+    std::size_t caller_scc_invalidations = 0u;
+    std::size_t abi_contract_epoch_reuses = 0u;
+    std::size_t summary_state_reuses = 0u;
+    std::size_t analysis_epochs_published = 0u;
+    std::size_t analysis_epochs_discarded = 0u;
 
     [[nodiscard]] std::size_t classified_misses() const noexcept {
         std::size_t total = 0u;

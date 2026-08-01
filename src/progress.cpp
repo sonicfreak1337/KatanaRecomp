@@ -1103,7 +1103,7 @@ struct NamedCounterMember final {
     OptionalCounterMember member;
 };
 
-constexpr std::array<NamedCounterMember, 84u> progress_counter_members{{
+constexpr std::array<NamedCounterMember, 93u> progress_counter_members{{
     {"iteration", &ProgressCounterSnapshot::iteration},
     {"pass", &ProgressCounterSnapshot::pass},
     {"active_workers", &ProgressCounterSnapshot::active_workers},
@@ -1247,6 +1247,24 @@ constexpr std::array<NamedCounterMember, 84u> progress_counter_members{{
      &ProgressCounterSnapshot::key_interned_sets},
     {"key_interned_references",
      &ProgressCounterSnapshot::key_interned_references},
+    {"program_graph_builds",
+     &ProgressCounterSnapshot::program_graph_builds},
+    {"program_graph_reuses",
+     &ProgressCounterSnapshot::program_graph_reuses},
+    {"program_graph_functions_built",
+     &ProgressCounterSnapshot::program_graph_functions_built},
+    {"program_graph_functions_reused",
+     &ProgressCounterSnapshot::program_graph_functions_reused},
+    {"caller_scc_invalidations",
+     &ProgressCounterSnapshot::caller_scc_invalidations},
+    {"abi_contract_epoch_reuses",
+     &ProgressCounterSnapshot::abi_contract_epoch_reuses},
+    {"summary_state_reuses",
+     &ProgressCounterSnapshot::summary_state_reuses},
+    {"analysis_epochs_published",
+     &ProgressCounterSnapshot::analysis_epochs_published},
+    {"analysis_epochs_discarded",
+     &ProgressCounterSnapshot::analysis_epochs_discarded},
 }};
 
 constexpr std::array<OptionalCounterMember, 12u> cache_miss_reason_members{{

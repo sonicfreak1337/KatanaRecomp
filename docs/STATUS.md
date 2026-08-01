@@ -49,10 +49,25 @@ noch nicht end-to-end abgenommen.
 
 Der verbindliche Umsetzungs-, Mess-, GPU- und Abschlussvertrag steht in
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-KR-4974 und KR-4975 sind abgeschlossen; KR-4976 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
+KR-4974 bis KR-4976 sind abgeschlossen; KR-4977 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
 belegtem End-to-End-Gewinn; der vorhandene D3D11-Presenter ist
 hardwarebeschleunigte Ausgabe, aber kein Beleg fuer GPU-beschleunigte
 Analyse.
+
+### KR-4976-Abschlussstand
+
+KR-4976 ersetzt die pro Runde neu materialisierte Function-Value-
+Programmsicht durch content-adressierte immutable Graphshards und eine
+sessiongebundene, atomar publizierte Analysis-Epoch. Sie behaelt SCC-/Caller-
+DAG, ABI-Vertraege, Summaries, Candidate-Inputs und deren Versionen und
+invalidiert bei lokalen Aenderungen den gerichteten Caller-SCC-Closure.
+Unvollstaendige ABI-Evidenz bleibt fail-closed und wird neu berechnet. Neun
+separate Progresszaehler belegen Graphaufbau/-reuse, Funktionsshards,
+Invalidierungen, ABI-/Summary-Reuse sowie publizierte oder verworfene
+Epochen. Der fokussierte MSVC-Build und der bestehende vollstaendige
+Function-Value-Regressionslauf sind gruen. Die weiterhin volle
+Multi-Root-Wiederholung und inkrementelle CFG-/Seedarbeit gehoeren zu
+KR-4977 beziehungsweise KR-4978 und bleiben vor Sonic offen.
 
 ### KR-4974-Abschlussstand
 
@@ -83,9 +98,10 @@ MSPDB-Helper-Stall offengelegt. Der Windows-Produktpfad isoliert MSPDB jetzt
 pro Hostkommando und setzt dessen natuerliche Shutdownfrist auf eine Sekunde,
 ohne die Job-Leere als Prozessbaumbeweis aufzuweichen. Diese letzte Aenderung
 baut in `katana-recomp`; ihre massgebliche Abnahme erfolgt gemaess `AGENTS.md`
-am spaeteren realen Produktpfad. Offen bleiben KR-4976 bis KR-4980, die
-8-/12-/24-Thread-Gates KR-4981, das GPU-Gate KR-4982, gegebenenfalls KR-4983,
-die Gesamtpruefung KR-4984 und erst danach der einzelne neue Sonic-Lauf.
+am spaeteren realen Produktpfad. Offen bleiben KR-4977 bis KR-4980, das
+GPU-Gate KR-4982, gegebenenfalls KR-4983, die Gesamtpruefung KR-4984 und erst
+danach der einzelne neue Sonic-Lauf. Dieser eine Lauf ist zugleich die einzige
+24-Thread-Produktzeitmessung KR-4981; eine 8-/12-/24-Thread-Matrix entfaellt.
 
 ### Abgebrochener NativeDisc-v24-Export
 
@@ -952,16 +968,16 @@ Offen bleiben:
 ```text
 KR-4974 Telemetrie und Miss-Reason-Ledger
   -> KR-4975 semantische Cachelinsen
-  -> KR-4976 persistente Programm-/SCC-Session
+  -> KR-4976 persistente Programm-/SCC-Session [abgeschlossen]
   -> KR-4977 gemeinsamer Multi-Root-Inventory-Fixpunkt
   -> KR-4978 inkrementeller CFG-/Seed-Fixpunkt
   -> KR-4979 priorisierter Executor und RAM-Grenzen
   -> KR-4980 persistente Buildshards
-  -> KR-4981 8-/12-/24-Thread-Kaltbuildgate
   -> KR-4982 GPU-Entscheidungsgate
      -> KR-4983 nur bei positivem GPU-Beweis
   -> KR-4984 unabhaengige Gesamtpruefung, P0/P1-Schliessung und Re-Review
-  -> genau ein frischer privater NativeDisc-Sonic-Lauf
+  -> genau ein frischer privater 24-Thread-NativeDisc-Sonic-Lauf
+     -> zugleich einzige KR-4981-Produktzeitmessung
 ```
 
 Vor KR-4984 wird kein weiterer privater Sonic-Port gebaut. Jeder P0-Task

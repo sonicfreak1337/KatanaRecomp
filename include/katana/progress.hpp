@@ -182,6 +182,15 @@ struct ProgressCounterSnapshot final {
     std::optional<std::uint64_t> reconstructed_results;
     std::optional<std::uint64_t> key_interned_sets;
     std::optional<std::uint64_t> key_interned_references;
+    std::optional<std::uint64_t> program_graph_builds;
+    std::optional<std::uint64_t> program_graph_reuses;
+    std::optional<std::uint64_t> program_graph_functions_built;
+    std::optional<std::uint64_t> program_graph_functions_reused;
+    std::optional<std::uint64_t> caller_scc_invalidations;
+    std::optional<std::uint64_t> abi_contract_epoch_reuses;
+    std::optional<std::uint64_t> summary_state_reuses;
+    std::optional<std::uint64_t> analysis_epochs_published;
+    std::optional<std::uint64_t> analysis_epochs_discarded;
 };
 
 struct ProgressEvent final {
