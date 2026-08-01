@@ -5,6 +5,7 @@
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -14,6 +15,55 @@
 #include <vector>
 
 namespace katana::analysis {
+
+// Versioned semantic views of one function evaluation. FullState is the
+// fail-closed fallback whenever a register, stack, memory or inventory
+// dependency cannot be proven complete. The remaining values are product
+// lenses and therefore participate in the exact cache-key schema.
+enum class EvaluationLens : std::uint8_t {
+    FullState,
+    Summary,
+    CandidateContract,
+    GuardedInventory,
+    ContextualReturn,
+    IsolatedObservation,
+    Count,
+};
+
+inline constexpr std::uint32_t evaluation_lens_schema_version = 1u;
+inline constexpr std::size_t evaluation_lens_count =
+    static_cast<std::size_t>(EvaluationLens::Count);
+
+[[nodiscard]] constexpr std::string_view evaluation_lens_name(
+    const EvaluationLens lens) noexcept {
+    switch (lens) {
+    case EvaluationLens::FullState: return "full-state";
+    case EvaluationLens::Summary: return "summary";
+    case EvaluationLens::CandidateContract: return "candidate-contract";
+    case EvaluationLens::GuardedInventory: return "guarded-inventory";
+    case EvaluationLens::ContextualReturn: return "contextual-return";
+    case EvaluationLens::IsolatedObservation: return "isolated-observation";
+    case EvaluationLens::Count: break;
+    }
+    return "unknown";
+}
+
+// Run-local observability only. These counters never enter canonical analysis
+// output, cache keys or product identities.
+struct EvaluationLensTelemetry {
+    std::array<std::size_t, evaluation_lens_count> requests{};
+    std::array<std::size_t, evaluation_lens_count> cache_hits{};
+    // Ready/in-flight reuse is valued with the producer's measured physical
+    // miss-compute duration. Current hit wall time is deliberately not used as
+    // a proxy for work which did not run.
+    std::array<std::uint64_t, evaluation_lens_count>
+        avoided_evaluation_nanoseconds{};
+    std::size_t full_state_fallbacks = 0u;
+    std::size_t projected_evaluations = 0u;
+    std::size_t reconstructed_results = 0u;
+    std::size_t key_interned_sets = 0u;
+    std::size_t key_interned_references = 0u;
+};
 
 struct FunctionRegisterValueSummary {
     std::uint8_t register_index = 0u;
@@ -363,6 +413,7 @@ struct FunctionValueAnalysisProgress {
     std::size_t session_cache_miss_isolation_partition_changed = 0u;
     std::size_t session_cache_miss_contextual_summary_changed = 0u;
     std::size_t session_cache_miss_tail_ingress_changed = 0u;
+    EvaluationLensTelemetry evaluation_lenses;
 };
 
 using FunctionValueAnalysisProgressCallback =

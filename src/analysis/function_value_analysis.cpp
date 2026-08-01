@@ -10654,6 +10654,255 @@ bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage
     return false;
 }
 
+[[nodiscard]] EvaluationLens select_evaluation_lens(
+    const ResolutionCollectionMode resolution_mode,
+    const bool collect_guarded_inventory,
+    const std::set<std::uint32_t>* const isolated_inventory_call_sites,
+    const std::map<std::uint32_t, FunctionValueSummary>* const
+        contextual_summaries) noexcept {
+    if (isolated_inventory_call_sites != nullptr)
+        return EvaluationLens::IsolatedObservation;
+    if (contextual_summaries != nullptr)
+        return EvaluationLens::ContextualReturn;
+    if (resolution_mode == ResolutionCollectionMode::Semantic)
+        return EvaluationLens::CandidateContract;
+    if (collect_guarded_inventory ||
+        resolution_mode == ResolutionCollectionMode::GuardedInventory)
+        return EvaluationLens::GuardedInventory;
+    return EvaluationLens::Summary;
+}
+
+struct FunctionEvaluationProjection final {
+    EvaluationLens requested_lens = EvaluationLens::FullState;
+    EvaluationLens effective_lens = EvaluationLens::FullState;
+    bool full_state_fallback = false;
+    bool register_contract_present = false;
+    bool stack_contract_present = false;
+    std::uint16_t register_read_mask =
+        std::numeric_limits<std::uint16_t>::max();
+    AbiStackArgumentReadSet stack_reads;
+    AbstractState ingress;
+};
+
+[[nodiscard]] bool valid_complete_stack_read_contract(
+    const AbiStackArgumentReadSet& reads) noexcept {
+    if (!reads.complete ||
+        reads.slots.size() > maximum_abi_stack_argument_slots ||
+        !std::is_sorted(reads.slots.begin(), reads.slots.end()) ||
+        std::adjacent_find(reads.slots.begin(), reads.slots.end()) !=
+            reads.slots.end())
+        return false;
+    return std::all_of(
+        reads.slots.begin(), reads.slots.end(), [](const auto slot) {
+            return slot >= 0 && slot <= maximum_stack_distance &&
+                   (slot & 3) == 0;
+        });
+}
+
+[[nodiscard]] std::optional<AbstractState>
+project_evaluation_ingress(
+    const AbstractState& source,
+    const std::uint16_t register_read_mask,
+    const AbiStackArgumentReadSet& stack_reads) {
+    // 0xffff is the explicit fail-closed register Top produced for unknown
+    // blocks/opcodes/ingress. It must never be mistaken for a precise lens.
+    if (register_read_mask ==
+            std::numeric_limits<std::uint16_t>::max() ||
+        !valid_complete_stack_read_contract(stack_reads))
+        return std::nullopt;
+    constexpr auto stack_pointer_bit =
+        static_cast<std::uint16_t>(1u << 15u);
+    if (!stack_reads.slots.empty() &&
+        (register_read_mask & stack_pointer_bit) == 0u)
+        return std::nullopt;
+
+    AbstractState projected;
+    // Memory remains FullState until an address-read contract exists. The
+    // state-wide inventory loss/watchers are likewise observable independent
+    // of one concrete register or stack-slot identity.
+    projected.memory_values = source.memory_values;
+    projected.inventory_unresolved_saved_stack_alias_sources =
+        source.inventory_unresolved_saved_stack_alias_sources;
+    projected.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+        source
+            .inventory_unresolved_saved_stack_alias_tracks_current_epoch;
+    projected.inventory_current_stack_epoch_alias_watcher =
+        source.inventory_current_stack_epoch_alias_watcher;
+    projected.inventory_detached_stack_epoch_alias_watcher =
+        source.inventory_detached_stack_epoch_alias_watcher;
+    projected.inventory_unresolved_stack_callback_loss =
+        source.inventory_unresolved_stack_callback_loss;
+    projected.inventory_stack_callback_loss_identity_truncated =
+        source.inventory_stack_callback_loss_identity_truncated;
+    for (std::size_t index = 0u;
+         index < projected.registers.size();
+         ++index) {
+        const auto bit = static_cast<std::uint16_t>(1u << index);
+        if ((register_read_mask & bit) != 0u) {
+            projected.registers[index] = source.registers[index];
+            projected.stack_offsets[index] =
+                source.stack_offsets[index];
+            projected.inventory_stack_offsets[index] =
+                source.inventory_stack_offsets[index];
+            projected.inventory_stack_offset_candidates[index] =
+                source.inventory_stack_offset_candidates[index];
+            projected.stack_may_alias[index] =
+                source.stack_may_alias[index];
+            projected.inventory_stack_may_alias[index] =
+                source.inventory_stack_may_alias[index];
+            projected.inventory_vbr_relative[index] =
+                source.inventory_vbr_relative[index];
+            projected.inventory_fixed_storage_reference[index] =
+                source.inventory_fixed_storage_reference[index];
+            continue;
+        }
+        projected.registers[index] = {};
+        projected.stack_offsets[index].reset();
+        projected.inventory_stack_offsets[index].reset();
+        projected.inventory_stack_offset_candidates[index].clear();
+        projected.stack_may_alias[index] = true;
+        projected.inventory_stack_may_alias[index] = true;
+        projected.inventory_vbr_relative[index] = false;
+        projected.inventory_fixed_storage_reference[index] = false;
+    }
+
+    for (const auto& [slot, value] : source.stack_values) {
+        if (std::binary_search(stack_reads.slots.begin(),
+                               stack_reads.slots.end(),
+                               slot)) {
+            projected.stack_values.emplace(slot, value);
+            continue;
+        }
+        if (has_saved_stack_epoch(value) &&
+            value.inventory_saved_stack_epoch
+                .tracks_current_epoch)
+            projected.inventory_current_stack_epoch_alias_watcher =
+                true;
+    }
+    // No complete address-read contract exists yet. Retaining the entire
+    // memory domain is therefore part of this lens's fail-closed semantics.
+    return projected;
+}
+
+[[nodiscard]] bool canonicalize_evaluation_ingress_in_place(
+    AbstractState& state,
+    const std::uint16_t register_read_mask,
+    const AbiStackArgumentReadSet& stack_reads) {
+    if (register_read_mask ==
+            std::numeric_limits<std::uint16_t>::max() ||
+        !valid_complete_stack_read_contract(stack_reads))
+        return false;
+    constexpr auto stack_pointer_bit =
+        static_cast<std::uint16_t>(1u << 15u);
+    if (!stack_reads.slots.empty() &&
+        (register_read_mask & stack_pointer_bit) == 0u)
+        return false;
+    for (std::size_t index = 0u;
+         index < state.registers.size();
+         ++index) {
+        const auto bit = static_cast<std::uint16_t>(1u << index);
+        if ((register_read_mask & bit) != 0u) continue;
+        state.registers[index] = {};
+        state.stack_offsets[index].reset();
+        state.inventory_stack_offsets[index].reset();
+        state.inventory_stack_offset_candidates[index].clear();
+        state.stack_may_alias[index] = true;
+        state.inventory_stack_may_alias[index] = true;
+        state.inventory_vbr_relative[index] = false;
+        state.inventory_fixed_storage_reference[index] = false;
+    }
+    for (auto stored = state.stack_values.begin();
+         stored != state.stack_values.end();) {
+        if (std::binary_search(stack_reads.slots.begin(),
+                               stack_reads.slots.end(),
+                               stored->first)) {
+            ++stored;
+            continue;
+        }
+        if (has_saved_stack_epoch(stored->second) &&
+            stored->second.inventory_saved_stack_epoch
+                .tracks_current_epoch)
+            state.inventory_current_stack_epoch_alias_watcher = true;
+        stored = state.stack_values.erase(stored);
+    }
+    return true;
+}
+
+[[nodiscard]] FunctionEvaluationProjection
+make_function_evaluation_projection(
+    const AbstractState& initial_state,
+    const EvaluationLens requested_lens,
+    const std::uint32_t function_entry,
+    const ForwardedRegisterReadMap& forwarded_register_reads,
+    const AbiStackArgumentReadMap& abi_stack_argument_reads,
+    const bool contracts_available) {
+    FunctionEvaluationProjection projection;
+    projection.requested_lens = requested_lens;
+
+    const auto register_reads =
+        forwarded_register_reads.find(function_entry);
+    projection.register_contract_present =
+        register_reads != forwarded_register_reads.end();
+    if (projection.register_contract_present)
+        projection.register_read_mask = register_reads->second;
+
+    const auto stack_reads =
+        abi_stack_argument_reads.find(function_entry);
+    projection.stack_contract_present =
+        stack_reads != abi_stack_argument_reads.end();
+    if (projection.stack_contract_present)
+        projection.stack_reads = stack_reads->second;
+
+    if (requested_lens == EvaluationLens::FullState) {
+        projection.ingress = initial_state;
+        return projection;
+    }
+    auto projected =
+        contracts_available && projection.register_contract_present &&
+                projection.stack_contract_present
+            ? project_evaluation_ingress(
+                  initial_state,
+                  projection.register_read_mask,
+                  projection.stack_reads)
+            : std::nullopt;
+    if (!projected.has_value()) {
+        projection.full_state_fallback = true;
+        projection.ingress = initial_state;
+        return projection;
+    }
+    projection.effective_lens = requested_lens;
+    projection.ingress = std::move(*projected);
+    return projection;
+}
+
+void canonicalize_evaluation_outputs(
+    FunctionEvaluation& evaluation,
+    const ForwardedRegisterReadMap& forwarded_register_reads,
+    const AbiStackArgumentReadMap& abi_stack_argument_reads) {
+    // Function summaries encode ABI-preserved values as passthroughs. Keep
+    // those symbolic summaries and canonicalize concrete outgoing states for
+    // the next target's complete ingress contract.
+    const auto reconstruct_state =
+        [&](const std::uint32_t target, AbstractState& state) {
+            const auto register_reads =
+                forwarded_register_reads.find(target);
+            const auto stack_reads =
+                abi_stack_argument_reads.find(target);
+            if (register_reads == forwarded_register_reads.end() ||
+                stack_reads == abi_stack_argument_reads.end())
+                return;
+            static_cast<void>(
+                canonicalize_evaluation_ingress_in_place(
+                    state,
+                    register_reads->second,
+                    stack_reads->second));
+        };
+    for (auto& call : evaluation.call_arguments)
+        reconstruct_state(call.callee, call.state);
+    for (auto& transfer : evaluation.inventory_transfers)
+        reconstruct_state(transfer.target, transfer.state);
+}
+
 enum class EvaluationKeyComponent : std::uint8_t {
     FunctionShape,
     ProjectedIngress,
@@ -10673,6 +10922,16 @@ inline constexpr std::uint64_t evaluation_key_hash_basis =
     1469598103934665603ull;
 inline constexpr std::uint64_t evaluation_key_hash_prime =
     1099511628211ull;
+
+enum class EvaluationKeyInternDomain : std::uint8_t {
+    SemanticCandidates,
+    InventoryCandidates,
+    Evidence,
+    Count,
+};
+
+inline constexpr auto evaluation_key_intern_domain_count =
+    static_cast<std::size_t>(EvaluationKeyInternDomain::Count);
 
 class EvaluationKeyEncoder {
   public:
@@ -10732,6 +10991,43 @@ class EvaluationKeyEncoder {
             append_value(value);
     }
 
+    template <typename Range>
+    void append_interned_u32_range(
+        const EvaluationKeyInternDomain domain,
+        const Range& values) {
+        std::vector<std::uint32_t> canonical(
+            values.begin(), values.end());
+        std::sort(canonical.begin(), canonical.end());
+        canonical.erase(
+            std::unique(canonical.begin(), canonical.end()),
+            canonical.end());
+
+        // Intern tables are component-local. This preserves exact component
+        // invalidation telemetry while still replacing repeated candidate and
+        // evidence sets inside the large ingress/summary components with a
+        // deterministic reference.
+        append(domain);
+        auto& table = intern_tables_[
+            static_cast<std::size_t>(active_component_) *
+                evaluation_key_intern_domain_count +
+            static_cast<std::size_t>(domain)];
+        const auto found = table.find(canonical);
+        if (found != table.end()) {
+            append(false);
+            append(found->second);
+            ++interned_references_;
+            return;
+        }
+        const auto identifier =
+            static_cast<std::uint64_t>(table.size());
+        table.emplace(canonical, identifier);
+        append(true);
+        append(identifier);
+        append_size(canonical.size());
+        for (const auto value : canonical) append(value);
+        ++interned_sets_;
+    }
+
     [[nodiscard]] std::vector<std::uint8_t> finish() && {
         return std::move(bytes_);
     }
@@ -10745,6 +11041,14 @@ class EvaluationKeyEncoder {
 
     [[nodiscard]] std::uint64_t hash() const noexcept {
         return hash_;
+    }
+
+    [[nodiscard]] std::size_t interned_sets() const noexcept {
+        return interned_sets_;
+    }
+
+    [[nodiscard]] std::size_t interned_references() const noexcept {
+        return interned_references_;
     }
 
   private:
@@ -10761,31 +11065,38 @@ class EvaluationKeyEncoder {
     }
 
     std::vector<std::uint8_t> bytes_;
+    std::array<
+        std::map<std::vector<std::uint32_t>, std::uint64_t>,
+        evaluation_key_component_count *
+            evaluation_key_intern_domain_count>
+        intern_tables_;
     std::array<std::uint64_t, evaluation_key_component_count>
         component_hashes_{};
     std::uint64_t hash_ = evaluation_key_hash_basis;
     EvaluationKeyComponent active_component_ =
         EvaluationKeyComponent::FunctionShape;
     bool collect_component_hashes_ = false;
+    std::size_t interned_sets_ = 0u;
+    std::size_t interned_references_ = 0u;
 };
 
 void encode(EvaluationKeyEncoder& key,
             const InventorySavedStackSlot& slot) {
     key.append(slot.relative_slot);
-    key.append_range(
-        slot.inventory_code_pointer_values,
-        [&](const auto value) { key.append(value); });
-    key.append_range(
-        slot.inventory_pc_relative_code_literal_values,
-        [&](const auto value) { key.append(value); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::InventoryCandidates,
+        slot.inventory_code_pointer_values);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::InventoryCandidates,
+        slot.inventory_pc_relative_code_literal_values);
     key.append(slot.inventory_code_pointer_values_truncated);
     key.append(
         slot.inventory_pc_relative_code_literal_values_truncated);
     key.append(slot.contextual_candidate_dependency);
-    key.append_range(slot.call_sites,
-                     [&](const auto value) { key.append(value); });
-    key.append_range(slot.callees,
-                     [&](const auto value) { key.append(value); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::Evidence, slot.call_sites);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::Evidence, slot.callees);
 }
 
 void encode(EvaluationKeyEncoder& key,
@@ -10806,24 +11117,25 @@ void encode(EvaluationKeyEncoder& key,
     key.append(value.inventory_stack_derived);
     key.append(value.inventory_code_pointer);
     key.append(value.inventory_pc_relative_code_literal);
-    key.append_range(
-        value.inventory_code_pointer_values,
-        [&](const auto candidate) { key.append(candidate); });
-    key.append_range(
-        value.inventory_pc_relative_code_literal_values,
-        [&](const auto candidate) { key.append(candidate); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::InventoryCandidates,
+        value.inventory_code_pointer_values);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::InventoryCandidates,
+        value.inventory_pc_relative_code_literal_values);
     key.append(value.inventory_code_pointer_values_truncated);
     key.append(
         value.inventory_pc_relative_code_literal_values_truncated);
     key.append(value.contextual_candidate_dependency);
     key.append(value.inventory_stack_callback_loss_unresolved);
     encode(key, value.inventory_saved_stack_epoch);
-    key.append_range(value.values,
-                     [&](const auto candidate) { key.append(candidate); });
-    key.append_range(value.call_sites,
-                     [&](const auto site) { key.append(site); });
-    key.append_range(value.callees,
-                     [&](const auto callee) { key.append(callee); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::SemanticCandidates,
+        value.values);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::Evidence, value.call_sites);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::Evidence, value.callees);
 }
 
 void encode(EvaluationKeyEncoder& key,
@@ -10888,12 +11200,12 @@ void encode(EvaluationKeyEncoder& key,
     key.append(summary.may_alias_stack);
     key.append(summary.inventory_code_pointer);
     key.append(summary.inventory_pc_relative_code_literal);
-    key.append_range(
-        summary.inventory_code_pointer_values,
-        [&](const auto value) { key.append(value); });
-    key.append_range(
-        summary.inventory_pc_relative_code_literal_values,
-        [&](const auto value) { key.append(value); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::InventoryCandidates,
+        summary.inventory_code_pointer_values);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::InventoryCandidates,
+        summary.inventory_pc_relative_code_literal_values);
     key.append(summary.inventory_code_pointer_values_truncated);
     key.append(
         summary.inventory_pc_relative_code_literal_values_truncated);
@@ -10902,12 +11214,14 @@ void encode(EvaluationKeyEncoder& key,
     key.append(summary.inventory_saved_stack_alias_latent);
     key.append(
         summary.inventory_saved_stack_alias_tracks_current_epoch);
-    key.append_range(summary.values,
-                     [&](const auto value) { key.append(value); });
-    key.append_range(summary.return_sites,
-                     [&](const auto site) { key.append(site); });
-    key.append_range(summary.evidence_callees,
-                     [&](const auto callee) { key.append(callee); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::SemanticCandidates,
+        summary.values);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::Evidence, summary.return_sites);
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::Evidence,
+        summary.evidence_callees);
     key.append(std::string_view{summary.reason});
 }
 
@@ -10920,8 +11234,9 @@ void encode(EvaluationKeyEncoder& key,
     key.append(summary.inventory_saved_stack_alias_latent);
     key.append(
         summary.inventory_saved_stack_alias_tracks_current_epoch);
-    key.append_range(summary.values,
-                     [&](const auto value) { key.append(value); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::SemanticCandidates,
+        summary.values);
 }
 
 void encode(EvaluationKeyEncoder& key,
@@ -10943,8 +11258,9 @@ void encode(EvaluationKeyEncoder& key,
 
 void encode(EvaluationKeyEncoder& key,
             const IndirectCalleeCandidates& candidates) {
-    key.append_range(candidates.targets,
-                     [&](const auto target) { key.append(target); });
+    key.append_interned_u32_range(
+        EvaluationKeyInternDomain::SemanticCandidates,
+        candidates.targets);
     key.append(candidates.guarded);
     key.append(candidates.complete);
     key.append(candidates.requires_code_pointer);
@@ -11031,6 +11347,8 @@ struct FunctionEvaluationCacheKey {
     std::array<std::uint64_t, evaluation_key_component_count>
         component_hashes{};
     std::vector<std::uint8_t> bytes;
+    std::size_t interned_sets = 0u;
+    std::size_t interned_references = 0u;
 };
 
 [[nodiscard]] std::uint64_t evaluation_key_hash(
@@ -11066,7 +11384,7 @@ make_function_evaluation_cache_key(
         indirect_callees,
     const TailIngressMap& tail_ingresses,
     const std::map<std::uint32_t, FunctionValueSummary>& summaries,
-    const AbstractState& initial_state,
+    const FunctionEvaluationProjection& projection,
     const ResolutionCollectionMode resolution_mode,
     const bool may_merge_stack_inventory,
     const bool collect_guarded_inventory,
@@ -11081,14 +11399,18 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{2u});
+    key.append(std::uint32_t{3u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
     encode(key, function);
     key.select_component(EvaluationKeyComponent::ProjectedIngress);
-    encode(key, initial_state);
+    encode(key, projection.ingress);
     key.select_component(EvaluationKeyComponent::ResolutionLens);
+    key.append(evaluation_lens_schema_version);
+    key.append(projection.requested_lens);
+    key.append(projection.effective_lens);
+    key.append(projection.full_state_fallback);
     key.append(resolution_mode);
     key.append(may_merge_stack_inventory);
     key.select_component(EvaluationKeyComponent::InventorySink);
@@ -11108,6 +11430,13 @@ make_function_evaluation_cache_key(
     key.append(collect_walk_diagnostics);
     key.select_component(EvaluationKeyComponent::AbiContract);
     key.append(abi_stack_argument_reads != nullptr);
+    key.append(function.entry_address);
+    key.append(projection.register_contract_present);
+    if (projection.register_contract_present)
+        key.append(projection.register_read_mask);
+    key.append(projection.stack_contract_present);
+    if (projection.stack_contract_present)
+        encode(key, projection.stack_reads);
     key.select_component(EvaluationKeyComponent::InventorySink);
     key.append(inventory_sink_sources);
 
@@ -11220,6 +11549,8 @@ make_function_evaluation_cache_key(
         });
 
     const auto component_hashes = key.component_hashes();
+    const auto interned_sets = key.interned_sets();
+    const auto interned_references = key.interned_references();
     const auto hash = key.hash();
     auto bytes = std::move(key).finish();
     return {hash,
@@ -11228,7 +11559,9 @@ make_function_evaluation_cache_key(
                 : hash,
             function.entry_address,
             component_hashes,
-            std::move(bytes)};
+            std::move(bytes),
+            interned_sets,
+            interned_references};
 }
 
 [[nodiscard]] std::size_t retained_heap_bytes(
@@ -11343,6 +11676,9 @@ struct CachedFunctionEvaluation {
     FunctionEvaluation evaluation;
     GuardedCodeInventoryCollector inventory{true};
     GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
+    // Run-local producer cost used only to value exact cache reuse. It is not
+    // part of canonical analysis output or any cache identity.
+    mutable std::uint64_t physical_evaluation_nanoseconds = 0u;
 
     [[nodiscard]] std::size_t
     retained_payload_budget_bytes() const noexcept {
@@ -11478,6 +11814,7 @@ class FunctionEvaluationCache {
         misses_ = 0u;
         evictions_ = 0u;
         miss_reasons_.fill(0u);
+        evaluation_lenses_ = {};
         component_histories_by_function_.clear();
         component_history_order_.clear();
         absent_key_histories_.clear();
@@ -11500,7 +11837,8 @@ class FunctionEvaluationCache {
                 evictions_,
                 entries_,
                 retained_payload_bytes_,
-                miss_reasons_};
+                miss_reasons_,
+                evaluation_lenses_};
     }
 
     [[nodiscard]] bool detailed_telemetry_enabled() const noexcept {
@@ -11541,6 +11879,23 @@ class FunctionEvaluationCache {
     get_or_compute(FunctionEvaluationCacheKey key,
                    Compute&& compute,
                    EvaluationActivityTelemetry* const activity = nullptr) {
+        return get_or_compute(
+            std::move(key),
+            EvaluationLens::FullState,
+            true,
+            std::forward<Compute>(compute),
+            activity);
+    }
+
+    template <typename Compute>
+    [[nodiscard]] std::pair<
+        std::shared_ptr<const CachedFunctionEvaluation>,
+        bool>
+    get_or_compute(FunctionEvaluationCacheKey key,
+                   const EvaluationLens requested_lens,
+                   const bool full_state_fallback,
+                   Compute&& compute,
+                   EvaluationActivityTelemetry* const activity = nullptr) {
         using Result =
             std::shared_ptr<const CachedFunctionEvaluation>;
         std::shared_future<Result> future;
@@ -11549,9 +11904,35 @@ class FunctionEvaluationCache {
         Entry* producer_entry = nullptr;
         detail::FunctionEvaluationCacheDecision decision;
         decision.function_entry = key.function_entry;
+        const auto requested_lens_index =
+            static_cast<std::size_t>(requested_lens);
+        const auto lens = requested_lens_index < evaluation_lens_count
+                              ? requested_lens
+                              : EvaluationLens::FullState;
+        const auto lens_index = static_cast<std::size_t>(lens);
+        const auto fell_back_to_full_state =
+            full_state_fallback ||
+            requested_lens_index >= evaluation_lens_count;
+        decision.lens = lens;
+        decision.full_state_fallback = fell_back_to_full_state;
+        const auto saturating_add_nanoseconds = [](
+            std::uint64_t& destination,
+            const std::uint64_t value) noexcept {
+            destination =
+                value > std::numeric_limits<std::uint64_t>::max() -
+                            destination
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : destination + value;
+        };
         {
             const std::lock_guard lock(mutex_);
             ++lookups_;
+            ++evaluation_lenses_.requests[lens_index];
+            if (fell_back_to_full_state)
+                ++evaluation_lenses_.full_state_fallbacks;
+            evaluation_lenses_.key_interned_sets += key.interned_sets;
+            evaluation_lenses_.key_interned_references +=
+                key.interned_references;
             const auto bucket = buckets_.find(key.hash);
             if (bucket != buckets_.end()) {
                 const auto found = std::find_if(
@@ -11565,6 +11946,16 @@ class FunctionEvaluationCache {
                     if (entry->ready) {
                         ready_result = entry->ready_result;
                         ++ready_hits_;
+                        ++evaluation_lenses_.cache_hits[lens_index];
+                        decision.avoided_evaluation_nanoseconds =
+                            ready_result
+                                ->physical_evaluation_nanoseconds;
+                        saturating_add_nanoseconds(
+                            evaluation_lenses_
+                                .avoided_evaluation_nanoseconds[
+                                    lens_index],
+                            decision
+                                .avoided_evaluation_nanoseconds);
                         decision.outcome = detail::
                             FunctionEvaluationCacheLookupOutcome::ReadyHit;
                         if (!touch_ready(*entry)) {
@@ -11578,6 +11969,7 @@ class FunctionEvaluationCache {
                     } else {
                         future = entry->result;
                         ++in_flight_coalesces_;
+                        ++evaluation_lenses_.cache_hits[lens_index];
                         decision.outcome = detail::
                             FunctionEvaluationCacheLookupOutcome::
                                 InFlightCoalesce;
@@ -11586,6 +11978,9 @@ class FunctionEvaluationCache {
             }
             if (!future.valid() && ready_result == nullptr) {
                 ++misses_;
+                if (!fell_back_to_full_state &&
+                    lens != EvaluationLens::FullState)
+                    ++evaluation_lenses_.projected_evaluations;
                 const auto entry_base_payload_bytes =
                     sizeof(Entry) + key.bytes.capacity();
                 make_room_for(entry_base_payload_bytes, true);
@@ -11633,7 +12028,6 @@ class FunctionEvaluationCache {
             return {std::move(ready_result), true};
         }
         if (future.valid() && producer == nullptr) {
-            observe_decision(decision);
             const EvaluationActivityScope wait{
                 decision.outcome == detail::
                         FunctionEvaluationCacheLookupOutcome::
@@ -11649,17 +12043,55 @@ class FunctionEvaluationCache {
                            std::future_status::ready;
                 });
             }
-            return {future.get(), true};
+            try {
+                auto result = future.get();
+                decision.avoided_evaluation_nanoseconds =
+                    result->physical_evaluation_nanoseconds;
+                {
+                    const std::lock_guard lock(mutex_);
+                    saturating_add_nanoseconds(
+                        evaluation_lenses_
+                            .avoided_evaluation_nanoseconds[
+                                lens_index],
+                        decision.avoided_evaluation_nanoseconds);
+                }
+                observe_decision(decision);
+                return {std::move(result), true};
+            } catch (...) {
+                observe_decision(decision);
+                throw;
+            }
         }
 
         if (producer == nullptr) {
-            observe_decision(decision);
-            return {compute(), false};
+            const auto started = std::chrono::steady_clock::now();
+            try {
+                auto result = compute();
+                result->physical_evaluation_nanoseconds =
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<
+                            std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - started)
+                            .count());
+                observe_decision(decision);
+                return {std::move(result), false};
+            } catch (...) {
+                observe_decision(decision);
+                throw;
+            }
         }
 
         Result result;
+        const auto compute_started =
+            std::chrono::steady_clock::now();
         try {
             result = compute();
+            result->physical_evaluation_nanoseconds =
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() -
+                        compute_started)
+                        .count());
         } catch (...) {
             const auto error = std::current_exception();
             {
@@ -11746,6 +12178,11 @@ class FunctionEvaluationCache {
         observe_decision(decision);
         global_analysis_executor().notify_waiters();
         return {std::move(result), false};
+    }
+
+    void record_reconstructed_result() noexcept {
+        const std::lock_guard lock(mutex_);
+        ++evaluation_lenses_.reconstructed_results;
     }
 
   private:
@@ -12185,6 +12622,7 @@ class FunctionEvaluationCache {
     std::array<std::size_t,
                detail::function_evaluation_cache_miss_reason_count>
         miss_reasons_{};
+    EvaluationLensTelemetry evaluation_lenses_;
     std::unordered_map<
         std::uint32_t,
         std::deque<FunctionComponentHistory>>
@@ -12229,6 +12667,28 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
                  ++index)
                 destination.miss_reasons[index] +=
                     source.miss_reasons[index];
+            for (std::size_t index = 0u;
+                 index < evaluation_lens_count;
+                 ++index) {
+                destination.evaluation_lenses.requests[index] +=
+                    source.evaluation_lenses.requests[index];
+                destination.evaluation_lenses.cache_hits[index] +=
+                    source.evaluation_lenses.cache_hits[index];
+                destination.evaluation_lenses
+                    .avoided_evaluation_nanoseconds[index] +=
+                    source.evaluation_lenses
+                        .avoided_evaluation_nanoseconds[index];
+            }
+            destination.evaluation_lenses.full_state_fallbacks +=
+                source.evaluation_lenses.full_state_fallbacks;
+            destination.evaluation_lenses.projected_evaluations +=
+                source.evaluation_lenses.projected_evaluations;
+            destination.evaluation_lenses.reconstructed_results +=
+                source.evaluation_lenses.reconstructed_results;
+            destination.evaluation_lenses.key_interned_sets +=
+                source.evaluation_lenses.key_interned_sets;
+            destination.evaluation_lenses.key_interned_references +=
+                source.evaluation_lenses.key_interned_references;
         };
     const auto add_statistics =
         [&](const FunctionValueAnalysisSessionStatistics& source) {
@@ -12845,6 +13305,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                ? current - initial
                                : 0u;
                 };
+            const auto cache_delta_u64 =
+                [](const std::uint64_t current,
+                   const std::uint64_t initial) noexcept {
+                    return current >= initial
+                               ? current - initial
+                               : std::uint64_t{0u};
+                };
             const auto miss_reason_delta =
                 [&](const detail::
                         FunctionEvaluationCacheMissReason reason) noexcept {
@@ -13070,6 +13537,59 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 miss_reason_delta(
                     detail::FunctionEvaluationCacheMissReason::
                         TailIngressChanged);
+            for (std::size_t index = 0u;
+                 index < evaluation_lens_count;
+                 ++index) {
+                progress.evaluation_lenses.requests[index] =
+                    cache_delta(
+                        session_statistics.evaluation_lenses
+                            .requests[index],
+                        session_statistics_at_start.evaluation_lenses
+                            .requests[index]);
+                progress.evaluation_lenses.cache_hits[index] =
+                    cache_delta(
+                        session_statistics.evaluation_lenses
+                            .cache_hits[index],
+                        session_statistics_at_start.evaluation_lenses
+                            .cache_hits[index]);
+                progress.evaluation_lenses
+                    .avoided_evaluation_nanoseconds[index] =
+                    cache_delta_u64(
+                        session_statistics.evaluation_lenses
+                            .avoided_evaluation_nanoseconds[index],
+                        session_statistics_at_start.evaluation_lenses
+                            .avoided_evaluation_nanoseconds[index]);
+            }
+            progress.evaluation_lenses.full_state_fallbacks =
+                cache_delta(
+                    session_statistics.evaluation_lenses
+                        .full_state_fallbacks,
+                    session_statistics_at_start.evaluation_lenses
+                        .full_state_fallbacks);
+            progress.evaluation_lenses.projected_evaluations =
+                cache_delta(
+                    session_statistics.evaluation_lenses
+                        .projected_evaluations,
+                    session_statistics_at_start.evaluation_lenses
+                        .projected_evaluations);
+            progress.evaluation_lenses.reconstructed_results =
+                cache_delta(
+                    session_statistics.evaluation_lenses
+                        .reconstructed_results,
+                    session_statistics_at_start.evaluation_lenses
+                        .reconstructed_results);
+            progress.evaluation_lenses.key_interned_sets =
+                cache_delta(
+                    session_statistics.evaluation_lenses
+                        .key_interned_sets,
+                    session_statistics_at_start.evaluation_lenses
+                        .key_interned_sets);
+            progress.evaluation_lenses.key_interned_references =
+                cache_delta(
+                    session_statistics.evaluation_lenses
+                        .key_interned_references,
+                    session_statistics_at_start.evaluation_lenses
+                        .key_interned_references);
             progress_callback(progress);
         } catch (...) {
             // Progress is observational. A failing UI/logger callback must
@@ -14763,6 +15283,18 @@ detail::analyze_function_values_with_guarded_entry_cache(
             if (account_request)
                 logical_evaluations.fetch_add(
                     1u, std::memory_order_relaxed);
+            const auto requested_lens = select_evaluation_lens(
+                resolution_mode,
+                guarded_inventory_collector != nullptr,
+                isolated_inventory_call_sites,
+                contextual_summaries);
+            const auto projection = make_function_evaluation_projection(
+                initial_state,
+                requested_lens,
+                function.entry_address,
+                forwarded_register_reads,
+                abi_stack_argument_reads,
+                !result.budget_exhausted);
             // Detailed stack diagnostics include deliberately repeated
             // per-evaluation trace side effects. Do not let memoization erase
             // those observations; this mode is already forced to one worker
@@ -14803,6 +15335,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         : nullptr,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources);
+                canonicalize_evaluation_outputs(
+                    artifact->evaluation,
+                    forwarded_register_reads,
+                    abi_stack_argument_reads);
                 if (replay_outputs &&
                     walk_diagnostics != nullptr) {
                     merge_fixpoint_diagnostics(
@@ -14827,7 +15363,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     indirect_callees,
                     evaluation_tail_ingresses,
                     evaluation_summaries,
-                    initial_state,
+                    projection,
                     resolution_mode,
                     may_merge_stack_inventory,
                     guarded_inventory_collector != nullptr,
@@ -14843,6 +15379,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
             auto cached =
                 session.impl_->evaluations.get_or_compute(
                     std::move(key),
+                    projection.requested_lens,
+                    projection.full_state_fallback,
                     [&]() {
                         const PhysicalEvaluationScope physical{
                             evaluation_activity_if_observed,
@@ -14867,7 +15405,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                     indirect_callees,
                                     evaluation_tail_ingresses,
                                     evaluation_summaries,
-                                    initial_state,
+                                    projection.ingress,
                                     resolution_mode,
                                     may_merge_stack_inventory,
                                     guarded_inventory_collector !=
@@ -14883,6 +15421,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                         : nullptr,
                                     evaluation_abi_stack_argument_reads,
                                     inventory_sink_sources);
+                            canonicalize_evaluation_outputs(
+                                artifact->evaluation,
+                                forwarded_register_reads,
+                                abi_stack_argument_reads);
+                            if (projection.effective_lens !=
+                                EvaluationLens::FullState)
+                                session.impl_->evaluations
+                                    .record_reconstructed_result();
                         } catch (...) {
                             artifact->inventory
                                 .finish_exact_replay_capture();
@@ -14919,7 +15465,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     indirect_callees,
                     evaluation_tail_ingresses,
                     evaluation_summaries,
-                    initial_state,
+                    projection.ingress,
                     resolution_mode,
                     may_merge_stack_inventory,
                     guarded_inventory_collector,
@@ -14931,6 +15477,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         : nullptr,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources);
+                canonicalize_evaluation_outputs(
+                    fallback->evaluation,
+                    forwarded_register_reads,
+                    abi_stack_argument_reads);
+                if (projection.effective_lens !=
+                    EvaluationLens::FullState)
+                    session.impl_->evaluations
+                        .record_reconstructed_result();
                 if (walk_diagnostics != nullptr) {
                     merge_fixpoint_diagnostics(
                         *walk_diagnostics,
@@ -15489,6 +16043,16 @@ detail::analyze_function_values_with_guarded_entry_cache(
             const PhysicalEvaluationScope physical{
                 evaluation_activity_if_observed,
                 physical_evaluations};
+            const auto fallback_projection =
+                make_function_evaluation_projection(
+                    context.input,
+                    context.isolated
+                        ? EvaluationLens::IsolatedObservation
+                        : EvaluationLens::GuardedInventory,
+                    context.function->entry_address,
+                    forwarded_register_reads,
+                    abi_stack_argument_reads,
+                    !result.budget_exhausted);
             fallback->evaluation = evaluate_function(
                 image,
                 *context.function,
@@ -15496,7 +16060,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 inventory_indirect_callees,
                 tail_ingresses,
                 summaries,
-                context.input,
+                fallback_projection.ingress,
                 ResolutionCollectionMode::GuardedInventory,
                 true,
                 &fallback->inventory,
@@ -15507,6 +16071,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 &abi_stack_argument_reads,
                 target_abi_inventory_sink_sources(
                     context.target));
+            canonicalize_evaluation_outputs(
+                fallback->evaluation,
+                forwarded_register_reads,
+                abi_stack_argument_reads);
+            if (fallback_projection.effective_lens !=
+                EvaluationLens::FullState)
+                session.impl_->evaluations
+                    .record_reconstructed_result();
             return ForwardedContextEvaluation{
                 std::shared_ptr<
                     const CachedFunctionEvaluation>{

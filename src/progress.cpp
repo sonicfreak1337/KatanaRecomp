@@ -1103,7 +1103,7 @@ struct NamedCounterMember final {
     OptionalCounterMember member;
 };
 
-constexpr std::array<NamedCounterMember, 61u> progress_counter_members{{
+constexpr std::array<NamedCounterMember, 84u> progress_counter_members{{
     {"iteration", &ProgressCounterSnapshot::iteration},
     {"pass", &ProgressCounterSnapshot::pass},
     {"active_workers", &ProgressCounterSnapshot::active_workers},
@@ -1195,6 +1195,58 @@ constexpr std::array<NamedCounterMember, 61u> progress_counter_members{{
     {"cache_miss_contextual_summary_changed",
      &ProgressCounterSnapshot::cache_miss_contextual_summary_changed},
     {"cache_miss_tail_ingress_changed", &ProgressCounterSnapshot::cache_miss_tail_ingress_changed},
+    {"evaluation_lens_full_state_requests",
+     &ProgressCounterSnapshot::evaluation_lens_full_state_requests},
+    {"evaluation_lens_summary_requests",
+     &ProgressCounterSnapshot::evaluation_lens_summary_requests},
+    {"evaluation_lens_candidate_contract_requests",
+     &ProgressCounterSnapshot::evaluation_lens_candidate_contract_requests},
+    {"evaluation_lens_guarded_inventory_requests",
+     &ProgressCounterSnapshot::evaluation_lens_guarded_inventory_requests},
+    {"evaluation_lens_contextual_return_requests",
+     &ProgressCounterSnapshot::evaluation_lens_contextual_return_requests},
+    {"evaluation_lens_isolated_observation_requests",
+     &ProgressCounterSnapshot::evaluation_lens_isolated_observation_requests},
+    {"evaluation_lens_full_state_cache_hits",
+     &ProgressCounterSnapshot::evaluation_lens_full_state_cache_hits},
+    {"evaluation_lens_summary_cache_hits",
+     &ProgressCounterSnapshot::evaluation_lens_summary_cache_hits},
+    {"evaluation_lens_candidate_contract_cache_hits",
+     &ProgressCounterSnapshot::evaluation_lens_candidate_contract_cache_hits},
+    {"evaluation_lens_guarded_inventory_cache_hits",
+     &ProgressCounterSnapshot::evaluation_lens_guarded_inventory_cache_hits},
+    {"evaluation_lens_contextual_return_cache_hits",
+     &ProgressCounterSnapshot::evaluation_lens_contextual_return_cache_hits},
+    {"evaluation_lens_isolated_observation_cache_hits",
+     &ProgressCounterSnapshot::evaluation_lens_isolated_observation_cache_hits},
+    {"evaluation_lens_full_state_avoided_evaluation_nanoseconds",
+     &ProgressCounterSnapshot::
+         evaluation_lens_full_state_avoided_evaluation_nanoseconds},
+    {"evaluation_lens_summary_avoided_evaluation_nanoseconds",
+     &ProgressCounterSnapshot::
+         evaluation_lens_summary_avoided_evaluation_nanoseconds},
+    {"evaluation_lens_candidate_contract_avoided_evaluation_nanoseconds",
+     &ProgressCounterSnapshot::
+         evaluation_lens_candidate_contract_avoided_evaluation_nanoseconds},
+    {"evaluation_lens_guarded_inventory_avoided_evaluation_nanoseconds",
+     &ProgressCounterSnapshot::
+         evaluation_lens_guarded_inventory_avoided_evaluation_nanoseconds},
+    {"evaluation_lens_contextual_return_avoided_evaluation_nanoseconds",
+     &ProgressCounterSnapshot::
+         evaluation_lens_contextual_return_avoided_evaluation_nanoseconds},
+    {"evaluation_lens_isolated_observation_avoided_evaluation_nanoseconds",
+     &ProgressCounterSnapshot::
+         evaluation_lens_isolated_observation_avoided_evaluation_nanoseconds},
+    {"full_state_fallbacks",
+     &ProgressCounterSnapshot::full_state_fallbacks},
+    {"projected_evaluations",
+     &ProgressCounterSnapshot::projected_evaluations},
+    {"reconstructed_results",
+     &ProgressCounterSnapshot::reconstructed_results},
+    {"key_interned_sets",
+     &ProgressCounterSnapshot::key_interned_sets},
+    {"key_interned_references",
+     &ProgressCounterSnapshot::key_interned_references},
 }};
 
 constexpr std::array<OptionalCounterMember, 12u> cache_miss_reason_members{{

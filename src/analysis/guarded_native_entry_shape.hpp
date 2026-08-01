@@ -284,6 +284,9 @@ enum class FunctionEvaluationCacheLookupOutcome : std::uint8_t {
 
 struct FunctionEvaluationCacheDecision final {
     std::uint32_t function_entry = 0u;
+    EvaluationLens lens = EvaluationLens::FullState;
+    bool full_state_fallback = false;
+    std::uint64_t avoided_evaluation_nanoseconds = 0u;
     FunctionEvaluationCacheLookupOutcome outcome =
         FunctionEvaluationCacheLookupOutcome::Miss;
     std::optional<FunctionEvaluationCacheMissReason> miss_reason;
@@ -315,6 +318,7 @@ struct FunctionValueAnalysisSessionStatistics {
     std::array<std::size_t,
                function_evaluation_cache_miss_reason_count>
         miss_reasons{};
+    EvaluationLensTelemetry evaluation_lenses;
 
     [[nodiscard]] std::size_t classified_misses() const noexcept {
         std::size_t total = 0u;

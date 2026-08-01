@@ -1141,6 +1141,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 .function_value_session_cache_miss_tail_ingress_changed =
                 function_values
                     ->session_cache_miss_tail_ingress_changed;
+            progress.function_value_evaluation_lenses =
+                function_values->evaluation_lenses;
         }
         try {
             progress_callback(progress);

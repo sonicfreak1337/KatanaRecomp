@@ -1245,13 +1245,18 @@ nicht gestartet. Die 8-/12-/24-Thread-Gates gehoeren unveraendert zu KR-4981.
 
 ---
 
-## [ ] KR-4975 - Semantische FunctionEvaluation-Key-Projektion und Cachelinsen
+## [x] KR-4975 - Semantische FunctionEvaluation-Key-Projektion und Cachelinsen
 
 Prioritaet: P0
 
 Abhaengigkeiten: KR-4974
 
-Status: Geplant.
+Status: Abgeschlossen. Produktive Linsen projizieren nur vollstaendig
+bewiesene Register-/Stackeingaben, behalten Memoryfacts mangels vollstaendig
+bewiesenem Address-Read-Set konservativ und fallen bei jeder unvollstaendigen
+Abhaengigkeit auf FullState zurueck. FullState und Projektion verwenden
+dieselbe kanonische Ausgangsform; Treffer und tatsaechlich vermiedene
+Evaluationzeit werden je Linse getrennt ausgegeben.
 
 ### Umfang
 

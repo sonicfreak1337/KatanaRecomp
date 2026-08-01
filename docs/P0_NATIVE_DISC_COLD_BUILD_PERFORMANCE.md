@@ -1,7 +1,7 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Aufgabenplan
 
-Status: verbindlicher P0-Fahrplan; KR-4974 abgeschlossen, KR-4975 bis KR-4984
-nicht abgeschlossen
+Status: verbindlicher P0-Fahrplan; KR-4974 und KR-4975 abgeschlossen,
+KR-4976 bis KR-4984 nicht abgeschlossen
 
 Analysebasis: P0-Planstand `ffd45ae`, Source-Checkpoint `18f8537` vom
 31. Juli 2026 und der abgebrochene private v24-Export. Der Source-Checkpoint

@@ -380,6 +380,81 @@ class StructuredControlFlowProgress final {
         counters.cache_miss_tail_ingress_changed =
             progress
                 .function_value_session_cache_miss_tail_ingress_changed;
+        const auto lens_index = [](
+            const katana::analysis::EvaluationLens lens) noexcept {
+            return static_cast<std::size_t>(lens);
+        };
+        const auto& lenses =
+            progress.function_value_evaluation_lenses;
+        counters.evaluation_lens_full_state_requests =
+            lenses.requests[lens_index(
+                katana::analysis::EvaluationLens::FullState)];
+        counters.evaluation_lens_summary_requests =
+            lenses.requests[lens_index(
+                katana::analysis::EvaluationLens::Summary)];
+        counters.evaluation_lens_candidate_contract_requests =
+            lenses.requests[lens_index(
+                katana::analysis::EvaluationLens::CandidateContract)];
+        counters.evaluation_lens_guarded_inventory_requests =
+            lenses.requests[lens_index(
+                katana::analysis::EvaluationLens::GuardedInventory)];
+        counters.evaluation_lens_contextual_return_requests =
+            lenses.requests[lens_index(
+                katana::analysis::EvaluationLens::ContextualReturn)];
+        counters.evaluation_lens_isolated_observation_requests =
+            lenses.requests[lens_index(
+                katana::analysis::EvaluationLens::IsolatedObservation)];
+        counters.evaluation_lens_full_state_cache_hits =
+            lenses.cache_hits[lens_index(
+                katana::analysis::EvaluationLens::FullState)];
+        counters.evaluation_lens_summary_cache_hits =
+            lenses.cache_hits[lens_index(
+                katana::analysis::EvaluationLens::Summary)];
+        counters.evaluation_lens_candidate_contract_cache_hits =
+            lenses.cache_hits[lens_index(
+                katana::analysis::EvaluationLens::CandidateContract)];
+        counters.evaluation_lens_guarded_inventory_cache_hits =
+            lenses.cache_hits[lens_index(
+                katana::analysis::EvaluationLens::GuardedInventory)];
+        counters.evaluation_lens_contextual_return_cache_hits =
+            lenses.cache_hits[lens_index(
+                katana::analysis::EvaluationLens::ContextualReturn)];
+        counters.evaluation_lens_isolated_observation_cache_hits =
+            lenses.cache_hits[lens_index(
+                katana::analysis::EvaluationLens::IsolatedObservation)];
+        counters
+            .evaluation_lens_full_state_avoided_evaluation_nanoseconds =
+            lenses.avoided_evaluation_nanoseconds[lens_index(
+                katana::analysis::EvaluationLens::FullState)];
+        counters
+            .evaluation_lens_summary_avoided_evaluation_nanoseconds =
+            lenses.avoided_evaluation_nanoseconds[lens_index(
+                katana::analysis::EvaluationLens::Summary)];
+        counters
+            .evaluation_lens_candidate_contract_avoided_evaluation_nanoseconds =
+            lenses.avoided_evaluation_nanoseconds[lens_index(
+                katana::analysis::EvaluationLens::CandidateContract)];
+        counters
+            .evaluation_lens_guarded_inventory_avoided_evaluation_nanoseconds =
+            lenses.avoided_evaluation_nanoseconds[lens_index(
+                katana::analysis::EvaluationLens::GuardedInventory)];
+        counters
+            .evaluation_lens_contextual_return_avoided_evaluation_nanoseconds =
+            lenses.avoided_evaluation_nanoseconds[lens_index(
+                katana::analysis::EvaluationLens::ContextualReturn)];
+        counters
+            .evaluation_lens_isolated_observation_avoided_evaluation_nanoseconds =
+            lenses.avoided_evaluation_nanoseconds[lens_index(
+                katana::analysis::EvaluationLens::IsolatedObservation)];
+        counters.full_state_fallbacks =
+            lenses.full_state_fallbacks;
+        counters.projected_evaluations =
+            lenses.projected_evaluations;
+        counters.reconstructed_results =
+            lenses.reconstructed_results;
+        counters.key_interned_sets = lenses.key_interned_sets;
+        counters.key_interned_references =
+            lenses.key_interned_references;
     }
 
     void ensure_round(

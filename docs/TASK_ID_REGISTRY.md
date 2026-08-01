@@ -96,8 +96,8 @@ KR-4984 verbindlich abzuschliessen.
 | KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze `0x8C010F22 + 0x18`, getrennte AOT-Template-Diagnose belegt |
 | KR-4972 | Hashgebundene Shared-Callback-/Thunk-AOT-Coverage herstellen | quellseitig implementiert, Produktabnahme offen; Guarded-AOT-Entry und Exportinvariante erhalten Ziel/Shared-Body, reale Carrier-Kanten und Codepointerprovenienz ohne erfundene feste CFG-Kante |
 | KR-4973 | NativeDisc-Sichtregression und proof-unabhaengige PVR-Ausgabe | abgeschlossen durch historische ABI-64-v32-Evidenz; Sega ab 2,032 s, 127 Hostframes, Fehler bei `553.990.562` / `11.080.283` an `0x8C11088C -> 0x8C64784E` |
-| KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | geplant P0 |
-| KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | geplant P0 |
+| KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | abgeschlossen; JSONL-, Prozessbaum-, Phasen-, Workset- und Cache-Miss-Telemetrie produktiv verdrahtet |
+| KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | abgeschlossen; versionierte fail-closed Register-/Stackprojektion, kanonische Ausgaenge, Set-Interning und Lens-Telemetrie produktiv verdrahtet |
 | KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | geplant P0 |
 | KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | geplant P0 |
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | geplant P0 |

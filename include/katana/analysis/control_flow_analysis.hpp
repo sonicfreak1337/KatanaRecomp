@@ -258,6 +258,7 @@ struct ControlFlowAnalysisProgress {
             0u;
     std::size_t
         function_value_session_cache_miss_tail_ingress_changed = 0u;
+    EvaluationLensTelemetry function_value_evaluation_lenses;
 };
 
 using ControlFlowAnalysisProgressCallback =

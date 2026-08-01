@@ -141,6 +141,47 @@ struct ProgressCounterSnapshot final {
     std::optional<std::uint64_t> cache_miss_isolation_partition_changed;
     std::optional<std::uint64_t> cache_miss_contextual_summary_changed;
     std::optional<std::uint64_t> cache_miss_tail_ingress_changed;
+    std::optional<std::uint64_t>
+        evaluation_lens_full_state_requests;
+    std::optional<std::uint64_t>
+        evaluation_lens_summary_requests;
+    std::optional<std::uint64_t>
+        evaluation_lens_candidate_contract_requests;
+    std::optional<std::uint64_t>
+        evaluation_lens_guarded_inventory_requests;
+    std::optional<std::uint64_t>
+        evaluation_lens_contextual_return_requests;
+    std::optional<std::uint64_t>
+        evaluation_lens_isolated_observation_requests;
+    std::optional<std::uint64_t>
+        evaluation_lens_full_state_cache_hits;
+    std::optional<std::uint64_t>
+        evaluation_lens_summary_cache_hits;
+    std::optional<std::uint64_t>
+        evaluation_lens_candidate_contract_cache_hits;
+    std::optional<std::uint64_t>
+        evaluation_lens_guarded_inventory_cache_hits;
+    std::optional<std::uint64_t>
+        evaluation_lens_contextual_return_cache_hits;
+    std::optional<std::uint64_t>
+        evaluation_lens_isolated_observation_cache_hits;
+    std::optional<std::uint64_t>
+        evaluation_lens_full_state_avoided_evaluation_nanoseconds;
+    std::optional<std::uint64_t>
+        evaluation_lens_summary_avoided_evaluation_nanoseconds;
+    std::optional<std::uint64_t>
+        evaluation_lens_candidate_contract_avoided_evaluation_nanoseconds;
+    std::optional<std::uint64_t>
+        evaluation_lens_guarded_inventory_avoided_evaluation_nanoseconds;
+    std::optional<std::uint64_t>
+        evaluation_lens_contextual_return_avoided_evaluation_nanoseconds;
+    std::optional<std::uint64_t>
+        evaluation_lens_isolated_observation_avoided_evaluation_nanoseconds;
+    std::optional<std::uint64_t> full_state_fallbacks;
+    std::optional<std::uint64_t> projected_evaluations;
+    std::optional<std::uint64_t> reconstructed_results;
+    std::optional<std::uint64_t> key_interned_sets;
+    std::optional<std::uint64_t> key_interned_references;
 };
 
 struct ProgressEvent final {
