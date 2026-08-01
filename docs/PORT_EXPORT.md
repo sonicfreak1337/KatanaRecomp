@@ -44,12 +44,41 @@ KATANA_HOST_BUILD_GENERATOR=Ninja
 KATANA_HOST_BUILD_JOBS=<N>
 KATANA_PORT_CODEGEN_JOBS=<N>
 KATANA_RUNTIME_PREFIX=<installiertes Runtime-SDK, optional>
+KATANA_RUNTIME_BUILD_TARGETS=<optimierter lokaler Buildtree-Export, optional>
 KATANA_RUNTIME_ROOT=<Quellbaum-Fallback, optional>
 ```
 
 Weitere Details stehen in
 [`EXECUTABLE_FIRST_DEVELOPMENT.md`](EXECUTABLE_FIRST_DEVELOPMENT.md) und
 [`PORT_BUILD_PROFILES.md`](PORT_BUILD_PROFILES.md).
+
+## Opt-in Portbuild-Telemetrie
+
+`port` und `port-executable` akzeptieren
+`--telemetry-jsonl <datei>`. Ohne diese Option startet weder ein Writerthread
+noch eine Ressourcenabtastung. Mit der Option sammelt Katana ein versioniertes
+Manifest sowie Fortschritts-, Prozessbaumressourcen- und Terminalrecords:
+
+```powershell
+katana-recomp port .\disc\game.gdi `
+  --output .\port `
+  --target-name game `
+  --telemetry-jsonl .\measurements\cold-build.jsonl
+```
+
+Die Zieldatei muss ausserhalb von Quell-, Ausgabe-, Runtime-, Workspace-,
+Publishjournal- und anderen geschuetzten Baeumen liegen und darf weder GDI,
+Track, Spielprojekt, Handoff, Runtimepayload noch Publishlock aliasieren.
+Reservierte Windows-Geraetenamen werden abgelehnt. Katana schreibt in eine
+exklusiv erzeugte temporaere Nachbardatei und ersetzt das Ziel erst nach dem
+terminalen Flush atomar. Eine explizit angeforderte, unvollstaendige oder
+nicht publizierbare Telemetrie laesst den CLI-Lauf fail-closed scheitern.
+
+Die Datei ist deshalb ein terminales Messartefakt und keine Live-Tail-
+Schnittstelle. Laufender Fortschritt bleibt ueber die bestehende
+Konsolenausgabe sichtbar. Ein gesetztes `telemetry_complete=false`, verlorene
+Beobachtungen oder eine als unvollstaendig qualifizierte Prozessbaumabfrage
+duerfen nicht als Performancebeweis verwendet werden.
 
 Der generische Exportpfad uebersetzt das validierte Dreamcast-Bootprogramm in
 statischen nativen AOT-Code. Ein verteilbares Portpaket enthaelt keine Raw-,

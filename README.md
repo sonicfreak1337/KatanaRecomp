@@ -200,6 +200,11 @@ Das installierbare CMake-Ziel lautet `KatanaRecomp::runtime_core`. Ein direkt
 konfiguriertes Portprojekt kann es per `find_package` verwenden. Die
 installierte CLI erkennt das Runtimepaket im gemeinsamen Installationspraefix
 automatisch; `KATANA_RUNTIME_PREFIX` waehlt ein anderes installiertes Paket.
+`KATANA_RUNTIME_BUILD_TARGETS` kann den
+`KatanaRuntimeBuildTargets.cmake`-Export eines lokalen Buildtrees direkt
+binden. Single-Config-Baeume muessen als `RelWithDebInfo`, `Release` oder
+`MinSizeRel` konfiguriert sein; bei Multi-Config-Baeumen baut die CLI eine
+vorhandene optimierte Konfiguration.
 `KATANA_RUNTIME_ROOT` bleibt der explizite Quellbaum-Fallback und wird
 `EXCLUDE_FROM_ALL` eingebunden. Generierte AOT-TUs verwenden die schmale
 `katana/runtime/aot_runtime_abi.hpp` sowie eine PCH.

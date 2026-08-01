@@ -1192,7 +1192,37 @@ Prioritaet: P0
 
 Abhaengigkeiten: keine
 
-Status: Geplant.
+Status: In Arbeit. Die Aufgabe bleibt offen, bis die oeffentliche Stresslast
+durch die realen Analyse-, Cache-, IR- und Partitionspfade gelaufen ist, alle
+fokussierten Gates nach den letzten Writer-/Pfadschutzkorrekturen erneut gruen
+sind und das unabhaengige Review keine offenen P0/P1-Funde mehr meldet.
+
+### Aktueller Arbeitsstand
+
+Quellseitig vorhanden:
+
+- versionierte opt-in JSONL-Telemetrie mit Manifest-, Progress-, Resource-
+  und Terminalrecords;
+- begrenzte asynchrone Aufzeichnung, explizite Verlust-/Completenessfelder,
+  geordneter Flush und atomare terminale Veroeffentlichung;
+- Input-/Output-/Workspace-/Publishlock-/GDI-Track-Aliasschutz sowie
+  Ablehnung reservierter Windows-Geraetenamen;
+- Windows-Job- und POSIX-Prozessgruppenressourcen; finale POSIX-`wait4`-
+  Werte erhalten kurzlebige Kindprozessarbeit fuer CPU, Faults und Peak-RSS;
+- exakte Cachelookups, Ready-Hits, In-Flight-Coalesces, Misses, Evictions,
+  Eintraege, Bytes und genau ein primaerer Grund pro Miss;
+- Head-of-Line-, dynamische Seed-/Workset- und
+  geplant/gestartet/ready/committed-Indikatoren;
+- eine deterministische retailfreie NativeDisc-Stressfixture mit `smoke`-
+  und `reference`-Profil.
+
+Noch offen:
+
+- reale konsumierende Verdrahtung aller Root-, Request-, Modul-, IR- und
+  Partitionslasten der Fixture;
+- fokussierter Build, Tests und erneutes Review nach dem letzten
+  Telemetrie-Sicherheitsumbau;
+- Referenzmessung und die eigentlichen 8-/12-/24-Thread-Gates.
 
 ### Umfang
 

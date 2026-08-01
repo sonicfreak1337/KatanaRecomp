@@ -54,6 +54,42 @@ belegtem End-to-End-Gewinn; der vorhandene D3D11-Presenter ist
 hardwarebeschleunigte Ausgabe, aber kein Beleg fuer GPU-beschleunigte
 Analyse.
 
+### KR-4974-Arbeitsstand
+
+KR-4974 ist im aktuellen Arbeitsbaum in Arbeit und bleibt bis zu seinem
+eigenen fokussierten Build, den realen Stresspfad-Gates und dem erneuten
+Review offen. Quellseitig vorhanden sind:
+
+- versionierte opt-in JSONL-Datensaetze fuer Manifest, Fortschritt,
+  Prozessbaumressourcen und terminalen Abschluss;
+- eine begrenzte asynchrone Aufzeichnung mit expliziten Drop- und
+  Vollstaendigkeitsfeldern, geordnetem Flush und atomarer terminaler
+  Veroeffentlichung;
+- fail-closed Pfadschutz gegen Quell-, GDI-Track-, Ausgabe-, Workspace-,
+  Publishlock- und Windows-Geraetenamen-Aliase;
+- Windows-Job-Object-Ressourcen und eine ehrlich qualifizierte
+  POSIX-Prozessgruppenaufnahme, deren finale `wait4`-Werte auch bereits
+  beendete Kinder fuer CPU, Faults und Peak-RSS erhalten;
+- FunctionEvaluation-Lookups, Ready-Hits, In-Flight-Coalesces, Misses,
+  Evictions, Eintraege, Bytes und genau einen primaeren Grund je Miss;
+- getrennte Werte fuer geplant, gestartet, ready, kanonisch committed,
+  dynamisch hinzugekommene Arbeit, Head-of-Line-Zeit und aktive Worker;
+- eine deterministische retailfreie NativeDisc-Stressfixture in den Profilen
+  `smoke` und `reference`.
+
+Nicht abgeschlossen oder nicht abgenommen sind weiterhin:
+
+- der vollstaendige reale Verbraucher fuer alle Root-, Request-, Modul-,
+  IR- und Partitionslasten der Stressfixture;
+- der fokussierte Gesamtbuild und die Wiederholung aller betroffenen Tests
+  nach den letzten Writer-/Pfadschutzkorrekturen;
+- die Referenzmessungen auf 8, 12 und 24 Threads samt Zeit-, CPU-, RAM- und
+  Cacheinvarianten;
+- KR-4975 bis KR-4980, das GPU-Entscheidungsgate KR-4982 und gegebenenfalls
+  KR-4983;
+- die verpflichtende unabhaengige Abschluss-Gesamtpruefung KR-4984 und der
+  erst danach zulaessige einzelne neue Sonic-Lauf.
+
 ### Abgebrochener NativeDisc-v24-Export
 
 `v24` bezeichnet hier den lokalen Iterationsnamen und das Log

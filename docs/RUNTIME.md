@@ -577,6 +577,35 @@ spaetere Plattformkonfiguration.
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
 - Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, Ausrichtung, strukturierte Fehler, Traces, Watchpoints, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase
+- exportierte Produkthosts begrenzen einen dauerhaft verspaeteten Gastthread
+  standardmaessig auf 85 Prozent eines logischen Prozessors. Zusaetzlich
+  begrenzt `KATANA_HOST_PROCESS_CPU_PERCENT` die aggregierte Prozess-CPU
+  inklusive AICA-/PVR-Workern standardmaessig auf 25 Prozent der mit
+  `KATANA_RUNTIME_JOBS` verfuegbaren Kapazitaet. Auf einem 24-Thread-Host sind
+  damit kurze 24-Thread-Bursts erlaubt, die ueber das
+  100-ms-Abrechnungsfenster gemittelte Last aber auf sechs voll ausgelastete
+  logische Prozessoren beschraenkt.
+  `KATANA_HOST_CPU_PERCENT` und `KATANA_HOST_PROCESS_CPU_PERCENT` akzeptieren
+  strikt validierte Werte von 1 bis 100; 100 deaktiviert jeweils nur die
+  zugehoerige Grenze. Host-Pacing, VSync und Lifecycle-Waits liefern
+  zusaetzlich natuerliche Leerlaufzeit
+- ein eigentuemergefuehrter, prozessweiter Runtime-Executor verwendet
+  standardmaessig die erkannten Hardwarethreads und ist mit
+  `KATANA_RUNTIME_JOBS` auf 1 bis 64 Jobs, niemals jedoch oberhalb der
+  erkannten Hardwarekapazitaet, begrenzbar. SH-4, Scheduler und
+  MMIO bleiben strikt seriell; unabhaengige AICA-Voices, disjunkte
+  PVR-Scanoutzeilen und beweisbar unabhaengige 32x32-PVR-Rasterkacheln laufen
+  parallel. Jede Rasterkachel behaelt die originale Primitive-, Listen- und
+  Modifier-Reihenfolge. Aktives Guest-Memory-Tracing, ein moeglicher
+  Renderfehler, nicht beweisbare Texturbereiche oder ein
+  Textur-/Renderziel-Overlap erzwingen vor dem ersten Pixelstore den
+  unveraenderten seriellen Rasterpfad. AICA-Zustand, Voicefehler, Audiomix
+  und PVR-Zaehler werden danach deterministisch reduziert und committed
+- der Windows-Videopfad bevorzugt eine doppelt gepufferte D3D11-Flip-Swapchain
+  mit begrenzter Frame-Latenz. Er faellt auf die kompatible
+  Discard-Swapchain und erst bei einem echten Backendfehler auf GDI zurueck;
+  verdeckte Fenster werden nur getaktet geprobt und ein transient verlorenes
+  D3D11-Geraet wird mit begrenztem Backoff wiederhergestellt
 - optionales leichtgewichtiges Last-MMIO-Tracking fuer begrenzte Produktprobes;
   bei Aktivierung speichert der Gast-Hotpath nur Operation, Adresse, Breite,
   Wert und Regionsbasis in einem allokationsfreien POD. Der owning

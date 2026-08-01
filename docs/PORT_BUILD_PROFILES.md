@@ -64,6 +64,18 @@ Der Produkt-Launcher erhaelt zusaetzlich den kleinen oeffentlichen
 `katana/io/input_provenance.hpp`-Vertrag aus demselben Runtimepaket; weitere
 Analyzerheader gehoeren nicht zum `runtime-sdk`.
 
+`KATANA_RUNTIME_BUILD_TARGETS=<Buildtree>/KatanaRuntimeBuildTargets.cmake`
+bindet stattdessen die bereits konfigurierte lokale Runtime und aktualisiert
+deren Runtime-Target vor dem Portlink inkrementell. Der zugehoerige
+`CMakeCache.txt` und das von CMake erzeugte
+`KatanaRuntimeBuildProfile.txt` sind Teil dieser Bindung. Ein
+Single-Config-Buildtree wird nur mit `RelWithDebInfo`, `Release` oder
+`MinSizeRel` akzeptiert; `--config` kann einen als `Debug` konfigurierten
+Ninja-/Make-Baum nicht nachtraeglich optimieren. Ein Multi-Config-Baum waehlt
+in dieser Reihenfolge `RelWithDebInfo`, `Release`, dann `MinSizeRel`.
+`KATANA_RUNTIME_PREFIX`, `KATANA_RUNTIME_BUILD_TARGETS` und
+`KATANA_RUNTIME_ROOT` sind gegenseitig exklusiv.
+
 Eine reine, ABI-kompatible Runtimeaenderung im verwendeten Quellbaum-SDK
 erneuert Runtimeobjekte und den finalen Link. Solange die gebundene
 Exporteridentitaet unveraendert bleibt, kann der verifizierte Whole-Export

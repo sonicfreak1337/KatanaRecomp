@@ -35,6 +35,46 @@ Berichte enthalten keine Hostzeit als Determinismusquelle. Absolute lokale
 Pfade, Firmwarebytes und Flash-Rohdaten sind keine portablen Berichtfelder;
 spaetere Diagnosebefehle muessen solche Inhalte standardmaessig redigieren.
 
+## Portbuild-Telemetrie
+
+Die mit `--telemetry-jsonl` explizit angeforderte lokale Messdatei verwendet
+den Streamvertrag `katana-port-build-telemetry` Version 1. Sie enthaelt
+Records der fachlichen Schemata:
+
+- `katana-port-build-manifest`
+- `katana-port-build-progress`
+- `katana-port-build-resource`
+- `katana-port-build-terminal`
+
+Progressrecords tragen die geordneten Scope-/Parent-Scope-IDs,
+Lebenszyklusstatus, Einheit, verstrichene Zeit und - soweit fuer die Phase
+verfuegbar - geplant, queued, aktiv, ready und committed. Der
+FunctionEvaluation-Strang ergaenzt Lookups, Ready-Hits,
+In-Flight-Coalesces, Misses, Evictions, Cachegroesse sowie die typisierten
+primaeren Missgruende. Dabei gelten die Invarianten
+
+```text
+lookups = ready_hits + in_flight_coalesces + misses
+sum(primary_miss_reasons) = misses
+```
+
+Ressourcenrecords unterscheiden Eigenprozess und beaufsichtigten
+Hostprozessbaum. Qualitaets- und Vollstaendigkeitsfelder bleiben
+authoritativ: Eine POSIX-`/proc`-Stichprobe behauptet nicht, bereits beendete
+Kinder oder alle I/O-Werte vollstaendig beobachtet zu haben; finale
+`wait4`-Evidenz wird getrennt ausgewiesen. Nicht verfuegbare GPU-Werte bleiben
+leer beziehungsweise `unsupported`; der D3D11-Presenter beweist keinen
+Analyse-GPU-Offload.
+
+Die begrenzte Queue und der gemeinsame Progressreporter weisen verlorene
+Beobachtungen kumulativ aus. Der Terminalrecord nennt Outcome, Exitcode,
+Record-/Dropzaehler und `telemetry_complete`. Vollstaendig bedeutet, dass der
+gesamte zugelassene Progressstrom geflusht, der Terminalrecord geschrieben
+und die temporaere Datei atomar publiziert wurde. Es bedeutet nicht, dass der
+Build selbst erfolgreich war. Umgekehrt ist eine explizit angeforderte,
+unvollstaendige oder nicht publizierbare Messung kein gueltiger
+Performancebeweis und fuehrt im CLI-Pfad fail-closed zum I/O-Fehler.
+
 `katana-alpha-isa`/`alpha-isa` Vertragsversion 1 wird mit
 `katana-recomp isa-report --json` erzeugt. Der Bericht zaehlt den gesamten
 16-Bit-Opcoderaum, ordnet jede decodierte Instruktionsart einer Familie zu und

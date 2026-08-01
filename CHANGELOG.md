@@ -4,6 +4,27 @@
 
 ### Geaendert
 
+- KR-4974 befindet sich im aktuellen Arbeitsbaum in Umsetzung und ist noch
+  kein abgeschlossener Performance-P0. Vorhanden sind eine opt-in
+  Portbuild-JSONL-Telemetrie mit Manifest-, Fortschritts-, Ressourcen- und
+  Terminaldatensaetzen, genaue FunctionEvaluation-Cachezaehler samt
+  primaerem Miss-Reason-Ledger, Head-of-Line-/Seedwachstumsindikatoren sowie
+  Heartbeats fuer lange Analyse- und Exportphasen. Die Telemetrie verwendet
+  eine begrenzte asynchrone Queue, weist verlorene Beobachtungen explizit aus,
+  erfasst beaufsichtigte Hostprozessbaeume und publiziert die Zieldatei erst
+  nach einem terminalen Flush atomar. Eingabe-, Ausgabe-, Workspace-,
+  Publishlock-, GDI-Track- und Windows-Geraetenamen-Aliase werden fail-closed
+  abgelehnt. Diese Quellimplementierung ist weder der
+  8-/12-/24-Thread-Performancebeweis noch eine Produktabnahme.
+- Fuer KR-4974 existiert ausserdem eine deterministische, retailfreie
+  NativeDisc-Stressfixture mit `smoke`- und `reference`-Profil. Sie modelliert
+  unter anderem Seedwellen, einen Head-of-Line-Root, 84.000 logische
+  Cacheanfragen, exakte Latent-AOT-Module und einen Partitionsplan. Generator,
+  unabhaengiger Byte-/ISO-Verifier und Katana-eigener Discparser sind
+  verdrahtet. Die endgueltige Abnahme muss zusaetzlich belegen, dass diese
+  Tabellen durch die realen Analyse-, Cache-, IR- und Partitionspfade
+  verbraucht werden; reine Fixture-Reproduzierbarkeit ist kein
+  Kaltbuild-Performancegate.
 - Der am 31. Juli 2026 gestartete private Exportversuch mit dem lokalen
   Iterationsnamen NativeDisc-v24 wurde nach etwa `3 h 27 min` auf
   ausdruecklichen Nutzerwunsch beendet. Er erzeugte **kein**

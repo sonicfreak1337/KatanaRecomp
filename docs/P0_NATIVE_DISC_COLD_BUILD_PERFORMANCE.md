@@ -1,6 +1,7 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Aufgabenplan
 
-Status: verbindlicher P0-Fahrplan; KR-4974 bis KR-4984 nicht abgeschlossen
+Status: verbindlicher P0-Fahrplan; KR-4974 in Arbeit, KR-4975 bis KR-4984
+nicht abgeschlossen
 
 Analysebasis: P0-Planstand `ffd45ae`, Source-Checkpoint `18f8537` vom
 31. Juli 2026 und der abgebrochene private v24-Export. Der Source-Checkpoint
@@ -27,6 +28,35 @@ Nach der Implementierung folgt zwingend eine unabhaengige Gesamtpruefung aller
 betroffenen Pfade. Alle P0- und P1-Funde werden geschlossen und die betroffenen
 Gates erneut ausgefuehrt. Erst danach darf genau ein neuer realer
 NativeDisc-Sonic-Port gebaut, installiert und sichtbar ausgefuehrt werden.
+
+## Aktueller KR-4974-Arbeitsstand
+
+Im Arbeitsbaum existieren inzwischen die grundlegenden Beobachtungs- und
+Reproduzierbarkeitsbausteine:
+
+- versionierte Manifest-, Progress-, Resource- und Terminalrecords in einer
+  opt-in JSONL-Ausgabe;
+- begrenzte asynchrone Aufnahme, explizite Drop-/Completenessfelder,
+  geordneter Flush und atomare terminale Veroeffentlichung;
+- pfad- und identitaetsbasierter Schutz der Telemetrieausgabe vor Quell-,
+  GDI-Track-, Ausgabe-, Workspace-, Publishlock- und Geraetenamen-Aliasen;
+- Prozessbaumressourcen ueber Windows Job Objects beziehungsweise
+  qualifizierte POSIX-Prozessgruppenaufnahme mit finaler `wait4`-Evidenz;
+- genaue FunctionEvaluation-Cachelookups mit Ready-Hit,
+  In-Flight-Coalesce, Miss, Eviction, Groesse und genau einem primaeren
+  Missgrund;
+- Heartbeats sowie getrennte Zaehler fuer Worksetwachstum, Head-of-Line,
+  geplant, gestartet, ready, committed und aktive Worker;
+- eine deterministische retailfreie NativeDisc-Stressfixture mit kleinem
+  `smoke`- und gatefaehigem `reference`-Profil.
+
+Diese Liste beschreibt Quellimplementierung, keinen abgeschlossenen Task.
+Insbesondere muss der Stresspfad alle modellierten Roots, Requests, Module,
+IR- und Partitionsdaten durch die realen Katana-Pfade verbrauchen. Danach
+folgen die fokussierten Tests, das erneute Review und erst in KR-4981 die
+8-/12-/24-Thread-Gates. GPU-Offload bleibt ein eigenes beweispflichtiges
+Entscheidungsgate in KR-4982. Die Abschluss-Gesamtpruefung KR-4984 bleibt
+unveraendert Pflicht.
 
 ## Gemessene Ausgangslage
 
