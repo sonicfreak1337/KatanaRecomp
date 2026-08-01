@@ -49,7 +49,7 @@ noch nicht end-to-end abgenommen.
 
 Der verbindliche Umsetzungs-, Mess-, GPU- und Abschlussvertrag steht in
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-KR-4974 bis KR-4976 sind abgeschlossen; KR-4977 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
+KR-4974 bis KR-4977 sind abgeschlossen; KR-4978 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
 belegtem End-to-End-Gewinn; der vorhandene D3D11-Presenter ist
 hardwarebeschleunigte Ausgabe, aber kein Beleg fuer GPU-beschleunigte
 Analyse.
@@ -65,9 +65,9 @@ Unvollstaendige ABI-Evidenz bleibt fail-closed und wird neu berechnet. Neun
 separate Progresszaehler belegen Graphaufbau/-reuse, Funktionsshards,
 Invalidierungen, ABI-/Summary-Reuse sowie publizierte oder verworfene
 Epochen. Der fokussierte MSVC-Build und der bestehende vollstaendige
-Function-Value-Regressionslauf sind gruen. Die weiterhin volle
-Multi-Root-Wiederholung und inkrementelle CFG-/Seedarbeit gehoeren zu
-KR-4977 beziehungsweise KR-4978 und bleiben vor Sonic offen.
+Function-Value-Regressionslauf sind gruen. Die inkrementelle CFG-/Seedarbeit
+gehoert zu KR-4978 und bleibt vor Sonic offen. Die Multi-Root-Wiederholung
+wurde mit KR-4977 geschlossen.
 
 ### KR-4974-Abschlussstand
 
@@ -98,7 +98,7 @@ MSPDB-Helper-Stall offengelegt. Der Windows-Produktpfad isoliert MSPDB jetzt
 pro Hostkommando und setzt dessen natuerliche Shutdownfrist auf eine Sekunde,
 ohne die Job-Leere als Prozessbaumbeweis aufzuweichen. Diese letzte Aenderung
 baut in `katana-recomp`; ihre massgebliche Abnahme erfolgt gemaess `AGENTS.md`
-am spaeteren realen Produktpfad. Offen bleiben KR-4977 bis KR-4980, das
+am spaeteren realen Produktpfad. Offen bleiben KR-4978 bis KR-4980, das
 GPU-Gate KR-4982, gegebenenfalls KR-4983, die Gesamtpruefung KR-4984 und erst
 danach der einzelne neue Sonic-Lauf. Dieser eine Lauf ist zugleich die einzige
 24-Thread-Produktzeitmessung KR-4981; eine 8-/12-/24-Thread-Matrix entfaellt.

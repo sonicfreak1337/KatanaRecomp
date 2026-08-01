@@ -99,7 +99,7 @@ KR-4984 verbindlich abzuschliessen.
 | KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | abgeschlossen; JSONL-, Prozessbaum-, Phasen-, Workset- und Cache-Miss-Telemetrie produktiv verdrahtet |
 | KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | abgeschlossen; versionierte fail-closed Register-/Stackprojektion, kanonische Ausgaenge, Set-Interning und Lens-Telemetrie produktiv verdrahtet |
 | KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | abgeschlossen; immutable Graphshards, persistente SCC-/ABI-/Summary-Epoch und gerichtete Invalidierung produktiv verdrahtet |
-| KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | geplant P0 |
+| KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | abgeschlossen in `4d17526` |
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | geplant P0 |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | geplant P0 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | geplant P0 |

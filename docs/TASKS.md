@@ -1308,13 +1308,13 @@ Produktresultate und fail-closed Verlustdiagnosen bleiben streng verglichen.
 
 ---
 
-## [ ] KR-4977 - Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt
+## [x] KR-4977 - Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt
 
 Prioritaet: P0
 
 Abhaengigkeiten: KR-4975, KR-4976
 
-Status: Geplant.
+Status: Abgeschlossen in `4d17526`.
 
 ### Umfang
 
