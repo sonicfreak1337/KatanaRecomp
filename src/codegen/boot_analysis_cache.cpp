@@ -663,6 +663,7 @@ void write_guarded_walk(
     output.size(value.local_fixpoint_iteration_budget);
     output.size(value.local_fixpoint_limited_evaluations);
     output.size(value.maximum_local_fixpoint_iterations);
+    output.boolean(value.resolution_root_logical_budget_exhausted);
     output.boolean(value.inventory_candidate_values_truncated);
     output.boolean(value.abi_stack_base_unresolved);
     output.boolean(value.inventory_tail_target_unresolved);
@@ -716,6 +717,7 @@ read_guarded_walk(Reader& input) {
     value.local_fixpoint_iteration_budget = input.size();
     value.local_fixpoint_limited_evaluations = input.size();
     value.maximum_local_fixpoint_iterations = input.size();
+    value.resolution_root_logical_budget_exhausted = input.boolean();
     value.inventory_candidate_values_truncated = input.boolean();
     value.abi_stack_base_unresolved = input.boolean();
     value.inventory_tail_target_unresolved = input.boolean();

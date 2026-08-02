@@ -30,7 +30,7 @@ enum class EvaluationLens : std::uint8_t {
     Count,
 };
 
-inline constexpr std::uint32_t evaluation_lens_schema_version = 1u;
+inline constexpr std::uint32_t evaluation_lens_schema_version = 2u;
 inline constexpr std::size_t evaluation_lens_count =
     static_cast<std::size_t>(EvaluationLens::Count);
 
@@ -331,6 +331,11 @@ struct GuardedCodeInventoryWalkDiagnostics {
     // Peak number of local CFG block evaluations in one function analysis.
     // This remains diagnostic while the explicit limit above is not reached.
     std::size_t maximum_local_fixpoint_iterations = 0u;
+    // Exact contribution partitions share one logical per-root budget.  The
+    // first exhausted category is scheduling-dependent, so expose one
+    // canonical fail-closed bit instead of publishing the winning worker's
+    // category as semantic output.
+    bool resolution_root_logical_budget_exhausted = false;
     bool inventory_candidate_values_truncated = false;
     bool abi_stack_base_unresolved = false;
     // A tail edge carried inventory-relevant state to a target which could
@@ -346,6 +351,7 @@ struct GuardedCodeInventoryWalkDiagnostics {
                contextual_return_evaluation_limited_functions != 0u ||
                abi_stack_argument_projection_truncated_functions != 0u ||
                local_fixpoint_limited_evaluations != 0u ||
+               resolution_root_logical_budget_exhausted ||
                inventory_candidate_values_truncated ||
                abi_stack_base_unresolved ||
                inventory_tail_target_unresolved;
