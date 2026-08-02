@@ -4,6 +4,23 @@
 
 ### Geaendert
 
+- Der sichtbare 24-Thread-Sonic-v40-Kaltlauf endete nach `21:11,230`
+  fail-closed ohne Port: Root 0 bis 6 waren nach rund `14,7 s` abgeschlossen,
+  waehrend Root 7 die kanonische Ausgabe fuer `18:33` blockierte und eine
+  einzelne Guarded-Inventory-CFG schliesslich das lokale
+  `65.536`-Iterationslimit erreichte. Die Resolutionphase verwendet deshalb
+  nun eine private, exakt reversible Paketdarstellung fuer transitive
+  Summary-Callee-Evidence sowie disjunkte Root- und Context-Provenienzlinsen.
+  Alle CandidateContract-, ContextualReturn-, Stable-, Isolated- und
+  Forwarded-Auswertungen bleiben intern kompakt; vor Root-Artefakt,
+  Exact-Replay-Inventar oder oeffentlicher Ausgabe werden saemtliche
+  Callee-Belege wieder sortiert, dedupliziert und vollstaendig expandiert.
+  Lokale Cap- und Lens-Fallback-Kapseln bleiben auch ohne den cachebrechenden
+  Detailtrace sichtbar. Fehlgeschlagene Portbuilds bewahren zudem ihren
+  urspruenglichen Exitcode, wenn eine absichtlich unvollstaendige
+  Fehlertelemetrie bereits terminal und atomar veroeffentlicht wurde.
+  Analyzer-ABI 27 und Function-Analysis-Epoch-Schema 6 invalidieren alte
+  interne Resolutionartefakte. Der v40-Lauf ist kein Sonic-Produktnachweis.
 - Der sichtbare 24-Thread-Sonic-v39-Kaltlauf belegte nach `20:49,737`
   einen einzelnen seriellen Resolution-Tail: Alle `1.191` Roots waren nach
   rund zweieinhalb Minuten gestartet, waehrend der globale

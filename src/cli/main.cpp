@@ -340,7 +340,6 @@ class PortBuildTelemetryRun final {
             const auto terminal = telemetry_.status();
             return !telemetry_required_ ||
                    (terminal.terminal_emitted &&
-                    terminal.telemetry_complete &&
                     !terminal.io_failed);
         }
         progress_.fail();
@@ -369,11 +368,14 @@ class PortBuildTelemetryRun final {
         }
         finished_ = true;
         const auto terminal = telemetry_.status();
+        // A failed product build may legitimately seal an incomplete upstream
+        // stream (for example before host configuration exists).  Once that
+        // state and the original exit code were atomically published, never
+        // replace the causal processing error with a secondary telemetry
+        // completeness error. Successful builds retain the strict complete()
+        // contract above.
         return !telemetry_required_ ||
-               (progress_sealed &&
-                phase_timings_recorded &&
-                terminal.terminal_emitted &&
-                terminal.telemetry_complete &&
+               (terminal.terminal_emitted &&
                 !terminal.io_failed);
     }
 
@@ -392,7 +394,7 @@ void require_requested_failure_telemetry(
     throw katana::cli::Error(
         katana::cli::ExitCode::InputOutput,
         "Der Portbuild ist fehlgeschlagen und die explizit "
-        "angeforderte Fehlertelemetrie konnte nicht vollstaendig "
+        "angeforderte Fehlertelemetrie konnte nicht terminal "
         "und atomar veroeffentlicht werden.");
 }
 
