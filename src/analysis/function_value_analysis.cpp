@@ -127,6 +127,53 @@ void emit_local_fixpoint_cap(const std::uint32_t function,
         static_cast<unsigned int>(contextual));
 }
 
+void emit_incomplete_resolution_root(
+    const std::size_t root_index,
+    const std::uint32_t root_address,
+    const bool local_fixpoint,
+    const GuardedCodeInventoryWalkDiagnostics& walk,
+    const bool candidate_inventory_truncated,
+    const bool candidate_budget_exhausted,
+    const bool raw_stored_candidates_truncated,
+    const bool table_scan_truncated) noexcept {
+    // Product runs must retain the first concrete loss capsule even when
+    // verbose diagnostics are disabled.  The previous DeltaOnly path reduced
+    // every cause to `incomplete-root` and then discarded the only object
+    // which still knew the owner and the actual truncation bit.
+    constexpr std::size_t maximum_capsules = 64u;
+    static std::atomic_size_t emitted_capsules = 0u;
+    const auto capsule =
+        emitted_capsules.fetch_add(1u, std::memory_order_relaxed);
+    if (capsule >= maximum_capsules) return;
+    std::fprintf(
+        stderr,
+        "KATANA_ANALYZER_INCOMPLETE_ROOT index=%zu root=0x%08X "
+        "local_fixpoint=%u pending_regions=%zu region_block_limited=%zu "
+        "forwarded_context_limited=%zu contextual_context_limited=%zu "
+        "contextual_evaluation_limited=%zu abi_stack_projection=%zu "
+        "candidate_values_truncated=%u abi_stack_base_unresolved=%u "
+        "tail_target_unresolved=%u candidate_inventory_truncated=%u "
+        "candidate_budget_exhausted=%u raw_stored_truncated=%u "
+        "table_scan_truncated=%u\n",
+        root_index,
+        static_cast<unsigned int>(root_address),
+        static_cast<unsigned int>(local_fixpoint),
+        walk.pending_inventory_region_count,
+        walk.inventory_region_block_limited_regions,
+        walk.forwarded_store_context_limited_functions,
+        walk.contextual_return_context_limited_functions,
+        walk.contextual_return_evaluation_limited_functions,
+        walk.abi_stack_argument_projection_truncated_functions,
+        static_cast<unsigned int>(
+            walk.inventory_candidate_values_truncated),
+        static_cast<unsigned int>(walk.abi_stack_base_unresolved),
+        static_cast<unsigned int>(walk.inventory_tail_target_unresolved),
+        static_cast<unsigned int>(candidate_inventory_truncated),
+        static_cast<unsigned int>(candidate_budget_exhausted),
+        static_cast<unsigned int>(raw_stored_candidates_truncated),
+        static_cast<unsigned int>(table_scan_truncated));
+}
+
 constexpr std::size_t maximum_detailed_analyzer_diagnostics = 64u;
 
 using DetailedAnalyzerDiagnosticKey =
@@ -2423,6 +2470,34 @@ detail::guarded_code_inventory_priority_order(
 
 namespace {
 
+struct GuardedCodeInventoryReplayTruncation final {
+    bool candidate_inventory_truncated = false;
+    bool candidate_budget_exhausted = false;
+    bool raw_stored_candidates_truncated = false;
+    bool table_scan_truncated = false;
+
+    [[nodiscard]] bool truncated() const noexcept {
+        return candidate_inventory_truncated ||
+               candidate_budget_exhausted ||
+               raw_stored_candidates_truncated ||
+               table_scan_truncated;
+    }
+
+    void merge(const GuardedCodeInventoryReplayTruncation& source) noexcept {
+        candidate_inventory_truncated =
+            candidate_inventory_truncated ||
+            source.candidate_inventory_truncated;
+        candidate_budget_exhausted =
+            candidate_budget_exhausted ||
+            source.candidate_budget_exhausted;
+        raw_stored_candidates_truncated =
+            raw_stored_candidates_truncated ||
+            source.raw_stored_candidates_truncated;
+        table_scan_truncated =
+            table_scan_truncated || source.table_scan_truncated;
+    }
+};
+
 class GuardedCodeInventoryCollector {
   public:
     explicit GuardedCodeInventoryCollector(
@@ -2459,10 +2534,19 @@ class GuardedCodeInventoryCollector {
     }
 
     [[nodiscard]] bool replay_truncated() const noexcept {
-        return candidate_inventory_truncated_ ||
-               candidate_budget_exhausted_ ||
-               raw_stored_candidates_truncated_ ||
-               table_scan_truncated_;
+        return replay_truncation().truncated();
+    }
+
+    [[nodiscard]] GuardedCodeInventoryReplayTruncation
+    replay_truncation() const noexcept {
+        return {
+            .candidate_inventory_truncated =
+                candidate_inventory_truncated_,
+            .candidate_budget_exhausted = candidate_budget_exhausted_,
+            .raw_stored_candidates_truncated =
+                raw_stored_candidates_truncated_,
+            .table_scan_truncated = table_scan_truncated_,
+        };
     }
 
     void mark_stored_candidates_incomplete() {
@@ -17999,10 +18083,32 @@ materialize_aborted_function_analysis(
     // An aborted transaction is explicitly fail-closed. Returning stale
     // candidates from the last good epoch would be less exact than returning
     // no executable inventory together with the sticky abort state.
-    const auto abort_diagnostics =
-        delta.guarded_code_inventory.walk_diagnostics;
+    const auto& abort_inventory = delta.guarded_code_inventory;
     result.guarded_code_inventory = {};
-    result.guarded_code_inventory.walk_diagnostics = abort_diagnostics;
+    result.guarded_code_inventory.raw_stored_candidate_budget =
+        abort_inventory.raw_stored_candidate_budget;
+    result.guarded_code_inventory.raw_stored_candidate_count =
+        abort_inventory.raw_stored_candidate_count;
+    result.guarded_code_inventory.candidate_budget =
+        abort_inventory.candidate_budget;
+    result.guarded_code_inventory.candidate_count =
+        abort_inventory.candidate_count;
+    result.guarded_code_inventory.shape_validation_work =
+        abort_inventory.shape_validation_work;
+    result.guarded_code_inventory.shape_validation_work_budget =
+        abort_inventory.shape_validation_work_budget;
+    result.guarded_code_inventory.shape_budget_exceeded_candidates =
+        abort_inventory.shape_budget_exceeded_candidates;
+    result.guarded_code_inventory.raw_stored_candidates_truncated =
+        abort_inventory.raw_stored_candidates_truncated;
+    result.guarded_code_inventory.candidate_budget_exhausted =
+        abort_inventory.candidate_budget_exhausted;
+    result.guarded_code_inventory.candidate_inventory_truncated =
+        abort_inventory.candidate_inventory_truncated;
+    result.guarded_code_inventory.table_scan_truncated =
+        abort_inventory.table_scan_truncated;
+    result.guarded_code_inventory.walk_diagnostics =
+        abort_inventory.walk_diagnostics;
     result.summary_replacements.clear();
     result.removed_summary_shards.clear();
     result.resolution_replacements.clear();
@@ -26735,7 +26841,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         batch.front().context_index;
                     forwarded_work.fanout = batch.size();
                     forwarded_work.priority =
-                        AnalysisWorkPriorityKind::Unblocking;
+                        AnalysisWorkPriorityKind::CriticalPrefix;
+                    forwarded_work.critical_prefix = function_index;
                     forwarded_work.quantum = 1u;
                     parallel_analysis_for(
                         forwarded_executor,
@@ -27088,7 +27195,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     contextual_work.subject = batch.front().address;
                     contextual_work.fanout = batch.size();
                     contextual_work.priority =
-                        AnalysisWorkPriorityKind::Unblocking;
+                        AnalysisWorkPriorityKind::CriticalPrefix;
+                    contextual_work.critical_prefix = function_index;
                     contextual_work.quantum = 1u;
                     parallel_analysis_for(
                         contextual_executor,
@@ -27378,7 +27486,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 harvest_work.subject = stable_addresses.front();
                 harvest_work.fanout = stable_results.size();
                 harvest_work.priority =
-                    AnalysisWorkPriorityKind::Unblocking;
+                    AnalysisWorkPriorityKind::CriticalPrefix;
+                harvest_work.critical_prefix = function_index;
                 harvest_work.quantum = 1u;
                 parallel_analysis_for(
                     contextual_executor,
@@ -27576,7 +27685,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 isolated_work.subject = function->entry_address;
                 isolated_work.fanout = isolated_results.size();
                 isolated_work.priority =
-                    AnalysisWorkPriorityKind::Unblocking;
+                    AnalysisWorkPriorityKind::CriticalPrefix;
+                isolated_work.critical_prefix = function_index;
                 isolated_work.quantum = 1u;
                 parallel_analysis_for(
                     global_analysis_executor(),
@@ -27692,7 +27802,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             FunctionValueResultMaterialization::TerminalFull)
         resolution_inventory_candidate.emplace(
             guarded_inventory_collector);
-    bool resolution_local_fixpoint_budget_exhausted = false;
+    bool resolution_root_incomplete = false;
+    GuardedCodeInventoryReplayTruncation
+        resolution_incomplete_replay_truncation;
     using ResolutionRootArtifactIndex =
         FunctionAnalysisEpoch::ResolutionRootArtifactIndex;
     auto staged_resolution_root_artifacts =
@@ -27831,11 +27943,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         bool retain_artifact_for_next_epoch = false;
         bool artifact_representable =
             resolved.persistent_artifact_reused;
+        const auto replay_truncation =
+            resolved.inventory.replay_truncation();
         if (resolved.persistent_artifact == nullptr &&
             resolved.root_index < resolution_root_plans.size() &&
             !resolved.local_fixpoint_budget_exhausted &&
             !resolved.walk_diagnostics.truncated() &&
-            !resolved.inventory.replay_truncated()) {
+            !replay_truncation.truncated()) {
             const auto& plan =
                 resolution_root_plans[resolved.root_index];
             artifact_representable = plan.representable;
@@ -27866,14 +27980,42 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 std::shared_ptr<const ResolutionRootArtifact>{
                     std::move(artifact)};
         }
-        // Presentation retention is all-or-nothing. A null artifact means
-        // this root carries a local budget loss or a walk/replay truncation;
-        // publishing any non-null partial map would let a later
-        // Unchanged/TerminalFull invocation silently omit this root.
-        if (resolved.persistent_artifact == nullptr &&
-            resolution_epoch_retention_enabled) {
-            disable_resolution_epoch_retention(
-                ResolutionRetentionLimitReason::IncompleteRoot);
+        const bool incomplete_root =
+            resolved.persistent_artifact == nullptr;
+        if (incomplete_root) {
+            const auto root_address =
+                resolved.root_index < resolution_functions.size()
+                    ? resolution_functions[resolved.root_index]
+                          ->entry_address
+                    : 0u;
+            emit_incomplete_resolution_root(
+                resolved.root_index,
+                root_address,
+                resolved.local_fixpoint_budget_exhausted,
+                resolved.walk_diagnostics,
+                replay_truncation.candidate_inventory_truncated,
+                replay_truncation.candidate_budget_exhausted,
+                replay_truncation.raw_stored_candidates_truncated,
+                replay_truncation.table_scan_truncated);
+            // DeltaOnly used to discard this root diagnostic and then label
+            // every cause as a local-fixpoint failure. Preserve the exact
+            // walk/collector bits in the fail-closed abort snapshot instead.
+            merge_root_walk_diagnostics(
+                inventory_walk_diagnostics,
+                resolved.walk_diagnostics);
+            resolution_incomplete_replay_truncation.merge(
+                replay_truncation);
+            resolution_root_incomplete = true;
+            resolution_inventory_candidate.reset();
+            result.resolutions.clear();
+            resolution_count = 0u;
+            // Presentation retention is all-or-nothing. Publishing any
+            // non-null partial map would let a later Unchanged/TerminalFull
+            // invocation silently omit this root.
+            if (resolution_epoch_retention_enabled) {
+                disable_resolution_epoch_retention(
+                    ResolutionRetentionLimitReason::IncompleteRoot);
+            }
         }
         if (resolved.persistent_artifact != nullptr &&
             resolution_epoch_retention_enabled) {
@@ -27902,55 +28044,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     ResolutionRetentionLimitReason::ByteLimit);
             }
         }
-        if (result.result_materialization ==
-            FunctionValueResultMaterialization::TerminalFull) {
-        inventory_walk_diagnostics.forwarded_store_context_limited_functions +=
-            resolved.walk_diagnostics.forwarded_store_context_limited_functions;
-        inventory_walk_diagnostics.forwarded_store_evaluation_cache_hits +=
-            resolved.walk_diagnostics
-                .forwarded_store_evaluation_cache_hits;
-        inventory_walk_diagnostics.forwarded_store_evaluation_cache_misses +=
-            resolved.walk_diagnostics
-                .forwarded_store_evaluation_cache_misses;
-        inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.insert(
-            inventory_walk_diagnostics.forwarded_store_context_limit_diagnostics.end(),
-            std::make_move_iterator(
-                resolved.walk_diagnostics.forwarded_store_context_limit_diagnostics.begin()),
-            std::make_move_iterator(
-                resolved.walk_diagnostics.forwarded_store_context_limit_diagnostics.end()));
-        inventory_walk_diagnostics.contextual_return_context_limited_functions +=
-            resolved.walk_diagnostics.contextual_return_context_limited_functions;
-        inventory_walk_diagnostics.contextual_return_evaluation_limited_functions +=
-            resolved.walk_diagnostics.contextual_return_evaluation_limited_functions;
-        inventory_walk_diagnostics.abi_stack_argument_projection_truncated_functions +=
-            resolved.walk_diagnostics.abi_stack_argument_projection_truncated_functions;
-        inventory_walk_diagnostics.local_fixpoint_limited_evaluations +=
-            resolved.walk_diagnostics.local_fixpoint_limited_evaluations;
-        inventory_walk_diagnostics.maximum_local_fixpoint_iterations =
-            std::max(
-                inventory_walk_diagnostics
-                    .maximum_local_fixpoint_iterations,
-                resolved.walk_diagnostics
-                    .maximum_local_fixpoint_iterations);
-        inventory_walk_diagnostics.inventory_candidate_values_truncated =
-            inventory_walk_diagnostics.inventory_candidate_values_truncated ||
-            resolved.walk_diagnostics.inventory_candidate_values_truncated;
-        inventory_walk_diagnostics.abi_stack_base_unresolved =
-            inventory_walk_diagnostics.abi_stack_base_unresolved ||
-            resolved.walk_diagnostics.abi_stack_base_unresolved;
-        inventory_walk_diagnostics.inventory_tail_target_unresolved =
-            inventory_walk_diagnostics.inventory_tail_target_unresolved ||
-            resolved.walk_diagnostics.inventory_tail_target_unresolved;
-        }
-        if (resolved.local_fixpoint_budget_exhausted) {
-            resolution_local_fixpoint_budget_exhausted = true;
-            resolution_inventory_candidate.reset();
-            result.resolutions.clear();
-            resolution_count = 0u;
-        }
+        if (!incomplete_root &&
+            result.result_materialization ==
+                FunctionValueResultMaterialization::TerminalFull)
+            merge_root_walk_diagnostics(
+                inventory_walk_diagnostics,
+                resolved.walk_diagnostics);
         const bool publish_resolution_outputs =
             !result.budget_exhausted &&
-            !resolution_local_fixpoint_budget_exhausted;
+            !resolution_root_incomplete;
         if (publish_resolution_outputs) {
             if (resolved.persistent_artifact != nullptr) {
                 if (resolution_inventory_candidate.has_value()) {
@@ -27992,19 +28094,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         resolved.persistent_artifact);
                 }
             } else {
-                if (result.result_materialization ==
-                    FunctionValueResultMaterialization::DeltaOnly) {
-                    resolution_local_fixpoint_budget_exhausted = true;
-                    resolution_inventory_candidate.reset();
-                    result.resolutions.clear();
-                    resolution_count = 0u;
-                }
                 if (resolution_inventory_candidate.has_value()) {
                     std::move(resolved.inventory).replay_into(
                         *resolution_inventory_candidate);
                 }
                 if (!result.budget_exhausted &&
-                    !resolution_local_fixpoint_budget_exhausted) {
+                    !resolution_root_incomplete) {
                     resolution_count +=
                         resolved.evaluation.resolutions.size();
                     result.resolutions.insert(
@@ -28038,6 +28133,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 std::memory_order_relaxed);
             commit_resolution_result(
                 evaluate_or_reuse_resolution_function(index));
+            if (resolution_root_incomplete) break;
         }
         progress_resolution_head_started_nanoseconds.store(
             0, std::memory_order_relaxed);
@@ -28064,6 +28160,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::exception_ptr producer_error;
             std::size_t ready_retained_bytes = 0u;
             std::size_t maximum_ready_retained_bytes = 0u;
+            std::size_t next_root_to_submit = 0u;
+            std::size_t active_initial_roots = 0u;
+            std::size_t initial_root_tasks_completed = 0u;
+            std::size_t committed_prefix = 0u;
             std::atomic_bool cancel_requested = false;
             bool producer_done = false;
         };
@@ -28123,6 +28223,52 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             resolution_dispatch_budget_limit - slot_storage_bytes;
         auto dispatch = std::make_shared<ResolutionDispatchState>(
             resolution_functions.size(), ready_retained_limit);
+        const auto cancel_dispatch = [&] {
+            dispatch->cancel_requested.store(
+                true, std::memory_order_release);
+            dispatch->changed.notify_all();
+            resolution_executor.notify_waiters();
+        };
+        const auto maximum_active_initial_roots = std::min(
+            maximum_parallel_resolution_jobs,
+            resolution_executor.maximum_jobs());
+        const auto maximum_uncommitted_resolution_roots = std::max(
+            maximum_active_initial_roots,
+            maximum_parallel_resolution_jobs);
+        const auto global_memory_capacity =
+            resolution_executor.memory_budget().capacity();
+        const auto evaluation_cache_limit =
+            session.impl_->evaluations
+                .maximum_retained_payload_bytes();
+        const auto saturating_add = [](const std::size_t left,
+                                       const std::size_t right) {
+            return right >
+                           std::numeric_limits<std::size_t>::max() -
+                               left
+                       ? std::numeric_limits<std::size_t>::max()
+                       : left + right;
+        };
+        const auto reserved_non_root_bytes = std::min(
+            global_memory_capacity,
+            saturating_add(
+                saturating_add(evaluation_cache_limit,
+                               evaluation_cache_limit),
+                ready_retained_limit));
+        const auto root_memory_headroom =
+            global_memory_capacity - reserved_non_root_bytes;
+        // Root AbstractStates are not individually byte-accounted yet. Give
+        // every live root a conservative executor lease while reserving half
+        // of the remaining process budget for growth inside the root. The two
+        // bounded evaluation caches and ready-result arena are accounted above.
+        const auto root_admission_bytes =
+            pre_reserved_resolution_budget
+                ? 0u
+                : std::max<std::size_t>(
+                      1u,
+                      root_memory_headroom /
+                          std::max<std::size_t>(
+                              1u,
+                              maximum_active_initial_roots * 2u));
 
         const auto ready_payload_bytes =
             [&](const ResolutionFunctionResult& value) {
@@ -28266,80 +28412,151 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         std::jthread producer(
             [&, dispatch]() noexcept {
             try {
-                // Keep the active root set inside one hardware-sized
-                // canonical prefix.  An unbounded set of Throughput lanes
-                // can otherwise finish hundreds of later roots while the
-                // ordered consumer waits for one early root, evicting the
-                // very context artifacts needed to unblock that prefix.
-                // Nested Contextual/Inventory work still shares every
-                // executor worker; only unrelated later roots wait for the
-                // current prefix to finish.
-                const auto maximum_root_batch = std::min(
-                    maximum_parallel_resolution_jobs,
-                    resolution_executor.maximum_jobs());
-                for (std::size_t batch_begin = 0u;
-                     batch_begin < resolution_functions.size() &&
-                     !dispatch->cancel_requested.load(
-                         std::memory_order_acquire);) {
-                    const auto batch_count = std::min(
-                        maximum_root_batch,
-                        resolution_functions.size() - batch_begin);
+                // Maintain a bounded sliding wavefront. The previous
+                // synchronous batches waited for the slowest of 24 roots
+                // before admitting root 25, leaving 23 workers idle for long
+                // serial forwarded chains. Individual submissions refill a
+                // lane immediately. The canonical-prefix window prevents a
+                // slow head root from admitting the entire program and
+                // evicting work which the consumer would then recompute.
+                // Executor leases keep live-root memory bounded and
+                // CriticalPrefix preserves HOL priority.
+                for (;;) {
+                    std::size_t index = 0u;
+                    {
+                        std::unique_lock lock(dispatch->mutex);
+                        dispatch->changed.wait(
+                            lock,
+                            [&] {
+                                return dispatch->cancel_requested.load(
+                                           std::memory_order_acquire) ||
+                                       dispatch->next_root_to_submit >=
+                                           resolution_functions.size() ||
+                                       (dispatch->active_initial_roots <
+                                            maximum_active_initial_roots &&
+                                        dispatch->next_root_to_submit -
+                                                dispatch->committed_prefix <
+                                            maximum_uncommitted_resolution_roots);
+                            });
+                        if (dispatch->cancel_requested.load(
+                                std::memory_order_acquire) ||
+                            dispatch->next_root_to_submit >=
+                                resolution_functions.size())
+                            break;
+                        index = dispatch->next_root_to_submit++;
+                        ++dispatch->active_initial_roots;
+                    }
                     AnalysisWorkDescriptor root_work;
                     root_work.phase = AnalysisWorkPhase::Resolution;
                     root_work.subject_kind =
                         AnalysisWorkSubjectKind::Root;
                     root_work.subject =
-                        resolution_functions[batch_begin]->entry_address;
-                    root_work.fanout = batch_count;
+                        resolution_functions[index]->entry_address;
+                    root_work.fanout = 1u;
                     root_work.priority =
-                        AnalysisWorkPriorityKind::Throughput;
+                        AnalysisWorkPriorityKind::CriticalPrefix;
+                    root_work.critical_prefix = index;
+                    root_work.transient_bytes = root_admission_bytes;
                     root_work.quantum = 1u;
-                    parallel_analysis_for(
-                        resolution_executor,
-                        std::move(root_work),
-                        batch_count,
-                        maximum_parallel_resolution_jobs,
-                        function_value_parallel_activity_if_observed,
-                        [&, batch_begin](const std::size_t batch_index) {
-                        const auto index = batch_begin + batch_index;
-                        if (dispatch->cancel_requested.load(
-                                std::memory_order_acquire))
-                            return;
-                        std::optional<ResolutionFunctionResult> resolved;
-                        std::exception_ptr error;
-                        try {
+                    try {
+                        resolution_executor.submit_once(
+                            std::move(root_work),
+                            [&, dispatch, index]() noexcept {
+                            const detail::ParallelWorkActivityScope
+                                activity_scope{
+                                    function_value_parallel_activity_if_observed};
+                            if (dispatch->cancel_requested.load(
+                                    std::memory_order_acquire))
+                                return;
+                            std::optional<ResolutionFunctionResult> resolved;
+                            std::exception_ptr error;
+                            try {
+                                if (session.impl_
+                                        ->resolution_execution_observer_for_testing
+                                        .job_started)
+                                    session.impl_
+                                        ->resolution_execution_observer_for_testing
+                                        .job_started(index);
+                                resolved.emplace(
+                                    evaluate_or_reuse_resolution_function(
+                                        index));
+                            } catch (...) {
+                                error = std::current_exception();
+                            }
                             if (session.impl_
                                     ->resolution_execution_observer_for_testing
-                                    .job_started)
-                                session.impl_
-                                    ->resolution_execution_observer_for_testing
-                                    .job_started(index);
-                            resolved.emplace(
-                                evaluate_or_reuse_resolution_function(
-                                    index));
-                        } catch (...) {
-                            error = std::current_exception();
-                        }
-                        if (session.impl_
-                                ->resolution_execution_observer_for_testing
-                                .job_completed) {
-                            try {
-                                session.impl_
-                                    ->resolution_execution_observer_for_testing
-                                    .job_completed(index);
-                            } catch (...) {
-                                if (!error) error = std::current_exception();
-                                resolved.reset();
+                                    .job_completed) {
+                                try {
+                                    session.impl_
+                                        ->resolution_execution_observer_for_testing
+                                        .job_completed(index);
+                                } catch (...) {
+                                    if (!error)
+                                        error = std::current_exception();
+                                    resolved.reset();
+                                }
                             }
+                            if (!dispatch->cancel_requested.load(
+                                    std::memory_order_acquire)) {
+                                try {
+                                    publish_initial_result(
+                                        index,
+                                        std::move(resolved),
+                                        std::move(error));
+                                } catch (...) {
+                                    {
+                                        const std::lock_guard lock(
+                                            dispatch->mutex);
+                                        if (!dispatch->producer_error)
+                                            dispatch->producer_error =
+                                                std::current_exception();
+                                    }
+                                    cancel_dispatch();
+                                }
+                            }
+                        },
+                        [&, dispatch]() noexcept {
+                            {
+                                const std::lock_guard lock(dispatch->mutex);
+                                if (dispatch->active_initial_roots != 0u)
+                                    --dispatch->active_initial_roots;
+                                ++dispatch->initial_root_tasks_completed;
+                            }
+                            dispatch->changed.notify_all();
+                            resolution_executor.notify_waiters();
+                        });
+                    } catch (...) {
+                        {
+                            const std::lock_guard lock(dispatch->mutex);
+                            if (dispatch->active_initial_roots != 0u)
+                                --dispatch->active_initial_roots;
+                            if (!dispatch->producer_error)
+                                dispatch->producer_error =
+                                    std::current_exception();
                         }
-                        publish_initial_result(
-                            index, std::move(resolved), std::move(error));
-                    });
-                    batch_begin += batch_count;
+                        cancel_dispatch();
+                        break;
+                    }
                 }
             } catch (...) {
-                const std::lock_guard lock(dispatch->mutex);
-                dispatch->producer_error = std::current_exception();
+                {
+                    const std::lock_guard lock(dispatch->mutex);
+                    if (!dispatch->producer_error)
+                        dispatch->producer_error =
+                            std::current_exception();
+                }
+                cancel_dispatch();
+            }
+            // Every submitted lambda captures this analysis frame. Drain it
+            // unconditionally, including after a producer-side exception,
+            // before producer_done lets the consumer leave the frame.
+            {
+                std::unique_lock lock(dispatch->mutex);
+                dispatch->changed.wait(
+                    lock,
+                    [&] {
+                        return dispatch->active_initial_roots == 0u;
+                    });
             }
             {
                 const std::lock_guard lock(dispatch->mutex);
@@ -28414,8 +28631,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 }
                 resolution_executor.notify_waiters();
                 if (missing_resolution_result || first_resolution_error) {
-                    dispatch->cancel_requested.store(
-                        true, std::memory_order_release);
+                    cancel_dispatch();
                     break;
                 }
 
@@ -28449,14 +28665,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         }
                     }
                     if (first_resolution_error) {
-                        dispatch->cancel_requested.store(
-                            true, std::memory_order_release);
+                        cancel_dispatch();
                         break;
                     }
                     if (!resolved) {
                         missing_resolution_result = true;
-                        dispatch->cancel_requested.store(
-                            true, std::memory_order_release);
+                        cancel_dispatch();
                         break;
                     }
                     const auto retained_bytes =
@@ -28510,17 +28724,25 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 }
                 if (!resolved) {
                     missing_resolution_result = true;
+                    cancel_dispatch();
                     break;
                 }
                 commit_resolution_result(std::move(*resolved));
                 result_lease.reset();
                 resolution_executor.notify_waiters();
+                if (resolution_root_incomplete) {
+                    cancel_dispatch();
+                    break;
+                }
+                {
+                    const std::lock_guard lock(dispatch->mutex);
+                    dispatch->committed_prefix = index + 1u;
+                }
+                dispatch->changed.notify_all();
             }
         } catch (...) {
             consumer_error = std::current_exception();
-            dispatch->cancel_requested.store(
-                true, std::memory_order_release);
-            resolution_executor.notify_waiters();
+            cancel_dispatch();
         }
         progress_resolution_head_started_nanoseconds.store(
             0, std::memory_order_relaxed);
@@ -28543,6 +28765,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             }
             dispatch->ready_retained_bytes = 0u;
         }
+        progress_resolution_functions_ready.store(
+            0u, std::memory_order_relaxed);
         slot_storage_lease.reset();
         resolution_executor.notify_waiters();
         if (consumer_error)
@@ -28555,7 +28779,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             throw std::logic_error(
                 "Parallele Function-Resolution lieferte kein Ergebnis.");
     }
-    if (resolution_local_fixpoint_budget_exhausted)
+    if (resolution_root_incomplete)
         result.budget_exhausted = true;
     result.resolution_root_artifacts_retained =
         result.budget_exhausted
@@ -28608,6 +28832,22 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             maximum_forwarded_store_limit_diagnostics);
     }
     result.guarded_code_inventory = guarded_inventory_collector.finish();
+    result.guarded_code_inventory.candidate_inventory_truncated =
+        result.guarded_code_inventory.candidate_inventory_truncated ||
+        resolution_incomplete_replay_truncation
+            .candidate_inventory_truncated;
+    result.guarded_code_inventory.candidate_budget_exhausted =
+        result.guarded_code_inventory.candidate_budget_exhausted ||
+        resolution_incomplete_replay_truncation
+            .candidate_budget_exhausted;
+    result.guarded_code_inventory.raw_stored_candidates_truncated =
+        result.guarded_code_inventory.raw_stored_candidates_truncated ||
+        resolution_incomplete_replay_truncation
+            .raw_stored_candidates_truncated;
+    result.guarded_code_inventory.table_scan_truncated =
+        result.guarded_code_inventory.table_scan_truncated ||
+        resolution_incomplete_replay_truncation
+            .table_scan_truncated;
     result.guarded_code_inventory.walk_diagnostics = inventory_walk_diagnostics;
     coalesce_resolutions(result.resolutions);
     resolution_count = result.resolutions.size();
@@ -28845,7 +29085,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     staged_presentation_metadata.resolution_retention_limit_reason =
         result.resolution_retention_limit_reason;
     if (result.result_materialization ==
-        FunctionValueResultMaterialization::DeltaOnly) {
+            FunctionValueResultMaterialization::DeltaOnly &&
+        !result.budget_exhausted) {
         // The flattened inventory belongs to the pinned presentation arena.
         // Intermediate consumers reconcile the exact owner shards above.
         result.guarded_code_inventory = {};
