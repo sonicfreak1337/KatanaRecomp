@@ -12276,6 +12276,118 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
     std::filesystem::rename(previous, published);
 }
 
+std::string guarded_aot_inventory_failure_message(
+    const katana::analysis::ControlFlowAnalysisResult& analysis) {
+    std::ostringstream reason;
+    reason << "Portanalyse besitzt kein vollstaendiges Guarded-AOT-Inventar:"
+           << " function_budget_exhausted="
+           << analysis.function_budget_exhausted
+           << " raw_stored_candidates="
+           << analysis.raw_stored_code_inventory_candidates
+           << '/' << analysis.raw_stored_code_inventory_budget
+           << " raw_stored_truncated="
+           << analysis.raw_stored_code_inventory_truncated
+           << " candidate_inventory_truncated="
+           << analysis.candidate_inventory_truncated
+           << " returned_table_scan_truncated="
+           << analysis.returned_table_scan_truncated
+           << " candidates="
+           << analysis.guarded_code_inventory_candidates
+           << '/' << analysis.guarded_code_inventory_budget
+           << " candidate_budget_exhausted="
+           << analysis.guarded_code_inventory_candidate_budget_exhausted
+           << " inventory_regions="
+           << analysis.guarded_code_inventory_walk.inventory_region_count
+           << '/'
+           << analysis.guarded_code_inventory_walk.inventory_region_budget
+           << " pending_inventory_regions="
+           << analysis.guarded_code_inventory_walk.pending_inventory_region_count
+           << " region_block_budget="
+           << analysis.guarded_code_inventory_walk.inventory_region_block_budget
+           << " region_block_limited="
+           << analysis.guarded_code_inventory_walk.inventory_region_block_limited_regions
+           << " forwarding_limited_functions="
+           << analysis.guarded_code_inventory_walk.forwarded_store_context_limited_functions
+           << " per_function_forwarding_context_budget="
+           << analysis.guarded_code_inventory_walk.forwarded_store_context_budget
+           << " forwarding_evaluation_cache_hits="
+           << analysis.guarded_code_inventory_walk
+                  .forwarded_store_evaluation_cache_hits
+           << " forwarding_evaluation_cache_misses="
+           << analysis.guarded_code_inventory_walk
+                  .forwarded_store_evaluation_cache_misses
+           << " contextual_return_limited_functions="
+           << analysis.guarded_code_inventory_walk.contextual_return_context_limited_functions
+           << " per_function_contextual_return_context_budget="
+           << analysis.guarded_code_inventory_walk.contextual_return_context_budget
+           << " contextual_return_evaluation_limited_functions="
+           << analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
+           << " per_function_contextual_return_evaluation_budget="
+           << analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
+           << " abi_stack_argument_projection_truncated="
+           << analysis.guarded_code_inventory_walk
+                  .abi_stack_argument_projection_truncated_functions
+           << '/' << analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
+           << " local_fixpoint_limited_evaluations="
+           << analysis.guarded_code_inventory_walk
+                  .local_fixpoint_limited_evaluations
+           << '/' << analysis.guarded_code_inventory_walk
+                          .local_fixpoint_iteration_budget
+           << " maximum_local_fixpoint_iterations="
+           << analysis.guarded_code_inventory_walk
+                  .maximum_local_fixpoint_iterations
+           << " resolution_root_logical_budget_exhausted="
+           << analysis.guarded_code_inventory_walk
+                  .resolution_root_logical_budget_exhausted
+           << " inventory_candidate_values_truncated="
+           << analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated
+           << " abi_stack_base_unresolved="
+           << analysis.guarded_code_inventory_walk.abi_stack_base_unresolved
+           << " inventory_tail_target_unresolved="
+           << analysis.guarded_code_inventory_walk
+                  .inventory_tail_target_unresolved
+           << " shape_budget_exceeded="
+           << analysis.guarded_code_shape_budget_exceeded_candidates
+           << " entry_rejections="
+           << analysis.guarded_aot_entry_rejections.size();
+    const auto& forwarding_limits =
+        analysis.guarded_code_inventory_walk
+            .forwarded_store_context_limit_diagnostics;
+    if (!forwarding_limits.empty()) {
+        const auto reason_name = [](
+            const katana::analysis::ForwardedStoreContextLimitReason value) {
+                switch (value) {
+                case katana::analysis::ForwardedStoreContextLimitReason::RootCallSites:
+                    return "roots";
+                case katana::analysis::ForwardedStoreContextLimitReason::ContextCount:
+                    return "contexts";
+                case katana::analysis::ForwardedStoreContextLimitReason::ReevaluationCount:
+                    return "reevaluations";
+                }
+                return "unknown";
+            };
+        reason << " forwarding_limit_capsule=[";
+        for (std::size_t index = 0u;
+             index < forwarding_limits.size();
+             ++index) {
+            const auto& capsule = forwarding_limits[index];
+            if (index != 0u) reason << ';';
+            reason << "{owner=0x" << std::hex << capsule.owner_entry
+                   << ",target=0x" << capsule.target
+                   << ",root=0x" << capsule.exemplar_root_call_site
+                   << std::dec
+                   << ",reason=" << reason_name(capsule.reason)
+                   << ",tail=" << capsule.tail
+                   << ",isolated=" << capsule.isolated
+                   << ",contexts=" << capsule.context_count
+                   << ",roots=" << capsule.root_call_site_count
+                   << ",evaluations=" << capsule.evaluation_count << '}';
+        }
+        reason << ']';
+    }
+    return reason.str();
+}
+
 static PortExportResult export_dreamcast_port_project_impl(
     const PreparedPortProgram& prepared,
     const std::filesystem::path& output_root,
@@ -12362,111 +12474,9 @@ static PortExportResult export_dreamcast_port_project_impl(
     if (!options.diagnostic_partial &&
         !katana::analysis::guarded_aot_inventory_complete(
             prepared.analysis)) {
-        std::ostringstream reason;
-        reason << "Portanalyse besitzt kein vollstaendiges Guarded-AOT-Inventar:"
-               << " function_budget_exhausted="
-               << prepared.analysis.function_budget_exhausted
-               << " raw_stored_candidates="
-               << prepared.analysis.raw_stored_code_inventory_candidates
-               << '/'
-               << prepared.analysis.raw_stored_code_inventory_budget
-               << " raw_stored_truncated="
-               << prepared.analysis.raw_stored_code_inventory_truncated
-               << " candidate_inventory_truncated="
-               << prepared.analysis.candidate_inventory_truncated
-               << " returned_table_scan_truncated="
-               << prepared.analysis.returned_table_scan_truncated
-               << " candidates="
-               << prepared.analysis.guarded_code_inventory_candidates
-               << '/' << prepared.analysis.guarded_code_inventory_budget
-               << " candidate_budget_exhausted="
-               << prepared.analysis.guarded_code_inventory_candidate_budget_exhausted
-               << " inventory_regions="
-               << prepared.analysis.guarded_code_inventory_walk.inventory_region_count
-               << '/'
-               << prepared.analysis.guarded_code_inventory_walk.inventory_region_budget
-               << " pending_inventory_regions="
-               << prepared.analysis.guarded_code_inventory_walk.pending_inventory_region_count
-               << " region_block_budget="
-               << prepared.analysis.guarded_code_inventory_walk.inventory_region_block_budget
-               << " region_block_limited="
-               << prepared.analysis.guarded_code_inventory_walk.inventory_region_block_limited_regions
-               << " forwarding_limited_functions="
-               << prepared.analysis.guarded_code_inventory_walk.forwarded_store_context_limited_functions
-               << " per_function_forwarding_context_budget="
-               << prepared.analysis.guarded_code_inventory_walk.forwarded_store_context_budget
-               << " forwarding_evaluation_cache_hits="
-               << prepared.analysis.guarded_code_inventory_walk
-                      .forwarded_store_evaluation_cache_hits
-               << " forwarding_evaluation_cache_misses="
-               << prepared.analysis.guarded_code_inventory_walk
-                      .forwarded_store_evaluation_cache_misses
-               << " contextual_return_limited_functions="
-               << prepared.analysis.guarded_code_inventory_walk.contextual_return_context_limited_functions
-               << " per_function_contextual_return_context_budget="
-               << prepared.analysis.guarded_code_inventory_walk.contextual_return_context_budget
-               << " contextual_return_evaluation_limited_functions="
-               << prepared.analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
-               << " per_function_contextual_return_evaluation_budget="
-               << prepared.analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
-               << " abi_stack_argument_projection_truncated="
-               << prepared.analysis.guarded_code_inventory_walk
-                      .abi_stack_argument_projection_truncated_functions
-               << '/' << prepared.analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
-               << " local_fixpoint_limited_evaluations="
-               << prepared.analysis.guarded_code_inventory_walk
-                      .local_fixpoint_limited_evaluations
-               << '/' << prepared.analysis.guarded_code_inventory_walk
-                              .local_fixpoint_iteration_budget
-               << " maximum_local_fixpoint_iterations="
-               << prepared.analysis.guarded_code_inventory_walk
-                      .maximum_local_fixpoint_iterations
-               << " resolution_root_logical_budget_exhausted="
-               << prepared.analysis.guarded_code_inventory_walk
-                      .resolution_root_logical_budget_exhausted
-               << " inventory_candidate_values_truncated="
-               << prepared.analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated
-                << " abi_stack_base_unresolved="
-                << prepared.analysis.guarded_code_inventory_walk.abi_stack_base_unresolved
-                << " inventory_tail_target_unresolved="
-                << prepared.analysis.guarded_code_inventory_walk
-                       .inventory_tail_target_unresolved
-                << " shape_budget_exceeded="
-               << prepared.analysis
-                      .guarded_code_shape_budget_exceeded_candidates
-               << " entry_rejections="
-               << prepared.analysis.guarded_aot_entry_rejections.size();
-        const auto& forwarding_limits = prepared.analysis.guarded_code_inventory_walk
-                                            .forwarded_store_context_limit_diagnostics;
-        if (!forwarding_limits.empty()) {
-            const auto reason_name = [](const katana::analysis::ForwardedStoreContextLimitReason value) {
-                switch (value) {
-                case katana::analysis::ForwardedStoreContextLimitReason::RootCallSites:
-                    return "roots";
-                case katana::analysis::ForwardedStoreContextLimitReason::ContextCount:
-                    return "contexts";
-                case katana::analysis::ForwardedStoreContextLimitReason::ReevaluationCount:
-                    return "reevaluations";
-                }
-                return "unknown";
-            };
-            reason << " forwarding_limit_capsule=[";
-            for (std::size_t index = 0u; index < forwarding_limits.size(); ++index) {
-                const auto& capsule = forwarding_limits[index];
-                if (index != 0u) reason << ';';
-                reason << "{owner=0x" << std::hex << capsule.owner_entry
-                       << ",target=0x" << capsule.target
-                       << ",root=0x" << capsule.exemplar_root_call_site << std::dec
-                       << ",reason=" << reason_name(capsule.reason)
-                       << ",tail=" << capsule.tail
-                       << ",isolated=" << capsule.isolated
-                       << ",contexts=" << capsule.context_count
-                       << ",roots=" << capsule.root_call_site_count
-                       << ",evaluations=" << capsule.evaluation_count << '}';
-            }
-            reason << ']';
-        }
-        throw std::runtime_error(reason.str());
+        throw std::runtime_error(
+            guarded_aot_inventory_failure_message(
+                prepared.analysis));
     }
     katana::ir::require_valid_program(prepared.program);
     require_guarded_aot_program_entries(
@@ -13717,7 +13727,35 @@ PreparedBootAnalysisRun prepare_boot_analysis(
         analysis_options);
     if (analysis.progress_callback_failed)
         options.progress.record_observation_loss();
-    control_flow_progress.complete(analysis.fixpoint_iterations);
+    control_flow_progress.complete(
+        analysis.fixpoint_iterations,
+        analysis.termination_reason ==
+                katana::analysis::ControlFlowAnalysisTerminationReason::None &&
+            !analysis.function_budget_exhausted);
+    if (!options.diagnostic_partial &&
+        analysis.function_budget_exhausted &&
+        analysis.guarded_aot_entry_rejections.empty() &&
+        std::none_of(
+            analysis.recursive.diagnostics.begin(),
+            analysis.recursive.diagnostics.end(),
+            katana::analysis::analysis_diagnostic_blocks_codegen) &&
+        std::none_of(
+            analysis.indirect_control_flow.begin(),
+            analysis.indirect_control_flow.end(),
+            [](const auto& resolution) {
+                const auto status =
+                    katana::analysis::control_flow_report_status(
+                        resolution);
+                return status ==
+                           katana::analysis::ControlFlowReportStatus::
+                               GuardedPartial ||
+                       status ==
+                           katana::analysis::ControlFlowReportStatus::
+                               Unresolved;
+            })) {
+        throw std::runtime_error(
+            guarded_aot_inventory_failure_message(analysis));
+    }
     report_progress(options, "ir-lowering");
     const auto architectural_safepoints =
         katana::ir::architectural_safepoint_block_leaders(

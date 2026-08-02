@@ -26,8 +26,20 @@ class StructuredControlFlowProgress final {
 
     void update(
         const katana::analysis::ControlFlowAnalysisProgress& progress) {
+        const auto failed =
+            progress.phase.find("budget-exhausted") !=
+                std::string_view::npos ||
+            progress.phase.find("cycle-exhausted") !=
+                std::string_view::npos ||
+            progress.phase.find("boundary-contract-stale") !=
+                std::string_view::npos;
         ensure_round(progress);
-        ensure_candidate_iteration(progress);
+        // A terminal failure can arrive on the explicit zero-iteration
+        // boundary. Do not let that boundary close the still-open candidate,
+        // FVA and resolution scopes as successful before the failure snapshot
+        // is applied below.
+        if (!failed || progress.candidate_contract_iteration != 0u)
+            ensure_candidate_iteration(progress);
 
         katana::ProgressCounterSnapshot control_counters;
         control_counters.iteration = progress.iteration;
@@ -56,13 +68,6 @@ class StructuredControlFlowProgress final {
             std::move(control_counters));
         update_round(progress);
 
-        const auto failed =
-            progress.phase.find("budget-exhausted") !=
-                std::string_view::npos ||
-            progress.phase.find("cycle-exhausted") !=
-                std::string_view::npos ||
-            progress.phase.find("boundary-contract-stale") !=
-                std::string_view::npos;
         const auto function_values_complete =
             progress.phase.starts_with(
                 "function-values-complete") ||
@@ -211,11 +216,13 @@ class StructuredControlFlowProgress final {
         }
     }
 
-    void complete(const std::size_t iterations) {
-        close_function_values(!round_failed_);
-        close_candidate_iteration(!round_failed_);
-        close_round(!round_failed_);
-        if (round_failed_)
+    void complete(const std::size_t iterations,
+                  const bool analysis_complete) {
+        const auto succeeded = analysis_complete && !round_failed_;
+        close_function_values(succeeded);
+        close_candidate_iteration(succeeded);
+        close_round(succeeded);
+        if (!succeeded)
             control_.fail();
         else
             control_.complete(iterations);

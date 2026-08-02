@@ -959,7 +959,10 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             false);
     }
     control_flow_progress.complete(
-        analysis.fixpoint_iterations);
+        analysis.fixpoint_iterations,
+        analysis.termination_reason ==
+                katana::analysis::ControlFlowAnalysisTerminationReason::None &&
+            !analysis.function_budget_exhausted);
     switch (analysis.termination_reason) {
     case katana::analysis::ControlFlowAnalysisTerminationReason::
         AnalysisIterationBudgetExceeded:

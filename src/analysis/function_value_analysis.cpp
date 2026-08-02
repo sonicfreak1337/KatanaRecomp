@@ -30,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <span>
@@ -409,6 +410,8 @@ struct AbiStackArgumentReadSet {
 
 using AbiStackArgumentReadMap =
     std::unordered_map<std::uint32_t, AbiStackArgumentReadSet>;
+using ForwardedRegisterReadMap =
+    std::unordered_map<std::uint32_t, std::uint16_t>;
 
 void make_abi_stack_argument_reads_unknown(
     AbiStackArgumentReadSet& reads) {
@@ -991,6 +994,22 @@ class EvidenceProvenanceDomainLens final {
     std::size_t required_tokens_ = 0u;
 };
 
+struct ContextualCallSiteKey final {
+    std::uint32_t call_site = 0u;
+    std::uint32_t callee = 0u;
+
+    auto operator<=>(const ContextualCallSiteKey&) const = default;
+};
+
+struct ContextualBoundSummary final {
+    AbstractState input;
+    FunctionValueSummary summary;
+};
+
+using ContextualSummaryBindings =
+    std::map<ContextualCallSiteKey,
+             std::vector<ContextualBoundSummary>>;
+
 class EvidenceProvenanceLens final {
   public:
     EvidenceProvenanceLens(
@@ -1002,8 +1021,7 @@ class EvidenceProvenanceLens final {
         const std::unordered_set<std::uint32_t>&
             locally_observable_callees,
         std::map<std::uint32_t, FunctionValueSummary> summaries,
-        std::optional<std::map<std::uint32_t,
-                               FunctionValueSummary>>
+        std::optional<ContextualSummaryBindings>
             contextual_summaries = std::nullopt,
         const EvidenceTokenAssignments* const
             prior_call_site_assignments = nullptr,
@@ -1040,9 +1058,27 @@ class EvidenceProvenanceLens final {
             }
         };
         collect_summary_callee_fields(summaries_);
-        if (contextual_summaries_.has_value())
-            collect_summary_callee_fields(
-                *contextual_summaries_);
+        if (contextual_summaries_.has_value()) {
+            for (auto& [key, bindings] :
+                 *contextual_summaries_) {
+                static_cast<void>(key);
+                for (auto& binding : bindings) {
+                    for_each_evidence_set(
+                        binding.input,
+                        [&](const EvidenceProvenanceDomain domain,
+                            std::set<std::uint32_t>& evidence) {
+                            (domain ==
+                                     EvidenceProvenanceDomain::CallSite
+                                 ? call_site_fields
+                                 : callee_fields)
+                                .push_back(&evidence);
+                        });
+                    for (auto& value : binding.summary.registers)
+                        summary_callee_fields.push_back(
+                            &value.evidence_callees);
+                }
+            }
+        }
         valid_ = call_sites_.canonicalize(
                      call_site_fields,
                      {},
@@ -1078,8 +1114,7 @@ class EvidenceProvenanceLens final {
         return &summaries_;
     }
 
-    [[nodiscard]] const std::map<std::uint32_t,
-                                 FunctionValueSummary>*
+    [[nodiscard]] const ContextualSummaryBindings*
     contextual_summaries() const noexcept {
         return contextual_summaries_.has_value()
                    ? &*contextual_summaries_
@@ -1133,8 +1168,7 @@ class EvidenceProvenanceLens final {
   private:
     AbstractState ingress_;
     std::map<std::uint32_t, FunctionValueSummary> summaries_;
-    std::optional<std::map<std::uint32_t, FunctionValueSummary>>
-        contextual_summaries_;
+    std::optional<ContextualSummaryBindings> contextual_summaries_;
     std::set<std::uint32_t> isolated_call_sites_;
     EvidenceProvenanceDomainLens call_sites_;
     EvidenceProvenanceDomainLens callees_;
@@ -1171,6 +1205,10 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source);
 bool merge_state(AbstractState& destination,
                  const AbstractState& source,
                  bool may_merge_stack_values);
+[[nodiscard]] bool canonicalize_evaluation_ingress_in_place(
+    AbstractState& state,
+    std::uint16_t register_read_mask,
+    const AbiStackArgumentReadSet& stack_reads);
 [[nodiscard]] bool has_saved_stack_epoch(const AbstractValue& value);
 [[nodiscard]] bool carries_unresolved_stack_callback(
     const AbstractValue& value);
@@ -2309,6 +2347,56 @@ void synchronize_inventory_provenance(AbstractValue& value) {
     }
     return false;
 }
+
+struct InventoryStateLoss final {
+    bool candidate_values_truncated = false;
+    bool stack_base_unresolved = false;
+};
+
+[[nodiscard]] InventoryStateLoss inventory_state_loss(
+    const AbstractState& state) {
+    InventoryStateLoss loss;
+    loss.candidate_values_truncated =
+        inventory_candidate_values_truncated(state);
+    loss.stack_base_unresolved =
+        state.inventory_unresolved_stack_callback_loss ||
+        state.inventory_stack_callback_loss_identity_truncated;
+    const auto observe = [&](const AbstractValue& value) {
+        loss.stack_base_unresolved =
+            loss.stack_base_unresolved ||
+            carries_unresolved_stack_callback(value);
+    };
+    for (const auto& value : state.registers)
+        observe(value);
+    for (const auto& [slot, value] : state.stack_values) {
+        static_cast<void>(slot);
+        observe(value);
+    }
+    for (const auto& [address, value] : state.memory_values) {
+        static_cast<void>(address);
+        observe(value);
+    }
+    return loss;
+}
+
+[[nodiscard]] bool inventory_join_creates_loss(
+    const AbstractState& left,
+    const AbstractState& right,
+    const AbstractState& joined) {
+    const auto left_loss = inventory_state_loss(left);
+    const auto right_loss = inventory_state_loss(right);
+    const auto joined_loss = inventory_state_loss(joined);
+    return
+        (joined_loss.candidate_values_truncated &&
+         !left_loss.candidate_values_truncated &&
+         !right_loss.candidate_values_truncated) ||
+        (joined_loss.stack_base_unresolved &&
+         !left_loss.stack_base_unresolved &&
+         !right_loss.stack_base_unresolved);
+}
+
+[[nodiscard]] std::vector<std::uint8_t>
+canonical_abstract_state_key(const AbstractState& state);
 
 [[nodiscard]] bool has_inventory_candidate_values(const AbstractValue& value) {
     return !value.inventory_code_pointer_values.empty() ||
@@ -3885,16 +3973,42 @@ bool merge_state(AbstractState& destination,
 }
 
 void coalesce_call_arguments(
-    std::vector<FunctionEvaluation::CallArguments>& observations) {
-    std::sort(observations.begin(),
-              observations.end(),
-              [](const auto& left, const auto& right) {
-                  return std::tie(left.call_site, left.callee) <
-                         std::tie(right.call_site, right.callee);
-              });
-    std::vector<FunctionEvaluation::CallArguments> merged;
-    merged.reserve(observations.size());
+    std::vector<FunctionEvaluation::CallArguments>& observations,
+    const bool preserve_lossless_disjuncts = false) {
+    constexpr std::size_t maximum_extra_disjuncts =
+        maximum_guarded_code_inventory;
+    struct KeyedObservation final {
+        FunctionEvaluation::CallArguments observation;
+        std::vector<std::uint8_t> state_key;
+    };
+    std::vector<KeyedObservation> keyed;
+    keyed.reserve(observations.size());
     for (auto& observation : observations) {
+        auto state_key =
+            canonical_abstract_state_key(observation.state);
+        keyed.push_back(
+            {std::move(observation),
+             std::move(state_key)});
+    }
+    std::sort(
+        keyed.begin(),
+        keyed.end(),
+        [](const auto& left, const auto& right) {
+            if (left.observation.call_site !=
+                right.observation.call_site)
+                return left.observation.call_site <
+                       right.observation.call_site;
+            if (left.observation.callee !=
+                right.observation.callee)
+                return left.observation.callee <
+                       right.observation.callee;
+            return left.state_key < right.state_key;
+        });
+    std::vector<FunctionEvaluation::CallArguments> merged;
+    merged.reserve(keyed.size());
+    std::size_t extra_disjuncts = 0u;
+    for (auto& item : keyed) {
+        auto& observation = item.observation;
         if (merged.empty() ||
             merged.back().call_site != observation.call_site ||
             merged.back().callee != observation.callee) {
@@ -3904,27 +4018,64 @@ void coalesce_call_arguments(
         // These observations feed the bounded inventory-only context walk.
         // A callback spilled in only one transient predecessor must remain
         // available as guarded/incomplete evidence after coalescing.
+        auto candidate = merged.back().state;
         static_cast<void>(
-            merge_state(merged.back().state, observation.state, true));
+            merge_state(candidate, observation.state, true));
+        if (preserve_lossless_disjuncts &&
+            inventory_join_creates_loss(
+                merged.back().state,
+                observation.state,
+                candidate) &&
+            extra_disjuncts < maximum_extra_disjuncts) {
+            merged.push_back(std::move(observation));
+            ++extra_disjuncts;
+        } else {
+            merged.back().state = std::move(candidate);
+        }
     }
     observations = std::move(merged);
 }
 
 void coalesce_inventory_transfers(
-    std::vector<FunctionEvaluation::InventoryTransfer>& observations) {
-    std::sort(observations.begin(),
-              observations.end(),
-              [](const auto& left, const auto& right) {
-                  return std::tie(left.transfer_site,
-                                  left.target,
-                                  left.target_kind) <
-                         std::tie(right.transfer_site,
-                                  right.target,
-                                  right.target_kind);
-              });
-    std::vector<FunctionEvaluation::InventoryTransfer> merged;
-    merged.reserve(observations.size());
+    std::vector<FunctionEvaluation::InventoryTransfer>& observations,
+    const bool preserve_lossless_disjuncts = false) {
+    constexpr std::size_t maximum_extra_disjuncts =
+        maximum_guarded_code_inventory;
+    struct KeyedObservation final {
+        FunctionEvaluation::InventoryTransfer observation;
+        std::vector<std::uint8_t> state_key;
+    };
+    std::vector<KeyedObservation> keyed;
+    keyed.reserve(observations.size());
     for (auto& observation : observations) {
+        auto state_key =
+            canonical_abstract_state_key(observation.state);
+        keyed.push_back(
+            {std::move(observation),
+             std::move(state_key)});
+    }
+    std::sort(
+        keyed.begin(),
+        keyed.end(),
+        [](const auto& left, const auto& right) {
+            if (left.observation.transfer_site !=
+                right.observation.transfer_site)
+                return left.observation.transfer_site <
+                       right.observation.transfer_site;
+            if (left.observation.target != right.observation.target)
+                return left.observation.target <
+                       right.observation.target;
+            if (left.observation.target_kind !=
+                right.observation.target_kind)
+                return left.observation.target_kind <
+                       right.observation.target_kind;
+            return left.state_key < right.state_key;
+        });
+    std::vector<FunctionEvaluation::InventoryTransfer> merged;
+    merged.reserve(keyed.size());
+    std::size_t extra_disjuncts = 0u;
+    for (auto& item : keyed) {
+        auto& observation = item.observation;
         if (merged.empty() ||
             merged.back().transfer_site !=
                 observation.transfer_site ||
@@ -3933,14 +4084,24 @@ void coalesce_inventory_transfers(
             merged.push_back(std::move(observation));
             continue;
         }
+        auto candidate = merged.back().state;
         static_cast<void>(
-            merge_state(merged.back().state,
-                        observation.state,
-                        true));
-        merged.back().guarded =
-            merged.back().guarded || observation.guarded;
-        merged.back().complete =
-            merged.back().complete && observation.complete;
+            merge_state(candidate, observation.state, true));
+        if (preserve_lossless_disjuncts &&
+            inventory_join_creates_loss(
+                merged.back().state,
+                observation.state,
+                candidate) &&
+            extra_disjuncts < maximum_extra_disjuncts) {
+            merged.push_back(std::move(observation));
+            ++extra_disjuncts;
+        } else {
+            merged.back().state = std::move(candidate);
+            merged.back().guarded =
+                merged.back().guarded || observation.guarded;
+            merged.back().complete =
+                merged.back().complete && observation.complete;
+        }
     }
     observations = std::move(merged);
 }
@@ -7201,6 +7362,9 @@ void promote_tail_code_literal_arguments(
     }
 }
 
+using ObservedCalleeInputs =
+    std::map<std::uint32_t, AbstractState>;
+
 void observe_callee_arguments(
     const katana::io::ExecutableImage& image,
     const AbstractState& state,
@@ -7209,9 +7373,13 @@ void observe_callee_arguments(
     const std::span<const std::uint32_t> candidate_callees,
     const bool candidate_callees_guarded,
     std::vector<FunctionEvaluation::CallArguments>* const call_arguments,
+    ObservedCalleeInputs* const observed_inputs,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
+    const ForwardedRegisterReadMap* const forwarded_register_reads,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads) {
-    if (call_arguments == nullptr || candidate_callees.empty()) return;
+    if ((call_arguments == nullptr && observed_inputs == nullptr) ||
+        candidate_callees.empty())
+        return;
     for (const auto candidate : candidate_callees) {
         const AbiStackArgumentReadSet* required_stack_reads = nullptr;
         if (abi_stack_argument_reads != nullptr) {
@@ -7228,6 +7396,22 @@ void observe_callee_arguments(
             walk_diagnostics,
             required_stack_reads);
         mark_observed_code_pointer_arguments(image, observation);
+        auto register_mask =
+            std::numeric_limits<std::uint16_t>::max();
+        if (forwarded_register_reads != nullptr) {
+            const auto register_reads =
+                forwarded_register_reads->find(candidate);
+            if (register_reads != forwarded_register_reads->end())
+                register_mask = register_reads->second;
+        }
+        AbiStackArgumentReadSet no_stack_projection;
+        no_stack_projection.complete = false;
+        static_cast<void>(canonicalize_evaluation_ingress_in_place(
+            observation,
+            register_mask,
+            required_stack_reads == nullptr
+                ? no_stack_projection
+                : *required_stack_reads));
         if (candidate_callees_guarded) {
             for (auto& value : observation)
                 value.guarded = true;
@@ -7240,8 +7424,11 @@ void observe_callee_arguments(
                 value.guarded = true;
             }
         }
-        call_arguments->push_back(
-            {call_site, candidate, std::move(observation)});
+        if (observed_inputs != nullptr)
+            observed_inputs->insert_or_assign(candidate, observation);
+        if (call_arguments != nullptr)
+            call_arguments->push_back(
+                {call_site, candidate, std::move(observation)});
     }
 }
 // Contextual candidate summaries are only needed along ABI values that really
@@ -7397,20 +7584,26 @@ void apply_call(AbstractState& state,
                 const std::map<std::uint32_t, FunctionValueSummary>& summaries,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments,
                 const bool preserve_guarded_stack_inventory = false,
-                const std::map<std::uint32_t, FunctionValueSummary>*
+                const ContextualSummaryBindings*
                     contextual_summaries = nullptr,
                 GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics = nullptr,
+                const ForwardedRegisterReadMap* const
+                    forwarded_register_reads = nullptr,
                 const AbiStackArgumentReadMap* const
                     abi_stack_argument_reads = nullptr) {
-    observe_callee_arguments(image,
-                             state,
-                             owner,
-                             call_site,
-                             candidate_callees,
-                             candidate_callees_guarded,
-                             call_arguments,
-                             walk_diagnostics,
-                             abi_stack_argument_reads);
+    ObservedCalleeInputs observed_inputs;
+    observe_callee_arguments(
+        image,
+        state,
+        owner,
+        call_site,
+        candidate_callees,
+        candidate_callees_guarded,
+        call_arguments,
+        contextual_summaries == nullptr ? nullptr : &observed_inputs,
+        walk_diagnostics,
+        forwarded_register_reads,
+        abi_stack_argument_reads);
     std::map<std::uint32_t, AbstractValue>
         preserved_saved_stack_memory;
     for (const auto& [address, value] : state.memory_values) {
@@ -7531,9 +7724,21 @@ void apply_call(AbstractState& state,
     for (const auto candidate : callees) {
         const FunctionValueSummary* summary = nullptr;
         if (contextual_summaries != nullptr) {
-            const auto contextual = contextual_summaries->find(candidate);
-            if (contextual != contextual_summaries->end())
-                summary = &contextual->second;
+            const auto contextual = contextual_summaries->find(
+                {call_site, candidate});
+            const auto observed = observed_inputs.find(candidate);
+            if (contextual != contextual_summaries->end() &&
+                observed != observed_inputs.end()) {
+                for (const auto& binding : contextual->second) {
+                    auto joined = binding.input;
+                    if (!merge_state(joined,
+                                     observed->second,
+                                     true)) {
+                        summary = &binding.summary;
+                        break;
+                    }
+                }
+            }
         }
         if (summary == nullptr) {
             const auto global = summaries.find(candidate);
@@ -8173,9 +8378,14 @@ void observe_stored_code_addresses(
     if (!persistent_destination && !forwarded_code_pointer_store &&
         !fixed_storage_literal_store)
         return;
-    if (walk_diagnostics != nullptr &&
-        carries_unresolved_stack_callback(value))
-        walk_diagnostics->abi_stack_base_unresolved = true;
+    if (walk_diagnostics != nullptr) {
+        walk_diagnostics->inventory_candidate_values_truncated =
+            walk_diagnostics->inventory_candidate_values_truncated ||
+            inventory_candidate_values_truncated(value);
+        walk_diagnostics->abi_stack_base_unresolved =
+            walk_diagnostics->abi_stack_base_unresolved ||
+            carries_unresolved_stack_callback(value);
+    }
 
     auto candidate_values = value.values;
     candidate_values.insert(candidate_values.end(),
@@ -8368,12 +8578,52 @@ enum class ResolutionCollectionMode : std::uint8_t {
 // context and local-CFG evaluation must stop promptly instead of keeping the
 // analysis frame alive until an unrelated heavy root naturally converges.
 struct ResolutionEvaluationCancelled final {};
+struct ResolutionSiblingEvaluationCancelled final {};
+
+// Resolution work may be cancelled by more than one independently owned
+// scope.  In particular, an exact-contribution batch must be able to stop its
+// remaining sibling walks without cancelling unrelated roots in the outer
+// wavefront.  Chaining immutable views keeps the hot polling path allocation-
+// free while preserving every enclosing cancellation source.
+struct ResolutionCancellation final {
+    const ResolutionCancellation* parent = nullptr;
+    const std::atomic_bool* requested = nullptr;
+    bool sibling_scope = false;
+
+    [[nodiscard]] bool local_requested() const noexcept {
+        return requested != nullptr &&
+               requested->load(std::memory_order_acquire);
+    }
+};
+
+[[nodiscard]] bool resolution_cancellation_requested(
+    const ResolutionCancellation* const cancellation) noexcept {
+    for (auto current = cancellation;
+         current != nullptr;
+         current = current->parent) {
+        if (current->local_requested()) return true;
+    }
+    return false;
+}
+
+void throw_if_resolution_cancelled(
+    const ResolutionCancellation* const cancel_requested) {
+    // An enclosing cancellation is authoritative.  Check parent scopes first
+    // so a concurrent product abort can never be misclassified as a merely
+    // batch-local sibling cancellation.
+    if (cancel_requested == nullptr) return;
+    throw_if_resolution_cancelled(cancel_requested->parent);
+    if (!cancel_requested->local_requested()) return;
+    if (cancel_requested->sibling_scope)
+        throw ResolutionSiblingEvaluationCancelled{};
+    throw ResolutionEvaluationCancelled{};
+}
 
 void throw_if_resolution_cancelled(
     const std::atomic_bool* const cancel_requested) {
-    if (cancel_requested != nullptr &&
-        cancel_requested->load(std::memory_order_acquire))
-        throw ResolutionEvaluationCancelled{};
+    const ResolutionCancellation cancellation{
+        nullptr, cancel_requested, false};
+    throw_if_resolution_cancelled(&cancellation);
 }
 
 struct FunctionEvaluationPlanBlock final {
@@ -8436,15 +8686,16 @@ FunctionEvaluation evaluate_function(
     const bool may_merge_stack_inventory = false,
     GuardedCodeInventoryCollector* const guarded_inventory_collector = nullptr,
     const std::set<std::uint32_t>* const isolated_inventory_call_sites = nullptr,
-    const std::map<std::uint32_t, FunctionValueSummary>*
-        contextual_summaries = nullptr,
+    const ContextualSummaryBindings* contextual_summaries = nullptr,
     const TailIngressMap* const local_tail_ingresses = nullptr,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics = nullptr,
+    const ForwardedRegisterReadMap* const
+        forwarded_register_reads = nullptr,
     const AbiStackArgumentReadMap* const
         abi_stack_argument_reads = nullptr,
     const std::uint8_t inventory_sink_sources = 0u,
     const FunctionEvaluationPlan* const prepared_plan = nullptr,
-    const std::atomic_bool* const cancel_requested = nullptr) {
+    const ResolutionCancellation* const cancel_requested = nullptr) {
     throw_if_resolution_cancelled(cancel_requested);
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
@@ -8466,6 +8717,9 @@ FunctionEvaluation evaluate_function(
             : &evaluation.call_arguments;
     auto* const inventory_transfers =
         guarded_inventory_collector == nullptr ? nullptr : &evaluation.inventory_transfers;
+    const bool preserve_interprocedural_disjuncts =
+        guarded_inventory_collector != nullptr ||
+        contextual_summaries != nullptr;
     constexpr std::size_t observation_compaction_floor = 1'024u;
     std::size_t next_call_argument_compaction =
         observation_compaction_floor;
@@ -8528,9 +8782,6 @@ FunctionEvaluation evaluate_function(
         const auto* const block = planned_block.block;
         if (block == nullptr) continue;
         auto state = *inputs.at(block_index);
-        if (walk_diagnostics != nullptr &&
-            inventory_candidate_values_truncated(state))
-            walk_diagnostics->inventory_candidate_values_truncated = true;
         struct DelayedCall {
             std::uint32_t call_site = 0u;
             std::optional<std::uint32_t> direct_callee;
@@ -8556,10 +8807,16 @@ FunctionEvaluation evaluate_function(
                                   line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
             if (resolution_mode != ResolutionCollectionMode::None && indirect) {
                 const auto& value = state[line.instruction.branch_register];
-                if (walk_diagnostics != nullptr &&
-                    carries_unresolved_stack_callback(value))
+                if (walk_diagnostics != nullptr) {
+                    walk_diagnostics
+                        ->inventory_candidate_values_truncated =
+                        walk_diagnostics
+                            ->inventory_candidate_values_truncated ||
+                        inventory_candidate_values_truncated(value);
                     walk_diagnostics->abi_stack_base_unresolved =
-                        true;
+                        walk_diagnostics->abi_stack_base_unresolved ||
+                        carries_unresolved_stack_callback(value);
+                }
                 InterproceduralTargetResolution resolution;
                 resolution.instruction_address = line.address;
                 resolution.register_index = line.instruction.branch_register;
@@ -8714,6 +8971,7 @@ FunctionEvaluation evaluate_function(
                            may_merge_stack_inventory,
                             contextual_summaries,
                             walk_diagnostics,
+                            forwarded_register_reads,
                             abi_stack_argument_reads);
                 delayed_call.reset();
             }
@@ -8770,6 +9028,7 @@ FunctionEvaluation evaluate_function(
                                may_merge_stack_inventory,
                                 contextual_summaries,
                                 walk_diagnostics,
+                                forwarded_register_reads,
                                 abi_stack_argument_reads);
             }
             if (tail_ingress.has_value()) {
@@ -8796,14 +9055,12 @@ FunctionEvaluation evaluate_function(
                                                 abi_stack_argument_reads);
                 }
             }
-            if (walk_diagnostics != nullptr &&
-                inventory_candidate_values_truncated(state))
-                walk_diagnostics->inventory_candidate_values_truncated = true;
         }
         if (evaluation.call_arguments.size() >=
             next_call_argument_compaction) {
             coalesce_call_arguments(
-                evaluation.call_arguments);
+                evaluation.call_arguments,
+                preserve_interprocedural_disjuncts);
             next_call_argument_compaction =
                 std::max(
                     observation_compaction_floor,
@@ -8812,7 +9069,8 @@ FunctionEvaluation evaluate_function(
         if (evaluation.inventory_transfers.size() >=
             next_inventory_transfer_compaction) {
             coalesce_inventory_transfers(
-                evaluation.inventory_transfers);
+                evaluation.inventory_transfers,
+                preserve_interprocedural_disjuncts);
             next_inventory_transfer_compaction =
                 std::max(
                     observation_compaction_floor,
@@ -8868,9 +9126,12 @@ FunctionEvaluation evaluate_function(
     // transient visits to the interprocedural worklist lets the same callsite
     // alternately replace its callee input and can keep a recursive graph
     // alive long after the local state has stabilized.
-    coalesce_call_arguments(evaluation.call_arguments);
+    coalesce_call_arguments(
+        evaluation.call_arguments,
+        preserve_interprocedural_disjuncts);
     coalesce_inventory_transfers(
-        evaluation.inventory_transfers);
+        evaluation.inventory_transfers,
+        preserve_interprocedural_disjuncts);
     coalesce_resolutions(evaluation.resolutions);
 
     for (const auto& [return_site, return_state] : returns) {
@@ -11677,9 +11938,6 @@ known_general_register_read_mask(const katana::sh4::DecodedInstruction& instruct
     }
 }
 
-using ForwardedRegisterReadMap =
-    std::unordered_map<std::uint32_t, std::uint16_t>;
-
 [[nodiscard]] std::uint16_t entry_register_read_before_def_mask(
     const FunctionInfo& function,
     const BasicBlockIndexView& blocks,
@@ -12189,8 +12447,7 @@ bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage
     const ResolutionCollectionMode resolution_mode,
     const bool collect_guarded_inventory,
     const std::set<std::uint32_t>* const isolated_inventory_call_sites,
-    const std::map<std::uint32_t, FunctionValueSummary>* const
-        contextual_summaries) noexcept {
+    const ContextualSummaryBindings* const contextual_summaries) noexcept {
     if (isolated_inventory_call_sites != nullptr)
         return EvaluationLens::IsolatedObservation;
     if (contextual_summaries != nullptr)
@@ -12840,6 +13097,13 @@ void encode(EvaluationKeyEncoder& key,
         state.inventory_stack_callback_loss_identity_truncated);
 }
 
+[[nodiscard]] std::vector<std::uint8_t>
+canonical_abstract_state_key(const AbstractState& state) {
+    EvaluationKeyEncoder key;
+    encode(key, state);
+    return std::move(key).finish();
+}
+
 void encode(EvaluationKeyEncoder& key,
             const FunctionRegisterValueSummary& summary) {
     key.append(summary.register_index);
@@ -13098,8 +13362,7 @@ make_function_evaluation_cache_key(
     const bool may_merge_stack_inventory,
     const bool collect_guarded_inventory,
     const std::set<std::uint32_t>* const isolated_inventory_call_sites,
-    const std::map<std::uint32_t, FunctionValueSummary>*
-        contextual_summaries,
+    const ContextualSummaryBindings* contextual_summaries,
     const TailIngressMap* const local_tail_ingresses,
     const bool collect_walk_diagnostics,
     const ForwardedRegisterReadMap& forwarded_register_reads,
@@ -13109,7 +13372,7 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{6u});
+    key.append(std::uint32_t{7u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -13154,7 +13417,7 @@ make_function_evaluation_cache_key(
     // evaluator deliberately ignores it, so it cannot distinguish artifacts.
     static_cast<void>(inventory_sink_sources);
 
-    std::set<std::uint32_t> summary_dependencies;
+    std::set<ContextualCallSiteKey> summary_dependencies;
     std::set<std::uint32_t> abi_dependencies;
     auto evaluation_block_addresses =
         function.block_addresses;
@@ -13185,7 +13448,7 @@ make_function_evaluation_cache_key(
                     key.append(true);
                     key.append(*line.target_address);
                     summary_dependencies.insert(
-                        *line.target_address);
+                        {line.address, *line.target_address});
                     abi_dependencies.insert(
                         *line.target_address);
                 } else {
@@ -13197,9 +13460,10 @@ make_function_evaluation_cache_key(
                     if (candidates !=
                         indirect_callees.end()) {
                         encode(key, candidates->second);
-                        summary_dependencies.insert(
-                            candidates->second.targets.begin(),
-                            candidates->second.targets.end());
+                        for (const auto candidate :
+                             candidates->second.targets)
+                            summary_dependencies.insert(
+                                {line.address, candidate});
                         abi_dependencies.insert(
                             candidates->second.targets.begin(),
                             candidates->second.targets.end());
@@ -13229,25 +13493,32 @@ make_function_evaluation_cache_key(
         EvaluationKeyComponent::SummaryDependency);
     key.append_range(
         summary_dependencies,
-        [&](const auto address) {
+        [&](const auto dependency) {
             if (contextual_summaries != nullptr) {
                 const auto contextual =
-                    contextual_summaries->find(address);
+                    contextual_summaries->find(dependency);
                 key.select_component(
                     EvaluationKeyComponent::ContextualSummary);
-                key.append(address);
+                key.append(dependency.call_site);
+                key.append(dependency.callee);
                 key.append(contextual !=
                            contextual_summaries->end());
-                if (contextual != contextual_summaries->end()) {
-                    encode_function_call_effect(
-                        key, contextual->second);
+                if (contextual != contextual_summaries->end() &&
+                    !contextual->second.empty()) {
+                    key.append_size(contextual->second.size());
+                    for (const auto& binding : contextual->second) {
+                        encode(key, binding.input);
+                        encode_function_call_effect(
+                            key, binding.summary);
+                    }
                     return;
                 }
             }
             key.select_component(
                 EvaluationKeyComponent::SummaryDependency);
-            key.append(address);
-            const auto global = summaries.find(address);
+            key.append(dependency.call_site);
+            key.append(dependency.callee);
+            const auto global = summaries.find(dependency.callee);
             key.append(global != summaries.end());
             if (global != summaries.end())
                 encode_function_call_effect(key, global->second);
@@ -13628,10 +13899,12 @@ class FunctionEvaluationCache {
                    const bool full_state_fallback,
                    Compute&& compute,
                    EvaluationActivityTelemetry* const activity = nullptr,
-                   const std::atomic_bool* const cancel_requested = nullptr) {
+                   const ResolutionCancellation* const cancel_requested = nullptr) {
         throw_if_resolution_cancelled(cancel_requested);
         using Result =
             std::shared_ptr<const CachedFunctionEvaluation>;
+        for (;;) {
+        throw_if_resolution_cancelled(cancel_requested);
         std::shared_future<Result> future;
         Result ready_result;
         std::shared_ptr<std::promise<Result>> producer;
@@ -13773,9 +14046,8 @@ class FunctionEvaluationCache {
             auto& executor = global_analysis_executor();
             if (executor.current_thread_is_worker()) {
                 executor.help_until([&] {
-                    return (cancel_requested != nullptr &&
-                            cancel_requested->load(
-                                std::memory_order_acquire)) ||
+                    return resolution_cancellation_requested(
+                               cancel_requested) ||
                            future.wait_for(
                                std::chrono::seconds{0}) ==
                                std::future_status::ready;
@@ -13800,6 +14072,14 @@ class FunctionEvaluationCache {
                 }
                 observe_decision(decision);
                 return {std::move(result), true};
+            } catch (const ResolutionSiblingEvaluationCancelled&) {
+                // A producer owned by another exact-contribution batch was
+                // cancelled locally.  Its cache entry has been removed.  A
+                // subscriber whose own scope is still live must retry the key
+                // instead of inheriting that unrelated batch cancellation.
+                observe_decision(decision);
+                throw_if_resolution_cancelled(cancel_requested);
+                continue;
             } catch (...) {
                 observe_decision(decision);
                 throw;
@@ -13921,6 +14201,7 @@ class FunctionEvaluationCache {
         observe_decision(decision);
         global_analysis_executor().notify_waiters();
         return {std::move(result), false};
+        }
     }
 
     void record_reconstructed_result() noexcept {
@@ -14413,10 +14694,12 @@ class MultiRootEvaluationCoordinator final {
     get_or_compute(const FunctionEvaluationCacheKey& key,
                    Compute&& compute,
                    EvaluationActivityTelemetry* const activity = nullptr,
-                   const std::atomic_bool* const cancel_requested = nullptr) {
+                   const ResolutionCancellation* const cancel_requested = nullptr) {
         throw_if_resolution_cancelled(cancel_requested);
         using Result =
             std::shared_ptr<const CachedFunctionEvaluation>;
+        for (;;) {
+        throw_if_resolution_cancelled(cancel_requested);
         std::shared_future<Result> future;
         Result ready;
         std::shared_ptr<std::promise<Result>> producer;
@@ -14481,9 +14764,8 @@ class MultiRootEvaluationCoordinator final {
             auto& executor = global_analysis_executor();
             if (executor.current_thread_is_worker()) {
                 executor.help_until([&] {
-                    return (cancel_requested != nullptr &&
-                            cancel_requested->load(
-                                std::memory_order_acquire)) ||
+                    return resolution_cancellation_requested(
+                               cancel_requested) ||
                            future.wait_for(
                                std::chrono::seconds{0}) ==
                                std::future_status::ready;
@@ -14493,8 +14775,13 @@ class MultiRootEvaluationCoordinator final {
                        std::future_status::ready)
                     throw_if_resolution_cancelled(cancel_requested);
             }
-            throw_if_resolution_cancelled(cancel_requested);
-            return {future.get(), true};
+            try {
+                throw_if_resolution_cancelled(cancel_requested);
+                return {future.get(), true};
+            } catch (const ResolutionSiblingEvaluationCancelled&) {
+                throw_if_resolution_cancelled(cancel_requested);
+                continue;
+            }
         }
 
         Result result;
@@ -14504,6 +14791,22 @@ class MultiRootEvaluationCoordinator final {
             if (result == nullptr)
                 throw std::logic_error(
                     "Multi-Root-Auswertung lieferte kein Artefakt.");
+        } catch (const ResolutionSiblingEvaluationCancelled&) {
+            const auto error = std::current_exception();
+            {
+                const std::lock_guard lock(mutex_);
+                // Batch-local cancellation is not a stable result for this
+                // run-global single-flight key.  Remove it before waking
+                // unrelated subscribers so they can become a fresh producer.
+                erase(producer_entry, false);
+                try {
+                    producer->set_exception(error);
+                } catch (...) {
+                    // Preserve the authoritative local cancellation.
+                }
+            }
+            global_analysis_executor().notify_waiters();
+            std::rethrow_exception(error);
         } catch (...) {
             const auto error = std::current_exception();
             {
@@ -14571,6 +14874,7 @@ class MultiRootEvaluationCoordinator final {
         }
         global_analysis_executor().notify_waiters();
         return {std::move(result), false};
+        }
     }
 
     [[nodiscard]] Statistics statistics() const noexcept {
@@ -15368,7 +15672,7 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 7u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 8u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -25404,47 +25708,45 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         [&](const TailIngressTarget target) {
             return cache_tail_target_abi_sink_sources(target);
         };
-    const auto unresolved_stack_callback_loss_reaches_inventory_sink =
+    const auto inventory_loss_reaches_inventory_sink =
         [&](const AbstractState& state, const std::uint32_t target) {
-            const auto sources =
-                target_abi_inventory_sink_sources(target);
-            for (std::uint8_t index = 0u; index < 4u; ++index) {
-                if ((sources &
-                     static_cast<std::uint8_t>(1u << index)) != 0u &&
-                    carries_unresolved_stack_callback(
-                        state[4u + index]))
-                    return true;
-            }
-            if ((sources & abi_stack_argument_taint) == 0u)
-                return false;
-            if (state.inventory_unresolved_stack_callback_loss)
-                return true;
-            return std::any_of(
-                state.stack_values.begin(),
-                state.stack_values.end(),
-                [](const auto& stored) {
-                    return carries_unresolved_stack_callback(
-                        stored.second);
-                });
+            auto register_read_mask =
+                std::numeric_limits<std::uint16_t>::max();
+            if (const auto reads = forwarded_register_reads.find(target);
+                reads != forwarded_register_reads.end())
+                register_read_mask = reads->second;
+            AbiStackArgumentReadSet stack_reads;
+            stack_reads.complete = false;
+            if (const auto reads = abi_stack_argument_reads.find(target);
+                reads != abi_stack_argument_reads.end())
+                stack_reads = reads->second;
+            return inventory_loss_in_evaluation_projection(
+                state,
+                register_read_mask,
+                stack_reads,
+                target_abi_inventory_sink_sources(target));
         };
-    const auto unresolved_stack_callback_loss_reaches_tail_sink =
+    const auto inventory_loss_reaches_tail_sink =
         [&](const AbstractState& state, const TailIngressTarget target) {
-            const auto sources = tail_abi_inventory_sink_sources(target);
-            for (std::uint8_t index = 0u; index < 4u; ++index) {
-                if ((sources & static_cast<std::uint8_t>(1u << index)) != 0u &&
-                    carries_unresolved_stack_callback(state[4u + index]))
-                    return true;
+            auto register_read_mask =
+                std::numeric_limits<std::uint16_t>::max();
+            AbiStackArgumentReadSet stack_reads;
+            stack_reads.complete = false;
+            if (target.kind == TailIngressTargetKind::Function) {
+                if (const auto reads =
+                        forwarded_register_reads.find(target.address);
+                    reads != forwarded_register_reads.end())
+                    register_read_mask = reads->second;
+                if (const auto reads =
+                        abi_stack_argument_reads.find(target.address);
+                    reads != abi_stack_argument_reads.end())
+                    stack_reads = reads->second;
             }
-            if ((sources & abi_stack_argument_taint) == 0u)
-                return false;
-            if (state.inventory_unresolved_stack_callback_loss)
-                return true;
-            return std::any_of(
-                state.stack_values.begin(),
-                state.stack_values.end(),
-                [](const auto& stored) {
-                    return carries_unresolved_stack_callback(stored.second);
-                });
+            return inventory_loss_in_evaluation_projection(
+                state,
+                register_read_mask,
+                stack_reads,
+                tail_abi_inventory_sink_sources(target));
         };
 
     // Candidate call carriers are private inventory transport, not semantic
@@ -25767,9 +26069,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 guarded_inventory_collector,
             const std::set<std::uint32_t>* const
                 isolated_inventory_call_sites,
-            const std::map<
-                std::uint32_t,
-                FunctionValueSummary>* const contextual_summaries,
+            const ContextualSummaryBindings* const contextual_summaries,
             const TailIngressMap* const local_tail_ingresses,
             GuardedCodeInventoryWalkDiagnostics* const
                 walk_diagnostics,
@@ -25783,7 +26083,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             const bool retain_unbounded_exact_replay = false,
             const TailIngressTargetKind evaluation_target_kind =
                 TailIngressTargetKind::Function,
-            const std::atomic_bool* const cancel_requested = nullptr) {
+            const ResolutionCancellation* const cancel_requested = nullptr) {
             throw_if_resolution_cancelled(cancel_requested);
             auto& evaluation_cache = session.impl_->evaluations;
             const EvaluationActivityScope request_activity{
@@ -25875,9 +26175,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     isolated_inventory_call_sites,
                     contextual_summaries,
                     local_tail_ingresses,
-                    walk_diagnostics != nullptr
-                        ? &artifact->walk_diagnostics
-                        : nullptr,
+                     walk_diagnostics != nullptr
+                         ? &artifact->walk_diagnostics
+                         : nullptr,
+                    &forwarded_register_reads,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                     prepared_plan,
@@ -25962,10 +26263,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     isolated_inventory_call_sites,
                                     contextual_summaries,
                                     local_tail_ingresses,
-                                    walk_diagnostics != nullptr
-                                        ? &artifact
-                                               ->walk_diagnostics
-                                        : nullptr,
+                                     walk_diagnostics != nullptr
+                                         ? &artifact
+                                                ->walk_diagnostics
+                                         : nullptr,
+                                    &forwarded_register_reads,
                                     evaluation_abi_stack_argument_reads,
                                     inventory_sink_sources,
                                     prepared_plan,
@@ -26066,9 +26368,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     isolated_inventory_call_sites,
                     contextual_summaries,
                     local_tail_ingresses,
-                    walk_diagnostics != nullptr
-                        ? &fallback->walk_diagnostics
-                        : nullptr,
+                     walk_diagnostics != nullptr
+                         ? &fallback->walk_diagnostics
+                         : nullptr,
+                    &forwarded_register_reads,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                     prepared_plan,
@@ -26307,9 +26610,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             }
             for (const auto& observation :
                  evaluation.call_arguments) {
-                if (unresolved_stack_callback_loss_reaches_inventory_sink(
+                const auto observation_loss =
+                    inventory_loss_reaches_inventory_sink(
                         observation.state,
-                        observation.callee)) {
+                        observation.callee);
+                owner_input.fixpoint_candidate_values_truncated =
+                    owner_input.fixpoint_candidate_values_truncated ||
+                    observation_loss.candidate_values_truncated;
+                if (observation_loss.abi_stack_base_unresolved) {
                     owner_input.fixpoint_abi_stack_base_unresolved = true;
                     emit_analyzer_stack_diagnostic(
                         "fixpoint-call",
@@ -26736,8 +27044,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         resolution_function_entries.insert(function->entry_address);
     const auto has_complete_exact_contribution_family =
         [](const CandidateInput& input) {
-            return !input.unknown_ingress &&
-                   !input.expected_contributions.empty() &&
+            return !input.expected_contributions.empty() &&
                    input.contribution_observations.size() ==
                        input.expected_contributions.size() &&
                    std::all_of(
@@ -26751,14 +27058,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     const auto uses_exact_contribution_partitions =
         [&](const std::uint32_t address,
             const CandidateInput& input) {
+            const auto partition_count =
+                input.expected_contributions.size() +
+                (input.unknown_ingress ? 1u : 0u);
             if (!resolution_function_entries.contains(address) ||
                 !has_complete_exact_contribution_family(input) ||
-                input.expected_contributions.size() <= 1u)
+                partition_count <= 1u)
                 return false;
             // Clean aggregate inputs stay aggregate: splitting them would
             // multiply complete root work without repairing any lost
-            // correlation. Exact partitions are the transactional replacement
-            // only for an owner whose aggregate fixpoint actually lost proof.
+            // correlation. An externally reachable entry retains a dedicated
+            // unknown-ingress partition instead of mixing Top into every
+            // observed caller contribution. Exact partitions are the
+            // transactional replacement only for an owner whose aggregate
+            // fixpoint actually lost proof.
             return input.recompute_candidate_values_truncated ||
                    input.fixpoint_candidate_values_truncated ||
                    input.fixpoint_abi_stack_base_unresolved ||
@@ -26769,15 +27082,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     for (const auto& [address, input] : candidate_inputs) {
         if (uses_exact_contribution_partitions(address, input))
             continue;
+        const auto resolution_validates_owner_loss =
+            resolution_function_entries.contains(address);
         inventory_walk_diagnostics.inventory_candidate_values_truncated =
             inventory_walk_diagnostics
                 .inventory_candidate_values_truncated ||
             input.recompute_candidate_values_truncated ||
-            input.fixpoint_candidate_values_truncated ||
-            inventory_candidate_values_truncated(input.state);
+            inventory_candidate_values_truncated(input.state) ||
+            (!resolution_validates_owner_loss &&
+             input.fixpoint_candidate_values_truncated);
         inventory_walk_diagnostics.abi_stack_base_unresolved =
             inventory_walk_diagnostics.abi_stack_base_unresolved ||
-            input.fixpoint_abi_stack_base_unresolved;
+            (!resolution_validates_owner_loss &&
+             input.fixpoint_abi_stack_base_unresolved);
     }
     std::unordered_set<std::uint32_t>
         forwarded_evidence_reserved_addresses;
@@ -28489,8 +28806,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              const EvaluationLens requested_lens,
              const std::set<std::uint32_t>* const isolated_call_sites,
              const std::span<const std::uint32_t> available_tokens,
-             const std::map<std::uint32_t,
-                            FunctionValueSummary>* const
+             const ContextualSummaryBindings* const
                  contextual_summaries,
              const EvidenceTokenAssignments* const
                  prior_call_site_assignments,
@@ -28515,19 +28831,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 evaluation_summaries.emplace(
                     address, summary->second);
             }
-            std::optional<std::map<std::uint32_t,
-                                   FunctionValueSummary>>
+            std::optional<ContextualSummaryBindings>
                 evaluation_contextual_summaries;
             if (contextual_summaries != nullptr) {
                 evaluation_contextual_summaries.emplace();
-                for (const auto address :
-                     dependencies->second) {
-                    const auto summary =
-                        contextual_summaries->find(address);
-                    if (summary == contextual_summaries->end())
+                for (const auto& [key, bindings] :
+                     *contextual_summaries) {
+                    if (!std::binary_search(
+                            dependencies->second.begin(),
+                            dependencies->second.end(),
+                            key.callee))
                         continue;
                     evaluation_contextual_summaries->emplace(
-                        address, summary->second);
+                        key, bindings);
                 }
             }
             const auto projection =
@@ -28583,7 +28899,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         [&](const ForwardedStoreContext& context,
             const std::set<std::uint32_t>& root_call_sites,
             const TailIngressMap* const local_tail_ingresses,
-            const std::atomic_bool* const cancel_requested) {
+            const ResolutionCancellation* const cancel_requested) {
             throw_if_resolution_cancelled(cancel_requested);
             const EvaluationActivityScope request_activity{
                 evaluation_activity_if_observed,
@@ -28665,7 +28981,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const AbstractState*>> input_observations,
             const bool input_family_complete,
             ResolutionRootLogicalBudget& logical_budget,
-            const std::atomic_bool* const cancel_requested) {
+            const ResolutionCancellation* const cancel_requested) {
         throw_if_resolution_cancelled(cancel_requested);
         ResolutionFunctionResult function_result;
         std::size_t next_root_resolution_compaction =
@@ -28688,7 +29004,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         function_result.walk_diagnostics.forwarded_store_context_budget =
             maximum_forwarded_store_contexts;
         function_result.walk_diagnostics.contextual_return_context_budget =
-            final_function_by_address.size();
+            logical_budget.contextual_context_limit;
         function_result.walk_diagnostics.contextual_return_evaluation_budget =
             maximum_contextual_return_evaluations;
         function_result.walk_diagnostics.abi_stack_argument_slot_budget =
@@ -28834,12 +29150,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 AbstractState forwarded_input,
                 const std::set<std::uint32_t>& root_call_sites) {
                 if (logical_budget.exhausted()) return;
-                // Non-isolated contexts carry no root correlation and use one
-                // monotone abstract join bucket per target/transfer kind.
-                // Isolated variants may also join when they belong to exactly
-                // the same non-empty root partition. Different roots retain
-                // the exact-shape path below, so their evidence is never
-                // cross-correlated by widening.
+                // Contexts remain monotone whenever their join is lossless.
+                // If widening two individually complete projected states
+                // creates a candidate or stack-provenance loss, keep a
+                // separate bounded disjunct instead. This preserves the exact
+                // root partition beyond the first forwarded ABI boundary;
+                // the existing logical/context budgets remain the fail-closed
+                // upper bound.
                 const auto context_key =
                     (static_cast<std::uint64_t>(target) << 3u) |
                     (tail ? 4u : 0u) |
@@ -28851,7 +29168,51 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     function_result
                         .forwarded_store_context_indices[
                         context_key];
+                auto target_register_read_mask =
+                    std::numeric_limits<std::uint16_t>::max();
+                AbiStackArgumentReadSet target_stack_reads;
+                target_stack_reads.complete = false;
+                auto target_inventory_sink_sources =
+                    abi_argument_taint_mask;
+                if (target_kind ==
+                    TailIngressTargetKind::Function) {
+                    if (const auto reads =
+                            forwarded_register_reads.find(target);
+                        reads != forwarded_register_reads.end())
+                        target_register_read_mask = reads->second;
+                    if (const auto reads =
+                            abi_stack_argument_reads.find(target);
+                        reads != abi_stack_argument_reads.end())
+                        target_stack_reads = reads->second;
+                    target_inventory_sink_sources =
+                        target_abi_inventory_sink_sources(target);
+                }
+                const auto join_creates_projected_loss =
+                    [&](const AbstractState& left,
+                        const AbstractState& right,
+                        const AbstractState& joined) {
+                        const auto loss =
+                            [&](const AbstractState& state) {
+                                return inventory_loss_in_evaluation_projection(
+                                    state,
+                                    target_register_read_mask,
+                                    target_stack_reads,
+                                    target_inventory_sink_sources);
+                            };
+                        const auto left_loss = loss(left);
+                        const auto right_loss = loss(right);
+                        const auto joined_loss = loss(joined);
+                        return
+                            (joined_loss.candidate_values_truncated &&
+                             !left_loss.candidate_values_truncated &&
+                             !right_loss.candidate_values_truncated) ||
+                            (joined_loss.abi_stack_base_unresolved &&
+                             !left_loss.abi_stack_base_unresolved &&
+                             !right_loss.abi_stack_base_unresolved);
+                    };
                 std::optional<std::size_t> existing_index;
+                std::optional<AbstractState> joined_input;
+                bool widen_partition = false;
                 for (const auto index : context_indices) {
                     const auto& context =
                         function_result.forwarded_store_contexts[
@@ -28860,12 +29221,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         (!root_call_sites.empty() &&
                          context.root_call_sites ==
                              root_call_sites)) {
+                        auto candidate = context.input;
+                        static_cast<void>(merge_state(
+                            candidate, forwarded_input, true));
+                        if (join_creates_projected_loss(
+                                context.input,
+                                forwarded_input,
+                                candidate))
+                            continue;
                         existing_index = index;
+                        joined_input = std::move(candidate);
+                        widen_partition = true;
                         break;
                     }
                 }
-                const auto widen_partition =
-                    existing_index.has_value();
                 if (!existing_index.has_value()) {
                     for (const auto index : context_indices) {
                         const auto& context =
@@ -28874,12 +29243,25 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         if (same_forwarded_store_shape(
                                 context.input,
                                 forwarded_input)) {
+                            auto candidate = context.input;
+                            static_cast<void>(
+                                merge_forwarded_inventory_payload(
+                                    candidate, forwarded_input));
+                            if (join_creates_projected_loss(
+                                    context.input,
+                                    forwarded_input,
+                                    candidate))
+                                continue;
                             existing_index = index;
+                            joined_input = std::move(candidate);
                             break;
                         }
                     }
                 }
                 if (existing_index.has_value()) {
+                    if (!joined_input.has_value())
+                        throw std::logic_error(
+                            "Forwarded-Store-Join ohne Ergebnis.");
                     const auto index = *existing_index;
                     auto& context = function_result.forwarded_store_contexts[index];
                     auto additional_roots = std::size_t{0u};
@@ -28914,13 +29296,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                       context.input)}
                             : std::nullopt;
                     const auto provenance_changed =
-                        widen_partition
-                            ? merge_state(
-                                  context.input,
-                                  forwarded_input,
-                                  true)
-                            : merge_forwarded_inventory_payload(
-                                  context.input, forwarded_input);
+                        context.input != *joined_input;
+                    if (provenance_changed)
+                        context.input = std::move(*joined_input);
                     const auto evidence_layout_changed =
                         evidence_layout_before.has_value() &&
                         *evidence_layout_before !=
@@ -29135,8 +29513,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const bool has_memory_callback_payload =
                     has_stack_callback_memory_payload(
                         forwarded.state);
-                if (unresolved_stack_callback_loss_reaches_inventory_sink(
-                        forwarded.state, forwarded.callee)) {
+                const auto forwarded_loss =
+                    inventory_loss_reaches_inventory_sink(
+                        forwarded.state, forwarded.callee);
+                function_result.walk_diagnostics
+                    .inventory_candidate_values_truncated =
+                    function_result.walk_diagnostics
+                        .inventory_candidate_values_truncated ||
+                    forwarded_loss.candidate_values_truncated;
+                if (forwarded_loss.abi_stack_base_unresolved) {
                     function_result.walk_diagnostics.abi_stack_base_unresolved =
                         true;
                     emit_analyzer_stack_diagnostic(
@@ -29235,8 +29620,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const std::set<std::uint32_t>& root_call_sites) {
                 const TailIngressTarget target{
                     forwarded.target, forwarded.target_kind};
-                if (unresolved_stack_callback_loss_reaches_tail_sink(
-                        forwarded.state, target)) {
+                const auto forwarded_loss =
+                    inventory_loss_reaches_tail_sink(
+                        forwarded.state, target);
+                function_result.walk_diagnostics
+                    .inventory_candidate_values_truncated =
+                    function_result.walk_diagnostics
+                        .inventory_candidate_values_truncated ||
+                    forwarded_loss.candidate_values_truncated;
+                if (forwarded_loss.abi_stack_base_unresolved) {
                     function_result.walk_diagnostics.abi_stack_base_unresolved =
                         true;
                     emit_analyzer_stack_diagnostic(
@@ -29594,25 +29986,69 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     function->entry_address))
                 return;
             if (logical_budget.exhausted()) return;
-            std::map<std::uint32_t, AbstractState> context_inputs;
-            std::map<std::uint32_t, FunctionValueSummary>
-                contextual_summaries;
-            std::map<std::uint32_t, std::set<std::uint32_t>>
-                context_callers;
-            std::deque<std::uint32_t> pending_contexts;
-            std::unordered_set<std::uint32_t> queued_contexts;
-            std::unordered_set<std::uint32_t>
-                candidate_context_functions;
-            std::vector<std::uint64_t> contextual_input_versions(
-                functions.size(), 0u);
-            std::vector<std::uint64_t> contextual_summary_versions(
-                functions.size(), 0u);
-            std::vector<std::uint64_t> contextual_candidate_versions(
-                functions.size(), 0u);
+            using ContextualLaneId = std::size_t;
+            struct ContextualEntryFamilyKey final {
+                std::uint32_t caller_entry = 0u;
+                std::uint32_t call_site = 0u;
+                std::uint32_t callee_entry = 0u;
+
+                auto operator<=>(
+                    const ContextualEntryFamilyKey&) const = default;
+            };
+            struct ContextualLane final {
+                std::uint32_t function_entry = 0u;
+                AbstractState match_input;
+                AbstractState input;
+                std::optional<FunctionValueSummary> summary;
+                bool candidate_context = false;
+                std::uint64_t input_version = 0u;
+                std::uint64_t summary_version = 0u;
+            };
+            std::vector<ContextualLane> contextual_lanes;
+            contextual_lanes.reserve(
+                std::min(logical_budget.contextual_context_limit,
+                         final_function_by_address.size() + 16u));
+            std::map<ContextualEntryFamilyKey,
+                     std::vector<ContextualLaneId>>
+                contextual_entry_families;
+            std::map<ContextualLaneId,
+                     std::set<ContextualLaneId>>
+                contextual_callers;
+            std::deque<ContextualLaneId> pending_contexts;
+            std::vector<std::uint8_t> queued_contexts;
             const auto enqueue_context =
-                [&](const std::uint32_t address) {
-                    if (queued_contexts.insert(address).second)
-                        pending_contexts.push_back(address);
+                [&](const ContextualLaneId lane) {
+                    if (lane >= queued_contexts.size())
+                        queued_contexts.resize(lane + 1u, 0u);
+                    if (queued_contexts[lane] == 0u) {
+                        queued_contexts[lane] = 1u;
+                        pending_contexts.push_back(lane);
+                    }
+                };
+            const auto contextual_bindings_for =
+                [&](const std::uint32_t caller_entry) {
+                    ContextualSummaryBindings bindings;
+                    for (const auto& [family, lane_ids] :
+                         contextual_entry_families) {
+                        if (family.caller_entry != caller_entry)
+                            continue;
+                        auto& bound = bindings[
+                            {family.call_site,
+                             family.callee_entry}];
+                        for (const auto lane_id : lane_ids) {
+                            const auto& lane =
+                                contextual_lanes.at(lane_id);
+                            if (!lane.summary.has_value())
+                                continue;
+                            bound.push_back(
+                                {lane.match_input, *lane.summary});
+                        }
+                        if (bound.empty())
+                            bindings.erase(
+                                {family.call_site,
+                                 family.callee_entry});
+                    }
+                    return bindings;
                 };
             // Keep each candidate-call owner as an independent resolution
             // root. The run-local MultiRootEvaluationCoordinator single-
@@ -29625,13 +30061,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     true;
                 return;
             }
-            context_inputs.emplace(function->entry_address,
-                                   input_state);
-            enqueue_context(function->entry_address);
+            contextual_lanes.push_back(
+                {function->entry_address,
+                 input_state,
+                 input_state,
+                 std::nullopt,
+                 false,
+                 0u,
+                 0u});
+            enqueue_context(0u);
             std::size_t contextual_evaluations = 0u;
             struct ContextualCountPublisher final {
                 ResolutionFunctionResult* result = nullptr;
-                const std::map<std::uint32_t, AbstractState>* contexts =
+                const std::vector<ContextualLane>* contexts =
                     nullptr;
                 const std::size_t* evaluations = nullptr;
 
@@ -29649,7 +30091,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 }
             } contextual_count_publisher{
                 &function_result,
-                &context_inputs,
+                &contextual_lanes,
                 &contextual_evaluations};
             bool contextual_context_budget_exhausted = false;
             const auto contextual_entry_register_reads =
@@ -29670,18 +30112,58 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                : &found->second;
                 };
             struct ContextualBatchItem {
+                ContextualLaneId lane_id = 0u;
                 std::uint32_t address = 0u;
                 std::size_t function_index = 0u;
                 AbstractState input;
                 std::uint64_t input_version = 0u;
-                std::uint64_t candidate_version = 0u;
-                std::vector<std::pair<std::size_t, std::uint64_t>>
-                    summary_versions;
+                bool candidate_context = false;
+                struct DependencyVersion final {
+                    ContextualLaneId lane_id = 0u;
+                    std::uint64_t input_version = 0u;
+                    std::uint64_t summary_version = 0u;
+                };
+                std::vector<DependencyVersion> dependencies;
+                ContextualSummaryBindings bindings;
                 std::optional<EvidenceProvenanceLens> evidence_lens;
                 std::optional<FunctionEvaluation> evaluation;
                 GuardedCodeInventoryWalkDiagnostics diagnostics;
                 std::exception_ptr error;
             };
+            const auto prepare_contextual_item =
+                [&](ContextualBatchItem& item,
+                    const ContextualLaneId lane_id) {
+                    const auto& lane = contextual_lanes.at(lane_id);
+                    item.lane_id = lane_id;
+                    item.address = lane.function_entry;
+                    item.function_index =
+                        fixpoint_function_index.at(item.address);
+                    item.input = lane.input;
+                    item.input_version = lane.input_version;
+                    item.candidate_context = lane.candidate_context;
+                    item.bindings =
+                        contextual_bindings_for(item.address);
+                    item.dependencies.clear();
+                    for (const auto& [family, lane_ids] :
+                         contextual_entry_families) {
+                        if (family.caller_entry != item.address)
+                            continue;
+                        for (const auto dependency : lane_ids) {
+                            const auto& dependency_lane =
+                                contextual_lanes.at(dependency);
+                            item.dependencies.push_back(
+                                {dependency,
+                                 dependency_lane.input_version,
+                                 dependency_lane.summary_version});
+                        }
+                    }
+                    item.diagnostics = {};
+                    item.diagnostics.local_fixpoint_iteration_budget =
+                        maximum_local_fixpoint_iterations;
+                    item.evidence_lens.reset();
+                    item.evaluation.reset();
+                    item.error = {};
+                };
             auto& contextual_executor = global_analysis_executor();
             while (!pending_contexts.empty() &&
                    !contextual_context_budget_exhausted &&
@@ -29705,31 +30187,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     return;
                 }
                 std::vector<ContextualBatchItem> batch(batch_size);
-                auto pending_address = pending_contexts.begin();
+                auto pending_lane = pending_contexts.begin();
                 for (std::size_t index = 0u;
                      index < batch.size();
-                     ++index, ++pending_address) {
-                    auto& item = batch[index];
-                    item.address = *pending_address;
-                    item.function_index =
-                        fixpoint_function_index.at(item.address);
-                    item.input = context_inputs.at(item.address);
-                    item.input_version =
-                        contextual_input_versions[item.function_index];
-                    item.candidate_version =
-                        contextual_candidate_versions[item.function_index];
-                    item.summary_versions.reserve(
-                        contextual_summary_dependencies[item.function_index]
-                            .size());
-                    for (const auto dependency :
-                         contextual_summary_dependencies[
-                             item.function_index]) {
-                        item.summary_versions.emplace_back(
-                            dependency,
-                            contextual_summary_versions[dependency]);
-                    }
-                    item.diagnostics.local_fixpoint_iteration_budget =
-                        maximum_local_fixpoint_iterations;
+                     ++index, ++pending_lane) {
+                    prepare_contextual_item(
+                        batch[index], *pending_lane);
                 }
                 const auto evaluate_contextual_item =
                     [&](ContextualBatchItem& item) noexcept {
@@ -29745,7 +30208,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     EvaluationLens::ContextualReturn,
                                     nullptr,
                                     forwarded_evidence_tokens,
-                                    &contextual_summaries,
+                                    &item.bindings,
                                     nullptr,
                                     nullptr);
                             const auto& evaluation_input =
@@ -29762,7 +30225,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     item.evidence_lens.has_value()
                                         ? item.evidence_lens
                                               ->contextual_summaries()
-                                        : &contextual_summaries;
+                                        : &item.bindings;
                             auto cached = cached_evaluate_function(
                                     *fixpoint_functions[
                                         item.function_index],
@@ -29827,39 +30290,35 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 for (auto& item : batch) {
                     throw_if_resolution_cancelled(cancel_requested);
                     bool stale =
-                        contextual_input_versions[
-                            item.function_index] !=
-                            item.input_version ||
-                        contextual_candidate_versions[
-                            item.function_index] !=
-                            item.candidate_version;
-                    for (const auto& [dependency, version] :
-                         item.summary_versions) {
+                        contextual_lanes.at(item.lane_id)
+                                .input_version !=
+                            item.input_version;
+                    for (const auto& dependency :
+                         item.dependencies) {
+                        const auto& current =
+                            contextual_lanes.at(
+                                dependency.lane_id);
                         stale =
                             stale ||
-                            contextual_summary_versions[dependency] !=
-                                version;
+                            current.input_version !=
+                                dependency.input_version ||
+                            current.summary_version !=
+                                dependency.summary_version;
                     }
                     if (stale) {
                         throw_if_resolution_cancelled(
                             cancel_requested);
-                        item.input =
-                            context_inputs.at(item.address);
-                        item.evaluation.reset();
-                        item.diagnostics = {};
-                        item.diagnostics
-                            .local_fixpoint_iteration_budget =
-                            maximum_local_fixpoint_iterations;
-                        item.error = {};
+                        prepare_contextual_item(
+                            item, item.lane_id);
                         evaluate_contextual_item(item);
                     }
                     if (pending_contexts.empty() ||
-                        pending_contexts.front() != item.address)
+                        pending_contexts.front() != item.lane_id)
                         throw std::logic_error(
                             "Paralleler Contextual-Return-Fixpunkt "
                             "verlor die FIFO-Reihenfolge.");
                     pending_contexts.pop_front();
-                    queued_contexts.erase(item.address);
+                    queued_contexts.at(item.lane_id) = 0u;
                     ++contextual_evaluations;
                     if (item.error)
                         std::rethrow_exception(item.error);
@@ -29873,20 +30332,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         record_local_fixpoint_limit();
                         return;
                     }
-                    const auto previous =
-                        contextual_summaries.find(item.address);
+                    auto& current_lane =
+                        contextual_lanes.at(item.lane_id);
                     const bool summary_changed =
-                        previous == contextual_summaries.end() ||
-                        previous->second !=
+                        !current_lane.summary.has_value() ||
+                        *current_lane.summary !=
                             context_evaluation.summary;
-                    contextual_summaries[item.address] =
+                    current_lane.summary =
                         std::move(context_evaluation.summary);
                     if (summary_changed) {
-                        ++contextual_summary_versions[
-                            item.function_index];
+                        ++current_lane.summary_version;
                         const auto callers =
-                            context_callers.find(item.address);
-                        if (callers != context_callers.end()) {
+                            contextual_callers.find(
+                                item.lane_id);
+                        if (callers !=
+                            contextual_callers.end()) {
                             for (const auto caller :
                                  callers->second)
                                 enqueue_context(caller);
@@ -29900,8 +30360,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         const bool candidate_call =
                             candidate_call_pairs.contains(pair);
                         const bool contextual_helper_call =
-                            candidate_context_functions.contains(
-                                item.address) &&
+                            item.candidate_context &&
                             is_semantic_call_pair(
                                 observation.call_site,
                                 observation.callee) &&
@@ -29919,38 +30378,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         if (!final_function_by_address.contains(
                                 observation.callee))
                             continue;
-                        if (!context_inputs.contains(
-                                observation.callee) &&
-                            context_inputs.size() >=
-                                final_function_by_address.size()) {
-                            function_result.walk_diagnostics
-                                .contextual_return_context_limited_functions =
-                                1u;
-                            emit_contextual_return_limit_diagnostic(
-                                "contexts",
-                                0u,
-                                function->entry_address,
-                                item.address,
-                                observation.callee,
-                                context_inputs.size(),
-                                contextual_evaluations,
-                                pending_contexts.size());
-                            contextual_context_budget_exhausted =
-                                true;
-                            break;
-                        }
-                        if (!context_inputs.contains(
-                                observation.callee) &&
-                            !logical_budget
-                                 .reserve_contextual_context()) {
-                            function_result.walk_diagnostics
-                                .resolution_root_logical_budget_exhausted =
-                                true;
-                            contextual_context_budget_exhausted = true;
-                            break;
-                        }
-                        auto callee_context_input =
+                        auto callee_match_input =
                             observation.state;
+                        auto callee_context_input =
+                            callee_match_input;
                         if (candidate_call) {
                             mark_contextual_candidate_abi_arguments(
                                 callee_context_input,
@@ -29959,35 +30390,154 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 contextual_entry_stack_reads(
                                     observation.callee));
                         }
-                        context_callers[observation.callee].insert(
-                            item.address);
-                        const auto callee_index =
-                            fixpoint_function_index.at(
-                                observation.callee);
-                        const bool candidate_membership_changed =
-                            candidate_context_functions.insert(
-                                observation.callee)
-                                .second;
-                        if (candidate_membership_changed)
-                            ++contextual_candidate_versions[
-                                callee_index];
-                        const auto [stored, inserted] =
-                            context_inputs.try_emplace(
-                                observation.callee,
-                                callee_context_input);
-                        const bool input_changed =
-                            inserted ||
-                            merge_state(stored->second,
-                                        callee_context_input);
-                        if (input_changed) {
-                            ++contextual_input_versions[
-                                callee_index];
+                        const ContextualEntryFamilyKey family{
+                            item.address,
+                            observation.call_site,
+                            observation.callee};
+                        auto& family_lanes =
+                            contextual_entry_families[family];
+                        std::optional<ContextualLaneId>
+                            selected_lane;
+                        std::optional<AbstractState>
+                            joined_match_input;
+                        std::optional<AbstractState> joined_input;
+                        for (const auto lane_id : family_lanes) {
+                            const auto& lane =
+                                contextual_lanes.at(lane_id);
+                            auto joined_match = lane.match_input;
+                            if (merge_state(
+                                    joined_match,
+                                    callee_match_input,
+                                    true))
+                                continue;
+                            auto joined = lane.input;
+                            static_cast<void>(merge_state(
+                                joined,
+                                callee_context_input,
+                                true));
+                            if (inventory_join_creates_loss(
+                                    lane.input,
+                                    callee_context_input,
+                                    joined))
+                                continue;
+                            selected_lane = lane_id;
+                            joined_match_input =
+                                std::move(joined_match);
+                            joined_input = std::move(joined);
+                            break;
                         }
-                        if (input_changed ||
-                            candidate_membership_changed) {
-                            enqueue_context(
-                                observation.callee);
+                        if (!selected_lane.has_value()) {
+                            for (const auto lane_id :
+                                 family_lanes) {
+                                const auto& lane =
+                                    contextual_lanes.at(lane_id);
+                                auto joined = lane.input;
+                                static_cast<void>(merge_state(
+                                    joined,
+                                    callee_context_input,
+                                    true));
+                                if (inventory_join_creates_loss(
+                                        lane.input,
+                                        callee_context_input,
+                                        joined))
+                                    continue;
+                                selected_lane = lane_id;
+                                joined_input =
+                                    std::move(joined);
+                                auto joined_match =
+                                    lane.match_input;
+                                static_cast<void>(merge_state(
+                                    joined_match,
+                                    callee_match_input,
+                                    true));
+                                joined_match_input =
+                                    std::move(joined_match);
+                                break;
+                            }
                         }
+                        if (!selected_lane.has_value()) {
+                            if (!logical_budget
+                                     .reserve_contextual_context()) {
+                                function_result.walk_diagnostics
+                                    .contextual_return_context_limited_functions =
+                                    1u;
+                                function_result.walk_diagnostics
+                                    .resolution_root_logical_budget_exhausted =
+                                    true;
+                                emit_contextual_return_limit_diagnostic(
+                                    "contexts",
+                                    0u,
+                                    function->entry_address,
+                                    item.address,
+                                    observation.callee,
+                                    contextual_lanes.size(),
+                                    contextual_evaluations,
+                                    pending_contexts.size());
+                                contextual_context_budget_exhausted =
+                                    true;
+                                break;
+                            }
+                            const auto lane_id =
+                                contextual_lanes.size();
+                            contextual_lanes.push_back(
+                                {observation.callee,
+                                 std::move(callee_match_input),
+                                 std::move(callee_context_input),
+                                 std::nullopt,
+                                 true,
+                                 0u,
+                                 0u});
+                            family_lanes.push_back(lane_id);
+                            selected_lane = lane_id;
+                            enqueue_context(lane_id);
+                        } else {
+                            auto& lane = contextual_lanes.at(
+                                *selected_lane);
+                            if (!joined_match_input.has_value()) {
+                                auto joined = lane.match_input;
+                                static_cast<void>(merge_state(
+                                    joined,
+                                    callee_match_input,
+                                    true));
+                                joined_match_input =
+                                    std::move(joined);
+                            }
+                            if (!joined_input.has_value()) {
+                                auto joined = lane.input;
+                                static_cast<void>(merge_state(
+                                    joined,
+                                    callee_context_input,
+                                    true));
+                                joined_input = std::move(joined);
+                            }
+                            if (lane.match_input !=
+                                    *joined_match_input ||
+                                lane.input != *joined_input) {
+                                lane.match_input =
+                                    std::move(*joined_match_input);
+                                lane.input =
+                                    std::move(*joined_input);
+                                ++lane.input_version;
+                                enqueue_context(*selected_lane);
+                                // The current caller observed this wider child
+                                // input before its reverse edge was published.
+                                // Re-evaluate it even when the recomputed child
+                                // summary is byte-identical: the widened match
+                                // binding can replace a prior global fallback.
+                                enqueue_context(item.lane_id);
+                                const auto callers =
+                                    contextual_callers.find(
+                                        *selected_lane);
+                                if (callers !=
+                                    contextual_callers.end()) {
+                                    for (const auto caller :
+                                         callers->second)
+                                        enqueue_context(caller);
+                                }
+                            }
+                        }
+                        contextual_callers[*selected_lane].insert(
+                            item.lane_id);
                     }
                     if (contextual_context_budget_exhausted)
                         break;
@@ -30001,9 +30551,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     "evaluations",
                     1u,
                     function->entry_address,
-                    pending_contexts.front(),
-                    pending_contexts.front(),
-                    context_inputs.size(),
+                    contextual_lanes.at(
+                        pending_contexts.front())
+                        .function_entry,
+                    contextual_lanes.at(
+                        pending_contexts.front())
+                        .function_entry,
+                    contextual_lanes.size(),
                     contextual_evaluations,
                     pending_contexts.size());
                 return;
@@ -30018,44 +30572,46 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 FunctionEvaluation evaluation;
                 GuardedCodeInventoryCollector inventory{true};
                 GuardedCodeInventoryWalkDiagnostics diagnostics;
+                ContextualSummaryBindings bindings;
                 std::optional<EvidenceProvenanceLens> evidence_lens;
                 std::exception_ptr error;
             };
-            std::vector<std::uint32_t> stable_addresses;
-            stable_addresses.reserve(context_inputs.size());
-            for (const auto& [address, context_input] :
-                 context_inputs) {
-                static_cast<void>(context_input);
-                if (final_function_by_address.contains(address))
-                    stable_addresses.push_back(address);
-            }
+            std::vector<ContextualLaneId> stable_lanes(
+                contextual_lanes.size());
+            std::iota(stable_lanes.begin(),
+                      stable_lanes.end(), 0u);
             std::vector<StableContextResult> stable_results(
-                stable_addresses.size());
+                stable_lanes.size());
             const auto harvest_stable_context =
                 [&](const std::size_t index) noexcept {
                     auto& stable = stable_results[index];
-                    const auto address = stable_addresses[index];
+                    const auto lane_id = stable_lanes[index];
+                    const auto& lane =
+                        contextual_lanes.at(lane_id);
+                    const auto address = lane.function_entry;
                     try {
                         throw_if_resolution_cancelled(
                             cancel_requested);
                         stable.diagnostics
                             .local_fixpoint_iteration_budget =
                             maximum_local_fixpoint_iterations;
+                        stable.bindings =
+                            contextual_bindings_for(address);
                         stable.evidence_lens =
                             make_multi_root_provenance_lens(
                                 address,
                                 TailIngressTargetKind::Function,
-                                context_inputs.at(address),
+                                lane.input,
                                 EvaluationLens::GuardedInventory,
                                 nullptr,
                                 forwarded_evidence_tokens,
-                                &contextual_summaries,
+                                &stable.bindings,
                                 nullptr,
                                 nullptr);
                         const auto& evaluation_input =
                             stable.evidence_lens.has_value()
                                 ? stable.evidence_lens->ingress()
-                                : context_inputs.at(address);
+                                : lane.input;
                         const auto& evaluation_summaries =
                             stable.evidence_lens.has_value()
                                 ? *stable.evidence_lens
@@ -30066,7 +30622,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 stable.evidence_lens.has_value()
                                     ? stable.evidence_lens
                                           ->contextual_summaries()
-                                    : &contextual_summaries;
+                                    : &stable.bindings;
                         auto cached = cached_evaluate_function(
                             *final_function_by_address.at(address),
                             inventory_indirect_callees,
@@ -30116,7 +30672,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     AnalysisWorkPhase::GuardedInventory;
                 harvest_work.subject_kind =
                     AnalysisWorkSubjectKind::Context;
-                harvest_work.subject = stable_addresses.front();
+                harvest_work.subject =
+                    contextual_lanes.at(stable_lanes.front())
+                        .function_entry;
                 harvest_work.fanout = stable_results.size();
                 harvest_work.priority =
                     AnalysisWorkPriorityKind::CriticalPrefix;
@@ -30173,9 +30731,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         if (function_result.local_fixpoint_budget_exhausted)
             return finalize_root_result();
         coalesce_call_arguments(
-            function_result.evaluation.call_arguments);
+            function_result.evaluation.call_arguments,
+            true);
         coalesce_inventory_transfers(
-            function_result.evaluation.inventory_transfers);
+            function_result.evaluation.inventory_transfers,
+            true);
         const std::set<std::uint32_t> no_forwarded_root_call_sites;
         if (!result.budget_exhausted)
             seed_forwarded_inventory(function_result.evaluation,
@@ -30390,14 +30950,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
 
     const auto evaluate_resolution_function =
         [&](const std::size_t function_index,
-            const std::atomic_bool* const cancel_requested) {
+            const ResolutionCancellation* const cancel_requested) {
         throw_if_resolution_cancelled(cancel_requested);
         const auto* const function =
             resolution_functions.at(function_index);
         const auto& aggregate_input =
             final_candidate_inputs.at(function->entry_address);
+        const auto contextual_lane_limit =
+            final_function_by_address.size() >
+                    std::numeric_limits<std::size_t>::max() -
+                        maximum_guarded_code_inventory
+                ? std::numeric_limits<std::size_t>::max()
+                : final_function_by_address.size() +
+                      maximum_guarded_code_inventory;
         ResolutionRootLogicalBudget logical_budget{
-            final_function_by_address.size()};
+            contextual_lane_limit};
         const auto aggregate_family_complete =
             !aggregate_input.unknown_ingress &&
             !aggregate_input.expected_call_sites.empty() &&
@@ -30425,12 +30992,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 cancel_requested);
 
         struct ContributionPartition final {
-            CallsiteContributionKey key;
+            std::optional<CallsiteContributionKey> key;
             const AbstractState* state = nullptr;
+            bool input_family_complete = false;
         };
+        AbstractState unknown_ingress_state;
+        unknown_ingress_state.stack_offsets[15u] = 0;
         std::vector<ContributionPartition> partitions;
         partitions.reserve(
-            aggregate_input.expected_contributions.size());
+            aggregate_input.expected_contributions.size() +
+            (aggregate_input.unknown_ingress ? 1u : 0u));
+        if (aggregate_input.unknown_ingress)
+            partitions.push_back(
+                {std::nullopt, &unknown_ingress_state, false});
         auto source_register_read_mask =
             std::numeric_limits<std::uint16_t>::max();
         AbiStackArgumentReadSet source_stack_reads;
@@ -30458,7 +31032,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 throw std::logic_error(
                     "Exakte Resolution-Contribution fehlt.");
             partitions.push_back(
-                {contribution, &observation->second});
+                {contribution, &observation->second, true});
             const auto source_loss =
                 inventory_loss_in_evaluation_projection(
                     observation->second,
@@ -30477,7 +31051,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         combined.walk_diagnostics.forwarded_store_context_budget =
             maximum_forwarded_store_contexts;
         combined.walk_diagnostics.contextual_return_context_budget =
-            final_function_by_address.size();
+            logical_budget.contextual_context_limit;
         combined.walk_diagnostics.contextual_return_evaluation_budget =
             maximum_contextual_return_evaluations;
         combined.walk_diagnostics.abi_stack_argument_slot_budget =
@@ -30501,6 +31075,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         struct ContributionPartitionResult final {
             std::optional<ResolutionFunctionResult> result;
             std::exception_ptr error;
+            bool sibling_cancelled = false;
         };
         auto& partition_executor = global_analysis_executor();
         const auto partition_lanes = std::max(
@@ -30516,32 +31091,66 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             const auto count = std::min(
                 partition_lanes, partitions.size() - first);
             std::vector<ContributionPartitionResult> batch(count);
+            std::atomic_bool sibling_cancel_requested = false;
+            const ResolutionCancellation partition_cancellation{
+                cancel_requested,
+                &sibling_cancel_requested,
+                true};
+            const auto cancel_partition_siblings = [&]() noexcept {
+                sibling_cancel_requested.store(
+                    true, std::memory_order_release);
+                partition_executor.notify_waiters();
+            };
             const auto evaluate_partition =
                 [&](const std::size_t index) noexcept {
                     try {
                         throw_if_resolution_cancelled(
-                            cancel_requested);
+                            &partition_cancellation);
                         const auto& partition =
                             partitions[first + index];
                         if (partition.state == nullptr)
                             throw std::logic_error(
                                 "Resolution-Contribution ohne State.");
-                        const std::array observations{
-                            std::pair<std::uint32_t,
-                                      const AbstractState*>{
-                                partition.key.site,
-                                partition.state}};
-                        batch[index].result.emplace(
-                            evaluate_resolution_partition(
-                                function_index,
-                                *partition.state,
-                                observations,
-                                true,
-                                logical_budget,
-                                cancel_requested));
+                        if (partition.key.has_value()) {
+                            const std::array observations{
+                                std::pair<std::uint32_t,
+                                          const AbstractState*>{
+                                    partition.key->site,
+                                    partition.state}};
+                            batch[index].result.emplace(
+                                evaluate_resolution_partition(
+                                    function_index,
+                                    *partition.state,
+                                    observations,
+                                    partition.input_family_complete,
+                                    logical_budget,
+                                    &partition_cancellation));
+                        } else {
+                            const std::span<const std::pair<
+                                std::uint32_t,
+                                const AbstractState*>> no_observations;
+                            batch[index].result.emplace(
+                                evaluate_resolution_partition(
+                                    function_index,
+                                    *partition.state,
+                                    no_observations,
+                                    partition.input_family_complete,
+                                    logical_budget,
+                                    &partition_cancellation));
+                        }
+                        const auto& resolved =
+                            *batch[index].result;
+                        if (resolved.local_fixpoint_budget_exhausted ||
+                            resolved.walk_diagnostics.truncated() ||
+                            resolved.inventory.replay_truncation()
+                                .truncated())
+                            cancel_partition_siblings();
+                    } catch (const ResolutionSiblingEvaluationCancelled&) {
+                        batch[index].sibling_cancelled = true;
                     } catch (...) {
                         batch[index].error =
                             std::current_exception();
+                        cancel_partition_siblings();
                     }
                 };
             if (batch.size() == 1u) {
@@ -30570,6 +31179,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 throw_if_resolution_cancelled(cancel_requested);
                 if (partition.error)
                     std::rethrow_exception(partition.error);
+            }
+            for (auto& partition : batch) {
+                throw_if_resolution_cancelled(cancel_requested);
+                if (partition.sibling_cancelled) continue;
                 if (!partition.result)
                     throw std::logic_error(
                         "Resolution-Contribution lieferte kein Ergebnis.");
@@ -30637,7 +31250,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     const auto evaluate_or_reuse_resolution_function =
         [&](const std::size_t function_index,
             const bool count_initial_start = true,
-            const std::atomic_bool* const cancel_requested = nullptr) {
+            const ResolutionCancellation* const cancel_requested = nullptr) {
         throw_if_resolution_cancelled(cancel_requested);
         if (count_initial_start)
             progress_resolution_functions_started.fetch_add(
@@ -31010,8 +31623,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             report_progress("resolution-progress");
     };
 
-    if (resolution_functions.size() <
-        minimum_parallel_resolution_functions) {
+    // Sticky baseline loss which no exact root partition replaced already
+    // makes this presentation fail-closed. Do not spend a full speculative
+    // wavefront proving the same terminal result again.
+    if (inventory_walk_diagnostics.truncated()) {
+        resolution_root_incomplete = true;
+        resolution_inventory_candidate.reset();
+        if (resolution_epoch_retention_enabled)
+            disable_resolution_epoch_retention(
+                ResolutionRetentionLimitReason::IncompleteRoot);
+    } else if (resolution_functions.size() <
+               minimum_parallel_resolution_functions) {
         for (std::size_t index = 0u;
              index < resolution_functions.size();
              ++index) {
@@ -31376,6 +31998,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             std::optional<ResolutionFunctionResult> resolved;
                             std::exception_ptr error;
                             try {
+                                const ResolutionCancellation
+                                    root_cancellation{
+                                        nullptr,
+                                        &dispatch->cancel_requested,
+                                        false};
                                 if (session.impl_
                                         ->resolution_execution_observer_for_testing
                                         .job_started)
@@ -31386,7 +32013,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     evaluate_or_reuse_resolution_function(
                                         index,
                                         true,
-                                        &dispatch->cancel_requested));
+                                        &root_cancellation));
                             } catch (...) {
                                 error = std::current_exception();
                             }
@@ -31544,6 +32171,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
 
                 if (recompute) {
                     try {
+                        const ResolutionCancellation
+                            root_cancellation{
+                                nullptr,
+                                &dispatch->cancel_requested,
+                                false};
                         if (session.impl_
                                 ->resolution_execution_observer_for_testing
                                 .job_started)
@@ -31554,7 +32186,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             evaluate_or_reuse_resolution_function(
                                 index,
                                 false,
-                                &dispatch->cancel_requested));
+                                &root_cancellation));
                     } catch (...) {
                         first_resolution_error =
                             std::current_exception();
