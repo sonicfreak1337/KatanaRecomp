@@ -4228,6 +4228,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         if (terminal_function_values.progress_callback_failed)
             progress_callback_failed.store(true,
                                            std::memory_order_relaxed);
+        if (terminal_function_values.budget_exhausted) {
+            analysis.function_budget_exhausted = true;
+            report_progress("function-values-terminal-budget-exhausted");
+        }
         if (terminal_function_values.persistent_analysis_bypass_reason !=
             PersistentAnalysisBypassReason::None) {
             mark_persistent_bypass(

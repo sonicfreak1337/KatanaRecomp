@@ -14717,7 +14717,7 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 4u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 5u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -23874,16 +23874,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         candidate_call_owner_functions.insert(owners->second.begin(),
                                               owners->second.end());
     }
-    std::vector<std::uint32_t> contextual_candidate_return_owners{
-        candidate_call_owner_functions.begin(),
-        candidate_call_owner_functions.end()};
-    std::sort(contextual_candidate_return_owners.begin(),
-              contextual_candidate_return_owners.end());
-    const auto global_contextual_return_coordinator =
-        contextual_candidate_return_owners.empty()
-            ? std::optional<std::uint32_t>{}
-            : std::optional<std::uint32_t>{
-                  contextual_candidate_return_owners.front()};
     const auto contains_resolution_or_inventory_instruction =
         [&](const FunctionInfo& function) {
             resolution_preparation_entries_visited +=
@@ -23929,8 +23919,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         if (!contains_resolution_or_inventory_instruction(candidate) &&
             !functions_reaching_guarded_inventory_sink.contains(
                 address) &&
-            (!global_contextual_return_coordinator.has_value() ||
-             address != *global_contextual_return_coordinator))
+            !candidate_call_owner_functions.contains(address))
             continue;
         resolution_functions.push_back(&candidate);
     }
@@ -25288,19 +25277,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         auto& plan = resolution_root_plans[index];
         std::vector<ResolutionDependencyNodeId> root_nodes{
             {root, ResolutionDependencyNodeKind::Function}};
-        const bool contextual_coordinator =
-            global_contextual_return_coordinator.has_value() &&
-            root == *global_contextual_return_coordinator;
-        if (contextual_coordinator) {
-            resolution_preparation_entries_visited +=
-                contextual_candidate_return_owners.size();
-            for (const auto owner :
-                 contextual_candidate_return_owners) {
-                root_nodes.push_back(
-                    {owner,
-                     ResolutionDependencyNodeKind::Function});
-            }
-        }
+        const bool contextual_candidate_return_owner =
+            candidate_call_owner_functions.contains(root);
         normalize(root_nodes);
         resolution_preparation_entries_visited += root_nodes.size();
         for (const auto node : root_nodes) {
@@ -25331,7 +25309,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         root_key.append(image.analysis_revision());
         root_key.append(image.guest_call_abi());
         root_key.append(root);
-        root_key.append(contextual_coordinator);
+        root_key.append(contextual_candidate_return_owner);
         root_key.append(forwarded_evidence_tokens.empty());
         root_key.append_range(
             root_nodes,
@@ -25340,19 +25318,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 root_key.append(
                     static_cast<std::uint8_t>(node.kind));
             });
-        if (contextual_coordinator) {
-            root_key.append_range(
-                contextual_candidate_return_owners,
-                [&](const auto owner) { root_key.append(owner); });
-            std::vector<std::uint64_t> pairs{
-                candidate_call_pairs.begin(),
-                candidate_call_pairs.end()};
-            resolution_preparation_entries_visited += pairs.size();
-            normalize(pairs);
-            root_key.append_range(
-                pairs,
-                [&](const auto pair) { root_key.append(pair); });
-        }
         plan.root_contract_bytes =
             std::move(root_key).finish();
         root_dependency_unrepresentable =
@@ -26556,12 +26521,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             }
         };
         const auto harvest_contextual_candidate_returns = [&] {
-            if (!global_contextual_return_coordinator.has_value() ||
-                function->entry_address !=
-                    *global_contextual_return_coordinator)
+            if (!candidate_call_owner_functions.contains(
+                    function->entry_address))
                 return;
-            const bool merged_owner_context =
-                contextual_candidate_return_owners.size() > 1u;
             std::map<std::uint32_t, AbstractState> context_inputs;
             std::map<std::uint32_t, FunctionValueSummary>
                 contextual_summaries;
@@ -26582,18 +26544,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (queued_contexts.insert(address).second)
                         pending_contexts.push_back(address);
                 };
-            // Candidate-return contexts are a product-wide guarded inventory
-            // domain. Seed every owner once and merge only where their helper
-            // graphs meet. Rebuilding this closure independently for every
-            // owner is equivalent semantically but multiplies the dominant
-            // analysis cost by the number of owners.
-            for (const auto owner :
-                 contextual_candidate_return_owners) {
-                context_inputs.emplace(
-                    owner,
-                    final_candidate_inputs.at(owner).state);
-                enqueue_context(owner);
-            }
+            // Keep each candidate-call owner as an independent resolution
+            // root. The run-local MultiRootEvaluationCoordinator single-
+            // flights identical helper contexts across roots, while distinct
+            // owner states remain parallel, precise, and independently
+            // cacheable instead of becoming one serial global tail.
+            context_inputs.emplace(function->entry_address,
+                                   input.state);
+            enqueue_context(function->entry_address);
             std::size_t contextual_evaluations = 0u;
             bool contextual_context_budget_exhausted = false;
             const auto contextual_entry_register_reads =
@@ -26976,32 +26934,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         .local_fixpoint_budget_exhausted) {
                     record_local_fixpoint_limit();
                     return;
-                }
-                if (merged_owner_context) {
-                    // Joining distinct roots deliberately forgets their
-                    // correlation. The resulting finite targets are useful
-                    // guarded AOT inventory, but can never become an
-                    // authoritative complete control-flow proof.
-                    stable.inventory
-                        .mark_stored_candidates_incomplete();
-                    for (auto& resolution :
-                         stable.evaluation.resolutions) {
-                        resolution.guarded = true;
-                        resolution.complete = false;
-                        resolution.evidence =
-                            resolution.targets.empty()
-                                ? ControlFlowEvidence::Unresolved
-                                : ControlFlowEvidence::GuardedPartial;
-                        resolution.reason =
-                            resolution.targets.empty()
-                                ? "global-contexts-unknown"
-                                : "merged-contexts-partial";
-                    }
-                    for (auto& transfer :
-                         stable.evaluation.inventory_transfers) {
-                        transfer.guarded = true;
-                        transfer.complete = false;
-                    }
                 }
                 std::move(stable.inventory)
                     .replay_deferred_into(

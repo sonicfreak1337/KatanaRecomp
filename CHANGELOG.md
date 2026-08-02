@@ -4,6 +4,20 @@
 
 ### Geaendert
 
+- Der sichtbare 24-Thread-Sonic-v39-Kaltlauf belegte nach `20:49,737`
+  einen einzelnen seriellen Resolution-Tail: Alle `1.191` Roots waren nach
+  rund zweieinhalb Minuten gestartet, waehrend der globale
+  Contextual-Return-Koordinator bis zum lokalen `65.536`-Iterationslimit
+  weiterlief und der Produktvertrag den unvollstaendigen Root vor der
+  Veroeffentlichung ablehnte. Contextual-Return-Besitzer bleiben deshalb nun
+  getrennte Resolution-Roots und laufen ueber den gemeinsamen Executor; der
+  vorhandene Multi-Root-Cache single-flightet identische Unterarbeit weiter,
+  ohne fremde Owner-Zustaende vorzeitig zu vermischen. TerminalFull uebernimmt
+  ausserdem einen eigenen Function-Value-Budgetverlust explizit in den
+  oeffentlichen CFA-Vollstaendigkeitsvertrag. Analyzer-ABI 26 und
+  Function-Analysis-Epoch-Schema 5 invalidieren die alten fusionierten
+  Artefakte. Der fehlgeschlagene v39-Lauf erzeugte keinen Port und ist kein
+  Sonic-Produktnachweis.
 - KR-4979 fuehrt alle schweren Analysephasen ueber einen gemeinsamen,
   kosten-, Fanout- und Critical-Prefix-priorisierten Executor mit begrenzten
   Continuations. Ein globaler Speicherhaushalt begrenzt parallele schwere
