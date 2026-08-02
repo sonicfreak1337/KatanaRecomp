@@ -9,8 +9,13 @@
   Continuations. Ein globaler Speicherhaushalt begrenzt parallele schwere
   Lanes, Cache-/Multi-Root-LRU bleibt recompute-sicher und Progress trennt
   laufende, wartende, leerlaufende, speicherblockierte und fortgesetzte
-  Arbeit. Resolution-Ergebnisse werden in einem begrenzten kanonischen
-  Sliding Window committed; Ausnahmewege drainen jeden gestarteten Callback.
+  Arbeit. Alle Resolution-Roots werden als teilbare Throughput-Continuations
+  zugelassen, waehrend innere Unblocking-Arbeit Vorrang behaelt; Ergebnisse
+  werden weiterhin streng kanonisch committed. Ein separat vorreserviertes
+  Latent-AOT-Childbudget deckt Slots und Ready-Payload genau einmal, spaetere
+  blockierte Ergebnisse werden speichersicher verworfen und bei Bedarf rein
+  neu berechnet. Ausnahmewege brechen noch nicht gestartete Roots ab und
+  drainen jeden bereits gestarteten Callback ohne Lost Wakeup.
   Unvollstaendige Roots verwerfen die optionale Presentation-Epoch strikt
   ganz oder gar nicht und erzwingen beim naechsten TerminalFull eine exakte
   Neuberechnung.

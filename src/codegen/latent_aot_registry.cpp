@@ -37,8 +37,13 @@ constexpr std::uint32_t iso_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
 constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::size_t maximum_analysis_implementation_identity_bytes = 4096u;
-constexpr std::uint64_t latent_aot_module_analysis_reserve_bytes =
+constexpr std::uint64_t latent_aot_module_analysis_base_reserve_bytes =
     2'560ull * 1024ull * 1024ull;
+constexpr std::uint64_t latent_aot_function_value_ready_budget_bytes =
+    1'024ull * 1024ull * 1024ull;
+constexpr std::uint64_t latent_aot_module_analysis_reserve_bytes =
+    latent_aot_module_analysis_base_reserve_bytes +
+    latent_aot_function_value_ready_budget_bytes;
 constexpr std::string_view latent_aot_analysis_cache_artifact{
     "module-analysis.bin"};
 
@@ -920,6 +925,11 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         options.maximum_native_instructions_per_module;
     analysis_options.maximum_contexts =
         options.maximum_analysis_contexts;
+    katana::analysis::AnalysisMemoryBudget function_value_ready_budget(
+        static_cast<std::size_t>(
+            latent_aot_function_value_ready_budget_bytes));
+    analysis_options.pre_reserved_function_value_ready_budget =
+        &function_value_ready_budget;
     try {
         analysis = katana::analysis::analyze_control_flow(
             image,

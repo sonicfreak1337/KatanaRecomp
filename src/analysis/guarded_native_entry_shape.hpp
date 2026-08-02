@@ -17,6 +17,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+namespace katana::analysis {
+class AnalysisMemoryBudget;
+}
+
 namespace katana::analysis::detail {
 
 enum class GuardedNativeEntryShapeStatus : std::uint8_t {
@@ -508,7 +512,9 @@ class FunctionValueAnalysisSession {
         std::size_t maximum_resolution_root_artifacts =
             default_maximum_resolution_root_artifacts,
         std::size_t maximum_resolution_epoch_retained_bytes =
-            default_maximum_resolution_epoch_retained_bytes);
+            default_maximum_resolution_epoch_retained_bytes,
+        AnalysisMemoryBudget* pre_reserved_resolution_ready_budget =
+            nullptr);
     ~FunctionValueAnalysisSession();
 
     FunctionValueAnalysisSession(FunctionValueAnalysisSession&&) noexcept;

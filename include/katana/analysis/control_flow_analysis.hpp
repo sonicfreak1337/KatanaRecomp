@@ -24,6 +24,8 @@
 
 namespace katana::analysis {
 
+class AnalysisMemoryBudget;
+
 enum class ControlFlowAnalysisTerminationReason : std::uint8_t {
     None,
     AnalysisIterationBudgetExceeded,
@@ -489,6 +491,11 @@ struct ControlFlowAnalysisOptions {
         std::numeric_limits<std::size_t>::max();
     std::size_t maximum_contexts =
         std::numeric_limits<std::size_t>::max();
+    // Optional non-owning child budget for FVA resolution results. The
+    // caller must keep it alive for this synchronous analysis and include
+    // its full capacity in an enclosing global executor reservation.
+    AnalysisMemoryBudget* pre_reserved_function_value_ready_budget =
+        nullptr;
 };
 
 [[nodiscard]] const char*

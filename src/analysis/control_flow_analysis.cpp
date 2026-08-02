@@ -1,6 +1,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 
 #include "katana/analysis/code_address.hpp"
+#include "katana/analysis/parallel_work.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/sh4/instruction.hpp"
 #include "guarded_native_entry_shape.hpp"
@@ -2188,7 +2189,15 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     detail::FunctionValueAnalysisSession function_value_session(
         16'384u,
         1'024u * 1024u * 1024u,
-        options.detailed_cache_miss_telemetry);
+        options.detailed_cache_miss_telemetry,
+        {},
+        detail::FunctionValueAnalysisSession::
+            default_maximum_resolution_dependency_nodes,
+        detail::FunctionValueAnalysisSession::
+            default_maximum_resolution_root_artifacts,
+        detail::FunctionValueAnalysisSession::
+            default_maximum_resolution_epoch_retained_bytes,
+        options.pre_reserved_function_value_ready_budget);
     // ABI-less inputs still have a valid local CFG/decode contract. They must
     // not stage an interprocedural delta that FVA deliberately cannot consume.
     const bool function_value_analysis_supported =

@@ -101,7 +101,7 @@ KR-4984 verbindlich abzuschliessen.
 | KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | abgeschlossen; immutable Graphshards, persistente SCC-/ABI-/Summary-Epoch und gerichtete Invalidierung produktiv verdrahtet |
 | KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | abgeschlossen in `4d17526` |
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | geplant P0 |
-| KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | geplant P0 |
+| KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; Sonic-Produktabnahme offen |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | geplant P0 |
 | KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | geplant P0 als finale Produktmessung nach KR-4984; keine Vorab-Buildmatrix |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | geplant P0 Entscheidungsgate |

@@ -17788,7 +17788,8 @@ struct detail::FunctionValueAnalysisSession::Impl {
          FunctionEvaluationCacheDecisionObserver decision_observer,
          const std::size_t maximum_resolution_dependency_nodes,
          const std::size_t maximum_resolution_root_artifacts,
-         const std::size_t maximum_resolution_epoch_retained_bytes)
+         const std::size_t maximum_resolution_epoch_retained_bytes,
+         AnalysisMemoryBudget* const pre_reserved_resolution_ready_budget)
         : evaluations(maximum_entries,
                       maximum_retained_payload_bytes,
                       detailed_telemetry,
@@ -17798,7 +17799,9 @@ struct detail::FunctionValueAnalysisSession::Impl {
           maximum_resolution_root_artifacts(
               maximum_resolution_root_artifacts),
           maximum_resolution_epoch_retained_bytes(
-              maximum_resolution_epoch_retained_bytes) {
+              maximum_resolution_epoch_retained_bytes),
+          pre_reserved_resolution_ready_budget(
+              pre_reserved_resolution_ready_budget) {
         if (detailed_telemetry) {
             function_value_detailed_cache_sessions_started.fetch_add(
                 1u, std::memory_order_relaxed);
@@ -17939,6 +17942,7 @@ struct detail::FunctionValueAnalysisSession::Impl {
     std::size_t maximum_resolution_dependency_nodes = 0u;
     std::size_t maximum_resolution_root_artifacts = 0u;
     std::size_t maximum_resolution_epoch_retained_bytes = 0u;
+    AnalysisMemoryBudget* pre_reserved_resolution_ready_budget = nullptr;
     ResolutionExecutionObserverForTesting
         resolution_execution_observer_for_testing;
     std::optional<detail::FunctionProgramDelta> pending_program_delta;
@@ -17955,7 +17959,8 @@ detail::FunctionValueAnalysisSession::FunctionValueAnalysisSession(
     FunctionEvaluationCacheDecisionObserver decision_observer,
     const std::size_t maximum_resolution_dependency_nodes,
     const std::size_t maximum_resolution_root_artifacts,
-    const std::size_t maximum_resolution_epoch_retained_bytes)
+    const std::size_t maximum_resolution_epoch_retained_bytes,
+    AnalysisMemoryBudget* const pre_reserved_resolution_ready_budget)
     : impl_(std::make_unique<Impl>(
           maximum_entries,
           maximum_retained_payload_bytes,
@@ -17963,7 +17968,8 @@ detail::FunctionValueAnalysisSession::FunctionValueAnalysisSession(
           std::move(decision_observer),
           maximum_resolution_dependency_nodes,
           maximum_resolution_root_artifacts,
-          maximum_resolution_epoch_retained_bytes)) {}
+          maximum_resolution_epoch_retained_bytes,
+          pre_reserved_resolution_ready_budget)) {}
 
 detail::FunctionValueAnalysisSession::~FunctionValueAnalysisSession() =
     default;
@@ -25730,6 +25736,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             function_result.pending_forwarded_store_contexts = {};
             function_result.forwarded_store_context_queued = {};
             function_result.forwarded_store_context_indices = {};
+            function_result.inventory.discard_transient_caches();
             if (function_result.local_fixpoint_budget_exhausted) {
                 function_result.evaluation.resolutions = {};
                 function_result.inventory =
@@ -26949,9 +26956,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 harvest_work.subject = stable_addresses.front();
                 harvest_work.fanout = stable_results.size();
                 harvest_work.priority =
-                    AnalysisWorkPriorityKind::CriticalPrefix;
-                harvest_work.critical_prefix =
-                    stable_addresses.front();
+                    AnalysisWorkPriorityKind::Unblocking;
                 harvest_work.quantum = 1u;
                 parallel_analysis_for(
                     contextual_executor,
@@ -27166,9 +27171,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 isolated_work.subject = function->entry_address;
                 isolated_work.fanout = isolated_results.size();
                 isolated_work.priority =
-                    AnalysisWorkPriorityKind::CriticalPrefix;
-                isolated_work.critical_prefix =
-                    function->entry_address;
+                    AnalysisWorkPriorityKind::Unblocking;
                 isolated_work.quantum = 1u;
                 parallel_analysis_for(
                     global_analysis_executor(),
@@ -27228,9 +27231,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     };
 
     const auto evaluate_or_reuse_resolution_function =
-        [&](const std::size_t function_index) {
-        progress_resolution_functions_started.fetch_add(
-            1u, std::memory_order_relaxed);
+        [&](const std::size_t function_index,
+            const bool count_initial_start = true) {
+        if (count_initial_start)
+            progress_resolution_functions_started.fetch_add(
+                1u, std::memory_order_relaxed);
         const auto& plan = resolution_root_plans.at(function_index);
         if (plan.reused_artifact != nullptr) {
             ResolutionFunctionResult reused;
@@ -27584,7 +27589,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             } else {
                 if (result.result_materialization ==
                     FunctionValueResultMaterialization::DeltaOnly) {
-                    result.budget_exhausted = true;
                     resolution_local_fixpoint_budget_exhausted = true;
                     resolution_inventory_candidate.reset();
                     result.resolutions.clear();
@@ -27594,7 +27598,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     std::move(resolved.inventory).replay_into(
                         *resolution_inventory_candidate);
                 }
-                if (!result.budget_exhausted) {
+                if (!result.budget_exhausted &&
+                    !resolution_local_fixpoint_budget_exhausted) {
                     resolution_count +=
                         resolved.evaluation.resolutions.size();
                     result.resolutions.insert(
@@ -27632,130 +27637,263 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         progress_resolution_head_started_nanoseconds.store(
             0, std::memory_order_relaxed);
     } else {
-        struct ResolutionResultSlot {
-            std::size_t function_index =
-                std::numeric_limits<std::size_t>::max();
+        struct ResolutionResultSlot final {
             std::optional<ResolutionFunctionResult> result;
             std::exception_ptr error;
+            std::optional<AnalysisMemoryBudget::Lease> retained_lease;
+            std::size_t retained_bytes = 0u;
             bool ready = false;
-            bool in_flight = false;
+            bool initial_completed = false;
+            bool recompute_required = false;
         };
-        struct PendingResolutionResult {
-            std::optional<ResolutionFunctionResult> result;
-            std::exception_ptr error;
-        };
-        struct ResolutionWindowState final {
-            explicit ResolutionWindowState(const std::size_t capacity)
-                : slots(capacity) {}
+        struct ResolutionDispatchState final {
+            ResolutionDispatchState(
+                const std::size_t root_count,
+                const std::size_t maximum_ready_bytes)
+                : slots(root_count),
+                  maximum_ready_retained_bytes(maximum_ready_bytes) {}
 
             std::vector<ResolutionResultSlot> slots;
             std::mutex mutex;
-            std::condition_variable ready;
-            std::size_t outstanding_tasks = 0u;
+            std::condition_variable changed;
+            std::exception_ptr producer_error;
+            std::size_t ready_retained_bytes = 0u;
+            std::size_t maximum_ready_retained_bytes = 0u;
+            std::atomic_bool cancel_requested = false;
+            bool producer_done = false;
         };
+
         auto& resolution_executor = global_analysis_executor();
-        auto* const resolution_executor_ptr = &resolution_executor;
-        const auto resolution_lanes = std::min(
-            maximum_parallel_resolution_jobs,
-            resolution_executor.maximum_jobs());
-        // Two canonical worker waves keep the pool fed while bounding the
-        // finished-but-blocked payload to O(worker_count), rather than one
-        // result slot per function. A slot is reused only after its exact
-        // predecessor was committed.
-        const auto resolution_window_capacity = std::min(
-            resolution_functions.size(), resolution_lanes * 2u);
-        auto resolution_window =
-            std::make_shared<ResolutionWindowState>(
-                resolution_window_capacity);
-        std::size_t submitted_functions = 0u;
-        std::exception_ptr submission_error;
-        const auto submit_resolution_function =
-            [&](const std::size_t index) -> bool {
-            const auto slot_index =
-                index % resolution_window_capacity;
-            try {
-                {
-                    const std::lock_guard lock(
-                        resolution_window->mutex);
-                    auto& slot =
-                        resolution_window->slots[slot_index];
-                    if (slot.in_flight || slot.ready)
-                        throw std::logic_error(
-                            "Resolution-Sliding-Window ueberschrieb einen "
-                            "noch belegten Slot.");
-                    slot.function_index = index;
-                    slot.in_flight = true;
-                    ++resolution_window->outstanding_tasks;
+        const auto pre_reserved_resolution_budget =
+            session.impl_->pre_reserved_resolution_ready_budget != nullptr;
+        auto& resolution_memory = pre_reserved_resolution_budget
+                                      ? *session.impl_
+                                             ->pre_reserved_resolution_ready_budget
+                                      : resolution_executor.memory_budget();
+        constexpr std::size_t maximum_resolution_ready_retained_bytes =
+            1'024u * 1'024u * 1'024u;
+        const auto resolution_dispatch_budget_limit =
+            pre_reserved_resolution_budget
+                ? resolution_memory.capacity()
+                : std::min(
+                      maximum_resolution_ready_retained_bytes,
+                      std::max<std::size_t>(
+                          1u, resolution_memory.capacity() / 4u));
+        if (resolution_functions.size() >
+            std::numeric_limits<std::size_t>::max() /
+                sizeof(ResolutionResultSlot))
+            throw std::overflow_error(
+                "Resolution-Resultslots ueberschreiten den Adressraum.");
+        const auto slot_storage_bytes =
+            resolution_functions.size() * sizeof(ResolutionResultSlot);
+        if (slot_storage_bytes > resolution_dispatch_budget_limit)
+            throw AnalysisMemoryBudgetExceeded(
+                slot_storage_bytes,
+                resolution_dispatch_budget_limit);
+        auto slot_storage_lease =
+            resolution_memory.try_acquire(slot_storage_bytes);
+        if (!slot_storage_lease && !pre_reserved_resolution_budget) {
+            resolution_executor.help_until([&] {
+                slot_storage_lease =
+                    resolution_memory.try_acquire(slot_storage_bytes);
+                return slot_storage_lease.has_value();
+            });
+        }
+        if (!slot_storage_lease)
+            throw AnalysisMemoryBudgetExceeded(
+                slot_storage_bytes,
+                resolution_memory.capacity());
+        struct SlotStorageLeaseReleaseNotifier final {
+            std::optional<AnalysisMemoryBudget::Lease>* lease = nullptr;
+            ParallelWorkExecutor* executor = nullptr;
+
+            ~SlotStorageLeaseReleaseNotifier() {
+                if (lease == nullptr || !lease->has_value()) return;
+                lease->reset();
+                executor->notify_waiters();
+            }
+        } slot_storage_release_notifier{
+            &slot_storage_lease, &resolution_executor};
+        const auto ready_retained_limit =
+            resolution_dispatch_budget_limit - slot_storage_bytes;
+        auto dispatch = std::make_shared<ResolutionDispatchState>(
+            resolution_functions.size(), ready_retained_limit);
+
+        const auto ready_payload_bytes =
+            [&](const ResolutionFunctionResult& value) {
+            std::size_t bytes = 0u;
+            const auto add = [&](const std::size_t count) {
+                if (count >
+                    std::numeric_limits<std::size_t>::max() - bytes)
+                    throw std::overflow_error(
+                        "Resolution-Readypayload ist zu gross.");
+                bytes += count;
+            };
+            add(retained_heap_bytes(value.evaluation));
+            add(value.inventory.retained_heap_bytes());
+            const auto diagnostic_count =
+                value.walk_diagnostics
+                    .forwarded_store_context_limit_diagnostics.capacity();
+            if (diagnostic_count >
+                std::numeric_limits<std::size_t>::max() /
+                    sizeof(ForwardedStoreContextLimitDiagnostic))
+                throw std::overflow_error(
+                    "Resolution-Diagnostikpayload ist zu gross.");
+            add(diagnostic_count *
+                sizeof(ForwardedStoreContextLimitDiagnostic));
+            return bytes;
+        };
+
+        const auto evict_later_ready_locked =
+            [&](const std::size_t preferred_index) {
+            for (std::size_t candidate = dispatch->slots.size();
+                 candidate > preferred_index + 1u;
+                 --candidate) {
+                auto& slot = dispatch->slots[candidate - 1u];
+                if (!slot.ready || !slot.result.has_value()) continue;
+                dispatch->ready_retained_bytes =
+                    dispatch->ready_retained_bytes >= slot.retained_bytes
+                        ? dispatch->ready_retained_bytes -
+                              slot.retained_bytes
+                        : 0u;
+                slot.result.reset();
+                slot.retained_lease.reset();
+                slot.retained_bytes = 0u;
+                slot.ready = false;
+                slot.recompute_required = true;
+                progress_resolution_functions_ready.fetch_sub(
+                    1u, std::memory_order_relaxed);
+                return true;
+            }
+            return false;
+        };
+
+        const auto publish_initial_result =
+            [&](const std::size_t index,
+                std::optional<ResolutionFunctionResult> resolved,
+                std::exception_ptr error) {
+            std::size_t retained_bytes = 0u;
+            if (resolved.has_value()) {
+                try {
+                    retained_bytes = ready_payload_bytes(*resolved);
+                    if (pre_reserved_resolution_budget &&
+                        retained_bytes >
+                        dispatch->maximum_ready_retained_bytes)
+                        throw AnalysisMemoryBudgetExceeded(
+                            retained_bytes,
+                            dispatch->maximum_ready_retained_bytes);
+                } catch (...) {
+                    error = std::current_exception();
+                    resolved.reset();
                 }
-                auto pending =
-                    std::make_shared<PendingResolutionResult>();
-                AnalysisWorkDescriptor descriptor;
-                descriptor.phase = AnalysisWorkPhase::Resolution;
-                descriptor.subject_kind =
-                    AnalysisWorkSubjectKind::Root;
-                descriptor.subject =
-                    resolution_functions[index]->entry_address;
-                descriptor.fanout =
-                    resolution_root_plans[index]
-                        .dependency_roots.size();
-                descriptor.priority =
-                    AnalysisWorkPriorityKind::CriticalPrefix;
-                descriptor.critical_prefix = index;
-                descriptor.quantum = 1u;
-                resolution_executor.submit(
-                    std::move(descriptor),
-                    [&, index, pending]() noexcept {
+            }
+            {
+                const std::lock_guard lock(dispatch->mutex);
+                auto& slot = dispatch->slots[index];
+                if (slot.initial_completed)
+                    throw std::logic_error(
+                        "Resolution-Root wurde im Initiallauf doppelt "
+                        "publiziert.");
+                std::optional<AnalysisMemoryBudget::Lease> lease;
+                if (!error && resolved.has_value() &&
+                    retained_bytes <=
+                        dispatch->maximum_ready_retained_bytes) {
+                    try {
+                        for (;;) {
+                            const auto local_room =
+                                retained_bytes <=
+                                dispatch->maximum_ready_retained_bytes -
+                                    std::min(
+                                        dispatch->ready_retained_bytes,
+                                        dispatch
+                                            ->maximum_ready_retained_bytes);
+                            if (local_room)
+                                lease = resolution_memory.try_acquire(
+                                    retained_bytes);
+                            if (lease.has_value()) break;
+                            if (!evict_later_ready_locked(index)) break;
+                        }
+                    } catch (...) {
+                        error = std::current_exception();
+                        resolved.reset();
+                        lease.reset();
+                    }
+                }
+                try {
+                    if (error) {
+                        slot.error = std::move(error);
+                        slot.ready = true;
+                    } else if (resolved.has_value() &&
+                               lease.has_value()) {
+                        slot.result = std::move(resolved);
+                        slot.retained_lease = std::move(lease);
+                        slot.retained_bytes = retained_bytes;
+                        dispatch->ready_retained_bytes += retained_bytes;
+                        slot.ready = true;
+                    } else if (resolved.has_value()) {
+                        // The root is pure. Dropping only this finalized,
+                        // uncommitted payload is a performance eviction; the
+                        // canonical consumer recomputes it before publication.
+                        slot.recompute_required = true;
+                    } else {
+                        slot.error = std::make_exception_ptr(
+                            std::logic_error(
+                                "Resolution-Root lieferte kein Ergebnis."));
+                        slot.ready = true;
+                    }
+                } catch (...) {
+                    slot.result.reset();
+                    slot.retained_lease.reset();
+                    slot.retained_bytes = 0u;
+                    slot.recompute_required = false;
+                    slot.error = std::current_exception();
+                    slot.ready = true;
+                }
+                slot.initial_completed = true;
+                if (slot.ready)
+                    progress_resolution_functions_ready.fetch_add(
+                        1u, std::memory_order_relaxed);
+            }
+            dispatch->changed.notify_all();
+            resolution_executor.notify_waiters();
+        };
+
+        AnalysisWorkDescriptor root_work;
+        root_work.phase = AnalysisWorkPhase::Resolution;
+        root_work.subject_kind = AnalysisWorkSubjectKind::Root;
+        root_work.subject = resolution_functions.front()->entry_address;
+        root_work.fanout = resolution_functions.size();
+        root_work.priority = AnalysisWorkPriorityKind::Throughput;
+        root_work.quantum = 1u;
+        std::jthread producer(
+            [&, dispatch, root_work = std::move(root_work)]() mutable
+                noexcept {
+            try {
+                parallel_analysis_for(
+                    resolution_executor,
+                    std::move(root_work),
+                    resolution_functions.size(),
+                    maximum_parallel_resolution_jobs,
+                    function_value_parallel_activity_if_observed,
+                    [&](const std::size_t index) {
+                        if (dispatch->cancel_requested.load(
+                                std::memory_order_acquire))
+                            return;
+                        std::optional<ResolutionFunctionResult> resolved;
+                        std::exception_ptr error;
                         try {
                             if (session.impl_
                                     ->resolution_execution_observer_for_testing
-                                    .job_started) {
+                                    .job_started)
                                 session.impl_
                                     ->resolution_execution_observer_for_testing
                                     .job_started(index);
-                            }
-                            pending->result.emplace(
+                            resolved.emplace(
                                 evaluate_or_reuse_resolution_function(
                                     index));
                         } catch (...) {
-                            pending->error =
-                                std::current_exception();
+                            error = std::current_exception();
                         }
-                        return AnalysisWorkDisposition::Complete;
-                    },
-                    [&, index, slot_index, pending, resolution_window,
-                     resolution_executor_ptr](
-                        const std::exception_ptr scheduler_error) noexcept {
-                        {
-                            const std::lock_guard lock(
-                                resolution_window->mutex);
-                            auto& slot =
-                                resolution_window->slots[slot_index];
-                            if (slot.function_index != index ||
-                                !slot.in_flight) {
-                                slot.result.reset();
-                                slot.error = pending->error
-                                                 ? pending->error
-                                                 : scheduler_error;
-                            } else {
-                                try {
-                                    slot.result =
-                                        std::move(pending->result);
-                                    slot.error = pending->error
-                                                     ? pending->error
-                                                     : scheduler_error;
-                                } catch (...) {
-                                    slot.result.reset();
-                                    slot.error =
-                                        std::current_exception();
-                                }
-                            }
-                            slot.ready = true;
-                            slot.in_flight = false;
-                            progress_resolution_functions_ready.fetch_add(
-                                1u, std::memory_order_relaxed);
-                        }
-                        resolution_window->ready.notify_all();
-                        resolution_executor_ptr->notify_waiters();
                         if (session.impl_
                                 ->resolution_execution_observer_for_testing
                                 .job_completed) {
@@ -27764,50 +27902,24 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     ->resolution_execution_observer_for_testing
                                     .job_completed(index);
                             } catch (...) {
-                                if (!pending->error)
-                                    pending->error =
-                                        std::current_exception();
+                                if (!error) error = std::current_exception();
+                                resolved.reset();
                             }
                         }
-                        {
-                            const std::lock_guard lock(
-                                resolution_window->mutex);
-                            if (resolution_window->outstanding_tasks != 0u)
-                                --resolution_window->outstanding_tasks;
-                        }
-                        // Only shared state and the process-global executor
-                        // are touched after retirement. A waiter may now
-                        // rethrow safely even before this callback returns.
-                        resolution_window->ready.notify_all();
-                        resolution_executor_ptr->notify_waiters();
+                        publish_initial_result(
+                            index, std::move(resolved), std::move(error));
                     });
-                return true;
             } catch (...) {
-                {
-                    const std::lock_guard lock(
-                        resolution_window->mutex);
-                    auto& slot =
-                        resolution_window->slots[slot_index];
-                    if (slot.function_index == index && slot.in_flight) {
-                        slot.function_index =
-                            std::numeric_limits<std::size_t>::max();
-                        slot.in_flight = false;
-                        if (resolution_window->outstanding_tasks != 0u)
-                            --resolution_window->outstanding_tasks;
-                    }
-                    if (!submission_error)
-                        submission_error = std::current_exception();
-                }
-                resolution_window->ready.notify_all();
-                resolution_executor.notify_waiters();
-                return false;
+                const std::lock_guard lock(dispatch->mutex);
+                dispatch->producer_error = std::current_exception();
             }
-        };
-
-        while (submitted_functions <
-                   resolution_window_capacity &&
-               submit_resolution_function(submitted_functions))
-            ++submitted_functions;
+            {
+                const std::lock_guard lock(dispatch->mutex);
+                dispatch->producer_done = true;
+            }
+            dispatch->changed.notify_all();
+            resolution_executor.notify_waiters();
+        });
 
         std::exception_ptr first_resolution_error;
         std::exception_ptr consumer_error;
@@ -27816,10 +27928,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             for (std::size_t index = 0u;
                  index < resolution_functions.size();
                  ++index) {
-                if (index >= submitted_functions) {
-                    missing_resolution_result = true;
-                    break;
-                }
                 progress_resolution_head_of_line_index.store(
                     index, std::memory_order_relaxed);
                 progress_resolution_head_started_nanoseconds.store(
@@ -27828,83 +27936,191 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             .time_since_epoch())
                         .count(),
                     std::memory_order_relaxed);
-                const auto slot_index =
-                    index % resolution_window_capacity;
-                const auto ready_for_index = [&] {
-                    const std::lock_guard lock(
-                        resolution_window->mutex);
-                    const auto& slot =
-                        resolution_window->slots[slot_index];
-                    return slot.function_index == index && slot.ready;
+                const auto available_for_index = [&] {
+                    const std::lock_guard lock(dispatch->mutex);
+                    const auto& slot = dispatch->slots[index];
+                    return slot.ready || slot.recompute_required ||
+                           (dispatch->producer_done &&
+                            !slot.initial_completed);
                 };
                 if (resolution_executor.current_thread_is_worker()) {
-                    resolution_executor.help_until(ready_for_index);
+                    resolution_executor.help_until(available_for_index);
                 } else {
-                    std::unique_lock lock(resolution_window->mutex);
-                    resolution_window->ready.wait(
+                    std::unique_lock lock(dispatch->mutex);
+                    dispatch->changed.wait(
                         lock,
                         [&] {
-                            const auto& slot =
-                                resolution_window->slots[slot_index];
-                            return slot.function_index == index &&
-                                   slot.ready;
+                            const auto& slot = dispatch->slots[index];
+                            return slot.ready ||
+                                   slot.recompute_required ||
+                                   (dispatch->producer_done &&
+                                    !slot.initial_completed);
                         });
                 }
 
                 std::optional<ResolutionFunctionResult> resolved;
+                std::optional<AnalysisMemoryBudget::Lease> result_lease;
+                bool recompute = false;
                 {
-                    const std::lock_guard lock(
-                        resolution_window->mutex);
-                    auto& slot =
-                        resolution_window->slots[slot_index];
-                    if (slot.function_index != index || !slot.ready) {
+                    const std::lock_guard lock(dispatch->mutex);
+                    auto& slot = dispatch->slots[index];
+                    if (slot.ready) {
+                        first_resolution_error = slot.error;
+                        resolved = std::move(slot.result);
+                        result_lease = std::move(slot.retained_lease);
+                        dispatch->ready_retained_bytes =
+                            dispatch->ready_retained_bytes >=
+                                    slot.retained_bytes
+                                ? dispatch->ready_retained_bytes -
+                                      slot.retained_bytes
+                                : 0u;
+                        slot = {};
+                        progress_resolution_functions_ready.fetch_sub(
+                            1u, std::memory_order_relaxed);
+                    } else if (slot.recompute_required) {
+                        slot.recompute_required = false;
+                        recompute = true;
+                    } else {
                         missing_resolution_result = true;
+                    }
+                }
+                resolution_executor.notify_waiters();
+                if (missing_resolution_result || first_resolution_error) {
+                    dispatch->cancel_requested.store(
+                        true, std::memory_order_release);
+                    break;
+                }
+
+                if (recompute) {
+                    try {
+                        if (session.impl_
+                                ->resolution_execution_observer_for_testing
+                                .job_started)
+                            session.impl_
+                                ->resolution_execution_observer_for_testing
+                                .job_started(index);
+                        resolved.emplace(
+                            evaluate_or_reuse_resolution_function(
+                                index, false));
+                    } catch (...) {
+                        first_resolution_error =
+                            std::current_exception();
+                    }
+                    if (session.impl_
+                            ->resolution_execution_observer_for_testing
+                            .job_completed) {
+                        try {
+                            session.impl_
+                                ->resolution_execution_observer_for_testing
+                                .job_completed(index);
+                        } catch (...) {
+                            if (!first_resolution_error)
+                                first_resolution_error =
+                                    std::current_exception();
+                            resolved.reset();
+                        }
+                    }
+                    if (first_resolution_error) {
+                        dispatch->cancel_requested.store(
+                            true, std::memory_order_release);
                         break;
                     }
-                    first_resolution_error = slot.error;
-                    resolved = std::move(slot.result);
-                    slot = {};
-                    progress_resolution_functions_ready.fetch_sub(
-                        1u, std::memory_order_relaxed);
+                    if (!resolved) {
+                        missing_resolution_result = true;
+                        dispatch->cancel_requested.store(
+                            true, std::memory_order_release);
+                        break;
+                    }
+                    const auto retained_bytes =
+                        ready_payload_bytes(*resolved);
+                    const auto maximum_single_result_bytes =
+                        resolution_memory.capacity() -
+                        slot_storage_bytes;
+                    if (retained_bytes > maximum_single_result_bytes)
+                        throw AnalysisMemoryBudgetExceeded(
+                            retained_bytes,
+                            maximum_single_result_bytes);
+                    for (;;) {
+                        result_lease = resolution_memory.try_acquire(
+                            retained_bytes);
+                        if (result_lease.has_value()) break;
+                        bool evicted = false;
+                        {
+                            const std::lock_guard lock(dispatch->mutex);
+                            evicted =
+                                evict_later_ready_locked(index);
+                        }
+                        if (evicted)
+                            resolution_executor.notify_waiters();
+                        if (!evicted) break;
+                    }
+                    if (!result_lease.has_value() &&
+                        !pre_reserved_resolution_budget) {
+                        while (!result_lease.has_value()) {
+                            bool evicted_while_helping = false;
+                            resolution_executor.help_until([&] {
+                                result_lease =
+                                    resolution_memory.try_acquire(
+                                        retained_bytes);
+                                if (result_lease.has_value()) return true;
+                                const std::lock_guard lock(
+                                    dispatch->mutex);
+                                evicted_while_helping =
+                                    evict_later_ready_locked(index);
+                                // Leave help_until before notifying: its
+                                // predicate owns the executor queue lock.
+                                return evicted_while_helping;
+                            });
+                            if (!evicted_while_helping) break;
+                            resolution_executor.notify_waiters();
+                        }
+                    }
+                    if (!result_lease.has_value())
+                        throw AnalysisMemoryBudgetExceeded(
+                            retained_bytes,
+                            resolution_memory.capacity());
                 }
-                if (first_resolution_error) break;
                 if (!resolved) {
                     missing_resolution_result = true;
                     break;
                 }
-                commit_resolution_result(
-                    std::move(*resolved));
-                if (submitted_functions <
-                        resolution_functions.size()) {
-                    if (!submit_resolution_function(
-                            submitted_functions))
-                        break;
-                    ++submitted_functions;
-                }
+                commit_resolution_result(std::move(*resolved));
+                result_lease.reset();
+                resolution_executor.notify_waiters();
             }
         } catch (...) {
             consumer_error = std::current_exception();
+            dispatch->cancel_requested.store(
+                true, std::memory_order_release);
+            resolution_executor.notify_waiters();
         }
         progress_resolution_head_started_nanoseconds.store(
             0, std::memory_order_relaxed);
-        const auto all_tasks_done = [&] {
-            const std::lock_guard lock(resolution_window->mutex);
-            return resolution_window->outstanding_tasks == 0u;
+        const auto producer_finished = [&] {
+            const std::lock_guard lock(dispatch->mutex);
+            return dispatch->producer_done;
         };
-        if (resolution_executor.current_thread_is_worker()) {
-            resolution_executor.help_until(all_tasks_done);
-        } else {
-            std::unique_lock lock(resolution_window->mutex);
-            resolution_window->ready.wait(
-                lock,
-                [&] {
-                    return resolution_window->outstanding_tasks == 0u;
-                });
+        if (resolution_executor.current_thread_is_worker())
+            resolution_executor.help_until(producer_finished);
+        producer.join();
+        std::exception_ptr producer_error;
+        {
+            const std::lock_guard lock(dispatch->mutex);
+            producer_error = dispatch->producer_error;
+            for (auto& slot : dispatch->slots) {
+                slot.result.reset();
+                slot.retained_lease.reset();
+                slot.retained_bytes = 0u;
+                slot.ready = false;
+            }
+            dispatch->ready_retained_bytes = 0u;
         }
+        slot_storage_lease.reset();
+        resolution_executor.notify_waiters();
         if (consumer_error)
             std::rethrow_exception(consumer_error);
-        if (submission_error)
-            std::rethrow_exception(submission_error);
+        if (producer_error)
+            std::rethrow_exception(producer_error);
         if (first_resolution_error)
             std::rethrow_exception(first_resolution_error);
         if (missing_resolution_result)
