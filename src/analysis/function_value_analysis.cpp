@@ -699,7 +699,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
 
 // One domain lens alpha-renames concrete evidence atoms by their complete
 // membership signature across every bounded input that one evaluation can
-// observe: ingress state and any private contextual-summary overlay. This
+// observe: ingress state and its private global/contextual summary overlays.
+// This
 // preserves the complete set equality/overlap/union algebra while making the
 // physical state independent of actual root addresses and group cardinality.
 // Atoms with an identical signature are represented by one token because
@@ -860,10 +861,12 @@ class EvidenceProvenanceLens final {
             locally_observable_call_sites,
         const std::unordered_set<std::uint32_t>&
             locally_observable_callees,
+        std::map<std::uint32_t, FunctionValueSummary> summaries,
         std::optional<std::map<std::uint32_t,
                                FunctionValueSummary>>
             contextual_summaries = std::nullopt)
         : ingress_(std::move(ingress)),
+          summaries_(std::move(summaries)),
           contextual_summaries_(std::move(contextual_summaries)),
           isolated_(isolated_call_sites != nullptr) {
         if (isolated_)
@@ -871,7 +874,7 @@ class EvidenceProvenanceLens final {
         std::vector<std::set<std::uint32_t>*> call_site_fields;
         std::vector<std::set<std::uint32_t>*> callee_fields;
         std::vector<std::vector<std::uint32_t>*>
-            contextual_callee_fields;
+            summary_callee_fields;
         for_each_evidence_set(
             ingress_,
             [&](const EvidenceProvenanceDomain domain,
@@ -883,15 +886,19 @@ class EvidenceProvenanceLens final {
             });
         if (isolated_)
             call_site_fields.push_back(&isolated_call_sites_);
-        if (contextual_summaries_.has_value()) {
-            for (auto& [address, summary] :
-                 *contextual_summaries_) {
+        const auto collect_summary_callee_fields =
+            [&](auto& summary_map) {
+            for (auto& [address, summary] : summary_map) {
                 static_cast<void>(address);
                 for (auto& value : summary.registers)
-                    contextual_callee_fields.push_back(
+                    summary_callee_fields.push_back(
                         &value.evidence_callees);
             }
-        }
+        };
+        collect_summary_callee_fields(summaries_);
+        if (contextual_summaries_.has_value())
+            collect_summary_callee_fields(
+                *contextual_summaries_);
         valid_ = call_sites_.canonicalize(
                      call_site_fields,
                      {},
@@ -899,7 +906,7 @@ class EvidenceProvenanceLens final {
                      locally_observable_call_sites) &&
                  callees_.canonicalize(
                      callee_fields,
-                     contextual_callee_fields,
+                     summary_callee_fields,
                      available_tokens,
                      locally_observable_callees);
     }
@@ -915,6 +922,12 @@ class EvidenceProvenanceLens final {
     [[nodiscard]] const std::set<std::uint32_t>* isolated_call_sites()
         const noexcept {
         return isolated_ ? &isolated_call_sites_ : nullptr;
+    }
+
+    [[nodiscard]] const std::map<std::uint32_t,
+                                 FunctionValueSummary>*
+    summaries() const noexcept {
+        return &summaries_;
     }
 
     [[nodiscard]] const std::map<std::uint32_t,
@@ -961,6 +974,7 @@ class EvidenceProvenanceLens final {
 
   private:
     AbstractState ingress_;
+    std::map<std::uint32_t, FunctionValueSummary> summaries_;
     std::optional<std::map<std::uint32_t, FunctionValueSummary>>
         contextual_summaries_;
     std::set<std::uint32_t> isolated_call_sites_;
@@ -24153,14 +24167,23 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     std::unordered_map<std::uint32_t,
                        std::unordered_set<std::uint32_t>>
         locally_observable_callees_by_function;
+    std::unordered_map<std::uint32_t,
+                       std::unordered_set<std::uint32_t>>
+        locally_insertable_callees_by_function;
+    std::map<TailIngressTarget, std::vector<std::uint32_t>>
+        summary_dependencies_by_target;
     locally_observable_call_sites_by_function.reserve(
         functions.size() +
         final_inventory_region_by_address.size());
     locally_observable_callees_by_function.reserve(
         functions.size() +
         final_inventory_region_by_address.size());
+    locally_insertable_callees_by_function.reserve(
+        functions.size() +
+        final_inventory_region_by_address.size());
     const auto collect_locally_observable_evidence =
-        [&](const FunctionInfo& candidate) {
+        [&](const FunctionInfo& candidate,
+            const TailIngressTargetKind target_kind) {
         ++resolution_preparation_entries_visited;
         auto& local_call_sites =
             locally_observable_call_sites_by_function[
@@ -24168,9 +24191,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         auto& local_callees =
             locally_observable_callees_by_function[
                 candidate.entry_address];
+        auto& locally_insertable_callees =
+            locally_insertable_callees_by_function[
+                candidate.entry_address];
+        auto& summary_dependencies =
+            summary_dependencies_by_target[
+                {candidate.entry_address, target_kind}];
         const auto add_local_callee =
             [&](const std::uint32_t callee) {
                 local_callees.insert(callee);
+                locally_insertable_callees.insert(callee);
                 const auto summary = summaries.find(callee);
                 if (summary == summaries.end()) return;
                 for (const auto& value : summary->second.registers)
@@ -24182,15 +24212,28 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             candidate.direct_callees.size();
         for (const auto callee : candidate.direct_callees)
             add_local_callee(callee);
+        auto evaluation_block_addresses =
+            candidate.block_addresses;
+        evaluation_block_addresses.push_back(
+            candidate.entry_address);
+        normalize(evaluation_block_addresses);
         resolution_preparation_entries_visited +=
-            candidate.block_addresses.size();
+            evaluation_block_addresses.size();
         for (const auto block_address :
-             candidate.block_addresses) {
+             evaluation_block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end()) continue;
             resolution_preparation_entries_visited +=
                 block->second->lines.size();
             for (const auto& line : block->second->lines) {
+                const bool call =
+                    line.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::Call ||
+                    line.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::IndirectCall;
+                if (call && line.target_address.has_value())
+                    summary_dependencies.push_back(
+                        *line.target_address);
                 // Keeping every local instruction address concrete is a
                 // deliberately conservative correlation partition. The
                 // evaluator can only add call/tail sites from this finite
@@ -24206,6 +24249,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         indirect->second.targets.size();
                     for (const auto callee : indirect->second.targets)
                         add_local_callee(callee);
+                    if (call &&
+                        !line.target_address.has_value())
+                        summary_dependencies.insert(
+                            summary_dependencies.end(),
+                            indirect->second.targets.begin(),
+                            indirect->second.targets.end());
                 }
                 const auto tail = tail_ingresses.find(line.address);
                 if (tail != tail_ingresses.end()) {
@@ -24216,6 +24265,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 }
             }
         }
+        normalize(summary_dependencies);
         const auto local_tail_ingresses =
             final_inventory_region_tail_ingresses_by_entry.find(
                 candidate.entry_address);
@@ -24235,7 +24285,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     };
     resolution_preparation_entries_visited += functions.size();
     for (const auto& candidate : functions)
-        collect_locally_observable_evidence(candidate);
+        collect_locally_observable_evidence(
+            candidate, TailIngressTargetKind::Function);
     // Inventory regions are executable FunctionInfo slices as well. They may
     // begin at an internal shared tail which has no ordinary function entry,
     // so excluding them leaves a real coordinator context unregistered and
@@ -24245,7 +24296,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     for (const auto& [entry, candidate] :
          final_inventory_region_by_address) {
         static_cast<void>(entry);
-        collect_locally_observable_evidence(*candidate);
+        collect_locally_observable_evidence(
+            *candidate,
+            TailIngressTargetKind::InventoryRegion);
     }
 
     // Build each dependency node in the dirty weak closure once. A root
@@ -25697,23 +25750,29 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              -> std::optional<EvidenceProvenanceLens> {
             if (available_tokens.empty())
                 return std::nullopt;
+            const auto dependencies =
+                summary_dependencies_by_target.find(
+                    {function_entry, target_kind});
+            if (dependencies ==
+                summary_dependencies_by_target.end())
+                throw std::logic_error(
+                    "Provenienz-Linse verlor ihre "
+                    "Summary-Abhaengigkeiten.");
+            std::map<std::uint32_t, FunctionValueSummary>
+                evaluation_summaries;
+            for (const auto address : dependencies->second) {
+                const auto summary = summaries.find(address);
+                if (summary == summaries.end()) continue;
+                evaluation_summaries.emplace(
+                    address, summary->second);
+            }
             std::optional<std::map<std::uint32_t,
                                    FunctionValueSummary>>
                 evaluation_contextual_summaries;
             if (contextual_summaries != nullptr) {
                 evaluation_contextual_summaries.emplace();
-                const auto function_index =
-                    fixpoint_function_index.find(function_entry);
-                if (function_index == fixpoint_function_index.end())
-                    throw std::logic_error(
-                        "Contextual-Provenienz-Linse verlor ihre "
-                        "Funktionszuordnung.");
-                for (const auto dependency :
-                     contextual_summary_dependencies[
-                         function_index->second]) {
-                    const auto address =
-                        fixpoint_functions[dependency]
-                            ->entry_address;
+                for (const auto address :
+                     dependencies->second) {
                     const auto summary =
                         contextual_summaries->find(address);
                     if (summary == contextual_summaries->end())
@@ -25739,8 +25798,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     locally_observable_call_sites_by_function)
                     .at(function_entry),
                 std::as_const(
-                    locally_observable_callees_by_function)
+                    locally_insertable_callees_by_function)
                     .at(function_entry),
+                std::move(evaluation_summaries),
                 std::move(evaluation_contextual_summaries));
             if (!lens.valid()) {
                 constexpr std::size_t maximum_fallback_capsules = 64u;
@@ -25791,6 +25851,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 evidence_lens.has_value()
                     ? evidence_lens->ingress()
                     : context.input;
+            const auto& evaluation_summaries =
+                evidence_lens.has_value()
+                    ? *evidence_lens->summaries()
+                    : summaries;
             const auto* const evaluation_root_call_sites =
                 context.isolated
                     ? evidence_lens.has_value()
@@ -25803,7 +25867,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 *context.function,
                 inventory_indirect_callees,
                 tail_ingresses,
-                summaries,
+                evaluation_summaries,
                 evaluation_input,
                 ResolutionCollectionMode::GuardedInventory,
                 true,
@@ -26822,6 +26886,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 item.evidence_lens.has_value()
                                     ? item.evidence_lens->ingress()
                                     : item.input;
+                            const auto& evaluation_summaries =
+                                item.evidence_lens.has_value()
+                                    ? *item.evidence_lens
+                                           ->summaries()
+                                    : summaries;
                             const auto* const
                                 evaluation_contextual_summaries =
                                     item.evidence_lens.has_value()
@@ -26833,7 +26902,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         item.function_index],
                                     inventory_indirect_callees,
                                     tail_ingresses,
-                                    summaries,
+                                    evaluation_summaries,
                                     evaluation_input,
                                     ResolutionCollectionMode::None,
                                     true,
@@ -27101,6 +27170,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             stable.evidence_lens.has_value()
                                 ? stable.evidence_lens->ingress()
                                 : context_inputs.at(address);
+                        const auto& evaluation_summaries =
+                            stable.evidence_lens.has_value()
+                                ? *stable.evidence_lens
+                                       ->summaries()
+                                : summaries;
                         const auto* const
                             evaluation_contextual_summaries =
                                 stable.evidence_lens.has_value()
@@ -27111,7 +27185,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             *final_function_by_address.at(address),
                             inventory_indirect_callees,
                             tail_ingresses,
-                            summaries,
+                            evaluation_summaries,
                             evaluation_input,
                             ResolutionCollectionMode::GuardedInventory,
                             true,
@@ -27292,6 +27366,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             isolated.evidence_lens.has_value()
                                 ? isolated.evidence_lens->ingress()
                                 : concrete_input;
+                        const auto& evaluation_summaries =
+                            isolated.evidence_lens.has_value()
+                                ? *isolated.evidence_lens
+                                       ->summaries()
+                                : summaries;
                         const auto* const evaluation_root_call_sites =
                             isolated.evidence_lens.has_value()
                                 ? isolated.evidence_lens
@@ -27301,7 +27380,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             *function,
                             inventory_indirect_callees,
                             tail_ingresses,
-                            summaries,
+                            evaluation_summaries,
                             evaluation_input,
                             ResolutionCollectionMode::
                                 GuardedInventory,
