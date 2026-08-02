@@ -698,28 +698,44 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
 }
 
 // One domain lens alpha-renames concrete evidence atoms by their complete
-// membership signature across the ingress state. This preserves the complete
-// set equality/overlap/union algebra while making the physical state
-// independent of actual root addresses and group cardinality. Atoms with an
-// identical signature are represented by one token because every transfer
-// observes them together; replay expands that token back to every concrete
-// address before any result becomes visible.
+// membership signature across every bounded input that one evaluation can
+// observe: ingress state and any private contextual-summary overlay. This
+// preserves the complete set equality/overlap/union algebra while making the
+// physical state independent of actual root addresses and group cardinality.
+// Atoms with an identical signature are represented by one token because
+// every transfer observes them together; replay expands that token back to
+// every concrete address before any result becomes visible.
 class EvidenceProvenanceDomainLens final {
   public:
     [[nodiscard]] bool canonicalize(
-        const std::span<std::set<std::uint32_t>*> fields,
+        const std::span<std::set<std::uint32_t>*> set_fields,
+        const std::span<std::vector<std::uint32_t>*> vector_fields,
         const std::span<const std::uint32_t> available_tokens,
         const std::unordered_set<std::uint32_t>&
             locally_observable_constants,
         const std::unordered_set<std::uint32_t>* const
             additional_locally_observable_constants = nullptr) {
         std::map<std::uint32_t, std::vector<std::size_t>> memberships;
+        const auto observe_field =
+            [&](const auto& evidence_values,
+                const std::size_t field_index) {
+                for (const auto evidence : evidence_values) {
+                    auto& membership = memberships[evidence];
+                    if (membership.empty() ||
+                        membership.back() != field_index)
+                        membership.push_back(field_index);
+                }
+            };
         for (std::size_t field_index = 0u;
-             field_index < fields.size();
-             ++field_index) {
-            for (const auto evidence : *fields[field_index])
-                memberships[evidence].push_back(field_index);
-        }
+             field_index < set_fields.size();
+             ++field_index)
+            observe_field(*set_fields[field_index], field_index);
+        for (std::size_t field_index = 0u;
+             field_index < vector_fields.size();
+             ++field_index)
+            observe_field(
+                *vector_fields[field_index],
+                set_fields.size() + field_index);
         if (memberships.empty()) return true;
         std::map<std::vector<std::size_t>,
                  std::vector<std::uint32_t>>
@@ -752,7 +768,7 @@ class EvidenceProvenanceDomainLens final {
             token_to_concrete_.emplace(
                 token, std::move(concrete_atoms));
         }
-        for (auto* const field : fields) {
+        for (auto* const field : set_fields) {
             std::set<std::uint32_t> canonical;
             for (const auto concrete : *field) {
                 const auto token = concrete_to_token_.find(concrete);
@@ -760,6 +776,21 @@ class EvidenceProvenanceDomainLens final {
                                      ? concrete
                                      : token->second);
             }
+            *field = std::move(canonical);
+        }
+        for (auto* const field : vector_fields) {
+            std::vector<std::uint32_t> canonical;
+            canonical.reserve(field->size());
+            for (const auto concrete : *field) {
+                const auto token = concrete_to_token_.find(concrete);
+                canonical.push_back(token == concrete_to_token_.end()
+                                        ? concrete
+                                        : token->second);
+            }
+            std::sort(canonical.begin(), canonical.end());
+            canonical.erase(
+                std::unique(canonical.begin(), canonical.end()),
+                canonical.end());
             *field = std::move(canonical);
         }
         return true;
@@ -829,14 +860,18 @@ class EvidenceProvenanceLens final {
             locally_observable_call_sites,
         const std::unordered_set<std::uint32_t>&
             locally_observable_callees,
-        const std::unordered_set<std::uint32_t>* const
-            additional_locally_observable_callees = nullptr)
+        std::optional<std::map<std::uint32_t,
+                               FunctionValueSummary>>
+            contextual_summaries = std::nullopt)
         : ingress_(std::move(ingress)),
+          contextual_summaries_(std::move(contextual_summaries)),
           isolated_(isolated_call_sites != nullptr) {
         if (isolated_)
             isolated_call_sites_ = *isolated_call_sites;
         std::vector<std::set<std::uint32_t>*> call_site_fields;
         std::vector<std::set<std::uint32_t>*> callee_fields;
+        std::vector<std::vector<std::uint32_t>*>
+            contextual_callee_fields;
         for_each_evidence_set(
             ingress_,
             [&](const EvidenceProvenanceDomain domain,
@@ -848,15 +883,25 @@ class EvidenceProvenanceLens final {
             });
         if (isolated_)
             call_site_fields.push_back(&isolated_call_sites_);
+        if (contextual_summaries_.has_value()) {
+            for (auto& [address, summary] :
+                 *contextual_summaries_) {
+                static_cast<void>(address);
+                for (auto& value : summary.registers)
+                    contextual_callee_fields.push_back(
+                        &value.evidence_callees);
+            }
+        }
         valid_ = call_sites_.canonicalize(
                      call_site_fields,
+                     {},
                      available_tokens,
                      locally_observable_call_sites) &&
                  callees_.canonicalize(
                      callee_fields,
+                     contextual_callee_fields,
                      available_tokens,
-                     locally_observable_callees,
-                     additional_locally_observable_callees);
+                     locally_observable_callees);
     }
 
     [[nodiscard]] bool valid() const noexcept {
@@ -870,6 +915,14 @@ class EvidenceProvenanceLens final {
     [[nodiscard]] const std::set<std::uint32_t>* isolated_call_sites()
         const noexcept {
         return isolated_ ? &isolated_call_sites_ : nullptr;
+    }
+
+    [[nodiscard]] const std::map<std::uint32_t,
+                                 FunctionValueSummary>*
+    contextual_summaries() const noexcept {
+        return contextual_summaries_.has_value()
+                   ? &*contextual_summaries_
+                   : nullptr;
     }
 
     void restore(AbstractState& state) const {
@@ -908,6 +961,8 @@ class EvidenceProvenanceLens final {
 
   private:
     AbstractState ingress_;
+    std::optional<std::map<std::uint32_t, FunctionValueSummary>>
+        contextual_summaries_;
     std::set<std::uint32_t> isolated_call_sites_;
     EvidenceProvenanceDomainLens call_sites_;
     EvidenceProvenanceDomainLens callees_;
@@ -25642,9 +25697,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              -> std::optional<EvidenceProvenanceLens> {
             if (available_tokens.empty())
                 return std::nullopt;
-            std::unordered_set<std::uint32_t>
-                contextual_observable_callees;
+            std::optional<std::map<std::uint32_t,
+                                   FunctionValueSummary>>
+                evaluation_contextual_summaries;
             if (contextual_summaries != nullptr) {
+                evaluation_contextual_summaries.emplace();
                 const auto function_index =
                     fixpoint_function_index.find(function_entry);
                 if (function_index == fixpoint_function_index.end())
@@ -25661,12 +25718,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         contextual_summaries->find(address);
                     if (summary == contextual_summaries->end())
                         continue;
-                    for (const auto& value :
-                         summary->second.registers) {
-                        contextual_observable_callees.insert(
-                            value.evidence_callees.begin(),
-                            value.evidence_callees.end());
-                    }
+                    evaluation_contextual_summaries->emplace(
+                        address, summary->second);
                 }
             }
             const auto projection =
@@ -25688,9 +25741,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 std::as_const(
                     locally_observable_callees_by_function)
                     .at(function_entry),
-                contextual_observable_callees.empty()
-                    ? nullptr
-                    : &contextual_observable_callees);
+                std::move(evaluation_contextual_summaries));
             if (!lens.valid()) {
                 constexpr std::size_t maximum_fallback_capsules = 64u;
                 static std::atomic_size_t emitted_fallback_capsules = 0u;
@@ -26771,6 +26822,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 item.evidence_lens.has_value()
                                     ? item.evidence_lens->ingress()
                                     : item.input;
+                            const auto* const
+                                evaluation_contextual_summaries =
+                                    item.evidence_lens.has_value()
+                                        ? item.evidence_lens
+                                              ->contextual_summaries()
+                                        : &contextual_summaries;
                             auto cached = cached_evaluate_function(
                                     *fixpoint_functions[
                                         item.function_index],
@@ -26782,7 +26839,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     true,
                                     nullptr,
                                     nullptr,
-                                    &contextual_summaries,
+                                    evaluation_contextual_summaries,
                                     nullptr,
                                     &item.diagnostics,
                                     &abi_stack_argument_reads,
@@ -26800,6 +26857,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 restore_evaluation_evidence_provenance(
                                     *item.evaluation,
                                     *item.evidence_lens);
+                                item.evidence_lens.reset();
                             }
                         } catch (...) {
                             item.error = std::current_exception();
@@ -27043,6 +27101,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             stable.evidence_lens.has_value()
                                 ? stable.evidence_lens->ingress()
                                 : context_inputs.at(address);
+                        const auto* const
+                            evaluation_contextual_summaries =
+                                stable.evidence_lens.has_value()
+                                    ? stable.evidence_lens
+                                          ->contextual_summaries()
+                                    : &contextual_summaries;
                         auto cached = cached_evaluate_function(
                             *final_function_by_address.at(address),
                             inventory_indirect_callees,
@@ -27053,7 +27117,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             true,
                             &stable.inventory,
                             nullptr,
-                            &contextual_summaries,
+                            evaluation_contextual_summaries,
                             nullptr,
                             &stable.diagnostics,
                             &abi_stack_argument_reads,
@@ -27075,6 +27139,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             restore_evaluation_evidence_provenance(
                                 stable.evaluation,
                                 *stable.evidence_lens);
+                            stable.evidence_lens.reset();
                         }
                     } catch (...) {
                         stable.error = std::current_exception();
