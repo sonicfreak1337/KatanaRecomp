@@ -8,19 +8,27 @@
   fail-closed ohne Port: Root 0 bis 6 waren nach rund `14,7 s` abgeschlossen,
   waehrend Root 7 die kanonische Ausgabe fuer `18:33` blockierte und eine
   einzelne Guarded-Inventory-CFG schliesslich das lokale
-  `65.536`-Iterationslimit erreichte. Die Resolutionphase verwendet deshalb
-  nun eine private, exakt reversible Paketdarstellung fuer transitive
-  Summary-Callee-Evidence sowie disjunkte Root- und Context-Provenienzlinsen.
-  Alle CandidateContract-, ContextualReturn-, Stable-, Isolated- und
-  Forwarded-Auswertungen bleiben intern kompakt; vor Root-Artefakt,
-  Exact-Replay-Inventar oder oeffentlicher Ausgabe werden saemtliche
-  Callee-Belege wieder sortiert, dedupliziert und vollstaendig expandiert.
+  `65.536`-Iterationslimit erreichte. Ein erster v41-Versuch wurde nach
+  `8:34,971` gezielt abgebrochen: `1.174` von `1.191` Roots waren bereits
+  fertig, aber eine private Summary-Paketdarstellung hielt semantisch gleiche
+  Mengen wie `{Paket}` und `{Paket, konkreter Callee}` intern fuer verschieden
+  und verlagerte den Head-of-line-Tail auf Root 0. Diese nicht-idempotente
+  Optimierung ist vollstaendig zurueckgenommen. Auch eine ueber mehrere
+  Funktionen langlebige Root-Linse bleibt deaktiviert, weil nur eine groessere
+  root-spezifische Erreichbarkeitsdomaene neue Konstanten exakt von verborgenen
+  Atomen trennen koennte. Die algebraisch sicheren, kurzlebigen
+  ContextualReturn-, Stable-, Isolated- und Forwarded-Linsen restaurieren ihre
+  Tokens dagegen jeweils vor dem Rueckfluss in den Root-Fixpunkt;
+  ContextualReturn und Stable schliessen dabei zusaetzlich die aktuell
+  relevanten kontextspezifischen Summary-Callees von der Tokenisierung aus.
   Lokale Cap- und Lens-Fallback-Kapseln bleiben auch ohne den cachebrechenden
   Detailtrace sichtbar. Fehlgeschlagene Portbuilds bewahren zudem ihren
   urspruenglichen Exitcode, wenn eine absichtlich unvollstaendige
   Fehlertelemetrie bereits terminal und atomar veroeffentlicht wurde.
-  Analyzer-ABI 27 und Function-Analysis-Epoch-Schema 6 invalidieren alte
-  interne Resolutionartefakte. Der v40-Lauf ist kein Sonic-Produktnachweis.
+  Analyzer-ABI 27 und
+  Function-Analysis-Epoch-Schema 6 invalidieren alte interne
+  Resolutionartefakte. Weder v40 noch der abgebrochene v41-Versuch sind ein
+  Sonic-Produktnachweis.
 - Der sichtbare 24-Thread-Sonic-v39-Kaltlauf belegte nach `20:49,737`
   einen einzelnen seriellen Resolution-Tail: Alle `1.191` Roots waren nach
   rund zweieinhalb Minuten gestartet, waehrend der globale
