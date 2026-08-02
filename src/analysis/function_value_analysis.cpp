@@ -12948,6 +12948,11 @@ class FunctionEvaluationCache {
         return detailed_telemetry_;
     }
 
+    [[nodiscard]] std::size_t maximum_retained_payload_bytes() const
+        noexcept {
+        return maximum_retained_payload_bytes_;
+    }
+
     [[nodiscard]] std::size_t component_history_entries_for_testing(
         const std::uint32_t function_entry) const {
         const std::lock_guard lock(mutex_);
@@ -13743,12 +13748,10 @@ class FunctionEvaluationCache {
 };
 
 // A run-local physical-work registry for multi-root inventory evaluation.
-// It deliberately has no admission, eviction, miss-classification, or LRU
-// policy: the persistent FunctionEvaluationCache remains the only semantic
-// cache. The registry merely ensures that all logical subscribers in one
-// analysis transaction invoke that cache once for an identical collision-
-// checked key, then pin the resulting artifact/future until the transaction
-// ends.
+// In-flight work is never evicted, so identical concurrent subscribers still
+// share exactly one producer. Completed aliases are an optional optimization:
+// a byte-bounded LRU may discard them and a later subscriber then re-enters
+// the persistent session cache (or recomputes) without changing semantics.
 class MultiRootEvaluationCoordinator final {
   public:
     struct Statistics final {
@@ -13758,7 +13761,13 @@ class MultiRootEvaluationCoordinator final {
         std::size_t in_flight_reuses = 0u;
         std::size_t entries = 0u;
         std::size_t retained_payload_bytes = 0u;
+        std::size_t evictions = 0u;
     };
+
+    explicit MultiRootEvaluationCoordinator(
+        const std::size_t maximum_ready_retained_payload_bytes)
+        : maximum_ready_retained_payload_bytes_(
+              maximum_ready_retained_payload_bytes) {}
 
     template <typename Compute>
     [[nodiscard]] std::pair<
@@ -13787,8 +13796,13 @@ class MultiRootEvaluationCoordinator final {
                 if (found != bucket->second.end()) {
                     auto* const entry = found->get();
                     if (entry->ready) {
-                        ready = entry->ready_result;
+                        if (entry->ready_result != nullptr)
+                            ready = entry->ready_result;
+                        else
+                            future = entry->result;
                         ++statistics_.ready_reuses;
+                        if (!touch_ready(*entry))
+                            erase(entry, true);
                     } else {
                         future = entry->result;
                         ++statistics_.in_flight_reuses;
@@ -13796,19 +13810,26 @@ class MultiRootEvaluationCoordinator final {
                 }
             }
             if (ready == nullptr && !future.valid()) {
+                auto entry = std::make_unique<Entry>();
+                entry->hash = key.hash;
+                entry->key_bytes = key.bytes;
+                const auto entry_base_payload_bytes =
+                    sizeof(Entry) + entry->key_bytes.capacity();
+                make_room_for(entry_base_payload_bytes);
                 producer =
                     std::make_shared<std::promise<Result>>();
                 future = producer->get_future().share();
-                auto entry = std::make_unique<Entry>();
-                entry->key_bytes = key.bytes;
                 entry->result = future;
+                entry->serial = ++serial_;
+                entry->retained_payload_bytes =
+                    entry_base_payload_bytes;
                 producer_entry = entry.get();
                 buckets_[key.hash].push_back(std::move(entry));
                 ++statistics_.producers;
                 ++statistics_.entries;
                 saturating_add(
                     statistics_.retained_payload_bytes,
-                    sizeof(Entry) + key.bytes.capacity());
+                    entry_base_payload_bytes);
             }
         }
         if (ready != nullptr) return {std::move(ready), true};
@@ -13834,14 +13855,22 @@ class MultiRootEvaluationCoordinator final {
                     "Multi-Root-Auswertung lieferte kein Artefakt.");
         } catch (...) {
             const auto error = std::current_exception();
-            try {
-                producer->set_exception(error);
-            } catch (...) {
-                // Preserve the authoritative producer failure.
+            {
+                const std::lock_guard lock(mutex_);
+                producer_entry->ready = true;
+                const auto retained =
+                    producer_entry->retained_payload_bytes <=
+                        maximum_ready_retained_payload_bytes_ &&
+                    touch_ready(*producer_entry);
+                if (!retained) erase(producer_entry, true);
+                try {
+                    producer->set_exception(error);
+                    if (retained) make_room_for(0u);
+                } catch (...) {
+                    if (retained) erase(producer_entry, false);
+                    // Preserve the authoritative producer failure.
+                }
             }
-            // Keep the exceptional shared future pinned as well. Erasing it
-            // would allow a later subscriber in this same analysis wave to
-            // launch a second physical producer for an identical key.
             global_analysis_executor().notify_waiters();
             std::rethrow_exception(error);
         }
@@ -13850,14 +13879,33 @@ class MultiRootEvaluationCoordinator final {
             const std::lock_guard lock(mutex_);
             producer_entry->ready = true;
             producer_entry->ready_result = result;
-            saturating_add(
-                statistics_.retained_payload_bytes,
-                result->retained_payload_budget_bytes());
+            const auto artifact_payload_bytes =
+                result->retained_payload_budget_bytes();
+            const auto artifact_size_overflow =
+                artifact_payload_bytes >
+                    std::numeric_limits<std::size_t>::max() -
+                        producer_entry->retained_payload_bytes ||
+                artifact_payload_bytes >
+                    std::numeric_limits<std::size_t>::max() -
+                        statistics_.retained_payload_bytes;
+            if (!artifact_size_overflow) {
+                producer_entry->retained_payload_bytes +=
+                    artifact_payload_bytes;
+                statistics_.retained_payload_bytes +=
+                    artifact_payload_bytes;
+            }
+            const auto retained =
+                !artifact_size_overflow &&
+                producer_entry->retained_payload_bytes <=
+                    maximum_ready_retained_payload_bytes_ &&
+                touch_ready(*producer_entry);
+            if (!retained) erase(producer_entry, true);
             try {
                 producer->set_value(result);
-                producer_entry->result = {};
+                if (retained) producer_entry->result = {};
             } catch (...) {
                 const auto error = std::current_exception();
+                if (retained) erase(producer_entry, false);
                 try {
                     producer->set_exception(error);
                 } catch (...) {
@@ -13868,6 +13916,7 @@ class MultiRootEvaluationCoordinator final {
                 global_analysis_executor().notify_waiters();
                 std::rethrow_exception(error);
             }
+            if (retained) make_room_for(0u);
         }
         global_analysis_executor().notify_waiters();
         return {std::move(result), false};
@@ -13880,12 +13929,16 @@ class MultiRootEvaluationCoordinator final {
 
   private:
     struct Entry final {
+        std::uint64_t hash = 0u;
         std::vector<std::uint8_t> key_bytes;
         std::shared_future<
             std::shared_ptr<const CachedFunctionEvaluation>>
             result;
         std::shared_ptr<const CachedFunctionEvaluation>
             ready_result;
+        std::uint64_t serial = 0u;
+        std::uint64_t last_use = 0u;
+        std::size_t retained_payload_bytes = 0u;
         bool ready = false;
     };
 
@@ -13898,12 +13951,72 @@ class MultiRootEvaluationCoordinator final {
                 : destination + value;
     }
 
+    [[nodiscard]] bool touch_ready(Entry& entry) noexcept {
+        if (entry.last_use != 0u)
+            ready_lru_.erase({entry.last_use, entry.serial});
+        entry.last_use = ++clock_;
+        if (entry.last_use == 0u) entry.last_use = ++clock_;
+        try {
+            const auto [position, inserted] = ready_lru_.emplace(
+                std::pair{entry.last_use, entry.serial}, &entry);
+            static_cast<void>(position);
+            if (inserted) return true;
+            entry.last_use = 0u;
+            return false;
+        } catch (...) {
+            entry.last_use = 0u;
+            return false;
+        }
+    }
+
+    void erase(Entry* const entry, const bool eviction) noexcept {
+        if (entry == nullptr) return;
+        if (entry->last_use != 0u)
+            ready_lru_.erase({entry->last_use, entry->serial});
+        const auto bucket = buckets_.find(entry->hash);
+        if (bucket == buckets_.end()) return;
+        const auto found = std::find_if(
+            bucket->second.begin(), bucket->second.end(),
+            [&](const auto& candidate) {
+                return candidate.get() == entry;
+            });
+        if (found == bucket->second.end()) return;
+        statistics_.retained_payload_bytes =
+            statistics_.retained_payload_bytes >=
+                    (*found)->retained_payload_bytes
+                ? statistics_.retained_payload_bytes -
+                      (*found)->retained_payload_bytes
+                : 0u;
+        --statistics_.entries;
+        if (eviction) ++statistics_.evictions;
+        bucket->second.erase(found);
+        if (bucket->second.empty()) buckets_.erase(bucket);
+    }
+
+    void make_room_for(const std::size_t incoming_payload_bytes) noexcept {
+        while (!ready_lru_.empty() &&
+               (statistics_.retained_payload_bytes >
+                    maximum_ready_retained_payload_bytes_ ||
+                (incoming_payload_bytes <=
+                     maximum_ready_retained_payload_bytes_ &&
+                 statistics_.retained_payload_bytes >
+                     maximum_ready_retained_payload_bytes_ -
+                         incoming_payload_bytes))) {
+            erase(ready_lru_.begin()->second, true);
+        }
+    }
+
     std::unordered_map<
         std::uint64_t,
         std::vector<std::unique_ptr<Entry>>>
         buckets_;
+    std::map<std::pair<std::uint64_t, std::uint64_t>, Entry*>
+        ready_lru_;
     mutable std::mutex mutex_;
     Statistics statistics_;
+    std::size_t maximum_ready_retained_payload_bytes_ = 0u;
+    std::uint64_t clock_ = 0u;
+    std::uint64_t serial_ = 0u;
 };
 
 } // namespace
@@ -14311,9 +14424,10 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
             short_limit.statistics());
     }
 
-    // The ordinary journal cap must be able to reject an exact replay, while
-    // the run-local coordinator pins one unbounded journal and one persistent
-    // cache lookup even when that cache refuses every entry.
+    // The ordinary journal cap must be able to reject an exact replay. With
+    // sufficient explicit coordinator budget, one complete journal and one
+    // persistent-cache lookup are reused even when that cache refuses every
+    // entry; the zero-budget probes below cover safe recomputation/eviction.
     {
         const auto replay_artifact = [](
             const std::size_t replay_budget) {
@@ -14361,7 +14475,8 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
                      {0x40u}}};
 
         FunctionEvaluationCache zero_budget_cache(0u, 0u, true);
-        MultiRootEvaluationCoordinator coordinator;
+        MultiRootEvaluationCoordinator coordinator{
+            std::numeric_limits<std::size_t>::max()};
         const auto key = make_key(950u, 0u);
         std::atomic_size_t coordinator_physical = 0u;
         const auto coordinated_lookup = [&] {
@@ -14401,6 +14516,10 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
             coordinator_statistics.in_flight_reuses;
         probe.coordinator_entries =
             coordinator_statistics.entries;
+        probe.coordinator_retained_payload_bytes =
+            coordinator_statistics.retained_payload_bytes;
+        probe.coordinator_evictions =
+            coordinator_statistics.evictions;
         probe.coordinator_session_lookups =
             coordinator_cache_statistics.lookups;
         probe.coordinator_session_entries =
@@ -14416,7 +14535,96 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
     }
 
     {
-        MultiRootEvaluationCoordinator coordinator;
+        FunctionEvaluationCache zero_budget_cache(0u, 0u, true);
+        MultiRootEvaluationCoordinator coordinator{0u};
+        const auto key = make_key(955u, 0u);
+        std::atomic_size_t computations = 0u;
+        const auto lookup = [&] {
+            return coordinator.get_or_compute(
+                key,
+                [&] {
+                    auto persistent = zero_budget_cache.get_or_compute(
+                        key,
+                        [&] {
+                            computations.fetch_add(
+                                1u, std::memory_order_relaxed);
+                            physical_computations.fetch_add(
+                                1u, std::memory_order_relaxed);
+                            return artifact();
+                        });
+                    return std::move(persistent.first);
+                });
+        };
+        const auto first = lookup();
+        const auto second = lookup();
+        const auto statistics = coordinator.statistics();
+        probe.coordinator_ready_eviction_recomputed =
+            !first.second && !second.second &&
+            first.first != nullptr && second.first != nullptr &&
+            computations.load(std::memory_order_relaxed) == 2u &&
+            statistics.requests == 2u &&
+            statistics.producers == 2u &&
+            statistics.ready_reuses == 0u &&
+            statistics.in_flight_reuses == 0u &&
+            statistics.entries == 0u &&
+            statistics.retained_payload_bytes == 0u &&
+            statistics.evictions == 2u;
+        add_statistics(zero_budget_cache.statistics());
+    }
+
+    {
+        MultiRootEvaluationCoordinator coordinator{0u};
+        const auto key = make_key(958u, 0u);
+        std::atomic_size_t computations = 0u;
+        std::promise<void> producer_started;
+        auto producer_started_future = producer_started.get_future();
+        std::promise<void> release_producer;
+        auto release_future = release_producer.get_future().share();
+        auto first = std::async(
+            std::launch::async,
+            [&] {
+                return coordinator.get_or_compute(
+                    key,
+                    [&] {
+                        computations.fetch_add(
+                            1u, std::memory_order_relaxed);
+                        producer_started.set_value();
+                        release_future.wait();
+                        return artifact();
+                    });
+            });
+        producer_started_future.wait();
+        auto second = std::async(
+            std::launch::async,
+            [&] {
+                return coordinator.get_or_compute(
+                    key, [&] { return artifact(); });
+            });
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds{2};
+        while (coordinator.statistics().in_flight_reuses == 0u &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        release_producer.set_value();
+        const auto first_result = first.get();
+        const auto second_result = second.get();
+        const auto statistics = coordinator.statistics();
+        probe.coordinator_in_flight_eviction_safe =
+            !first_result.second && second_result.second &&
+            first_result.first == second_result.first &&
+            computations.load(std::memory_order_relaxed) == 1u &&
+            statistics.requests == 2u &&
+            statistics.producers == 1u &&
+            statistics.in_flight_reuses == 1u &&
+            statistics.entries == 0u &&
+            statistics.retained_payload_bytes == 0u &&
+            statistics.evictions == 1u;
+    }
+
+    {
+        MultiRootEvaluationCoordinator coordinator{
+            std::numeric_limits<std::size_t>::max()};
         auto first_key = make_key(960u, 0u);
         auto colliding_key = make_key(961u, 1u);
         colliding_key.hash = first_key.hash;
@@ -14454,7 +14662,8 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
     }
 
     {
-        MultiRootEvaluationCoordinator coordinator;
+        MultiRootEvaluationCoordinator coordinator{
+            std::numeric_limits<std::size_t>::max()};
         const auto key = make_key(970u, 0u);
         std::atomic_size_t computations = 0u;
         std::size_t observed_failures = 0u;
@@ -14481,7 +14690,7 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
             computations.load(std::memory_order_relaxed) == 1u &&
             statistics.requests == 2u &&
             statistics.producers == 1u &&
-            statistics.in_flight_reuses == 1u &&
+            statistics.ready_reuses == 1u &&
             statistics.entries == 1u;
     }
 
@@ -17730,6 +17939,8 @@ struct detail::FunctionValueAnalysisSession::Impl {
     std::size_t maximum_resolution_dependency_nodes = 0u;
     std::size_t maximum_resolution_root_artifacts = 0u;
     std::size_t maximum_resolution_epoch_retained_bytes = 0u;
+    ResolutionExecutionObserverForTesting
+        resolution_execution_observer_for_testing;
     std::optional<detail::FunctionProgramDelta> pending_program_delta;
     PersistentAnalysisBypassReason pending_persistent_analysis_bypass_reason =
         PersistentAnalysisBypassReason::None;
@@ -17922,6 +18133,14 @@ void detail::FunctionValueAnalysisSession::
 force_full_cpu_recompute_once() {
     bypass_all_persistent_analysis_state_once(
         PersistentAnalysisBypassReason::ExplicitTest);
+}
+
+void detail::FunctionValueAnalysisSession::
+set_resolution_execution_observer_for_testing(
+    ResolutionExecutionObserverForTesting observer) {
+    const std::lock_guard lock(impl_->analysis_mutex);
+    impl_->resolution_execution_observer_for_testing =
+        std::move(observer);
 }
 
 FunctionValueAnalysisResult
@@ -18119,7 +18338,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             terminal.image_identity ==
                 image.analysis_instance_identity() &&
             terminal.image_revision == image.analysis_revision()) {
-            session.impl_->pending_program_delta.reset();
             const bool pinned_abort_matches =
                 session.impl_->pending_terminal_abort_snapshot.has_value() &&
                 session.impl_->pending_terminal_abort_image_identity ==
@@ -18128,42 +18346,77 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     image.analysis_revision() &&
                 session.impl_->pending_terminal_abort_epoch_version ==
                     terminal.expected_published_epoch_version;
-            if (pinned_abort_matches) {
-                result = std::move(
-                    *session.impl_->pending_terminal_abort_snapshot);
-                session.impl_->pending_terminal_abort_snapshot.reset();
-                result.result_materialization =
-                    FunctionValueResultMaterialization::TerminalFull;
-            } else if (session.impl_->published_epoch != nullptr) {
-                result = materialize_function_analysis_epoch(
-                    *session.impl_->published_epoch,
-                    guarded_native_entry_shapes);
-            } else {
+            const bool published_epoch_materializable =
+                session.impl_->published_epoch != nullptr &&
+                session.impl_->published_epoch
+                        ->presentation_root_artifacts != nullptr;
+            if (pinned_abort_matches || published_epoch_materializable) {
+                session.impl_->pending_program_delta.reset();
+                if (pinned_abort_matches) {
+                    result = std::move(
+                        *session.impl_->pending_terminal_abort_snapshot);
+                    session.impl_->pending_terminal_abort_snapshot.reset();
+                    result.result_materialization =
+                        FunctionValueResultMaterialization::TerminalFull;
+                } else {
+                    result = materialize_function_analysis_epoch(
+                        *session.impl_->published_epoch,
+                        guarded_native_entry_shapes);
+                }
+                session.impl_->final_materialized_blocks.fetch_add(
+                    result.final_materialized_blocks,
+                    std::memory_order_relaxed);
+                session.impl_->final_materialized_functions.fetch_add(
+                    result.final_materialized_functions,
+                    std::memory_order_relaxed);
+                if (progress_callback) {
+                    try {
+                        FunctionValueAnalysisProgress progress;
+                        progress.phase = "terminal-materialized";
+                        progress.functions = result.summaries.size();
+                        progress.resolutions = result.resolutions.size();
+                        const auto executor_snapshot =
+                            global_analysis_executor().snapshot();
+                        progress.active_workers =
+                            executor_snapshot.running;
+                        progress.executor_running_workers =
+                            executor_snapshot.running;
+                        progress.executor_waiting_workers =
+                            executor_snapshot.waiting;
+                        progress.executor_idle_workers =
+                            executor_snapshot.idle;
+                        progress.executor_queued_work =
+                            executor_snapshot.queued;
+                        progress.executor_memory_blocked_work =
+                            executor_snapshot.memory_blocked;
+                        progress.executor_continuations =
+                            executor_snapshot.continuations;
+                        progress.analysis_memory_capacity_bytes =
+                            executor_snapshot.memory_capacity;
+                        progress.analysis_memory_used_bytes =
+                            executor_snapshot.memory_used;
+                        progress.analysis_memory_peak_bytes =
+                            executor_snapshot.memory_peak;
+                        progress.configured_workers =
+                            global_analysis_executor().maximum_jobs();
+                        progress.final_materialized_blocks =
+                            result.final_materialized_blocks;
+                        progress.final_materialized_functions =
+                            result.final_materialized_functions;
+                        progress_callback(progress);
+                    } catch (...) {
+                        result.progress_callback_failed = true;
+                    }
+                }
+                return result;
+            }
+            if (session.impl_->published_epoch == nullptr)
                 throw std::logic_error(
                     "TerminalFull besitzt weder Epoch noch gepinnten Abort-Snapshot.");
-            }
-            session.impl_->final_materialized_blocks.fetch_add(
-                result.final_materialized_blocks,
-                std::memory_order_relaxed);
-            session.impl_->final_materialized_functions.fetch_add(
-                result.final_materialized_functions,
-                std::memory_order_relaxed);
-            if (progress_callback) {
-                try {
-                    FunctionValueAnalysisProgress progress;
-                    progress.phase = "terminal-materialized";
-                    progress.functions = result.summaries.size();
-                    progress.resolutions = result.resolutions.size();
-                    progress.final_materialized_blocks =
-                        result.final_materialized_blocks;
-                    progress.final_materialized_functions =
-                        result.final_materialized_functions;
-                    progress_callback(progress);
-                } catch (...) {
-                    result.progress_callback_failed = true;
-                }
-            }
-            return result;
+            // The semantic epoch remains valid, but its presentation aliases
+            // were deliberately discarded at the configured retention limit.
+            // Keep the Unchanged journal pending and rebuild an exact
+            // TerminalFull from the immutable program graph below.
         }
     }
     const auto session_statistics_at_start =
@@ -18287,12 +18540,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     std::atomic_size_t physical_evaluations = 0u;
     std::atomic_size_t cache_replay_fallback_recomputes = 0u;
     std::atomic_size_t cache_diagnostic_bypass_evaluations = 0u;
-    // Multi-root inventory contexts are a run-scoped physical arena, not an
-    // opportunistic layer in the bounded persistent session cache. Every
-    // canonical dependency-version key remains resident until this complete
-    // analysis transaction ends, so eviction or a large exact replay can
-    // never cause a second interpreter execution for another logical root.
-    MultiRootEvaluationCoordinator multi_root_context_evaluations;
+    // In-flight multi-root contexts always single-flight. Completed aliases
+    // reuse the session cache byte limit and may be evicted without changing
+    // canonical analysis output.
+    MultiRootEvaluationCoordinator multi_root_context_evaluations{
+        session.impl_->evaluations.maximum_retained_payload_bytes()};
     std::atomic_size_t multi_root_provenance_links = 0u;
     EvaluationActivityTelemetry evaluation_activity;
     ParallelWorkActivity function_value_parallel_activity;
@@ -18431,9 +18683,25 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             progress.resolutions =
                 progress_resolution_count.load(
                     std::memory_order_relaxed);
-            progress.active_workers =
-                function_value_parallel_activity
-                    .active_worker_count();
+            const auto executor_snapshot =
+                global_analysis_executor().snapshot();
+            progress.active_workers = executor_snapshot.running;
+            progress.executor_running_workers =
+                executor_snapshot.running;
+            progress.executor_waiting_workers =
+                executor_snapshot.waiting;
+            progress.executor_idle_workers = executor_snapshot.idle;
+            progress.executor_queued_work = executor_snapshot.queued;
+            progress.executor_memory_blocked_work =
+                executor_snapshot.memory_blocked;
+            progress.executor_continuations =
+                executor_snapshot.continuations;
+            progress.analysis_memory_capacity_bytes =
+                executor_snapshot.memory_capacity;
+            progress.analysis_memory_used_bytes =
+                executor_snapshot.memory_used;
+            progress.analysis_memory_peak_bytes =
+                executor_snapshot.memory_peak;
             progress.logical_evaluations =
                 logical_evaluations.load(
                     std::memory_order_relaxed);
@@ -18517,6 +18785,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 multi_root_statistics.entries;
             progress.multi_root_retained_payload_bytes =
                 multi_root_statistics.retained_payload_bytes;
+            progress.multi_root_evictions =
+                multi_root_statistics.evictions;
             progress.resolution_functions_total =
                 progress_resolution_functions_total.load(
                     std::memory_order_relaxed);
@@ -19776,7 +20046,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     .resolution_retention_limit_reason !=
                 ResolutionRetentionLimitReason::None ||
             local_result.resolution_retention_limit_reason !=
-                ResolutionRetentionLimitReason::None)
+                ResolutionRetentionLimitReason::None ||
+            previous_epoch->presentation_root_artifacts->size() !=
+                previous_epoch->resolution_root_artifacts->size() ||
+            local_epoch->presentation_root_artifacts->size() !=
+                local_epoch->resolution_root_artifacts->size())
             cold_restart();
 
         const auto checked_subtract =
@@ -19897,6 +20171,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 add(sizeof(std::shared_ptr<const FunctionAnalysisEpoch::
                                                 ResolutionRootArtifact>));
                 add(5u * sizeof(void*));
+                // The localized path admits only epochs whose presentation
+                // and reusable-root indices are 1:1 aliases. Charge the
+                // second persistent-index node without double-counting the
+                // shared artifact payload.
+                add(sizeof(std::uint32_t));
+                add(sizeof(std::shared_ptr<const FunctionAnalysisEpoch::
+                                                ResolutionRootArtifact>));
+                add(5u * sizeof(void*));
                 for (const auto& resolution : artifact.resolutions) {
                     add(resolution.targets.capacity() *
                         sizeof(std::uint32_t));
@@ -19959,6 +20241,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 session.impl_->maximum_resolution_root_artifacts ||
             next_epoch_retained_bytes >
                 session.impl_->maximum_resolution_epoch_retained_bytes ||
+            next_presentation_root_count !=
+                next_resolution_root_count ||
             replaced_roots.size() > next_presentation_root_count)
             cold_restart();
         const auto reused_root_count =
@@ -23202,8 +23486,18 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         if (batch.size() == 1u) {
             evaluate_batch_item(batch.front());
         } else {
+            AnalysisWorkDescriptor fixpoint_work;
+            fixpoint_work.phase = AnalysisWorkPhase::FunctionValue;
+            fixpoint_work.dependency_epoch = result.fixpoint_iterations;
+            fixpoint_work.subject_kind = AnalysisWorkSubjectKind::Scc;
+            fixpoint_work.subject = batch.front().address;
+            fixpoint_work.fanout = batch.size();
+            fixpoint_work.priority =
+                AnalysisWorkPriorityKind::SeedRelease;
+            fixpoint_work.quantum = 1u;
             parallel_analysis_for(
                 fixpoint_executor,
+                std::move(fixpoint_work),
                 batch.size(),
                 parallel_fixpoint_jobs,
                 function_value_parallel_activity_if_observed,
@@ -26080,8 +26374,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 if (batch.size() == 1u) {
                     evaluate_forwarded_item(batch.front());
                 } else {
+                    AnalysisWorkDescriptor forwarded_work;
+                    forwarded_work.phase =
+                        AnalysisWorkPhase::GuardedInventory;
+                    forwarded_work.subject_kind =
+                        AnalysisWorkSubjectKind::Context;
+                    forwarded_work.subject =
+                        batch.front().context_index;
+                    forwarded_work.fanout = batch.size();
+                    forwarded_work.priority =
+                        AnalysisWorkPriorityKind::Unblocking;
+                    forwarded_work.quantum = 1u;
                     parallel_analysis_for(
                         forwarded_executor,
+                        std::move(forwarded_work),
                         batch.size(),
                         maximum_parallel_resolution_jobs,
                         function_value_parallel_activity_if_observed,
@@ -26384,8 +26690,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 if (batch.size() == 1u) {
                     evaluate_contextual_item(batch.front());
                 } else {
+                    AnalysisWorkDescriptor contextual_work;
+                    contextual_work.phase =
+                        AnalysisWorkPhase::FunctionValue;
+                    contextual_work.subject_kind =
+                        AnalysisWorkSubjectKind::Context;
+                    contextual_work.subject = batch.front().address;
+                    contextual_work.fanout = batch.size();
+                    contextual_work.priority =
+                        AnalysisWorkPriorityKind::Unblocking;
+                    contextual_work.quantum = 1u;
                     parallel_analysis_for(
                         contextual_executor,
+                        std::move(contextual_work),
                         batch.size(),
                         maximum_parallel_resolution_jobs,
                         function_value_parallel_activity_if_observed,
@@ -26624,8 +26941,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 if (!stable_results.empty())
                     harvest_stable_context(0u);
             } else {
+                AnalysisWorkDescriptor harvest_work;
+                harvest_work.phase =
+                    AnalysisWorkPhase::GuardedInventory;
+                harvest_work.subject_kind =
+                    AnalysisWorkSubjectKind::Context;
+                harvest_work.subject = stable_addresses.front();
+                harvest_work.fanout = stable_results.size();
+                harvest_work.priority =
+                    AnalysisWorkPriorityKind::CriticalPrefix;
+                harvest_work.critical_prefix =
+                    stable_addresses.front();
+                harvest_work.quantum = 1u;
                 parallel_analysis_for(
                     contextual_executor,
+                    std::move(harvest_work),
                     stable_results.size(),
                     maximum_parallel_resolution_jobs,
                     function_value_parallel_activity_if_observed,
@@ -26828,8 +27158,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 if (!isolated_results.empty())
                     evaluate_isolated(0u);
             } else {
+                AnalysisWorkDescriptor isolated_work;
+                isolated_work.phase =
+                    AnalysisWorkPhase::GuardedInventory;
+                isolated_work.subject_kind =
+                    AnalysisWorkSubjectKind::Root;
+                isolated_work.subject = function->entry_address;
+                isolated_work.fanout = isolated_results.size();
+                isolated_work.priority =
+                    AnalysisWorkPriorityKind::CriticalPrefix;
+                isolated_work.critical_prefix =
+                    function->entry_address;
+                isolated_work.quantum = 1u;
                 parallel_analysis_for(
                     global_analysis_executor(),
+                    std::move(isolated_work),
                     isolated_results.size(),
                     maximum_parallel_resolution_jobs,
                     function_value_parallel_activity_if_observed,
@@ -26943,17 +27286,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     using ResolutionRootArtifactIndex =
         FunctionAnalysisEpoch::ResolutionRootArtifactIndex;
     auto staged_resolution_root_artifacts =
-        previous_epoch != nullptr &&
+        resolution_epoch_retention_enabled &&
+                previous_epoch != nullptr &&
                 previous_epoch->resolution_root_artifacts != nullptr
             ? std::make_shared<ResolutionRootArtifactIndex>(
                   *previous_epoch->resolution_root_artifacts)
             : std::make_shared<ResolutionRootArtifactIndex>();
     auto staged_presentation_root_artifacts =
-        previous_epoch != nullptr &&
-                previous_epoch->presentation_root_artifacts != nullptr
-            ? std::make_shared<ResolutionRootArtifactIndex>(
-                  *previous_epoch->presentation_root_artifacts)
-            : std::make_shared<ResolutionRootArtifactIndex>();
+        resolution_epoch_retention_enabled
+            ? (previous_epoch != nullptr &&
+                       previous_epoch->presentation_root_artifacts != nullptr
+                   ? std::make_shared<ResolutionRootArtifactIndex>(
+                         *previous_epoch->presentation_root_artifacts)
+                   : std::make_shared<ResolutionRootArtifactIndex>())
+            : std::shared_ptr<ResolutionRootArtifactIndex>{};
     // Recomputed roots are withdrawn from the semantic reuse index before
     // evaluation. They become visible again only after complete retention.
     for (const auto root : result.resolution_root_artifacts_recomputed)
@@ -26963,7 +27309,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             FunctionValueDependencyNodeKind::Function)
             continue;
         staged_resolution_root_artifacts->erase(removed.address);
-        staged_presentation_root_artifacts->erase(removed.address);
+        if (staged_presentation_root_artifacts != nullptr)
+            staged_presentation_root_artifacts->erase(removed.address);
         if (publish_owner_deltas) {
             result.removed_guarded_code_inventory_shards.push_back(
                 removed);
@@ -26992,7 +27339,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 nullptr)
             continue;
         staged_resolution_root_artifacts->erase(address);
-        staged_presentation_root_artifacts->erase(address);
+        if (staged_presentation_root_artifacts != nullptr)
+            staged_presentation_root_artifacts->erase(address);
         const FunctionValueDependencyNodeId owner{
             address, FunctionValueDependencyNodeKind::Function};
         if (publish_owner_deltas) {
@@ -27004,7 +27352,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     normalize(result.removed_guarded_code_inventory_shards);
     std::size_t retained_resolution_root_artifacts = 0u;
     const auto resolution_root_retained_bytes =
-        [&](const ResolutionRootArtifact& artifact)
+        [&](const ResolutionRootArtifact& artifact,
+            const bool retain_reuse_alias)
             -> std::optional<std::size_t> {
         std::size_t bytes = 0u;
         bool valid = true;
@@ -27036,6 +27385,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         add(sizeof(std::uint32_t));
         add(sizeof(std::shared_ptr<const ResolutionRootArtifact>));
         add(5u * sizeof(void*));
+        if (retain_reuse_alias) {
+            add(sizeof(std::uint32_t));
+            add(sizeof(std::shared_ptr<const ResolutionRootArtifact>));
+            add(5u * sizeof(void*));
+        }
         for (const auto& resolution : artifact.resolutions) {
             add(resolution.targets.capacity() * sizeof(std::uint32_t));
             add(resolution.call_sites.capacity() * sizeof(std::uint32_t));
@@ -27051,6 +27405,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         retained_resolution_root_artifacts = 0u;
         staged_resolution_root_artifacts =
             std::make_shared<ResolutionRootArtifactIndex>();
+        staged_presentation_root_artifacts.reset();
         staged_resolution_dependency_nodes =
             std::make_shared<ResolutionDependencyNodeIndex>();
         staged_resolution_dependency_components_by_node =
@@ -27060,6 +27415,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     };
     const auto commit_resolution_result =
         [&](ResolutionFunctionResult resolved) {
+        if (session.impl_->resolution_execution_observer_for_testing.commit)
+            session.impl_->resolution_execution_observer_for_testing.commit(
+                resolved.root_index);
         bool retain_artifact_for_next_epoch = false;
         bool artifact_representable =
             resolved.persistent_artifact_reused;
@@ -27097,12 +27455,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             resolved.persistent_artifact =
                 std::shared_ptr<const ResolutionRootArtifact>{
                     std::move(artifact)};
-            staged_presentation_root_artifacts->insert_or_assign(
-                resolved.persistent_artifact->root_address,
-                resolved.persistent_artifact);
+        }
+        // Presentation retention is all-or-nothing. A null artifact means
+        // this root carries a local budget loss or a walk/replay truncation;
+        // publishing any non-null partial map would let a later
+        // Unchanged/TerminalFull invocation silently omit this root.
+        if (resolved.persistent_artifact == nullptr &&
+            resolution_epoch_retention_enabled) {
+            disable_resolution_epoch_retention(
+                ResolutionRetentionLimitReason::IncompleteRoot);
         }
         if (resolved.persistent_artifact != nullptr &&
-            artifact_representable &&
             resolution_epoch_retention_enabled) {
             if (retained_resolution_root_artifacts >=
                 session.impl_->maximum_resolution_root_artifacts) {
@@ -27110,11 +27473,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     ResolutionRetentionLimitReason::RootEntryLimit);
             } else if (const auto retained_bytes =
                            resolution_root_retained_bytes(
-                               *resolved.persistent_artifact)) {
+                               *resolved.persistent_artifact,
+                               artifact_representable)) {
                 retain_resolution_bytes(*retained_bytes);
                 if (resolution_epoch_retention_enabled) {
                     ++retained_resolution_root_artifacts;
-                    retain_artifact_for_next_epoch = true;
+                    retain_artifact_for_next_epoch =
+                        artifact_representable;
+                    staged_presentation_root_artifacts->insert_or_assign(
+                        resolved.persistent_artifact->root_address,
+                        resolved.persistent_artifact);
                 } else {
                     disable_resolution_epoch_retention(
                         ResolutionRetentionLimitReason::ByteLimit);
@@ -27265,115 +27633,278 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             0, std::memory_order_relaxed);
     } else {
         struct ResolutionResultSlot {
+            std::size_t function_index =
+                std::numeric_limits<std::size_t>::max();
             std::optional<ResolutionFunctionResult> result;
             std::exception_ptr error;
             bool ready = false;
+            bool in_flight = false;
         };
-        std::vector<ResolutionResultSlot> slots(
-            resolution_functions.size());
-        std::mutex slots_mutex;
-        std::condition_variable slots_ready;
-        bool producer_done = false;
-        std::exception_ptr producer_error;
+        struct PendingResolutionResult {
+            std::optional<ResolutionFunctionResult> result;
+            std::exception_ptr error;
+        };
+        struct ResolutionWindowState final {
+            explicit ResolutionWindowState(const std::size_t capacity)
+                : slots(capacity) {}
+
+            std::vector<ResolutionResultSlot> slots;
+            std::mutex mutex;
+            std::condition_variable ready;
+            std::size_t outstanding_tasks = 0u;
+        };
         auto& resolution_executor = global_analysis_executor();
-        std::jthread producer([&]() noexcept {
+        auto* const resolution_executor_ptr = &resolution_executor;
+        const auto resolution_lanes = std::min(
+            maximum_parallel_resolution_jobs,
+            resolution_executor.maximum_jobs());
+        // Two canonical worker waves keep the pool fed while bounding the
+        // finished-but-blocked payload to O(worker_count), rather than one
+        // result slot per function. A slot is reused only after its exact
+        // predecessor was committed.
+        const auto resolution_window_capacity = std::min(
+            resolution_functions.size(), resolution_lanes * 2u);
+        auto resolution_window =
+            std::make_shared<ResolutionWindowState>(
+                resolution_window_capacity);
+        std::size_t submitted_functions = 0u;
+        std::exception_ptr submission_error;
+        const auto submit_resolution_function =
+            [&](const std::size_t index) -> bool {
+            const auto slot_index =
+                index % resolution_window_capacity;
             try {
-                parallel_analysis_for(
-                    resolution_executor,
-                    resolution_functions.size(),
-                    maximum_parallel_resolution_jobs,
-                    function_value_parallel_activity_if_observed,
-                    [&](const std::size_t index) noexcept {
-                        std::optional<ResolutionFunctionResult> resolved;
-                        std::exception_ptr error;
+                {
+                    const std::lock_guard lock(
+                        resolution_window->mutex);
+                    auto& slot =
+                        resolution_window->slots[slot_index];
+                    if (slot.in_flight || slot.ready)
+                        throw std::logic_error(
+                            "Resolution-Sliding-Window ueberschrieb einen "
+                            "noch belegten Slot.");
+                    slot.function_index = index;
+                    slot.in_flight = true;
+                    ++resolution_window->outstanding_tasks;
+                }
+                auto pending =
+                    std::make_shared<PendingResolutionResult>();
+                AnalysisWorkDescriptor descriptor;
+                descriptor.phase = AnalysisWorkPhase::Resolution;
+                descriptor.subject_kind =
+                    AnalysisWorkSubjectKind::Root;
+                descriptor.subject =
+                    resolution_functions[index]->entry_address;
+                descriptor.fanout =
+                    resolution_root_plans[index]
+                        .dependency_roots.size();
+                descriptor.priority =
+                    AnalysisWorkPriorityKind::CriticalPrefix;
+                descriptor.critical_prefix = index;
+                descriptor.quantum = 1u;
+                resolution_executor.submit(
+                    std::move(descriptor),
+                    [&, index, pending]() noexcept {
                         try {
-                            resolved.emplace(
+                            if (session.impl_
+                                    ->resolution_execution_observer_for_testing
+                                    .job_started) {
+                                session.impl_
+                                    ->resolution_execution_observer_for_testing
+                                    .job_started(index);
+                            }
+                            pending->result.emplace(
                                 evaluate_or_reuse_resolution_function(
                                     index));
                         } catch (...) {
-                            error = std::current_exception();
+                            pending->error =
+                                std::current_exception();
                         }
+                        return AnalysisWorkDisposition::Complete;
+                    },
+                    [&, index, slot_index, pending, resolution_window,
+                     resolution_executor_ptr](
+                        const std::exception_ptr scheduler_error) noexcept {
                         {
-                            const std::lock_guard lock(slots_mutex);
-                            slots[index].result =
-                                std::move(resolved);
-                            slots[index].error =
-                                std::move(error);
-                            slots[index].ready = true;
+                            const std::lock_guard lock(
+                                resolution_window->mutex);
+                            auto& slot =
+                                resolution_window->slots[slot_index];
+                            if (slot.function_index != index ||
+                                !slot.in_flight) {
+                                slot.result.reset();
+                                slot.error = pending->error
+                                                 ? pending->error
+                                                 : scheduler_error;
+                            } else {
+                                try {
+                                    slot.result =
+                                        std::move(pending->result);
+                                    slot.error = pending->error
+                                                     ? pending->error
+                                                     : scheduler_error;
+                                } catch (...) {
+                                    slot.result.reset();
+                                    slot.error =
+                                        std::current_exception();
+                                }
+                            }
+                            slot.ready = true;
+                            slot.in_flight = false;
                             progress_resolution_functions_ready.fetch_add(
                                 1u, std::memory_order_relaxed);
                         }
-                        slots_ready.notify_all();
-                        resolution_executor.notify_waiters();
+                        resolution_window->ready.notify_all();
+                        resolution_executor_ptr->notify_waiters();
+                        if (session.impl_
+                                ->resolution_execution_observer_for_testing
+                                .job_completed) {
+                            try {
+                                session.impl_
+                                    ->resolution_execution_observer_for_testing
+                                    .job_completed(index);
+                            } catch (...) {
+                                if (!pending->error)
+                                    pending->error =
+                                        std::current_exception();
+                            }
+                        }
+                        {
+                            const std::lock_guard lock(
+                                resolution_window->mutex);
+                            if (resolution_window->outstanding_tasks != 0u)
+                                --resolution_window->outstanding_tasks;
+                        }
+                        // Only shared state and the process-global executor
+                        // are touched after retirement. A waiter may now
+                        // rethrow safely even before this callback returns.
+                        resolution_window->ready.notify_all();
+                        resolution_executor_ptr->notify_waiters();
                     });
+                return true;
             } catch (...) {
-                const std::lock_guard lock(slots_mutex);
-                producer_error = std::current_exception();
+                {
+                    const std::lock_guard lock(
+                        resolution_window->mutex);
+                    auto& slot =
+                        resolution_window->slots[slot_index];
+                    if (slot.function_index == index && slot.in_flight) {
+                        slot.function_index =
+                            std::numeric_limits<std::size_t>::max();
+                        slot.in_flight = false;
+                        if (resolution_window->outstanding_tasks != 0u)
+                            --resolution_window->outstanding_tasks;
+                    }
+                    if (!submission_error)
+                        submission_error = std::current_exception();
+                }
+                resolution_window->ready.notify_all();
+                resolution_executor.notify_waiters();
+                return false;
             }
-            {
-                const std::lock_guard lock(slots_mutex);
-                producer_done = true;
-            }
-            slots_ready.notify_all();
-            resolution_executor.notify_waiters();
-        });
+        };
+
+        while (submitted_functions <
+                   resolution_window_capacity &&
+               submit_resolution_function(submitted_functions))
+            ++submitted_functions;
 
         std::exception_ptr first_resolution_error;
+        std::exception_ptr consumer_error;
         bool missing_resolution_result = false;
-        for (std::size_t index = 0u;
-             index < slots.size();
-             ++index) {
-            progress_resolution_head_of_line_index.store(
-                index, std::memory_order_relaxed);
-            progress_resolution_head_started_nanoseconds.store(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now()
-                        .time_since_epoch())
-                    .count(),
-                std::memory_order_relaxed);
-            const auto ready_or_done = [&] {
-                const std::lock_guard lock(slots_mutex);
-                return slots[index].ready || producer_done;
-            };
-            if (resolution_executor.current_thread_is_worker()) {
-                resolution_executor.help_until(ready_or_done);
-            } else {
-                std::unique_lock lock(slots_mutex);
-                slots_ready.wait(
-                    lock,
-                    [&] {
-                        return slots[index].ready ||
-                               producer_done;
-                    });
-            }
-
-            std::optional<ResolutionFunctionResult> resolved;
-            {
-                const std::lock_guard lock(slots_mutex);
-                if (!slots[index].ready) {
+        try {
+            for (std::size_t index = 0u;
+                 index < resolution_functions.size();
+                 ++index) {
+                if (index >= submitted_functions) {
                     missing_resolution_result = true;
                     break;
                 }
-                first_resolution_error =
-                    slots[index].error;
-                resolved =
-                    std::move(slots[index].result);
-                progress_resolution_functions_ready.fetch_sub(
-                    1u, std::memory_order_relaxed);
+                progress_resolution_head_of_line_index.store(
+                    index, std::memory_order_relaxed);
+                progress_resolution_head_started_nanoseconds.store(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now()
+                            .time_since_epoch())
+                        .count(),
+                    std::memory_order_relaxed);
+                const auto slot_index =
+                    index % resolution_window_capacity;
+                const auto ready_for_index = [&] {
+                    const std::lock_guard lock(
+                        resolution_window->mutex);
+                    const auto& slot =
+                        resolution_window->slots[slot_index];
+                    return slot.function_index == index && slot.ready;
+                };
+                if (resolution_executor.current_thread_is_worker()) {
+                    resolution_executor.help_until(ready_for_index);
+                } else {
+                    std::unique_lock lock(resolution_window->mutex);
+                    resolution_window->ready.wait(
+                        lock,
+                        [&] {
+                            const auto& slot =
+                                resolution_window->slots[slot_index];
+                            return slot.function_index == index &&
+                                   slot.ready;
+                        });
+                }
+
+                std::optional<ResolutionFunctionResult> resolved;
+                {
+                    const std::lock_guard lock(
+                        resolution_window->mutex);
+                    auto& slot =
+                        resolution_window->slots[slot_index];
+                    if (slot.function_index != index || !slot.ready) {
+                        missing_resolution_result = true;
+                        break;
+                    }
+                    first_resolution_error = slot.error;
+                    resolved = std::move(slot.result);
+                    slot = {};
+                    progress_resolution_functions_ready.fetch_sub(
+                        1u, std::memory_order_relaxed);
+                }
+                if (first_resolution_error) break;
+                if (!resolved) {
+                    missing_resolution_result = true;
+                    break;
+                }
+                commit_resolution_result(
+                    std::move(*resolved));
+                if (submitted_functions <
+                        resolution_functions.size()) {
+                    if (!submit_resolution_function(
+                            submitted_functions))
+                        break;
+                    ++submitted_functions;
+                }
             }
-            if (first_resolution_error) break;
-            if (!resolved) {
-                missing_resolution_result = true;
-                break;
-            }
-            commit_resolution_result(
-                std::move(*resolved));
+        } catch (...) {
+            consumer_error = std::current_exception();
         }
         progress_resolution_head_started_nanoseconds.store(
             0, std::memory_order_relaxed);
-        producer.join();
-        if (producer_error)
-            std::rethrow_exception(producer_error);
+        const auto all_tasks_done = [&] {
+            const std::lock_guard lock(resolution_window->mutex);
+            return resolution_window->outstanding_tasks == 0u;
+        };
+        if (resolution_executor.current_thread_is_worker()) {
+            resolution_executor.help_until(all_tasks_done);
+        } else {
+            std::unique_lock lock(resolution_window->mutex);
+            resolution_window->ready.wait(
+                lock,
+                [&] {
+                    return resolution_window->outstanding_tasks == 0u;
+                });
+        }
+        if (consumer_error)
+            std::rethrow_exception(consumer_error);
+        if (submission_error)
+            std::rethrow_exception(submission_error);
         if (first_resolution_error)
             std::rethrow_exception(first_resolution_error);
         if (missing_resolution_result)

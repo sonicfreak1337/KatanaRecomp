@@ -506,6 +506,40 @@ void append_incremental_epoch_counters(
         ledger.full_cpu_recompute_fallbacks;
 }
 
+void append_executor_counters(
+    katana::ProgressCounterSnapshot& counters,
+    const katana::analysis::FunctionValueAnalysisProgress& progress) {
+    counters.executor_running_workers =
+        progress.executor_running_workers;
+    counters.executor_waiting_workers =
+        progress.executor_waiting_workers;
+    counters.executor_idle_workers = progress.executor_idle_workers;
+    counters.executor_queued_work = progress.executor_queued_work;
+    counters.executor_memory_blocked_work =
+        progress.executor_memory_blocked_work;
+    counters.executor_continuations = progress.executor_continuations;
+    counters.analysis_memory_capacity_bytes =
+        progress.analysis_memory_capacity_bytes;
+    counters.analysis_memory_used_bytes =
+        progress.analysis_memory_used_bytes;
+    counters.analysis_memory_peak_bytes =
+        progress.analysis_memory_peak_bytes;
+}
+
+void append_executor_counters(
+    katana::ProgressCounterSnapshot& counters,
+    const katana::analysis::ParallelWorkExecutorSnapshot& snapshot) {
+    counters.executor_running_workers = snapshot.running;
+    counters.executor_waiting_workers = snapshot.waiting;
+    counters.executor_idle_workers = snapshot.idle;
+    counters.executor_queued_work = snapshot.queued;
+    counters.executor_memory_blocked_work = snapshot.memory_blocked;
+    counters.executor_continuations = snapshot.continuations;
+    counters.analysis_memory_capacity_bytes = snapshot.memory_capacity;
+    counters.analysis_memory_used_bytes = snapshot.memory_used;
+    counters.analysis_memory_peak_bytes = snapshot.memory_peak;
+}
+
 struct SeedRoundLedger final {
     std::size_t seed_facts_added = 0u;
     std::size_t seed_targets_changed = 0u;
@@ -1114,6 +1148,7 @@ struct RealFvaWaveLedger final {
     std::size_t multi_root_provenance_links = 0u;
     std::size_t multi_root_retained_contexts = 0u;
     std::size_t multi_root_retained_payload_bytes = 0u;
+    std::size_t multi_root_evictions = 0u;
     IncrementalEpochLedger incremental;
     PersistentWorkLedger work;
     std::array<std::size_t,
@@ -1134,6 +1169,7 @@ struct RealFvaStressResult final {
     std::size_t multi_root_provenance_links = 0u;
     std::size_t multi_root_retained_contexts = 0u;
     std::size_t multi_root_retained_payload_bytes = 0u;
+    std::size_t multi_root_evictions = 0u;
     IncrementalEpochLedger incremental;
     PersistentWorkLedger work;
     std::size_t replay_hits = 0u;
@@ -1215,6 +1251,7 @@ struct RealFvaStressResult final {
             std::size_t multi_root_provenance_links = 0u;
             std::size_t multi_root_retained_contexts = 0u;
             std::size_t multi_root_retained_payload_bytes = 0u;
+            std::size_t multi_root_evictions = 0u;
             IncrementalEpochLedger incremental;
             PersistentWorkLedger work;
         } last_progress;
@@ -1241,6 +1278,7 @@ struct RealFvaStressResult final {
                         counters.queued_work = progress.pending;
                         counters.configured_workers =
                             progress.configured_workers;
+                        append_executor_counters(counters, progress);
                         counters.added_work = added_roots;
                         counters.growing_workset =
                             !replay && index != 0u && added_roots != 0u;
@@ -1285,6 +1323,8 @@ struct RealFvaStressResult final {
                             progress.multi_root_retained_contexts;
                         last_progress.multi_root_retained_payload_bytes =
                             progress.multi_root_retained_payload_bytes;
+                        last_progress.multi_root_evictions =
+                            progress.multi_root_evictions;
                          last_progress.incremental =
                              incremental_epoch_ledger(progress);
                          last_progress.work =
@@ -1412,8 +1452,11 @@ struct RealFvaStressResult final {
                     last_progress.multi_root_context_requests ==
                         last_progress.multi_root_unique_contexts +
                             multi_root_reuses &&
-                    last_progress.multi_root_retained_contexts ==
+                    last_progress.multi_root_retained_contexts <=
                         last_progress.multi_root_unique_contexts &&
+                    last_progress.multi_root_evictions ==
+                        last_progress.multi_root_unique_contexts -
+                            last_progress.multi_root_retained_contexts &&
                     ((last_progress.multi_root_retained_contexts == 0u) ==
                      (last_progress.multi_root_retained_payload_bytes == 0u)) &&
                      last_progress.incremental.completed_without_fallback() &&
@@ -1465,6 +1508,8 @@ struct RealFvaStressResult final {
             last_progress.multi_root_retained_contexts;
         ledger.multi_root_retained_payload_bytes =
             last_progress.multi_root_retained_payload_bytes;
+        ledger.multi_root_evictions =
+            last_progress.multi_root_evictions;
         ledger.incremental = last_progress.incremental;
         ledger.work = last_progress.work;
         for (std::size_t reason = 0u; reason < ledger.miss_reasons.size(); ++reason)
@@ -1540,6 +1585,8 @@ struct RealFvaStressResult final {
             last_progress.multi_root_retained_contexts;
         aggregate.multi_root_retained_payload_bytes +=
             last_progress.multi_root_retained_payload_bytes;
+        aggregate.multi_root_evictions +=
+            last_progress.multi_root_evictions;
         aggregate.incremental.add(last_progress.incremental);
         aggregate.work.add(last_progress.work);
         ++aggregate.runs;
@@ -1626,6 +1673,7 @@ struct SemanticFvaStressResult final {
     std::size_t multi_root_provenance_links = 0u;
     std::size_t multi_root_retained_contexts = 0u;
     std::size_t multi_root_retained_payload_bytes = 0u;
+    std::size_t multi_root_evictions = 0u;
     IncrementalEpochLedger incremental;
     IncrementalEpochLedger targeted_incremental;
     PersistentWorkLedger work;
@@ -1783,6 +1831,10 @@ semantic_baseline_edges() {
         initial_counters.planned_work = boundaries.size();
         initial_counters.configured_workers =
             katana::analysis::global_analysis_executor().maximum_jobs();
+        const auto initial_executor =
+            katana::analysis::global_analysis_executor().snapshot();
+        initial_counters.active_workers = initial_executor.running;
+        append_executor_counters(initial_counters, initial_executor);
         semantic_progress.update(run_index, std::move(initial_counters));
         const auto before = session.statistics();
         std::mutex run_progress_mutex;
@@ -1801,6 +1853,7 @@ semantic_baseline_edges() {
         std::size_t terminal_multi_root_provenance_links = 0u;
         std::size_t terminal_multi_root_retained_contexts = 0u;
         std::size_t terminal_multi_root_retained_payload_bytes = 0u;
+        std::size_t terminal_multi_root_evictions = 0u;
         IncrementalEpochLedger terminal_incremental;
         PersistentWorkLedger terminal_work;
         bool stack_observed = false;
@@ -1837,6 +1890,8 @@ semantic_baseline_edges() {
                             progress.multi_root_retained_contexts;
                         terminal_multi_root_retained_payload_bytes =
                             progress.multi_root_retained_payload_bytes;
+                        terminal_multi_root_evictions =
+                            progress.multi_root_evictions;
                          terminal_incremental =
                              incremental_epoch_ledger(progress);
                          terminal_work = persistent_work_ledger(progress);
@@ -1864,6 +1919,7 @@ semantic_baseline_edges() {
                             progress.resolution_functions_committed;
                         counters.configured_workers =
                             progress.configured_workers;
+                        append_executor_counters(counters, progress);
                         counters.head_of_line_index =
                             progress.resolution_head_of_line_index;
                         counters.head_of_line_elapsed_milliseconds =
@@ -1943,6 +1999,8 @@ semantic_baseline_edges() {
                             progress.multi_root_retained_contexts;
                         counters.multi_root_retained_payload_bytes =
                             progress.multi_root_retained_payload_bytes;
+                        counters.multi_root_evictions =
+                            progress.multi_root_evictions;
                         counters.cache_evictions =
                             progress.session_cache_evictions;
                         counters.cache_entries =
@@ -2091,8 +2149,11 @@ semantic_baseline_edges() {
                     terminal_multi_root_context_requests ==
                         terminal_multi_root_unique_contexts +
                             terminal_multi_root_reuses &&
-                    terminal_multi_root_retained_contexts ==
+                    terminal_multi_root_retained_contexts <=
                         terminal_multi_root_unique_contexts &&
+                    terminal_multi_root_evictions ==
+                        terminal_multi_root_unique_contexts -
+                            terminal_multi_root_retained_contexts &&
                     ((terminal_multi_root_retained_contexts == 0u) ==
                      (terminal_multi_root_retained_payload_bytes == 0u)) &&
                     terminal_incremental.completed_without_fallback() &&
@@ -2219,6 +2280,8 @@ semantic_baseline_edges() {
             terminal_multi_root_retained_contexts;
         aggregate.multi_root_retained_payload_bytes +=
             terminal_multi_root_retained_payload_bytes;
+        aggregate.multi_root_evictions +=
+            terminal_multi_root_evictions;
         aggregate.incremental.add(terminal_incremental);
         aggregate.work.add(terminal_work);
         aggregate.cache_replay_fallback_recomputes += terminal_fallbacks;
@@ -4577,6 +4640,16 @@ struct StructuredProgressEvidence final {
                 counters.multi_root_provenance_links &&
                 counters.multi_root_retained_contexts &&
                 counters.multi_root_retained_payload_bytes &&
+                counters.multi_root_evictions &&
+                counters.executor_running_workers &&
+                counters.executor_waiting_workers &&
+                counters.executor_idle_workers &&
+                counters.executor_queued_work &&
+                counters.executor_memory_blocked_work &&
+                counters.executor_continuations &&
+                counters.analysis_memory_capacity_bytes &&
+                counters.analysis_memory_used_bytes &&
+                counters.analysis_memory_peak_bytes &&
                 counters.cache_evictions && counters.cache_entries &&
                 counters.cache_retained_payload_bytes && complete_miss_reasons &&
                 *counters.cache_lookups ==
@@ -4595,8 +4668,24 @@ struct StructuredProgressEvidence final {
                     *counters.multi_root_unique_contexts +
                         *counters.multi_root_ready_reuses +
                         *counters.multi_root_in_flight_reuses &&
-                *counters.multi_root_retained_contexts ==
+                *counters.multi_root_retained_contexts <=
                     *counters.multi_root_unique_contexts &&
+                *counters.multi_root_evictions ==
+                    *counters.multi_root_unique_contexts -
+                        *counters.multi_root_retained_contexts &&
+                counters.active_workers &&
+                *counters.active_workers ==
+                    *counters.executor_running_workers &&
+                *counters.executor_idle_workers <=
+                    *counters.executor_waiting_workers &&
+                *counters.executor_memory_blocked_work <=
+                    *counters.executor_queued_work &&
+                *counters.executor_continuations <=
+                    *counters.executor_queued_work &&
+                *counters.analysis_memory_used_bytes <=
+                    *counters.analysis_memory_peak_bytes &&
+                *counters.analysis_memory_peak_bytes <=
+                    *counters.analysis_memory_capacity_bytes &&
                 ((*counters.multi_root_retained_contexts == 0u) ==
                  (*counters.multi_root_retained_payload_bytes == 0u));
             const auto terminal_quiescent =
@@ -4660,6 +4749,18 @@ struct StructuredProgressEvidence final {
                         event.counters.started == expected_latent_modules &&
                         event.counters.committed_work == expected_latent_modules &&
                         event.counters.active_workers == 0u &&
+                        event.counters.executor_running_workers ==
+                            event.counters.active_workers &&
+                        event.counters.executor_waiting_workers.has_value() &&
+                        event.counters.executor_idle_workers.has_value() &&
+                        event.counters.executor_queued_work.has_value() &&
+                        event.counters.executor_memory_blocked_work
+                            .has_value() &&
+                        event.counters.executor_continuations.has_value() &&
+                        event.counters.analysis_memory_capacity_bytes
+                            .has_value() &&
+                        event.counters.analysis_memory_used_bytes.has_value() &&
+                        event.counters.analysis_memory_peak_bytes.has_value() &&
                         event.counters.queued_work == 0u,
                     "Latent-AOT meldet keinen exakten Worker-/Workledger");
             evidence.latent_configured_workers = expected_latent_workers;
@@ -5209,6 +5310,8 @@ int main(const int argc, char** argv) {
         const auto combined_multi_root_retained_payload_bytes =
             fva.multi_root_retained_payload_bytes +
             semantic.multi_root_retained_payload_bytes;
+        const auto combined_multi_root_evictions =
+            fva.multi_root_evictions + semantic.multi_root_evictions;
         auto combined_incremental = fva.incremental;
         combined_incremental.add(semantic.incremental);
         auto combined_work = fva.work;
@@ -5226,8 +5329,11 @@ int main(const int argc, char** argv) {
                     combined_multi_root_unique_contexts +
                         combined_multi_root_ready_reuses +
                         combined_multi_root_in_flight_reuses &&
-                combined_multi_root_retained_contexts ==
+                combined_multi_root_retained_contexts <=
                     combined_multi_root_unique_contexts &&
+                combined_multi_root_evictions ==
+                    combined_multi_root_unique_contexts -
+                        combined_multi_root_retained_contexts &&
                 ((combined_multi_root_retained_contexts == 0u) ==
                  (combined_multi_root_retained_payload_bytes == 0u)) &&
                 combined_incremental.completed_without_fallback() &&
@@ -5329,6 +5435,8 @@ int main(const int argc, char** argv) {
                   << combined_multi_root_retained_contexts
                   << ",\"multi_root_retained_payload_bytes\":"
                   << combined_multi_root_retained_payload_bytes
+                  << ",\"multi_root_evictions\":"
+                  << combined_multi_root_evictions
                   << ",\"replay_hits\":" << fva.replay_hits
                   << ",\"replay_misses\":" << fva.replay_misses
                   << ",\"functions\":" << program.size()
@@ -5495,6 +5603,8 @@ int main(const int argc, char** argv) {
                      << ledger.multi_root_retained_contexts
                      << ",\"multi_root_retained_payload_bytes\":"
                      << ledger.multi_root_retained_payload_bytes
+                     << ",\"multi_root_evictions\":"
+                     << ledger.multi_root_evictions
                      << ",\"analysis_epochs_published\":"
                      << ledger.incremental.analysis_epochs_published
                      << ",\"analysis_epochs_discarded\":"

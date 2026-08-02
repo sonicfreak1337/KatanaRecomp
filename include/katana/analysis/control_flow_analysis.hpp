@@ -326,6 +326,15 @@ struct ControlFlowAnalysisProgress {
     std::size_t function_value_summarized_functions = 0u;
     std::size_t function_value_pending = 0u;
     std::size_t function_value_active_workers = 0u;
+    std::size_t function_value_executor_running_workers = 0u;
+    std::size_t function_value_executor_waiting_workers = 0u;
+    std::size_t function_value_executor_idle_workers = 0u;
+    std::size_t function_value_executor_queued_work = 0u;
+    std::size_t function_value_executor_memory_blocked_work = 0u;
+    std::size_t function_value_executor_continuations = 0u;
+    std::size_t function_value_analysis_memory_capacity_bytes = 0u;
+    std::size_t function_value_analysis_memory_used_bytes = 0u;
+    std::size_t function_value_analysis_memory_peak_bytes = 0u;
     std::size_t function_value_logical_evaluations = 0u;
     std::size_t function_value_physical_evaluations = 0u;
     std::size_t function_value_active_evaluation_requests = 0u;
@@ -365,6 +374,7 @@ struct ControlFlowAnalysisProgress {
     std::size_t function_value_multi_root_retained_contexts = 0u;
     std::size_t
         function_value_multi_root_retained_payload_bytes = 0u;
+    std::size_t function_value_multi_root_evictions = 0u;
     std::size_t function_value_resolution_functions_total = 0u;
     std::size_t function_value_resolution_functions_started = 0u;
     std::size_t function_value_resolution_functions_ready = 0u;

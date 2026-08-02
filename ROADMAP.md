@@ -109,15 +109,14 @@ Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
 
 ```text
 letzte reale Produktevidenz: historischer ABI-77/78-NativeDisc-Stand
-Source-Checkpoint:           18f8537
+Implementierungsstand:       KR-4979
 verbindlicher P0-Plan:       ffd45ae / KR-4974 bis KR-4984
-aktueller Source:            Runtime-ABI 85 / Analyzer-ABI 23 /
+aktueller Source:            Runtime-ABI 87 / Analyzer-ABI 25 /
                              Portprojektvertrag 75; nicht end-to-end
                              abgenommen
-naechste Produktabnahme:     nach KR-4974 bis KR-4980 und dem eigenen
-                             Gesamtreview KR-4984 genau ein frischer
-                             NativeDisc-Sonic-Lauf; KR-4982/4983 sind
-                             vorerst gestrichen
+naechste Produktabnahme:     auf aktuelle Nutzeranweisung sofort nach
+                             KR-4979 genau ein frischer NativeDisc-Sonic-
+                             Lauf; KR-4980/4984 warten bis danach
 ```
 
 Der Runtime-only-Relink von `b064ee8` beweist die korrigierte

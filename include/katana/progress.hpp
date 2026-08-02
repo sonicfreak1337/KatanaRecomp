@@ -75,6 +75,19 @@ struct ProgressCounterSnapshot final {
     std::optional<std::uint64_t> iteration;
     std::optional<std::uint64_t> pass;
     std::optional<std::uint64_t> active_workers;
+    // Process-wide analysis-executor state. `active_workers` is retained as
+    // the operation's compatibility signal; these explicit fields distinguish
+    // CPU work, dependency waits and genuine pool idleness across nested
+    // analyses.
+    std::optional<std::uint64_t> executor_running_workers;
+    std::optional<std::uint64_t> executor_waiting_workers;
+    std::optional<std::uint64_t> executor_idle_workers;
+    std::optional<std::uint64_t> executor_queued_work;
+    std::optional<std::uint64_t> executor_memory_blocked_work;
+    std::optional<std::uint64_t> executor_continuations;
+    std::optional<std::uint64_t> analysis_memory_capacity_bytes;
+    std::optional<std::uint64_t> analysis_memory_used_bytes;
+    std::optional<std::uint64_t> analysis_memory_peak_bytes;
     std::optional<std::uint64_t> evaluation_requests;
     std::optional<std::uint64_t> active_evaluation_requests;
     std::optional<std::uint64_t> evaluation_request_nanoseconds;
@@ -137,6 +150,7 @@ struct ProgressCounterSnapshot final {
     std::optional<std::uint64_t> multi_root_provenance_links;
     std::optional<std::uint64_t> multi_root_retained_contexts;
     std::optional<std::uint64_t> multi_root_retained_payload_bytes;
+    std::optional<std::uint64_t> multi_root_evictions;
     std::optional<std::uint64_t> cache_evictions;
     std::optional<std::uint64_t> cache_entries;
     // Deterministic retained-payload admission budget; never process RSS.

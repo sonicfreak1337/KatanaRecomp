@@ -824,6 +824,11 @@ Typ: P0 Implementierung
 
 Abhaengigkeiten: KR-4974, KR-4977, KR-4978
 
+Status: Implementiert; alle bestaetigten P0/P1 des betroffenen Executor-,
+Resolution-, RAM-, Eviction-, Progress- und Latent-AOT-Strangs sind gebuendelt
+geschlossen und in der Re-Review bestaetigt. Produktabnahme ist auf
+Nutzeranweisung der unmittelbar folgende reale Sonic-Lauf.
+
 Ziel: Alle konfigurierten Threads arbeiten auf teilbaren, unblockenden Jobs,
 ohne den Host durch RAM-Druck unbrauchbar zu machen.
 

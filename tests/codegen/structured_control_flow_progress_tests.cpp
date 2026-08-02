@@ -92,6 +92,18 @@ resolution_progress(const std::size_t round,
     progress.function_value_summarized_functions = 1'600u;
     progress.function_value_pending = 11u;
     progress.function_value_active_workers = 24u;
+    progress.function_value_executor_running_workers = 18u;
+    progress.function_value_executor_waiting_workers = 6u;
+    progress.function_value_executor_idle_workers = 0u;
+    progress.function_value_executor_queued_work = 9u;
+    progress.function_value_executor_memory_blocked_work = 4u;
+    progress.function_value_executor_continuations = 5u;
+    progress.function_value_analysis_memory_capacity_bytes =
+        8'589'934'592u;
+    progress.function_value_analysis_memory_used_bytes =
+        3'221'225'472u;
+    progress.function_value_analysis_memory_peak_bytes =
+        4'294'967'296u;
     progress.function_value_logical_evaluations = 13u;
     progress.function_value_physical_evaluations = 5u;
     progress.function_value_active_evaluation_requests = 7u;
@@ -141,9 +153,10 @@ resolution_progress(const std::size_t round,
     progress.function_value_multi_root_ready_reuses = 2u;
     progress.function_value_multi_root_in_flight_reuses = 1u;
     progress.function_value_multi_root_provenance_links = 6u;
-    progress.function_value_multi_root_retained_contexts = 2u;
+    progress.function_value_multi_root_retained_contexts = 1u;
     progress.function_value_multi_root_retained_payload_bytes =
         2'048u;
+    progress.function_value_multi_root_evictions = 1u;
     progress.function_value_session_cache_evictions = 1u;
     progress.function_value_session_cache_entries = 8u;
     progress.function_value_session_cache_retained_payload_bytes =
@@ -364,6 +377,24 @@ int main() {
                            std::optional<std::uint64_t>{0u} &&
                        event.counters.configured_workers ==
                            std::optional<std::uint64_t>{24u} &&
+                       event.counters.executor_running_workers ==
+                           std::optional<std::uint64_t>{18u} &&
+                       event.counters.executor_waiting_workers ==
+                           std::optional<std::uint64_t>{6u} &&
+                       event.counters.executor_idle_workers ==
+                           std::optional<std::uint64_t>{0u} &&
+                       event.counters.executor_queued_work ==
+                           std::optional<std::uint64_t>{9u} &&
+                       event.counters.executor_memory_blocked_work ==
+                           std::optional<std::uint64_t>{4u} &&
+                       event.counters.executor_continuations ==
+                           std::optional<std::uint64_t>{5u} &&
+                       event.counters.analysis_memory_capacity_bytes ==
+                           std::optional<std::uint64_t>{8'589'934'592u} &&
+                       event.counters.analysis_memory_used_bytes ==
+                           std::optional<std::uint64_t>{3'221'225'472u} &&
+                       event.counters.analysis_memory_peak_bytes ==
+                           std::optional<std::uint64_t>{4'294'967'296u} &&
                        event.counters.head_of_line_index ==
                            std::optional<std::uint64_t>{0u} &&
                        event.counters
@@ -401,10 +432,12 @@ int main() {
                        event.counters.multi_root_provenance_links ==
                            std::optional<std::uint64_t>{6u} &&
                        event.counters.multi_root_retained_contexts ==
-                           std::optional<std::uint64_t>{2u} &&
+                           std::optional<std::uint64_t>{1u} &&
                        event.counters
                                .multi_root_retained_payload_bytes ==
                            std::optional<std::uint64_t>{2'048u} &&
+                       event.counters.multi_root_evictions ==
+                           std::optional<std::uint64_t>{1u} &&
                        event.counters.incremental_epochs_started ==
                            std::optional<std::uint64_t>{1u} &&
                        event.counters.analysis_epochs_published ==

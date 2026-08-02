@@ -461,11 +461,15 @@ struct FunctionEvaluationCacheTelemetryProbe final {
     std::size_t coordinator_ready_reuses = 0u;
     std::size_t coordinator_in_flight_reuses = 0u;
     std::size_t coordinator_entries = 0u;
+    std::size_t coordinator_retained_payload_bytes = 0u;
+    std::size_t coordinator_evictions = 0u;
     std::size_t coordinator_session_lookups = 0u;
     std::size_t coordinator_session_entries = 0u;
     std::size_t coordinator_physical_computations = 0u;
     bool coordinator_collision_safe = false;
     bool coordinator_failure_pinned = false;
+    bool coordinator_ready_eviction_recomputed = false;
+    bool coordinator_in_flight_eviction_safe = false;
     bool throwing_observer_semantics_preserved = false;
 };
 
@@ -474,6 +478,14 @@ struct FunctionEvaluationCacheTelemetryProbe final {
 // without exposing the private evaluation artifact type to tests.
 [[nodiscard]] FunctionEvaluationCacheTelemetryProbe
 probe_function_evaluation_cache_telemetry_for_testing();
+
+// Narrow fault-observation hook for the parallel resolution lifetime
+// regressions. Product sessions leave every callback empty.
+struct ResolutionExecutionObserverForTesting final {
+    std::function<void(std::size_t)> job_started;
+    std::function<void(std::size_t)> job_completed;
+    std::function<void(std::size_t)> commit;
+};
 
 class FunctionValueAnalysisSession {
   public:
@@ -525,6 +537,9 @@ class FunctionValueAnalysisSession {
 
     // Compatibility test hook; now aliases the strong full-state bypass.
     void force_full_cpu_recompute_once();
+
+    void set_resolution_execution_observer_for_testing(
+        ResolutionExecutionObserverForTesting observer);
 
     struct Impl;
 

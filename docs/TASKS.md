@@ -6,11 +6,13 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 
 - `AGENTS.md` gilt fuer jeden Task und jeden automatisierten Bearbeiter.
 - Oberste Prioritaet ist ein lauffaehiger Sonic-Adventure-PAL-Produktport.
-- Das echte Endprodukt ist die Bring-up-Abnahme.
+- Das echte Endprodukt und der massgebliche Test ist immer der reale
+  Sonic-Produktport samt normalem Lauf und echtem Screenshot.
 - Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach fixer Hostzeit.
 - DirectBoot besitzt keinen Sega-Screen als Pflichtmeilenstein; dieses Bild gehoert zu IP.BIN.
-- Keine neue breite Testsuite, Funktionsmatrix oder vorsorgliche Regression.
-- Kleine vorhandene Tests duerfen nur angepasst werden, wenn eine sonst schwer sichtbare Datenkorruption abgesichert werden muss.
+- Keine Zwischen-Testbuilds, Unit-Testlaeufe, synthetischen Stresslaeufe oder
+  Testmatrizen ohne neue ausdrueckliche Nutzerfreigabe; Zwischenfehler werden
+  durch die vorgeschriebenen P0/P1-Reviews geschlossen.
 - Produktlaeufe erfolgen erst nach einem zusammenhaengenden Implementierungsblock.
 - Keine Sonic-Adressen, Titelhooks oder Retailbytes im generischen Katana-Code.
 - Kein Interpreter, JIT oder Emulationsfallback im normalen Produktpfad.
@@ -20,8 +22,8 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 - Jeder potentiell lange Prozess besitzt spaetestens alle zehn Sekunden einen
   belastbaren Fortschrittsindikator oder Heartbeat.
 - Jeder P0-Task wird fokussiert verifiziert, einzeln committed und gepusht.
-- Vor dem naechsten privaten Sonic-Port folgt zwingend die unabhaengige
-  Gesamtpruefung KR-4984 mit Schliessung und Re-Review aller P0/P1-Funde.
+- Aktuelle ausdrueckliche Reihenfolge: Nach KR-4979 folgt sofort ein privater
+  Sonic-Produktbuild und -lauf; KR-4980 und KR-4984 warten bis danach.
 - Jeder offene Roadmap-Task wird verbindlich in dieser Reihenfolge beendet:
   implementieren, nur P0/P1 der betroffenen Pfade reviewen, alle bestaetigten
   P0/P1 gebuendelt fixen, fokussiert verifizieren, committen und pushen. Erst
@@ -40,8 +42,8 @@ Diese drei Staende duerfen nicht als derselbe Fortschritt berichtet werden:
    NativeDisc-Stand bleibt die letzte ausgefuehrte Produktevidenz. Seine
    Details und sichtbaren Screens stehen in `STATUS.md`; er ist kein Nachweis
    fuer den aktuellen Source.
-2. **Aktueller Source-Checkpoint:** `18f8537` verwendet Runtime-ABI 85,
-   Block-ABI 5, Analyzer-ABI 23, PlatformServices-ABI 13,
+2. **Aktueller KR-4979-Stand:** verwendet Runtime-ABI 87,
+   Block-ABI 5, Analyzer-ABI 25, PlatformServices-ABI 13,
    Backend-Interface-ABI 12, Portprojektvertrag 75, Native-AOT-Profil 13 und
    Partitionsschema 5. Er enthaelt umfangreiche Analyse-, Cache-,
    Fortschritts-, Runtime-CPU- und D3D11-Umbauten, ist aber kein
@@ -1378,7 +1380,9 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4974, KR-4977, KR-4978
 
-Status: Geplant.
+Status: Implementiert und nach gebuendelter P0/P1-Schliessung dreifach
+re-reviewed. Die vom Nutzer bestimmte Produktabnahme ist der unmittelbar
+folgende Sonic-Build/-Lauf; erst dessen reale Evidenz schliesst den Taskstatus.
 
 ### Umfang
 

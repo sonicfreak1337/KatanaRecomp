@@ -260,6 +260,7 @@ int main() {
     formatted.counters.multi_root_provenance_links = 6u;
     formatted.counters.multi_root_retained_contexts = 2u;
     formatted.counters.multi_root_retained_payload_bytes = 2048u;
+    formatted.counters.multi_root_evictions = 0u;
     formatted.counters.cache_evictions = 1u;
     formatted.counters.cache_entries = 64u;
     formatted.counters.cache_retained_payload_bytes = 4096u;
@@ -299,6 +300,7 @@ int main() {
                               "\"multi_root_provenance_links\":6,"
                               "\"multi_root_retained_contexts\":2,"
                               "\"multi_root_retained_payload_bytes\":2048,"
+                              "\"multi_root_evictions\":0,"
                               "\"cache_evictions\":1,\"cache_entries\":64,"
                               "\"cache_retained_payload_bytes\":4096,"
                               "\"cache_miss_cold\":1,"
@@ -333,6 +335,7 @@ int main() {
                                "multi_root_provenance_links=6 "
                                "multi_root_retained_contexts=2 "
                                "multi_root_retained_payload_bytes=2048 "
+                               "multi_root_evictions=0 "
                                "cache_evictions=1 "
                                "cache_entries=64 "
                                "cache_retained_payload_bytes=4096 "
@@ -346,6 +349,55 @@ int main() {
                 katana::progress_activity_accounting_valid(
                     formatted.counters),
             "Schema-v1-, Replay-Fallback- oder Cache-Ledger-Vertrag ist nicht stabil.");
+    katana::ProgressEvent executor_event;
+    executor_event.counters.executor_running_workers = 12u;
+    executor_event.counters.executor_waiting_workers = 4u;
+    executor_event.counters.executor_idle_workers = 0u;
+    executor_event.counters.executor_queued_work = 7u;
+    executor_event.counters.executor_memory_blocked_work = 2u;
+    executor_event.counters.executor_continuations = 3u;
+    executor_event.counters.analysis_memory_capacity_bytes =
+        8'589'934'592u;
+    executor_event.counters.analysis_memory_used_bytes =
+        1'610'612'736u;
+    executor_event.counters.analysis_memory_peak_bytes =
+        3'221'225'472u;
+    const auto executor_json =
+        katana::format_progress_event_json(executor_event);
+    const auto executor_human =
+        katana::format_progress_event_human(executor_event);
+    require(
+        katana::progress_event_telemetry_complete(executor_event) &&
+            executor_json.find("\"executor_running_workers\":12") !=
+                std::string::npos &&
+            executor_json.find("\"executor_memory_blocked_work\":2") !=
+                std::string::npos &&
+            executor_json.find("\"analysis_memory_used_bytes\":1610612736") !=
+                std::string::npos &&
+            executor_human.find("executor_continuations=3") !=
+                std::string::npos &&
+            executor_human.find("analysis_memory_peak_bytes=3221225472") !=
+                std::string::npos,
+        "Executor-/Speichertelemetrie erreichte JSONL/Human nicht vollstaendig.");
+    auto incomplete_executor_event = executor_event;
+    incomplete_executor_event.counters.executor_queued_work.reset();
+    require(
+        !katana::progress_event_telemetry_complete(
+            incomplete_executor_event),
+        "Ein unvollstaendiges Executor-Ledger blieb gruen.");
+    auto impossible_executor_event = executor_event;
+    impossible_executor_event.counters.executor_idle_workers = 5u;
+    require(
+        !katana::progress_event_telemetry_complete(
+            impossible_executor_event),
+        "Mehr Idle- als wartende Executor-Worker blieben gruen.");
+    impossible_executor_event = executor_event;
+    impossible_executor_event.counters.analysis_memory_peak_bytes =
+        9'000'000'000u;
+    require(
+        !katana::progress_event_telemetry_complete(
+            impossible_executor_event),
+        "Ein Speicherpeak oberhalb des Executor-Budgets blieb gruen.");
     katana::ProgressCounterSnapshot activity;
     activity.evaluation_requests = 5u;
     activity.active_evaluation_requests = 2u;
@@ -522,6 +574,24 @@ int main() {
         !katana::progress_event_telemetry_complete(
             partial_retention_after_limit),
         "Ein Byte-Limit mit partiell behaltenem Root blieb gruen.");
+    auto incomplete_root_retention = invalid_incremental_ledger;
+    incomplete_root_retention.counters.resolution_root_artifacts_total = 3u;
+    incomplete_root_retention.counters
+        .resolution_root_artifacts_retained = 0u;
+    incomplete_root_retention.counters
+        .resolution_epoch_retained_bytes = 0u;
+    incomplete_root_retention.counters
+        .resolution_retention_limit_reason = "incomplete-root";
+    require(
+        katana::progress_event_telemetry_complete(
+            incomplete_root_retention) &&
+            katana::format_progress_event_json(
+                incomplete_root_retention)
+                    .find("\"resolution_retention_limit_reason\":"
+                          "\"incomplete-root\"") !=
+                std::string::npos,
+        "Ein vollstaendig verworfener unvollstaendiger Root erreichte "
+        "Progress-/JSON-Telemetrie nicht als typisierter Retentiongrund.");
     auto unknown_retention_reason = invalid_incremental_ledger;
     unknown_retention_reason.counters.resolution_root_artifacts_total = 3u;
     unknown_retention_reason.counters.resolution_retention_limit_reason =
@@ -588,6 +658,18 @@ int main() {
             invalid_multi_root_retention.counters),
         "Ein vom Unique-Ledger abweichender Multi-Root-Retentionzaehler "
         "blieb gruen.");
+    auto valid_multi_root_eviction = formatted;
+    valid_multi_root_eviction.counters.multi_root_retained_contexts = 1u;
+    valid_multi_root_eviction.counters.multi_root_evictions = 1u;
+    require(
+        katana::progress_cache_accounting_valid(
+            valid_multi_root_eviction.counters) &&
+            katana::format_progress_event_json(
+                valid_multi_root_eviction)
+                    .find("\"multi_root_evictions\":1") !=
+                std::string::npos,
+        "Ein gueltiges Multi-Root-Eviction-Ledger wurde verworfen oder "
+        "nicht formatiert.");
     auto invalid_multi_root_zero_retention = formatted;
     invalid_multi_root_zero_retention.counters.multi_root_context_requests = 3u;
     invalid_multi_root_zero_retention.counters.multi_root_unique_contexts = 0u;

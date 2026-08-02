@@ -2315,8 +2315,13 @@ def main() -> int:
             == result.get("multi_root_unique_contexts", 0)
             + result.get("multi_root_ready_reuses", 0)
             + result.get("multi_root_in_flight_reuses", 0)
-            and result.get("multi_root_retained_contexts")
-            == result.get("multi_root_unique_contexts")
+            and isinstance(result.get("multi_root_evictions"), int)
+            and result.get("multi_root_evictions", -1) >= 0
+            and result.get("multi_root_retained_contexts", 0)
+            <= result.get("multi_root_unique_contexts", 0)
+            and result.get("multi_root_evictions")
+            == result.get("multi_root_unique_contexts", 0)
+            - result.get("multi_root_retained_contexts", 0)
             and result.get("multi_root_retained_payload_bytes", 0) > 0
             and isinstance(result.get("multi_root_provenance_links"), int)
             and result.get("multi_root_provenance_links", -1) >= 0
@@ -2379,8 +2384,13 @@ def main() -> int:
                 == wave.get("multi_root_unique_contexts")
                 + wave.get("multi_root_ready_reuses")
                 + wave.get("multi_root_in_flight_reuses")
+                and isinstance(wave.get("multi_root_evictions"), int)
+                and wave.get("multi_root_evictions", -1) >= 0
                 and wave.get("multi_root_retained_contexts")
+                <= wave.get("multi_root_unique_contexts")
+                and wave.get("multi_root_evictions")
                 == wave.get("multi_root_unique_contexts")
+                - wave.get("multi_root_retained_contexts")
                 and isinstance(wave.get("multi_root_provenance_links"), int)
                 and isinstance(wave.get("multi_root_retained_payload_bytes"), int)
                 and (wave.get("multi_root_retained_contexts") == 0)

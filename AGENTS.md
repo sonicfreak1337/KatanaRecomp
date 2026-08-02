@@ -5,21 +5,16 @@ in diesem Repository. Sie sind keine Empfehlung.
 
 ## Produkt vor Testinfrastruktur
 
-- Das echte Endprodukt ist der massgebliche Test und die einzige
-  Produktabnahme. Fuer den aktuellen Bring-up ist das der reale erzeugte Port
-  mit seinem normalen Programmlauf.
-- Builds, Unit-Tests, synthetische Fixtures, Stresslaeufe und Testmatrizen sind
-  nur eng begrenzte Diagnosewerkzeuge. Sie ersetzen niemals den Produktlauf.
-- Ausserhalb des Endprodukts wird nur der kleinste bereits vorhandene Compile-
-  oder Regression-Check ausgefuehrt, der zum Absichern einer konkret
-  geaenderten oder nachweislich fehlerhaften Stelle zwingend erforderlich ist.
-- Keine breite Suite, vorsorgliche Regression, synthetische Matrix, Fuzz-
-  Kampagne oder neue Testinfrastruktur ohne einen konkret belegten
-  Produktblocker, den ein kleinerer Check nicht abdecken kann.
-- Pro Implementierungsschritt gibt es hoechstens einen fokussierten Build und
-  einen engen Check. Eine Wiederholung ist nur nach einem echten Fehler dieses
-  Checks zulaessig und bleibt auf den fehlgeschlagenen Pfad beschraenkt. Danach
-  geht die Arbeit sofort zum Produkt- beziehungsweise Performancepfad zurueck.
+- Das echte Endprodukt, der massgebliche Test und die einzige Produktabnahme
+  ist fuer diesen Bring-up immer Sonic selbst: ein real erzeugter Port, sein
+  normaler Programmlauf und ein echter Screenshot jenseits von SEGA -> Schwarz.
+- Zwischenimplementierungen erhalten keine eigenen Testbuilds, Unit-Testlaeufe,
+  synthetischen Fixtures, Stresslaeufe oder Testmatrizen. Ihre Fehler werden in
+  den vorgeschriebenen P0/P1-Reviews der vollstaendigen betroffenen Pfade
+  gefunden und gebuendelt geschlossen.
+- Gebaut und ausgefuehrt wird der Sonic-Produktpfad. Ein anderer Lauf ist nur
+  nach einer neuen ausdruecklichen Nutzerfreigabe fuer genau diesen benannten
+  Lauf zulaessig.
 - Performance wird primaer am realen End-to-End-Produktpfad gemessen.
   Synthetische Zeiten oder gruene Testmatrizen sind kein Ersatz fuer eine reale
   Kaltbuildzeit und keinen sichtbaren Programmlauf.
@@ -70,3 +65,5 @@ Nutzeranweisung hat diese Vorrang.
   Folgetasks sind auch dort verboten.
 - Sobald die Soundness nach KR-4984 belegt ist, folgt ohne weitere
   Zwischenumbauten genau der vorgesehene Sonic-Produktbuild und -lauf.
+- Aktuelle ausdrueckliche Reihenfolge: Nach Abschluss und Push von KR-4979
+  folgt sofort ein Sonic-Produktbuild und -lauf; KR-4980 wartet bis danach.

@@ -1101,10 +1101,28 @@ struct NamedCounterMember final {
     OptionalCounterMember member;
 };
 
-constexpr std::array<NamedCounterMember, 179u> progress_counter_members{{
+constexpr std::array<NamedCounterMember, 189u> progress_counter_members{{
     {"iteration", &ProgressCounterSnapshot::iteration},
     {"pass", &ProgressCounterSnapshot::pass},
     {"active_workers", &ProgressCounterSnapshot::active_workers},
+    {"executor_running_workers",
+     &ProgressCounterSnapshot::executor_running_workers},
+    {"executor_waiting_workers",
+     &ProgressCounterSnapshot::executor_waiting_workers},
+    {"executor_idle_workers",
+     &ProgressCounterSnapshot::executor_idle_workers},
+    {"executor_queued_work",
+     &ProgressCounterSnapshot::executor_queued_work},
+    {"executor_memory_blocked_work",
+     &ProgressCounterSnapshot::executor_memory_blocked_work},
+    {"executor_continuations",
+     &ProgressCounterSnapshot::executor_continuations},
+    {"analysis_memory_capacity_bytes",
+     &ProgressCounterSnapshot::analysis_memory_capacity_bytes},
+    {"analysis_memory_used_bytes",
+     &ProgressCounterSnapshot::analysis_memory_used_bytes},
+    {"analysis_memory_peak_bytes",
+     &ProgressCounterSnapshot::analysis_memory_peak_bytes},
     {"evaluation_requests", &ProgressCounterSnapshot::evaluation_requests},
     {"active_evaluation_requests",
      &ProgressCounterSnapshot::active_evaluation_requests},
@@ -1193,6 +1211,8 @@ constexpr std::array<NamedCounterMember, 179u> progress_counter_members{{
      &ProgressCounterSnapshot::multi_root_retained_contexts},
     {"multi_root_retained_payload_bytes",
      &ProgressCounterSnapshot::multi_root_retained_payload_bytes},
+    {"multi_root_evictions",
+     &ProgressCounterSnapshot::multi_root_evictions},
     {"cache_evictions", &ProgressCounterSnapshot::cache_evictions},
     {"cache_entries", &ProgressCounterSnapshot::cache_entries},
     {"cache_retained_payload_bytes",
@@ -1585,6 +1605,39 @@ constexpr std::array<ActivityCounterMembers, 6u>
          &ProgressCounterSnapshot::maximum_cache_commit_nanoseconds},
     }};
 
+constexpr std::array<OptionalCounterMember, 9u>
+    executor_counter_members{{
+        &ProgressCounterSnapshot::executor_running_workers,
+        &ProgressCounterSnapshot::executor_waiting_workers,
+        &ProgressCounterSnapshot::executor_idle_workers,
+        &ProgressCounterSnapshot::executor_queued_work,
+        &ProgressCounterSnapshot::executor_memory_blocked_work,
+        &ProgressCounterSnapshot::executor_continuations,
+        &ProgressCounterSnapshot::analysis_memory_capacity_bytes,
+        &ProgressCounterSnapshot::analysis_memory_used_bytes,
+        &ProgressCounterSnapshot::analysis_memory_peak_bytes,
+    }};
+
+[[nodiscard]] bool executor_accounting_valid(
+    const ProgressCounterSnapshot& counters) noexcept {
+    if (!complete_optional_counter_group(
+            counters, executor_counter_members))
+        return false;
+    if (!counters.analysis_memory_capacity_bytes) return true;
+    return *counters.executor_idle_workers <=
+               *counters.executor_waiting_workers &&
+           *counters.executor_memory_blocked_work <=
+               *counters.executor_queued_work &&
+           *counters.executor_continuations <=
+               *counters.executor_queued_work &&
+           *counters.analysis_memory_used_bytes <=
+               *counters.analysis_memory_capacity_bytes &&
+           *counters.analysis_memory_used_bytes <=
+               *counters.analysis_memory_peak_bytes &&
+           *counters.analysis_memory_peak_bytes <=
+               *counters.analysis_memory_capacity_bytes;
+}
+
 [[nodiscard]] bool checked_add(const std::uint64_t value, std::uint64_t& sum) noexcept {
     if (value > std::numeric_limits<std::uint64_t>::max() - sum) return false;
     sum += value;
@@ -1706,7 +1759,8 @@ bool progress_cache_accounting_valid(const ProgressCounterSnapshot& counters) no
         counters.multi_root_in_flight_reuses.has_value() ||
         counters.multi_root_provenance_links.has_value() ||
         counters.multi_root_retained_contexts.has_value() ||
-        counters.multi_root_retained_payload_bytes.has_value();
+        counters.multi_root_retained_payload_bytes.has_value() ||
+        counters.multi_root_evictions.has_value();
     if (multi_root_accounting_present) {
         if (!counters.multi_root_context_requests ||
             !counters.multi_root_unique_contexts ||
@@ -1714,19 +1768,27 @@ bool progress_cache_accounting_valid(const ProgressCounterSnapshot& counters) no
             !counters.multi_root_in_flight_reuses ||
             !counters.multi_root_provenance_links ||
             !counters.multi_root_retained_contexts ||
-            !counters.multi_root_retained_payload_bytes)
+            !counters.multi_root_retained_payload_bytes ||
+            !counters.multi_root_evictions)
             return false;
         std::uint64_t reuses = 0u;
         if (!checked_add(*counters.multi_root_ready_reuses, reuses) ||
             !checked_add(*counters.multi_root_in_flight_reuses, reuses))
             return false;
         std::uint64_t coordinator_requests = reuses;
+        std::uint64_t produced_contexts = 0u;
         if (!checked_add(
                 *counters.multi_root_unique_contexts,
                 coordinator_requests) ||
             coordinator_requests !=
                 *counters.multi_root_context_requests ||
-            *counters.multi_root_retained_contexts !=
+            !checked_add(
+                *counters.multi_root_retained_contexts,
+                produced_contexts) ||
+            !checked_add(
+                *counters.multi_root_evictions,
+                produced_contexts) ||
+            produced_contexts !=
                 *counters.multi_root_unique_contexts ||
             ((*counters.multi_root_retained_contexts == 0u) !=
              (*counters.multi_root_retained_payload_bytes == 0u)))
@@ -1838,7 +1900,8 @@ namespace {
     const bool retention_limited =
         retention_reason == "dependency-node-limit" ||
         retention_reason == "root-entry-limit" ||
-        retention_reason == "byte-limit";
+        retention_reason == "byte-limit" ||
+        retention_reason == "incomplete-root";
     if (retention_reason != "none" && !retention_limited)
         return false;
     if (*counters.resolution_root_artifacts_retained >
@@ -1888,6 +1951,7 @@ bool progress_event_telemetry_complete(const ProgressEvent& event) noexcept {
     }();
     return event.telemetry_complete && event.dropped_observations == 0u &&
            bypass_reason_valid &&
+           executor_accounting_valid(event.counters) &&
            progress_cache_accounting_valid(event.counters) &&
            progress_activity_accounting_valid(event.counters) &&
            physical_work_accounting_valid(event.counters) &&

@@ -2403,6 +2403,24 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 function_values->pending;
             progress.function_value_active_workers =
                 function_values->active_workers;
+            progress.function_value_executor_running_workers =
+                function_values->executor_running_workers;
+            progress.function_value_executor_waiting_workers =
+                function_values->executor_waiting_workers;
+            progress.function_value_executor_idle_workers =
+                function_values->executor_idle_workers;
+            progress.function_value_executor_queued_work =
+                function_values->executor_queued_work;
+            progress.function_value_executor_memory_blocked_work =
+                function_values->executor_memory_blocked_work;
+            progress.function_value_executor_continuations =
+                function_values->executor_continuations;
+            progress.function_value_analysis_memory_capacity_bytes =
+                function_values->analysis_memory_capacity_bytes;
+            progress.function_value_analysis_memory_used_bytes =
+                function_values->analysis_memory_used_bytes;
+            progress.function_value_analysis_memory_peak_bytes =
+                function_values->analysis_memory_peak_bytes;
             progress.function_value_logical_evaluations =
                 function_values->logical_evaluations;
             progress.function_value_physical_evaluations =
@@ -2477,6 +2495,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             progress
                 .function_value_multi_root_retained_payload_bytes =
                 function_values->multi_root_retained_payload_bytes;
+            progress.function_value_multi_root_evictions =
+                function_values->multi_root_evictions;
             progress.function_value_resolution_functions_total =
                 function_values->resolution_functions_total;
             progress.function_value_resolution_functions_started =

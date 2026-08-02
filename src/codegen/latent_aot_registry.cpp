@@ -23,6 +23,7 @@
 #include <limits>
 #include <map>
 #include <new>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -36,8 +37,48 @@ constexpr std::uint32_t iso_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
 constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::size_t maximum_analysis_implementation_identity_bytes = 4096u;
+constexpr std::uint64_t latent_aot_module_analysis_reserve_bytes =
+    2'560ull * 1024ull * 1024ull;
 constexpr std::string_view latent_aot_analysis_cache_artifact{
     "module-analysis.bin"};
+
+[[nodiscard]] constexpr bool
+latent_aot_module_transient_bytes_overflow(
+    const std::size_t source_bytes) noexcept {
+    constexpr auto maximum = std::numeric_limits<std::size_t>::max();
+    if constexpr (maximum < latent_aot_module_analysis_reserve_bytes)
+        return true;
+    constexpr auto reserve = static_cast<std::size_t>(
+        latent_aot_module_analysis_reserve_bytes);
+    return source_bytes > maximum - reserve;
+}
+
+[[nodiscard]] constexpr std::size_t
+latent_aot_module_transient_bytes(const std::size_t source_bytes) noexcept {
+    constexpr auto maximum = std::numeric_limits<std::size_t>::max();
+    if (latent_aot_module_transient_bytes_overflow(source_bytes))
+        return maximum;
+    constexpr auto reserve = static_cast<std::size_t>(
+        latent_aot_module_analysis_reserve_bytes);
+    return source_bytes > maximum - reserve
+               ? maximum
+               : source_bytes + reserve;
+}
+
+void append_executor_snapshot(
+    katana::ProgressCounterSnapshot& counters,
+    const katana::analysis::ParallelWorkExecutorSnapshot& snapshot) {
+    counters.active_workers = snapshot.running;
+    counters.executor_running_workers = snapshot.running;
+    counters.executor_waiting_workers = snapshot.waiting;
+    counters.executor_idle_workers = snapshot.idle;
+    counters.executor_queued_work = snapshot.queued;
+    counters.executor_memory_blocked_work = snapshot.memory_blocked;
+    counters.executor_continuations = snapshot.continuations;
+    counters.analysis_memory_capacity_bytes = snapshot.memory_capacity;
+    counters.analysis_memory_used_bytes = snapshot.memory_used;
+    counters.analysis_memory_peak_bytes = snapshot.memory_peak;
+}
 
 struct DiscFileCandidate {
     std::uint32_t size = 0u;
@@ -1480,32 +1521,59 @@ LatentAotDiscovery discover_latent_aot_modules(
         {candidates.size(),
          options.maximum_workers,
          katana::analysis::global_analysis_executor().maximum_jobs()});
-    std::atomic_size_t active_candidates = 0u;
+    auto& analysis_executor =
+        katana::analysis::global_analysis_executor();
+    const auto maximum_candidate_bytes =
+        std::accumulate(
+            candidates.begin(),
+            candidates.end(),
+            std::size_t{0u},
+            [](const std::size_t current,
+               const DiscFileCandidate& candidate) {
+                return std::max(current, candidate.bytes.size());
+            });
+    katana::analysis::AnalysisWorkDescriptor candidate_work;
+    candidate_work.phase =
+        katana::analysis::AnalysisWorkPhase::LatentAot;
+    candidate_work.subject_kind =
+        katana::analysis::AnalysisWorkSubjectKind::Module;
+    candidate_work.estimated_cost =
+        std::max(std::size_t{1u}, maximum_candidate_bytes);
+    candidate_work.fanout = candidates.size();
+    candidate_work.priority =
+        katana::analysis::AnalysisWorkPriorityKind::Throughput;
+    if (latent_aot_module_transient_bytes_overflow(
+            maximum_candidate_bytes))
+        throw katana::analysis::AnalysisMemoryBudgetExceeded(
+            std::numeric_limits<std::size_t>::max(),
+            analysis_executor.memory_budget().capacity());
+    candidate_work.transient_bytes =
+        latent_aot_module_transient_bytes(maximum_candidate_bytes);
+    candidate_work.quantum = 1u;
     std::atomic_size_t started_candidates = 0u;
     {
         katana::ProgressCounterSnapshot counters;
         counters.configured_workers = configured_candidate_workers;
-        counters.active_workers = 0u;
         counters.queued_work = candidates.size();
         counters.started = 0u;
         counters.committed_work = 0u;
+        append_executor_snapshot(
+            counters, analysis_executor.snapshot());
         candidate_progress.update(std::move(counters));
     }
     katana::analysis::parallel_analysis_for(
+        analysis_executor,
+        std::move(candidate_work),
         candidates.size(),
         options.maximum_workers,
+        nullptr,
         [&](const std::size_t index) {
-            active_candidates.fetch_add(
-                1u, std::memory_order_relaxed);
             const auto started =
                 started_candidates.fetch_add(
                     1u, std::memory_order_relaxed) +
                 1u;
             {
                 katana::ProgressCounterSnapshot counters;
-                counters.active_workers =
-                    active_candidates.load(
-                        std::memory_order_relaxed);
                 counters.configured_workers =
                     configured_candidate_workers;
                 counters.queued_work =
@@ -1519,6 +1587,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                 counters.cache_misses =
                     cache_counters.misses.load(
                         std::memory_order_relaxed);
+                append_executor_snapshot(
+                    counters, analysis_executor.snapshot());
                 candidate_progress.update(
                     std::move(counters));
             }
@@ -1543,13 +1613,8 @@ LatentAotDiscovery discover_latent_aot_modules(
             // result until the final collection pass.
             std::vector<std::uint8_t>{}.swap(
                 candidates[index].bytes);
-            active_candidates.fetch_sub(
-                1u, std::memory_order_relaxed);
             candidate_progress.advance(1u);
             katana::ProgressCounterSnapshot counters;
-            counters.active_workers =
-                active_candidates.load(
-                    std::memory_order_relaxed);
             counters.configured_workers =
                 configured_candidate_workers;
             counters.queued_work =
@@ -1569,9 +1634,29 @@ LatentAotDiscovery discover_latent_aot_modules(
             counters.cache_misses =
                 cache_counters.misses.load(
                     std::memory_order_relaxed);
+            append_executor_snapshot(
+                counters, analysis_executor.snapshot());
             candidate_progress.update(
                 std::move(counters));
         });
+    {
+        katana::ProgressCounterSnapshot counters;
+        counters.configured_workers = configured_candidate_workers;
+        counters.queued_work = 0u;
+        counters.started = started_candidates.load(
+            std::memory_order_relaxed);
+        counters.committed_work = candidate_progress.completed();
+        counters.cache_hits =
+            cache_counters.positive_hits.load(
+                std::memory_order_relaxed) +
+            cache_counters.negative_hits.load(
+                std::memory_order_relaxed);
+        counters.cache_misses = cache_counters.misses.load(
+            std::memory_order_relaxed);
+        append_executor_snapshot(
+            counters, analysis_executor.snapshot());
+        candidate_progress.update(std::move(counters));
+    }
     candidate_progress.complete();
     result.analysis_candidate_duration_ms =
         std::move(analysis_candidate_duration_ms);

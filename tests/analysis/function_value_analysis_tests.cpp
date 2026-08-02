@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <span>
@@ -1250,6 +1251,53 @@ void verify_incremental_resolution_root_reuse() {
         "Ein Byte-Retention-Ueberlauf beeinflusste Analyse oder behielt "
         "unbudgetierte Root-Artefakte.");
 
+    const auto presentationless_epoch =
+        overflowing_byte_budget_session.published_epoch_version();
+    katana::analysis::detail::FunctionProgramDelta terminal_delta;
+    terminal_delta.kind =
+        katana::analysis::detail::FunctionProgramDeltaKind::Unchanged;
+    terminal_delta.result_materialization =
+        katana::analysis::FunctionValueResultMaterialization::TerminalFull;
+    terminal_delta.expected_published_epoch_version =
+        presentationless_epoch;
+    terminal_delta.image_identity = image.analysis_instance_identity();
+    terminal_delta.image_revision = image.analysis_revision();
+    overflowing_byte_budget_session.stage_next_function_program_delta(
+        std::move(terminal_delta));
+    std::string recomputed_terminal_phase;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        recomputed_terminal_shapes{image};
+    const auto recomputed_terminal = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            std::span<const katana::sh4::DisassemblyLine>{},
+            std::span<const katana::analysis::FunctionBoundary>{},
+            std::span<const katana::analysis::ResolvedControlFlowEdge>{},
+            [&](const auto& progress) {
+                recomputed_terminal_phase = progress.phase;
+            },
+            recomputed_terminal_shapes,
+            overflowing_byte_budget_session);
+    require_same_function_value_semantics(
+        recomputed_terminal, exact_cold, false);
+    require(
+        recomputed_terminal_phase != "terminal-materialized" &&
+            recomputed_terminal.result_materialization ==
+                katana::analysis::FunctionValueResultMaterialization::
+                    TerminalFull &&
+            recomputed_terminal.resolution_root_artifacts_reused.empty() &&
+            recomputed_terminal.resolution_root_artifacts_recomputed.size() ==
+                2u &&
+            recomputed_terminal.resolution_root_artifacts_retained == 0u &&
+            recomputed_terminal.resolution_epoch_retained_bytes == 0u &&
+            recomputed_terminal.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::ByteLimit &&
+            overflowing_byte_budget_session.published_epoch_version() ==
+                presentationless_epoch + 1u,
+        "Ein Unchanged/TerminalFull benutzte nach verworfener "
+        "Praesentationsretention den leeren Fast-Materializer statt den "
+        "unveraenderten ProgramGraph exakt neu auszuwerten.");
+
     Session overflowing_dependency_budget_session{
         16'384u,
         1'024u * 1'024u * 1'024u,
@@ -1297,6 +1345,106 @@ void verify_incremental_resolution_root_reuse() {
                     DependencyNodeLimit,
         "Das Dependency-Node-Limit blieb untypisiert oder behielt einen "
         "partiellen Resolution-Cache.");
+
+    if (katana::analysis::global_analysis_executor().maximum_jobs() >= 2u) {
+        std::atomic_size_t resolution_jobs_started = 0u;
+        std::atomic_size_t resolution_jobs_completed = 0u;
+        std::atomic_bool release_remaining_jobs = false;
+        Session unwind_session;
+        katana::analysis::detail::ResolutionExecutionObserverForTesting
+            unwind_observer;
+        unwind_observer.job_started =
+            [&](const std::size_t index) {
+                resolution_jobs_started.fetch_add(
+                    1u, std::memory_order_release);
+                if (index == 0u) {
+                    while (resolution_jobs_started.load(
+                               std::memory_order_acquire) < 2u)
+                        std::this_thread::yield();
+                    return;
+                }
+                while (!release_remaining_jobs.load(
+                    std::memory_order_acquire))
+                    std::this_thread::yield();
+            };
+        unwind_observer.job_completed =
+            [&](const std::size_t) {
+                resolution_jobs_completed.fetch_add(
+                    1u, std::memory_order_release);
+            };
+        unwind_observer.commit =
+            [&](const std::size_t index) {
+                if (index != 0u) return;
+                release_remaining_jobs.store(
+                    true, std::memory_order_release);
+                throw std::runtime_error(
+                    "synthetic-resolution-commit");
+            };
+        unwind_session.set_resolution_execution_observer_for_testing(
+            std::move(unwind_observer));
+        katana::analysis::detail::GuardedNativeEntryShapeCache
+            unwind_shapes{image};
+        auto unwind_error =
+            std::make_shared<std::exception_ptr>();
+        std::promise<void> unwind_retired_promise;
+        auto unwind_retired =
+            unwind_retired_promise.get_future();
+        katana::analysis::AnalysisWorkDescriptor unwind_work;
+        unwind_work.phase =
+            katana::analysis::AnalysisWorkPhase::Resolution;
+        unwind_work.subject_kind =
+            katana::analysis::AnalysisWorkSubjectKind::Root;
+        unwind_work.subject = 0u;
+        unwind_work.priority =
+            katana::analysis::AnalysisWorkPriorityKind::CriticalPrefix;
+        unwind_work.critical_prefix = 0u;
+        katana::analysis::global_analysis_executor().submit(
+            std::move(unwind_work),
+            [&, unwind_error]() noexcept {
+                try {
+                    static_cast<void>(katana::analysis::detail::
+                        analyze_function_values_with_guarded_entry_cache(
+                            image,
+                            lines,
+                            boundaries,
+                            {},
+                            {},
+                            unwind_shapes,
+                            unwind_session));
+                } catch (...) {
+                    *unwind_error = std::current_exception();
+                }
+                return katana::analysis::
+                    AnalysisWorkDisposition::Complete;
+            },
+            [&, unwind_error](
+                const std::exception_ptr scheduler_error) noexcept {
+                if (scheduler_error && !*unwind_error)
+                    *unwind_error = scheduler_error;
+                unwind_retired_promise.set_value();
+            });
+        unwind_retired.get();
+        bool commit_error_propagated = false;
+        try {
+            if (*unwind_error)
+                std::rethrow_exception(*unwind_error);
+        } catch (const std::runtime_error& error) {
+            commit_error_propagated =
+                std::string_view{error.what()} ==
+                "synthetic-resolution-commit";
+        }
+        require(
+            commit_error_propagated &&
+                resolution_jobs_started.load(
+                    std::memory_order_acquire) >= 2u &&
+                resolution_jobs_completed.load(
+                    std::memory_order_acquire) ==
+                    resolution_jobs_started.load(
+                        std::memory_order_acquire),
+            "Eine kanonische Resolution-Commit-Ausnahme wurde vor dem "
+            "Drain aller gestarteten Sliding-Window-Completion-Callbacks "
+            "weitergereicht.");
+    }
 }
 
 void verify_inventory_region_dependency_reuse() {
@@ -1843,14 +1991,18 @@ void verify_function_evaluation_cache_telemetry() {
                     probe.coordinator_in_flight_reuses ==
                 1u &&
             probe.coordinator_entries == 1u &&
+            probe.coordinator_retained_payload_bytes != 0u &&
+            probe.coordinator_evictions == 0u &&
             probe.coordinator_session_lookups == 1u &&
             probe.coordinator_session_entries == 0u &&
             probe.coordinator_physical_computations == 1u &&
             probe.coordinator_collision_safe &&
-            probe.coordinator_failure_pinned,
+            probe.coordinator_failure_pinned &&
+            probe.coordinator_ready_eviction_recomputed &&
+            probe.coordinator_in_flight_eviction_safe,
         "Der Multi-Root-Coordinator verlor bei verweigerter Session-"
-        "Admission oder normalem Replay-Ueberlauf sein unbegrenztes "
-        "exaktes Journal bzw. startete denselben Producer erneut.");
+        "Admission sein exaktes Ergebnis, verletzte das Ready-Bytebudget "
+        "oder evictete laufende Single-Flight-Arbeit.");
     require(
         probe.inline_only_artifact_bytes ==
                 probe.inline_only_artifact_owner_bytes &&
@@ -3081,8 +3233,60 @@ contextual_candidate_input_overflow_values(const bool stack_argument) {
                                        helper_address)},
         katana::analysis::FunctionBoundary{callback_address, 4u},
     };
-    return katana::analysis::analyze_function_values(
-        image, lines, boundaries, edges);
+    katana::analysis::detail::FunctionValueAnalysisSession session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        cold_shapes{image};
+    const auto cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            edges,
+            {},
+            cold_shapes,
+            session);
+    const auto cold_epoch = session.published_epoch_version();
+    katana::analysis::detail::FunctionProgramDelta terminal_delta;
+    terminal_delta.kind =
+        katana::analysis::detail::FunctionProgramDeltaKind::Unchanged;
+    terminal_delta.result_materialization =
+        katana::analysis::FunctionValueResultMaterialization::TerminalFull;
+    terminal_delta.expected_published_epoch_version = cold_epoch;
+    terminal_delta.image_identity = image.analysis_instance_identity();
+    terminal_delta.image_revision = image.analysis_revision();
+    session.stage_next_function_program_delta(
+        std::move(terminal_delta));
+    bool used_terminal_materializer = false;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        warm_shapes{image};
+    const auto warm = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            std::span<const katana::sh4::DisassemblyLine>{},
+            std::span<const katana::analysis::FunctionBoundary>{},
+            std::span<const katana::analysis::ResolvedControlFlowEdge>{},
+            [&](const auto& progress) {
+                used_terminal_materializer =
+                    used_terminal_materializer ||
+                    progress.phase == "terminal-materialized";
+            },
+            warm_shapes,
+            session);
+    require_same_function_value_semantics(cold, warm, false);
+    require(
+        !used_terminal_materializer &&
+            cold.guarded_code_inventory.walk_diagnostics.truncated() &&
+            warm.guarded_code_inventory.walk_diagnostics.truncated() &&
+            warm.resolution_root_artifacts_retained == 0u &&
+            warm.resolution_epoch_retained_bytes == 0u &&
+            warm.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::
+                    IncompleteRoot &&
+            session.published_epoch_version() == cold_epoch + 1u,
+        "Ein root-spezifisch abgeschnittener Lauf publizierte eine "
+        "partielle Presentation-Epoch oder verlor beim folgenden "
+        "Unchanged/TerminalFull seine Truncation-Diagnose.");
+    return warm;
 }
 
 katana::analysis::FunctionValueAnalysisResult
@@ -6294,6 +6498,162 @@ int main() {
                     }),
             "Der Analysis-Executor erzeugt zwischen Batches neue Worker "
             "statt seinen festen Pool wiederzuverwenden.");
+    }
+    {
+        katana::analysis::ParallelWorkExecutor priority_executor(1u);
+        std::mutex order_mutex;
+        std::vector<std::size_t> dispatch_order;
+        katana::analysis::AnalysisWorkDescriptor throughput;
+        throughput.phase =
+            katana::analysis::AnalysisWorkPhase::FunctionValue;
+        throughput.subject_kind =
+            katana::analysis::AnalysisWorkSubjectKind::Root;
+        throughput.priority =
+            katana::analysis::AnalysisWorkPriorityKind::Throughput;
+        throughput.quantum = 1u;
+        katana::analysis::parallel_analysis_for(
+            priority_executor,
+            throughput,
+            5u,
+            1u,
+            nullptr,
+            [&](const std::size_t index) {
+                {
+                    const std::lock_guard lock(order_mutex);
+                    dispatch_order.push_back(index);
+                }
+                if (index != 0u) return;
+                katana::analysis::AnalysisWorkDescriptor critical;
+                critical.phase =
+                    katana::analysis::AnalysisWorkPhase::Resolution;
+                critical.subject_kind =
+                    katana::analysis::AnalysisWorkSubjectKind::Root;
+                critical.priority =
+                    katana::analysis::AnalysisWorkPriorityKind::
+                        CriticalPrefix;
+                critical.critical_prefix = 0u;
+                critical.quantum = 1u;
+                priority_executor.submit_once(
+                    std::move(critical),
+                    [&] {
+                        const std::lock_guard lock(order_mutex);
+                        dispatch_order.push_back(99u);
+                    });
+            });
+        require(
+            dispatch_order ==
+                std::vector<std::size_t>{0u, 99u, 1u, 2u, 3u, 4u},
+            "Ein grober Throughput-Drain verschluckte weiterhin kritische "
+            "Nested-Arbeit oder seine begrenzte Continuation.");
+    }
+    {
+        katana::analysis::AnalysisMemoryBudget memory_budget{64u};
+        katana::analysis::ParallelWorkExecutor memory_executor(
+            2u, memory_budget);
+        katana::analysis::AnalysisWorkDescriptor memory_bound;
+        memory_bound.phase =
+            katana::analysis::AnalysisWorkPhase::FunctionValue;
+        memory_bound.priority =
+            katana::analysis::AnalysisWorkPriorityKind::Unblocking;
+        memory_bound.transient_bytes = 48u;
+        memory_bound.quantum = 1u;
+        std::atomic_size_t entered = 0u;
+        std::atomic_size_t completed = 0u;
+        std::atomic_bool release = false;
+        auto memory_run = std::async(
+            std::launch::async,
+            [&] {
+                katana::analysis::parallel_analysis_for(
+                    memory_executor,
+                    memory_bound,
+                    2u,
+                    2u,
+                    nullptr,
+                    [&](const std::size_t) {
+                        entered.fetch_add(
+                            1u, std::memory_order_release);
+                        while (!release.load(
+                            std::memory_order_acquire))
+                            std::this_thread::yield();
+                        completed.fetch_add(
+                            1u, std::memory_order_relaxed);
+                    });
+            });
+        const auto memory_deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds{2};
+        katana::analysis::ParallelWorkExecutorSnapshot blocked;
+        do {
+            blocked = memory_executor.snapshot();
+            if (entered.load(std::memory_order_acquire) == 1u &&
+                blocked.memory_blocked != 0u)
+                break;
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < memory_deadline);
+        const bool budget_block_visible =
+            entered.load(std::memory_order_acquire) == 1u &&
+            blocked.running == 1u && blocked.queued != 0u &&
+            blocked.memory_blocked != 0u &&
+            blocked.memory_used == 48u &&
+            blocked.memory_capacity == 64u;
+        release.store(true, std::memory_order_release);
+        memory_run.get();
+        const auto quiescent = memory_executor.snapshot();
+        bool oversize_rejected = false;
+        try {
+            auto oversize = memory_bound;
+            oversize.transient_bytes = 65u;
+            memory_executor.submit_once(
+                std::move(oversize), [] {});
+        } catch (const katana::analysis::AnalysisMemoryBudgetExceeded&
+                     error) {
+            oversize_rejected =
+                error.requested() == 65u && error.capacity() == 64u;
+        }
+        require(
+            budget_block_visible && oversize_rejected &&
+                completed.load(std::memory_order_relaxed) == 2u &&
+                quiescent.running == 0u && quiescent.queued == 0u &&
+                quiescent.memory_used == 0u &&
+                quiescent.memory_peak == 48u,
+            "Das globale Analysis-Speicherbudget liess zwei 48-Byte-Jobs "
+            "gleichzeitig in 64 Byte zu, verbarg den Blockzustand oder "
+            "lehnte Oversize-Arbeit nicht typisiert ab.");
+    }
+    {
+        katana::analysis::ParallelWorkExecutor utilization_executor(8u);
+        std::barrier first_window(8);
+        std::barrier release_window(8);
+        std::atomic_size_t peak_running = 0u;
+        katana::analysis::AnalysisWorkDescriptor work;
+        work.phase = katana::analysis::AnalysisWorkPhase::FunctionValue;
+        work.priority =
+            katana::analysis::AnalysisWorkPriorityKind::Unblocking;
+        work.quantum = 1u;
+        katana::analysis::parallel_analysis_for(
+            utilization_executor,
+            work,
+            8u,
+            8u,
+            nullptr,
+            [&](const std::size_t) {
+                first_window.arrive_and_wait();
+                const auto running =
+                    utilization_executor.snapshot().running;
+                auto peak = peak_running.load(
+                    std::memory_order_relaxed);
+                while (peak < running &&
+                       !peak_running.compare_exchange_weak(
+                           peak,
+                           running,
+                           std::memory_order_relaxed))
+                    ;
+                release_window.arrive_and_wait();
+            });
+        require(
+            peak_running.load(std::memory_order_relaxed) >= 6u,
+            "Ein schweres Executor-Fenster nutzte weniger als 75 Prozent "
+            "seiner acht konfigurierten Worker.");
     }
     {
         katana::analysis::ParallelWorkExecutor single_worker(1u);

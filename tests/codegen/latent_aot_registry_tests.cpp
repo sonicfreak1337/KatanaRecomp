@@ -503,8 +503,12 @@ int main() {
         const auto cache_cold =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);
+        require(
+            cached_options.progress.flush(),
+            "Latent-AOT-Progress konnte vor der Telemetriepruefung nicht flushen.");
         bool saw_module_control_flow_update = false;
         bool saw_module_function_values = false;
+        bool saw_candidate_executor_telemetry = false;
         {
             const std::lock_guard lock(
                 latent_progress_mutex);
@@ -534,6 +538,38 @@ int main() {
                                event.counters.iteration
                                    .has_value();
                     });
+            saw_candidate_executor_telemetry =
+                std::any_of(
+                    latent_progress_events.begin(),
+                    latent_progress_events.end(),
+                    [](const katana::ProgressEvent& event) {
+                        const auto& counters = event.counters;
+                        return event.operation ==
+                                   katana::ProgressOperation::
+                                       CandidateResolution &&
+                               event.label ==
+                                   "latent-aot-candidates" &&
+                               counters.active_workers ==
+                                   counters.executor_running_workers &&
+                               counters.executor_waiting_workers
+                                   .has_value() &&
+                               counters.executor_idle_workers
+                                   .has_value() &&
+                               counters.executor_queued_work
+                                   .has_value() &&
+                               counters.executor_memory_blocked_work
+                                   .has_value() &&
+                               counters.executor_continuations
+                                   .has_value() &&
+                               counters.analysis_memory_capacity_bytes
+                                   .has_value() &&
+                               counters.analysis_memory_used_bytes
+                                   .has_value() &&
+                               counters.analysis_memory_peak_bytes
+                                   .has_value() &&
+                               katana::progress_event_telemetry_complete(
+                                   event);
+                    });
             latent_progress_events.clear();
         }
         require(
@@ -546,10 +582,11 @@ int main() {
                 cache_cold.analysis_cache_stores == 1u &&
                 cache_cold.analysis_full_pipeline_runs == 2u &&
                 saw_module_control_flow_update &&
-                saw_module_function_values,
+                saw_module_function_values &&
+                saw_candidate_executor_telemetry,
             "Kalter Latent-AOT-Analysecache speicherte den sicher "
             "source-derived negativen Treffer nicht exakt einmal oder "
-                "meldete keinen inneren CFA/FVA-Modulfortschritt.");
+                "meldete keinen inneren CFA/FVA-/Executor-Fortschritt.");
         const auto cache_warm =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);

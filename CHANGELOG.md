@@ -4,6 +4,16 @@
 
 ### Geaendert
 
+- KR-4979 fuehrt alle schweren Analysephasen ueber einen gemeinsamen,
+  kosten-, Fanout- und Critical-Prefix-priorisierten Executor mit begrenzten
+  Continuations. Ein globaler Speicherhaushalt begrenzt parallele schwere
+  Lanes, Cache-/Multi-Root-LRU bleibt recompute-sicher und Progress trennt
+  laufende, wartende, leerlaufende, speicherblockierte und fortgesetzte
+  Arbeit. Resolution-Ergebnisse werden in einem begrenzten kanonischen
+  Sliding Window committed; Ausnahmewege drainen jeden gestarteten Callback.
+  Unvollstaendige Roots verwerfen die optionale Presentation-Epoch strikt
+  ganz oder gar nicht und erzwingen beim naechsten TerminalFull eine exakte
+  Neuberechnung.
 - KR-4976 ist abgeschlossen. Function Value verwendet nun content-
   adressierte immutable Programmgraphshards und eine sessiongebundene,
   atomar publizierte Analysis-Epoch fuer SCC-/Caller-DAG, ABI-Vertraege,

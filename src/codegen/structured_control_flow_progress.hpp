@@ -46,9 +46,11 @@ class StructuredControlFlowProgress final {
             control_counters, progress);
         control_counters.growing_workset =
             progress.growing_workset;
-        if (progress.function_value_active)
+        if (progress.function_value_active) {
             control_counters.configured_workers =
                 progress.function_value_configured_workers;
+            append_executor_counters(control_counters, progress);
+        }
         control_.update(
             progress.iteration,
             std::move(control_counters));
@@ -111,6 +113,7 @@ class StructuredControlFlowProgress final {
             progress.function_value_summarized_functions;
         function_counters.configured_workers =
             progress.function_value_configured_workers;
+        append_executor_counters(function_counters, progress);
         function_counters.discovered =
             progress.function_value_functions;
         function_counters.started =
@@ -164,6 +167,7 @@ class StructuredControlFlowProgress final {
                 progress.function_value_resolution_functions_committed;
             resolution_counters.configured_workers =
                 progress.function_value_configured_workers;
+            append_executor_counters(resolution_counters, progress);
             // The producer maintains `resolution_functions_ready` as the
             // current ready-queue occupancy: it increments when a result is
             // published and decrements when that result leaves the queue for
@@ -232,6 +236,29 @@ class StructuredControlFlowProgress final {
             progress.round_metadata_targets;
         counters.round_full_cpu_fallbacks =
             progress.round_full_cpu_fallbacks;
+    }
+
+    static void append_executor_counters(
+        katana::ProgressCounterSnapshot& counters,
+        const katana::analysis::ControlFlowAnalysisProgress& progress) {
+        counters.executor_running_workers =
+            progress.function_value_executor_running_workers;
+        counters.executor_waiting_workers =
+            progress.function_value_executor_waiting_workers;
+        counters.executor_idle_workers =
+            progress.function_value_executor_idle_workers;
+        counters.executor_queued_work =
+            progress.function_value_executor_queued_work;
+        counters.executor_memory_blocked_work =
+            progress.function_value_executor_memory_blocked_work;
+        counters.executor_continuations =
+            progress.function_value_executor_continuations;
+        counters.analysis_memory_capacity_bytes =
+            progress.function_value_analysis_memory_capacity_bytes;
+        counters.analysis_memory_used_bytes =
+            progress.function_value_analysis_memory_used_bytes;
+        counters.analysis_memory_peak_bytes =
+            progress.function_value_analysis_memory_peak_bytes;
     }
 
     static void append_incremental_epoch_counters(
@@ -468,6 +495,7 @@ class StructuredControlFlowProgress final {
             progress.function_value_active_workers;
         counters.configured_workers =
             progress.function_value_configured_workers;
+        append_executor_counters(counters, progress);
         append_cache_counters(counters, progress);
         append_function_physical_work_counters(counters, progress);
         function_subphase_->update(
@@ -575,6 +603,8 @@ class StructuredControlFlowProgress final {
         counters.multi_root_retained_payload_bytes =
             progress
                 .function_value_multi_root_retained_payload_bytes;
+        counters.multi_root_evictions =
+            progress.function_value_multi_root_evictions;
         counters.cache_evictions =
             progress.function_value_session_cache_evictions;
         counters.cache_entries =
@@ -741,9 +771,11 @@ class StructuredControlFlowProgress final {
         counters.growing_workset =
             progress.growing_workset;
         counters.committed_work = progress.instructions;
-        if (progress.function_value_active)
+        if (progress.function_value_active) {
             counters.configured_workers =
                 progress.function_value_configured_workers;
+            append_executor_counters(counters, progress);
+        }
         round_->update(progress.instructions,
                        std::move(counters));
     }
@@ -807,6 +839,7 @@ class StructuredControlFlowProgress final {
             progress.function_value_resolution_functions_committed;
         counters.configured_workers =
             progress.function_value_configured_workers;
+        append_executor_counters(counters, progress);
         counters.added_work = progress.round_added_seeds;
         append_seed_round_counters(counters, progress);
         counters.growing_workset =

@@ -56,6 +56,7 @@ enum class ResolutionRetentionLimitReason : std::uint8_t {
     DependencyNodeLimit,
     RootEntryLimit,
     ByteLimit,
+    IncompleteRoot,
 };
 
 // A persistent-state bypass is stronger than a cache miss: the complete
@@ -128,6 +129,8 @@ resolution_retention_limit_reason_name(
         return "root-entry-limit";
     case ResolutionRetentionLimitReason::ByteLimit:
         return "byte-limit";
+    case ResolutionRetentionLimitReason::IncompleteRoot:
+        return "incomplete-root";
     }
     return "unknown";
 }
@@ -514,6 +517,15 @@ struct FunctionValueAnalysisProgress {
     // Run-local live telemetry. These counters never participate in
     // canonical analysis output, cache keys, or product identities.
     std::size_t active_workers = 0u;
+    std::size_t executor_running_workers = 0u;
+    std::size_t executor_waiting_workers = 0u;
+    std::size_t executor_idle_workers = 0u;
+    std::size_t executor_queued_work = 0u;
+    std::size_t executor_memory_blocked_work = 0u;
+    std::size_t executor_continuations = 0u;
+    std::size_t analysis_memory_capacity_bytes = 0u;
+    std::size_t analysis_memory_used_bytes = 0u;
+    std::size_t analysis_memory_peak_bytes = 0u;
     std::size_t logical_evaluations = 0u;
     std::size_t physical_evaluations = 0u;
     // Exact run-local activity domains. Counts are logical admissions into
@@ -550,9 +562,9 @@ struct FunctionValueAnalysisProgress {
     // this separate preserves the exact physical-work identity:
     // misses + replay fallbacks + diagnostic bypasses.
     std::size_t cache_diagnostic_bypass_evaluations = 0u;
-    // Run-local physical-work fanout. A unique context invokes the persistent
-    // session cache once; ready/in-flight subscribers replay that pinned
-    // artifact without another interpreter execution.
+    // Run-local physical-work fanout. In-flight subscribers always share one
+    // producer. Completed aliases are byte-bounded and may re-enter the
+    // session cache after LRU eviction without changing analysis semantics.
     std::size_t multi_root_context_requests = 0u;
     std::size_t multi_root_unique_contexts = 0u;
     std::size_t multi_root_ready_reuses = 0u;
@@ -560,6 +572,7 @@ struct FunctionValueAnalysisProgress {
     std::size_t multi_root_provenance_links = 0u;
     std::size_t multi_root_retained_contexts = 0u;
     std::size_t multi_root_retained_payload_bytes = 0u;
+    std::size_t multi_root_evictions = 0u;
     std::size_t resolution_functions_total = 0u;
     std::size_t resolution_functions_started = 0u;
     std::size_t resolution_functions_ready = 0u;
