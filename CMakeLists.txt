@@ -231,20 +231,27 @@ file(
     "include/katana/sh4/*.hpp"
 )
 list(
+    REMOVE_ITEM
+    KATANA_ANALYSIS_IDENTITY_INPUTS
+    "include/katana/analysis/hardware_audit.hpp"
+    "include/katana/sh4/isa_coverage.hpp"
+    "src/analysis/hardware_audit.cpp"
+    "src/decoder/isa_coverage.cpp"
+)
+list(
     APPEND
     KATANA_ANALYSIS_IDENTITY_INPUTS
-    "include/katana/codegen/latent_aot_analysis_cache.hpp"
-    "include/katana/codegen/latent_aot_registry.hpp"
-    "include/katana/codegen/boot_analysis_cache.hpp"
     "src/io/binary_reader.cpp"
     "src/io/executable_image.cpp"
+)
+set(
+    KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS
+    "include/katana/codegen/boot_analysis_cache.hpp"
+    "include/katana/codegen/latent_aot_analysis_cache.hpp"
+    "include/katana/codegen/latent_aot_registry.hpp"
+    "src/codegen/boot_analysis_cache.cpp"
     "src/codegen/latent_aot_analysis_cache.cpp"
     "src/codegen/latent_aot_registry.cpp"
-    "src/codegen/boot_analysis_cache.cpp"
-    # prepare_boot_analysis() and its semantic cache contract currently live
-    # in this monolithic source. Until that slice is physically separated,
-    # analysis identity must conservatively own it.
-    "src/codegen/port_export.cpp"
 )
 file(
     GLOB_RECURSE
@@ -311,15 +318,21 @@ list(
 )
 set(
     KATANA_ORCHESTRATION_IDENTITY_INPUTS
+    "include/katana/analysis/hardware_audit.hpp"
+    "include/katana/sh4/isa_coverage.hpp"
+    "src/analysis/hardware_audit.cpp"
     "src/cli/main.cpp"
     "src/cli/port_export_orchestration.cpp"
     "src/cli/port_export_orchestration.hpp"
+    "src/decoder/isa_coverage.cpp"
 )
 list(REMOVE_DUPLICATES KATANA_ANALYSIS_IDENTITY_INPUTS)
+list(REMOVE_DUPLICATES KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_IR_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_CODEGEN_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_ORCHESTRATION_IDENTITY_INPUTS)
 list(SORT KATANA_ANALYSIS_IDENTITY_INPUTS)
+list(SORT KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS)
 list(SORT KATANA_IR_IDENTITY_INPUTS)
 list(SORT KATANA_CODEGEN_IDENTITY_INPUTS)
 list(SORT KATANA_ORCHESTRATION_IDENTITY_INPUTS)
@@ -356,6 +369,7 @@ foreach(
     IN LISTS
         KATANA_COMPONENT_IDENTITY_WATCH_INPUTS
         KATANA_ANALYSIS_IDENTITY_INPUTS
+        KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS
         KATANA_IR_IDENTITY_INPUTS
         KATANA_CODEGEN_IDENTITY_INPUTS
         KATANA_ORCHESTRATION_IDENTITY_INPUTS
@@ -726,6 +740,13 @@ target_link_libraries(katana_diagnostic_interpreter PUBLIC katana_runtime_core)
 katana_configure_runtime_archive(katana_runtime_core)
 katana_configure_runtime_archive(katana_diagnostic_interpreter)
 katana_configure_runtime_archive(katana_runtime)
+
+if(MSVC)
+    set_source_files_properties(
+        src/analysis/function_value_analysis.cpp
+        PROPERTIES COMPILE_OPTIONS "/bigobj"
+    )
+endif()
 
 add_library(katana_core STATIC
     $<TARGET_OBJECTS:katana_sh4_decoder_objects>

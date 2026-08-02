@@ -479,6 +479,13 @@ struct ControlFlowAnalysisProgress {
 using ControlFlowAnalysisProgressCallback =
     std::function<void(const ControlFlowAnalysisProgress& progress)>;
 
+inline constexpr std::size_t
+    maximum_persistent_function_analysis_epoch_blob_bytes =
+        768u * 1024u * 1024u;
+
+using PersistentFunctionAnalysisEpochPublishCallback =
+    std::function<void(std::span<const std::uint8_t> blob)>;
+
 struct ControlFlowAnalysisOptions {
     // Detailed cache-miss history is diagnostic work and remains independent
     // from live progress and execution limits.
@@ -496,6 +503,21 @@ struct ControlFlowAnalysisOptions {
     // its full capacity in an enclosing global executor reservation.
     AnalysisMemoryBudget* pre_reserved_function_value_ready_budget =
         nullptr;
+    // Optional exact-image FunctionValue epoch. Import is provisional and
+    // transactional: any stale, malformed, incompatible or oversized blob is
+    // only a cache miss and the complete analysis remains authoritative.
+    std::span<const std::uint8_t>
+        persistent_function_analysis_epoch_import_blob;
+    std::string_view
+        persistent_function_analysis_epoch_implementation_identity;
+    std::size_t maximum_persistent_function_analysis_epoch_blob_bytes =
+        katana::analysis::
+            maximum_persistent_function_analysis_epoch_blob_bytes;
+    // Invoked only for a complete, safely exportable terminal epoch.
+    // Non-resource callback failures are observational cache failures and do
+    // not fail the analysis; std::bad_alloc preserves normal resource failure.
+    PersistentFunctionAnalysisEpochPublishCallback
+        persistent_function_analysis_epoch_publish_callback;
 };
 
 [[nodiscard]] const char*

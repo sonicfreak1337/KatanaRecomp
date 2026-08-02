@@ -32,7 +32,10 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <type_traits>
@@ -2500,6 +2503,20 @@ struct GuardedCodeInventoryReplayTruncation final {
 
 class GuardedCodeInventoryCollector {
   public:
+    struct PersistentDeferredStoredCandidate final {
+        StoredCodeAddressCandidate candidate;
+        bool complete_evidence = false;
+    };
+
+    struct PersistentDeferredSnapshot final {
+        std::vector<PersistentDeferredStoredCandidate> stored_candidates;
+        std::vector<ReturnedCodeAddressTableCandidate> returned_tables;
+        bool raw_stored_candidates_truncated = false;
+        bool candidate_budget_exhausted = false;
+        bool candidate_inventory_truncated = false;
+        bool table_scan_truncated = false;
+    };
+
     explicit GuardedCodeInventoryCollector(
         const bool defer_stored_admission = false,
         detail::GuardedNativeEntryShapeCache* const shape_cache = nullptr)
@@ -2547,6 +2564,58 @@ class GuardedCodeInventoryCollector {
                 raw_stored_candidates_truncated_,
             .table_scan_truncated = table_scan_truncated_,
         };
+    }
+
+    template <typename StoredCallback, typename ReturnedCallback>
+    void visit_persistent_deferred_snapshot(
+        StoredCallback&& stored_callback,
+        ReturnedCallback&& returned_callback) const {
+        if (!defer_stored_admission_ || captures_exact_replay_ ||
+            replay_destination_ != nullptr || !replay_events_.empty() ||
+            !replay_stored_candidates_.empty() ||
+            !replay_returned_candidates_.empty()) {
+            throw std::logic_error(
+                "Guarded-Code-Inventar ist kein persistierbarer "
+                "Deferred-Root-Snapshot.");
+        }
+        for (const auto& [target, candidate] : stored_candidates_)
+            stored_callback(
+                candidate, complete_stored_targets_.contains(target));
+        for (const auto& [table, candidate] : returned_tables_) {
+            static_cast<void>(table);
+            returned_callback(candidate);
+        }
+    }
+
+    [[nodiscard]] std::size_t
+    persistent_deferred_stored_count() const noexcept {
+        return stored_candidates_.size();
+    }
+
+    [[nodiscard]] std::size_t
+    persistent_deferred_returned_count() const noexcept {
+        return returned_tables_.size();
+    }
+
+    [[nodiscard]] static GuardedCodeInventoryCollector
+    from_persistent_deferred_snapshot(
+        PersistentDeferredSnapshot snapshot) {
+        GuardedCodeInventoryCollector collector{true};
+        for (auto& stored : snapshot.stored_candidates) {
+            collector.collect_stored_candidate(
+                std::move(stored.candidate), stored.complete_evidence);
+        }
+        for (auto& returned : snapshot.returned_tables)
+            collector.collect_returned_candidate(std::move(returned));
+        collector.raw_stored_candidates_truncated_ =
+            snapshot.raw_stored_candidates_truncated;
+        collector.candidate_budget_exhausted_ =
+            snapshot.candidate_budget_exhausted;
+        collector.candidate_inventory_truncated_ =
+            snapshot.candidate_inventory_truncated;
+        collector.table_scan_truncated_ =
+            snapshot.table_scan_truncated;
+        return collector;
     }
 
     void mark_stored_candidates_incomplete() {
@@ -15210,6 +15279,15 @@ class PersistentProgramIndex final {
         materialize_node(node->right, output);
     }
 
+    template <typename Callback>
+    static void for_each_node(const NodePtr& node,
+                              const Callback& callback) {
+        if (node == nullptr) return;
+        for_each_node(node->left, callback);
+        callback(node->key, node->value);
+        for_each_node(node->right, callback);
+    }
+
   public:
     PersistentProgramIndex() = default;
     PersistentProgramIndex(const PersistentProgramIndex&) = default;
@@ -15247,6 +15325,11 @@ class PersistentProgramIndex final {
 
     void materialize(std::map<Key, Value>& output) const {
         materialize_node(root_, output);
+    }
+
+    template <typename Callback>
+    void for_each(const Callback& callback) const {
+        for_each_node(root_, callback);
     }
 
   private:
@@ -17917,6 +18000,1717 @@ struct FunctionAnalysisEpoch final {
     FunctionValueAnalysisResult presentation_metadata;
 };
 
+inline constexpr std::array<std::uint8_t, 8u>
+    persistent_function_epoch_magic{
+        'K', 'F', 'V', 'A', 'E', '0', '0', '1'};
+inline constexpr std::uint32_t persistent_function_epoch_format_version = 1u;
+inline constexpr std::size_t persistent_function_epoch_digest_bytes = 64u;
+inline constexpr std::size_t persistent_function_epoch_maximum_elements =
+    32u * 1024u * 1024u;
+inline constexpr std::size_t persistent_function_epoch_maximum_string_bytes =
+    64u * 1024u * 1024u;
+
+struct PersistentFunctionEpochCorrupt final {};
+struct PersistentFunctionEpochIncomplete final {};
+struct PersistentFunctionEpochResourceLimit final {};
+
+template <typename T, bool = std::is_enum_v<T>>
+struct PersistentFunctionEpochRawType final {
+    using type = T;
+};
+
+template <typename T>
+struct PersistentFunctionEpochRawType<T, true> final {
+    using type = std::underlying_type_t<T>;
+};
+
+[[nodiscard]] std::string persistent_epoch_sha256(
+    const std::span<const std::uint8_t> bytes) {
+    return katana::io::sha256_bytes(
+        bytes.empty()
+            ? std::string_view{}
+            : std::string_view{
+                  reinterpret_cast<const char*>(bytes.data()),
+                  bytes.size()});
+}
+
+class PersistentFunctionEpochWriter final {
+  public:
+    explicit PersistentFunctionEpochWriter(const std::size_t maximum_bytes)
+        : maximum_bytes_(maximum_bytes) {}
+
+    template <typename T>
+        requires(std::is_integral_v<T> || std::is_enum_v<T>)
+    void scalar(const T value) {
+        using Raw = typename PersistentFunctionEpochRawType<T>::type;
+        using Unsigned = std::make_unsigned_t<Raw>;
+        auto bits = static_cast<Unsigned>(static_cast<Raw>(value));
+        reserve(sizeof(Unsigned));
+        for (std::size_t index = 0u; index < sizeof(Unsigned); ++index) {
+            bytes_.push_back(static_cast<std::uint8_t>(
+                bits & static_cast<Unsigned>(0xffu)));
+            bits >>= 8u;
+        }
+    }
+
+    void boolean(const bool value) { scalar<std::uint8_t>(value ? 1u : 0u); }
+
+    void count(const std::size_t value) {
+        scalar<std::uint64_t>(static_cast<std::uint64_t>(value));
+    }
+
+    void string(const std::string_view value) {
+        count(value.size());
+        raw(std::span<const std::uint8_t>{
+            reinterpret_cast<const std::uint8_t*>(value.data()),
+            value.size()});
+    }
+
+    void blob(const std::span<const std::uint8_t> value) {
+        count(value.size());
+        raw(value);
+    }
+
+    void raw(const std::span<const std::uint8_t> value) {
+        reserve(value.size());
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+
+    template <typename Range, typename Write>
+    void sequence(const Range& values, Write&& write) {
+        count(values.size());
+        for (const auto& value : values) write(value);
+    }
+
+    [[nodiscard]] std::vector<std::uint8_t> finish_with_digest() && {
+        const auto digest = persistent_epoch_sha256(bytes_);
+        if (digest.size() != persistent_function_epoch_digest_bytes)
+            throw PersistentFunctionEpochCorrupt{};
+        raw(std::span<const std::uint8_t>{
+            reinterpret_cast<const std::uint8_t*>(digest.data()),
+            digest.size()});
+        return std::move(bytes_);
+    }
+
+  private:
+    void reserve(const std::size_t incoming) {
+        if (incoming > maximum_bytes_ -
+                           std::min(maximum_bytes_, bytes_.size()))
+            throw PersistentFunctionEpochResourceLimit{};
+        const auto required = bytes_.size() + incoming;
+        if (required <= bytes_.capacity()) return;
+        const auto capacity = bytes_.capacity();
+        const auto geometric_increment =
+            std::max<std::size_t>(capacity / 2u, 4u * 1024u);
+        const auto geometric =
+            geometric_increment > maximum_bytes_ -
+                                      std::min(maximum_bytes_, capacity)
+                ? maximum_bytes_
+                : capacity + geometric_increment;
+        bytes_.reserve(std::max(required, geometric));
+    }
+
+    std::vector<std::uint8_t> bytes_;
+    std::size_t maximum_bytes_ = 0u;
+};
+
+class PersistentFunctionEpochReader final {
+  public:
+    explicit PersistentFunctionEpochReader(
+        const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+
+    template <typename T>
+        requires(std::is_integral_v<T> || std::is_enum_v<T>)
+    [[nodiscard]] T scalar() {
+        using Raw = typename PersistentFunctionEpochRawType<T>::type;
+        using Unsigned = std::make_unsigned_t<Raw>;
+        if (remaining() < sizeof(Unsigned))
+            throw PersistentFunctionEpochCorrupt{};
+        auto bits = Unsigned{0u};
+        for (std::size_t index = 0u; index < sizeof(Unsigned); ++index) {
+            bits |= static_cast<Unsigned>(bytes_[cursor_++]) <<
+                    (index * 8u);
+        }
+        return static_cast<T>(static_cast<Raw>(bits));
+    }
+
+    [[nodiscard]] bool boolean() {
+        const auto value = scalar<std::uint8_t>();
+        if (value > 1u) throw PersistentFunctionEpochCorrupt{};
+        return value != 0u;
+    }
+
+    template <typename E>
+        requires std::is_enum_v<E>
+    [[nodiscard]] E enumeration(const E maximum) {
+        const auto value = scalar<E>();
+        using U = std::underlying_type_t<E>;
+        if (static_cast<U>(value) > static_cast<U>(maximum))
+            throw PersistentFunctionEpochCorrupt{};
+        return value;
+    }
+
+    [[nodiscard]] std::size_t count(
+        const std::size_t maximum =
+            persistent_function_epoch_maximum_elements) {
+        const auto value = scalar<std::uint64_t>();
+        if (value > maximum || value > remaining())
+            throw PersistentFunctionEpochResourceLimit{};
+        const auto converted = static_cast<std::size_t>(value);
+        if (converted > persistent_function_epoch_maximum_elements -
+                            std::min(persistent_function_epoch_maximum_elements,
+                                     decoded_elements_))
+            throw PersistentFunctionEpochResourceLimit{};
+        decoded_elements_ += converted;
+        return converted;
+    }
+
+    [[nodiscard]] std::size_t size_value() {
+        const auto value = scalar<std::uint64_t>();
+        if (value > std::numeric_limits<std::size_t>::max())
+            throw PersistentFunctionEpochResourceLimit{};
+        return static_cast<std::size_t>(value);
+    }
+
+    [[nodiscard]] std::string string(
+        const std::size_t maximum =
+            persistent_function_epoch_maximum_string_bytes) {
+        const auto size = byte_count(maximum);
+        const auto bytes = raw(size);
+        return std::string{
+            reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+    }
+
+    [[nodiscard]] std::vector<std::uint8_t> blob(
+        const std::size_t maximum) {
+        const auto size = byte_count(maximum);
+        const auto bytes = raw(size);
+        return {bytes.begin(), bytes.end()};
+    }
+
+    [[nodiscard]] std::span<const std::uint8_t> raw(
+        const std::size_t size) {
+        if (size > remaining()) throw PersistentFunctionEpochCorrupt{};
+        const auto result = bytes_.subspan(cursor_, size);
+        cursor_ += size;
+        return result;
+    }
+
+    [[nodiscard]] bool finished() const noexcept {
+        return cursor_ == bytes_.size();
+    }
+
+  private:
+    [[nodiscard]] std::size_t byte_count(const std::size_t maximum) {
+        const auto value = scalar<std::uint64_t>();
+        if (value > maximum || value > remaining() ||
+            value > std::numeric_limits<std::size_t>::max())
+            throw PersistentFunctionEpochResourceLimit{};
+        return static_cast<std::size_t>(value);
+    }
+
+    [[nodiscard]] std::size_t remaining() const noexcept {
+        return bytes_.size() - cursor_;
+    }
+
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+    std::size_t decoded_elements_ = 0u;
+};
+
+template <typename T, typename Write>
+void write_scalar_vector(PersistentFunctionEpochWriter& writer,
+                         const T& values,
+                         Write&& write) {
+    writer.sequence(values, std::forward<Write>(write));
+}
+
+template <typename T, typename Read>
+[[nodiscard]] std::vector<T> read_vector(
+    PersistentFunctionEpochReader& reader,
+    Read&& read,
+    const std::size_t maximum =
+        persistent_function_epoch_maximum_elements) {
+    const auto count = reader.count(maximum);
+    std::vector<T> values;
+    values.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index)
+        values.push_back(read());
+    return values;
+}
+
+[[nodiscard]] std::string persistent_function_image_fingerprint(
+    const katana::io::ExecutableImage& image) {
+    EvaluationKeyEncoder key;
+    key.append(std::string_view{"persistent-function-image-v1"});
+    key.append(image.guest_call_abi());
+    key.append(image.initial_snapshot_policy());
+    key.append_optional(image.initial_snapshot_entry());
+    key.append(image.address_model());
+    key.append_range(image.segments(), [&](const auto& segment) {
+        key.append(segment.virtual_address);
+        key.append(segment.file_offset);
+        key.append(segment.memory_size);
+        key.append(segment.kind);
+        key.append(segment.permissions.readable);
+        key.append(segment.permissions.writable);
+        key.append(segment.permissions.executable);
+        key.append(segment.source_kind);
+        key.append(segment.load_phase);
+        key.append(segment.latent_source_size);
+        key.append_range(segment.bytes,
+                         [&](const auto byte) { key.append(byte); });
+    });
+    key.append_range(image.entry_points(),
+                     [&](const auto address) { key.append(address); });
+    key.append_range(image.symbols(), [&](const auto& symbol) {
+        key.append(std::string_view{symbol.name});
+        key.append(symbol.address);
+        key.append(symbol.size);
+        key.append(symbol.kind);
+        key.append(symbol.binding);
+    });
+    key.append_range(image.relocations(), [&](const auto& relocation) {
+        key.append(relocation.address);
+        key.append(relocation.raw_type);
+        key.append(relocation.kind);
+        key.append(std::string_view{relocation.symbol_name});
+        key.append(relocation.symbol_address);
+        key.append(relocation.addend);
+        key.append_optional(relocation.applied_value);
+    });
+    key.append_range(image.address_aliases(), [&](const auto& alias) {
+        key.append(alias.source_start);
+        key.append(alias.runtime_start);
+        key.append(alias.size);
+    });
+    return digest_evaluation_key_material(std::move(key));
+}
+
+void encode_persistent_program_edge(EvaluationKeyEncoder& key,
+                                    const ResolvedControlFlowEdge& edge) {
+    encode_program_edge(key, edge);
+    key.append(edge.analysis_candidate_carrier);
+}
+
+[[nodiscard]] std::string persistent_program_input_fingerprint(
+    const FunctionProgramInputArena& arena) {
+    EvaluationKeyEncoder key;
+    key.append(std::string_view{"persistent-function-program-input-v1"});
+    key.append_size(arena.lines->size());
+    arena.lines->for_each(
+        [&](const auto, const auto& line) { encode(key, line); });
+    key.append_size(arena.boundaries->size());
+    arena.boundaries->for_each([&](const auto, const auto& boundary) {
+        key.append(boundary.entry_address);
+        key.append(boundary.size);
+    });
+    const auto append_edge_sites = [&](const auto& sites) {
+        key.append_size(sites.size());
+        sites.for_each([&](const auto site, const auto& edges) {
+            key.append(site);
+            key.append_range(edges, [&](const auto& edge) {
+                encode_persistent_program_edge(key, edge);
+            });
+        });
+    };
+    append_edge_sites(*arena.semantic_edges);
+    append_edge_sites(*arena.candidate_call_edges);
+    append_edge_sites(*arena.candidate_tail_edges);
+    key.append_size(arena.candidate_calls->size());
+    arena.candidate_calls->for_each([&](const auto site,
+                                        const auto& carriers) {
+        key.append(site);
+        key.append_range(carriers, [&](const auto& carrier) {
+            key.append(carrier.call_site);
+            key.append(carrier.target);
+        });
+    });
+    key.append_size(arena.candidate_tails->size());
+    arena.candidate_tails->for_each([&](const auto site,
+                                        const auto& carriers) {
+        key.append(site);
+        key.append_range(carriers, [&](const auto& carrier) {
+            key.append(carrier.transfer_site);
+            key.append(carrier.target);
+        });
+    });
+    return digest_evaluation_key_material(std::move(key));
+}
+
+void write_u32_values(PersistentFunctionEpochWriter& writer,
+                      const std::vector<std::uint32_t>& values) {
+    writer.sequence(values,
+                    [&](const auto value) { writer.scalar(value); });
+}
+
+[[nodiscard]] std::vector<std::uint32_t> read_u32_values(
+    PersistentFunctionEpochReader& reader,
+    const std::size_t maximum =
+        persistent_function_epoch_maximum_elements) {
+    return read_vector<std::uint32_t>(
+        reader,
+        [&] { return reader.scalar<std::uint32_t>(); },
+        maximum);
+}
+
+void write_program_graph(PersistentFunctionEpochWriter& writer,
+                         const FunctionProgramGraph& graph) {
+    std::vector<const BasicBlock*> blocks;
+    const auto block_view = graph.block_view();
+    blocks.reserve(block_view.size());
+    for (const auto& block : block_view) blocks.push_back(&block);
+    std::sort(blocks.begin(), blocks.end(), [](const auto* left,
+                                               const auto* right) {
+        return left->start_address < right->start_address;
+    });
+    writer.sequence(blocks, [&](const auto* block) {
+        writer.scalar<std::uint64_t>(block->id);
+        writer.scalar(block->start_address);
+        writer.scalar(block->end_address);
+        writer.count(block->lines.size());
+        for (const auto& line : block->lines) writer.scalar(line.address);
+        write_u32_values(writer, block->successors);
+        writer.boolean(block->has_indirect_successor);
+    });
+
+    std::vector<const FunctionInfo*> functions;
+    const auto function_view = graph.function_view();
+    functions.reserve(function_view.size());
+    for (const auto& function : function_view) functions.push_back(&function);
+    std::sort(functions.begin(), functions.end(), [](const auto* left,
+                                                     const auto* right) {
+        return left->entry_address < right->entry_address;
+    });
+    writer.sequence(functions, [&](const auto* function) {
+        writer.scalar<std::uint64_t>(function->id);
+        writer.scalar(function->entry_address);
+        writer.scalar(function->size);
+        write_u32_values(writer, function->block_addresses);
+        write_u32_values(writer, function->direct_callees);
+        write_u32_values(writer, function->indirect_call_sites);
+        write_u32_values(writer, function->shared_block_addresses);
+        write_u32_values(writer, function->tail_jump_targets);
+        writer.scalar(function->evidence);
+    });
+
+    writer.count(graph.component_count());
+    for (std::size_t index = 0u; index < graph.component_count(); ++index) {
+        write_u32_values(writer, graph.component_at(index));
+        writer.string(graph.scc_fingerprint_at(index));
+        writer.scalar(graph.scc_dependency_version_at(index));
+    }
+    writer.count(functions.size());
+    for (const auto* function : functions) {
+        writer.scalar(function->entry_address);
+        const auto* const version =
+            graph.find_dependency_version(function->entry_address);
+        if (version == nullptr) throw PersistentFunctionEpochIncomplete{};
+        writer.scalar(*version);
+    }
+    writer.scalar<std::uint64_t>(graph.next_block_id);
+    writer.scalar<std::uint64_t>(graph.next_function_id);
+    writer.scalar(graph.next_scc_dependency_version);
+}
+
+[[nodiscard]] std::shared_ptr<FunctionProgramGraph> read_program_graph(
+    PersistentFunctionEpochReader& reader,
+    std::string identity,
+    std::shared_ptr<const FunctionProgramInputArena> input_arena,
+    const std::span<const katana::sh4::DisassemblyLine> current_lines,
+    std::shared_ptr<const std::vector<ResolvedControlFlowEdge>>
+        semantic_edges) {
+    auto graph = std::make_shared<FunctionProgramGraph>();
+    graph->identity = std::move(identity);
+    graph->input_arena = std::move(input_arena);
+    graph->semantic_edges_materialized = std::move(semantic_edges);
+
+    std::unordered_map<std::uint32_t,
+                       const katana::sh4::DisassemblyLine*>
+        line_by_address;
+    line_by_address.reserve(current_lines.size());
+    for (const auto& line : current_lines) {
+        if (!line_by_address.emplace(line.address, &line).second)
+            throw PersistentFunctionEpochIncomplete{};
+        if (line.target_address.has_value())
+            graph->control_targets.insert(*line.target_address);
+    }
+
+    const auto block_count = reader.count(current_lines.size());
+    graph->blocks.reserve(block_count);
+    graph->block_by_address.reserve(block_count);
+    graph->block_shards_by_address.reserve(block_count);
+    graph->block_fingerprints.reserve(block_count);
+    auto maximum_block_id = std::size_t{0u};
+    bool has_block_id = false;
+    for (std::size_t index = 0u; index < block_count; ++index) {
+        BasicBlock block;
+        const auto id = reader.scalar<std::uint64_t>();
+        if (id > std::numeric_limits<std::size_t>::max())
+            throw PersistentFunctionEpochResourceLimit{};
+        block.id = static_cast<std::size_t>(id);
+        block.start_address = reader.scalar<std::uint32_t>();
+        block.end_address = reader.scalar<std::uint32_t>();
+        const auto line_count = reader.count(current_lines.size());
+        block.lines.reserve(line_count);
+        for (std::size_t line_index = 0u;
+             line_index < line_count;
+             ++line_index) {
+            const auto address = reader.scalar<std::uint32_t>();
+            const auto found = line_by_address.find(address);
+            if (found == line_by_address.end())
+                throw PersistentFunctionEpochIncomplete{};
+            block.lines.push_back(*found->second);
+        }
+        block.successors = read_u32_values(reader, block_count);
+        block.has_indirect_successor = reader.boolean();
+        if (block.lines.empty() ||
+            block.lines.front().address != block.start_address ||
+            (index != 0u &&
+             graph->sorted_block_addresses.back() >= block.start_address))
+            throw PersistentFunctionEpochIncomplete{};
+        auto shard = std::make_shared<const BasicBlock>(std::move(block));
+        const auto address = shard->start_address;
+        graph->sorted_block_addresses.push_back(address);
+        graph->block_fingerprints.emplace(
+            address, basic_block_fingerprint(*shard));
+        graph->block_by_address.emplace(address, shard.get());
+        if (!graph->block_shards_by_address.emplace(address, shard).second)
+            throw PersistentFunctionEpochIncomplete{};
+        graph->blocks.push_back(std::move(shard));
+        maximum_block_id = std::max(maximum_block_id,
+                                    graph->blocks[index].id);
+        has_block_id = true;
+    }
+    graph->logical_block_count = graph->blocks.size();
+
+    const auto function_count = reader.count(current_lines.size());
+    graph->functions.reserve(function_count);
+    graph->function_by_address.reserve(function_count);
+    graph->function_shards_by_address.reserve(function_count);
+    graph->function_fingerprints.reserve(function_count);
+    auto maximum_function_id = std::size_t{0u};
+    bool has_function_id = false;
+    for (std::size_t index = 0u; index < function_count; ++index) {
+        FunctionInfo function;
+        const auto id = reader.scalar<std::uint64_t>();
+        if (id > std::numeric_limits<std::size_t>::max())
+            throw PersistentFunctionEpochResourceLimit{};
+        function.id = static_cast<std::size_t>(id);
+        function.entry_address = reader.scalar<std::uint32_t>();
+        function.size = reader.scalar<std::uint32_t>();
+        function.block_addresses = read_u32_values(reader, block_count);
+        function.direct_callees = read_u32_values(reader, function_count);
+        function.indirect_call_sites =
+            read_u32_values(reader, current_lines.size());
+        function.shared_block_addresses =
+            read_u32_values(reader, block_count);
+        function.tail_jump_targets =
+            read_u32_values(reader, function_count);
+        function.evidence = reader.enumeration(
+            ControlFlowEvidence::Unresolved);
+        if ((index != 0u &&
+             graph->functions[index - 1u].entry_address >=
+                 function.entry_address) ||
+            function.block_addresses.empty())
+            throw PersistentFunctionEpochIncomplete{};
+        for (const auto block : function.block_addresses) {
+            if (!graph->block_by_address.contains(block))
+                throw PersistentFunctionEpochIncomplete{};
+        }
+        auto shard =
+            std::make_shared<const FunctionInfo>(std::move(function));
+        const auto address = shard->entry_address;
+        graph->function_by_address.emplace(address, shard.get());
+        if (!graph->function_shards_by_address.emplace(address, shard).second)
+            throw PersistentFunctionEpochIncomplete{};
+        graph->functions.push_back(std::move(shard));
+        maximum_function_id = std::max(maximum_function_id,
+                                       graph->functions[index].id);
+        has_function_id = true;
+    }
+    graph->logical_function_count = graph->functions.size();
+    const BasicBlockIndexView block_index{graph->block_by_address};
+    for (const auto& function : graph->functions) {
+        graph->function_fingerprints.emplace(
+            function.entry_address,
+            function_program_fingerprint(function, block_index));
+        for (const auto callee : function.direct_callees)
+            graph->callers_by_callee[callee].push_back(
+                function.entry_address);
+        for (const auto target : function.tail_jump_targets)
+            graph->tail_callers_by_target[target].push_back(
+                function.entry_address);
+        for (const auto block_address : function.block_addresses) {
+            const auto block = graph->block_by_address.find(block_address);
+            if (block == graph->block_by_address.end() ||
+                block->second->lines.empty())
+                throw PersistentFunctionEpochIncomplete{};
+            graph->owners_by_block[block_address].push_back(
+                function.entry_address);
+            graph->owners_by_control[controlling_line(*block->second).address]
+                .push_back(function.entry_address);
+        }
+    }
+    for (auto* map : {&graph->owners_by_block,
+                      &graph->owners_by_control,
+                      &graph->callers_by_callee,
+                      &graph->tail_callers_by_target}) {
+        for (auto& [address, values] : *map) {
+            static_cast<void>(address);
+            normalize(values);
+        }
+    }
+
+    const auto component_count = reader.count(function_count);
+    graph->strongly_connected_components.reserve(component_count);
+    graph->scc_fingerprints.reserve(component_count);
+    graph->scc_dependency_versions.reserve(component_count);
+    std::unordered_set<std::uint32_t> component_members;
+    component_members.reserve(function_count);
+    for (std::size_t component = 0u;
+         component < component_count;
+         ++component) {
+        auto members = read_u32_values(reader, function_count);
+        if (members.empty() || !std::is_sorted(members.begin(), members.end()))
+            throw PersistentFunctionEpochIncomplete{};
+        for (const auto member : members) {
+            if (!graph->function_by_address.contains(member) ||
+                !component_members.insert(member).second)
+                throw PersistentFunctionEpochIncomplete{};
+            graph->scc_by_function.emplace(member, component);
+        }
+        graph->strongly_connected_components.push_back(std::move(members));
+        auto fingerprint = reader.string(256u);
+        if (fingerprint.size() != persistent_function_epoch_digest_bytes)
+            throw PersistentFunctionEpochIncomplete{};
+        graph->scc_fingerprints.push_back(std::move(fingerprint));
+        graph->scc_dependency_versions.push_back(
+            reader.scalar<std::uint64_t>());
+    }
+    if (component_members.size() != function_count)
+        throw PersistentFunctionEpochIncomplete{};
+    if (strong_components(graph->functions) !=
+        graph->strongly_connected_components)
+        throw PersistentFunctionEpochIncomplete{};
+    graph->caller_sccs.resize(component_count);
+    graph->callee_sccs.resize(component_count);
+    for (const auto& function : graph->functions) {
+        const auto caller_component =
+            graph->scc_by_function.at(function.entry_address);
+        for (const auto callee : function.direct_callees) {
+            const auto target = graph->scc_by_function.find(callee);
+            if (target == graph->scc_by_function.end() ||
+                target->second == caller_component)
+                continue;
+            graph->callee_sccs[caller_component].push_back(target->second);
+            graph->caller_sccs[target->second].push_back(caller_component);
+        }
+    }
+    for (auto& values : graph->caller_sccs) normalize(values);
+    for (auto& values : graph->callee_sccs) normalize(values);
+
+    const auto dependency_count = reader.count(function_count);
+    if (dependency_count != function_count)
+        throw PersistentFunctionEpochIncomplete{};
+    for (std::size_t index = 0u; index < dependency_count; ++index) {
+        const auto address = reader.scalar<std::uint32_t>();
+        const auto version = reader.scalar<std::uint64_t>();
+        if (!graph->function_by_address.contains(address) || version == 0u ||
+            !graph->dependency_versions.emplace(address, version).second)
+            throw PersistentFunctionEpochIncomplete{};
+    }
+    const auto next_block_id = reader.scalar<std::uint64_t>();
+    const auto next_function_id = reader.scalar<std::uint64_t>();
+    if (next_block_id > std::numeric_limits<std::size_t>::max() ||
+        next_function_id > std::numeric_limits<std::size_t>::max())
+        throw PersistentFunctionEpochResourceLimit{};
+    graph->next_block_id = static_cast<std::size_t>(next_block_id);
+    graph->next_function_id = static_cast<std::size_t>(next_function_id);
+    graph->next_scc_dependency_version = reader.scalar<std::uint64_t>();
+    if ((has_block_id && graph->next_block_id <= maximum_block_id) ||
+        (has_function_id &&
+         graph->next_function_id <= maximum_function_id))
+        throw PersistentFunctionEpochIncomplete{};
+    for (const auto version : graph->scc_dependency_versions) {
+        if (version == 0u ||
+            graph->next_scc_dependency_version <= version)
+            throw PersistentFunctionEpochIncomplete{};
+    }
+
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
+        call_candidates;
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
+        jump_candidates;
+    auto jump_table_sites =
+        std::make_shared<std::unordered_set<std::uint32_t>>();
+    for (const auto& edge : *graph->semantic_edges_materialized) {
+        graph->control_targets.insert(edge.target_address);
+        auto& candidates =
+            edge.kind == ResolvedControlFlowKind::Call
+                ? call_candidates[edge.instruction_address]
+                : jump_candidates[edge.instruction_address];
+        candidates.targets.push_back(edge.target_address);
+        const auto evidence = resolved_edge_evidence(edge);
+        candidates.guarded = candidates.guarded ||
+                             evidence != ControlFlowEvidence::ProvenComplete;
+        candidates.complete = candidates.complete &&
+                              control_flow_evidence_complete(evidence);
+        if (edge.kind == ResolvedControlFlowKind::Jump &&
+            std::find(edge.evidence_origins.begin(),
+                      edge.evidence_origins.end(),
+                      AnalysisEvidenceOrigin::JumpTable) !=
+                edge.evidence_origins.end())
+            jump_table_sites->insert(edge.instruction_address);
+    }
+    auto persistent_calls = std::make_shared<PersistentIndirectCalleeIndex>();
+    for (auto& [site, candidates] : call_candidates) {
+        normalize(candidates.targets);
+        persistent_calls->insert_or_assign(site, std::move(candidates));
+    }
+    auto persistent_jumps = std::make_shared<PersistentIndirectCalleeIndex>();
+    for (auto& [site, candidates] : jump_candidates) {
+        normalize(candidates.targets);
+        persistent_jumps->insert_or_assign(site, std::move(candidates));
+    }
+    graph->summary_indirect_callees = std::move(persistent_calls);
+    graph->indirect_jump_candidates = std::move(persistent_jumps);
+    graph->jump_table_jump_sites = std::move(jump_table_sites);
+    return graph;
+}
+
+void write_function_summary(PersistentFunctionEpochWriter& writer,
+                            const FunctionValueSummary& summary) {
+    writer.scalar(summary.function_address);
+    writer.sequence(summary.registers, [&](const auto& value) {
+        writer.scalar(value.register_index);
+        writer.boolean(value.complete);
+        writer.boolean(value.guarded);
+        writer.boolean(value.abi_preserved);
+        writer.boolean(value.may_alias_stack);
+        writer.boolean(value.inventory_code_pointer);
+        writer.boolean(value.inventory_pc_relative_code_literal);
+        write_u32_values(writer, value.inventory_code_pointer_values);
+        write_u32_values(
+            writer, value.inventory_pc_relative_code_literal_values);
+        writer.boolean(value.inventory_code_pointer_values_truncated);
+        writer.boolean(
+            value.inventory_pc_relative_code_literal_values_truncated);
+        writer.boolean(value.contextual_candidate_dependency);
+        writer.boolean(value.inventory_stack_callback_loss_unresolved);
+        writer.boolean(value.inventory_saved_stack_alias_latent);
+        writer.boolean(
+            value.inventory_saved_stack_alias_tracks_current_epoch);
+        write_u32_values(writer, value.values);
+        write_u32_values(writer, value.return_sites);
+        write_u32_values(writer, value.evidence_callees);
+        writer.string(value.reason);
+    });
+    writer.boolean(summary.memory_complete);
+    writer.sequence(summary.memory_values, [&](const auto& value) {
+        writer.scalar(value.address);
+        writer.boolean(value.complete);
+        writer.boolean(value.guarded);
+        writer.boolean(value.inventory_stack_callback_loss_unresolved);
+        writer.boolean(value.inventory_saved_stack_alias_latent);
+        writer.boolean(
+            value.inventory_saved_stack_alias_tracks_current_epoch);
+        write_u32_values(writer, value.values);
+    });
+    writer.scalar(summary.inventory_unresolved_saved_stack_alias_sources);
+    writer.boolean(
+        summary.inventory_unresolved_saved_stack_alias_tracks_current_epoch);
+    writer.boolean(summary.inventory_unresolved_stack_callback_loss);
+    writer.boolean(
+        summary.inventory_stack_callback_loss_identity_truncated);
+}
+
+[[nodiscard]] FunctionValueSummary read_function_summary(
+    PersistentFunctionEpochReader& reader) {
+    FunctionValueSummary summary;
+    summary.function_address = reader.scalar<std::uint32_t>();
+    const auto register_count = reader.count(16u);
+    summary.registers.reserve(register_count);
+    std::uint8_t previous_register = 0u;
+    bool has_register = false;
+    for (std::size_t index = 0u; index < register_count; ++index) {
+        FunctionRegisterValueSummary value;
+        value.register_index = reader.scalar<std::uint8_t>();
+        if (value.register_index >= 16u ||
+            (has_register && value.register_index <= previous_register))
+            throw PersistentFunctionEpochIncomplete{};
+        previous_register = value.register_index;
+        has_register = true;
+        value.complete = reader.boolean();
+        value.guarded = reader.boolean();
+        value.abi_preserved = reader.boolean();
+        value.may_alias_stack = reader.boolean();
+        value.inventory_code_pointer = reader.boolean();
+        value.inventory_pc_relative_code_literal = reader.boolean();
+        value.inventory_code_pointer_values = read_u32_values(reader);
+        value.inventory_pc_relative_code_literal_values =
+            read_u32_values(reader);
+        value.inventory_code_pointer_values_truncated = reader.boolean();
+        value.inventory_pc_relative_code_literal_values_truncated =
+            reader.boolean();
+        value.contextual_candidate_dependency = reader.boolean();
+        value.inventory_stack_callback_loss_unresolved = reader.boolean();
+        value.inventory_saved_stack_alias_latent = reader.boolean();
+        value.inventory_saved_stack_alias_tracks_current_epoch =
+            reader.boolean();
+        value.values = read_u32_values(reader);
+        value.return_sites = read_u32_values(reader);
+        value.evidence_callees = read_u32_values(reader);
+        value.reason = reader.string();
+        summary.registers.push_back(std::move(value));
+    }
+    summary.memory_complete = reader.boolean();
+    const auto memory_count = reader.count(
+        persistent_function_epoch_maximum_string_bytes /
+        sizeof(FunctionMemoryValueSummary));
+    summary.memory_values.reserve(memory_count);
+    std::uint32_t previous_address = 0u;
+    bool has_address = false;
+    for (std::size_t index = 0u; index < memory_count; ++index) {
+        FunctionMemoryValueSummary value;
+        value.address = reader.scalar<std::uint32_t>();
+        if (has_address && value.address <= previous_address)
+            throw PersistentFunctionEpochIncomplete{};
+        previous_address = value.address;
+        has_address = true;
+        value.complete = reader.boolean();
+        value.guarded = reader.boolean();
+        value.inventory_stack_callback_loss_unresolved = reader.boolean();
+        value.inventory_saved_stack_alias_latent = reader.boolean();
+        value.inventory_saved_stack_alias_tracks_current_epoch =
+            reader.boolean();
+        value.values = read_u32_values(reader);
+        summary.memory_values.push_back(std::move(value));
+    }
+    summary.inventory_unresolved_saved_stack_alias_sources =
+        reader.scalar<std::uint8_t>();
+    if (summary.inventory_unresolved_saved_stack_alias_sources > 3u)
+        throw PersistentFunctionEpochIncomplete{};
+    summary.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
+        reader.boolean();
+    summary.inventory_unresolved_stack_callback_loss = reader.boolean();
+    summary.inventory_stack_callback_loss_identity_truncated =
+        reader.boolean();
+    return summary;
+}
+
+void write_walk_diagnostics(
+    PersistentFunctionEpochWriter& writer,
+    const GuardedCodeInventoryWalkDiagnostics& diagnostics) {
+    const auto size = [&](const std::size_t value) {
+        writer.scalar<std::uint64_t>(value);
+    };
+    size(diagnostics.inventory_region_count);
+    size(diagnostics.inventory_region_budget);
+    size(diagnostics.pending_inventory_region_count);
+    size(diagnostics.inventory_region_block_budget);
+    size(diagnostics.inventory_region_block_limited_regions);
+    size(diagnostics.forwarded_store_context_budget);
+    size(diagnostics.forwarded_store_context_limited_functions);
+    size(diagnostics.forwarded_store_evaluation_cache_hits);
+    size(diagnostics.forwarded_store_evaluation_cache_misses);
+    writer.sequence(
+        diagnostics.forwarded_store_context_limit_diagnostics,
+        [&](const auto& value) {
+            writer.scalar(value.owner_entry);
+            writer.scalar(value.target);
+            writer.scalar(value.exemplar_root_call_site);
+            size(value.context_count);
+            size(value.root_call_site_count);
+            size(value.evaluation_count);
+            writer.boolean(value.tail);
+            writer.boolean(value.isolated);
+            writer.scalar(value.reason);
+        });
+    size(diagnostics.contextual_return_context_budget);
+    size(diagnostics.contextual_return_context_limited_functions);
+    size(diagnostics.contextual_return_evaluation_budget);
+    size(diagnostics.contextual_return_evaluation_limited_functions);
+    size(diagnostics.abi_stack_argument_slot_budget);
+    size(diagnostics.abi_stack_argument_projection_truncated_functions);
+    size(diagnostics.local_fixpoint_iteration_budget);
+    size(diagnostics.local_fixpoint_limited_evaluations);
+    size(diagnostics.maximum_local_fixpoint_iterations);
+    writer.boolean(diagnostics.inventory_candidate_values_truncated);
+    writer.boolean(diagnostics.abi_stack_base_unresolved);
+    writer.boolean(diagnostics.inventory_tail_target_unresolved);
+}
+
+[[nodiscard]] GuardedCodeInventoryWalkDiagnostics read_walk_diagnostics(
+    PersistentFunctionEpochReader& reader) {
+    GuardedCodeInventoryWalkDiagnostics diagnostics;
+    const auto size = [&] { return reader.size_value(); };
+    diagnostics.inventory_region_count = size();
+    diagnostics.inventory_region_budget = size();
+    diagnostics.pending_inventory_region_count = size();
+    diagnostics.inventory_region_block_budget = size();
+    diagnostics.inventory_region_block_limited_regions = size();
+    diagnostics.forwarded_store_context_budget = size();
+    diagnostics.forwarded_store_context_limited_functions = size();
+    diagnostics.forwarded_store_evaluation_cache_hits = size();
+    diagnostics.forwarded_store_evaluation_cache_misses = size();
+    const auto limit_count = reader.count(16u);
+    diagnostics.forwarded_store_context_limit_diagnostics.reserve(
+        limit_count);
+    for (std::size_t index = 0u; index < limit_count; ++index) {
+        ForwardedStoreContextLimitDiagnostic value;
+        value.owner_entry = reader.scalar<std::uint32_t>();
+        value.target = reader.scalar<std::uint32_t>();
+        value.exemplar_root_call_site = reader.scalar<std::uint32_t>();
+        value.context_count = size();
+        value.root_call_site_count = size();
+        value.evaluation_count = size();
+        value.tail = reader.boolean();
+        value.isolated = reader.boolean();
+        value.reason = reader.enumeration(
+            ForwardedStoreContextLimitReason::ReevaluationCount);
+        diagnostics.forwarded_store_context_limit_diagnostics.push_back(
+            value);
+    }
+    diagnostics.contextual_return_context_budget = size();
+    diagnostics.contextual_return_context_limited_functions = size();
+    diagnostics.contextual_return_evaluation_budget = size();
+    diagnostics.contextual_return_evaluation_limited_functions = size();
+    diagnostics.abi_stack_argument_slot_budget = size();
+    diagnostics.abi_stack_argument_projection_truncated_functions = size();
+    diagnostics.local_fixpoint_iteration_budget = size();
+    diagnostics.local_fixpoint_limited_evaluations = size();
+    diagnostics.maximum_local_fixpoint_iterations = size();
+    diagnostics.inventory_candidate_values_truncated = reader.boolean();
+    diagnostics.abi_stack_base_unresolved = reader.boolean();
+    diagnostics.inventory_tail_target_unresolved = reader.boolean();
+    return diagnostics;
+}
+
+void write_resolution(PersistentFunctionEpochWriter& writer,
+                      const InterproceduralTargetResolution& resolution) {
+    writer.scalar(resolution.instruction_address);
+    writer.scalar(resolution.register_index);
+    writer.boolean(resolution.call);
+    write_u32_values(writer, resolution.targets);
+    write_u32_values(writer, resolution.call_sites);
+    write_u32_values(writer, resolution.callees);
+    writer.boolean(resolution.guarded);
+    writer.boolean(resolution.complete);
+    writer.scalar(resolution.evidence);
+    writer.string(resolution.reason);
+}
+
+[[nodiscard]] InterproceduralTargetResolution read_resolution(
+    PersistentFunctionEpochReader& reader) {
+    InterproceduralTargetResolution resolution;
+    resolution.instruction_address = reader.scalar<std::uint32_t>();
+    resolution.register_index = reader.scalar<std::uint8_t>();
+    if (resolution.register_index >= 16u)
+        throw PersistentFunctionEpochIncomplete{};
+    resolution.call = reader.boolean();
+    resolution.targets = read_u32_values(reader);
+    resolution.call_sites = read_u32_values(reader);
+    resolution.callees = read_u32_values(reader);
+    resolution.guarded = reader.boolean();
+    resolution.complete = reader.boolean();
+    resolution.evidence = reader.enumeration(ControlFlowEvidence::Unresolved);
+    resolution.reason = reader.string();
+    return resolution;
+}
+
+void write_stored_candidate(PersistentFunctionEpochWriter& writer,
+                            const StoredCodeAddressCandidate& candidate) {
+    writer.scalar(candidate.target_address);
+    writer.boolean(candidate.complete);
+    writer.boolean(candidate.guarded);
+    write_u32_values(writer, candidate.store_instruction_addresses);
+    write_u32_values(writer, candidate.evidence_call_sites);
+    write_u32_values(writer, candidate.evidence_callees);
+}
+
+[[nodiscard]] StoredCodeAddressCandidate read_stored_candidate(
+    PersistentFunctionEpochReader& reader) {
+    StoredCodeAddressCandidate candidate;
+    candidate.target_address = reader.scalar<std::uint32_t>();
+    candidate.complete = reader.boolean();
+    candidate.guarded = reader.boolean();
+    candidate.store_instruction_addresses = read_u32_values(reader);
+    candidate.evidence_call_sites = read_u32_values(reader);
+    candidate.evidence_callees = read_u32_values(reader);
+    return candidate;
+}
+
+void write_returned_candidate(
+    PersistentFunctionEpochWriter& writer,
+    const ReturnedCodeAddressTableCandidate& candidate) {
+    writer.scalar(candidate.table_address);
+    write_u32_values(writer, candidate.target_addresses);
+    write_u32_values(writer, candidate.load_instruction_addresses);
+    write_u32_values(writer, candidate.evidence_call_sites);
+    write_u32_values(writer, candidate.evidence_callees);
+    writer.boolean(candidate.scan_truncated);
+}
+
+[[nodiscard]] ReturnedCodeAddressTableCandidate read_returned_candidate(
+    PersistentFunctionEpochReader& reader) {
+    ReturnedCodeAddressTableCandidate candidate;
+    candidate.table_address = reader.scalar<std::uint32_t>();
+    candidate.target_addresses = read_u32_values(reader);
+    candidate.load_instruction_addresses = read_u32_values(reader);
+    candidate.evidence_call_sites = read_u32_values(reader);
+    candidate.evidence_callees = read_u32_values(reader);
+    candidate.scan_truncated = reader.boolean();
+    return candidate;
+}
+
+void write_deferred_inventory(
+    PersistentFunctionEpochWriter& writer,
+    const GuardedCodeInventoryCollector& collector) {
+    writer.count(collector.persistent_deferred_stored_count());
+    collector.visit_persistent_deferred_snapshot(
+        [&](const auto& candidate, const bool complete_evidence) {
+            write_stored_candidate(writer, candidate);
+            writer.boolean(complete_evidence);
+        },
+        [&](const auto&) {});
+    writer.count(collector.persistent_deferred_returned_count());
+    collector.visit_persistent_deferred_snapshot(
+        [&](const auto&, const bool) {},
+        [&](const auto& candidate) {
+            write_returned_candidate(writer, candidate);
+        });
+    const auto truncation = collector.replay_truncation();
+    writer.boolean(truncation.raw_stored_candidates_truncated);
+    writer.boolean(truncation.candidate_budget_exhausted);
+    writer.boolean(truncation.candidate_inventory_truncated);
+    writer.boolean(truncation.table_scan_truncated);
+}
+
+[[nodiscard]] GuardedCodeInventoryCollector read_deferred_inventory(
+    PersistentFunctionEpochReader& reader) {
+    GuardedCodeInventoryCollector::PersistentDeferredSnapshot snapshot;
+    const auto stored_count = reader.count(maximum_raw_stored_code_candidates);
+    snapshot.stored_candidates.reserve(stored_count);
+    for (std::size_t index = 0u; index < stored_count; ++index) {
+        auto candidate = read_stored_candidate(reader);
+        const auto complete_evidence = reader.boolean();
+        snapshot.stored_candidates.push_back(
+            {std::move(candidate), complete_evidence});
+    }
+    const auto returned_count = reader.count(maximum_guarded_code_inventory);
+    snapshot.returned_tables.reserve(returned_count);
+    for (std::size_t index = 0u; index < returned_count; ++index)
+        snapshot.returned_tables.push_back(
+            read_returned_candidate(reader));
+    snapshot.raw_stored_candidates_truncated = reader.boolean();
+    snapshot.candidate_budget_exhausted = reader.boolean();
+    snapshot.candidate_inventory_truncated = reader.boolean();
+    snapshot.table_scan_truncated = reader.boolean();
+    return GuardedCodeInventoryCollector::
+        from_persistent_deferred_snapshot(std::move(snapshot));
+}
+
+using PersistentResolutionNodeId =
+    FunctionAnalysisEpoch::ResolutionDependencyNodeId;
+using PersistentResolutionNodeKind =
+    FunctionAnalysisEpoch::ResolutionDependencyNodeKind;
+using PersistentResolutionNodeShard =
+    FunctionAnalysisEpoch::ResolutionDependencyNodeShard;
+using PersistentResolutionComponent =
+    FunctionAnalysisEpoch::ResolutionDependencySccContract;
+
+void write_resolution_node_id(PersistentFunctionEpochWriter& writer,
+                              const PersistentResolutionNodeId node) {
+    writer.scalar(node.address);
+    writer.scalar(node.kind);
+}
+
+[[nodiscard]] PersistentResolutionNodeId read_resolution_node_id(
+    PersistentFunctionEpochReader& reader) {
+    return {
+        reader.scalar<std::uint32_t>(),
+        reader.enumeration(PersistentResolutionNodeKind::InventoryRegion)};
+}
+
+void rebind_persistent_contract_image(
+    std::vector<std::uint8_t>& contract,
+    const katana::io::ExecutableImage& image) {
+    constexpr std::size_t schema_offset = 0u;
+    constexpr std::size_t identity_offset = sizeof(std::uint32_t);
+    constexpr std::size_t revision_offset =
+        identity_offset + sizeof(std::uint64_t);
+    constexpr std::size_t prefix_size =
+        revision_offset + sizeof(std::uint64_t);
+    if (contract.size() < prefix_size)
+        throw PersistentFunctionEpochIncomplete{};
+    auto read_u32 = [&](const std::size_t offset) {
+        auto value = std::uint32_t{0u};
+        for (std::size_t index = 0u; index < sizeof(value); ++index)
+            value |= static_cast<std::uint32_t>(contract[offset + index]) <<
+                     (index * 8u);
+        return value;
+    };
+    if (read_u32(schema_offset) != function_analysis_epoch_schema_version)
+        throw PersistentFunctionEpochIncomplete{};
+    const auto write_u64 = [&](const std::size_t offset,
+                               const std::uint64_t value) {
+        auto bits = value;
+        for (std::size_t index = 0u; index < sizeof(bits); ++index) {
+            contract[offset + index] =
+                static_cast<std::uint8_t>(bits & 0xffu);
+            bits >>= 8u;
+        }
+    };
+    write_u64(identity_offset, image.analysis_instance_identity());
+    write_u64(revision_offset, image.analysis_revision());
+}
+
+void write_resolution_epoch(PersistentFunctionEpochWriter& writer,
+                            const FunctionAnalysisEpoch& epoch) {
+    if (epoch.resolution_dependency_nodes == nullptr ||
+        epoch.resolution_dependency_components_by_node == nullptr ||
+        epoch.resolution_root_artifacts == nullptr ||
+        epoch.presentation_root_artifacts == nullptr)
+        throw PersistentFunctionEpochIncomplete{};
+
+    std::map<PersistentResolutionNodeId,
+             std::shared_ptr<const PersistentResolutionNodeShard>>
+        nodes;
+    epoch.resolution_dependency_nodes->materialize(nodes);
+    writer.sequence(nodes, [&](const auto& item) {
+        write_resolution_node_id(writer, item.first);
+        if (item.second == nullptr || item.second->contract == nullptr)
+            throw PersistentFunctionEpochIncomplete{};
+        writer.blob(*item.second->contract);
+        writer.sequence(item.second->outgoing, [&](const auto node) {
+            write_resolution_node_id(writer, node);
+        });
+        writer.sequence(item.second->incoming, [&](const auto node) {
+            write_resolution_node_id(writer, node);
+        });
+        writer.boolean(item.second->unrepresentable);
+    });
+
+    std::map<PersistentResolutionNodeId,
+             std::shared_ptr<const PersistentResolutionComponent>>
+        components_by_node;
+    epoch.resolution_dependency_components_by_node->materialize(
+        components_by_node);
+    std::map<PersistentResolutionNodeId,
+             std::shared_ptr<const PersistentResolutionComponent>>
+        components;
+    for (const auto& [node, component] : components_by_node) {
+        if (component == nullptr || component->members.empty() ||
+            !std::is_sorted(component->members.begin(),
+                            component->members.end()) ||
+            !std::binary_search(component->members.begin(),
+                                component->members.end(), node))
+            throw PersistentFunctionEpochIncomplete{};
+        const auto key = component->members.front();
+        const auto [stored, inserted] = components.emplace(key, component);
+        if (!inserted && stored->second != component)
+            throw PersistentFunctionEpochIncomplete{};
+    }
+    if (components.size() != epoch.resolution_dependency_scc_count ||
+        components_by_node.size() != nodes.size())
+        throw PersistentFunctionEpochIncomplete{};
+    writer.sequence(components, [&](const auto& item) {
+        write_resolution_node_id(writer, item.first);
+        writer.sequence(item.second->members, [&](const auto node) {
+            write_resolution_node_id(writer, node);
+        });
+        writer.sequence(item.second->dependencies, [&](const auto& dependency) {
+            if (dependency == nullptr || dependency->members.empty())
+                throw PersistentFunctionEpochIncomplete{};
+            write_resolution_node_id(writer, dependency->members.front());
+        });
+    });
+
+    std::map<std::uint32_t,
+             std::shared_ptr<const FunctionAnalysisEpoch::
+                 ResolutionRootArtifact>>
+        reusable_roots;
+    std::map<std::uint32_t,
+             std::shared_ptr<const FunctionAnalysisEpoch::
+                 ResolutionRootArtifact>>
+        presentation_roots;
+    epoch.resolution_root_artifacts->materialize(reusable_roots);
+    epoch.presentation_root_artifacts->materialize(presentation_roots);
+    writer.sequence(presentation_roots, [&](const auto& item) {
+        const auto& artifact = item.second;
+        if (artifact == nullptr || artifact->root_address != item.first)
+            throw PersistentFunctionEpochIncomplete{};
+        writer.scalar(item.first);
+        const auto reusable = reusable_roots.find(item.first);
+        writer.boolean(reusable != reusable_roots.end() &&
+                       reusable->second == artifact);
+        writer.blob(artifact->root_contract_bytes);
+        writer.sequence(artifact->dependency_roots,
+                        [&](const auto& component) {
+            if (component == nullptr || component->members.empty())
+                throw PersistentFunctionEpochIncomplete{};
+            write_resolution_node_id(writer, component->members.front());
+        });
+        writer.sequence(artifact->resolutions, [&](const auto& resolution) {
+            write_resolution(writer, resolution);
+        });
+        write_deferred_inventory(writer, artifact->inventory);
+        write_walk_diagnostics(writer, artifact->walk_diagnostics);
+    });
+    write_walk_diagnostics(writer, epoch.presentation_baseline_diagnostics);
+}
+
+struct ImportedResolutionComponentRecord final {
+    PersistentResolutionNodeId key;
+    std::vector<PersistentResolutionNodeId> members;
+    std::vector<PersistentResolutionNodeId> dependencies;
+};
+
+[[nodiscard]] std::size_t read_resolution_epoch(
+    PersistentFunctionEpochReader& reader,
+    const katana::io::ExecutableImage& image,
+    FunctionAnalysisEpoch& epoch,
+    const std::size_t maximum_dependency_nodes,
+    const std::size_t maximum_roots,
+    const std::size_t maximum_retained_bytes) {
+    using NodeIndex = FunctionAnalysisEpoch::ResolutionDependencyNodeIndex;
+    using ComponentIndex =
+        FunctionAnalysisEpoch::ResolutionDependencyComponentIndex;
+    using PreparationIndex =
+        FunctionAnalysisEpoch::ResolutionPreparationIndex;
+    using RootIndex = FunctionAnalysisEpoch::ResolutionRootArtifactIndex;
+
+    const auto node_count = reader.count(maximum_dependency_nodes);
+    std::map<PersistentResolutionNodeId,
+             std::shared_ptr<const PersistentResolutionNodeShard>>
+        nodes;
+    std::size_t retained_bytes = 0u;
+    const auto add_retained = [&](const std::size_t value) {
+        if (value > maximum_retained_bytes -
+                        std::min(maximum_retained_bytes, retained_bytes))
+            throw PersistentFunctionEpochResourceLimit{};
+        retained_bytes += value;
+    };
+    for (std::size_t index = 0u; index < node_count; ++index) {
+        const auto id = read_resolution_node_id(reader);
+        auto contract = reader.blob(maximum_retained_bytes);
+        rebind_persistent_contract_image(contract, image);
+        auto outgoing = read_vector<PersistentResolutionNodeId>(
+            reader, [&] { return read_resolution_node_id(reader); },
+            maximum_dependency_nodes);
+        auto incoming = read_vector<PersistentResolutionNodeId>(
+            reader, [&] { return read_resolution_node_id(reader); },
+            maximum_dependency_nodes);
+        if (!std::is_sorted(outgoing.begin(), outgoing.end()) ||
+            std::adjacent_find(outgoing.begin(), outgoing.end()) !=
+                outgoing.end() ||
+            !std::is_sorted(incoming.begin(), incoming.end()) ||
+            std::adjacent_find(incoming.begin(), incoming.end()) !=
+                incoming.end())
+            throw PersistentFunctionEpochIncomplete{};
+        const auto unrepresentable = reader.boolean();
+        auto contract_owner =
+            std::make_shared<const std::vector<std::uint8_t>>(
+                std::move(contract));
+        const auto node_bytes =
+            sizeof(PersistentResolutionNodeShard) +
+            sizeof(std::vector<std::uint8_t>) +
+            contract_owner->capacity() * sizeof(std::uint8_t) +
+            outgoing.capacity() * sizeof(PersistentResolutionNodeId) +
+            incoming.capacity() * sizeof(PersistentResolutionNodeId) +
+            2u * (sizeof(PersistentResolutionNodeId) +
+                  sizeof(std::shared_ptr<const void>) + 5u * sizeof(void*));
+        add_retained(node_bytes);
+        auto shard = std::make_shared<const PersistentResolutionNodeShard>(
+            PersistentResolutionNodeShard{
+                std::move(contract_owner),
+                std::move(outgoing),
+                std::move(incoming),
+                unrepresentable,
+                node_bytes});
+        if (!nodes.emplace(id, std::move(shard)).second)
+            throw PersistentFunctionEpochIncomplete{};
+    }
+    for (const auto& [id, node] : nodes) {
+        for (const auto target : node->outgoing) {
+            const auto found = nodes.find(target);
+            if (found == nodes.end() ||
+                !std::binary_search(found->second->incoming.begin(),
+                                    found->second->incoming.end(), id))
+                throw PersistentFunctionEpochIncomplete{};
+        }
+        for (const auto source : node->incoming) {
+            const auto found = nodes.find(source);
+            if (found == nodes.end() ||
+                !std::binary_search(found->second->outgoing.begin(),
+                                    found->second->outgoing.end(), id))
+                throw PersistentFunctionEpochIncomplete{};
+        }
+    }
+
+    const auto component_count = reader.count(maximum_dependency_nodes);
+    std::vector<ImportedResolutionComponentRecord> component_records;
+    component_records.reserve(component_count);
+    std::map<PersistentResolutionNodeId, std::size_t> component_by_key;
+    std::map<PersistentResolutionNodeId, std::size_t> component_by_node;
+    for (std::size_t index = 0u; index < component_count; ++index) {
+        ImportedResolutionComponentRecord record;
+        record.key = read_resolution_node_id(reader);
+        record.members = read_vector<PersistentResolutionNodeId>(
+            reader, [&] { return read_resolution_node_id(reader); },
+            maximum_dependency_nodes);
+        record.dependencies = read_vector<PersistentResolutionNodeId>(
+            reader, [&] { return read_resolution_node_id(reader); },
+            maximum_dependency_nodes);
+        if (record.members.empty() || record.members.front() != record.key ||
+            !std::is_sorted(record.members.begin(), record.members.end()) ||
+            std::adjacent_find(record.members.begin(), record.members.end()) !=
+                record.members.end() ||
+            !std::is_sorted(record.dependencies.begin(),
+                            record.dependencies.end()) ||
+            std::adjacent_find(record.dependencies.begin(),
+                               record.dependencies.end()) !=
+                record.dependencies.end() ||
+            !component_by_key.emplace(record.key, index).second)
+            throw PersistentFunctionEpochIncomplete{};
+        for (const auto member : record.members) {
+            if (!nodes.contains(member) ||
+                !component_by_node.emplace(member, index).second)
+                throw PersistentFunctionEpochIncomplete{};
+        }
+        component_records.push_back(std::move(record));
+    }
+    if (component_by_node.size() != nodes.size())
+        throw PersistentFunctionEpochIncomplete{};
+
+    std::vector<std::size_t> component_indegree(component_count, 0u);
+    std::vector<std::vector<std::size_t>> component_dependents(
+        component_count);
+    for (std::size_t index = 0u; index < component_count; ++index) {
+        std::vector<PersistentResolutionNodeId> expected_dependencies;
+        for (const auto member : component_records[index].members) {
+            for (const auto target : nodes.at(member)->outgoing) {
+                const auto target_component = component_by_node.at(target);
+                if (target_component != index)
+                    expected_dependencies.push_back(
+                        component_records[target_component].key);
+            }
+        }
+        normalize(expected_dependencies);
+        if (expected_dependencies !=
+            component_records[index].dependencies)
+            throw PersistentFunctionEpochIncomplete{};
+        for (const auto dependency : expected_dependencies) {
+            const auto dependency_index = component_by_key.at(dependency);
+            ++component_indegree[index];
+            component_dependents[dependency_index].push_back(index);
+        }
+    }
+    std::vector<std::size_t> ready_components;
+    ready_components.reserve(component_count);
+    for (std::size_t index = 0u; index < component_count; ++index)
+        if (component_indegree[index] == 0u)
+            ready_components.push_back(index);
+    auto visited_components = std::size_t{0u};
+    while (!ready_components.empty()) {
+        const auto component = ready_components.back();
+        ready_components.pop_back();
+        ++visited_components;
+        for (const auto dependent : component_dependents[component]) {
+            if (component_indegree[dependent] == 0u)
+                throw PersistentFunctionEpochIncomplete{};
+            --component_indegree[dependent];
+            if (component_indegree[dependent] == 0u)
+                ready_components.push_back(dependent);
+        }
+    }
+    if (visited_components != component_count)
+        throw PersistentFunctionEpochIncomplete{};
+
+    std::vector<std::shared_ptr<PersistentResolutionComponent>> components;
+    components.reserve(component_count);
+    for (const auto& record : component_records) {
+        auto component = std::make_shared<PersistentResolutionComponent>();
+        component->members = record.members;
+        component->node_contracts.reserve(record.members.size());
+        for (const auto member : record.members)
+            component->node_contracts.push_back(nodes.at(member)->contract);
+        components.push_back(std::move(component));
+    }
+    for (std::size_t index = 0u; index < components.size(); ++index) {
+        auto& component = components[index];
+        for (const auto dependency : component_records[index].dependencies) {
+            const auto found = component_by_key.find(dependency);
+            if (found == component_by_key.end() || found->second == index)
+                throw PersistentFunctionEpochIncomplete{};
+            component->dependencies.push_back(components[found->second]);
+        }
+        component->retained_bytes =
+            sizeof(PersistentResolutionComponent) +
+            component->members.capacity() *
+                sizeof(PersistentResolutionNodeId) +
+            component->node_contracts.capacity() *
+                sizeof(std::shared_ptr<const std::vector<std::uint8_t>>) +
+            component->dependencies.capacity() *
+                sizeof(std::shared_ptr<const PersistentResolutionComponent>);
+        add_retained(component->retained_bytes);
+    }
+
+    auto node_index = std::make_shared<NodeIndex>();
+    for (const auto& [id, node] : nodes)
+        node_index->insert_or_assign(id, node);
+    auto component_index = std::make_shared<ComponentIndex>();
+    auto preparation_index = std::make_shared<PreparationIndex>();
+    for (const auto& [id, component_number] : component_by_node) {
+        std::shared_ptr<const PersistentResolutionComponent> component =
+            components[component_number];
+        component_index->insert_or_assign(id, component);
+        preparation_index->insert_or_assign(
+            id,
+            FunctionAnalysisEpoch::ResolutionPreparationShard{
+                nodes.at(id), std::move(component)});
+    }
+    epoch.resolution_dependency_nodes = std::move(node_index);
+    epoch.resolution_dependency_components_by_node =
+        std::move(component_index);
+    epoch.resolution_preparation_shards = std::move(preparation_index);
+    epoch.resolution_dependency_scc_count = component_count;
+    const auto dependency_retained_bytes = retained_bytes;
+    epoch.resolution_dependency_retained_bytes =
+        dependency_retained_bytes;
+
+    auto reusable_roots = std::make_shared<RootIndex>();
+    auto presentation_roots = std::make_shared<RootIndex>();
+    const auto root_count = reader.count(maximum_roots);
+    for (std::size_t index = 0u; index < root_count; ++index) {
+        const auto root = reader.scalar<std::uint32_t>();
+        const auto reusable = reader.boolean();
+        if (epoch.program == nullptr ||
+            epoch.program->find_function(root) == nullptr)
+            throw PersistentFunctionEpochIncomplete{};
+        auto artifact = std::make_shared<
+            FunctionAnalysisEpoch::ResolutionRootArtifact>();
+        artifact->root_address = root;
+        artifact->root_contract_bytes = reader.blob(maximum_retained_bytes);
+        rebind_persistent_contract_image(
+            artifact->root_contract_bytes, image);
+        const auto dependency_count = reader.count(component_count);
+        artifact->dependency_roots.reserve(dependency_count);
+        PersistentResolutionNodeId previous_dependency{};
+        bool has_dependency = false;
+        for (std::size_t dependency_index = 0u;
+             dependency_index < dependency_count;
+             ++dependency_index) {
+            const auto key = read_resolution_node_id(reader);
+            if (has_dependency && !(previous_dependency < key))
+                throw PersistentFunctionEpochIncomplete{};
+            previous_dependency = key;
+            has_dependency = true;
+            const auto found = component_by_key.find(key);
+            if (found == component_by_key.end())
+                throw PersistentFunctionEpochIncomplete{};
+            artifact->dependency_roots.push_back(components[found->second]);
+        }
+        const auto resolution_count = reader.count(
+            maximum_retained_bytes /
+            sizeof(InterproceduralTargetResolution));
+        artifact->resolutions.reserve(resolution_count);
+        for (std::size_t resolution_index = 0u;
+             resolution_index < resolution_count;
+             ++resolution_index)
+            artifact->resolutions.push_back(read_resolution(reader));
+        artifact->inventory = read_deferred_inventory(reader);
+        artifact->walk_diagnostics = read_walk_diagnostics(reader);
+        if (artifact->walk_diagnostics.truncated() ||
+            artifact->inventory.replay_truncated())
+            throw PersistentFunctionEpochIncomplete{};
+        auto root_retained_bytes = std::size_t{0u};
+        const auto add_root_retained = [&](const std::size_t value) {
+            if (value > maximum_retained_bytes -
+                            std::min(maximum_retained_bytes,
+                                     root_retained_bytes))
+                throw PersistentFunctionEpochResourceLimit{};
+            root_retained_bytes += value;
+        };
+        add_root_retained(
+            sizeof(FunctionAnalysisEpoch::ResolutionRootArtifact));
+        add_root_retained(artifact->root_contract_bytes.capacity() *
+                          sizeof(std::uint8_t));
+        add_root_retained(artifact->dependency_roots.capacity() *
+                          sizeof(std::shared_ptr<const
+                              PersistentResolutionComponent>));
+        add_root_retained(artifact->resolutions.capacity() *
+                          sizeof(InterproceduralTargetResolution));
+        add_root_retained(artifact->inventory.retained_heap_bytes());
+        add_root_retained(
+            artifact->walk_diagnostics
+                    .forwarded_store_context_limit_diagnostics.capacity() *
+            sizeof(ForwardedStoreContextLimitDiagnostic));
+        add_root_retained(sizeof(std::uint32_t));
+        add_root_retained(sizeof(std::shared_ptr<const
+            FunctionAnalysisEpoch::ResolutionRootArtifact>));
+        add_root_retained(5u * sizeof(void*));
+        if (reusable) {
+            add_root_retained(sizeof(std::uint32_t));
+            add_root_retained(sizeof(std::shared_ptr<const
+                FunctionAnalysisEpoch::ResolutionRootArtifact>));
+            add_root_retained(5u * sizeof(void*));
+        }
+        for (const auto& resolution : artifact->resolutions) {
+            add_root_retained(resolution.targets.capacity() *
+                              sizeof(std::uint32_t));
+            add_root_retained(resolution.call_sites.capacity() *
+                              sizeof(std::uint32_t));
+            add_root_retained(resolution.callees.capacity() *
+                              sizeof(std::uint32_t));
+            add_root_retained(retained_heap_bytes(resolution.reason));
+        }
+        add_retained(root_retained_bytes);
+        std::shared_ptr<const FunctionAnalysisEpoch::ResolutionRootArtifact>
+            published = artifact;
+        if (presentation_roots->find(root) != nullptr)
+            throw PersistentFunctionEpochIncomplete{};
+        presentation_roots->insert_or_assign(root, published);
+        if (reusable) reusable_roots->insert_or_assign(root, published);
+    }
+    epoch.resolution_root_artifacts = std::move(reusable_roots);
+    epoch.presentation_root_artifacts = std::move(presentation_roots);
+    epoch.presentation_baseline_diagnostics =
+        read_walk_diagnostics(reader);
+    return retained_bytes;
+}
+
+void write_presentation_metadata(
+    PersistentFunctionEpochWriter& writer,
+    const FunctionValueAnalysisResult& metadata) {
+    const auto size = [&](const std::size_t value) {
+        writer.scalar<std::uint64_t>(value);
+    };
+    size(metadata.fixpoint_iterations);
+    size(metadata.strongly_connected_components);
+    size(metadata.unchanged_ingress_skips);
+    size(metadata.fixpoint_worker_count);
+    size(metadata.fixpoint_parallel_batches);
+    size(metadata.fixpoint_speculative_evaluations);
+    size(metadata.fixpoint_stale_repairs);
+    size(metadata.maximum_fixpoint_batch_size);
+    size(metadata.iteration_budget);
+    writer.boolean(metadata.budget_exhausted);
+    size(metadata.resolution_root_artifacts_retained);
+    size(metadata.resolution_epoch_retained_bytes);
+    writer.scalar(metadata.resolution_retention_limit_reason);
+}
+
+[[nodiscard]] FunctionValueAnalysisResult read_presentation_metadata(
+    PersistentFunctionEpochReader& reader) {
+    FunctionValueAnalysisResult metadata;
+    metadata.result_materialization =
+        FunctionValueResultMaterialization::TerminalFull;
+    const auto size = [&] { return reader.size_value(); };
+    metadata.fixpoint_iterations = size();
+    metadata.strongly_connected_components = size();
+    metadata.unchanged_ingress_skips = size();
+    metadata.fixpoint_worker_count = size();
+    metadata.fixpoint_parallel_batches = size();
+    metadata.fixpoint_speculative_evaluations = size();
+    metadata.fixpoint_stale_repairs = size();
+    metadata.maximum_fixpoint_batch_size = size();
+    metadata.iteration_budget = size();
+    metadata.budget_exhausted = reader.boolean();
+    metadata.resolution_root_artifacts_retained = size();
+    metadata.resolution_epoch_retained_bytes = size();
+    metadata.resolution_retention_limit_reason = reader.enumeration(
+        ResolutionRetentionLimitReason::IncompleteRoot);
+    if (metadata.budget_exhausted)
+        throw PersistentFunctionEpochIncomplete{};
+    return metadata;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> write_persistent_function_epoch(
+    const FunctionAnalysisEpoch& epoch,
+    const katana::io::ExecutableImage& image,
+    const std::string_view implementation_identity,
+    const std::size_t maximum_blob_bytes) {
+    if (implementation_identity.empty() ||
+        implementation_identity.size() > 4u * 1024u ||
+        epoch.schema_version != function_analysis_epoch_schema_version ||
+        epoch.program == nullptr || epoch.program_input_arena == nullptr ||
+        epoch.program->input_arena != epoch.program_input_arena ||
+        epoch.summary_candidate_shards == nullptr ||
+        epoch.presentation_root_artifacts == nullptr ||
+        epoch.presentation_metadata.budget_exhausted)
+        throw PersistentFunctionEpochIncomplete{};
+
+    PersistentFunctionEpochWriter writer{maximum_blob_bytes};
+    writer.raw(persistent_function_epoch_magic);
+    writer.scalar(persistent_function_epoch_format_version);
+    writer.scalar(function_program_graph_schema_version);
+    writer.scalar(function_analysis_epoch_schema_version);
+    writer.string(implementation_identity);
+    writer.string(persistent_function_image_fingerprint(image));
+    writer.string(persistent_program_input_fingerprint(
+        *epoch.program_input_arena));
+    writer.string(epoch.program->identity);
+    writer.scalar(epoch.version);
+    writer.scalar<std::uint64_t>(epoch.program->function_view().size());
+    writer.scalar<std::uint64_t>(
+        epoch.presentation_root_artifacts->size());
+    write_program_graph(writer, *epoch.program);
+
+    if (epoch.summary_candidate_shards->size() !=
+        epoch.program->function_view().size())
+        throw PersistentFunctionEpochIncomplete{};
+    writer.count(epoch.summary_candidate_shards->size());
+    epoch.summary_candidate_shards->for_each(
+        [&](const auto owner, const auto& shard) {
+        if (owner != shard.summary.function_address ||
+            epoch.program->find_function(owner) == nullptr)
+            throw PersistentFunctionEpochIncomplete{};
+        writer.scalar(owner);
+        write_function_summary(writer, shard.summary);
+        const auto summary_version = epoch.summary_versions.find(owner);
+        const auto input_version = epoch.input_versions.find(owner);
+        if (summary_version == epoch.summary_versions.end() ||
+            input_version == epoch.input_versions.end())
+            throw PersistentFunctionEpochIncomplete{};
+        writer.scalar(summary_version->second);
+        writer.scalar(input_version->second);
+    });
+    std::vector<std::uint32_t> inventory_sinks{
+        epoch.inventory_sink_functions.begin(),
+        epoch.inventory_sink_functions.end()};
+    normalize(inventory_sinks);
+    write_u32_values(writer, inventory_sinks);
+    write_resolution_epoch(writer, epoch);
+    write_presentation_metadata(writer, epoch.presentation_metadata);
+    return std::move(writer).finish_with_digest();
+}
+
+struct PersistentFunctionEpochHeader final {
+    std::uint32_t format_version = 0u;
+    std::uint32_t graph_schema_version = 0u;
+    std::uint32_t epoch_schema_version = 0u;
+    std::string implementation_identity;
+    std::string image_fingerprint;
+    std::string program_input_fingerprint;
+    std::string program_identity;
+    std::uint64_t exported_epoch_version = 0u;
+    std::size_t program_functions = 0u;
+    std::size_t resolution_roots = 0u;
+};
+
+[[nodiscard]] PersistentFunctionEpochHeader read_persistent_epoch_header(
+    PersistentFunctionEpochReader& reader) {
+    const auto magic = reader.raw(persistent_function_epoch_magic.size());
+    if (!std::equal(magic.begin(), magic.end(),
+                    persistent_function_epoch_magic.begin()))
+        throw PersistentFunctionEpochCorrupt{};
+    PersistentFunctionEpochHeader header;
+    header.format_version = reader.scalar<std::uint32_t>();
+    header.graph_schema_version = reader.scalar<std::uint32_t>();
+    header.epoch_schema_version = reader.scalar<std::uint32_t>();
+    header.implementation_identity = reader.string(4u * 1024u);
+    header.image_fingerprint = reader.string(256u);
+    header.program_input_fingerprint = reader.string(256u);
+    header.program_identity = reader.string(256u);
+    header.exported_epoch_version = reader.scalar<std::uint64_t>();
+    header.program_functions = reader.size_value();
+    header.resolution_roots = reader.size_value();
+    if (header.program_functions >
+            persistent_function_epoch_maximum_elements ||
+        header.resolution_roots >
+            persistent_function_epoch_maximum_elements)
+        throw PersistentFunctionEpochResourceLimit{};
+    return header;
+}
+
+[[nodiscard]] std::shared_ptr<FunctionAnalysisEpoch>
+read_persistent_function_epoch_body(
+    PersistentFunctionEpochReader& reader,
+    const katana::io::ExecutableImage& image,
+    const std::shared_ptr<const FunctionProgramInputArena>& input_arena,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    std::shared_ptr<const std::vector<ResolvedControlFlowEdge>>
+        semantic_edges,
+    const std::string& program_identity,
+    const std::size_t maximum_dependency_nodes,
+    const std::size_t maximum_roots,
+    const std::size_t maximum_retained_bytes) {
+    auto epoch = std::make_shared<FunctionAnalysisEpoch>();
+    epoch->program_input_arena = input_arena;
+    epoch->program = read_program_graph(
+        reader,
+        program_identity,
+        input_arena,
+        lines,
+        std::move(semantic_edges));
+
+    const auto summary_count = reader.count(
+        epoch->program->function_view().size());
+    if (summary_count != epoch->program->function_view().size())
+        throw PersistentFunctionEpochIncomplete{};
+    auto summary_index =
+        std::make_shared<FunctionAnalysisEpoch::SummaryCandidateIndex>();
+    for (std::size_t index = 0u; index < summary_count; ++index) {
+        const auto owner = reader.scalar<std::uint32_t>();
+        auto summary = read_function_summary(reader);
+        const auto summary_version = reader.scalar<std::uint64_t>();
+        const auto input_version = reader.scalar<std::uint64_t>();
+        if (summary.function_address != owner ||
+            epoch->program->find_function(owner) == nullptr ||
+            epoch->summaries.contains(owner) || summary_version == 0u ||
+            input_version == 0u)
+            throw PersistentFunctionEpochIncomplete{};
+        epoch->summaries.emplace(owner, summary);
+        epoch->summary_versions.emplace(owner, summary_version);
+        epoch->input_versions.emplace(owner, input_version);
+        // CandidateInput and ABI contracts deliberately remain absent in the
+        // cross-process baseline. TerminalFull can flatten the complete
+        // summary/root presentation immediately; every semantic round sees
+        // the missing input owner and recomputes it before publication.
+        summary_index->insert_or_assign(
+            owner,
+            FunctionAnalysisEpoch::SummaryCandidateShard{
+                std::move(summary), CandidateInput{}, {},
+                summary_version, input_version});
+    }
+    epoch->summary_candidate_shards = std::move(summary_index);
+    auto inventory_sinks = read_u32_values(reader);
+    if (!std::is_sorted(inventory_sinks.begin(), inventory_sinks.end()) ||
+        std::adjacent_find(inventory_sinks.begin(), inventory_sinks.end()) !=
+            inventory_sinks.end())
+        throw PersistentFunctionEpochIncomplete{};
+    for (const auto address : inventory_sinks) {
+        if (epoch->program->find_function(address) == nullptr)
+            throw PersistentFunctionEpochIncomplete{};
+        epoch->inventory_sink_functions.insert(address);
+    }
+    const auto computed_resolution_retained_bytes =
+        read_resolution_epoch(reader,
+                              image,
+                              *epoch,
+                              maximum_dependency_nodes,
+                              maximum_roots,
+                              maximum_retained_bytes);
+    auto presentation_metadata = read_presentation_metadata(reader);
+    if (presentation_metadata.strongly_connected_components !=
+            epoch->program->component_count() ||
+        presentation_metadata.resolution_root_artifacts_retained !=
+            epoch->resolution_root_artifacts->size())
+        throw PersistentFunctionEpochIncomplete{};
+    // Retention is allocation-accounting, not semantic payload. Vector
+    // capacities can legitimately differ after cross-process
+    // reconstruction, so publish the bounded value computed from the actual
+    // imported ownership graph instead of trusting or byte-comparing the
+    // producer process's allocator-dependent counter.
+    presentation_metadata.resolution_epoch_retained_bytes =
+        computed_resolution_retained_bytes;
+    epoch->presentation_metadata = std::move(presentation_metadata);
+    return epoch;
+}
+
 void collect_presentation_root_artifacts(
     const FunctionAnalysisEpoch& epoch,
     std::map<std::uint32_t,
@@ -17985,15 +19779,12 @@ materialize_function_analysis_epoch(
     result.resolution_replacements.clear();
     result.removed_resolution_shards.clear();
     if (epoch.summary_candidate_shards != nullptr) {
-        std::map<std::uint32_t,
-                 FunctionAnalysisEpoch::SummaryCandidateShard>
-            summary_shards;
-        epoch.summary_candidate_shards->materialize(summary_shards);
-        result.summaries.reserve(summary_shards.size());
-        for (const auto& [address, shard] : summary_shards) {
+        result.summaries.reserve(epoch.summary_candidate_shards->size());
+        epoch.summary_candidate_shards->for_each(
+            [&](const auto address, const auto& shard) {
             static_cast<void>(address);
             result.summaries.push_back(shard.summary);
-        }
+        });
     } else {
         result.summaries.reserve(epoch.summaries.size());
         for (const auto& [address, summary] : epoch.summaries) {
@@ -18449,6 +20240,248 @@ published_epoch_version() const {
     return impl_->published_epoch == nullptr
                ? 0u
                : impl_->published_epoch->version;
+}
+
+std::vector<std::uint8_t>
+detail::FunctionValueAnalysisSession::export_persistent_epoch_shards(
+    const katana::io::ExecutableImage& image,
+    const std::string_view implementation_identity,
+    const std::size_t maximum_blob_bytes) const {
+    if (maximum_blob_bytes <
+            persistent_function_epoch_magic.size() +
+                persistent_function_epoch_digest_bytes ||
+        implementation_identity.empty())
+        return {};
+    const std::lock_guard lock(impl_->analysis_mutex);
+    if (impl_->published_epoch == nullptr ||
+        impl_->bound_image_identity != image.analysis_instance_identity() ||
+        impl_->bound_image_revision != image.analysis_revision())
+        return {};
+    try {
+        return write_persistent_function_epoch(
+            *impl_->published_epoch,
+            image,
+            implementation_identity,
+            maximum_blob_bytes);
+    } catch (const PersistentFunctionEpochIncomplete&) {
+        return {};
+    } catch (const PersistentFunctionEpochResourceLimit&) {
+        return {};
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error&) {
+        return {};
+    } catch (...) {
+        return {};
+    }
+}
+
+detail::PersistentFunctionAnalysisEpochImportResult
+detail::FunctionValueAnalysisSession::import_persistent_epoch_shards(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const FunctionBoundary> function_boundaries,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges,
+    const std::span<const std::uint8_t> blob,
+    const std::string_view implementation_identity,
+    const FunctionValueResultMaterialization result_materialization,
+    const std::size_t maximum_blob_bytes) {
+    PersistentFunctionAnalysisEpochImportResult result;
+    result.artifact_bytes = blob.size();
+    if (blob.empty()) return result;
+    if (blob.size() > maximum_blob_bytes) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::ResourceLimit;
+        return result;
+    }
+    if (implementation_identity.empty()) {
+        result.status = PersistentFunctionAnalysisEpochImportStatus::
+            ImplementationMismatch;
+        return result;
+    }
+    if (result_materialization !=
+            FunctionValueResultMaterialization::TerminalFull &&
+        result_materialization != FunctionValueResultMaterialization::DeltaOnly) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::Corrupt;
+        return result;
+    }
+    constexpr auto minimum_blob_size =
+        persistent_function_epoch_digest_bytes +
+        persistent_function_epoch_magic.size() + 3u * sizeof(std::uint32_t);
+    if (blob.size() < minimum_blob_size) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::Corrupt;
+        return result;
+    }
+
+    try {
+        const auto body = blob.first(
+            blob.size() - persistent_function_epoch_digest_bytes);
+        const auto stored_digest_bytes = blob.last(
+            persistent_function_epoch_digest_bytes);
+        const auto actual_digest = persistent_epoch_sha256(body);
+        if (actual_digest.size() != stored_digest_bytes.size() ||
+            !std::equal(actual_digest.begin(),
+                        actual_digest.end(),
+                        stored_digest_bytes.begin(),
+                        stored_digest_bytes.end())) {
+            result.status =
+                PersistentFunctionAnalysisEpochImportStatus::Corrupt;
+            return result;
+        }
+
+        PersistentFunctionEpochReader reader{body};
+        const auto header = read_persistent_epoch_header(reader);
+        result.program_functions = header.program_functions;
+        result.resolution_roots = header.resolution_roots;
+        if (header.format_version !=
+                persistent_function_epoch_format_version ||
+            header.graph_schema_version !=
+                function_program_graph_schema_version ||
+            header.epoch_schema_version !=
+                function_analysis_epoch_schema_version) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                SchemaMismatch;
+            return result;
+        }
+        if (header.implementation_identity != implementation_identity) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                ImplementationMismatch;
+            return result;
+        }
+        const auto image_identity = image.analysis_instance_identity();
+        const auto image_revision = image.analysis_revision();
+        if (header.image_fingerprint !=
+            persistent_function_image_fingerprint(image)) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                ImageMismatch;
+            return result;
+        }
+        if (lines.empty() || function_boundaries.empty()) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                ProgramMismatch;
+            return result;
+        }
+        auto input_arena = build_program_input_arena(
+            lines, function_boundaries, resolved_edges);
+        if (header.program_input_fingerprint !=
+            persistent_program_input_fingerprint(*input_arena)) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                ProgramMismatch;
+            return result;
+        }
+        auto materialized_lines = materialize_program_values(
+            *input_arena->lines);
+        auto materialized_boundaries = materialize_program_values(
+            *input_arena->boundaries);
+        auto materialized_semantic_edges = materialize_program_edges(
+            *input_arena->semantic_edges);
+        const auto current_program_identity =
+            function_program_graph_identity(
+                materialized_lines,
+                materialized_boundaries,
+                materialized_semantic_edges);
+        if (header.program_identity != current_program_identity) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                ProgramMismatch;
+            return result;
+        }
+        auto semantic_edges_owner =
+            std::make_shared<const std::vector<ResolvedControlFlowEdge>>(
+                std::move(materialized_semantic_edges));
+        auto staged_epoch = read_persistent_function_epoch_body(
+            reader,
+            image,
+            input_arena,
+            materialized_lines,
+            std::move(semantic_edges_owner),
+            current_program_identity,
+            impl_->maximum_resolution_dependency_nodes,
+            impl_->maximum_resolution_root_artifacts,
+            impl_->maximum_resolution_epoch_retained_bytes);
+        if (!reader.finished())
+            throw PersistentFunctionEpochCorrupt{};
+        if (staged_epoch->program->function_view().size() !=
+                result.program_functions ||
+            staged_epoch->presentation_root_artifacts->size() !=
+                result.resolution_roots)
+            throw PersistentFunctionEpochIncomplete{};
+
+        const std::lock_guard lock(impl_->analysis_mutex);
+        if (image_identity != image.analysis_instance_identity() ||
+            image_revision != image.analysis_revision()) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                ImageMismatch;
+            return result;
+        }
+        if (impl_->pending_program_delta.has_value() ||
+            impl_->pending_persistent_analysis_bypass_reason !=
+                PersistentAnalysisBypassReason::None) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                Incomplete;
+            return result;
+        }
+        impl_->bind(image);
+        const auto previous_version =
+            impl_->published_epoch == nullptr
+                ? std::uint64_t{0u}
+                : impl_->published_epoch->version;
+        if (previous_version == std::numeric_limits<std::uint64_t>::max()) {
+            result.status = PersistentFunctionAnalysisEpochImportStatus::
+                ResourceLimit;
+            return result;
+        }
+        staged_epoch->version = previous_version + 1u;
+        const auto imported_version = staged_epoch->version;
+        impl_->published_epoch = std::move(staged_epoch);
+        impl_->pending_terminal_abort_snapshot.reset();
+        impl_->pending_terminal_abort_image_identity = 0u;
+        impl_->pending_terminal_abort_image_revision = 0u;
+        impl_->pending_terminal_abort_epoch_version = 0u;
+        impl_->pending_program_delta = FunctionProgramDelta{
+            .kind = FunctionProgramDeltaKind::Unchanged,
+            .result_materialization = result_materialization,
+            .expected_published_epoch_version = imported_version,
+            .image_identity = image_identity,
+            .image_revision = image_revision};
+        impl_->analysis_epochs_published.fetch_add(
+            1u, std::memory_order_relaxed);
+        impl_->resolution_root_artifacts_retained.store(
+            impl_->published_epoch->presentation_metadata
+                .resolution_root_artifacts_retained,
+            std::memory_order_relaxed);
+        impl_->resolution_epoch_retained_bytes.store(
+            impl_->published_epoch->presentation_metadata
+                .resolution_epoch_retained_bytes,
+            std::memory_order_relaxed);
+        impl_->resolution_retention_limit_reason.store(
+            impl_->published_epoch->presentation_metadata
+                .resolution_retention_limit_reason,
+            std::memory_order_relaxed);
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::Imported;
+        return result;
+    } catch (const PersistentFunctionEpochResourceLimit&) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::ResourceLimit;
+    } catch (const PersistentFunctionEpochIncomplete&) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::Incomplete;
+    } catch (const PersistentFunctionEpochCorrupt&) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::Corrupt;
+    } catch (const std::bad_alloc&) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::ResourceLimit;
+    } catch (const std::length_error&) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::ResourceLimit;
+    } catch (...) {
+        result.status =
+            PersistentFunctionAnalysisEpochImportStatus::Corrupt;
+    }
+    return result;
 }
 
 void detail::FunctionValueAnalysisSession::

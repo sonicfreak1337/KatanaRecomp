@@ -143,6 +143,20 @@ endforeach()
 string(SHA256 KATANA_ANALYSIS_COMPONENT_IDENTITY
        "${katana_analysis_material}")
 
+set(katana_analysis_cache_material
+    "katana-analysis-cache-component-v1;${katana_toolchain_material}")
+katana_expand_component_dependency_closure(
+    KATANA_ANALYSIS_CACHE_IDENTITY_CLOSURE
+    FALSE
+    ${KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS})
+foreach(katana_component_file
+        IN LISTS KATANA_ANALYSIS_CACHE_IDENTITY_CLOSURE)
+    katana_append_component_file(
+        katana_analysis_cache_material "${katana_component_file}")
+endforeach()
+string(SHA256 KATANA_ANALYSIS_CACHE_COMPONENT_IDENTITY
+       "${katana_analysis_cache_material}")
+
 set(katana_ir_material
     "katana-ir-component-v1;${katana_toolchain_material}")
 katana_expand_component_dependency_closure(
@@ -161,7 +175,7 @@ katana_expand_component_dependency_closure(
     KATANA_CODEGEN_IDENTITY_CLOSURE
     FALSE
     ${KATANA_CODEGEN_IDENTITY_INPUTS})
-# Analysis-cache codecs and latent discovery are owned by the analysis
+# Analysis-cache codecs and latent discovery are owned by the analysis-cache
 # component. Codegen includes their public data contracts but must not be
 # invalidated when only cache/discovery implementation changes.
 list(
@@ -204,6 +218,8 @@ namespace katana::build_contract {
 
 inline constexpr std::string_view analysis_component_identity =
     \"${KATANA_ANALYSIS_COMPONENT_IDENTITY}\";
+inline constexpr std::string_view analysis_cache_component_identity =
+    \"${KATANA_ANALYSIS_CACHE_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view ir_component_identity =
     \"${KATANA_IR_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view codegen_component_identity =

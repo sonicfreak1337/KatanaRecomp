@@ -75,7 +75,10 @@ struct PortExportOptions {
     // runtime/UI-only rebuild does not invalidate native analysis artifacts.
     std::filesystem::path analysis_cache_root;
     std::filesystem::path codegen_cache_root;
+    // Pure analyzer/FVA semantics and persistent epoch codec identity.
     std::string analysis_implementation_identity;
+    // Prepared boot/latent IR cache codec and IR contract identity.
+    std::string analysis_cache_implementation_identity;
     std::string codegen_implementation_identity;
     // Optional external, identity-bound game project. The caller owns the
     // definition and all referenced spans for the complete export call.

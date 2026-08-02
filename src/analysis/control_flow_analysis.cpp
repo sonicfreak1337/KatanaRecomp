@@ -2198,6 +2198,21 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         detail::FunctionValueAnalysisSession::
             default_maximum_resolution_epoch_retained_bytes,
         options.pre_reserved_function_value_ready_budget);
+    static_assert(
+        maximum_persistent_function_analysis_epoch_blob_bytes ==
+        detail::FunctionValueAnalysisSession::
+            default_maximum_persistent_epoch_blob_bytes);
+    bool persistent_function_analysis_epoch_imported = false;
+    bool persistent_function_analysis_epoch_dirty_after_import = false;
+    std::optional<std::size_t>
+        persistent_function_analysis_epoch_program_functions;
+    bool persistent_function_analysis_epoch_import_terminal =
+        options.persistent_function_analysis_epoch_import_blob.empty() ||
+        options.persistent_function_analysis_epoch_implementation_identity
+            .empty() ||
+        options.maximum_persistent_function_analysis_epoch_blob_bytes == 0u ||
+        options.persistent_function_analysis_epoch_import_blob.size() >
+            options.maximum_persistent_function_analysis_epoch_blob_bytes;
     // ABI-less inputs still have a valid local CFG/decode contract. They must
     // not stage an interprocedural delta that FVA deliberately cannot consume.
     const bool function_value_analysis_supported =
@@ -3474,10 +3489,23 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             continue;
         }
 
+        if (!persistent_function_analysis_epoch_imported &&
+            !persistent_function_analysis_epoch_import_terminal &&
+            persistent_function_analysis_epoch_program_functions.has_value() &&
+            function_boundary_index.size() >
+                *persistent_function_analysis_epoch_program_functions)
+            persistent_function_analysis_epoch_import_terminal = true;
+        const bool persistent_epoch_import_size_ready =
+            !persistent_function_analysis_epoch_imported &&
+            !persistent_function_analysis_epoch_import_terminal &&
+            (!persistent_function_analysis_epoch_program_functions.has_value() ||
+             function_boundary_index.size() ==
+                 *persistent_function_analysis_epoch_program_functions);
         std::vector<FunctionBoundary> function_boundaries;
         if (function_value_analysis_supported &&
             (!function_value_program_initialized ||
-             function_value_full_program_required)) {
+             function_value_full_program_required ||
+             persistent_epoch_import_size_ready)) {
             function_boundaries.reserve(function_boundary_index.size());
             analysis.function_boundary_entries_visited +=
                 function_boundary_index.size();
@@ -3576,9 +3604,28 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             function_values.result_materialization =
                 FunctionValueResultMaterialization::DeltaOnly;
             if (function_value_analysis_supported) {
+                const bool persistent_epoch_imported_before_round =
+                    persistent_function_analysis_epoch_imported;
+                const bool persistent_epoch_import_pending =
+                    !persistent_function_analysis_epoch_imported &&
+                    !persistent_function_analysis_epoch_import_terminal;
+                if (persistent_epoch_import_pending &&
+                    persistent_function_analysis_epoch_program_functions
+                        .has_value() &&
+                    function_boundary_index.size() >
+                        *persistent_function_analysis_epoch_program_functions)
+                    persistent_function_analysis_epoch_import_terminal = true;
+                const bool persistent_epoch_import_attempt_due =
+                    persistent_epoch_import_pending &&
+                    !persistent_function_analysis_epoch_import_terminal &&
+                    (!persistent_function_analysis_epoch_program_functions
+                          .has_value() ||
+                     function_boundary_index.size() ==
+                         *persistent_function_analysis_epoch_program_functions);
                 const bool full_function_program =
                     !function_value_program_initialized ||
-                    function_value_full_program_required;
+                    function_value_full_program_required ||
+                    persistent_epoch_import_attempt_due;
                 detail::FunctionProgramDelta function_program_delta;
                 function_program_delta.result_materialization =
                     FunctionValueResultMaterialization::DeltaOnly;
@@ -3621,6 +3668,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     full_function_program
                         ? function_edge_journal.materialize_all()
                         : std::vector<ResolvedControlFlowEdge>{};
+                const auto function_program_boundaries =
+                    full_function_program
+                        ? std::span<const FunctionBoundary>(
+                              function_boundaries)
+                        : std::span<const FunctionBoundary>{};
                 if (full_function_program) {
                     const auto materialized_program_items =
                         function_program_lines.size() +
@@ -3630,17 +3682,58 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     analysis.result_index_materialized_items +=
                         materialized_program_items;
                 }
-                function_value_session.stage_next_function_program_delta(
-                    std::move(function_program_delta));
+                bool function_program_delta_staged_by_epoch_import = false;
+                if (persistent_epoch_import_attempt_due) {
+                    const auto import = function_value_session
+                        .import_persistent_epoch_shards(
+                            image,
+                            function_program_lines,
+                            function_boundaries,
+                            function_program_edges,
+                            options
+                                .persistent_function_analysis_epoch_import_blob,
+                            options
+                                .persistent_function_analysis_epoch_implementation_identity,
+                            FunctionValueResultMaterialization::DeltaOnly,
+                            options
+                                .maximum_persistent_function_analysis_epoch_blob_bytes);
+                    using ImportStatus = detail::
+                        PersistentFunctionAnalysisEpochImportStatus;
+                    if (import.status == ImportStatus::Imported) {
+                        persistent_function_analysis_epoch_imported = true;
+                        function_program_delta_staged_by_epoch_import = true;
+                        report_progress(
+                            "function-values-persistent-epoch-imported");
+                    } else if (import.status != ImportStatus::ProgramMismatch) {
+                        persistent_function_analysis_epoch_import_terminal =
+                            true;
+                    } else if (import.program_functions == 0u) {
+                        persistent_function_analysis_epoch_import_terminal =
+                            true;
+                    } else {
+                        persistent_function_analysis_epoch_program_functions =
+                            import.program_functions;
+                        if (function_boundary_index.size() >
+                            import.program_functions)
+                            persistent_function_analysis_epoch_import_terminal =
+                                true;
+                    }
+                }
+                if (!function_program_delta_staged_by_epoch_import)
+                    function_value_session.stage_next_function_program_delta(
+                        std::move(function_program_delta));
                 function_values =
                     detail::analyze_function_values_with_guarded_entry_cache(
                         image,
                         function_program_lines,
-                        function_boundaries,
+                        function_program_boundaries,
                         function_program_edges,
                         function_value_progress_callback,
                         guarded_native_entry_shapes,
                         function_value_session);
+                if (persistent_epoch_imported_before_round)
+                    persistent_function_analysis_epoch_dirty_after_import =
+                        true;
                 if (function_values.result_materialization !=
                     FunctionValueResultMaterialization::DeltaOnly)
                     throw std::logic_error(
@@ -4476,10 +4569,44 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     publish_seed_ledger();
     analysis.jump_table_cache = jump_table_cache.counters();
     report_progress("analysis-terminal-materialized");
-    report_progress("complete");
     analysis.progress_callback_failed =
         progress_callback_failed.load(
             std::memory_order_relaxed);
+    if (analysis.termination_reason ==
+            ControlFlowAnalysisTerminationReason::None &&
+        !analysis.function_budget_exhausted &&
+        function_value_analysis_supported &&
+        function_value_program_initialized &&
+        options.persistent_function_analysis_epoch_publish_callback &&
+        !options.persistent_function_analysis_epoch_implementation_identity
+             .empty() &&
+        options.maximum_persistent_function_analysis_epoch_blob_bytes != 0u &&
+        (!persistent_function_analysis_epoch_imported ||
+         persistent_function_analysis_epoch_dirty_after_import)) {
+        try {
+            report_progress(
+                "function-values-persistent-epoch-export-start");
+            const auto blob = function_value_session
+                .export_persistent_epoch_shards(
+                    image,
+                    options
+                        .persistent_function_analysis_epoch_implementation_identity,
+                    options
+                        .maximum_persistent_function_analysis_epoch_blob_bytes);
+            if (!blob.empty())
+                options.persistent_function_analysis_epoch_publish_callback(
+                    blob);
+            if (!blob.empty())
+                report_progress(
+                    "function-values-persistent-epoch-published");
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (...) {
+            // Non-resource cache publication failures cannot invalidate the
+            // authoritative fresh result.
+        }
+    }
+    report_progress("complete");
     return analysis;
 }
 

@@ -39,11 +39,14 @@ struct LatentAotDiscoveryOptions {
     // Optional persistent, local-only negative analysis cache. The caller must place it
     // below its existing private codegen-cache root; neither this path nor a
     // cache key survives into exported product metadata. Persistent caching is
-    // enabled only when analysis_implementation_identity proves the exact
-    // build-bound analysis/IR implementation components; an empty identity
-    // deliberately disables it.
+    // Each cache layer is enabled only when its own exact build-bound
+    // implementation identity is present; empty identities deliberately
+    // disable the corresponding layer.
     std::filesystem::path analysis_cache_root;
+    // Pure analyzer/FVA semantics and persistent epoch codec identity.
     std::string analysis_implementation_identity;
+    // Latent positive/negative IR-cache codec and IR contract identity.
+    std::string analysis_cache_implementation_identity;
     katana::ProgressReporter progress;
     std::size_t maximum_directory_entries = 4096u;
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;

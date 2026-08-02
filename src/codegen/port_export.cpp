@@ -46,6 +46,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <new>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -54,6 +55,7 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -177,42 +179,188 @@ std::string game_project_export_identity(
 }
 
 std::string boot_analysis_semantic_contract_identity(
-    const PortExportOptions& options) {
+    const PortExportOptions&) {
     std::ostringstream material;
     const auto append =
         [&material](const std::string_view value) {
             material << value.size() << ':' << value << ';';
         };
-    append("katana-boot-analysis-semantic-contract-v1");
-    append(
-        options.game_project != nullptr
-            ? game_project_export_identity(*options.game_project)
-            : std::string_view{"no-game-project"});
-    material << static_cast<std::uint32_t>(
-                    options.latent_aot_discovery_mode)
-             << ';';
-    auto hints = std::vector<LatentAotEntryHint>(
-        options.latent_aot_entry_hints.begin(),
-        options.latent_aot_entry_hints.end());
-    std::sort(
-        hints.begin(),
-        hints.end(),
-        [](const auto& left, const auto& right) {
-            return std::tie(left.byte_identity,
-                            left.disc_byte_offset,
-                            left.byte_size,
-                            left.module_relative_offset) <
-                   std::tie(right.byte_identity,
-                            right.disc_byte_offset,
-                            right.byte_size,
-                            right.module_relative_offset);
-        });
-    hints.erase(std::unique(hints.begin(), hints.end()), hints.end());
-    material << hints.size() << ';';
-    for (const auto& hint : hints) {
-        append(hint.byte_identity);
-        material << hint.disc_byte_offset << ';' << hint.byte_size
-                 << ';' << hint.module_relative_offset << ';';
+    // The boot analyzer consumes only the already-materialized image and the
+    // explicit AnalysisOverrides passed separately to the cache key. Latent
+    // discovery mode/hints and runtime-only GameProject fields are downstream
+    // contracts and must not invalidate an otherwise identical boot epoch.
+    append("katana-boot-analysis-semantic-contract-v2");
+    return katana::io::sha256_bytes(material.str());
+}
+
+void append_persistent_epoch_key_field(
+    std::ostringstream& material,
+    const std::string_view value) {
+    material << 's' << value.size() << ':' << value << ';';
+}
+
+template <typename T>
+    requires std::is_integral_v<T>
+void append_persistent_epoch_key_value(
+    std::ostringstream& material,
+    const T value) {
+    material << 'i' << +value << ';';
+}
+
+std::string persistent_boot_epoch_cache_key(
+    const katana::io::ExecutableImage& image,
+    const katana::analysis::AnalysisOverrides* const overrides,
+    const std::string_view analysis_implementation_identity) {
+    std::ostringstream material;
+    append_persistent_epoch_key_field(
+        material, "katana-persistent-function-analysis-epoch-key-v1");
+    append_persistent_epoch_key_value(
+        material, katana::analysis::abi_version);
+    append_persistent_epoch_key_field(
+        material, analysis_implementation_identity);
+
+    append_persistent_epoch_key_value(material, image.segments().size());
+    for (const auto& segment : image.segments()) {
+        append_persistent_epoch_key_field(material, segment.name);
+        append_persistent_epoch_key_value(material, segment.virtual_address);
+        append_persistent_epoch_key_value(material, segment.file_offset);
+        append_persistent_epoch_key_value(material, segment.memory_size);
+        append_persistent_epoch_key_value(
+            material,
+            static_cast<std::underlying_type_t<katana::io::SegmentKind>>(
+                segment.kind));
+        append_persistent_epoch_key_value(
+            material, segment.permissions.readable);
+        append_persistent_epoch_key_value(
+            material, segment.permissions.writable);
+        append_persistent_epoch_key_value(
+            material, segment.permissions.executable);
+        append_persistent_epoch_key_value(
+            material,
+            static_cast<std::underlying_type_t<
+                katana::io::ImageSourceKind>>(segment.source_kind));
+        append_persistent_epoch_key_value(
+            material,
+            static_cast<std::underlying_type_t<
+                katana::io::ImageLoadPhase>>(segment.load_phase));
+        append_persistent_epoch_key_field(
+            material, segment.local_source_name);
+        append_persistent_epoch_key_value(
+            material, segment.latent_source_size);
+        append_persistent_epoch_key_value(material, segment.bytes.size());
+        append_persistent_epoch_key_field(
+            material,
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(segment.bytes.data()),
+                segment.bytes.size())));
+    }
+    append_persistent_epoch_key_value(
+        material, image.entry_points().size());
+    for (const auto entry : image.entry_points())
+        append_persistent_epoch_key_value(material, entry);
+    append_persistent_epoch_key_value(material, image.symbols().size());
+    for (const auto& symbol : image.symbols()) {
+        append_persistent_epoch_key_field(material, symbol.name);
+        append_persistent_epoch_key_value(material, symbol.address);
+        append_persistent_epoch_key_value(material, symbol.size);
+        append_persistent_epoch_key_value(
+            material,
+            static_cast<std::underlying_type_t<katana::io::SymbolKind>>(
+                symbol.kind));
+        append_persistent_epoch_key_value(
+            material,
+            static_cast<std::underlying_type_t<katana::io::SymbolBinding>>(
+                symbol.binding));
+    }
+    append_persistent_epoch_key_value(
+        material, image.relocations().size());
+    for (const auto& relocation : image.relocations()) {
+        append_persistent_epoch_key_value(material, relocation.address);
+        append_persistent_epoch_key_value(material, relocation.raw_type);
+        append_persistent_epoch_key_value(
+            material,
+            static_cast<std::underlying_type_t<katana::io::RelocationKind>>(
+                relocation.kind));
+        append_persistent_epoch_key_field(
+            material, relocation.symbol_name);
+        append_persistent_epoch_key_value(
+            material, relocation.symbol_address);
+        append_persistent_epoch_key_value(material, relocation.addend);
+        append_persistent_epoch_key_value(
+            material, relocation.applied_value.has_value());
+        if (relocation.applied_value.has_value())
+            append_persistent_epoch_key_value(
+                material, *relocation.applied_value);
+    }
+    append_persistent_epoch_key_value(
+        material, image.address_aliases().size());
+    for (const auto& alias : image.address_aliases()) {
+        append_persistent_epoch_key_value(material, alias.source_start);
+        append_persistent_epoch_key_value(material, alias.runtime_start);
+        append_persistent_epoch_key_value(material, alias.size);
+    }
+    append_persistent_epoch_key_value(
+        material,
+        static_cast<std::underlying_type_t<katana::io::GuestCallAbi>>(
+            image.guest_call_abi()));
+    append_persistent_epoch_key_value(
+        material,
+        static_cast<std::underlying_type_t<
+            katana::io::InitialSnapshotPolicy>>(
+                image.initial_snapshot_policy()));
+    append_persistent_epoch_key_value(
+        material, image.initial_snapshot_entry().has_value());
+    if (image.initial_snapshot_entry().has_value())
+        append_persistent_epoch_key_value(
+            material, *image.initial_snapshot_entry());
+    append_persistent_epoch_key_value(
+        material,
+        static_cast<std::underlying_type_t<katana::io::ImageAddressModel>>(
+            image.address_model()));
+
+    append_persistent_epoch_key_value(material, overrides != nullptr);
+    if (overrides != nullptr) {
+        append_persistent_epoch_key_value(material, overrides->version);
+        append_persistent_epoch_key_value(
+            material,
+            static_cast<std::underlying_type_t<
+                katana::analysis::AnalysisDirectiveMode>>(overrides->mode));
+        append_persistent_epoch_key_value(
+            material, overrides->functions.size());
+        for (const auto& function : overrides->functions) {
+            append_persistent_epoch_key_value(material, function.address);
+            append_persistent_epoch_key_value(material, function.line);
+            append_persistent_epoch_key_value(material, function.size);
+        }
+        append_persistent_epoch_key_value(
+            material, overrides->jumps.size());
+        for (const auto& jump : overrides->jumps) {
+            append_persistent_epoch_key_value(
+                material, jump.instruction_address);
+            append_persistent_epoch_key_value(material, jump.target);
+            append_persistent_epoch_key_value(material, jump.line);
+        }
+        append_persistent_epoch_key_value(
+            material, overrides->jump_tables.size());
+        for (const auto& table : overrides->jump_tables) {
+            append_persistent_epoch_key_value(
+                material, table.dispatch_address);
+            append_persistent_epoch_key_value(material, table.table_address);
+            append_persistent_epoch_key_value(material, table.entry_count);
+            append_persistent_epoch_key_value(material, table.line);
+            append_persistent_epoch_key_value(material, table.entry_stride);
+            append_persistent_epoch_key_value(material, table.relative_base);
+            append_persistent_epoch_key_value(
+                material,
+                static_cast<std::underlying_type_t<
+                    katana::analysis::JumpTableOverrideEncoding>>(
+                        table.encoding));
+            append_persistent_epoch_key_value(
+                material,
+                static_cast<std::underlying_type_t<
+                    katana::analysis::JumpTableOverrideTransfer>>(
+                        table.transfer));
+        }
     }
     return katana::io::sha256_bytes(material.str());
 }
@@ -12338,9 +12486,9 @@ static PortExportResult export_dreamcast_port_project_impl(
         LatentAotDiscoveryOptions discovery_options;
         discovery_options.mode = options.latent_aot_discovery_mode;
         discovery_options.analysis_implementation_identity =
-            options.analysis_implementation_identity.empty()
-                ? options.codegen_implementation_identity
-                : options.analysis_implementation_identity;
+            options.analysis_implementation_identity;
+        discovery_options.analysis_cache_implementation_identity =
+            options.analysis_cache_implementation_identity;
         discovery_options.progress = options.progress;
         if (!options.analysis_cache_root.empty())
             discovery_options.analysis_cache_root =
@@ -12781,12 +12929,20 @@ static PortExportResult export_dreamcast_port_project_impl(
         auto content = emit_cpp_port_translation_unit(request).joined_text();
         if (partition_cache) {
             if (content.size() <=
-                maximum_port_codegen_cache_artifact_bytes)
-                partition_cache->store_integrity_bounded(
-                    cache_key,
-                    cache_artifact_name,
-                    content,
-                    maximum_port_codegen_cache_artifact_bytes);
+                maximum_port_codegen_cache_artifact_bytes) {
+                try {
+                    partition_cache->store_integrity_bounded(
+                        cache_key,
+                        cache_artifact_name,
+                        content,
+                        maximum_port_codegen_cache_artifact_bytes);
+                } catch (const std::bad_alloc&) {
+                    throw;
+                } catch (const std::exception&) {
+                    // Generated source remains authoritative when the
+                    // optional local cache cannot publish.
+                }
+            }
             partition_cache_misses.fetch_add(1u, std::memory_order_relaxed);
         }
         return ProjectArtifact{relative_path, std::move(content)};
@@ -13089,11 +13245,17 @@ static PortExportResult export_dreamcast_port_project_impl(
                     if (content.size() >
                         maximum_port_codegen_cache_artifact_bytes)
                         return;
-                    partition_cache->store_integrity_bounded(
-                        metadata_cache_key,
-                        artifact_name,
-                        content,
-                        maximum_port_codegen_cache_artifact_bytes);
+                    try {
+                        partition_cache->store_integrity_bounded(
+                            metadata_cache_key,
+                            artifact_name,
+                            content,
+                            maximum_port_codegen_cache_artifact_bytes);
+                    } catch (const std::bad_alloc&) {
+                        throw;
+                    } catch (const std::exception&) {
+                        // Metadata cache publication is observational only.
+                    }
                 };
             store_metadata_cache("source-map.json", source_map_json);
             store_metadata_cache("cfg.json", control_flow_graph_json);
@@ -13332,11 +13494,13 @@ PreparedBootAnalysisRun prepare_boot_analysis(
     const std::string_view progress_label) {
     constexpr std::string_view artifact_name{
         "prepared-boot-analysis.bin"};
+    constexpr std::string_view epoch_artifact_name{
+        "function-analysis-epoch.bin"};
     const bool cache_enabled =
         boot_analysis_positive_product_cache_enabled &&
         !options.diagnostic_partial &&
         !options.analysis_cache_root.empty() &&
-        !options.analysis_implementation_identity.empty();
+        !options.analysis_cache_implementation_identity.empty();
     std::unique_ptr<CodegenCache> cache;
     std::string cache_key;
     bool cache_entry_absent = true;
@@ -13345,7 +13509,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
             image,
             overrides,
             boot_analysis_semantic_contract_identity(options),
-            options.analysis_implementation_identity);
+            options.analysis_cache_implementation_identity);
         cache = std::make_unique<CodegenCache>(
             options.analysis_cache_root / "boot");
         try {
@@ -13435,6 +13599,41 @@ PreparedBootAnalysisRun prepare_boot_analysis(
 
     if (cache_enabled)
         report_progress(options, "analysis-ir-cache-miss");
+
+    const bool epoch_cache_enabled =
+        !options.diagnostic_partial &&
+        !options.analysis_cache_root.empty() &&
+        !options.analysis_implementation_identity.empty();
+    std::unique_ptr<CodegenCache> epoch_cache;
+    std::string epoch_cache_key;
+    std::string epoch_import_blob;
+    if (epoch_cache_enabled) {
+        try {
+            epoch_cache_key = persistent_boot_epoch_cache_key(
+                image,
+                overrides,
+                options.analysis_implementation_identity);
+            epoch_cache = std::make_unique<CodegenCache>(
+                options.analysis_cache_root / "boot");
+            if (auto stored = epoch_cache->load_bounded(
+                    epoch_cache_key,
+                    epoch_artifact_name,
+                    katana::analysis::
+                        maximum_persistent_function_analysis_epoch_blob_bytes)) {
+                epoch_import_blob = std::move(*stored);
+                report_progress(options, "analysis-epoch-cache-hit");
+            } else {
+                report_progress(options, "analysis-epoch-cache-miss");
+            }
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            epoch_cache.reset();
+            epoch_cache_key.clear();
+            epoch_import_blob.clear();
+            report_progress(options, "analysis-epoch-cache-miss");
+        }
+    }
     report_progress(options, "control-flow-analysis");
     detail::StructuredControlFlowProgress control_flow_progress(
         options.progress,
@@ -13468,11 +13667,49 @@ PreparedBootAnalysisRun prepare_boot_analysis(
                 report_progress(options, marker.str());
             };
     }
+    katana::analysis::ControlFlowAnalysisOptions analysis_options;
+    analysis_options.detailed_cache_miss_telemetry =
+        options.detailed_analysis_telemetry;
+    analysis_options.persistent_function_analysis_epoch_import_blob =
+        std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(epoch_import_blob.data()),
+            epoch_import_blob.size());
+    analysis_options
+        .persistent_function_analysis_epoch_implementation_identity =
+            options.analysis_implementation_identity;
+    if (epoch_cache != nullptr && !epoch_cache_key.empty()) {
+        analysis_options
+            .persistent_function_analysis_epoch_publish_callback =
+                [&epoch_cache,
+                 &epoch_cache_key,
+                 &epoch_import_blob,
+                 epoch_artifact_name](
+                    const std::span<const std::uint8_t> blob) {
+                    const auto serialized = std::string_view(
+                        reinterpret_cast<const char*>(blob.data()),
+                        blob.size());
+                    if (!epoch_import_blob.empty() &&
+                        epoch_import_blob != serialized)
+                        static_cast<void>(
+                            epoch_cache->erase_bounded_if_matches(
+                                epoch_cache_key,
+                                epoch_artifact_name,
+                                epoch_import_blob,
+                                katana::analysis::
+                                    maximum_persistent_function_analysis_epoch_blob_bytes));
+                    epoch_cache->store_bounded(
+                        epoch_cache_key,
+                        epoch_artifact_name,
+                        serialized,
+                        katana::analysis::
+                            maximum_persistent_function_analysis_epoch_blob_bytes);
+                };
+    }
     auto analysis = katana::analysis::analyze_control_flow(
         image,
         overrides,
         analysis_progress_callback,
-        options.detailed_analysis_telemetry);
+        analysis_options);
     if (analysis.progress_callback_failed)
         options.progress.record_observation_loss();
     control_flow_progress.complete(analysis.fixpoint_iterations);
@@ -13636,7 +13873,7 @@ PortExportResult export_dreamcast_port_project(
         prepared_analysis.full_pipeline_runs;
     if (!options.diagnostic_partial &&
         !options.analysis_cache_root.empty() &&
-        !options.analysis_implementation_identity.empty())
+        !options.analysis_cache_implementation_identity.empty())
         report.checkpoints.push_back(
             "analysis-ir-positive-cache-disabled");
     return report;
@@ -13768,7 +14005,7 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         prepared_analysis.full_pipeline_runs;
     if (!options.diagnostic_partial &&
         !options.analysis_cache_root.empty() &&
-        !options.analysis_implementation_identity.empty())
+        !options.analysis_cache_implementation_identity.empty())
         report.checkpoints.push_back(
             "analysis-ir-positive-cache-disabled");
     return report;

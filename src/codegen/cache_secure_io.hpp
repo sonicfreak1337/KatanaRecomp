@@ -10,6 +10,7 @@
 #include <limits>
 #include <optional>
 #include <random>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -28,6 +29,37 @@
 #endif
 
 namespace katana::codegen::detail {
+
+inline constexpr std::string_view secure_cache_root_lock_artifact_name{
+    ".katana-cache-root.lock"};
+inline constexpr std::string_view secure_cache_root_lock_magic{
+    "KATANA-CACHE-ROOT-SEQUENCE-V1\n"};
+
+[[nodiscard]] inline std::string secure_cache_root_lock_payload(
+    const std::uint64_t sequence) {
+    auto payload = std::string(secure_cache_root_lock_magic);
+    for (std::size_t byte = 0u; byte < sizeof(sequence); ++byte)
+        payload.push_back(static_cast<char>(
+            (sequence >> (byte * 8u)) & 0xffu));
+    return payload;
+}
+
+[[nodiscard]] inline std::optional<std::uint64_t>
+parse_secure_cache_root_lock_payload(
+    const std::string_view payload) noexcept {
+    if (payload.size() != secure_cache_root_lock_magic.size() +
+                              sizeof(std::uint64_t) ||
+        !payload.starts_with(secure_cache_root_lock_magic))
+        return std::nullopt;
+    std::uint64_t sequence = 0u;
+    for (std::size_t byte = 0u; byte < sizeof(sequence); ++byte)
+        sequence |= static_cast<std::uint64_t>(
+                        static_cast<unsigned char>(
+                            payload[secure_cache_root_lock_magic.size() +
+                                    byte]))
+                    << (byte * 8u);
+    return sequence;
+}
 
 enum class SecureArtifactKind : std::uint8_t {
     Missing,
@@ -405,6 +437,194 @@ win_final_dos_path(const HANDLE handle) {
         return index == chain.handles.size();
     } catch (...) {
         return false;
+    }
+}
+
+[[nodiscard]] inline bool win_delete_open_file(HANDLE handle);
+
+class SecureCacheRootMutationLock final {
+  public:
+    explicit SecureCacheRootMutationLock(
+        const std::filesystem::path& root)
+        : root_(root) {
+        auto opened_root = win_open_cache_root(root_, true);
+        if (opened_root.kind != SecureArtifactKind::Regular)
+            throw std::runtime_error(
+                "Codegen-Cache-Rootlock konnte den Root nicht sicher "
+                "oeffnen.");
+        root_chain_ = std::move(opened_root.chain);
+        if (!win_revalidate_directory_chain(
+                root_, root_, root_chain_))
+            throw std::runtime_error(
+                "Codegen-Cache-Rootlock verlor seine Rootidentitaet.");
+
+        lock_path_ = root_ /
+                     std::filesystem::path(
+                         secure_cache_root_lock_artifact_name);
+        lock_file_ = WinHandle(CreateFileW(
+            lock_path_.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr));
+        const auto information =
+            lock_file_ ? win_file_information(lock_file_.get())
+                       : std::nullopt;
+        const auto final_path =
+            lock_file_ ? win_final_dos_path(lock_file_.get())
+                       : std::nullopt;
+        if (!information ||
+            !win_safe_regular_information(*information) ||
+            !final_path ||
+            !win_paths_equal_case_insensitive(
+                lock_path_, *final_path) ||
+            !win_revalidate_directory_chain(
+                root_, root_, root_chain_))
+            throw std::runtime_error(
+                "Codegen-Cache-Rootlock ist kein sicheres Artefakt.");
+
+        OVERLAPPED overlap{};
+        if (!LockFileEx(
+                lock_file_.get(),
+                LOCKFILE_EXCLUSIVE_LOCK,
+                0u,
+                MAXDWORD,
+                MAXDWORD,
+                &overlap))
+            throw std::runtime_error(
+                "Codegen-Cache-Rootlock konnte nicht exklusiv "
+                "gesperrt werden.");
+        locked_ = true;
+        read_sequence();
+    }
+
+    SecureCacheRootMutationLock(
+        const SecureCacheRootMutationLock&) = delete;
+    SecureCacheRootMutationLock& operator=(
+        const SecureCacheRootMutationLock&) = delete;
+
+    ~SecureCacheRootMutationLock() {
+        if (!locked_) return;
+        OVERLAPPED overlap{};
+        static_cast<void>(UnlockFileEx(
+            lock_file_.get(),
+            0u,
+            MAXDWORD,
+            MAXDWORD,
+            &overlap));
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> sequence() const noexcept {
+        return sequence_;
+    }
+
+    std::uint64_t advance_sequence() {
+        const auto next = !sequence_.has_value() ||
+                                  *sequence_ ==
+                                      std::numeric_limits<
+                                          std::uint64_t>::max()
+                              ? 1u
+                              : *sequence_ + 1u;
+        const auto payload = secure_cache_root_lock_payload(next);
+        LARGE_INTEGER beginning{};
+        if (!SetFilePointerEx(
+                lock_file_.get(), beginning, nullptr, FILE_BEGIN))
+            throw std::runtime_error(
+                "Codegen-Cache-Rootsequenz konnte nicht positioniert "
+                "werden.");
+        DWORD written = 0u;
+        if (!WriteFile(
+                lock_file_.get(),
+                payload.data(),
+                static_cast<DWORD>(payload.size()),
+                &written,
+                nullptr) ||
+            written != payload.size() ||
+            !SetEndOfFile(lock_file_.get()) ||
+            !FlushFileBuffers(lock_file_.get()) ||
+            !win_revalidate_directory_chain(
+                root_, root_, root_chain_))
+            throw std::runtime_error(
+                "Codegen-Cache-Rootsequenz konnte nicht sicher "
+                "veroeffentlicht werden.");
+        sequence_ = next;
+        return next;
+    }
+
+  private:
+    void read_sequence() {
+        LARGE_INTEGER size{};
+        if (!GetFileSizeEx(lock_file_.get(), &size) ||
+            size.QuadPart < 0 ||
+            size.QuadPart > 128)
+            return;
+        LARGE_INTEGER beginning{};
+        if (!SetFilePointerEx(
+                lock_file_.get(), beginning, nullptr, FILE_BEGIN))
+            return;
+        std::string payload(
+            static_cast<std::size_t>(size.QuadPart), '\0');
+        DWORD read = 0u;
+        if (!payload.empty() &&
+            (!ReadFile(
+                 lock_file_.get(),
+                 payload.data(),
+                 static_cast<DWORD>(payload.size()),
+                 &read,
+                 nullptr) ||
+             read != payload.size()))
+            return;
+        sequence_ = parse_secure_cache_root_lock_payload(payload);
+    }
+
+    std::filesystem::path root_;
+    std::filesystem::path lock_path_;
+    WinDirectoryChain root_chain_;
+    WinHandle lock_file_;
+    std::optional<std::uint64_t> sequence_;
+    bool locked_ = false;
+};
+
+inline void secure_cache_prune_empty_parents(
+    const std::filesystem::path& root,
+    std::filesystem::path directory) noexcept {
+    try {
+        directory = directory.lexically_normal();
+        while (directory != root &&
+               cache_path_within(root, directory)) {
+            const auto parent = directory.parent_path();
+            auto parent_chain = win_open_directory_chain(
+                root, parent, false);
+            if (parent_chain.kind !=
+                SecureArtifactKind::Regular)
+                return;
+            WinHandle target(CreateFileW(
+                directory.c_str(),
+                FILE_READ_ATTRIBUTES | DELETE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS |
+                    FILE_FLAG_OPEN_REPARSE_POINT,
+                nullptr));
+            BY_HANDLE_FILE_INFORMATION information{};
+            if (!target ||
+                !win_validate_named_directory(
+                    directory, target.get(), information) ||
+                !win_revalidate_directory_chain(
+                    root, parent, parent_chain.chain))
+                return;
+            if (!win_delete_open_file(target.get())) return;
+            target.reset();
+            if (!win_revalidate_directory_chain(
+                    root, parent, parent_chain.chain))
+                return;
+            directory = parent;
+        }
+    } catch (...) {
+        // Empty-directory pruning is bounded cache maintenance only.
     }
 }
 
@@ -1029,6 +1249,191 @@ posix_open_directory_chain(
         posix_open_directory_chain(root, directory, false);
     return current.kind == SecureArtifactKind::Regular &&
            current.chain.identities == expected;
+}
+
+class SecureCacheRootMutationLock final {
+  public:
+    explicit SecureCacheRootMutationLock(
+        const std::filesystem::path& root)
+        : root_(root) {
+        auto opened_root = posix_open_directory_chain(
+            root_, root_, true);
+        if (opened_root.kind != SecureArtifactKind::Regular)
+            throw std::runtime_error(
+                "Codegen-Cache-Rootlock konnte den Root nicht sicher "
+                "oeffnen.");
+        root_chain_ = std::move(opened_root.chain);
+        lock_file_ = PosixFd(openat(
+            root_chain_.cache_root.get(),
+            std::string(secure_cache_root_lock_artifact_name).c_str(),
+            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+            0600));
+        struct stat information{};
+        if (!lock_file_ ||
+            fstat(lock_file_.get(), &information) != 0 ||
+            !S_ISREG(information.st_mode) ||
+            information.st_nlink != 1 ||
+            !posix_named_regular_file_matches_snapshot(
+                root_chain_.cache_root.get(),
+                std::filesystem::path(
+                    secure_cache_root_lock_artifact_name),
+                information) ||
+            !posix_directory_chain_matches(
+                root_, root_, root_chain_.identities))
+            throw std::runtime_error(
+                "Codegen-Cache-Rootlock ist kein sicheres Artefakt.");
+
+        struct flock lock{};
+        lock.l_type = F_WRLCK;
+        lock.l_whence = SEEK_SET;
+        lock.l_start = 0;
+        lock.l_len = 0;
+        int status = -1;
+        do {
+            status = fcntl(lock_file_.get(), F_SETLKW, &lock);
+        } while (status != 0 && errno == EINTR);
+        if (status != 0)
+            throw std::runtime_error(
+                "Codegen-Cache-Rootlock konnte nicht exklusiv "
+                "gesperrt werden.");
+        locked_ = true;
+        read_sequence();
+    }
+
+    SecureCacheRootMutationLock(
+        const SecureCacheRootMutationLock&) = delete;
+    SecureCacheRootMutationLock& operator=(
+        const SecureCacheRootMutationLock&) = delete;
+
+    ~SecureCacheRootMutationLock() {
+        if (!locked_) return;
+        struct flock lock{};
+        lock.l_type = F_UNLCK;
+        lock.l_whence = SEEK_SET;
+        lock.l_start = 0;
+        lock.l_len = 0;
+        static_cast<void>(fcntl(
+            lock_file_.get(), F_SETLK, &lock));
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> sequence() const noexcept {
+        return sequence_;
+    }
+
+    std::uint64_t advance_sequence() {
+        const auto next = !sequence_.has_value() ||
+                                  *sequence_ ==
+                                      std::numeric_limits<
+                                          std::uint64_t>::max()
+                              ? 1u
+                              : *sequence_ + 1u;
+        const auto payload = secure_cache_root_lock_payload(next);
+        if (ftruncate(lock_file_.get(), 0) != 0 ||
+            lseek(lock_file_.get(), 0, SEEK_SET) != 0)
+            throw std::runtime_error(
+                "Codegen-Cache-Rootsequenz konnte nicht positioniert "
+                "werden.");
+        std::size_t offset = 0u;
+        while (offset < payload.size()) {
+            ssize_t written = -1;
+            do {
+                written = write(
+                    lock_file_.get(),
+                    payload.data() + offset,
+                    payload.size() - offset);
+            } while (written < 0 && errno == EINTR);
+            if (written <= 0)
+                throw std::runtime_error(
+                    "Codegen-Cache-Rootsequenz konnte nicht "
+                    "geschrieben werden.");
+            offset += static_cast<std::size_t>(written);
+        }
+        if (fsync(lock_file_.get()) != 0 ||
+            !posix_directory_chain_matches(
+                root_, root_, root_chain_.identities))
+            throw std::runtime_error(
+                "Codegen-Cache-Rootsequenz konnte nicht sicher "
+                "veroeffentlicht werden.");
+        sequence_ = next;
+        return next;
+    }
+
+  private:
+    void read_sequence() {
+        struct stat information{};
+        if (fstat(lock_file_.get(), &information) != 0 ||
+            information.st_size < 0 ||
+            information.st_size > 128 ||
+            lseek(lock_file_.get(), 0, SEEK_SET) != 0)
+            return;
+        std::string payload(
+            static_cast<std::size_t>(information.st_size), '\0');
+        std::size_t offset = 0u;
+        while (offset < payload.size()) {
+            ssize_t count = -1;
+            do {
+                count = read(
+                    lock_file_.get(),
+                    payload.data() + offset,
+                    payload.size() - offset);
+            } while (count < 0 && errno == EINTR);
+            if (count <= 0) return;
+            offset += static_cast<std::size_t>(count);
+        }
+        sequence_ = parse_secure_cache_root_lock_payload(payload);
+    }
+
+    std::filesystem::path root_;
+    PosixDirectoryChain root_chain_;
+    PosixFd lock_file_;
+    std::optional<std::uint64_t> sequence_;
+    bool locked_ = false;
+};
+
+inline void secure_cache_prune_empty_parents(
+    const std::filesystem::path& root,
+    std::filesystem::path directory) noexcept {
+    try {
+        directory = directory.lexically_normal();
+        while (directory != root &&
+               cache_path_within(root, directory)) {
+            const auto parent = directory.parent_path();
+            auto parent_chain = posix_open_directory_chain(
+                root, parent, false);
+            if (parent_chain.kind !=
+                SecureArtifactKind::Regular)
+                return;
+            const auto filename = directory.filename();
+            PosixFd target(openat(
+                parent_chain.chain.parent.get(),
+                filename.c_str(),
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+            struct stat opened{};
+            struct stat named{};
+            if (!target ||
+                fstat(target.get(), &opened) != 0 ||
+                !S_ISDIR(opened.st_mode) ||
+                fstatat(
+                    parent_chain.chain.parent.get(),
+                    filename.c_str(),
+                    &named,
+                    AT_SYMLINK_NOFOLLOW) != 0 ||
+                !S_ISDIR(named.st_mode) ||
+                posix_file_identity(opened) !=
+                    posix_file_identity(named) ||
+                !posix_directory_chain_matches(
+                    root, parent, parent_chain.chain.identities))
+                return;
+            if (unlinkat(
+                    parent_chain.chain.parent.get(),
+                    filename.c_str(),
+                    AT_REMOVEDIR) != 0)
+                return;
+            directory = parent;
+        }
+    } catch (...) {
+        // Empty-directory pruning is bounded cache maintenance only.
+    }
 }
 
 [[nodiscard]] inline bool posix_public_file_matches_snapshot(

@@ -7195,6 +7195,8 @@ int export_port_project(const std::filesystem::path& source_path,
         export_options.codegen_cache_root = workspace / ".katana-codegen-cache";
         export_options.analysis_implementation_identity =
             implementation_identities.analysis;
+        export_options.analysis_cache_implementation_identity =
+            implementation_identities.analysis_cache;
         export_options.codegen_implementation_identity =
             implementation_identities.codegen;
         export_options.game_project =

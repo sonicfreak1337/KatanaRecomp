@@ -4,6 +4,8 @@
 #include <array>
 #include <fstream>
 #include <future>
+#include <new>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -355,19 +357,33 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
             artifact.content.size() <=
                 maximum_project_cache_artifact_bytes) {
             const auto cache_name = artifact.relative_path.generic_string();
-            const auto cached = options.cache->load_bounded(
-                options.cache_key,
-                cache_name,
-                maximum_project_cache_artifact_bytes);
+            std::optional<std::string> cached;
+            try {
+                cached = options.cache->load_integrity_bounded(
+                    options.cache_key,
+                    cache_name,
+                    maximum_project_cache_artifact_bytes);
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (const std::exception&) {
+                // The project cache is optional. Unsafe local state is a miss.
+            }
             if (cached) {
                 write_file(root, artifact.relative_path, *cached);
                 hit = true;
             } else {
-                options.cache->store_bounded(
-                    options.cache_key,
-                    cache_name,
-                    artifact.content,
-                    maximum_project_cache_artifact_bytes);
+                try {
+                    options.cache->store_integrity_bounded(
+                        options.cache_key,
+                        cache_name,
+                        artifact.content,
+                        maximum_project_cache_artifact_bytes);
+                } catch (const std::bad_alloc&) {
+                    throw;
+                } catch (const std::exception&) {
+                    // Fresh generated content remains authoritative even if
+                    // optional cache publication is unavailable.
+                }
                 write_file(root, artifact.relative_path, artifact.content);
             }
         } else {

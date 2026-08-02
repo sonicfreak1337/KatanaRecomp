@@ -65,6 +65,8 @@ port_export_implementation_identities() {
     if (!valid_cache_digest(
             katana::build_contract::analysis_component_identity) ||
         !valid_cache_digest(
+            katana::build_contract::analysis_cache_component_identity) ||
+        !valid_cache_digest(
             katana::build_contract::ir_component_identity) ||
         !valid_cache_digest(
             katana::build_contract::codegen_component_identity) ||
@@ -85,17 +87,24 @@ port_export_implementation_identities() {
     };
     const auto analyzer_abi =
         std::to_string(katana::build_contract::analyzer_abi_version);
-    const auto ir_contract =
-        std::to_string(port_ir_contract_version);
-    const std::array<std::string_view, 4u> stable_analysis_fields{
+    const std::array<std::string_view, 2u> stable_analysis_fields{
         katana::build_contract::analysis_component_identity,
-        katana::build_contract::ir_component_identity,
-        analyzer_abi,
-        ir_contract};
+        analyzer_abi};
     PortExportImplementationIdentities identities;
     identities.analysis = combine(
         "katana-port-analysis-components",
         stable_analysis_fields);
+
+    const auto ir_contract =
+        std::to_string(port_ir_contract_version);
+    const std::array<std::string_view, 4u> analysis_cache_fields{
+        identities.analysis,
+        katana::build_contract::analysis_cache_component_identity,
+        katana::build_contract::ir_component_identity,
+        ir_contract};
+    identities.analysis_cache = combine(
+        "katana-port-analysis-cache-components",
+        analysis_cache_fields);
 
     const auto backend_abi =
         std::to_string(
@@ -115,9 +124,8 @@ port_export_implementation_identities() {
         std::to_string(
             katana::codegen::
                 native_aot_emission_profile_version);
-    const std::array<std::string_view, 7u> codegen_fields{
+    const std::array<std::string_view, 6u> codegen_fields{
         katana::build_contract::codegen_component_identity,
-        katana::build_contract::ir_component_identity,
         backend_abi,
         partition_schema,
         metadata_schema,
@@ -148,9 +156,11 @@ port_export_implementation_identities() {
         std::to_string(
             katana::runtime::
                 game_project_artifact_format_version);
-    const std::array<std::string_view, 10u> whole_fields{
+    const std::array<std::string_view, 12u> whole_fields{
         identities.analysis,
+        identities.analysis_cache,
         identities.codegen,
+        katana::build_contract::ir_component_identity,
         katana::build_contract::
             orchestration_component_identity,
         katana::build_contract::project_version,

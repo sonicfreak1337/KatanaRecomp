@@ -26,6 +26,7 @@
 #include <numeric>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -883,7 +884,10 @@ CandidateAnalysisOutcome finalize_candidate_program(
 CandidateAnalysisOutcome analyze_candidate_uncached(
     const DiscFileCandidate& candidate,
     const LatentAotDiscoveryOptions& options,
-    const katana::ProgressReporter& progress_reporter) {
+    const katana::ProgressReporter& progress_reporter,
+    const std::span<const std::uint8_t> persistent_epoch_import_blob,
+    katana::analysis::PersistentFunctionAnalysisEpochPublishCallback
+        persistent_epoch_publish_callback) {
     if (const auto rejection =
             candidate_source_shape_rejection(
                 candidate, options))
@@ -930,6 +934,13 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             latent_aot_function_value_ready_budget_bytes));
     analysis_options.pre_reserved_function_value_ready_budget =
         &function_value_ready_budget;
+    analysis_options.persistent_function_analysis_epoch_import_blob =
+        persistent_epoch_import_blob;
+    analysis_options
+        .persistent_function_analysis_epoch_implementation_identity =
+            options.analysis_implementation_identity;
+    analysis_options.persistent_function_analysis_epoch_publish_callback =
+        std::move(persistent_epoch_publish_callback);
     try {
         analysis = katana::analysis::analyze_control_flow(
             image,
@@ -1019,8 +1030,43 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
     inputs.analyzer_implementation_id =
         std::string(latent_aot_analysis_implementation_id) + "-" +
         katana::io::sha256_bytes(
-            options.analysis_implementation_identity);
+            options.analysis_cache_implementation_identity);
     return inputs;
+}
+
+std::string candidate_epoch_cache_key(
+    const DiscFileCandidate& candidate,
+    const LatentAotDiscoveryOptions& options) {
+    std::ostringstream material;
+    const auto append_field =
+        [&material](const std::string_view value) {
+            material << 's' << value.size() << ':' << value << ';';
+        };
+    const auto append_value =
+        [&material](const auto value) {
+            material << 'i' << +value << ';';
+        };
+    append_field("katana-latent-persistent-function-analysis-epoch-key-v1");
+    append_value(katana::analysis::abi_version);
+    append_field(options.analysis_implementation_identity);
+    append_field(candidate.byte_identity);
+    append_value(candidate.size);
+    append_value(candidate.source_address);
+    append_value(latent_aot_analysis_address_layout_schema);
+    append_value(!candidate.explicit_entry_offsets.empty());
+    auto entry_offsets = candidate.entry_offsets;
+    std::sort(entry_offsets.begin(), entry_offsets.end());
+    entry_offsets.erase(
+        std::unique(entry_offsets.begin(), entry_offsets.end()),
+        entry_offsets.end());
+    append_value(entry_offsets.size());
+    for (const auto entry : entry_offsets)
+        append_value(entry);
+    append_value(options.maximum_entry_scan_instructions);
+    append_value(options.maximum_native_instructions_per_module);
+    append_value(options.maximum_analysis_iterations);
+    append_value(options.maximum_analysis_contexts);
+    return katana::io::sha256_bytes(material.str());
 }
 
 CandidateAnalysisOutcome analyze_candidate(
@@ -1029,9 +1075,12 @@ CandidateAnalysisOutcome analyze_candidate(
     CodegenCache* const cache,
     CandidateAnalysisCacheCounters& counters,
     const katana::ProgressReporter& progress_reporter) {
+    constexpr std::string_view epoch_artifact_name{
+        "function-analysis-epoch.bin"};
     std::string cache_key;
     bool cache_entry_absent = true;
-    if (cache != nullptr) {
+    if (cache != nullptr &&
+        !options.analysis_cache_implementation_identity.empty()) {
         try {
             cache_key = make_latent_aot_analysis_cache_key(
                 candidate_cache_key_inputs(candidate, options));
@@ -1099,8 +1148,64 @@ CandidateAnalysisOutcome analyze_candidate(
 
     counters.full_pipeline_runs.fetch_add(
         1u, std::memory_order_relaxed);
+    std::string epoch_cache_key;
+    std::string epoch_import_blob;
+    if (cache != nullptr &&
+        !options.analysis_implementation_identity.empty()) {
+        try {
+            epoch_cache_key =
+                candidate_epoch_cache_key(candidate, options);
+            if (auto stored = cache->load_bounded(
+                    epoch_cache_key,
+                    epoch_artifact_name,
+                    katana::analysis::
+                        maximum_persistent_function_analysis_epoch_blob_bytes))
+                epoch_import_blob = std::move(*stored);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            epoch_cache_key.clear();
+            epoch_import_blob.clear();
+        }
+    }
+    katana::analysis::PersistentFunctionAnalysisEpochPublishCallback
+        epoch_publish_callback;
+    if (cache != nullptr && !epoch_cache_key.empty()) {
+        epoch_publish_callback =
+            [cache,
+             epoch_cache_key,
+             &epoch_import_blob,
+             epoch_artifact_name](
+                const std::span<const std::uint8_t> blob) {
+                const auto serialized = std::string_view(
+                    reinterpret_cast<const char*>(blob.data()),
+                    blob.size());
+                if (!epoch_import_blob.empty() &&
+                    epoch_import_blob != serialized)
+                    static_cast<void>(
+                        cache->erase_bounded_if_matches(
+                            epoch_cache_key,
+                            epoch_artifact_name,
+                            epoch_import_blob,
+                            katana::analysis::
+                                maximum_persistent_function_analysis_epoch_blob_bytes));
+                cache->store_bounded(
+                    epoch_cache_key,
+                    epoch_artifact_name,
+                    serialized,
+                    katana::analysis::
+                        maximum_persistent_function_analysis_epoch_blob_bytes);
+            };
+    }
     auto analyzed = analyze_candidate_uncached(
-        candidate, options, progress_reporter);
+        candidate,
+        options,
+        progress_reporter,
+        std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(
+                epoch_import_blob.data()),
+            epoch_import_blob.size()),
+        std::move(epoch_publish_callback));
     if (cache == nullptr || cache_key.empty() ||
         !cache_entry_absent || !analyzed.deterministic)
         return analyzed;
@@ -1190,6 +1295,8 @@ LatentAotDiscovery discover_latent_aot_modules(
         options.maximum_analysis_iterations == 0u ||
         options.maximum_analysis_contexts == 0u ||
         options.analysis_implementation_identity.size() >
+            maximum_analysis_implementation_identity_bytes ||
+        options.analysis_cache_implementation_identity.size() >
             maximum_analysis_implementation_identity_bytes ||
         options.source_address_begin >= options.source_address_end ||
         (options.source_address_begin & 3u) != 0u ||
@@ -1512,7 +1619,8 @@ LatentAotDiscovery discover_latent_aot_modules(
 
     std::unique_ptr<CodegenCache> analysis_cache;
     if (!options.analysis_cache_root.empty() &&
-        !options.analysis_implementation_identity.empty())
+        (!options.analysis_implementation_identity.empty() ||
+         !options.analysis_cache_implementation_identity.empty()))
         analysis_cache =
             std::make_unique<CodegenCache>(
                 options.analysis_cache_root);

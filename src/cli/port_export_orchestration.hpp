@@ -14,6 +14,7 @@ inline constexpr std::uint32_t port_ir_contract_version = 2u;
 
 struct PortExportImplementationIdentities final {
     std::string analysis;
+    std::string analysis_cache;
     std::string codegen;
     std::string whole_export;
 };

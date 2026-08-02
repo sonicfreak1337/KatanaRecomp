@@ -14,8 +14,10 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace katana::analysis {
 class AnalysisMemoryBudget;
@@ -491,6 +493,31 @@ struct ResolutionExecutionObserverForTesting final {
     std::function<void(std::size_t)> commit;
 };
 
+enum class PersistentFunctionAnalysisEpochImportStatus : std::uint8_t {
+    Imported,
+    Empty,
+    SchemaMismatch,
+    ImplementationMismatch,
+    ImageMismatch,
+    ProgramMismatch,
+    Incomplete,
+    Corrupt,
+    ResourceLimit,
+};
+
+struct PersistentFunctionAnalysisEpochImportResult final {
+    PersistentFunctionAnalysisEpochImportStatus status =
+        PersistentFunctionAnalysisEpochImportStatus::Empty;
+    std::size_t artifact_bytes = 0u;
+    std::size_t program_functions = 0u;
+    std::size_t resolution_roots = 0u;
+
+    [[nodiscard]] bool imported() const noexcept {
+        return status ==
+               PersistentFunctionAnalysisEpochImportStatus::Imported;
+    }
+};
+
 class FunctionValueAnalysisSession {
   public:
     static constexpr std::size_t
@@ -500,6 +527,9 @@ class FunctionValueAnalysisSession {
     static constexpr std::size_t
         default_maximum_resolution_epoch_retained_bytes =
             512u * 1024u * 1024u;
+    static constexpr std::size_t
+        default_maximum_persistent_epoch_blob_bytes =
+            768u * 1024u * 1024u;
 
     explicit FunctionValueAnalysisSession(
         std::size_t maximum_entries = 16'384u,
@@ -530,6 +560,36 @@ class FunctionValueAnalysisSession {
     statistics() const;
 
     [[nodiscard]] std::uint64_t published_epoch_version() const;
+
+    // Opaque, cross-process baseline for the expensive immutable program and
+    // resolution-owner domains. The component identity is supplied by the
+    // product cache layer and is part of the authenticated artifact envelope.
+    // An empty export means that no complete, bounded epoch is publishable.
+    [[nodiscard]] std::vector<std::uint8_t>
+    export_persistent_epoch_shards(
+        const katana::io::ExecutableImage& image,
+        std::string_view implementation_identity,
+        std::size_t maximum_blob_bytes =
+            default_maximum_persistent_epoch_blob_bytes) const;
+
+    // Import is transactional. It validates the current image and complete
+    // program input before publishing an immutable baseline and stages the
+    // matching Unchanged journal for exactly one subsequent analysis call.
+    // Missing semantic owner state is never represented by an empty result:
+    // the imported presentation may be consumed directly only when complete;
+    // otherwise the ordinary analysis path recomputes every missing owner.
+    [[nodiscard]] PersistentFunctionAnalysisEpochImportResult
+    import_persistent_epoch_shards(
+        const katana::io::ExecutableImage& image,
+        std::span<const katana::sh4::DisassemblyLine> lines,
+        std::span<const FunctionBoundary> function_boundaries,
+        std::span<const ResolvedControlFlowEdge> resolved_edges,
+        std::span<const std::uint8_t> blob,
+        std::string_view implementation_identity,
+        FunctionValueResultMaterialization result_materialization =
+            FunctionValueResultMaterialization::TerminalFull,
+        std::size_t maximum_blob_bytes =
+            default_maximum_persistent_epoch_blob_bytes);
 
     // The next real analysis invocation consumes this exact producer journal.
     // It is bound to image identity/revision and the expected published epoch;
