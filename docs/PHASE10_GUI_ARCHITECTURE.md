@@ -61,7 +61,7 @@ active hostbuild process tree. Output conflicts are rejected both inside
 `JobCoordinator` and across application processes; unrelated output roots may
 run concurrently.
 
-Application contract version 4 exposes one sequenced hierarchical event stream
+Application contract version 8 exposes one sequenced hierarchical event stream
 to both CLI and GUI. Known work reports current/total counters; configure and
 compile remain indeterminate until their tools expose a trustworthy total. The
 host process is tailed while running and only newly appended, redacted chunks
@@ -69,22 +69,28 @@ are delivered. The GUI retains a bounded in-memory log and never rereads the
 complete `recompile.log` during refresh.
 
 A terminal `completed` or `partial` event is emitted only after `job-result.json`
-has been written, staging has been atomically renamed and stale cleanup has
-succeeded. Publication failures stay inside the structured job error path and
-end with a terminal `failed` event. Log redaction updates the tail offset to the
-new atomic file size before compilation, so shortening configuration output
-cannot hide later compiler chunks. On Linux, `waitpid` retries `EINTR`; other
-wait errors cannot reuse stale status, and cancellation escalates from bounded
-`SIGTERM` waiting to `SIGKILL`.
+has been written, staging has been atomically renamed and local user data has
+been preserved. This is the authoritative publication commit point. Cleanup of
+the stale recovery copy happens afterwards; if it cannot finish, the published
+result remains successful, emits a structured warning and the next run resumes
+cleanup under the same output lock. Failures before the commit point stay
+inside the structured job error path and end with a terminal `failed` event.
+Log redaction updates the tail offset to the new atomic file size before
+compilation, so shortening configuration output cannot hide later compiler
+chunks. On Linux, `waitpid` retries `EINTR`; other wait errors cannot reuse stale
+status, and cancellation escalates from bounded `SIGTERM` waiting to `SIGKILL`.
 
-Generated output is transactional. Each job writes to a short,
-identity-derived sibling staging directory and publishes it only after its
+Generated output is transactional. Each job writes to a short, unique sibling
+staging directory and publishes it only after its
 terminal result is known. Failed or cancelled staging is removed. When a
 rebuild fails, the former successful output is moved to an explicitly stale
 directory instead of remaining indistinguishable from the failed attempt.
-Further failures with the same stable CLI job ID replace only the current
-failure report and preserve that last successful stale directory until a new
-build succeeds.
+Further failures from either CLI or GUI replace only the current failure report
+and preserve that root-bound successful stale directory until a new build
+succeeds. Recovery classifies only bounded, regular, non-link Katana job results
+whose non-disclosing binding matches the normalized output root; an empty folder
+selected for a first GUI build is accepted, while a non-empty unmanaged output
+or a link is preserved and rejected fail-closed.
 This also keeps Visual Studio tracking paths below the classic Windows path
 limit in deeply nested test and user workspaces.
 

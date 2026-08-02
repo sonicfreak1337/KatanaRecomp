@@ -100,13 +100,13 @@ KR-4984 verbindlich abzuschliessen.
 | KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | abgeschlossen; versionierte fail-closed Register-/Stackprojektion, kanonische Ausgaenge, Set-Interning und Lens-Telemetrie produktiv verdrahtet |
 | KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | abgeschlossen; immutable Graphshards, persistente SCC-/ABI-/Summary-Epoch und gerichtete Invalidierung produktiv verdrahtet |
 | KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | abgeschlossen in `4d17526` |
-| KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | geplant P0 |
+| KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; Sonic-Produktabnahme offen |
-| KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | geplant P0 |
+| KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
 | KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | geplant P0 als finale Produktmessung nach KR-4984; keine Vorab-Buildmatrix |
-| KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | geplant P0 Entscheidungsgate |
-| KR-4983 | Deterministische capability-gated GPU-Beschleunigung | bedingt geplant P0 nach positivem KR-4982-Gate |
-| KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | geplant, letzter P0 Gate-Vorbereitungstask |
+| KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
+| KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
+| KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | quellseitig dreifach re-reviewed und ohne offenen P0/P1; Sonic-Produktevidenz offen |
 
 ## Aktuelle Meilensteinzuordnung
 

@@ -25,6 +25,7 @@
 #include <cwctype>
 #include <fstream>
 #include <iomanip>
+#include <random>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -291,6 +292,306 @@ std::string read_text(const std::filesystem::path& path) {
     return output.str();
 }
 
+enum class PublishedJobResultState : std::uint8_t { Successful, Unsuccessful };
+
+bool unsafe_application_path_link(
+    const std::filesystem::path& path,
+    const std::filesystem::file_status status) noexcept {
+    if (std::filesystem::is_symlink(status)) return true;
+#ifdef _WIN32
+    const auto attributes = GetFileAttributesW(path.c_str());
+    return attributes == INVALID_FILE_ATTRIBUTES ||
+           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+#else
+    static_cast<void>(path);
+    return false;
+#endif
+}
+
+void require_no_existing_application_path_links(
+    const std::filesystem::path& path,
+    const std::string_view description) {
+    const auto absolute = std::filesystem::absolute(path).lexically_normal();
+    auto current = absolute.root_path();
+    const auto inspect = [&](const bool is_leaf) {
+        std::error_code status_error;
+        const auto status =
+            std::filesystem::symlink_status(current, status_error);
+        if (status_error == std::errc::no_such_file_or_directory ||
+            (!status_error &&
+             status.type() == std::filesystem::file_type::not_found))
+            return false;
+        if (status_error || unsafe_application_path_link(current, status) ||
+            (!is_leaf && !std::filesystem::is_directory(status)))
+            throw std::runtime_error(
+                std::string(description) +
+                " besitzt einen unsicheren bestehenden Pfadbestandteil.");
+        return true;
+    };
+    if (!current.empty() && !inspect(current == absolute)) return;
+    for (const auto& component : absolute.relative_path()) {
+        current /= component;
+        if (!inspect(current == absolute)) return;
+    }
+}
+
+std::string application_output_binding(
+    const std::filesystem::path& final_root) {
+    return io::sha256_bytes(
+        "KATANA_APPLICATION_OUTPUT_BINDING 1\n" +
+        normalized_output_path(final_root).generic_string() + '\n');
+}
+
+PublishedJobResultState
+published_job_result_state(
+    const std::filesystem::path& root,
+    const std::filesystem::path& expected_final_root) {
+    constexpr std::uintmax_t max_job_result_bytes = 16u * 1024u * 1024u;
+    require_no_existing_application_path_links(
+        root, "Vorhandenes Jobergebnis");
+    std::error_code status_error;
+    const auto root_status = std::filesystem::symlink_status(root, status_error);
+    if (status_error || !std::filesystem::is_directory(root_status) ||
+        unsafe_application_path_link(root, root_status))
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis besitzt keinen sicheren Ausgabeordner.");
+
+    const auto result_path = root / "job-result.json";
+    status_error.clear();
+    const auto result_status = std::filesystem::symlink_status(result_path, status_error);
+    if (status_error || !std::filesystem::is_regular_file(result_status) ||
+        unsafe_application_path_link(result_path, result_status))
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis besitzt keinen lesbaren terminalen Status.");
+    status_error.clear();
+    const auto result_size = std::filesystem::file_size(result_path, status_error);
+    if (status_error || result_size > max_job_result_bytes)
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis ueberschreitet das sichere Lesebudget.");
+    std::ifstream input(result_path, std::ios::binary);
+    if (!input)
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis ist nicht lesbar.");
+    std::string result_json(static_cast<std::size_t>(result_size), '\0');
+    if (!result_json.empty()) {
+        input.read(result_json.data(), static_cast<std::streamsize>(result_json.size()));
+        if (input.gcount() != static_cast<std::streamsize>(result_json.size()))
+            throw std::runtime_error(
+                "Vorhandenes Jobergebnis konnte nicht vollstaendig gelesen werden.");
+    }
+    char trailing_byte = '\0';
+    if (input.get(trailing_byte) || input.bad())
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis hat sich waehrend des Lesens veraendert.");
+    const auto contract_prefix =
+        "{\"schema\":\"katana-application-job\",\"version\":" +
+        std::to_string(application_contract_version) +
+        ",\"output_binding\":\"" +
+        application_output_binding(expected_final_root) + "\",";
+    if (!result_json.starts_with(contract_prefix))
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis besitzt keinen Katana-Anwendungsvertrag.");
+    constexpr std::string_view state_prefix = ",\"state\":\"";
+    const auto state_begin = result_json.find(state_prefix);
+    if (state_begin == std::string::npos)
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis besitzt keinen terminalen Status.");
+    const auto value_begin = state_begin + state_prefix.size();
+    const auto value_end = result_json.find('"', value_begin);
+    if (value_end == std::string::npos)
+        throw std::runtime_error(
+            "Vorhandenes Jobergebnis besitzt einen ungueltigen Status.");
+    const std::string_view state(result_json.data() + value_begin,
+                                 value_end - value_begin);
+    if (state == "completed" || state == "partial")
+        return PublishedJobResultState::Successful;
+    if (state == "failed" || state == "cancelled")
+        return PublishedJobResultState::Unsuccessful;
+    throw std::runtime_error(
+        "Vorhandenes Jobergebnis ist nicht terminal.");
+}
+
+constexpr std::string_view stale_cleanup_proof_name =
+    ".katana-stale-cleanup-proof";
+
+std::string new_application_stage_token(
+    const std::filesystem::path& final_root,
+    const std::string_view job_id) {
+    std::random_device random;
+    std::ostringstream seed;
+    seed << normalized_output_path(final_root).generic_string() << ':'
+         << job_id << ':'
+         << std::chrono::steady_clock::now().time_since_epoch().count()
+         << ':' << random() << ':' << random() << ':' << random()
+         << ':' << random();
+#ifdef _WIN32
+    seed << ':' << GetCurrentProcessId();
+#else
+    seed << ':' << ::getpid();
+#endif
+    return io::sha256_bytes(seed.str()).substr(0u, 24u);
+}
+
+std::string stale_cleanup_proof_content(
+    const std::filesystem::path& final_root,
+    const std::filesystem::path& stale_root) {
+    const auto binding = io::sha256_bytes(
+        normalized_output_path(final_root).generic_string() + '\n' +
+        normalized_output_path(stale_root).generic_string());
+    return "KATANA_STALE_CLEANUP_PROOF 1\nbinding " + binding + "\n";
+}
+
+bool safe_transaction_directory_exists(
+    const std::filesystem::path& root,
+    const std::string_view description) {
+    require_no_existing_application_path_links(root, description);
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(root, status_error);
+    if (status_error == std::errc::no_such_file_or_directory ||
+        (!status_error &&
+         status.type() == std::filesystem::file_type::not_found))
+        return false;
+    if (status_error || !std::filesystem::is_directory(status) ||
+        unsafe_application_path_link(root, status))
+        throw std::runtime_error(
+            std::string(description) +
+            " ist kein sicherer regulaerer Ordner.");
+    return true;
+}
+
+void require_safe_transaction_tree(
+    const std::filesystem::path& root,
+    const std::string_view description) {
+    if (!safe_transaction_directory_exists(root, description))
+        throw std::runtime_error(
+            std::string(description) + " fehlt.");
+    for (std::filesystem::recursive_directory_iterator iterator(root), end;
+         iterator != end;
+         ++iterator) {
+        std::error_code status_error;
+        const auto status = iterator->symlink_status(status_error);
+        if (status_error ||
+            unsafe_application_path_link(iterator->path(), status) ||
+            (!std::filesystem::is_directory(status) &&
+             !std::filesystem::is_regular_file(status)))
+            throw std::runtime_error(
+                std::string(description) +
+                " enthaelt einen unsicheren Dateisystemeintrag.");
+    }
+}
+
+void create_safe_transaction_directory(
+    const std::filesystem::path& root,
+    const std::string_view description) {
+    if (safe_transaction_directory_exists(root, description))
+        throw std::runtime_error(
+            std::string(description) + " ist bereits vorhanden.");
+    std::error_code create_error;
+    if (!std::filesystem::create_directory(root, create_error) || create_error)
+        throw std::runtime_error(
+            std::string(description) + " konnte nicht erstellt werden.");
+    if (!safe_transaction_directory_exists(root, description))
+        throw std::runtime_error(
+            std::string(description) + " wurde nicht sicher erstellt.");
+}
+
+void require_safe_stale_cleanup_root(
+    const std::filesystem::path& stale_root) {
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(stale_root, status_error);
+    if (status_error || !std::filesystem::is_directory(status) ||
+        unsafe_application_path_link(stale_root, status))
+        throw std::runtime_error(
+            "Recovery-Kopie ist kein sicherer regulaerer Ordner.");
+}
+
+bool has_valid_stale_cleanup_proof(
+    const std::filesystem::path& final_root,
+    const std::filesystem::path& stale_root) {
+    constexpr std::uintmax_t maximum_proof_bytes = 256u;
+    const auto proof_path = final_root / stale_cleanup_proof_name;
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(proof_path, status_error);
+    if (status_error == std::errc::no_such_file_or_directory ||
+        (!status_error &&
+         status.type() == std::filesystem::file_type::not_found))
+        return false;
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        unsafe_application_path_link(proof_path, status))
+        throw std::runtime_error(
+            "Recovery-Cleanup-Nachweis ist kein sicherer regulaerer Marker.");
+    status_error.clear();
+    const auto size = std::filesystem::file_size(proof_path, status_error);
+    if (status_error || size > maximum_proof_bytes)
+        throw std::runtime_error(
+            "Recovery-Cleanup-Nachweis ueberschreitet sein Lesebudget.");
+    std::ifstream input(proof_path, std::ios::binary);
+    if (!input)
+        throw std::runtime_error(
+            "Recovery-Cleanup-Nachweis ist nicht lesbar.");
+    std::string content(static_cast<std::size_t>(size), '\0');
+    if (!content.empty()) {
+        input.read(content.data(), static_cast<std::streamsize>(content.size()));
+        if (input.gcount() != static_cast<std::streamsize>(content.size()))
+            throw std::runtime_error(
+                "Recovery-Cleanup-Nachweis konnte nicht vollstaendig gelesen werden.");
+    }
+    char trailing_byte = '\0';
+    if (input.get(trailing_byte) || input.bad() ||
+        content != stale_cleanup_proof_content(final_root, stale_root))
+        throw std::runtime_error(
+            "Recovery-Cleanup-Nachweis ist fremd oder ungueltig.");
+    return true;
+}
+
+void write_stale_cleanup_proof(
+    const std::filesystem::path& final_root,
+    const std::filesystem::path& stale_root) {
+    const auto proof_path = final_root / stale_cleanup_proof_name;
+    auto temporary_path = proof_path;
+    temporary_path += ".katana-tmp";
+    for (const auto& reserved_path : {proof_path, temporary_path}) {
+        std::error_code status_error;
+        const auto status =
+            std::filesystem::symlink_status(reserved_path, status_error);
+        const bool missing =
+            status_error == std::errc::no_such_file_or_directory ||
+            (!status_error &&
+             status.type() == std::filesystem::file_type::not_found);
+        if (missing) continue;
+        if (status_error || !std::filesystem::is_regular_file(status) ||
+            unsafe_application_path_link(reserved_path, status))
+            throw std::runtime_error(
+                "Reservierter Recovery-Cleanup-Marker ist fremd oder unsicher.");
+        if (reserved_path == proof_path)
+            throw std::runtime_error(
+                "Recovery-Cleanup-Nachweis ist unerwartet bereits vorhanden.");
+        if (!std::filesystem::remove(reserved_path, status_error) || status_error)
+            throw std::runtime_error(
+                "Temporarer Recovery-Cleanup-Marker konnte nicht ersetzt werden.");
+    }
+    write_atomic(
+        proof_path,
+        stale_cleanup_proof_content(final_root, stale_root));
+}
+
+void remove_stale_cleanup_proof(
+    const std::filesystem::path& final_root,
+    const std::filesystem::path& stale_root) {
+    if (!has_valid_stale_cleanup_proof(final_root, stale_root))
+        throw std::runtime_error(
+            "Recovery-Cleanup-Nachweis fehlt vor seiner Entfernung.");
+    std::error_code remove_error;
+    if (!std::filesystem::remove(
+            final_root / stale_cleanup_proof_name, remove_error) ||
+        remove_error)
+        throw std::runtime_error(
+            "Recovery-Cleanup-Nachweis konnte nicht entfernt werden.");
+}
+
 std::string portable_name(const std::filesystem::path& path) {
     return path.filename().generic_string();
 }
@@ -541,7 +842,10 @@ std::string hex_address(const std::uint32_t value) {
     return output.str();
 }
 
-bool remove_tree_with_retry(const std::filesystem::path& path, std::error_code& error) {
+bool remove_tree_with_retry(
+    const std::filesystem::path& path,
+    std::error_code& error,
+    const std::function<void()>& validate_before_attempt = {}) {
     constexpr std::size_t attempts = 100u;
     constexpr auto retry_delay = std::chrono::milliseconds(50);
     auto removal_path = path;
@@ -562,6 +866,7 @@ bool remove_tree_with_retry(const std::filesystem::path& path, std::error_code& 
     }
 #endif
     for (std::size_t attempt = 0u; attempt < attempts; ++attempt) {
+        if (validate_before_attempt) validate_before_attempt();
         error.clear();
         std::filesystem::remove_all(removal_path, error);
         if (!error) return true;
@@ -1415,40 +1720,158 @@ JobResult ApplicationService::execute(const JobRequest& request,
     require_stable_id(request.tool_version, "Werkzeugversion");
     if (request.manifest_path.empty() || request.output_root.empty())
         throw std::invalid_argument("Job braucht Projektmanifest und Ausgabeziel.");
-    CrossProcessJobLock process_lock(normalized_output_path(request.output_root));
+    const auto final_root =
+        std::filesystem::absolute(request.output_root).lexically_normal();
+    require_no_existing_application_path_links(
+        final_root, "Angefordertes Ausgabeziel");
+    CrossProcessJobLock process_lock(normalized_output_path(final_root));
     JobResult result;
     result.job_id = request.id;
+    result.output_binding = application_output_binding(final_root);
     result.kind = request.kind;
     result.state = JobState::Running;
     result.tool_version = request.tool_version;
     result.failure_category = JobFailureCategory::InputOutput;
     const bool transactional =
         request.kind == JobKind::Build || request.kind == JobKind::RunPreflight;
-    const auto final_root = std::filesystem::absolute(request.output_root).lexically_normal();
     auto work_root = final_root;
     auto stale_root = final_root;
-    stale_root += ".katana-stale-" + request.id;
+    stale_root += ".katana-stale";
+    bool transactional_setup_complete = !transactional;
+    bool previous_final_rotated = false;
+    bool published_success = false;
+    bool work_root_owned = false;
     if (transactional) {
-        const auto staging_key = io::sha256_bytes(final_root.generic_string() + ':' + request.id);
-        work_root = final_root.parent_path() / (".katana-stage-" + staging_key.substr(0u, 12u));
-        std::error_code cleanup_error;
-        if (!remove_tree_with_retry(work_root, cleanup_error))
-            throw std::runtime_error("Altes Job-Staging konnte nicht entfernt werden.");
-        if (std::filesystem::exists(final_root)) {
-            if (std::filesystem::exists(stale_root)) {
-                if (!remove_tree_with_retry(final_root, cleanup_error))
-                    throw std::runtime_error(
-                        "Vorheriger Fehlerbericht konnte nicht ersetzt werden.");
-            } else {
-                std::filesystem::rename(final_root, stale_root);
-            }
-        }
-        std::filesystem::create_directories(work_root);
+        work_root =
+            final_root.parent_path() /
+            (".katana-stage-" +
+             new_application_stage_token(final_root, request.id));
     }
     JobEventStream events(request, observer);
     events.emit(JobState::Queued, 0u, "queued", {}, JobStepStatus::Pending);
     events.emit(JobState::Running, 2u, "validation", {}, JobStepStatus::Running);
     try {
+        if (transactional) {
+            std::error_code cleanup_error;
+            auto final_exists = safe_transaction_directory_exists(
+                final_root, "Vorhandenes Ausgabeziel");
+            if (final_exists) {
+                std::error_code empty_error;
+                const auto final_status =
+                    std::filesystem::symlink_status(final_root, empty_error);
+                if (empty_error ||
+                    unsafe_application_path_link(final_root, final_status))
+                    throw std::runtime_error(
+                        "Vorhandenes Ausgabeziel konnte nicht sicher geprueft werden.");
+                if (std::filesystem::is_directory(final_status) &&
+                    std::filesystem::is_empty(final_root, empty_error)) {
+                    if (empty_error ||
+                        !safe_transaction_directory_exists(
+                            final_root, "Leeres Ausgabeziel") ||
+                        !std::filesystem::is_empty(final_root, empty_error) ||
+                        empty_error ||
+                        !std::filesystem::remove(final_root, empty_error) ||
+                        empty_error)
+                        throw std::runtime_error(
+                            "Leeres Ausgabeziel konnte nicht fuer den ersten Lauf vorbereitet "
+                            "werden.");
+                    final_exists = false;
+                } else if (empty_error) {
+                    throw std::runtime_error(
+                        "Vorhandenes Ausgabeziel konnte nicht sicher geprueft werden.");
+                }
+            }
+            const auto stale_exists = safe_transaction_directory_exists(
+                stale_root, "Vorhandene Recovery-Kopie");
+            std::optional<PublishedJobResultState> final_state;
+            bool stale_cleanup_proven = false;
+            if (final_exists) {
+                final_state = published_job_result_state(
+                    final_root, final_root);
+                stale_cleanup_proven = has_valid_stale_cleanup_proof(
+                    final_root, stale_root);
+                if (stale_cleanup_proven &&
+                    *final_state != PublishedJobResultState::Successful)
+                    throw std::runtime_error(
+                        "Fehlerhaftes Jobergebnis besitzt einen fremden "
+                        "Recovery-Cleanup-Nachweis.");
+            }
+            if (stale_exists) {
+                require_safe_stale_cleanup_root(stale_root);
+                if (!stale_cleanup_proven)
+                    static_cast<void>(
+                        published_job_result_state(stale_root, final_root));
+            }
+            if (final_exists && stale_exists) {
+                if (*final_state == PublishedJobResultState::Successful) {
+                    if (!stale_cleanup_proven) {
+                        codegen::preserve_local_port_user_data(
+                            stale_root, final_root);
+                        write_stale_cleanup_proof(
+                            final_root, stale_root);
+                        stale_cleanup_proven = true;
+                    }
+                    if (!remove_tree_with_retry(
+                            stale_root,
+                            cleanup_error,
+                            [&] {
+                                if (!has_valid_stale_cleanup_proof(
+                                    final_root,
+                                    stale_root))
+                                    throw std::runtime_error(
+                                        "Recovery-Cleanup-Nachweis fehlt.");
+                                require_safe_transaction_tree(
+                                    stale_root,
+                                    "Zu bereinigende Recovery-Kopie");
+                            }))
+                        throw std::runtime_error(
+                            "Unterbrochene Erfolgsveroeffentlichung konnte nicht bereinigt werden.");
+                    remove_stale_cleanup_proof(
+                        final_root, stale_root);
+                    stale_cleanup_proven = false;
+                } else {
+                    require_safe_transaction_tree(
+                        final_root,
+                        "Zu ersetzender Fehlerbericht");
+                    if (safe_transaction_directory_exists(
+                            work_root, "Fehlerbericht-Quarantaene"))
+                        throw std::runtime_error(
+                            "Fehlerbericht-Quarantaene ist unerwartet belegt.");
+                    std::filesystem::rename(final_root, work_root);
+                    work_root_owned = true;
+                    if (!remove_tree_with_retry(
+                            work_root,
+                            cleanup_error,
+                            [&] {
+                                if (!work_root_owned)
+                                    throw std::runtime_error(
+                                        "Job-Staging ist nicht transaktionseigen.");
+                                require_safe_transaction_tree(
+                                    work_root,
+                                    "Transaktionseigener Fehlerbericht");
+                            }))
+                        throw std::runtime_error(
+                            "Vorheriger Fehlerbericht konnte nicht ersetzt werden.");
+                    work_root_owned = false;
+                }
+            } else if (final_exists && stale_cleanup_proven) {
+                remove_stale_cleanup_proof(
+                    final_root, stale_root);
+            }
+            if (safe_transaction_directory_exists(
+                    final_root, "Zu sicherndes Jobergebnis")) {
+                if (safe_transaction_directory_exists(
+                        stale_root, "Recovery-Ziel"))
+                    throw std::runtime_error(
+                        "Recovery-Ziel ist vor der Rotation nicht frei.");
+                std::filesystem::rename(final_root, stale_root);
+                previous_final_rotated = true;
+            }
+            create_safe_transaction_directory(
+                work_root, "Neues Job-Staging");
+            work_root_owned = true;
+            transactional_setup_complete = true;
+        }
         require_not_cancelled(cancellation);
         auto manifest = io::parse_project_manifest(request.manifest_path);
         require_firmware_profile(manifest, final_root);
@@ -1833,57 +2256,254 @@ JobResult ApplicationService::execute(const JobRequest& request,
                        "Quelle und Projekteinstellungen pruefen und Job wiederholen."));
     }
     auto result_path = work_root / "job-result.json";
+    bool current_result_published = false;
+    bool failure_final_owned = false;
+    const auto final_directory_exists = [&] {
+        return safe_transaction_directory_exists(
+            final_root, "Transaktionales Jobergebnis");
+    };
+    const auto stale_directory_exists = [&] {
+        return safe_transaction_directory_exists(
+            stale_root, "Transaktionale Recovery-Kopie");
+    };
+    const auto remove_owned_work = [&](std::error_code& cleanup_error) {
+        if (!work_root_owned) {
+            if (safe_transaction_directory_exists(
+                    work_root, "Nicht eigenes Job-Staging"))
+                throw std::runtime_error(
+                    "Nicht eigenes Job-Staging bleibt unangetastet.");
+            return true;
+        }
+        const auto removed = remove_tree_with_retry(
+            work_root,
+            cleanup_error,
+            [&] {
+                if (!work_root_owned)
+                    throw std::runtime_error(
+                        "Job-Staging ist nicht transaktionseigen.");
+                if (safe_transaction_directory_exists(
+                        work_root, "Transaktionseigenes Job-Staging"))
+                    require_safe_transaction_tree(
+                        work_root, "Transaktionseigenes Job-Staging");
+            });
+        if (removed) work_root_owned = false;
+        return removed;
+    };
+    const auto publish_failure_final = [&] {
+        if (final_directory_exists())
+            throw std::runtime_error(
+                "Fehlerbericht kann kein bestehendes Jobergebnis ersetzen.");
+        std::error_code cleanup_error;
+        if (!remove_owned_work(cleanup_error))
+            throw std::runtime_error(
+                "Altes Job-Staging konnte vor dem Fehlerbericht nicht bereinigt werden.");
+        create_safe_transaction_directory(
+            work_root, "Fehlerbericht-Staging");
+        work_root_owned = true;
+        result_path = work_root / "job-result.json";
+        write_atomic(result_path, format_job_result_json(result));
+        std::filesystem::rename(work_root, final_root);
+        work_root_owned = false;
+        if (!final_directory_exists())
+            throw std::runtime_error(
+                "Fehlerbericht wurde nicht sicher publiziert.");
+        failure_final_owned = true;
+        result_path = final_root / "job-result.json";
+        current_result_published = true;
+    };
+    const auto remove_owned_failure_final = [&](std::error_code& cleanup_error) {
+        if (!failure_final_owned) return true;
+        if (!final_directory_exists()) {
+            failure_final_owned = false;
+            return true;
+        }
+        if (!remove_owned_work(cleanup_error)) return false;
+        require_safe_transaction_tree(
+            final_root, "Transaktionseigener Fehlerbericht");
+        std::filesystem::rename(final_root, work_root);
+        failure_final_owned = false;
+        work_root_owned = true;
+        return remove_owned_work(cleanup_error);
+    };
     try {
         if (transactional && result.state != JobState::Completed &&
             result.state != JobState::Partial)
             result.artifacts.clear();
-        write_atomic(result_path, format_job_result_json(result));
-        if (transactional) {
-            if (result.state == JobState::Completed || result.state == JobState::Partial) {
-                std::filesystem::rename(work_root, final_root);
-                try {
-                    codegen::preserve_local_port_user_data(stale_root, final_root);
-                } catch (...) {
-                    std::error_code rollback_error;
-                    static_cast<void>(remove_tree_with_retry(final_root, rollback_error));
-                    if (std::filesystem::exists(stale_root))
-                        std::filesystem::rename(stale_root, final_root);
-                    throw;
-                }
-                std::error_code cleanup_error;
-                if (!remove_tree_with_retry(stale_root, cleanup_error))
-                    throw std::runtime_error(
-                        "Veraltetes Jobergebnis konnte nicht bereinigt werden.");
-            } else {
-                std::error_code cleanup_error;
-                if (!remove_tree_with_retry(work_root, cleanup_error))
-                    throw std::runtime_error(
-                        "Fehlgeschlagenes Job-Staging konnte nicht bereinigt werden.");
-                std::filesystem::create_directories(final_root);
-                result_path = final_root / "job-result.json";
-                write_atomic(result_path, format_job_result_json(result));
+        if (transactional && !transactional_setup_complete) {
+            auto final_exists = final_directory_exists();
+            const auto stale_exists = stale_directory_exists();
+            std::optional<PublishedJobResultState> stale_state;
+            if (stale_exists)
+                stale_state = published_job_result_state(
+                    stale_root, final_root);
+            if (previous_final_rotated && !final_exists && stale_exists) {
+                std::filesystem::rename(stale_root, final_root);
+                previous_final_rotated = false;
+                final_exists = true;
             }
+            if (!final_exists && stale_exists &&
+                *stale_state ==
+                    PublishedJobResultState::Successful) {
+                std::filesystem::rename(stale_root, final_root);
+                final_exists = true;
+            }
+            if (!final_exists) publish_failure_final();
+        } else if (!transactional) {
+            write_atomic(result_path, format_job_result_json(result));
+        } else if (result.state == JobState::Completed ||
+                   result.state == JobState::Partial) {
+            if (!work_root_owned)
+                throw std::runtime_error(
+                    "Erfolgreiches Job-Staging ist nicht transaktionseigen.");
+            require_safe_transaction_tree(
+                work_root, "Erfolgreiches Job-Staging");
+            if (final_directory_exists())
+                throw std::runtime_error(
+                    "Erfolgreiches Job-Staging kann kein bestehendes Ziel ersetzen.");
+            write_atomic(result_path, format_job_result_json(result));
+            std::filesystem::rename(work_root, final_root);
+            work_root_owned = false;
+            const auto stale_exists = stale_directory_exists();
+            if (stale_exists)
+                static_cast<void>(
+                    published_job_result_state(stale_root, final_root));
+            try {
+                if (stale_exists)
+                    codegen::preserve_local_port_user_data(
+                        stale_root, final_root);
+            } catch (...) {
+                std::error_code rollback_error;
+                if (safe_transaction_directory_exists(
+                        work_root, "Rollback-Staging"))
+                    throw std::runtime_error(
+                        "Rollback-Staging ist unerwartet belegt.");
+                require_safe_transaction_tree(
+                    final_root, "Noch nicht committedes Jobergebnis");
+                std::filesystem::rename(final_root, work_root);
+                work_root_owned = true;
+                if (stale_directory_exists()) {
+                    static_cast<void>(
+                        published_job_result_state(stale_root, final_root));
+                    std::filesystem::rename(stale_root, final_root);
+                    previous_final_rotated = false;
+                }
+                if (!remove_owned_work(rollback_error))
+                    throw std::runtime_error(
+                        "Neues Jobergebnis konnte nach dem Rollback nicht bereinigt werden.");
+                throw;
+            }
+            // Preserve kann user-data atomar aus stale in final verschoben
+            // haben. Ab hier bleibt das neue erfolgreiche final autoritativ;
+            // auch ein nachfolgender Proof-/Cleanupfehler darf es nicht mehr
+            // zurueckrollen oder als Fehlerbericht ueberschreiben.
+            published_success = true;
+            if (stale_exists) {
+                write_stale_cleanup_proof(
+                    final_root, stale_root);
+                std::error_code cleanup_error;
+                if (!remove_tree_with_retry(
+                        stale_root,
+                        cleanup_error,
+                        [&] {
+                            if (!has_valid_stale_cleanup_proof(
+                                final_root,
+                                stale_root))
+                                throw std::runtime_error(
+                                    "Recovery-Cleanup-Nachweis fehlt.");
+                            require_safe_transaction_tree(
+                                stale_root,
+                                "Zu bereinigende Recovery-Kopie");
+                        })) {
+                    result.diagnostics.push_back(
+                        {DiagnosticSeverity::Warning,
+                         "job-stale-cleanup-deferred",
+                         "Das erfolgreiche Jobergebnis wurde veroeffentlicht, aber die alte "
+                         "Recovery-Kopie konnte noch nicht entfernt werden.",
+                         "Der naechste Lauf setzt die Bereinigung unter demselben Ausgabe-Lock "
+                         "fort.",
+                         std::nullopt});
+                } else {
+                    remove_stale_cleanup_proof(
+                        final_root, stale_root);
+                    previous_final_rotated = false;
+                }
+            } else {
+                previous_final_rotated = false;
+            }
+            current_result_published = true;
             result_path = final_root / "job-result.json";
+        } else {
+            std::error_code cleanup_error;
+            if (!remove_owned_work(cleanup_error))
+                throw std::runtime_error(
+                    "Fehlgeschlagenes Job-Staging konnte nicht bereinigt werden.");
+            publish_failure_final();
         }
-        result.artifacts.push_back({"job-result", "job-result.json", artifact_hash(result_path)});
+        if (current_result_published || !transactional)
+            result.artifacts.push_back(
+                {"job-result", "job-result.json", artifact_hash(result_path)});
     } catch (const std::exception& error) {
-        result.state = JobState::Failed;
-        result.failure_category = JobFailureCategory::InputOutput;
-        result.artifacts.clear();
-        result.diagnostics.push_back(
-            make_error("job-publication-failed",
-                       error.what(),
-                       "Ausgabeziel, Zugriffsrechte und freien Speicher pruefen."));
-        if (transactional) {
-            std::error_code ignored;
-            static_cast<void>(remove_tree_with_retry(work_root, ignored));
-            if (std::filesystem::exists(final_root)) {
-                result_path = final_root / "job-result.json";
+        if (published_success) {
+            result.diagnostics.push_back(
+                {DiagnosticSeverity::Warning,
+                 "job-publication-cleanup-deferred",
+                 redact_sensitive_text(error.what()),
+                 "Das erfolgreiche Jobergebnis bleibt autoritativ; die Bereinigung wird beim "
+                 "naechsten Lauf erneut versucht.",
+                 std::nullopt});
+        } else {
+            result.state = JobState::Failed;
+            result.failure_category = JobFailureCategory::InputOutput;
+            result.artifacts.clear();
+            result.diagnostics.push_back(
+                make_error("job-publication-failed",
+                           error.what(),
+                           "Ausgabeziel, Zugriffsrechte und freien Speicher pruefen."));
+            if (transactional) {
+                std::error_code ignored;
                 try {
-                    write_atomic(result_path, format_job_result_json(result));
-                    result.artifacts.push_back(
-                        {"job-result", "job-result.json", artifact_hash(result_path)});
+                    if (!remove_owned_work(ignored))
+                        throw std::runtime_error(
+                            "Unvollstaendiges Job-Staging konnte nicht entfernt werden.");
+                    if (!remove_owned_failure_final(ignored))
+                        throw std::runtime_error(
+                            "Unvollstaendiger Fehlerbericht konnte nicht entfernt werden.");
+                    auto final_exists = final_directory_exists();
+                    const auto stale_exists = stale_directory_exists();
+                    std::optional<PublishedJobResultState> stale_state;
+                    if (stale_exists)
+                        stale_state = published_job_result_state(
+                            stale_root, final_root);
+                    if (!final_exists && stale_exists &&
+                        (previous_final_rotated ||
+                         *stale_state ==
+                             PublishedJobResultState::Successful)) {
+                        std::filesystem::rename(stale_root, final_root);
+                        previous_final_rotated = false;
+                        final_exists = true;
+                    }
+                    if (!final_exists) {
+                        publish_failure_final();
+                        result.artifacts.push_back(
+                            {"job-result", "job-result.json", artifact_hash(result_path)});
+                    } else if (published_job_result_state(
+                                   final_root, final_root) ==
+                               PublishedJobResultState::Unsuccessful) {
+                        result_path = final_root / "job-result.json";
+                        write_atomic(
+                            result_path, format_job_result_json(result));
+                        result.artifacts.push_back(
+                            {"job-result", "job-result.json", artifact_hash(result_path)});
+                    }
                 } catch (...) {
+                    if (failure_final_owned) {
+                        std::error_code cleanup_error;
+                        try {
+                            static_cast<void>(
+                                remove_owned_failure_final(cleanup_error));
+                        } catch (...) {
+                        }
+                    }
                 }
             }
         }
@@ -2074,6 +2694,7 @@ std::string format_source_inspection_json(const SourceInspection& inspection) {
 std::string format_job_result_json(const JobResult& result) {
     std::ostringstream output;
     output << "{\"schema\":\"katana-application-job\",\"version\":" << application_contract_version
+           << ",\"output_binding\":" << io::quote_json(result.output_binding)
            << ",\"job_id\":" << io::quote_json(result.job_id)
            << ",\"kind\":" << io::quote_json(job_kind_name(result.kind))
            << ",\"state\":" << io::quote_json(job_state_name(result.state))

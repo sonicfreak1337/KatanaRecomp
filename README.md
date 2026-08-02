@@ -2,20 +2,19 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller Implementierungsstand: KR-4979; verbindlicher P0-Planstand:
-`ffd45ae`. Der eingecheckte Source traegt Runtime-ABI 87, Analyzer-ABI 25
-und Portprojektvertrag 75. Der private NativeDisc-v24-Export wurde nach
-etwa `3 h 27 min` waehrend der dritten vollstaendigen Function-Value-
-Neuberechnung beendet. Er erzeugte kein Portartefakt, keine `game.exe`,
-keinen Sonic-Lauf und keinen neuen Screenshot. Der Checkpoint ist kein
-P0-Abschluss: Kaltbuild-Performance, abschliessende Gesamtpruefung und
-Produktabnahme bleiben offen. Der verbindliche Fahrplan steht in
+Aktueller Implementierungsstand: KR-4984-Sourcegate. Der reviewte Source
+traegt Runtime-ABI 87, Analyzer-ABI 27, Application-Contract 8 und
+Portprojektvertrag 75. Die vollstaendige P0/P1-Gesamtpruefung ist quellseitig
+ohne offenen Befund abgeschlossen; ein neues Portartefakt, ein Sonic-Lauf und
+ein neuer Screenshot existieren aus diesem Stand noch nicht. Als naechstes
+folgt genau der freigegebene sichtbare 24-Thread-Sonic-Produktlauf samt
+Buildzeitmessung. Der verbindliche Fahrplan steht in
 [`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
 
 ```text
 Runtime-ABI:                    87
 Block-ABI:                       5
-Analyzer-ABI:                   25
+Analyzer-ABI:                   27
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             75

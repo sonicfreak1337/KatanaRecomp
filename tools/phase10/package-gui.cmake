@@ -44,7 +44,9 @@ file(MAKE_DIRECTORY
     "${output_root}/docs"
     "${output_root}/runtime-sdk/cmake"
     "${output_root}/runtime-sdk/include/katana/io"
+    "${output_root}/runtime-sdk/include/katana/sh4"
     "${output_root}/runtime-sdk/include/katana"
+    "${output_root}/runtime-sdk/src/decoder"
     "${output_root}/runtime-sdk/src/io"
     "${output_root}/runtime-sdk/src"
 )
@@ -61,9 +63,15 @@ endif()
 file(COPY "${logo}" "${icon}" "${asset_manifest}" DESTINATION "${output_root}/assets")
 file(COPY "${source_root}/include/katana/runtime" DESTINATION
     "${output_root}/runtime-sdk/include/katana")
+file(COPY "${source_root}/include/katana/sh4" DESTINATION
+    "${output_root}/runtime-sdk/include/katana")
 file(COPY "${source_root}/src/runtime" DESTINATION "${output_root}/runtime-sdk/src")
 file(COPY "${source_root}/include/katana/build_contract.hpp.in" DESTINATION
     "${output_root}/runtime-sdk/include/katana")
+file(COPY "${source_root}/include/katana/progress.hpp" DESTINATION
+    "${output_root}/runtime-sdk/include/katana")
+file(COPY "${source_root}/src/progress.cpp" DESTINATION
+    "${output_root}/runtime-sdk/src")
 file(COPY "${source_root}/cmake/KatanaVersions.cmake" DESTINATION
     "${output_root}/runtime-sdk/cmake")
 file(COPY "${source_root}/VERSION" DESTINATION "${output_root}/runtime-sdk")
@@ -74,24 +82,76 @@ file(COPY
     DESTINATION "${output_root}/runtime-sdk/include/katana/io"
 )
 file(COPY
+    "${source_root}/src/decoder/decoder.cpp"
+    "${source_root}/src/decoder/instruction_metadata.cpp"
+    DESTINATION "${output_root}/runtime-sdk/src/decoder"
+)
+file(COPY
     "${source_root}/src/io/input_provenance.cpp"
     "${source_root}/src/io/json_report.cpp"
     DESTINATION "${output_root}/runtime-sdk/src/io"
 )
 file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
 "cmake_minimum_required(VERSION 3.25)\n"
-"project(KatanaRuntimeSdk LANGUAGES CXX)\n"
 "include(\"\${CMAKE_CURRENT_SOURCE_DIR}/cmake/KatanaVersions.cmake\")\n"
+"project(KatanaRuntimeSdk VERSION \${KATANA_PROJECT_VERSION} LANGUAGES CXX)\n"
+"find_package(Threads REQUIRED)\n"
+"set(CMAKE_CXX_STANDARD 20)\n"
+"set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
+"set(CMAKE_CXX_EXTENSIONS OFF)\n"
+"if(MSVC)\n"
+"  add_compile_options(/FS)\n"
+"endif()\n"
 "file(MAKE_DIRECTORY \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana\")\n"
 "configure_file(\"\${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp\" @ONLY)\n"
-"file(GLOB runtime_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/*.cpp\")\n"
-"file(GLOB io_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/io/*.cpp\")\n"
-"add_library(katana_runtime STATIC \${runtime_sources} \${io_sources})\n"
-"target_compile_features(katana_runtime PUBLIC cxx_std_20)\n"
-"target_include_directories(katana_runtime PUBLIC \"\${CMAKE_CURRENT_SOURCE_DIR}/include\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include\")\n"
-"if(WIN32)\n"
-"  target_link_libraries(katana_runtime PUBLIC gdi32 user32 winmm)\n"
+"file(GLOB runtime_core_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/*.cpp\")\n"
+"set(runtime_diagnostic_sources\n"
+"  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/controlled_fallback.cpp\"\n"
+"  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/interpreter_boundary.cpp\"\n"
+"  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/dynamic_interpreter.cpp\")\n"
+"list(REMOVE_ITEM runtime_core_sources \${runtime_diagnostic_sources})\n"
+"if(NOT WIN32)\n"
+"  list(REMOVE_ITEM runtime_core_sources \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/host_video_d3d11.cpp\")\n"
 "endif()\n"
+"set(decoder_sources\n"
+"  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/decoder/decoder.cpp\"\n"
+"  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/decoder/instruction_metadata.cpp\")\n"
+"file(GLOB io_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/io/*.cpp\")\n"
+"add_library(katana_runtime_core_objects OBJECT \${runtime_core_sources} \${io_sources} \"\${CMAKE_CURRENT_SOURCE_DIR}/src/progress.cpp\")\n"
+"add_library(katana_runtime_diagnostic_objects OBJECT \${runtime_diagnostic_sources} \${decoder_sources})\n"
+"foreach(runtime_object_target IN ITEMS katana_runtime_core_objects katana_runtime_diagnostic_objects)\n"
+"  target_compile_features(\${runtime_object_target} PUBLIC cxx_std_20)\n"
+"  target_include_directories(\${runtime_object_target} PRIVATE \"\${CMAKE_CURRENT_SOURCE_DIR}/include\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include\")\n"
+"  if(MSVC)\n"
+"    target_compile_options(\${runtime_object_target} PRIVATE /W4 /permissive- /EHsc /utf-8 /fp:strict)\n"
+"  else()\n"
+"    target_compile_options(\${runtime_object_target} PRIVATE -Wall -Wextra -Wpedantic -frounding-math)\n"
+"  endif()\n"
+"endforeach()\n"
+"target_link_libraries(katana_runtime_core_objects PRIVATE Threads::Threads)\n"
+"add_library(katana_runtime_core STATIC $<TARGET_OBJECTS:katana_runtime_core_objects>)\n"
+"add_library(katana_runtime STATIC $<TARGET_OBJECTS:katana_runtime_core_objects> $<TARGET_OBJECTS:katana_runtime_diagnostic_objects>)\n"
+"add_library(KatanaRecomp::runtime_core ALIAS katana_runtime_core)\n"
+"add_library(KatanaRecomp::runtime ALIAS katana_runtime)\n"
+"set_target_properties(katana_runtime_core PROPERTIES EXPORT_NAME runtime_core)\n"
+"set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)\n"
+"function(katana_configure_runtime_archive target)\n"
+"  target_compile_features(\${target} PUBLIC cxx_std_20)\n"
+"  target_include_directories(\${target} PUBLIC \"\${CMAKE_CURRENT_SOURCE_DIR}/include\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include\")\n"
+"  target_link_libraries(\${target} PUBLIC Threads::Threads)\n"
+"  if(WIN32)\n"
+"    target_link_libraries(\${target} PUBLIC bcrypt d3d11 dxgi gdi32 user32 winmm)\n"
+"  endif()\n"
+"  set_target_properties(\${target} PROPERTIES\n"
+"    KATANA_PROJECT_VERSION \"\${PROJECT_VERSION}\"\n"
+"    KATANA_RUNTIME_ABI_VERSION \"\${KATANA_RUNTIME_ABI_VERSION}\"\n"
+"    KATANA_BLOCK_ABI_VERSION \"\${KATANA_BLOCK_ABI_VERSION}\"\n"
+"    KATANA_PLATFORM_SERVICES_ABI_VERSION \"\${KATANA_PLATFORM_SERVICES_ABI_VERSION}\"\n"
+"    KATANA_PORT_PROJECT_CONTRACT_VERSION \"\${KATANA_PORT_PROJECT_CONTRACT_VERSION}\"\n"
+"    EXPORT_PROPERTIES \"KATANA_PROJECT_VERSION;KATANA_RUNTIME_ABI_VERSION;KATANA_BLOCK_ABI_VERSION;KATANA_PLATFORM_SERVICES_ABI_VERSION;KATANA_PORT_PROJECT_CONTRACT_VERSION\")\n"
+"endfunction()\n"
+"katana_configure_runtime_archive(katana_runtime_core)\n"
+"katana_configure_runtime_archive(katana_runtime)\n"
 )
 file(COPY
     "${source_root}/docs/PHASE10_GUI_ARCHITECTURE.md"

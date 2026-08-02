@@ -343,7 +343,7 @@ int main() {
                 incomplete_result.analysis_coverage->reachable_abort_edges == 0u &&
                 incomplete_result.analysis_coverage->control_flow_complete &&
                 incomplete_events.back().state == app::JobState::Completed &&
-                incomplete_json.find("\"version\":7") != std::string::npos &&
+                incomplete_json.find("\"version\":8") != std::string::npos &&
                 incomplete_json.find("\"executable_byte_classes\"") != std::string::npos &&
                 incomplete_json.find("\"precompile_sets\"") != std::string::npos &&
                 incomplete_json.find("\"state\":\"completed\"") != std::string::npos &&
@@ -697,7 +697,7 @@ int main() {
             !std::filesystem::exists(fixture.root / "gdi-build" / "game.exe") &&
             !std::filesystem::exists(fixture.root / "gdi-build" / "sourcecode") &&
             std::filesystem::exists(std::filesystem::path((fixture.root / "gdi-build").string() +
-                                                          ".katana-stale-failed-rebuild") /
+                                                          ".katana-stale") /
 #ifdef _WIN32
                                     "game.exe"),
 #else
@@ -705,7 +705,7 @@ int main() {
 #endif
         "Fehlgeschlagene Wiederholung laesst alte oder teilweise Resultate aktiv.");
     const auto stale_root = std::filesystem::path((fixture.root / "gdi-build").string() +
-                                                  ".katana-stale-failed-rebuild");
+                                                   ".katana-stale");
 #ifdef _WIN32
     const auto stale_executable = stale_root / "game.exe";
 #else
@@ -720,7 +720,7 @@ int main() {
     require(second_failed_rebuild.state == app::JobState::Failed &&
                 std::filesystem::exists(stale_executable) &&
                 read_text(stale_executable) == stale_hash,
-            "Zweiter Fehler mit gleicher CLI-Job-ID loescht den letzten erfolgreichen Build.");
+            "Wiederholter Fehler loescht den letzten erfolgreichen Build.");
     const auto failed = service.execute({"gdi-error",
                                          app::JobKind::Validate,
                                          gdi_manifest_path,

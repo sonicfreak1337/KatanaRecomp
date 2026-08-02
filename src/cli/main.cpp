@@ -2350,6 +2350,7 @@ PortHostCommandTimeout configured_port_host_command_runtime(
             return std::chrono::duration_cast<
                 std::chrono::milliseconds>(
                 maximum_port_host_command_runtime);
+        if (*value == "unlimited") return std::nullopt;
         std::uint64_t milliseconds = 0u;
         const auto conversion = std::from_chars(
             value->data(),
@@ -2359,7 +2360,8 @@ PortHostCommandTimeout configured_port_host_command_runtime(
         if (conversion.ec != std::errc{} ||
             conversion.ptr != value->data() + value->size())
             throw std::invalid_argument(
-                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS ist ungueltig.");
+                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS muss 'unlimited' "
+                "oder eine Millisekundenzahl sein.");
         const auto maximum_wait_milliseconds =
             static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2368,8 +2370,8 @@ PortHostCommandTimeout configured_port_host_command_runtime(
         if (milliseconds == 0u ||
             milliseconds > maximum_wait_milliseconds)
             throw std::invalid_argument(
-                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS muss zwischen 1 und "
-                "900000 liegen.");
+                "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS muss 'unlimited' "
+                "oder zwischen 1 und 900000 liegen.");
         return std::chrono::milliseconds(milliseconds);
     }();
     const auto test_stage =
@@ -3454,11 +3456,12 @@ SupervisedHostCommandResult run_supervised_host_command(
     const std::optional<std::size_t> windows_cl_jobs =
         std::nullopt,
     const std::function<void()>& supervision_heartbeat = {}) {
-    if (!timeout || timeout->count() <= 0 ||
-        *timeout > maximum_port_host_command_runtime)
+    if (timeout &&
+        (timeout->count() <= 0 ||
+         *timeout > maximum_port_host_command_runtime))
         throw std::invalid_argument(
-            "Port-Hostprozess braucht ein Zeitlimit von hoechstens "
-            "15 Minuten.");
+            "Port-Hostprozess braucht 'unlimited' oder ein Zeitlimit von "
+            "hoechstens 15 Minuten.");
     SupervisedHostCommandResult result;
     const SupervisedHostCommandTelemetryAttempt telemetry_attempt(
         telemetry, telemetry_phase, result);
@@ -3665,7 +3668,11 @@ SupervisedHostCommandResult run_supervised_host_command(
     }
 
     const auto deadline =
-        std::chrono::steady_clock::now() + *timeout;
+        timeout
+            ? std::optional(
+                  std::chrono::steady_clock::now() +
+                  *timeout)
+            : std::nullopt;
     bool root_terminal = false;
     DWORD root_exit_code = 1u;
     for (;;) {
@@ -3742,7 +3749,8 @@ SupervisedHostCommandResult run_supervised_host_command(
             break;
         }
 
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (deadline &&
+            std::chrono::steady_clock::now() >= *deadline) {
             result.exit_code = 124;
             result.exit_code_available = true;
             result.timed_out = true;
@@ -6155,76 +6163,95 @@ void store_cached_port_export(
     if (!tree_identity)
         throw std::runtime_error(
             "Content-addressed Portcodegen-Ausgabe ist nach Export unvollstaendig.");
-    const auto state_path = port_export_cache_path(workspace, source_kind, key);
-    ensure_safe_port_directory_chain(
-        workspace,
-        state_path.parent_path(),
-        "Content-addressed Portexport-Cache");
-    const auto temporary = std::filesystem::path(state_path.string() + ".tmp");
-    std::ostringstream state_content;
-    state_content << "KATANA_PORT_EXPORT_STATE "
-                  << port_export_cache_version << '\n'
-                  << "key " << key << '\n'
-                  << "source " << source_kind << '\n'
-                  << "tree " << *tree_identity << '\n'
-                  << "recipe " << port_export_recipe_identity(expected_recipe)
-                  << '\n'
-                  << "functions " << report.functions << '\n'
-                  << "partitions " << report.partitions << '\n';
-    const auto serialized_state = state_content.str();
-    if (serialized_state.size() > maximum_port_export_cache_state_bytes)
-        throw std::runtime_error(
-            "Content-addressed Portexport-Status ueberschreitet sein Bytebudget.");
-    std::error_code replace_error;
-    const auto temporary_status =
-        std::filesystem::symlink_status(temporary, replace_error);
-    if (replace_error == std::errc::no_such_file_or_directory ||
-        (!replace_error &&
-         temporary_status.type() ==
-             std::filesystem::file_type::not_found)) {
-        replace_error.clear();
-    } else if (
-        replace_error ||
-        !std::filesystem::is_regular_file(temporary_status) ||
-        unsafe_port_filesystem_link(temporary, temporary_status) ||
-        !std::filesystem::remove(temporary, replace_error) ||
-        replace_error) {
-        throw std::runtime_error(
-            "Temporaerer Portexport-Status ist kein sicher ersetzbares Artefakt.");
+    try {
+        const auto state_path =
+            port_export_cache_path(workspace, source_kind, key);
+        ensure_safe_port_directory_chain(
+            workspace,
+            state_path.parent_path(),
+            "Content-addressed Portexport-Cache");
+        const auto temporary =
+            std::filesystem::path(state_path.string() + ".tmp");
+        std::ostringstream state_content;
+        state_content << "KATANA_PORT_EXPORT_STATE "
+                      << port_export_cache_version << '\n'
+                      << "key " << key << '\n'
+                      << "source " << source_kind << '\n'
+                      << "tree " << *tree_identity << '\n'
+                      << "recipe "
+                      << port_export_recipe_identity(expected_recipe)
+                      << '\n'
+                      << "functions " << report.functions << '\n'
+                      << "partitions " << report.partitions << '\n';
+        const auto serialized_state = state_content.str();
+        if (serialized_state.size() >
+            maximum_port_export_cache_state_bytes)
+            throw std::runtime_error(
+                "Content-addressed Portexport-Status ueberschreitet sein "
+                "Bytebudget.");
+        std::error_code replace_error;
+        const auto temporary_status =
+            std::filesystem::symlink_status(temporary, replace_error);
+        if (replace_error == std::errc::no_such_file_or_directory ||
+            (!replace_error &&
+             temporary_status.type() ==
+                 std::filesystem::file_type::not_found)) {
+            replace_error.clear();
+        } else if (
+            replace_error ||
+            !std::filesystem::is_regular_file(temporary_status) ||
+            unsafe_port_filesystem_link(temporary, temporary_status) ||
+            !std::filesystem::remove(temporary, replace_error) ||
+            replace_error) {
+            throw std::runtime_error(
+                "Temporaerer Portexport-Status ist kein sicher "
+                "ersetzbares Artefakt.");
+        }
+        std::ofstream output(
+            temporary, std::ios::binary | std::ios::trunc);
+        output.write(
+            serialized_state.data(),
+            static_cast<std::streamsize>(serialized_state.size()));
+        output.flush();
+        if (!output)
+            throw std::runtime_error(
+                "Content-addressed Portexport-Status konnte nicht "
+                "geschrieben werden.");
+        output.close();
+        const auto previous_status =
+            std::filesystem::symlink_status(state_path, replace_error);
+        if (replace_error == std::errc::no_such_file_or_directory ||
+            (!replace_error &&
+             previous_status.type() ==
+                 std::filesystem::file_type::not_found)) {
+            replace_error.clear();
+        } else if (
+            replace_error ||
+            !std::filesystem::is_regular_file(previous_status) ||
+            unsafe_port_filesystem_link(state_path, previous_status) ||
+            !std::filesystem::remove(state_path, replace_error) ||
+            replace_error) {
+            throw std::runtime_error(
+                "Alter content-addressed Portexport-Status konnte nicht "
+                "sicher ersetzt werden.");
+        }
+        ensure_safe_port_directory_chain(
+            workspace,
+            state_path.parent_path(),
+            "Content-addressed Portexport-Cache");
+        std::filesystem::rename(temporary, state_path, replace_error);
+        if (replace_error)
+            throw std::runtime_error(
+                "Content-addressed Portexport-Status konnte nicht "
+                "publiziert werden.");
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception& exception) {
+        std::cerr
+            << "KATANA_PORT_CACHE_PUBLISH_SKIPPED whole-export: "
+            << exception.what() << '\n'
+            << std::flush;
     }
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    output.write(
-        serialized_state.data(),
-        static_cast<std::streamsize>(serialized_state.size()));
-    output.flush();
-    if (!output)
-        throw std::runtime_error(
-            "Content-addressed Portexport-Status konnte nicht geschrieben werden.");
-    output.close();
-    const auto previous_status =
-        std::filesystem::symlink_status(state_path, replace_error);
-    if (replace_error == std::errc::no_such_file_or_directory ||
-        (!replace_error &&
-         previous_status.type() ==
-             std::filesystem::file_type::not_found)) {
-        replace_error.clear();
-    } else if (
-        replace_error ||
-        !std::filesystem::is_regular_file(previous_status) ||
-        unsafe_port_filesystem_link(state_path, previous_status) ||
-        !std::filesystem::remove(state_path, replace_error) ||
-        replace_error) {
-        throw std::runtime_error(
-            "Alter content-addressed Portexport-Status konnte nicht sicher ersetzt werden.");
-    }
-    ensure_safe_port_directory_chain(
-        workspace,
-        state_path.parent_path(),
-        "Content-addressed Portexport-Cache");
-    std::filesystem::rename(temporary, state_path, replace_error);
-    if (replace_error)
-        throw std::runtime_error(
-            "Content-addressed Portexport-Status konnte nicht publiziert werden.");
 }
 
 int extract_boot_executable_artifact(

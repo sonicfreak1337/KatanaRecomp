@@ -33,7 +33,7 @@ erfolgt erstmals gesammelt in KR-3709.
 
 Ein Artefakt darf nur dann einem Tag zugeordnet werden, wenn sein internes
 `source_commit` exakt auf den vom Tag bezeichneten Commit zeigt. Das wird vor
-der Veroeffentlichung zusammen mit einem optional extern gespeicherten Hash
+der Veroeffentlichung zwingend zusammen mit einem extern gespeicherten Hash
 geprueft:
 
 ```powershell

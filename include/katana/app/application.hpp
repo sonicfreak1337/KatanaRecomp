@@ -17,7 +17,7 @@
 
 namespace katana::app {
 
-inline constexpr std::uint32_t application_contract_version = 7u;
+inline constexpr std::uint32_t application_contract_version = 8u;
 inline constexpr std::uint32_t settings_schema_version = 1u;
 
 enum class DiagnosticSeverity : std::uint8_t { Information, Warning, Error };
@@ -176,6 +176,7 @@ struct JobArtifact {
 
 struct JobResult {
     std::string job_id;
+    std::string output_binding;
     JobKind kind = JobKind::Validate;
     JobState state = JobState::Failed;
     JobFailureCategory failure_category = JobFailureCategory::None;

@@ -6,22 +6,22 @@ Aktuelle interne Version: `v0.49.0`
 
 ```text
 letzte reale Produktevidenz: historischer ABI-77/78-NativeDisc-Stand
-Source-Checkpoint:           18f8537
-verbindlicher P0-Plan:       ffd45ae / KR-4974 bis KR-4984
-aktueller Source:            Runtime-ABI 85 / Analyzer-ABI 23 /
-                             Portprojektvertrag 75
-letzter Exportversuch:       NativeDisc-v24 nach ca. 3 h 27 min abgebrochen
+Source-Checkpoint:           KR-4984-Sourcegate
+verbindlicher P0-Plan:       KR-4974 bis KR-4984 quellseitig umgesetzt
+aktueller Source:            Runtime-ABI 87 / Analyzer-ABI 27 /
+                             Application 8 / Portprojektvertrag 75
+letzter Exportversuch:       v40/v41 ohne neues Portartefakt beendet
 aktuelles Portartefakt:      keines
 aktueller Sonic-Lauf:        keiner
 aktueller Screenshot:        keiner
-offene Produktabnahme:       Performancegate, Gesamtpruefung und erst danach
-                             genau ein neuer NativeDisc-Sonic-Lauf
+offene Produktabnahme:       genau ein sichtbarer 24-Thread-NativeDisc-Sonic-
+                             Lauf mit Zeit- und Screenshotbeweis
 ```
 
-## Aktueller P0-Stand vom 31. Juli 2026
+## Aktueller P0-Stand vom 2. August 2026
 
-Source-Checkpoint `18f8537` enthaelt umfangreiche Umbauten, ist aber
-ausdruecklich kein vollstaendiger P0-Abschluss. Quellseitig vorhanden sind:
+Der KR-4984-Sourcegate-Stand enthaelt die Performanceumbauten und die
+vollstaendige P0/P1-Gesamtpruefung. Quellseitig vorhanden sind:
 
 - komponentenbezogene Analyse-, IR-, Codegen- und Orchestrierungsidentitaeten;
 - ein gebundener positiver Boot-Analysecache sowie positiver und negativer
@@ -39,20 +39,15 @@ ausdruecklich kein vollstaendiger P0-Abschluss. Quellseitig vorhanden sind:
 - weitere Function-Value-/Guarded-Inventory-Korrekturen und
   Rootfilterung.
 
-Der fokussierte `katana-function-value-analysis-tests`-Lauf und der
-Release-Build von `katana-recomp` sind gruen. Unabhaengige Teilreviews der
-zuletzt korrigierten Contextual-/Rootfilter- und Runtime-Parallelpfade
-meldeten keine bestaetigten P0/P1-Funde. Das ist **keine** abschliessende
-Gesamtpruefung des gesamten Arbeitsbaums. Insbesondere sind Kaltbuildzeit,
-Runtime-CPU-Entlastung, D3D11-Nutzung und ein moeglicher Analyse-GPU-Offload
-noch nicht end-to-end abgenommen.
+Die abschliessende Gesamtpruefung des gesamten Arbeitsbaums und zwei
+unabhaengige Regressionreviews melden keinen offenen P0/P1. Kaltbuildzeit,
+Runtimeverhalten und sichtbarer Spielfortschritt sind noch nicht durch den
+neuen realen Produktlauf belegt.
 
-Der verbindliche Umsetzungs-, Mess-, GPU- und Abschlussvertrag steht in
+Der verbindliche Umsetzungs-, Mess- und Abschlussvertrag steht in
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-KR-4974 bis KR-4977 sind abgeschlossen; KR-4978 bis KR-4984 bleiben offen. Ein GPU-Compute-Pfad gilt nur nach
-belegtem End-to-End-Gewinn; der vorhandene D3D11-Presenter ist
-hardwarebeschleunigte Ausgabe, aber kein Beleg fuer GPU-beschleunigte
-Analyse.
+KR-4974 bis KR-4980 sind quellseitig umgesetzt; KR-4984 ist quellseitig gruen
+und wartet nur auf die Produktevidenz. KR-4982/KR-4983 bleiben gestrichen.
 
 ### KR-4976-Abschlussstand
 

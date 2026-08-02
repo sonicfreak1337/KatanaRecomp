@@ -22,8 +22,9 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 - Jeder potentiell lange Prozess besitzt spaetestens alle zehn Sekunden einen
   belastbaren Fortschrittsindikator oder Heartbeat.
 - Jeder P0-Task wird fokussiert verifiziert, einzeln committed und gepusht.
-- Aktuelle ausdrueckliche Reihenfolge: Nach KR-4979 folgt sofort ein privater
-  Sonic-Produktbuild und -lauf; KR-4980 und KR-4984 warten bis danach.
+- Aktuelle ausdrueckliche Reihenfolge: KR-4980 ist implementiert; nach dem
+  jetzt gruenen KR-4984-Sourcegate folgt sofort genau ein privater sichtbarer
+  Sonic-Produktbuild und -lauf.
 - Jeder offene Roadmap-Task wird verbindlich in dieser Reihenfolge beendet:
   implementieren, nur P0/P1 der betroffenen Pfade reviewen, alle bestaetigten
   P0/P1 gebuendelt fixen, fokussiert verifizieren, committen und pushen. Erst
@@ -42,20 +43,21 @@ Diese drei Staende duerfen nicht als derselbe Fortschritt berichtet werden:
    NativeDisc-Stand bleibt die letzte ausgefuehrte Produktevidenz. Seine
    Details und sichtbaren Screens stehen in `STATUS.md`; er ist kein Nachweis
    fuer den aktuellen Source.
-2. **Aktueller KR-4979-Stand:** verwendet Runtime-ABI 87,
-   Block-ABI 5, Analyzer-ABI 25, PlatformServices-ABI 13,
+2. **Aktueller KR-4984-Stand:** verwendet Runtime-ABI 87,
+   Block-ABI 5, Analyzer-ABI 27, PlatformServices-ABI 13,
    Backend-Interface-ABI 12, Portprojektvertrag 75, Native-AOT-Profil 13 und
    Partitionsschema 5. Er enthaelt umfangreiche Analyse-, Cache-,
-   Fortschritts-, Runtime-CPU- und D3D11-Umbauten, ist aber kein
-   P0-Abschluss oder Produktproof.
+   Fortschritts-, Runtime-CPU- und D3D11-Umbauten sowie den persistenten
+   Schichtcache. Die P0/P1-Gesamtpruefung ist quellseitig gruen; der reale
+   Produktproof steht unmittelbar bevor.
 3. **Letzter Exportversuch:** Der lokale NativeDisc-v24-Iterationslauf wurde
    nach etwa `3 h 27 min` mitten in der dritten vollstaendigen
    Function-Value-Neuberechnung beendet. Er erzeugte kein Portartefakt,
    keinen Sonic-Lauf und keinen Screenshot.
 
-Der naechste kritische Pfad ist ausschliesslich KR-4974 bis KR-4984. Erst
-nach den Sonic-kritischen Performanceumbauten, beweispflichtiger
-GPU-Entscheidung und unabhaengiger Gesamtpruefung folgt genau ein frischer
+Der naechste kritische Pfad ist der freigegebene KR-4981-Produktlauf. Nach den
+Sonic-kritischen Performanceumbauten und der unabhaengigen Gesamtpruefung folgt
+genau ein frischer
 NativeDisc-Port mit realer Discinstallation, Produktlauf und neuem echten
 Fensterscreenshot. DirectBoot wird spaeter mit einem an den dann aktuellen
 Runtime-ABI gebundenen CompletePlatform-Handoff geprueft; NativeDisc
@@ -1404,7 +1406,9 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4975, KR-4976, KR-4978
 
-Status: Geplant.
+Status: Quellseitig implementiert und P0/P1-re-reviewed in `3c018be`;
+Produktwirkung und Gesamtzeit werden ausschliesslich im folgenden Sonic-Lauf
+gemessen.
 
 ### Umfang
 
@@ -1509,10 +1513,31 @@ ausdrueckliche Nutzerfreigabe.
 
 Prioritaet: P0, letzter Gate-Vorbereitungstask
 
-Abhaengigkeiten: KR-4974 bis KR-4980, KR-4982 und gegebenenfalls KR-4983
+Abhaengigkeiten: KR-4974 bis KR-4980; KR-4982/KR-4983 sind auf
+Nutzeranweisung vorerst gestrichen
 
-Status: Geplant. Der naechste reale NativeDisc-Lauf ist bis zum Abschluss
-gesperrt.
+Status: Quellseitige Gesamtreview und gebuendelte P0/P1-Schliessung sind
+dreifach re-reviewed und gruen. Der reale NativeDisc-Lauf ist freigegeben;
+Produktevidenz und Zeitmessung stehen noch aus.
+
+### Geschlossenes Finding-Ledger
+
+- P0: Function-Evaluation-Cachekey verlor forwarded Register-Live-ins.
+- P1: Application-Publikation und Recovery waren nicht durchgaengig
+  eigentums-, Root-, Link-/Reparse- und Crashfenster-sicher.
+- P1: Das paketierte Quell-SDK enthielt nicht die vollstaendige produktive
+  Runtime-Core-/Decoder-/Progress-Verdrahtung.
+- P1: Lange freigegebene Produktbuilds besassen keinen expliziten
+  unbegrenzten Supervisor-Modus.
+- P1: Optionale Whole-Export-Cachepublikation konnte einen gueltigen Export
+  nachtraeglich abbrechen.
+- P1: Artefaktprovenienz verlangte keinen extern autoritativen SHA-256.
+- P1: Das Releasewerkzeug schrieb nicht ausschliesslich die kanonische
+  `VERSION` und behandelte Git-/Tagfehler nicht vollstaendig fail-closed.
+- Re-Review: Application-Contract 8 bindet terminale Ergebnisse an das
+  normalisierte Ziel; `.katana-stale` und Cleanup-Proof sind
+  frontend-unabhaengig, und der private Runner trennt Application 8 von
+  Buildplan 7.
 
 ### Umfang
 
@@ -1522,7 +1547,8 @@ gesperrt.
   Hostbuild und Packaging
 - Review exakter Latent-AOT-Hints, bytegleicher Multi-Extent-Bindings und
   sichtbarer-Frame-Baseline/-Pixelverteilung
-- Review des optionalen Analyse-GPU-Pfads und seines CPU-Fallbacks
+- Bestaetigung, dass die gestrichenen Analyse-GPU-Tasks nicht versehentlich
+  teilverdrahtet oder reaktiviert wurden
 - Review der beruehrten Runtime-CPU-/Parallelwork- und
   CPU-/D3D11-Ausgabepfade
 - Runtime-Vorher/Nachher bei gleicher Gastarbeit: Gesamt-CPU-Zeit,
@@ -1535,8 +1561,8 @@ gesperrt.
 ### Akzeptanz
 
 - alle P0/P1-Funde geschlossen und nachreviewed
-- betroffene Korrektheits- und Performancegates nach jeder Reparatur erneut
-  gruen
+- der gebuendelte Endstand ist statisch end-to-end nachreviewed; gemaess
+  Nutzervertrag ist Sonic der einzige neue Produkt-/Performancetest
 - keine unverdrahtete Option, Identitaet, Telemetrie oder Fallbackgrenze
 - kein ungebundener Runtime-Busy-Spin; bestaetigte Runtime-Hotspotarbeit pro
   gleicher Gastarbeit mindestens 20 Prozent unter Vorher-Baseline

@@ -736,8 +736,10 @@ def main() -> int:
     require(
         "maximum_port_host_command_runtime =\n    std::chrono::minutes(15)"
         in main_source
-        and "if (!timeout || timeout->count() <= 0" in main_source,
-        "host commands can still be unbounded or exceed 15 minutes",
+        and 'if (*value == "unlimited") return std::nullopt' in main_source
+        and "if (timeout &&" in main_source
+        and "timeout->count() <= 0" in main_source,
+        "host commands lack the explicit no-limit grant or can exceed the default cap",
     )
     require(
         "cmd.exe /d /v:off /s /c" in main_source

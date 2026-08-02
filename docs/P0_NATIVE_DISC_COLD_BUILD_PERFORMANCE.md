@@ -1,7 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Aufgabenplan
 
-Status: verbindlicher P0-Fahrplan; KR-4974 und KR-4975 abgeschlossen,
-KR-4976 bis KR-4984 nicht abgeschlossen
+Status: KR-4974 bis KR-4980 quellseitig implementiert; KR-4984-Gesamtpruefung
+ohne offenen P0/P1, KR-4982/KR-4983 vorerst gestrichen; KR-4981-Sonic-
+Produktmessung offen
 
 Analysebasis: P0-Planstand `ffd45ae`, Source-Checkpoint `18f8537` vom
 31. Juli 2026 und der abgebrochene private v24-Export. Der Source-Checkpoint
@@ -853,6 +854,9 @@ Akzeptanz:
 
 Typ: P0 Implementierung
 
+Status: Quellseitig implementiert und P0/P1-re-reviewed in `3c018be`;
+Produktwirkung wird im einmaligen KR-4981-Lauf gemessen.
+
 Abhaengigkeiten: KR-4975, KR-4976, KR-4978
 
 Ziel: Ein Whole-Analysis-Miss verwirft keine semantisch unveraenderten
@@ -902,6 +906,9 @@ Akzeptanz:
 
 Typ: P0 Entscheidungs- und Benchmarktask
 
+Status: Auf Nutzeranweisung vorerst gestrichen; keine Vorarbeit ohne neue
+ausdrueckliche Freigabe.
+
 Abhaengigkeiten: KR-4974, KR-4975, KR-4977, KR-4979
 
 Ziel: Fuer jeden plausiblen Batchkern wird gegen den bereits optimierten
@@ -927,6 +934,9 @@ Akzeptanz: Es gelten ausnahmslos die oben definierten GPU-Schwellen.
 ### KR-4983 - Deterministische capability-gated GPU-Beschleunigung
 
 Typ: bedingte P0 Implementierung
+
+Status: Auf Nutzeranweisung vorerst gestrichen; keine Vorarbeit ohne neue
+ausdrueckliche Freigabe.
 
 Abhaengigkeit: positives KR-4982-Gate
 
@@ -954,11 +964,16 @@ Akzeptanz:
 
 Typ: letzter P0 Gate-Vorbereitungstask
 
-Abhaengigkeiten: KR-4974 bis KR-4980, KR-4982 und gegebenenfalls KR-4983
+Abhaengigkeiten: KR-4974 bis KR-4980; KR-4982 und KR-4983 sind auf
+Nutzeranweisung vorerst gestrichen
 
 Ziel: Ein unabhaengiger Reviewer verfolgt alle geaenderten Daten- und
 Fehlerpfade end-to-end. Der reale NativeDisc-Lauf bleibt gesperrt, bis jeder
 P0/P1 geschlossen und nachgeprueft ist.
+
+Status: Quellseitig dreifach re-reviewed und ohne offenen P0/P1. Der einmalige
+sichtbare NativeDisc-Produktlauf ist freigegeben; Zeit- und Screenshotbeweis
+stehen noch aus.
 
 Pflichtumfang:
 

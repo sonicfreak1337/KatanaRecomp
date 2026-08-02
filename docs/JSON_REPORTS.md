@@ -120,7 +120,9 @@ dieses gepruefte Artefakt darf manuell in die Dokumentation uebernommen werden.
 
 ## Anwendungsjob und Buildplan
 
-`katana-application-job` Version 7 unterscheidet die Endzustaende `completed`,
+`katana-application-job` Version 8 bindet publizierte Jobberichte ueber einen
+nichtoffenlegenden `output_binding` an ihr normalisiertes Ausgabeziel und
+unterscheidet die Endzustaende `completed`,
 `partial`, `failed` und `cancelled`. `partial` ist kein erfolgreicher Build:
 Analyseartefakte bleiben nutzbar, Codegen und Hostkompilierung werden jedoch
 unterdrueckt. Das Feld `analysis` enthaelt committed ausfuehrbare Bytes,
@@ -167,7 +169,7 @@ Der private Runner ermittelt Runtime-ABI und Portprojektvertrag strikt aus der
 kanonischen `cmake/KatanaVersions.cmake`. Fehlende, doppelte, malformed,
 nicht-positive oder ueberlaufende Deklarationen werden ebenso abgelehnt wie
 als JSON-String oder Gleitkommazahl eingeschleuste Vertragswerte. Der
-Anwendungskontrakt bleibt Version 7.
+Anwendungskontrakt verwendet Version 8.
 
 `katana-persistent-image-v1` und `katana-dreamcast-storage-v1` berichten den
 lokalen Arbeitskopienzustand ohne Pfade, Hashes oder Nutzdaten.

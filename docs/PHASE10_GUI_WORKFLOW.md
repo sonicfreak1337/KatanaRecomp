@@ -48,9 +48,12 @@ Validation, hashing, boot image, analysis, IR, codegen, host configuration,
 host compilation and finalization remain ordered. Unknown step totals are
 shown as indeterminate and failure/cancellation names the active step.
 The terminal 100-percent event is a publication acknowledgement: it is sent
-only after the final result exists at the requested output path. A rename,
-write or cleanup failure therefore appears as `failed`, never as an earlier
-success followed by a host-side exception.
+only after the final result exists at the requested output path and local user
+data has been preserved. A rename, result write or user-data preservation
+failure before that commit point appears as `failed`. Failure to remove the
+now-obsolete stale recovery copy afterwards leaves the successful result
+authoritative, emits a warning and is retried by the next run under the same
+output lock.
 
 On Windows the desktop shell presents the same values through separate native
 overall and step progress bars. GDI and output stay visible in read-only,

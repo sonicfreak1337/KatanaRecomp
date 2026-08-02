@@ -6,7 +6,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $buildOnlyMode = 'build-only'
-$requiredApplicationContract = 7
+$requiredApplicationContract = 8
+$requiredBuildPlanContract = 7
 $checkpointOrder = @('KR_RETAIL_NOT_REACHED', 'KR_RETAIL_ANALYSIS_CONTINUES')
 $script:RuntimeProcessStarts = 0
 
@@ -346,7 +347,7 @@ function Test-ExactContractInteger {
 function Assert-ContractCompatibility {
     param($JobResult, $BuildPlan, $PortMetadata)
     if (-not (Test-ExactContractInteger $JobResult.version $requiredApplicationContract) -or
-        -not (Test-ExactContractInteger $BuildPlan.version $requiredApplicationContract) -or
+        -not (Test-ExactContractInteger $BuildPlan.version $requiredBuildPlanContract) -or
         -not (Test-ExactContractInteger $PortMetadata.contract_version $requiredPortContract) -or
         -not (Test-ExactContractInteger $PortMetadata.runtime_abi $requiredRuntimeAbi)) {
         throw 'Runtime-, Port- oder Anwendungsvertrag des aktuellen Jobs ist inkompatibel.'
@@ -562,7 +563,7 @@ if ($SelfTest) {
         throw 'SelfTest konnte die kanonischen Vertragswerte nicht reproduzierbar aufloesen.'
     }
     $matchingJobResult = [pscustomobject]@{ version = $requiredApplicationContract }
-    $matchingBuildPlan = [pscustomobject]@{ version = $requiredApplicationContract }
+    $matchingBuildPlan = [pscustomobject]@{ version = $requiredBuildPlanContract }
     $matchingPortMetadata = [pscustomobject]@{
         contract_version = $requiredPortContract
         runtime_abi = $requiredRuntimeAbi
@@ -644,19 +645,19 @@ if ($SelfTest) {
         [pscustomobject]@{
             name = 'Buildplanvertrag-String'
             job = $matchingJobResult
-            plan = [pscustomobject]@{ version = [string]$requiredApplicationContract }
+            plan = [pscustomobject]@{ version = [string]$requiredBuildPlanContract }
             metadata = $matchingPortMetadata
         },
         [pscustomobject]@{
             name = 'Buildplanvertrag-Gleitkomma'
             job = $matchingJobResult
-            plan = [pscustomobject]@{ version = [double]$requiredApplicationContract }
+            plan = [pscustomobject]@{ version = [double]$requiredBuildPlanContract }
             metadata = $matchingPortMetadata
         },
         [pscustomobject]@{
             name = 'Buildplanvertrag-Array'
             job = $matchingJobResult
-            plan = [pscustomobject]@{ version = @($requiredApplicationContract) }
+            plan = [pscustomobject]@{ version = @($requiredBuildPlanContract) }
             metadata = $matchingPortMetadata
         }
     )) {

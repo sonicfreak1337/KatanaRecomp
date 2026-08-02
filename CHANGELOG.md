@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- KR-4984 schliesst die vollstaendige P0/P1-Gesamtpruefung quellseitig ohne
+  offenen Befund. Der Function-Evaluation-Cache bindet forwarded Register-
+  Live-ins; optionale Whole-Export-Cachepublikation ist fail-open; lange
+  explizit freigegebene Hostbuilds besitzen den Modus `unlimited`; das
+  paketierte Runtime-SDK enthaelt die exakte Runtime-Core-, Decoder-, IO- und
+  Progressverdrahtung; Artefaktprovenienz verlangt einen externen SHA-256;
+  und das Releasewerkzeug arbeitet atomar auf der kanonischen `VERSION` sowie
+  fail-closed gegen Git-/Tagfehler.
+- Application-Contract 8 bindet jedes terminale Ergebnis nichtoffenlegend an
+  sein normalisiertes Ausgabeziel. Lexikalische Mutationspfade lehnen
+  Symlinks, Junctions und Reparse-Ahnen ab; zufaellige transaktionseigene
+  Stages, frontend-stabiles `.katana-stale`, Preserve als Commitpunkt und ein
+  rootgebundener Cleanup-Proof sichern alle reviewten Publish-/Rollback-
+  Crashfenster. Der private Runner prueft Application 8 und Buildplan 7
+  getrennt. Der reale Sonic-Zeit- und Screenshotbeweis folgt erst jetzt.
+
 - Der sichtbare 24-Thread-Sonic-v40-Kaltlauf endete nach `21:11,230`
   fail-closed ohne Port: Root 0 bis 6 waren nach rund `14,7 s` abgeschlossen,
   waehrend Root 7 die kanonische Ausgabe fuer `18:33` blockierte und eine

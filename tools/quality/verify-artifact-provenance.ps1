@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory = $true)][string]$Archive,
     [Parameter(Mandatory = $true)][string]$GitRef,
-    [string]$ExpectedSha256 = ""
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+    [string]$ExpectedSha256
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,11 +43,9 @@ finally {
 if ($manifest.source_commit -ne $tagCommit) {
     throw "Artefaktcommit $($manifest.source_commit) stimmt nicht mit $GitRef ($tagCommit) ueberein."
 }
-if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-    $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
-        throw "Artefakthash $actualHash stimmt nicht mit dem erwarteten SHA-256 ueberein."
-    }
+$actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
+    throw "Artefakthash $actualHash stimmt nicht mit dem erwarteten SHA-256 ueberein."
 }
 
-Write-Output "KR_ARTIFACT_PROVENANCE_SUCCESS ref=$GitRef commit=$tagCommit"
+Write-Output "KR_ARTIFACT_PROVENANCE_SUCCESS ref=$GitRef commit=$tagCommit sha256=$actualHash"

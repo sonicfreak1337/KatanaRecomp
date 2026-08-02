@@ -12880,13 +12880,14 @@ make_function_evaluation_cache_key(
         contextual_summaries,
     const TailIngressMap* const local_tail_ingresses,
     const bool collect_walk_diagnostics,
+    const ForwardedRegisterReadMap& forwarded_register_reads,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads,
     const std::uint8_t inventory_sink_sources,
     const bool collect_component_hashes) {
     EvaluationKeyEncoder key(collect_component_hashes);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{4u});
+    key.append(std::uint32_t{5u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -13030,6 +13031,12 @@ make_function_evaluation_cache_key(
             key.select_component(
                 EvaluationKeyComponent::AbiContract);
             key.append(address);
+            const auto register_reads =
+                forwarded_register_reads.find(address);
+            key.append(register_reads !=
+                       forwarded_register_reads.end());
+            if (register_reads != forwarded_register_reads.end())
+                key.append(register_reads->second);
             if (abi_stack_argument_reads == nullptr) return;
             const auto reads =
                 abi_stack_argument_reads->find(address);
@@ -25591,6 +25598,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     contextual_summaries,
                     local_tail_ingresses,
                     walk_diagnostics != nullptr,
+                    forwarded_register_reads,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                     evaluation_cache
