@@ -673,6 +673,43 @@ enum class EvidenceProvenanceDomain : std::uint8_t {
     Callee,
 };
 
+using EvidenceMembership = std::vector<std::size_t>;
+using EvidenceTokenAssignments =
+    std::map<EvidenceMembership, std::uint32_t>;
+
+struct EvidenceFieldLayout {
+    std::array<std::vector<std::int32_t>, 16u>
+        register_saved_stack_slots;
+    std::map<std::int32_t, std::vector<std::int32_t>>
+        stack_saved_stack_slots;
+    std::map<std::uint32_t, std::vector<std::int32_t>>
+        memory_saved_stack_slots;
+
+    bool operator==(const EvidenceFieldLayout&) const = default;
+};
+
+[[nodiscard]] EvidenceFieldLayout capture_evidence_field_layout(
+    const AbstractState& state) {
+    EvidenceFieldLayout layout;
+    const auto capture_saved_slots = [](const AbstractValue& value) {
+        std::vector<std::int32_t> slots;
+        slots.reserve(value.inventory_saved_stack_epoch.slots.size());
+        for (const auto& slot : value.inventory_saved_stack_epoch.slots)
+            slots.push_back(slot.relative_slot);
+        return slots;
+    };
+    for (std::size_t index = 0u; index < state.registers.size(); ++index)
+        layout.register_saved_stack_slots[index] =
+            capture_saved_slots(state.registers[index]);
+    for (const auto& [slot, value] : state.stack_values)
+        layout.stack_saved_stack_slots.emplace(
+            slot, capture_saved_slots(value));
+    for (const auto& [address, value] : state.memory_values)
+        layout.memory_saved_stack_slots.emplace(
+            address, capture_saved_slots(value));
+    return layout;
+}
+
 template <typename Callback>
 void for_each_evidence_set(AbstractValue& value, Callback&& callback) {
     callback(EvidenceProvenanceDomain::CallSite, value.call_sites);
@@ -715,8 +752,10 @@ class EvidenceProvenanceDomainLens final {
         const std::unordered_set<std::uint32_t>&
             locally_observable_constants,
         const std::unordered_set<std::uint32_t>* const
-            additional_locally_observable_constants = nullptr) {
-        std::map<std::uint32_t, std::vector<std::size_t>> memberships;
+            additional_locally_observable_constants = nullptr,
+        const EvidenceTokenAssignments* const prior_assignments =
+            nullptr) {
+        std::map<std::uint32_t, EvidenceMembership> memberships;
         const auto observe_field =
             [&](const auto& evidence_values,
                 const std::size_t field_index) {
@@ -737,9 +776,7 @@ class EvidenceProvenanceDomainLens final {
             observe_field(
                 *vector_fields[field_index],
                 set_fields.size() + field_index);
-        if (memberships.empty()) return true;
-        std::map<std::vector<std::size_t>,
-                 std::vector<std::uint32_t>>
+        std::map<EvidenceMembership, std::vector<std::uint32_t>>
             atoms_by_membership;
         for (auto& [concrete, membership] : memberships) {
             if (locally_observable_constants.contains(concrete) ||
@@ -750,25 +787,69 @@ class EvidenceProvenanceDomainLens final {
             atoms_by_membership[std::move(membership)].push_back(
                 concrete);
         }
-        required_tokens_ = atoms_by_membership.size();
-        if (atoms_by_membership.size() > available_tokens.size())
+        token_by_membership_ =
+            prior_assignments == nullptr
+                ? EvidenceTokenAssignments{}
+                : *prior_assignments;
+        required_tokens_ = token_by_membership_.size();
+        for (const auto& [membership, concrete_atoms] :
+             atoms_by_membership) {
+            static_cast<void>(concrete_atoms);
+            if (!token_by_membership_.contains(membership))
+                ++required_tokens_;
+        }
+        if (required_tokens_ > available_tokens.size())
             return false;
 
         // A token may never alias input evidence. Tokens are also selected
         // outside every image/program address before this lens is built; the
         // local evaluator can therefore add real callsites/callees without
-        // making reverse expansion ambiguous.
-        std::size_t token_index = 0u;
+        // making reverse expansion ambiguous. Keep prior names reserved even
+        // while their membership is temporarily absent: discovering a new,
+        // lexicographically earlier membership must not renumber every
+        // existing group and turn one monotone Forwarded context into a new
+        // cache key.
+        std::unordered_set<std::uint32_t> used_tokens;
+        used_tokens.reserve(token_by_membership_.size());
+        for (const auto& [membership, token] : token_by_membership_) {
+            static_cast<void>(membership);
+            if (!std::binary_search(
+                    available_tokens.begin(),
+                    available_tokens.end(),
+                    token,
+                    std::greater<std::uint32_t>{}) ||
+                memberships.contains(token) ||
+                !used_tokens.insert(token).second)
+                return false;
+        }
+        auto next_token = available_tokens.begin();
         for (auto& [membership, concrete_atoms] :
              atoms_by_membership) {
-            static_cast<void>(membership);
-            const auto token = available_tokens[token_index++];
-            if (memberships.contains(token)) return false;
+            auto assignment = token_by_membership_.find(membership);
+            if (assignment == token_by_membership_.end()) {
+                while (next_token != available_tokens.end() &&
+                       (used_tokens.contains(*next_token) ||
+                        memberships.contains(*next_token)))
+                    ++next_token;
+                if (next_token == available_tokens.end()) {
+                    required_tokens_ = used_tokens.size() + 1u;
+                    return false;
+                }
+                const auto token = *next_token++;
+                assignment = token_by_membership_
+                                 .emplace(membership, token)
+                                 .first;
+                used_tokens.insert(token);
+            }
+            const auto token = assignment->second;
             for (const auto concrete : concrete_atoms)
                 concrete_to_token_.emplace(concrete, token);
-            token_to_concrete_.emplace(
-                token, std::move(concrete_atoms));
+            if (!token_to_concrete_
+                     .emplace(token, std::move(concrete_atoms))
+                     .second)
+                return false;
         }
+        required_tokens_ = token_by_membership_.size();
         for (auto* const field : set_fields) {
             std::set<std::uint32_t> canonical;
             for (const auto concrete : *field) {
@@ -844,10 +925,16 @@ class EvidenceProvenanceDomainLens final {
         return required_tokens_;
     }
 
+    [[nodiscard]] const EvidenceTokenAssignments& token_assignments()
+        const noexcept {
+        return token_by_membership_;
+    }
+
   private:
     std::map<std::uint32_t, std::uint32_t> concrete_to_token_;
     std::map<std::uint32_t, std::vector<std::uint32_t>>
         token_to_concrete_;
+    EvidenceTokenAssignments token_by_membership_;
     std::size_t required_tokens_ = 0u;
 };
 
@@ -864,7 +951,11 @@ class EvidenceProvenanceLens final {
         std::map<std::uint32_t, FunctionValueSummary> summaries,
         std::optional<std::map<std::uint32_t,
                                FunctionValueSummary>>
-            contextual_summaries = std::nullopt)
+            contextual_summaries = std::nullopt,
+        const EvidenceTokenAssignments* const
+            prior_call_site_assignments = nullptr,
+        const EvidenceTokenAssignments* const
+            prior_callee_assignments = nullptr)
         : ingress_(std::move(ingress)),
           summaries_(std::move(summaries)),
           contextual_summaries_(std::move(contextual_summaries)),
@@ -903,12 +994,16 @@ class EvidenceProvenanceLens final {
                      call_site_fields,
                      {},
                      available_tokens,
-                     locally_observable_call_sites) &&
+                     locally_observable_call_sites,
+                     nullptr,
+                     prior_call_site_assignments) &&
                  callees_.canonicalize(
                      callee_fields,
                      summary_callee_fields,
                      available_tokens,
-                     locally_observable_callees);
+                     locally_observable_callees,
+                     nullptr,
+                     prior_callee_assignments);
     }
 
     [[nodiscard]] bool valid() const noexcept {
@@ -970,6 +1065,16 @@ class EvidenceProvenanceLens final {
     [[nodiscard]] std::size_t required_tokens() const noexcept {
         return std::max(call_sites_.required_tokens(),
                         callees_.required_tokens());
+    }
+
+    [[nodiscard]] const EvidenceTokenAssignments&
+    call_site_token_assignments() const noexcept {
+        return call_sites_.token_assignments();
+    }
+
+    [[nodiscard]] const EvidenceTokenAssignments&
+    callee_token_assignments() const noexcept {
+        return callees_.token_assignments();
     }
 
   private:
@@ -23857,6 +23962,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         bool isolated = false;
         AbstractState input;
         std::set<std::uint32_t> root_call_sites;
+        EvidenceTokenAssignments call_site_tokens;
+        EvidenceTokenAssignments callee_tokens;
         bool evaluated = false;
         bool evaluation_dirty = true;
         std::size_t evaluation_count = 0u;
@@ -25746,7 +25853,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              const std::span<const std::uint32_t> available_tokens,
              const std::map<std::uint32_t,
                             FunctionValueSummary>* const
-                 contextual_summaries)
+                 contextual_summaries,
+             const EvidenceTokenAssignments* const
+                 prior_call_site_assignments,
+             const EvidenceTokenAssignments* const
+                 prior_callee_assignments)
              -> std::optional<EvidenceProvenanceLens> {
             if (available_tokens.empty())
                 return std::nullopt;
@@ -25801,7 +25912,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     locally_insertable_callees_by_function)
                     .at(function_entry),
                 std::move(evaluation_summaries),
-                std::move(evaluation_contextual_summaries));
+                std::move(evaluation_contextual_summaries),
+                prior_call_site_assignments,
+                prior_callee_assignments);
             if (!lens.valid()) {
                 constexpr std::size_t maximum_fallback_capsules = 64u;
                 static std::atomic_size_t emitted_fallback_capsules = 0u;
@@ -25846,7 +25959,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     : EvaluationLens::GuardedInventory,
                 context.isolated ? &root_call_sites : nullptr,
                 forwarded_evidence_tokens,
-                nullptr);
+                nullptr,
+                &context.call_site_tokens,
+                &context.callee_tokens);
             const auto& evaluation_input =
                 evidence_lens.has_value()
                     ? evidence_lens->ingress()
@@ -26133,6 +26248,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             return;
                         }
                     }
+                    const auto evidence_layout_before =
+                        widen_partition
+                            ? std::optional<EvidenceFieldLayout>{
+                                  capture_evidence_field_layout(
+                                      context.input)}
+                            : std::nullopt;
                     const auto provenance_changed =
                         widen_partition
                             ? merge_state(
@@ -26141,6 +26262,18 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                   true)
                             : merge_forwarded_inventory_payload(
                                   context.input, forwarded_input);
+                    const auto evidence_layout_changed =
+                        evidence_layout_before.has_value() &&
+                        *evidence_layout_before !=
+                            capture_evidence_field_layout(context.input);
+                    if (evidence_layout_changed) {
+                        // Evidence memberships use field ordinals. A widened
+                        // stack/memory shape therefore starts a new naming
+                        // epoch instead of retaining assignments whose
+                        // ordinals now denote different semantic fields.
+                        context.call_site_tokens.clear();
+                        context.callee_tokens.clear();
+                    }
                     bool roots_changed = false;
                     if (isolated) {
                         const auto root_count = context.root_call_sites.size();
@@ -26148,9 +26281,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                                        root_call_sites.end());
                         roots_changed = context.root_call_sites.size() != root_count;
                     }
-                    if (provenance_changed || roots_changed)
+                    if (provenance_changed || roots_changed ||
+                        evidence_layout_changed)
                         ++context.version;
-                    if (provenance_changed || roots_changed)
+                    if (provenance_changed || roots_changed ||
+                        evidence_layout_changed)
                         context.evaluation_dirty = true;
                     if (context.evaluation_dirty &&
                         !function_result.forwarded_store_context_queued[index]) {
@@ -26709,6 +26844,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         record_local_fixpoint_limit();
                         return;
                     }
+                    if (item.evaluation->evidence_lens.has_value()) {
+                        context.call_site_tokens =
+                            item.evaluation->evidence_lens
+                                ->call_site_token_assignments();
+                        context.callee_tokens =
+                            item.evaluation->evidence_lens
+                                ->callee_token_assignments();
+                    }
                     const EvaluationActivityScope replay_activity{
                         evaluation_activity_if_observed,
                         EvaluationActivityKind::ExactReplay};
@@ -26881,7 +27024,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     EvaluationLens::ContextualReturn,
                                     nullptr,
                                     forwarded_evidence_tokens,
-                                    &contextual_summaries);
+                                    &contextual_summaries,
+                                    nullptr,
+                                    nullptr);
                             const auto& evaluation_input =
                                 item.evidence_lens.has_value()
                                     ? item.evidence_lens->ingress()
@@ -27165,7 +27310,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 EvaluationLens::GuardedInventory,
                                 nullptr,
                                 forwarded_evidence_tokens,
-                                &contextual_summaries);
+                                &contextual_summaries,
+                                nullptr,
+                                nullptr);
                         const auto& evaluation_input =
                             stable.evidence_lens.has_value()
                                 ? stable.evidence_lens->ingress()
@@ -27361,6 +27508,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 EvaluationLens::IsolatedObservation,
                                 &root_call_sites,
                                 forwarded_evidence_tokens,
+                                nullptr,
+                                nullptr,
                                 nullptr);
                         const auto& evaluation_input =
                             isolated.evidence_lens.has_value()
@@ -28114,24 +28263,45 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             resolution_executor.notify_waiters();
         };
 
-        AnalysisWorkDescriptor root_work;
-        root_work.phase = AnalysisWorkPhase::Resolution;
-        root_work.subject_kind = AnalysisWorkSubjectKind::Root;
-        root_work.subject = resolution_functions.front()->entry_address;
-        root_work.fanout = resolution_functions.size();
-        root_work.priority = AnalysisWorkPriorityKind::Throughput;
-        root_work.quantum = 1u;
         std::jthread producer(
-            [&, dispatch, root_work = std::move(root_work)]() mutable
-                noexcept {
+            [&, dispatch]() noexcept {
             try {
-                parallel_analysis_for(
-                    resolution_executor,
-                    std::move(root_work),
-                    resolution_functions.size(),
+                // Keep the active root set inside one hardware-sized
+                // canonical prefix.  An unbounded set of Throughput lanes
+                // can otherwise finish hundreds of later roots while the
+                // ordered consumer waits for one early root, evicting the
+                // very context artifacts needed to unblock that prefix.
+                // Nested Contextual/Inventory work still shares every
+                // executor worker; only unrelated later roots wait for the
+                // current prefix to finish.
+                const auto maximum_root_batch = std::min(
                     maximum_parallel_resolution_jobs,
-                    function_value_parallel_activity_if_observed,
-                    [&](const std::size_t index) {
+                    resolution_executor.maximum_jobs());
+                for (std::size_t batch_begin = 0u;
+                     batch_begin < resolution_functions.size() &&
+                     !dispatch->cancel_requested.load(
+                         std::memory_order_acquire);) {
+                    const auto batch_count = std::min(
+                        maximum_root_batch,
+                        resolution_functions.size() - batch_begin);
+                    AnalysisWorkDescriptor root_work;
+                    root_work.phase = AnalysisWorkPhase::Resolution;
+                    root_work.subject_kind =
+                        AnalysisWorkSubjectKind::Root;
+                    root_work.subject =
+                        resolution_functions[batch_begin]->entry_address;
+                    root_work.fanout = batch_count;
+                    root_work.priority =
+                        AnalysisWorkPriorityKind::Throughput;
+                    root_work.quantum = 1u;
+                    parallel_analysis_for(
+                        resolution_executor,
+                        std::move(root_work),
+                        batch_count,
+                        maximum_parallel_resolution_jobs,
+                        function_value_parallel_activity_if_observed,
+                        [&, batch_begin](const std::size_t batch_index) {
+                        const auto index = batch_begin + batch_index;
                         if (dispatch->cancel_requested.load(
                                 std::memory_order_acquire))
                             return;
@@ -28165,6 +28335,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         publish_initial_result(
                             index, std::move(resolved), std::move(error));
                     });
+                    batch_begin += batch_count;
+                }
             } catch (...) {
                 const std::lock_guard lock(dispatch->mutex);
                 dispatch->producer_error = std::current_exception();
