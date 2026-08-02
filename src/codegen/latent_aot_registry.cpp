@@ -182,21 +182,6 @@ bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept 
                        });
 }
 
-class AnalysisBudgetExceeded final : public std::runtime_error {
-  public:
-    explicit AnalysisBudgetExceeded(
-        const LatentAotAnalysisRejection rejection)
-        : std::runtime_error("latent-aot-analysis-budget"),
-          rejection_(rejection) {}
-
-    [[nodiscard]] LatentAotAnalysisRejection rejection() const noexcept {
-        return rejection_;
-    }
-
-  private:
-    LatentAotAnalysisRejection rejection_;
-};
-
 bool safe_component(const std::string_view component) noexcept {
     return !component.empty() && component != "." && component != ".." &&
            component.find('/') == std::string_view::npos &&
@@ -887,33 +872,23 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             std::to_string(
                 candidate.source_bindings.front()
                     .disc_byte_offset));
+    katana::analysis::ControlFlowAnalysisOptions analysis_options;
+    analysis_options.maximum_fixpoint_iterations =
+        options.maximum_analysis_iterations;
+    analysis_options.maximum_instructions =
+        options.maximum_native_instructions_per_module;
+    analysis_options.maximum_contexts =
+        options.maximum_analysis_contexts;
     try {
         analysis = katana::analysis::analyze_control_flow(
             image,
             nullptr,
-            [&options, &control_flow_progress](
+            [&control_flow_progress](
                 const katana::analysis::
                     ControlFlowAnalysisProgress& progress) {
                 control_flow_progress.update(progress);
-                if (progress.iteration >
-                    options.maximum_analysis_iterations)
-                    throw AnalysisBudgetExceeded(
-                        LatentAotAnalysisRejection::
-                            AnalysisIterationBudgetExceeded);
-                if (progress.instructions >
-                    options
-                        .maximum_native_instructions_per_module)
-                    throw AnalysisBudgetExceeded(
-                        LatentAotAnalysisRejection::
-                            InstructionBudgetExceeded);
-                if (progress.contexts >
-                    options.maximum_analysis_contexts)
-                    throw AnalysisBudgetExceeded(
-                        LatentAotAnalysisRejection::
-                            AnalysisContextBudgetExceeded);
-            });
-    } catch (const AnalysisBudgetExceeded& error) {
-        return reject_candidate(error.rejection());
+            },
+            analysis_options);
     } catch (const std::bad_alloc&) {
         throw;
     } catch (const std::exception&) {
@@ -923,6 +898,24 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     }
     control_flow_progress.complete(
         analysis.fixpoint_iterations);
+    switch (analysis.termination_reason) {
+    case katana::analysis::ControlFlowAnalysisTerminationReason::
+        AnalysisIterationBudgetExceeded:
+        return reject_candidate(
+            LatentAotAnalysisRejection::
+                AnalysisIterationBudgetExceeded);
+    case katana::analysis::ControlFlowAnalysisTerminationReason::
+        InstructionBudgetExceeded:
+        return reject_candidate(
+            LatentAotAnalysisRejection::InstructionBudgetExceeded);
+    case katana::analysis::ControlFlowAnalysisTerminationReason::
+        AnalysisContextBudgetExceeded:
+        return reject_candidate(
+            LatentAotAnalysisRejection::
+                AnalysisContextBudgetExceeded);
+    case katana::analysis::ControlFlowAnalysisTerminationReason::None:
+        break;
+    }
     if (!complete_native_graph(analysis))
         return reject_candidate(
             katana::analysis::guarded_aot_inventory_complete(

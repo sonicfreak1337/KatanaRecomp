@@ -665,6 +665,7 @@ void write_guarded_walk(
     output.size(value.maximum_local_fixpoint_iterations);
     output.boolean(value.inventory_candidate_values_truncated);
     output.boolean(value.abi_stack_base_unresolved);
+    output.boolean(value.inventory_tail_target_unresolved);
 }
 
 [[nodiscard]] katana::analysis::GuardedCodeInventoryWalkDiagnostics
@@ -717,6 +718,7 @@ read_guarded_walk(Reader& input) {
     value.maximum_local_fixpoint_iterations = input.size();
     value.inventory_candidate_values_truncated = input.boolean();
     value.abi_stack_base_unresolved = input.boolean();
+    value.inventory_tail_target_unresolved = input.boolean();
     return value;
 }
 

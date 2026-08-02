@@ -18,6 +18,7 @@
 #include <iostream>
 #include <mutex>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -233,15 +234,36 @@ void verify_persistent_function_value_session() {
                 second_shapes,
                 session);
     const auto second_stats = session.statistics();
+    const auto progress_ledgers_balanced = [](const auto& events) {
+        return std::all_of(
+            events.begin(),
+            events.end(),
+            [](const auto& progress) {
+                const auto settled =
+                    progress.analysis_epochs_published +
+                    progress.analysis_epochs_discarded;
+                return progress.resolution_root_artifacts_total ==
+                           progress.resolution_root_artifacts_reused +
+                               progress
+                                   .resolution_root_artifacts_recomputed &&
+                       settled <= progress.incremental_epochs_started &&
+                       (progress.phase != "complete" ||
+                        settled ==
+                            progress.incremental_epochs_started);
+            });
+    };
     require_same_function_value_semantics(first, second, false);
     require(
-        second_stats.hits > first_stats.hits &&
+        second_stats.hits >= first_stats.hits &&
             second_stats.entries != 0u &&
             second_stats.retained_payload_bytes != 0u &&
             first_stats.program_graph_builds == 1u &&
             first_stats.program_graph_reuses == 0u &&
             first_stats.analysis_epochs_published == 1u &&
             first_stats.analysis_epochs_discarded == 0u &&
+            first_stats.incremental_epochs_started == 1u &&
+            first_stats.resolution_root_artifacts_reused == 0u &&
+            first_stats.resolution_root_artifacts_recomputed != 0u &&
             second_stats.program_graph_builds == 1u &&
             second_stats.program_graph_reuses == 1u &&
             second_stats.program_graph_functions_reused >=
@@ -249,7 +271,12 @@ void verify_persistent_function_value_session() {
             second_stats.abi_contract_epoch_reuses == 1u &&
             second_stats.summary_state_reuses >= boundaries.size() &&
             second_stats.analysis_epochs_published == 2u &&
-            second_stats.analysis_epochs_discarded == 0u,
+            second_stats.analysis_epochs_discarded == 0u &&
+            second_stats.incremental_epochs_started == 2u &&
+            second_stats.resolution_root_artifacts_reused >
+                first_stats.resolution_root_artifacts_reused &&
+            second_stats.resolution_root_artifacts_recomputed ==
+                first_stats.resolution_root_artifacts_recomputed,
         "Die analyseweite Function-Value-Session lieferte im identischen "
         "zweiten Kandidatenvertrag keinen echten Warm-Hit oder keine "
         "atomar wiederverwendete Graph-/ABI-/Summary-Epoch.");
@@ -279,10 +306,14 @@ void verify_persistent_function_value_session() {
             warm_progress.back().resolution_functions_committed <=
                 warm_progress.back().resolution_functions_total &&
             warm_progress.back().active_workers == 0u &&
-            warm_progress.back().logical_evaluations != 0u &&
+            warm_progress.back().resolution_root_artifacts_total ==
+                warm_progress.back().resolution_root_artifacts_reused +
+                    warm_progress.back()
+                        .resolution_root_artifacts_recomputed &&
+            warm_progress.back().resolution_root_artifacts_reused != 0u &&
+            warm_progress.back().resolution_root_artifacts_recomputed == 0u &&
             warm_progress.back().physical_evaluations <=
                 warm_progress.back().logical_evaluations &&
-            warm_progress.back().session_cache_hits != 0u &&
             warm_progress.back().program_graph_builds == 0u &&
             warm_progress.back().program_graph_reuses == 1u &&
             warm_progress.back().program_graph_functions_reused >=
@@ -292,47 +323,124 @@ void verify_persistent_function_value_session() {
                 boundaries.size() &&
             warm_progress.back().analysis_epochs_published == 1u &&
             warm_progress.back().analysis_epochs_discarded == 0u &&
+            warm_progress.back().incremental_epochs_started == 1u &&
+            warm_progress.back().incremental_epochs_started ==
+                warm_progress.back().analysis_epochs_published +
+                    warm_progress.back().analysis_epochs_discarded &&
+            progress_ledgers_balanced(cold_progress) &&
+            progress_ledgers_balanced(warm_progress) &&
             warm_progress.back().cache_key_builds ==
                 warm_progress.back().logical_evaluations &&
-            warm_progress.back().evaluation_request_nanoseconds != 0u &&
-            warm_progress.back().cache_key_build_nanoseconds != 0u,
+            (warm_progress.back().logical_evaluations == 0u ||
+             (warm_progress.back().evaluation_request_nanoseconds != 0u &&
+              warm_progress.back().cache_key_build_nanoseconds != 0u)),
         "Der Function-Value-Progress meldete keinen sauberen "
         "analyse-lokalen Start/Abschluss oder verlor seine getrennten "
         "Cache-/Aktivitaets-/Zeitzaehler.");
 
+    session.force_full_cpu_recompute_once();
+    const auto before_empty_stats = session.statistics();
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        empty_shapes{image};
+    const auto empty = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            std::span<const katana::sh4::DisassemblyLine>{},
+            boundaries,
+            {},
+            {},
+            empty_shapes,
+            session);
+    const auto after_empty_stats = session.statistics();
+    require(
+        empty.summaries.empty() && empty.resolutions.empty() &&
+            after_empty_stats.incremental_epochs_started ==
+                before_empty_stats.incremental_epochs_started &&
+            after_empty_stats.analysis_epochs_published ==
+                before_empty_stats.analysis_epochs_published &&
+            after_empty_stats.analysis_epochs_discarded ==
+                before_empty_stats.analysis_epochs_discarded &&
+            after_empty_stats.full_cpu_recompute_fallbacks ==
+                before_empty_stats.full_cpu_recompute_fallbacks,
+        "Eine leere FVA-Anfrage oeffnete eine falsche Epoch oder "
+        "verbrauchte den ausstehenden konservativen CPU-Fallback.");
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        forced_shapes{image};
+    const auto forced =
+        katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                lines,
+                boundaries,
+                {},
+                {},
+                forced_shapes,
+                session);
+    const auto forced_stats = session.statistics();
+    require_same_function_value_semantics(first, forced, false);
+    require(
+        forced.full_cpu_recompute_fallbacks == 1u &&
+            forced.resolution_root_artifacts_reused.empty() &&
+            !forced.resolution_root_artifacts_recomputed.empty() &&
+            forced_stats.full_cpu_recompute_fallbacks == 1u &&
+            forced_stats.analysis_epochs_published == 3u &&
+            forced_stats.incremental_epochs_started == 3u &&
+            forced_stats.analysis_epochs_discarded == 0u,
+        "Der nicht darstellbare inkrementelle Zustand fiel nicht exakt "
+        "einmal auf die semantisch identische CPU-Vollauswertung zurueck.");
+
     katana::analysis::ResolvedControlFlowEdge local_edge;
     local_edge.instruction_address = 4u;
-    local_edge.target_address = 0x10u;
+    local_edge.target_address = 0x08u;
     local_edge.kind = katana::analysis::ResolvedControlFlowKind::Jump;
     local_edge.evidence =
         katana::analysis::ControlFlowEvidence::ProvenComplete;
-    const std::array local_edges{local_edge};
+    katana::analysis::detail::FunctionProgramDelta local_delta;
+    local_delta.kind =
+        katana::analysis::detail::FunctionProgramDeltaKind::Exact;
+    local_delta.result_materialization =
+        katana::analysis::FunctionValueResultMaterialization::TerminalFull;
+    local_delta.expected_published_epoch_version =
+        session.published_epoch_version();
+    local_delta.image_identity = image.analysis_instance_identity();
+    local_delta.image_revision = image.analysis_revision();
+    local_delta.changed_semantic_edge_sites.push_back(
+        {local_edge.instruction_address,
+         {local_edge}});
+    session.stage_next_function_program_delta(std::move(local_delta));
     katana::analysis::detail::GuardedNativeEntryShapeCache
         extended_shapes{image};
     const auto extended =
         katana::analysis::detail::
             analyze_function_values_with_guarded_entry_cache(
                 image,
-                lines,
-                boundaries,
-                local_edges,
+                std::span<const katana::sh4::DisassemblyLine>{},
+                std::span<const katana::analysis::FunctionBoundary>{},
+                std::span<const katana::analysis::ResolvedControlFlowEdge>{},
                 {},
                 extended_shapes,
                 session);
     const auto extended_stats = session.statistics();
+    const std::array semantic_edge_snapshot{local_edge};
+    const auto extended_cold =
+        katana::analysis::analyze_function_values(
+            image, lines, boundaries, semantic_edge_snapshot);
+    require_same_function_value_semantics(
+        extended_cold, extended, false);
     require(
         !extended.budget_exhausted &&
             extended_stats.program_graph_builds == 2u &&
             extended_stats.program_graph_functions_reused >
-                second_stats.program_graph_functions_reused &&
+                forced_stats.program_graph_functions_reused &&
             extended_stats.program_graph_functions_built >
-                second_stats.program_graph_functions_built &&
+                forced_stats.program_graph_functions_built &&
             extended_stats.summary_state_reuses >
-                second_stats.summary_state_reuses &&
+                forced_stats.summary_state_reuses &&
             extended_stats.caller_scc_invalidations != 0u &&
             extended_stats.caller_scc_invalidations <
                 extended.summaries.size() &&
-            extended_stats.analysis_epochs_published == 3u &&
+            extended_stats.analysis_epochs_published == 4u &&
+            extended_stats.incremental_epochs_started == 4u &&
             extended_stats.analysis_epochs_discarded == 0u,
         "Eine lokale Funktionserweiterung baute unveraenderte immutable "
         "Shards neu oder invalidierte ausserhalb ihres beweisbaren "
@@ -402,6 +510,10 @@ void verify_persistent_function_value_session() {
         diagnostic_progress;
     katana::analysis::detail::GuardedNativeEntryShapeCache
         diagnostic_shapes{image};
+    // This fixture verifies the lower FunctionEvaluation cache itself. Root
+    // artifact reuse would correctly bypass that layer altogether, so force
+    // the explicit fail-closed CPU path for this one diagnostic epoch.
+    session.force_full_cpu_recompute_once();
     set_stack_diagnostics_for_serial_fixpoint(true);
     const auto diagnostic =
         katana::analysis::detail::
@@ -501,8 +613,6 @@ void verify_persistent_function_value_session() {
                 {},
                 cold_inventory_shapes,
                 inventory_session);
-    const auto cold_inventory_stats =
-        inventory_session.statistics();
     require(
         !cold_inventory.guarded_code_inventory
              .stored_code_addresses.empty(),
@@ -514,6 +624,9 @@ void verify_persistent_function_value_session() {
         warm_inventory_shapes{inventory_image};
     std::vector<katana::analysis::FunctionValueAnalysisProgress>
         warm_inventory_progress;
+    // Bypass the higher-level immutable root artifact so the full CPU round
+    // must exercise its exact replay path.
+    inventory_session.force_full_cpu_recompute_once();
     const auto warm_inventory =
         katana::analysis::detail::
             analyze_function_values_with_guarded_entry_cache(
@@ -526,13 +639,10 @@ void verify_persistent_function_value_session() {
                 },
                 warm_inventory_shapes,
                 inventory_session);
-    const auto warm_inventory_stats =
-        inventory_session.statistics();
     require_same_function_value_semantics(
         cold_inventory, warm_inventory, false);
     require(
-        warm_inventory_stats.hits > cold_inventory_stats.hits &&
-            !warm_inventory.guarded_code_inventory
+        !warm_inventory.guarded_code_inventory
                  .stored_code_addresses.empty() &&
             !warm_inventory_progress.empty() &&
             warm_inventory_progress.back().phase == "complete" &&
@@ -659,10 +769,12 @@ void verify_persistent_function_value_session() {
                 session);
     const auto expanded_stats = session.statistics();
     require(
-        expanded_stats.hits > second_stats.hits &&
-            expanded_stats.misses > second_stats.misses,
-        "Eine neue unabhaengige Funktion invalidierte entweder alle warmen "
-        "Funktionsartefakte oder erzeugte keinen eigenen Miss.");
+        expanded_stats.program_graph_functions_reused >
+                extended_stats.program_graph_functions_reused &&
+            expanded_stats.program_graph_functions_built >
+                extended_stats.program_graph_functions_built,
+        "Eine neue unabhaengige Funktion verwarf unveraenderte "
+        "Programmgraph-Shards oder erzeugte keinen eigenen Neubau.");
     katana::analysis::detail::FunctionValueAnalysisSession
         expanded_fresh_session;
     katana::analysis::detail::GuardedNativeEntryShapeCache
@@ -759,6 +871,849 @@ void verify_persistent_function_value_session() {
         evicting_session.statistics().evictions != 0u,
         "Ein Eintrag grosser Session-Cache uebte den deterministischen "
         "LRU-Eviction-Pfad nicht aus.");
+}
+
+void verify_incremental_resolution_root_reuse() {
+    std::vector<std::uint8_t> bytes(0x60u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0x412Bu); // jmp @r1
+    put_u16(0x02u, 0x0009u); // delay nop
+    put_u16(0x20u, 0x000Bu); // independent target
+    put_u16(0x22u, 0x0009u);
+    put_u16(0x40u, 0x422Bu); // disconnected jmp @r2 root
+    put_u16(0x42u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({
+        ".incremental-resolution-roots",
+        0u,
+        0u,
+        bytes.size(),
+        katana::io::SegmentKind::Code,
+        {true, false, true},
+        bytes});
+    image.add_entry_point(0x00u);
+    image.add_entry_point(0x40u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, 0x04u},
+            {0x20u, 0x04u},
+            {0x40u, 0x04u},
+        }};
+
+    katana::analysis::detail::FunctionValueAnalysisSession session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        cold_shapes{image};
+    const auto cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            cold_shapes,
+            session);
+    require(
+        cold.resolution_root_artifacts_reused.empty() &&
+            cold.resolution_root_artifacts_recomputed ==
+                std::vector<std::uint32_t>({0x00u, 0x40u}),
+        "Der kalte Root-Artefaktlauf meldete keine exakte kanonische "
+        "Ausgangsmenge.");
+
+    constexpr std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
+        changed_edges{{{
+            0x00u,
+            0x20u,
+            katana::analysis::ResolvedControlFlowKind::Jump,
+            false,
+            katana::analysis::ControlFlowEvidence::ProvenComplete,
+            {},
+            false}}};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        incremental_shapes{image};
+    const auto incremental = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            changed_edges,
+            {},
+            incremental_shapes,
+            session);
+
+    katana::analysis::detail::FunctionValueAnalysisSession
+        reference_session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        reference_shapes{image};
+    const auto reference = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            changed_edges,
+            {},
+            reference_shapes,
+            reference_session);
+    require_same_function_value_semantics(
+        incremental, reference, false);
+
+    const auto contains = [](const auto& values,
+                             const std::uint32_t value) {
+        return std::find(values.begin(), values.end(), value) !=
+               values.end();
+    };
+    require(
+        contains(incremental.resolution_root_artifacts_reused, 0x40u) &&
+            !contains(incremental.resolution_root_artifacts_reused, 0x00u) &&
+            contains(
+                incremental.resolution_root_artifacts_recomputed, 0x00u) &&
+            !contains(
+                incremental.resolution_root_artifacts_recomputed, 0x40u) &&
+            contains(incremental.incremental_dirty_functions, 0x00u) &&
+            !contains(incremental.incremental_dirty_functions, 0x40u) &&
+            incremental.full_cpu_recompute_fallbacks == 0u &&
+            incremental.resolution_root_artifacts_reused.size() +
+                    incremental.resolution_root_artifacts_recomputed.size() ==
+                2u,
+        "Eine lokale Candidate-Kante invalidierte den getrennten Root "
+        "oder der inkrementelle Lauf wich vom frischen CPU-Referenzlauf ab.");
+
+    using Session =
+        katana::analysis::detail::FunctionValueAnalysisSession;
+    Session exact_root_budget_session{
+        16'384u,
+        1'024u * 1'024u * 1'024u,
+        false,
+        {},
+        Session::default_maximum_resolution_dependency_nodes,
+        2u,
+        Session::default_maximum_resolution_epoch_retained_bytes};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        exact_cold_shapes{image};
+    const auto exact_cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            exact_cold_shapes,
+            exact_root_budget_session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        exact_warm_shapes{image};
+    std::vector<katana::analysis::FunctionValueAnalysisProgress>
+        exact_warm_progress;
+    const auto exact_warm = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            [&](const auto& progress) {
+                exact_warm_progress.push_back(progress);
+            },
+            exact_warm_shapes,
+            exact_root_budget_session);
+    require_same_function_value_semantics(
+        exact_cold, exact_warm, false);
+    require(
+        exact_warm.resolution_root_artifacts_reused.size() == 2u &&
+            exact_warm.resolution_root_artifacts_recomputed.empty() &&
+            exact_warm.resolution_root_artifacts_retained == 2u &&
+            exact_warm.resolution_epoch_retained_bytes != 0u &&
+            exact_warm.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::None &&
+            !exact_warm_progress.empty() &&
+            exact_warm_progress.back()
+                    .resolution_root_artifacts_retained == 2u &&
+            exact_warm_progress.back()
+                    .resolution_epoch_retained_bytes ==
+                exact_warm.resolution_epoch_retained_bytes &&
+            exact_warm_progress.back()
+                    .resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::None &&
+            exact_root_budget_session.statistics()
+                    .resolution_root_artifacts_retained == 2u &&
+            exact_root_budget_session.statistics()
+                    .resolution_epoch_retained_bytes ==
+                exact_warm.resolution_epoch_retained_bytes &&
+            exact_root_budget_session.statistics()
+                    .resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::None,
+        "Das exakt ausgeschoepfte Root-Retention-Limit verlor Artefakte.");
+
+    // The canonical admission budget must include both reused roots and roots
+    // created in this epoch. Keeping the reused prefix after the new suffix
+    // overflows would publish a history-dependent partial cache.
+    auto initial_bytes = bytes;
+    initial_bytes[0x40u] = 0x0Bu; // rts: present, but not a root yet
+    initial_bytes[0x41u] = 0x00u;
+    const auto initial_lines =
+        katana::sh4::disassemble(initial_bytes, 0u);
+    Session mixed_reuse_new_budget_session{
+        16'384u,
+        1'024u * 1'024u * 1'024u,
+        false,
+        {},
+        Session::default_maximum_resolution_dependency_nodes,
+        1u,
+        Session::default_maximum_resolution_epoch_retained_bytes};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        mixed_initial_shapes{image};
+    const auto mixed_initial = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            initial_lines,
+            boundaries,
+            {},
+            {},
+            mixed_initial_shapes,
+            mixed_reuse_new_budget_session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        mixed_overflow_shapes{image};
+    const auto mixed_overflow = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            mixed_overflow_shapes,
+            mixed_reuse_new_budget_session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        mixed_after_overflow_shapes{image};
+    const auto mixed_after_overflow = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            mixed_after_overflow_shapes,
+            mixed_reuse_new_budget_session);
+    require_same_function_value_semantics(
+        mixed_overflow, mixed_after_overflow, false);
+    require_same_function_value_semantics(
+        mixed_overflow, exact_cold, false);
+    require_same_function_value_semantics(
+        mixed_after_overflow, exact_cold, false);
+    require(
+        mixed_initial.resolution_root_artifacts_retained == 1u &&
+            mixed_initial.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::None &&
+            mixed_overflow.resolution_root_artifacts_reused ==
+                std::vector<std::uint32_t>{0x00u} &&
+            mixed_overflow.resolution_root_artifacts_recomputed ==
+                std::vector<std::uint32_t>{0x40u} &&
+            mixed_overflow.resolution_root_artifacts_retained == 0u &&
+            mixed_overflow.resolution_epoch_retained_bytes == 0u &&
+            mixed_overflow.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::
+                    RootEntryLimit &&
+            mixed_after_overflow.resolution_root_artifacts_reused.empty() &&
+            mixed_after_overflow.resolution_root_artifacts_recomputed ==
+                std::vector<std::uint32_t>({0x00u, 0x40u}) &&
+            mixed_after_overflow.resolution_root_artifacts_retained == 0u &&
+            mixed_after_overflow.resolution_epoch_retained_bytes == 0u &&
+            mixed_after_overflow.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::
+                    RootEntryLimit,
+        "Reused und neue Root-Artefakte umgingen gemeinsam das Limit oder "
+        "hinterliessen nach dem Overflow eine partielle Retention. "
+        "initial_retained=" +
+            std::to_string(
+                mixed_initial.resolution_root_artifacts_retained) +
+            ", overflow_reused=" +
+            std::to_string(
+                mixed_overflow.resolution_root_artifacts_reused.size()) +
+            ", overflow_recomputed=" +
+            std::to_string(
+                mixed_overflow.resolution_root_artifacts_recomputed.size()) +
+            ", overflow_retained=" +
+            std::to_string(
+                mixed_overflow.resolution_root_artifacts_retained) +
+            ", overflow_bytes=" +
+            std::to_string(
+                mixed_overflow.resolution_epoch_retained_bytes) +
+            ", overflow_reason=" +
+            std::string{katana::analysis::
+                resolution_retention_limit_reason_name(
+                    mixed_overflow
+                        .resolution_retention_limit_reason)} +
+            ", after_reused=" +
+            std::to_string(
+                mixed_after_overflow
+                    .resolution_root_artifacts_reused.size()) +
+            ", after_recomputed=" +
+            std::to_string(
+                mixed_after_overflow
+                    .resolution_root_artifacts_recomputed.size()) +
+            ", after_reason=" +
+            std::string{katana::analysis::
+                resolution_retention_limit_reason_name(
+                    mixed_after_overflow
+                        .resolution_retention_limit_reason)});
+
+    Session overflowing_root_budget_session{
+        16'384u,
+        1'024u * 1'024u * 1'024u,
+        false,
+        {},
+        Session::default_maximum_resolution_dependency_nodes,
+        1u,
+        Session::default_maximum_resolution_epoch_retained_bytes};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        overflow_cold_shapes{image};
+    const auto overflow_cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            overflow_cold_shapes,
+            overflowing_root_budget_session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        overflow_warm_shapes{image};
+    const auto overflow_warm = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            overflow_warm_shapes,
+            overflowing_root_budget_session);
+    require_same_function_value_semantics(
+        overflow_cold, overflow_warm, false);
+    require(
+        overflow_warm.resolution_root_artifacts_reused.empty() &&
+            overflow_warm.resolution_root_artifacts_recomputed.size() ==
+                2u &&
+            overflow_warm.resolution_root_artifacts_retained == 0u &&
+            overflow_warm.resolution_epoch_retained_bytes == 0u &&
+            overflow_warm.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::
+                    RootEntryLimit &&
+            overflow_warm.full_cpu_recompute_fallbacks == 0u,
+        "Ein Root ueber dem Retention-Limit wurde teilweise behalten oder "
+        "faelschlich als Analysefallback gemeldet.");
+
+    Session overflowing_byte_budget_session{
+        16'384u,
+        1'024u * 1'024u * 1'024u,
+        false,
+        {},
+        Session::default_maximum_resolution_dependency_nodes,
+        Session::default_maximum_resolution_root_artifacts,
+        1u};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        byte_cold_shapes{image};
+    const auto byte_cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            byte_cold_shapes,
+            overflowing_byte_budget_session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        byte_warm_shapes{image};
+    const auto byte_warm = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            byte_warm_shapes,
+            overflowing_byte_budget_session);
+    require_same_function_value_semantics(
+        byte_cold, byte_warm, false);
+    require(
+        byte_warm.resolution_root_artifacts_reused.empty() &&
+            byte_warm.resolution_root_artifacts_recomputed.size() == 2u &&
+            byte_warm.resolution_root_artifacts_retained == 0u &&
+            byte_warm.resolution_epoch_retained_bytes == 0u &&
+            byte_warm.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::
+                    ByteLimit &&
+            byte_warm.full_cpu_recompute_fallbacks == 0u,
+        "Ein Byte-Retention-Ueberlauf beeinflusste Analyse oder behielt "
+        "unbudgetierte Root-Artefakte.");
+
+    Session overflowing_dependency_budget_session{
+        16'384u,
+        1'024u * 1'024u * 1'024u,
+        false,
+        {},
+        0u,
+        Session::default_maximum_resolution_root_artifacts,
+        Session::default_maximum_resolution_epoch_retained_bytes};
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        dependency_cold_shapes{image};
+    const auto dependency_cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            dependency_cold_shapes,
+            overflowing_dependency_budget_session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        dependency_warm_shapes{image};
+    const auto dependency_warm = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            {},
+            dependency_warm_shapes,
+            overflowing_dependency_budget_session);
+    require_same_function_value_semantics(
+        dependency_cold, dependency_warm, false);
+    require(
+        dependency_warm.resolution_root_artifacts_reused.empty() &&
+            dependency_warm.resolution_root_artifacts_recomputed.size() ==
+                2u &&
+            dependency_warm.resolution_root_artifacts_retained == 0u &&
+            dependency_warm.resolution_epoch_retained_bytes == 0u &&
+            dependency_warm.resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::
+                    DependencyNodeLimit &&
+            overflowing_dependency_budget_session.statistics()
+                    .resolution_retention_limit_reason ==
+                katana::analysis::ResolutionRetentionLimitReason::
+                    DependencyNodeLimit,
+        "Das Dependency-Node-Limit blieb untypisiert oder behielt einen "
+        "partiellen Resolution-Cache.");
+}
+
+void verify_inventory_region_dependency_reuse() {
+    std::vector<std::uint8_t> bytes(0x90u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0x412Bu); // candidate-only tail -> 0x20
+    put_u16(0x02u, 0x0009u);
+    put_u16(0x20u, 0xB00Eu); // direct bsr -> helper 0x40
+    put_u16(0x22u, 0x0009u);
+    put_u16(0x24u, 0x422Bu); // regional self-tail -> 0x20
+    put_u16(0x26u, 0x0009u);
+    put_u16(0x40u, 0x432Bu); // helper resolution root
+    put_u16(0x42u, 0x0009u);
+    put_u16(0x60u, 0x000Bu);
+    put_u16(0x62u, 0x0009u);
+    put_u16(0x70u, 0x442Bu); // disconnected resolution root
+    put_u16(0x72u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({
+        ".inventory-region-dependency-reuse",
+        0u,
+        0u,
+        bytes.size(),
+        katana::io::SegmentKind::Code,
+        {true, false, true},
+        bytes});
+    image.add_entry_point(0x00u);
+    image.add_entry_point(0x70u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 5u>
+        boundaries{{
+            {0x00u, 0x04u},
+            {0x20u, 0x08u},
+            {0x40u, 0x04u},
+            {0x60u, 0x04u},
+            {0x70u, 0x04u},
+        }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 2u>
+        inventory_edges{{
+            {0x00u,
+             0x20u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+            {0x24u,
+             0x20u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+        }};
+
+    katana::analysis::detail::FunctionValueAnalysisSession session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        cold_shapes{image};
+    const auto cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            inventory_edges,
+            {},
+            cold_shapes,
+            session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        warm_shapes{image};
+    const auto warm = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            inventory_edges,
+            {},
+            warm_shapes,
+            session);
+    require_same_function_value_semantics(cold, warm, false);
+    require(
+        !cold.resolution_root_artifacts_recomputed.empty() &&
+            warm.resolution_root_artifacts_recomputed.empty() &&
+            warm.resolution_root_artifacts_reused ==
+                cold.resolution_root_artifacts_recomputed,
+        "Ein unveraenderter InventoryRegion-SCC wurde nicht exakt als "
+        "Root-Artefakt wiederverwendet.");
+
+    std::vector<katana::analysis::ResolvedControlFlowEdge> changed_edges{
+        inventory_edges.begin(), inventory_edges.end()};
+    changed_edges.push_back({
+        0x40u,
+        0x60u,
+        katana::analysis::ResolvedControlFlowKind::Jump,
+        false,
+        katana::analysis::ControlFlowEvidence::ProvenComplete,
+        {},
+        false});
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        incremental_shapes{image};
+    const auto incremental = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            changed_edges,
+            {},
+            incremental_shapes,
+            session);
+    katana::analysis::detail::FunctionValueAnalysisSession
+        fresh_session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        fresh_shapes{image};
+    const auto fresh = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            changed_edges,
+            {},
+            fresh_shapes,
+            fresh_session);
+    require_same_function_value_semantics(incremental, fresh, false);
+    const auto contains = [](const auto& values,
+                             const std::uint32_t address) {
+        return std::find(values.begin(), values.end(), address) !=
+               values.end();
+    };
+    require(
+        contains(incremental.resolution_root_artifacts_reused, 0x70u) &&
+            contains(
+                incremental.resolution_root_artifacts_recomputed,
+                0x00u) &&
+            contains(
+                incremental.resolution_root_artifacts_recomputed,
+                0x20u) &&
+            contains(
+                incremental.resolution_root_artifacts_recomputed,
+                0x40u) &&
+            !contains(
+                incremental.resolution_root_artifacts_recomputed,
+                0x70u) &&
+            incremental.full_cpu_recompute_fallbacks == 0u,
+        "Eine Helper-Aenderung hinter einem zyklischen, gleichadressigen "
+        "Function/InventoryRegion-Knoten invalidierte nicht den gesamten "
+        "Root-Strang oder den getrennten Root gleich mit.");
+}
+
+void verify_typed_interfunction_tail_transport() {
+    std::vector<std::uint8_t> bytes(0xD0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] =
+            static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] =
+            static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // Root A covers an ordinary statically known Function tail.
+    put_u16(0x00u, 0xD403u); // callback literal 0x10 -> r4
+    put_u16(0x02u, 0xA025u); // bra 0x50 (Function tail)
+    put_u16(0x04u, 0x0009u);
+    put_u32(0x10u, 0xB0u);
+
+    // Root B reaches 0x40 through a guarded candidate-only JMP. r4 carries
+    // independent ABI code-pointer evidence; the value whose transport is
+    // under test lives only in r8. The ordinary Function 0x40 is a
+    // one-instruction fallthrough which does not read r8; the same-address
+    // InventoryRegion follows its private region edge into 0x42 and stores r8
+    // at a proven fixed destination. Any address-only ingress/output
+    // projection therefore loses the B8 callback without weakening the
+    // unknown-object-store false-positive contract.
+    put_u16(0x20u, 0xD404u); // carrier literal 0x34 -> r4
+    put_u16(0x22u, 0xD805u); // tested callback literal 0x38 -> r8
+    put_u16(0x24u, 0x412Bu); // jmp @r1 -> 0x40 (InventoryRegion tail)
+    put_u16(0x26u, 0x0009u);
+    put_u32(0x34u, 0xB0u);
+    put_u32(0x38u, 0xB8u);
+
+    put_u16(0x40u, 0x0009u); // ordinary Function ends; Region falls through
+    put_u16(0x42u, 0xD502u); // fixed destination literal 0x4C -> r5
+    put_u16(0x44u, 0x2542u); // carrier makes the ABI sink exact
+    put_u16(0x46u, 0x2582u); // Region-only persistent r8 callback store
+    put_u16(0x48u, 0x000Bu);
+    put_u16(0x4Au, 0x0009u);
+    put_u32(0x4Cu, 0xC8u);
+    put_u16(0x50u, 0x2742u); // ordinary Function-tail r4 store
+    put_u16(0x52u, 0x000Bu);
+    put_u16(0x54u, 0x0009u);
+
+    // Root C uses an ordinary call. It reaches the sink only if the ABI
+    // backwards slice follows Region 0x90 -> Region 0xA0 before admitting the
+    // forwarded call into Function 0x80.
+    put_u16(0x60u, 0xD403u); // callback literal 0x70 -> r4
+    put_u16(0x62u, 0xB00Du); // bsr 0x80
+    put_u16(0x64u, 0x0009u);
+    put_u16(0x66u, 0x000Bu);
+    put_u16(0x68u, 0x0009u);
+    put_u32(0x70u, 0xC0u);
+    put_u16(0x80u, 0xA006u); // bra 0x90 (Region tail)
+    put_u16(0x82u, 0x0009u);
+    put_u16(0x90u, 0xA006u); // Region 0x90 -> Region 0xA0
+    put_u16(0x92u, 0x0009u);
+    put_u16(0xA0u, 0x2742u); // regional persistent r4 callback store
+    put_u16(0xA2u, 0x000Bu);
+    put_u16(0xA4u, 0x0009u);
+
+    put_u16(0xB0u, 0x000Bu);
+    put_u16(0xB2u, 0x0009u);
+    put_u16(0xB8u, 0x000Bu);
+    put_u16(0xBAu, 0x0009u);
+    put_u16(0xC0u, 0x000Bu);
+    put_u16(0xC2u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".typed-interfunction-tail",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0x00u);
+    image.add_entry_point(0x20u);
+    image.add_entry_point(0x60u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 11u>
+        boundaries{{
+            {0x00u, 0x06u},
+            {0x20u, 0x08u},
+            {0x40u, 0x02u},
+            {0x42u, 0x0Au},
+            {0x50u, 0x06u},
+            {0x60u, 0x0Au},
+            {0x80u, 0x04u},
+            {0xA0u, 0x06u},
+            {0xB0u, 0x04u},
+            {0xB8u, 0x04u},
+            {0xC0u, 0x04u},
+        }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u>
+        edges{{
+            {0x24u,
+             0x40u,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true},
+        }};
+
+    katana::analysis::detail::FunctionValueAnalysisSession session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache cold_shapes{image};
+    const auto cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            edges,
+            {},
+            cold_shapes,
+            session);
+    katana::analysis::detail::GuardedNativeEntryShapeCache warm_shapes{image};
+    const auto warm = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            edges,
+            {},
+            warm_shapes,
+            session);
+    require_same_function_value_semantics(cold, warm, false);
+    const auto contains_stored = [](const auto& result,
+                                    const std::uint32_t target) {
+        return std::any_of(
+            result.guarded_code_inventory.stored_code_addresses.begin(),
+            result.guarded_code_inventory.stored_code_addresses.end(),
+            [target](const auto& candidate) {
+                return candidate.target_address == target;
+            });
+    };
+    const auto contains_root = [](const auto& roots,
+                                  const std::uint32_t address) {
+        return std::find(roots.begin(), roots.end(), address) != roots.end();
+    };
+    require(
+        contains_stored(cold, 0xB0u) &&
+            contains_stored(cold, 0xB8u) &&
+            contains_stored(cold, 0xC0u) &&
+            contains_stored(warm, 0xB0u) &&
+            contains_stored(warm, 0xB8u) &&
+            contains_stored(warm, 0xC0u) &&
+            !cold.guarded_code_inventory.walk_diagnostics.truncated() &&
+            !warm.guarded_code_inventory.walk_diagnostics.truncated() &&
+            contains_root(warm.resolution_root_artifacts_reused, 0x00u) &&
+            contains_root(warm.resolution_root_artifacts_reused, 0x20u) &&
+            contains_root(warm.resolution_root_artifacts_reused, 0x60u) &&
+            warm.resolution_root_artifacts_recomputed.empty(),
+        "Der typisierte Tail-Transport verlor den statischen Function-Tail, "
+        "den gleichadressigen InventoryRegion-Tail, die regionale ABI-"
+        "Rueckwaertsprojektion oder deren exakte Cold/Warm-Root-"
+        "Wiederverwendung (cold_b0=" +
+            std::to_string(contains_stored(cold, 0xB0u)) +
+            ", cold_b8=" +
+            std::to_string(contains_stored(cold, 0xB8u)) +
+            ", cold_c0=" +
+            std::to_string(contains_stored(cold, 0xC0u)) +
+            ", warm_b0=" +
+            std::to_string(contains_stored(warm, 0xB0u)) +
+            ", warm_b8=" +
+            std::to_string(contains_stored(warm, 0xB8u)) +
+            ", warm_c0=" +
+            std::to_string(contains_stored(warm, 0xC0u)) +
+            ", cold_truncated=" +
+            std::to_string(
+                cold.guarded_code_inventory.walk_diagnostics.truncated()) +
+            ", warm_truncated=" +
+            std::to_string(
+                warm.guarded_code_inventory.walk_diagnostics.truncated()) +
+            ", reused_00=" +
+            std::to_string(contains_root(
+                warm.resolution_root_artifacts_reused, 0x00u)) +
+            ", reused_20=" +
+            std::to_string(contains_root(
+                warm.resolution_root_artifacts_reused, 0x20u)) +
+            ", reused_60=" +
+            std::to_string(contains_root(
+                warm.resolution_root_artifacts_reused, 0x60u)) +
+            ", recomputed=" +
+            std::to_string(
+                warm.resolution_root_artifacts_recomputed.size()) +
+            ").");
+}
+
+void verify_unresolved_tail_target_is_fail_closed() {
+    constexpr std::size_t region_budget = 1'024u;
+    constexpr std::size_t target_count = region_budget + 1u;
+    constexpr std::uint32_t target_base = 0x100u;
+    std::vector<std::uint8_t> bytes(
+        target_base + target_count * 4u,
+        0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    put_u16(0x00u, 0x412Bu); // one candidate-only tail site
+    put_u16(0x02u, 0x0009u);
+    std::vector<katana::analysis::ResolvedControlFlowEdge> edges;
+    edges.reserve(target_count);
+    for (std::size_t index = 0u; index < target_count; ++index) {
+        const auto target = target_base +
+                            static_cast<std::uint32_t>(index * 4u);
+        put_u16(target, 0x000Bu);
+        put_u16(target + 2u, 0x0009u);
+        edges.push_back(
+            {0x00u,
+             target,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true});
+    }
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".unresolved-tail-target",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 1u>
+        boundaries{{{0x00u, 0x04u}}};
+    katana::analysis::detail::FunctionValueAnalysisSession session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+    const auto result = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            edges,
+            {},
+            shapes,
+            session);
+    const auto& diagnostics =
+        result.guarded_code_inventory.walk_diagnostics;
+    require(
+        !result.budget_exhausted &&
+            diagnostics.inventory_region_count == region_budget &&
+            diagnostics.pending_inventory_region_count == 1u &&
+            diagnostics.inventory_tail_target_unresolved &&
+            diagnostics.truncated(),
+        "Ein Tail-Ziel jenseits des typisierten Regionbudgets blieb im "
+        "finalen FunctionValueAnalysisResult nicht fail-closed sichtbar.");
 }
 
 void verify_function_evaluation_cache_telemetry() {
@@ -926,10 +1881,14 @@ katana::io::ExecutableImage image_with_callee(const std::vector<std::uint8_t>& c
     };
     std::copy(main.begin(), main.end(), bytes.begin());
     std::copy(callee.begin(), callee.end(), bytes.begin() + 0x20u);
-    bytes[0x10u] = 0x0Bu;
-    bytes[0x11u] = 0x00u;
+    bytes[0x10u] = 0x0Bu; // jsr @r2 (unchanged candidate site)
+    bytes[0x11u] = 0x42u;
     bytes[0x12u] = 0x09u;
     bytes[0x13u] = 0x00u;
+    bytes[0x14u] = 0x0Bu;
+    bytes[0x15u] = 0x00u;
+    bytes[0x16u] = 0x09u;
+    bytes[0x17u] = 0x00u;
     bytes[0x14u] = 0x0Bu;
     bytes[0x15u] = 0x00u;
     bytes[0x16u] = 0x09u;
@@ -2032,7 +2991,98 @@ multi_owner_contextual_return_values() {
     return {std::move(values),
             final_progress.resolution_functions_total,
             boundaries.size(),
-            final_progress};
+             final_progress};
+}
+
+katana::analysis::FunctionValueAnalysisResult
+contextual_candidate_input_overflow_values(const bool stack_argument) {
+    const auto helper_address = stack_argument ? 0x90u : 0x80u;
+    const auto callback_address = stack_argument ? 0xB0u : 0xA0u;
+    const auto object_base = stack_argument ? 0x50u : 0x40u;
+    std::vector<std::uint8_t> bytes(
+        stack_argument ? 0xC0u : 0xB0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    std::vector<katana::analysis::ResolvedControlFlowEdge> edges;
+    edges.reserve(9u);
+    std::size_t cursor = 0u;
+    for (std::uint32_t index = 0u; index < 9u; ++index) {
+        const auto object_address = object_base + index * 4u;
+        const auto value_register = stack_argument ? 0u : 4u;
+        put_u16(cursor,
+                static_cast<std::uint16_t>(
+                    0xE000u | (value_register << 8u) | object_address));
+        cursor += 2u;
+        if (stack_argument) {
+            put_u16(cursor, 0x2F02u); // mov.l r0,@r15
+            cursor += 2u;
+        }
+        const auto call_site = static_cast<std::uint32_t>(cursor);
+        put_u16(cursor, 0x410Bu); // jsr @r1
+        put_u16(cursor + 2u, 0x0009u);
+        cursor += 4u;
+        edges.push_back(
+            {call_site,
+             helper_address,
+             katana::analysis::ResolvedControlFlowKind::Call,
+             true,
+             katana::analysis::ControlFlowEvidence::GuardedPartial,
+             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+             true});
+        put_u32(object_address, callback_address);
+    }
+    put_u16(cursor, 0x000Bu);
+    put_u16(cursor + 2u, 0x0009u);
+    const auto owner_size = static_cast<std::uint32_t>(cursor + 4u);
+
+    auto helper_cursor = static_cast<std::size_t>(helper_address);
+    if (stack_argument) {
+        put_u16(helper_cursor, 0x64F2u); // mov.l @r15,r4
+        helper_cursor += 2u;
+    }
+    put_u16(helper_cursor, 0x6142u); // mov.l @r4,r1
+    put_u16(helper_cursor + 2u, 0x410Bu); // jsr @r1
+    put_u16(helper_cursor + 4u, 0x0009u);
+    put_u16(helper_cursor + 6u, 0xE000u); // complete return {0}
+    put_u16(helper_cursor + 8u, 0x000Bu);
+    put_u16(helper_cursor + 10u, 0x0009u);
+    put_u16(callback_address, 0x000Bu);
+    put_u16(callback_address + 2u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({stack_argument
+                           ? ".contextual-stack-input-overflow"
+                           : ".contextual-register-input-overflow",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    const std::array boundaries{
+        katana::analysis::FunctionBoundary{0u, owner_size},
+        katana::analysis::FunctionBoundary{
+            helper_address,
+            static_cast<std::uint32_t>(helper_cursor + 12u -
+                                       helper_address)},
+        katana::analysis::FunctionBoundary{callback_address, 4u},
+    };
+    return katana::analysis::analyze_function_values(
+        image, lines, boundaries, edges);
 }
 
 katana::analysis::FunctionValueAnalysisResult
@@ -4555,10 +5605,521 @@ multi_callee_memory_saved_stack_alias_values() {
         image, lines, boundaries, edges);
 }
 
+void verify_delta_staging_and_cold_replacement_contract() {
+    std::vector<std::uint8_t> bytes(0x20u, 0x09u);
+    bytes[0x00u] = 0x2Bu; // jmp @r1
+    bytes[0x01u] = 0x41u;
+    bytes[0x02u] = 0x09u; // delay nop
+    bytes[0x03u] = 0x00u;
+    bytes[0x10u] = 0x0Bu; // rts
+    bytes[0x11u] = 0x00u;
+    bytes[0x12u] = 0x09u;
+    bytes[0x13u] = 0x00u;
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".delta-staging-contract",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Code,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0x00u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 2u>
+        boundaries{{{0x00u, 0x04u}, {0x10u, 0x04u}}};
+    using Session =
+        katana::analysis::detail::FunctionValueAnalysisSession;
+    using Delta = katana::analysis::detail::FunctionProgramDelta;
+
+    const auto unbound_delta = [&] {
+        Delta delta;
+        delta.kind =
+            katana::analysis::detail::FunctionProgramDeltaKind::Exact;
+        delta.result_materialization =
+            katana::analysis::FunctionValueResultMaterialization::DeltaOnly;
+        delta.image_identity = image.analysis_instance_identity();
+        delta.image_revision = image.analysis_revision();
+        return delta;
+    };
+
+    Session duplicate_delta_session;
+    duplicate_delta_session.stage_next_function_program_delta(
+        unbound_delta());
+    bool duplicate_delta_rejected = false;
+    try {
+        duplicate_delta_session.stage_next_function_program_delta(
+            unbound_delta());
+    } catch (const std::logic_error&) {
+        duplicate_delta_rejected = true;
+    }
+    Session duplicate_bypass_session;
+    duplicate_bypass_session.bypass_all_persistent_analysis_state_once(
+        katana::analysis::PersistentAnalysisBypassReason::ExplicitTest);
+    bool duplicate_bypass_rejected = false;
+    try {
+        duplicate_bypass_session
+            .bypass_all_persistent_analysis_state_once(
+                katana::analysis::
+                    PersistentAnalysisBypassReason::ExplicitTest);
+    } catch (const std::logic_error&) {
+        duplicate_bypass_rejected = true;
+    }
+    Session delta_then_bypass;
+    delta_then_bypass.stage_next_function_program_delta(unbound_delta());
+    delta_then_bypass.bypass_all_persistent_analysis_state_once(
+        katana::analysis::PersistentAnalysisBypassReason::ExplicitTest);
+    Session bypass_then_delta;
+    bypass_then_delta.bypass_all_persistent_analysis_state_once(
+        katana::analysis::PersistentAnalysisBypassReason::ExplicitTest);
+    bypass_then_delta.stage_next_function_program_delta(unbound_delta());
+    Session empty_invocation_session;
+    empty_invocation_session.stage_next_function_program_delta(
+        unbound_delta());
+    katana::analysis::detail::GuardedNativeEntryShapeCache empty_shapes{
+        image};
+    static_cast<void>(katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            std::span<const katana::sh4::DisassemblyLine>{},
+            std::span<const katana::analysis::FunctionBoundary>{},
+            std::span<const katana::analysis::ResolvedControlFlowEdge>{},
+            {},
+            empty_shapes,
+            empty_invocation_session));
+    bool empty_invocation_preserved_delta = false;
+    try {
+        empty_invocation_session.stage_next_function_program_delta(
+            unbound_delta());
+    } catch (const std::logic_error&) {
+        empty_invocation_preserved_delta = true;
+    }
+    Session empty_bypass_session;
+    empty_bypass_session.bypass_all_persistent_analysis_state_once(
+        katana::analysis::PersistentAnalysisBypassReason::ExplicitTest);
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        empty_bypass_shapes{image};
+    static_cast<void>(katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            std::span<const katana::sh4::DisassemblyLine>{},
+            std::span<const katana::analysis::FunctionBoundary>{},
+            std::span<const katana::analysis::ResolvedControlFlowEdge>{},
+            {},
+            empty_bypass_shapes,
+            empty_bypass_session));
+    bool empty_invocation_preserved_bypass = false;
+    try {
+        empty_bypass_session.bypass_all_persistent_analysis_state_once(
+            katana::analysis::PersistentAnalysisBypassReason::ExplicitTest);
+    } catch (const std::logic_error&) {
+        empty_invocation_preserved_bypass = true;
+    }
+    require(duplicate_delta_rejected && duplicate_bypass_rejected,
+            "Delta-/Bypass-One-Shot-Slots akzeptierten stilles "
+            "Same-Kind-Ueberschreiben oder verboten Mischstaging.");
+    require(empty_invocation_preserved_delta &&
+                empty_invocation_preserved_bypass,
+            "Eine leere Nichtanalyse konsumierte Delta oder Bypass.");
+
+    Session first_delta_session;
+    Delta first_delta;
+    first_delta.kind =
+        katana::analysis::detail::FunctionProgramDeltaKind::Unknown;
+    first_delta.result_materialization =
+        katana::analysis::FunctionValueResultMaterialization::DeltaOnly;
+    first_delta.image_identity = image.analysis_instance_identity();
+    first_delta.image_revision = image.analysis_revision();
+    first_delta_session.stage_next_function_program_delta(
+        std::move(first_delta));
+    katana::analysis::detail::GuardedNativeEntryShapeCache
+        first_delta_shapes{image};
+    const auto first_delta_result = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image, lines, boundaries, {}, {}, first_delta_shapes,
+            first_delta_session);
+    require(
+        first_delta_result.result_materialization ==
+            katana::analysis::FunctionValueResultMaterialization::DeltaOnly,
+        "Eine erste Cold/Unknown-FVA-Runde verlor ihren DeltaOnly-Vertrag.");
+
+    Session session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache cold_shapes{image};
+    const auto cold = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image, lines, boundaries, {}, {}, cold_shapes, session);
+    require(!cold.budget_exhausted &&
+                session.published_epoch_version() != 0u,
+            "Die Staging-Regression erhielt keine kalte Baseline-Epoch.");
+
+    auto cold_delta = unbound_delta();
+    cold_delta.expected_published_epoch_version =
+        session.published_epoch_version();
+    session.bypass_all_persistent_analysis_state_once(
+        katana::analysis::PersistentAnalysisBypassReason::ExplicitTest);
+    session.stage_next_function_program_delta(std::move(cold_delta));
+    katana::analysis::detail::GuardedNativeEntryShapeCache bypass_shapes{
+        image};
+    const auto replacement = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image, lines, boundaries, {}, {}, bypass_shapes, session);
+    std::set<std::uint32_t> summary_owners;
+    for (const auto& shard : replacement.summary_replacements) {
+        require(shard.owner.kind ==
+                    katana::analysis::FunctionValueDependencyNodeKind::
+                        Function,
+                "Cold-Replacement emittierte einen untypisierten Summary-Owner.");
+        summary_owners.insert(shard.owner.address);
+    }
+    const auto has_baseline_inventory = std::any_of(
+        replacement.guarded_code_inventory_replacements.begin(),
+        replacement.guarded_code_inventory_replacements.end(),
+        [](const auto& shard) {
+            return shard.owner.kind ==
+                   katana::analysis::FunctionValueDependencyNodeKind::
+                       AnalysisBaseline;
+        });
+    const auto has_function_inventory = std::any_of(
+        replacement.guarded_code_inventory_replacements.begin(),
+        replacement.guarded_code_inventory_replacements.end(),
+        [](const auto& shard) {
+            return shard.owner.address == 0x00u &&
+                   shard.owner.kind ==
+                       katana::analysis::FunctionValueDependencyNodeKind::
+                           Function;
+        });
+    const auto has_function_resolution = std::any_of(
+        replacement.resolution_replacements.begin(),
+        replacement.resolution_replacements.end(),
+        [](const auto& shard) {
+            return shard.owner.address == 0x00u &&
+                   shard.owner.kind ==
+                       katana::analysis::FunctionValueDependencyNodeKind::
+                           Function;
+        });
+    require(
+        replacement.result_materialization ==
+                katana::analysis::FunctionValueResultMaterialization::
+                    DeltaOnly &&
+            replacement.persistent_analysis_bypass_reason ==
+                katana::analysis::PersistentAnalysisBypassReason::
+                    ExplicitTest &&
+            replacement.summaries.empty() &&
+            replacement.resolutions.empty() &&
+            replacement.guarded_code_inventory.stored_code_addresses.empty() &&
+            replacement.guarded_code_inventory
+                .returned_code_address_tables.empty() &&
+            summary_owners == std::set<std::uint32_t>{0x00u, 0x10u} &&
+            has_baseline_inventory && has_function_inventory &&
+            has_function_resolution,
+        "Ein returned Bypass war kein vollstaendiger owner-keyed "
+        "Cold-Replacement-Vertrag oder materialisierte flache DeltaOnly-"
+        "Ausgaben.");
+
+    const auto semantic_epoch = session.published_epoch_version();
+    Delta terminal;
+    terminal.kind =
+        katana::analysis::detail::FunctionProgramDeltaKind::Unchanged;
+    terminal.result_materialization =
+        katana::analysis::FunctionValueResultMaterialization::TerminalFull;
+    terminal.expected_published_epoch_version = semantic_epoch;
+    terminal.image_identity = image.analysis_instance_identity();
+    terminal.image_revision = image.analysis_revision();
+    session.stage_next_function_program_delta(std::move(terminal));
+    std::string terminal_phase;
+    katana::analysis::detail::GuardedNativeEntryShapeCache terminal_shapes{
+        image};
+    const auto materialized = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image,
+            lines,
+            boundaries,
+            {},
+            [&](const auto& progress) { terminal_phase = progress.phase; },
+            terminal_shapes,
+            session);
+    require(
+        terminal_phase == "terminal-materialized" &&
+            materialized.result_materialization ==
+                katana::analysis::FunctionValueResultMaterialization::
+                    TerminalFull &&
+            !materialized.summaries.empty() &&
+            materialized.summary_replacements.empty() &&
+            materialized.resolution_replacements.empty() &&
+            materialized.guarded_code_inventory_replacements.empty() &&
+            materialized.final_materialized_functions ==
+                materialized.summaries.size() &&
+            materialized.final_materialized_blocks != 0u &&
+            session.published_epoch_version() == semantic_epoch,
+        "TerminalFull materialisierte nicht exakt einmal aus derselben "
+        "Epoch oder behielt DeltaOnly-Ledger.");
+
+    // Both one-shot slots were consumed by the real invocation.
+    auto consumed_delta = unbound_delta();
+    consumed_delta.expected_published_epoch_version = semantic_epoch;
+    session.stage_next_function_program_delta(std::move(consumed_delta));
+    session.bypass_all_persistent_analysis_state_once(
+        katana::analysis::PersistentAnalysisBypassReason::ExplicitTest);
+}
+
+void verify_candidate_derived_topology_add_replace_withdrawal() {
+    std::vector<std::uint8_t> bytes(0x30u, 0x09u);
+    bytes[0x00u] = 0x0Bu; // jsr @r1
+    bytes[0x01u] = 0x41u;
+    bytes[0x02u] = 0x09u; // delay nop
+    bytes[0x03u] = 0x00u;
+    bytes[0x04u] = 0x0Bu; // rts
+    bytes[0x05u] = 0x00u;
+    bytes[0x06u] = 0x09u;
+    bytes[0x07u] = 0x00u;
+    bytes[0x10u] = 0x0Bu;
+    bytes[0x11u] = 0x00u;
+    bytes[0x12u] = 0x09u;
+    bytes[0x13u] = 0x00u;
+    bytes[0x20u] = 0x0Bu;
+    bytes[0x21u] = 0x00u;
+    bytes[0x22u] = 0x09u;
+    bytes[0x23u] = 0x00u;
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.add_segment({".candidate-derived-topology",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Code,
+                       {true, false, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{{0x00u, 0x08u},
+                    {0x10u, 0x04u},
+                    {0x20u, 0x04u}}};
+    using Session =
+        katana::analysis::detail::FunctionValueAnalysisSession;
+    using Delta = katana::analysis::detail::FunctionProgramDelta;
+    using Edge = katana::analysis::ResolvedControlFlowEdge;
+
+    const auto candidate = [](const std::uint32_t target) {
+        Edge edge;
+        edge.instruction_address = 0u;
+        edge.target_address = target;
+        edge.kind = katana::analysis::ResolvedControlFlowKind::Call;
+        edge.guarded = true;
+        edge.evidence =
+            katana::analysis::ControlFlowEvidence::GuardedPartial;
+        edge.analysis_candidate_carrier = true;
+        return edge;
+    };
+    const auto analyze_fresh = [&](const std::span<const Edge> edges) {
+        return katana::analysis::analyze_function_values(
+            image, lines, boundaries, edges);
+    };
+
+    Session session;
+    katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+    const auto baseline = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image, lines, boundaries, {}, {}, shapes, session);
+    require(!baseline.budget_exhausted,
+            "Candidate-DerivedTopology erhielt keine Cold-Baseline.");
+
+    const auto run_delta = [&](const std::vector<Edge>& family,
+                               const std::string_view description) {
+        Delta delta;
+        delta.kind =
+            katana::analysis::detail::FunctionProgramDeltaKind::Exact;
+        delta.result_materialization =
+            katana::analysis::FunctionValueResultMaterialization::DeltaOnly;
+        delta.expected_published_epoch_version =
+            session.published_epoch_version();
+        delta.image_identity = image.analysis_instance_identity();
+        delta.image_revision = image.analysis_revision();
+        delta.changed_candidate_call_sites.push_back(
+            {0u, family});
+        session.stage_next_function_program_delta(std::move(delta));
+        const auto incremental = katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                std::span<const katana::sh4::DisassemblyLine>{},
+                std::span<const katana::analysis::FunctionBoundary>{},
+                std::span<const Edge>{},
+                {},
+                shapes,
+                session);
+        require(
+            incremental.result_materialization ==
+                    katana::analysis::FunctionValueResultMaterialization::
+                        DeltaOnly &&
+                incremental.persistent_analysis_bypass_reason ==
+                    katana::analysis::PersistentAnalysisBypassReason::None &&
+                incremental.full_cpu_recompute_fallbacks == 0u &&
+                incremental.function_edge_full_scans == 0u &&
+                incremental.function_edge_full_sorts == 0u &&
+                incremental.candidate_call_edge_full_scans == 0u &&
+                incremental.candidate_call_edge_full_sorts == 0u &&
+                incremental.candidate_tail_edge_full_scans == 0u &&
+                incremental.candidate_tail_edge_full_sorts == 0u &&
+                incremental.inventory_topology_entries_visited != 0u &&
+                incremental.abi_contract_entries_visited != 0u &&
+                incremental.summary_candidate_entries_visited != 0u &&
+                incremental.resolution_preparation_entries_visited != 0u,
+            std::string{description} +
+                " nahm keinen echten fallbackfreien DerivedTopology-Warmpfad.");
+
+        Delta terminal;
+        terminal.kind =
+            katana::analysis::detail::FunctionProgramDeltaKind::Unchanged;
+        terminal.result_materialization =
+            katana::analysis::FunctionValueResultMaterialization::TerminalFull;
+        terminal.expected_published_epoch_version =
+            session.published_epoch_version();
+        terminal.image_identity = image.analysis_instance_identity();
+        terminal.image_revision = image.analysis_revision();
+        session.stage_next_function_program_delta(std::move(terminal));
+        const auto materialized = katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                std::span<const katana::sh4::DisassemblyLine>{},
+                std::span<const katana::analysis::FunctionBoundary>{},
+                std::span<const Edge>{},
+                {},
+                shapes,
+                session);
+        const auto fresh = analyze_fresh(family);
+        require_same_function_value_semantics(
+            fresh, materialized, false);
+    };
+
+    run_delta(std::vector<Edge>{candidate(0x10u)},
+              "Candidate-Addition");
+    run_delta(std::vector<Edge>{candidate(0x20u)},
+              "Candidate-Replacement");
+    run_delta({}, "Candidate-Withdrawal");
+}
+
+void verify_boundary_overlay_fallback_contracts() {
+    using Boundary = katana::analysis::FunctionBoundary;
+    using Delta = katana::analysis::detail::FunctionProgramDelta;
+    using Session =
+        katana::analysis::detail::FunctionValueAnalysisSession;
+    const auto make_image = [](std::vector<std::uint8_t> bytes,
+                               const std::string& name) {
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.add_segment({name,
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Code,
+                           {true, false, true},
+                           std::move(bytes)});
+        image.add_entry_point(0u);
+        return image;
+    };
+    const auto nop_bytes = [] {
+        std::vector<std::uint8_t> bytes(0x20u, 0u);
+        for (std::size_t offset = 0u; offset < bytes.size(); offset += 2u)
+            bytes[offset] = 0x09u;
+        return bytes;
+    };
+    const auto verify_fallback = [&](const katana::io::ExecutableImage& image,
+                                     const std::span<const Boundary> initial,
+                                     const std::span<const Boundary> current,
+                                     const Boundary added,
+                                     const std::string_view description) {
+        const auto lines = katana::sh4::disassemble(
+            image.segments().front().bytes, 0u);
+        Session session;
+        katana::analysis::detail::GuardedNativeEntryShapeCache
+            initial_shapes{image};
+        const auto baseline = katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image, lines, initial, {}, {}, initial_shapes, session);
+        require(!baseline.budget_exhausted &&
+                    session.published_epoch_version() != 0u,
+                "Die Boundary-Fallback-Regression erhielt keine Baseline.");
+
+        Delta delta;
+        delta.kind =
+            katana::analysis::detail::FunctionProgramDeltaKind::Exact;
+        delta.result_materialization =
+            katana::analysis::FunctionValueResultMaterialization::TerminalFull;
+        delta.expected_published_epoch_version =
+            session.published_epoch_version();
+        delta.image_identity = image.analysis_instance_identity();
+        delta.image_revision = image.analysis_revision();
+        delta.changed_boundaries.push_back(
+            {added.entry_address, added});
+        session.stage_next_function_program_delta(std::move(delta));
+        katana::analysis::detail::GuardedNativeEntryShapeCache
+            incremental_shapes{image};
+        const auto incremental = katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image,
+                std::span<const katana::sh4::DisassemblyLine>{},
+                std::span<const Boundary>{},
+                std::span<const katana::analysis::ResolvedControlFlowEdge>{},
+                {},
+                incremental_shapes,
+                session);
+        katana::analysis::detail::GuardedNativeEntryShapeCache cold_shapes{
+            image};
+        Session cold_session;
+        const auto cold = katana::analysis::detail::
+            analyze_function_values_with_guarded_entry_cache(
+                image, lines, current, {}, {}, cold_shapes, cold_session);
+        require_same_function_value_semantics(cold, incremental, false);
+        require(
+            incremental.persistent_analysis_bypass_reason ==
+                    katana::analysis::PersistentAnalysisBypassReason::
+                        ProgramDeltaUnrepresentable &&
+                incremental.full_cpu_recompute_fallbacks == 1u,
+            std::string{description} +
+                " wurde nicht fail-closed exakt kalt neu aufgebaut.");
+    };
+
+    const auto split_image =
+        make_image(nop_bytes(), ".boundary-end-inside-block");
+    constexpr std::array split_initial{Boundary{0u, 0x10u}};
+    constexpr std::array split_current{
+        Boundary{0u, 0x10u}, Boundary{0x10u, 0x02u}};
+    verify_fallback(split_image,
+                    split_initial,
+                    split_current,
+                    split_current[1],
+                    "Ein Boundary-Ende innerhalb eines alten Blocks");
+
+    auto tail_bytes = nop_bytes();
+    tail_bytes[0x00u] = 0x06u; // bra 0x10
+    tail_bytes[0x01u] = 0xA0u;
+    tail_bytes[0x10u] = 0x0Bu; // rts
+    tail_bytes[0x11u] = 0x00u;
+    const auto tail_image =
+        make_image(std::move(tail_bytes), ".tail-owner-boundary");
+    constexpr std::array tail_initial{Boundary{0u, 0x04u}};
+    constexpr std::array tail_current{
+        Boundary{0u, 0x04u}, Boundary{0x10u, 0x04u}};
+    verify_fallback(tail_image,
+                    tail_initial,
+                    tail_current,
+                    tail_current[1],
+                    "Ein neuer Function-Entry mit altem Tail-Owner");
+}
+
 } // namespace
 
 int main() {
     verify_persistent_function_value_session();
+    verify_incremental_resolution_root_reuse();
+    verify_delta_staging_and_cold_replacement_contract();
+    verify_candidate_derived_topology_add_replace_withdrawal();
+    verify_boundary_overlay_fallback_contracts();
+    verify_inventory_region_dependency_reuse();
+    verify_typed_interfunction_tail_transport();
+    verify_unresolved_tail_target_is_fail_closed();
     verify_function_evaluation_cache_telemetry();
 
     {
@@ -5430,6 +6991,20 @@ int main() {
                     multi_owner_contextual_parallel.values
                         .guarded_code_inventory.walk_diagnostics.truncated()) +
                 ").");
+
+        for (const bool stack_argument : {false, true}) {
+            const auto overflow =
+                contextual_candidate_input_overflow_values(stack_argument);
+            const auto& diagnostics =
+                overflow.guarded_code_inventory.walk_diagnostics;
+            require(
+                diagnostics.inventory_candidate_values_truncated &&
+                    diagnostics.truncated() && !overflow.budget_exhausted,
+                std::string{"Mehr als acht kontextuelle Candidate-"} +
+                    (stack_argument ? "Stack-" : "Register-") +
+                    "Argumentwerte gingen ohne fail-closed "
+                    "Truncation-Diagnose verloren.");
+        }
 
         const auto contextual_budget =
             contextual_read_contract_and_fixpoint_budget_values();
@@ -7208,13 +8783,15 @@ int main() {
         0x09u,
         0x00u // nop (delay)
     };
-    const std::array<std::uint8_t, 10u> parameter_callee{
+    const std::array<std::uint8_t, 12u> parameter_callee{
         0x42u,
         0x61u, // mov.l @r4,r1
         0x0Bu,
         0x41u, // jsr @r1
         0x09u,
         0x00u, // nop (delay)
+        0x00u,
+        0xE0u, // mov #0,r0: complete return must not suppress context
         0x0Bu,
         0x00u, // rts
         0x09u,
@@ -7275,11 +8852,17 @@ int main() {
             "globale Resolutions oder CFG-Kanten.");
 
     std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);
-    const std::array<std::uint8_t, 12u> indirect_parameter_caller{
+    const std::array<std::uint8_t, 18u> indirect_parameter_caller{
         0x40u,
         0xE4u, // mov #0x40,r4
-        0x03u,
-        0xDCu, // mov.l @(0x10,pc),r12
+        0x29u,
+        0x00u, // movt r0 -> {0,1}
+        0x08u,
+        0x40u, // shll2 r0 -> {0,4}
+        0x0Cu,
+        0x34u, // add r0,r4 -> {0x40,0x44}
+        0x04u,
+        0xDCu, // mov.l @(0x1c,pc),r12
         0x0Bu,
         0x4Cu, // jsr @r12
         0x09u,
@@ -7294,14 +8877,18 @@ int main() {
               indirect_parameter_bytes.begin());
     std::copy(
         parameter_callee.begin(), parameter_callee.end(), indirect_parameter_bytes.begin() + 0x20u);
-    indirect_parameter_bytes[0x10u] = 0x20u;
-    indirect_parameter_bytes[0x11u] = 0x00u;
-    indirect_parameter_bytes[0x12u] = 0x00u;
-    indirect_parameter_bytes[0x13u] = 0x00u;
-    indirect_parameter_bytes[0x40u] = 0x50u;
+    indirect_parameter_bytes[0x1Cu] = 0x20u;
+    indirect_parameter_bytes[0x1Du] = 0x00u;
+    indirect_parameter_bytes[0x1Eu] = 0x00u;
+    indirect_parameter_bytes[0x1Fu] = 0x00u;
+    indirect_parameter_bytes[0x40u] = 0x60u;
     indirect_parameter_bytes[0x41u] = 0x00u;
     indirect_parameter_bytes[0x42u] = 0x00u;
     indirect_parameter_bytes[0x43u] = 0x00u;
+    indirect_parameter_bytes[0x44u] = 0x50u;
+    indirect_parameter_bytes[0x45u] = 0x00u;
+    indirect_parameter_bytes[0x46u] = 0x00u;
+    indirect_parameter_bytes[0x47u] = 0x00u;
     indirect_parameter_bytes[0x50u] = 0x0Bu;
     indirect_parameter_bytes[0x51u] = 0x00u;
     indirect_parameter_bytes[0x52u] = 0x09u;
@@ -7324,7 +8911,8 @@ int main() {
                     katana::analysis::ControlFlowEvidence::RuntimeOnly &&
                 indirect_parameter_site->analysis_candidates == std::vector<std::uint32_t>{0x50u} &&
                 indirect_parameter_site->evidence_call_sites.empty(),
-            "Bewachter indirekter Call verlor seinen Parameterkandidaten oder "
+            "Bewachter indirekter Call verlor seinen gueltigen Parameterkandidaten "
+            "neben einer ungueltigen Alternative oder "
             "uebertrug Objektadress-Provenienz auf den geladenen Funktionswert.");
 
     std::vector<std::uint8_t> finite_index_bytes(0x38u, 0x09u);

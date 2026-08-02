@@ -136,12 +136,45 @@ int main() {
             require(
                 canonical_parsed.state ==
                         katana::codegen::BootAnalysisCacheState::Hit &&
+                    !canonical_parsed.artifact.analysis
+                         .guarded_code_inventory_walk
+                         .inventory_tail_target_unresolved &&
                     !katana::codegen::
                          validate_boot_analysis_cache_source_binding(
                              canonical_parsed.artifact, image),
-                "Positiver Bootcache wurde trotz fehlendem "
-                "Vollstaendigkeitsbeweis als Produktinput zugelassen.");
+                "Das vollstaendige Tail-Target-Diagnosebit rundete nicht "
+                "durch den Bootcache oder ein positiver Bootcache wurde "
+                "trotz fehlendem Vollstaendigkeitsbeweis als Produktinput "
+                "zugelassen.");
         }
+        auto unresolved_tail = artifact;
+        unresolved_tail.analysis.guarded_code_inventory_walk
+            .inventory_tail_target_unresolved = true;
+        require(
+            !katana::codegen::boot_analysis_artifact_cacheable(
+                unresolved_tail),
+            "Ein ungebundenes Inventory-Tail-Target wurde als "
+            "vollstaendiges Bootcache-Artefakt zugelassen.");
+
+        auto previous_schema = canonical;
+        constexpr std::size_t schema_offset = 8u;
+        const auto stale_schema =
+            katana::codegen::boot_analysis_cache_schema_version - 1u;
+        require(
+            previous_schema.size() >= schema_offset + 4u,
+            "Bootcache-Testartefakt besitzt keinen vollstaendigen Header.");
+        for (std::size_t index = 0u; index < 4u; ++index) {
+            previous_schema[schema_offset + index] =
+                static_cast<std::uint8_t>(
+                    stale_schema >> (index * 8u));
+        }
+        require(
+            katana::codegen::parse_boot_analysis_cache(
+                key, previous_schema)
+                    .state ==
+                katana::codegen::BootAnalysisCacheState::Miss,
+            "Ein Bootcache des vorherigen Schemas wurde nicht als Miss "
+            "behandelt.");
 
         // Simulate a checksum-consistent subset forgery. All retained
         // instructions still match the current bytes, so byte rebinding alone

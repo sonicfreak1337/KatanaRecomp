@@ -32,6 +32,31 @@ DETERMINISTIC_SEED = 0x00C0FFEE
 ROOT_MAGIC = b"KSTRROOT"
 ROOT_HEADER = struct.Struct("<8sIIII")
 ROOT_RECORD = struct.Struct("<IIIII")
+ROOT_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA = "katana-native-disc-cold-build-stress-v3"
+MANIFEST_SCHEMA_VERSION = 3
+WORKLOAD_SCHEMA = "katana-native-disc-workload-v3"
+WORKLOAD_SCHEMA_VERSION = 3
+PROVENANCE_CONTRACT_VERSION = 3
+DELTA_SCALE_FUNCTION_COUNTS = [16, 128]
+REQUIRED_FUNCTION_VALUE_SUBPHASES = [
+    "inventory-region-closure",
+    "inventory-region-sink-sources",
+    "abi-return-signatures",
+    "abi-stack-reads",
+    "abi-register-reads",
+    "persistent-store-signatures",
+    "inventory-reachability",
+    "cache-key-plan",
+    "resolution-root-dependencies",
+    "resolution-root-scc-order",
+    "resolution-root-scc-components",
+    "resolution-root-contracts",
+    "resolution-root-plan",
+]
+RESOLUTION_PROBE_VALUE_BLOCK = 0
+RESOLUTION_PROBE_STORE_BLOCK = 1
+RESOLUTION_PROBE_LOAD_BLOCK = 2
 
 
 @dataclass(frozen=True)
@@ -73,8 +98,8 @@ PROFILES = {
 }
 
 EXPECTED_MANIFEST_DIGESTS = {
-    "smoke": "23acc483a0429578f9967fed888839f39335bfb626225c3a39aafd4eeb2081f0",
-    "reference": "3fa1027ec898483657b37e7bc3e6c79fdb4f7e908408cc5d04c4e1d2e85f0bea",
+    "smoke": "861af21607d2cdb1a1a8ea2a2ca5d85b0bab5995d58f4e62a49515bf94e818c6",
+    "reference": "dbe0500286adc3e05de122a99769707e83e95302f4376ee608631864ac12af55",
 }
 
 
@@ -151,12 +176,41 @@ def sh4_move_immediate(function_index: int, block_index: int) -> int:
     return 0xE000 | (register << 8) | immediate
 
 
+def resolution_root_function_indices(profile: Profile) -> set[int]:
+    roots = {
+        (root_index * 37) % profile.function_count
+        for root_index in range(profile.root_count)
+    }
+    if len(roots) != profile.root_count:
+        raise AssertionError("resolution-root fixture contains duplicate functions")
+    return roots
+
+
+def resolution_probe_delay(function_index: int, block_index: int) -> int | None:
+    if block_index == RESOLUTION_PROBE_VALUE_BLOCK:
+        immediate = (
+            function_index * 29 + block_index * 17 + DETERMINISTIC_SEED
+        ) & 0xFF
+        return 0xE000 | immediate  # mov #imm,r0
+    if block_index == RESOLUTION_PROBE_STORE_BLOCK:
+        return 0x2F06  # mov.l r0,@-r15
+    if block_index == RESOLUTION_PROBE_LOAD_BLOCK:
+        return 0x60F6  # mov.l @r15+,r0
+    return None
+
+
 def build_boot_program(profile: Profile) -> bytes:
     output = bytearray(profile.function_count * FUNCTION_SIZE)
+    resolution_roots = resolution_root_function_indices(profile)
     cursor = 0
     for function_index in range(profile.function_count):
         for block_index in range(BLOCKS_PER_FUNCTION - 1):
-            struct.pack_into("<HH", output, cursor, 0xA000, sh4_move_immediate(function_index, block_index))
+            delay = sh4_move_immediate(function_index, block_index)
+            if function_index in resolution_roots:
+                probe_delay = resolution_probe_delay(function_index, block_index)
+                if probe_delay is not None:
+                    delay = probe_delay
+            struct.pack_into("<HH", output, cursor, 0xA000, delay)
             cursor += 4
         struct.pack_into("<HH", output, cursor, 0x000B, 0x0009)
         cursor += 4
@@ -227,10 +281,13 @@ def build_semantic_program() -> bytes:
 
     put_u16(0x50C0, 0x000B)
     put_u16(0x50C2, 0x0009)
-    # D is intentionally disconnected. A targeted root-edge change must keep
-    # this function on the exact-hit side of the invalidation closure.
-    put_u16(0x5100, 0x000B)
-    put_u16(0x5102, 0x0009)
+    # D is intentionally disconnected. Its balanced stack spill restores r0
+    # and r15 while making it a real resolution root without cross-function
+    # dependencies, so a targeted change must retain this artifact exactly.
+    put_u16(0x5100, 0x2F06)  # mov.l r0,@-r15
+    put_u16(0x5102, 0x60F6)  # mov.l @r15+,r0
+    put_u16(0x5104, 0x000B)
+    put_u16(0x5106, 0x0009)
     put_u32(0x5140, 0)
     put_u32(0x5144, 0)
     return bytes(output)
@@ -245,7 +302,7 @@ def semantic_contract() -> dict[str, Any]:
             {"offset": 0x5040, "size": 0x10},
             {"offset": 0x5080, "size": 0x0E},
             {"offset": 0x50C0, "size": 0x04},
-            {"offset": 0x5100, "size": 0x04},
+            {"offset": 0x5100, "size": 0x08},
         ],
         "call_chain": [0x00, 0x5000, 0x5040, 0x5080, 0x50C0],
         "heavy_prefix_blocks": SEMANTIC_HEAVY_BLOCKS,
@@ -295,7 +352,7 @@ def build_roots(profile: Profile) -> bytes:
     output = bytearray(
         ROOT_HEADER.pack(
             ROOT_MAGIC,
-            2,
+            ROOT_SCHEMA_VERSION,
             profile.root_count,
             ROOT_RECORD.size,
             len(profile.seed_wave_counts),
@@ -324,15 +381,21 @@ def workload_contract(profile: Profile) -> dict[str, Any]:
         "declared_entry_count": profile.module_count + 1,
         "declared_hint_count": profile.module_count + 3,
         "declared_source_binding_count": profile.module_count + 1,
+        "cfa_delta_scale_function_counts": DELTA_SCALE_FUNCTION_COUNTS,
+        "fva_delta_scale_function_counts": DELTA_SCALE_FUNCTION_COUNTS,
         "function_count": profile.function_count,
         "module_count": profile.module_count,
         "module_extent_count": profile.module_count + 1,
         "partition_count": profile.partition_count,
         "replay_passes": profile.replay_passes,
+        "resolution_root_count": profile.root_count,
+        "resolution_root_probe": "r0-stack-roundtrip",
+        "persistent_physical_work_contract": "kr-4978-v1",
+        "required_function_value_subphases": REQUIRED_FUNCTION_VALUE_SUBPHASES,
         "root_count": profile.root_count,
         "semantic_function_count": 6,
         "seed_wave_counts": list(profile.seed_wave_counts),
-        "throughput_topology": "independent-bra-chains",
+        "throughput_topology": "independent-bra-chains-with-resolution-roots",
         "wave_count": len(profile.seed_wave_counts),
     }
 
@@ -629,8 +692,8 @@ def generate(profile: Profile, output: Path) -> str:
             canonical_json(
                 {
                     "profile": profile.name,
-                    "schema": "katana-native-disc-workload-v2",
-                    "version": 2,
+                    "schema": WORKLOAD_SCHEMA,
+                    "version": WORKLOAD_SCHEMA_VERSION,
                     "workload": workload,
                 }
             ),
@@ -710,14 +773,14 @@ def generate(profile: Profile, output: Path) -> str:
         "iso_files": iso_entries,
         "profile": profile.name,
         "provenance": {
-            "contract_version": 2,
+            "contract_version": PROVENANCE_CONTRACT_VERSION,
             "deterministic_seed": DETERMINISTIC_SEED,
             "generator": "tools/performance/write_native_disc_cold_build_stress.py",
             "retail_content": False,
             "source_inputs": [],
         },
-        "schema": "katana-native-disc-cold-build-stress-v2",
-        "version": 2,
+        "schema": MANIFEST_SCHEMA,
+        "version": MANIFEST_SCHEMA_VERSION,
         "workload": workload,
     }
     manifest_bytes = canonical_json(manifest)

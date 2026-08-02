@@ -354,6 +354,14 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
     const auto summary = summarize_control_flow_analysis(analysis);
     katana::io::write_json_report_header(output, "katana-control-flow-v4", "control-flow");
     output << ",\"privacy\":\"local-detailed\""
+           << ",\"termination_reason\":"
+           << katana::io::quote_json(
+                  control_flow_analysis_termination_reason_name(
+                      analysis.termination_reason))
+           << ",\"recursive_baseline_status\":"
+           << katana::io::quote_json(
+                  recursive_analysis_baseline_status_name(
+                      analysis.recursive.baseline_status))
            << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
            << ",\"instruction_contexts\":" << analysis.recursive.contextual_instructions.size()
            << ",\"ranges\":" << analysis.recursive.ranges.size()
@@ -378,6 +386,10 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations
            << ",\"recursive_processed_work_items\":" << analysis.recursive.processed_work_items
            << ",\"recursive_reused_contexts\":" << analysis.recursive.reused_contexts
+           << ",\"recursive_incremental_passes\":"
+           << analysis.recursive_incremental_passes
+           << ",\"recursive_full_recompute_fallbacks\":"
+           << analysis.recursive_full_recompute_fallbacks
            << ",\"function_summary_iterations\":" << analysis.function_summary_iterations
            << ",\"function_scc_count\":" << analysis.function_scc_count
            << ",\"unchanged_ingress_skips\":" << analysis.unchanged_ingress_skips
@@ -433,6 +445,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << (analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated ? "true" : "false")
            << ",\"guarded_abi_stack_base_unresolved\":"
            << (analysis.guarded_code_inventory_walk.abi_stack_base_unresolved ? "true" : "false")
+           << ",\"guarded_inventory_tail_target_unresolved\":"
+           << (analysis.guarded_code_inventory_walk.inventory_tail_target_unresolved ? "true" : "false")
            << ",\"guarded_code_shape_validation_work\":"
            << analysis.guarded_code_shape_validation_work
            << ",\"guarded_code_shape_validation_work_budget\":"
@@ -957,9 +971,21 @@ std::string format_control_flow_frontier_json(const ControlFlowAnalysisResult& a
     const auto summary = summarize_control_flow_analysis(analysis);
     katana::io::write_json_report_header(
         output, "katana-control-flow-frontier-v1", "control-flow-frontier");
-    output << ",\"privacy\":\"aggregate\",\"summary\":{\"instructions\":"
+    output << ",\"privacy\":\"aggregate\",\"termination_reason\":"
+           << katana::io::quote_json(
+                  control_flow_analysis_termination_reason_name(
+                      analysis.termination_reason))
+           << ",\"recursive_baseline_status\":"
+           << katana::io::quote_json(
+                  recursive_analysis_baseline_status_name(
+                      analysis.recursive.baseline_status))
+           << ",\"summary\":{\"instructions\":"
            << analysis.recursive.instructions.size()
-           << ",\"functions\":" << analysis.recursive.functions.size() << ',';
+           << ",\"functions\":" << analysis.recursive.functions.size()
+           << ",\"recursive_incremental_passes\":"
+           << analysis.recursive_incremental_passes
+           << ",\"recursive_full_recompute_fallbacks\":"
+           << analysis.recursive_full_recompute_fallbacks << ',';
     append_frontier_summary_json(output, summary);
     output << "}}\n";
     return output.str();

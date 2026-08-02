@@ -479,9 +479,7 @@ class ProgressCore final {
             static_cast<std::uint64_t>(std::max(elapsed, std::chrono::milliseconds(0)).count());
         event.dropped_observations = dropped_observations_.load(std::memory_order_relaxed);
         event.telemetry_complete =
-            event.telemetry_complete && event.dropped_observations == 0u &&
-            progress_cache_accounting_valid(event.counters) &&
-            progress_activity_accounting_valid(event.counters);
+            progress_event_telemetry_complete(event);
         try {
             const auto admission = next_callback_admission_;
             pending_callbacks_.push_back(PendingCallback{std::move(event), admission});
@@ -1103,7 +1101,7 @@ struct NamedCounterMember final {
     OptionalCounterMember member;
 };
 
-constexpr std::array<NamedCounterMember, 100u> progress_counter_members{{
+constexpr std::array<NamedCounterMember, 179u> progress_counter_members{{
     {"iteration", &ProgressCounterSnapshot::iteration},
     {"pass", &ProgressCounterSnapshot::pass},
     {"active_workers", &ProgressCounterSnapshot::active_workers},
@@ -1160,6 +1158,16 @@ constexpr std::array<NamedCounterMember, 100u> progress_counter_members{{
     {"committed_work", &ProgressCounterSnapshot::committed_work},
     {"configured_workers", &ProgressCounterSnapshot::configured_workers},
     {"added_work", &ProgressCounterSnapshot::added_work},
+    {"round_seed_facts_added",
+     &ProgressCounterSnapshot::round_seed_facts_added},
+    {"round_seed_targets_changed",
+     &ProgressCounterSnapshot::round_seed_targets_changed},
+    {"round_decode_targets",
+     &ProgressCounterSnapshot::round_decode_targets},
+    {"round_metadata_targets",
+     &ProgressCounterSnapshot::round_metadata_targets},
+    {"round_full_cpu_fallbacks",
+     &ProgressCounterSnapshot::round_full_cpu_fallbacks},
     {"head_of_line_index", &ProgressCounterSnapshot::head_of_line_index},
     {"head_of_line_elapsed_milliseconds",
      &ProgressCounterSnapshot::head_of_line_elapsed_milliseconds},
@@ -1279,6 +1287,152 @@ constexpr std::array<NamedCounterMember, 100u> progress_counter_members{{
      &ProgressCounterSnapshot::analysis_epochs_published},
     {"analysis_epochs_discarded",
      &ProgressCounterSnapshot::analysis_epochs_discarded},
+    {"incremental_epochs_started",
+     &ProgressCounterSnapshot::incremental_epochs_started},
+    {"resolution_root_artifacts_total",
+     &ProgressCounterSnapshot::resolution_root_artifacts_total},
+    {"resolution_root_artifacts_reused",
+     &ProgressCounterSnapshot::resolution_root_artifacts_reused},
+    {"resolution_root_artifacts_recomputed",
+     &ProgressCounterSnapshot::resolution_root_artifacts_recomputed},
+    {"resolution_root_artifacts_retained",
+     &ProgressCounterSnapshot::resolution_root_artifacts_retained},
+    {"resolution_epoch_retained_bytes",
+     &ProgressCounterSnapshot::resolution_epoch_retained_bytes},
+    {"dirty_sccs", &ProgressCounterSnapshot::dirty_sccs},
+    {"dirty_functions", &ProgressCounterSnapshot::dirty_functions},
+    {"dirty_inventory_sinks",
+     &ProgressCounterSnapshot::dirty_inventory_sinks},
+    {"full_cpu_recompute_fallbacks",
+     &ProgressCounterSnapshot::full_cpu_recompute_fallbacks},
+    {"recursive_snapshot_epochs",
+     &ProgressCounterSnapshot::recursive_snapshot_epochs},
+    {"recursive_final_materializations",
+     &ProgressCounterSnapshot::recursive_final_materializations},
+    {"recursive_trusted_snapshot_validations",
+     &ProgressCounterSnapshot::recursive_trusted_snapshot_validations},
+    {"recursive_seed_arena_copy_items",
+     &ProgressCounterSnapshot::recursive_seed_arena_copy_items},
+    {"recursive_seed_arena_copy_bytes",
+     &ProgressCounterSnapshot::recursive_seed_arena_copy_bytes},
+    {"recursive_seed_arena_shift_items",
+     &ProgressCounterSnapshot::recursive_seed_arena_shift_items},
+    {"recursive_seed_arena_shift_bytes",
+     &ProgressCounterSnapshot::recursive_seed_arena_shift_bytes},
+    {"recursive_seed_contract_items_visited",
+     &ProgressCounterSnapshot::recursive_seed_contract_items_visited},
+    {"recursive_decoded_work_items",
+     &ProgressCounterSnapshot::recursive_decoded_work_items},
+    {"recursive_canonical_context_updates",
+     &ProgressCounterSnapshot::recursive_canonical_context_updates},
+    {"recursive_canonical_instruction_updates",
+     &ProgressCounterSnapshot::recursive_canonical_instruction_updates},
+    {"recursive_canonical_function_updates",
+     &ProgressCounterSnapshot::recursive_canonical_function_updates},
+    {"recursive_public_baseline_hash_bytes",
+     &ProgressCounterSnapshot::recursive_public_baseline_hash_bytes},
+    {"recursive_public_baseline_copy_items",
+     &ProgressCounterSnapshot::recursive_public_baseline_copy_items},
+    {"recursive_public_sort_items",
+     &ProgressCounterSnapshot::recursive_public_sort_items},
+    {"recursive_public_materialized_items",
+     &ProgressCounterSnapshot::recursive_public_materialized_items},
+    {"recursive_public_materializations",
+     &ProgressCounterSnapshot::recursive_public_materializations},
+    {"epoch_index_lookups",
+     &ProgressCounterSnapshot::epoch_index_lookups},
+    {"epoch_index_updates",
+     &ProgressCounterSnapshot::epoch_index_updates},
+    {"terminal_epoch_fold_items",
+     &ProgressCounterSnapshot::terminal_epoch_fold_items},
+    {"runtime_copy_instruction_visits",
+     &ProgressCounterSnapshot::runtime_copy_instruction_visits},
+    {"runtime_copy_result_entries_visited",
+     &ProgressCounterSnapshot::runtime_copy_result_entries_visited},
+    {"runtime_copy_result_entries_rebuilt",
+     &ProgressCounterSnapshot::runtime_copy_result_entries_rebuilt},
+    {"local_control_flow_instruction_visits",
+     &ProgressCounterSnapshot::local_control_flow_instruction_visits},
+    {"local_control_flow_result_entries_visited",
+     &ProgressCounterSnapshot::local_control_flow_result_entries_visited},
+    {"local_control_flow_result_entries_rebuilt",
+     &ProgressCounterSnapshot::local_control_flow_result_entries_rebuilt},
+    {"dispatch_index_entries_visited",
+     &ProgressCounterSnapshot::dispatch_index_entries_visited},
+    {"dispatch_index_entries_rebuilt",
+     &ProgressCounterSnapshot::dispatch_index_entries_rebuilt},
+    {"jump_table_instruction_visits",
+     &ProgressCounterSnapshot::jump_table_instruction_visits},
+    {"jump_table_result_entries_visited",
+     &ProgressCounterSnapshot::jump_table_result_entries_visited},
+    {"jump_table_result_entries_rebuilt",
+     &ProgressCounterSnapshot::jump_table_result_entries_rebuilt},
+    {"function_boundary_entries_visited",
+     &ProgressCounterSnapshot::function_boundary_entries_visited},
+    {"function_boundary_entries_rebuilt",
+     &ProgressCounterSnapshot::function_boundary_entries_rebuilt},
+    {"function_edge_family_entries_visited",
+     &ProgressCounterSnapshot::function_edge_family_entries_visited},
+    {"function_edge_family_entries_rebuilt",
+     &ProgressCounterSnapshot::function_edge_family_entries_rebuilt},
+    {"function_edge_state_encode_items",
+     &ProgressCounterSnapshot::function_edge_state_encode_items},
+    {"function_edge_state_copy_items",
+     &ProgressCounterSnapshot::function_edge_state_copy_items},
+    {"function_edge_state_exact_compare_items",
+     &ProgressCounterSnapshot::function_edge_state_exact_compare_items},
+    {"result_index_copy_items",
+     &ProgressCounterSnapshot::result_index_copy_items},
+    {"result_index_sort_items",
+     &ProgressCounterSnapshot::result_index_sort_items},
+    {"result_index_materialized_items",
+     &ProgressCounterSnapshot::result_index_materialized_items},
+    {"program_delta_entries_visited",
+     &ProgressCounterSnapshot::program_delta_entries_visited},
+    {"function_edge_full_scans",
+     &ProgressCounterSnapshot::function_edge_full_scans},
+    {"function_edge_full_sorts",
+     &ProgressCounterSnapshot::function_edge_full_sorts},
+    {"candidate_call_edge_full_scans",
+     &ProgressCounterSnapshot::candidate_call_edge_full_scans},
+    {"candidate_call_edge_full_sorts",
+     &ProgressCounterSnapshot::candidate_call_edge_full_sorts},
+    {"candidate_tail_edge_full_scans",
+     &ProgressCounterSnapshot::candidate_tail_edge_full_scans},
+    {"candidate_tail_edge_full_sorts",
+     &ProgressCounterSnapshot::candidate_tail_edge_full_sorts},
+    {"program_graph_blocks_built",
+     &ProgressCounterSnapshot::program_graph_blocks_built},
+    {"program_graph_blocks_reused",
+     &ProgressCounterSnapshot::program_graph_blocks_reused},
+    {"program_graph_sccs_built",
+     &ProgressCounterSnapshot::program_graph_sccs_built},
+    {"program_graph_sccs_reused",
+     &ProgressCounterSnapshot::program_graph_sccs_reused},
+    {"resolution_dependency_nodes_built",
+     &ProgressCounterSnapshot::resolution_dependency_nodes_built},
+    {"resolution_dependency_nodes_reused",
+     &ProgressCounterSnapshot::resolution_dependency_nodes_reused},
+    {"resolution_dependency_sccs_built",
+     &ProgressCounterSnapshot::resolution_dependency_sccs_built},
+    {"resolution_dependency_sccs_reused",
+     &ProgressCounterSnapshot::resolution_dependency_sccs_reused},
+    {"abi_contract_entries_visited",
+     &ProgressCounterSnapshot::abi_contract_entries_visited},
+    {"abi_contract_entries_rebuilt",
+     &ProgressCounterSnapshot::abi_contract_entries_rebuilt},
+    {"summary_candidate_entries_visited",
+     &ProgressCounterSnapshot::summary_candidate_entries_visited},
+    {"summary_candidate_entries_rebuilt",
+     &ProgressCounterSnapshot::summary_candidate_entries_rebuilt},
+    {"inventory_topology_entries_visited",
+     &ProgressCounterSnapshot::inventory_topology_entries_visited},
+    {"resolution_preparation_entries_visited",
+     &ProgressCounterSnapshot::resolution_preparation_entries_visited},
+    {"final_materialized_blocks",
+     &ProgressCounterSnapshot::final_materialized_blocks},
+    {"final_materialized_functions",
+     &ProgressCounterSnapshot::final_materialized_functions},
 }};
 
 constexpr std::array<OptionalCounterMember, 12u> cache_miss_reason_members{{
@@ -1295,6 +1449,106 @@ constexpr std::array<OptionalCounterMember, 12u> cache_miss_reason_members{{
     &ProgressCounterSnapshot::cache_miss_contextual_summary_changed,
     &ProgressCounterSnapshot::cache_miss_tail_ingress_changed,
 }};
+
+constexpr std::array<OptionalCounterMember, 20u>
+    recursive_physical_work_members{{
+        &ProgressCounterSnapshot::recursive_snapshot_epochs,
+        &ProgressCounterSnapshot::recursive_final_materializations,
+        &ProgressCounterSnapshot::recursive_trusted_snapshot_validations,
+        &ProgressCounterSnapshot::recursive_seed_arena_copy_items,
+        &ProgressCounterSnapshot::recursive_seed_arena_copy_bytes,
+        &ProgressCounterSnapshot::recursive_seed_arena_shift_items,
+        &ProgressCounterSnapshot::recursive_seed_arena_shift_bytes,
+        &ProgressCounterSnapshot::recursive_seed_contract_items_visited,
+        &ProgressCounterSnapshot::recursive_decoded_work_items,
+        &ProgressCounterSnapshot::recursive_canonical_context_updates,
+        &ProgressCounterSnapshot::recursive_canonical_instruction_updates,
+        &ProgressCounterSnapshot::recursive_canonical_function_updates,
+        &ProgressCounterSnapshot::recursive_public_baseline_hash_bytes,
+        &ProgressCounterSnapshot::recursive_public_baseline_copy_items,
+        &ProgressCounterSnapshot::recursive_public_sort_items,
+        &ProgressCounterSnapshot::recursive_public_materialized_items,
+        &ProgressCounterSnapshot::recursive_public_materializations,
+        &ProgressCounterSnapshot::epoch_index_lookups,
+        &ProgressCounterSnapshot::epoch_index_updates,
+        &ProgressCounterSnapshot::terminal_epoch_fold_items,
+    }};
+
+constexpr std::array<OptionalCounterMember, 21u>
+    control_flow_physical_work_members{{
+        &ProgressCounterSnapshot::runtime_copy_instruction_visits,
+        &ProgressCounterSnapshot::runtime_copy_result_entries_visited,
+        &ProgressCounterSnapshot::runtime_copy_result_entries_rebuilt,
+        &ProgressCounterSnapshot::local_control_flow_instruction_visits,
+        &ProgressCounterSnapshot::local_control_flow_result_entries_visited,
+        &ProgressCounterSnapshot::local_control_flow_result_entries_rebuilt,
+        &ProgressCounterSnapshot::dispatch_index_entries_visited,
+        &ProgressCounterSnapshot::dispatch_index_entries_rebuilt,
+        &ProgressCounterSnapshot::jump_table_instruction_visits,
+        &ProgressCounterSnapshot::jump_table_result_entries_visited,
+        &ProgressCounterSnapshot::jump_table_result_entries_rebuilt,
+        &ProgressCounterSnapshot::function_boundary_entries_visited,
+        &ProgressCounterSnapshot::function_boundary_entries_rebuilt,
+        &ProgressCounterSnapshot::function_edge_family_entries_visited,
+        &ProgressCounterSnapshot::function_edge_family_entries_rebuilt,
+        &ProgressCounterSnapshot::function_edge_state_encode_items,
+        &ProgressCounterSnapshot::function_edge_state_copy_items,
+        &ProgressCounterSnapshot::function_edge_state_exact_compare_items,
+        &ProgressCounterSnapshot::result_index_copy_items,
+        &ProgressCounterSnapshot::result_index_sort_items,
+        &ProgressCounterSnapshot::result_index_materialized_items,
+    }};
+
+constexpr std::array<OptionalCounterMember, 23u>
+    function_value_physical_work_members{{
+        &ProgressCounterSnapshot::program_delta_entries_visited,
+        &ProgressCounterSnapshot::function_edge_full_scans,
+        &ProgressCounterSnapshot::function_edge_full_sorts,
+        &ProgressCounterSnapshot::candidate_call_edge_full_scans,
+        &ProgressCounterSnapshot::candidate_call_edge_full_sorts,
+        &ProgressCounterSnapshot::candidate_tail_edge_full_scans,
+        &ProgressCounterSnapshot::candidate_tail_edge_full_sorts,
+        &ProgressCounterSnapshot::program_graph_blocks_built,
+        &ProgressCounterSnapshot::program_graph_blocks_reused,
+        &ProgressCounterSnapshot::program_graph_sccs_built,
+        &ProgressCounterSnapshot::program_graph_sccs_reused,
+        &ProgressCounterSnapshot::resolution_dependency_nodes_built,
+        &ProgressCounterSnapshot::resolution_dependency_nodes_reused,
+        &ProgressCounterSnapshot::resolution_dependency_sccs_built,
+        &ProgressCounterSnapshot::resolution_dependency_sccs_reused,
+        &ProgressCounterSnapshot::abi_contract_entries_visited,
+        &ProgressCounterSnapshot::abi_contract_entries_rebuilt,
+        &ProgressCounterSnapshot::summary_candidate_entries_visited,
+        &ProgressCounterSnapshot::summary_candidate_entries_rebuilt,
+        &ProgressCounterSnapshot::inventory_topology_entries_visited,
+        &ProgressCounterSnapshot::resolution_preparation_entries_visited,
+        &ProgressCounterSnapshot::final_materialized_blocks,
+        &ProgressCounterSnapshot::final_materialized_functions,
+    }};
+
+template <std::size_t Size>
+[[nodiscard]] bool complete_optional_counter_group(
+    const ProgressCounterSnapshot& counters,
+    const std::array<OptionalCounterMember, Size>& members) noexcept {
+    bool any = false;
+    bool all = true;
+    for (const auto member : members) {
+        const bool present = (counters.*member).has_value();
+        any = any || present;
+        all = all && present;
+    }
+    return !any || all;
+}
+
+[[nodiscard]] bool physical_work_accounting_valid(
+    const ProgressCounterSnapshot& counters) noexcept {
+    return complete_optional_counter_group(
+               counters, recursive_physical_work_members) &&
+           complete_optional_counter_group(
+               counters, control_flow_physical_work_members) &&
+           complete_optional_counter_group(
+               counters, function_value_physical_work_members);
+}
 
 struct ActivityCounterMembers final {
     OptionalCounterMember count;
@@ -1508,10 +1762,136 @@ bool progress_activity_accounting_valid(
     return true;
 }
 
+namespace {
+
+[[nodiscard]] bool incremental_analysis_accounting_valid(
+    const ProgressEvent& event) noexcept {
+    const auto& counters = event.counters;
+    const auto seed_round_present =
+        counters.round_seed_facts_added.has_value() ||
+        counters.round_seed_targets_changed.has_value() ||
+        counters.round_decode_targets.has_value() ||
+        counters.round_metadata_targets.has_value() ||
+        counters.round_full_cpu_fallbacks.has_value();
+    if (seed_round_present &&
+        (!counters.round_seed_facts_added ||
+         !counters.round_seed_targets_changed ||
+         !counters.round_decode_targets ||
+         !counters.round_metadata_targets ||
+         !counters.round_full_cpu_fallbacks))
+        return false;
+    if (seed_round_present) {
+        if (*counters.round_decode_targets >
+                *counters.round_seed_targets_changed ||
+            *counters.round_metadata_targets >
+                *counters.round_seed_targets_changed)
+            return false;
+        if (counters.growing_workset.has_value() &&
+            *counters.growing_workset !=
+                (*counters.round_seed_targets_changed != 0u ||
+                 *counters.round_full_cpu_fallbacks != 0u))
+            return false;
+    }
+
+    const auto incremental_epoch_present =
+        counters.analysis_epochs_published.has_value() ||
+        counters.analysis_epochs_discarded.has_value() ||
+        counters.incremental_epochs_started.has_value() ||
+        counters.resolution_root_artifacts_total.has_value() ||
+        counters.resolution_root_artifacts_reused.has_value() ||
+        counters.resolution_root_artifacts_recomputed.has_value() ||
+        counters.resolution_root_artifacts_retained.has_value() ||
+        counters.resolution_epoch_retained_bytes.has_value() ||
+        counters.resolution_retention_limit_reason.has_value() ||
+        counters.dirty_sccs.has_value() ||
+        counters.dirty_functions.has_value() ||
+        counters.dirty_inventory_sinks.has_value() ||
+        counters.full_cpu_recompute_fallbacks.has_value();
+    if (!incremental_epoch_present) return true;
+    if (!counters.analysis_epochs_published ||
+        !counters.analysis_epochs_discarded ||
+        !counters.incremental_epochs_started ||
+        !counters.resolution_root_artifacts_total ||
+        !counters.resolution_root_artifacts_reused ||
+        !counters.resolution_root_artifacts_recomputed ||
+        !counters.resolution_root_artifacts_retained ||
+        !counters.resolution_epoch_retained_bytes ||
+        !counters.resolution_retention_limit_reason ||
+        !counters.dirty_sccs || !counters.dirty_functions ||
+        !counters.dirty_inventory_sinks ||
+        !counters.full_cpu_recompute_fallbacks)
+        return false;
+
+    std::uint64_t accounted_roots = 0u;
+    if (!checked_add(
+            *counters.resolution_root_artifacts_reused,
+            accounted_roots) ||
+        !checked_add(
+            *counters.resolution_root_artifacts_recomputed,
+            accounted_roots) ||
+        accounted_roots !=
+            *counters.resolution_root_artifacts_total)
+        return false;
+
+    const auto& retention_reason =
+        *counters.resolution_retention_limit_reason;
+    const bool retention_limited =
+        retention_reason == "dependency-node-limit" ||
+        retention_reason == "root-entry-limit" ||
+        retention_reason == "byte-limit";
+    if (retention_reason != "none" && !retention_limited)
+        return false;
+    if (*counters.resolution_root_artifacts_retained >
+        *counters.resolution_root_artifacts_total)
+        return false;
+    if (retention_limited &&
+        (*counters.resolution_root_artifacts_retained != 0u ||
+         *counters.resolution_epoch_retained_bytes != 0u))
+        return false;
+    if (!retention_limited &&
+        *counters.resolution_root_artifacts_retained != 0u &&
+        *counters.resolution_epoch_retained_bytes == 0u)
+        return false;
+
+    std::uint64_t settled_epochs = 0u;
+    if (!checked_add(
+            *counters.analysis_epochs_published,
+            settled_epochs) ||
+        !checked_add(
+            *counters.analysis_epochs_discarded,
+            settled_epochs) ||
+        settled_epochs > *counters.incremental_epochs_started)
+        return false;
+    const auto terminal =
+        event.state == ProgressState::Completed ||
+        event.state == ProgressState::Cached ||
+        event.state == ProgressState::Skipped ||
+        event.state == ProgressState::Failed;
+    return !terminal ||
+           settled_epochs == *counters.incremental_epochs_started;
+}
+
+} // namespace
+
 bool progress_event_telemetry_complete(const ProgressEvent& event) noexcept {
+    const auto bypass_reason_valid = [&]() noexcept {
+        if (!event.counters.persistent_analysis_bypass_reason)
+            return true;
+        const auto& reason =
+            *event.counters.persistent_analysis_bypass_reason;
+        return reason == "none" ||
+               reason == "function-boundary-changed" ||
+               reason == "recursive-baseline-rejected" ||
+               reason == "program-delta-unrepresentable" ||
+               reason == "resolution-dependency-unrepresentable" ||
+               reason == "explicit-test";
+    }();
     return event.telemetry_complete && event.dropped_observations == 0u &&
+           bypass_reason_valid &&
            progress_cache_accounting_valid(event.counters) &&
-           progress_activity_accounting_valid(event.counters);
+           progress_activity_accounting_valid(event.counters) &&
+           physical_work_accounting_valid(event.counters) &&
+           incremental_analysis_accounting_valid(event);
 }
 
 std::string format_progress_event_json(const ProgressEvent& event) {
@@ -1560,6 +1940,26 @@ std::string format_progress_event_json(const ProgressEvent& event) {
         append_json_string(result, field.name);
         result.push_back(':');
         append_unsigned(result, *value);
+        first_counter = false;
+    }
+    if (event.counters.resolution_retention_limit_reason) {
+        if (!first_counter) result.push_back(',');
+        append_json_string(
+            result, "resolution_retention_limit_reason");
+        result.push_back(':');
+        append_json_string(
+            result,
+            *event.counters.resolution_retention_limit_reason);
+        first_counter = false;
+    }
+    if (event.counters.persistent_analysis_bypass_reason) {
+        if (!first_counter) result.push_back(',');
+        append_json_string(
+            result, "persistent_analysis_bypass_reason");
+        result.push_back(':');
+        append_json_string(
+            result,
+            *event.counters.persistent_analysis_bypass_reason);
         first_counter = false;
     }
     result += "},\"dropped_observations\":";
@@ -1615,6 +2015,16 @@ std::string format_progress_event_human(const ProgressEvent& event) {
         result += field.name;
         result.push_back('=');
         append_unsigned(result, *value);
+    }
+    if (event.counters.resolution_retention_limit_reason) {
+        result += " resolution_retention_limit_reason=";
+        result +=
+            *event.counters.resolution_retention_limit_reason;
+    }
+    if (event.counters.persistent_analysis_bypass_reason) {
+        result += " persistent_analysis_bypass_reason=";
+        result +=
+            *event.counters.persistent_analysis_bypass_reason;
     }
     result += " dropped_observations=";
     append_unsigned(result, event.dropped_observations);

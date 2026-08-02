@@ -959,6 +959,18 @@ int main() {
         require(bounded_result.modules.empty() && bounded_result.rejected_files >= 1u,
                 "Instruktionsbudget verwarf ein zu grosses natives Modul nicht lokal.");
 
+        auto context_bounded =
+            katana::codegen::LatentAotDiscoveryOptions{};
+        context_bounded.maximum_analysis_contexts = 1u;
+        const auto context_bounded_result =
+            katana::codegen::discover_latent_aot_modules(
+                source, 0u, 0u, {}, context_bounded);
+        require(
+            context_bounded_result.modules.empty() &&
+                context_bounded_result.rejected_files >= 1u,
+            "Latent-AOT verdrahtete das CFA-Kontextbudget nicht mit dem "
+            "nicht-beobachtenden Analyseabbruch.");
+
         auto invalid = katana::codegen::LatentAotDiscoveryOptions{};
         invalid.maximum_workers = 0u;
         rejected = false;

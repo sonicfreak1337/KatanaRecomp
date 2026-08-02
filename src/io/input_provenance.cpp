@@ -299,6 +299,32 @@ std::vector<InputProvenance> portable_inputs(const BuildProvenance& provenance) 
 
 } // namespace
 
+struct Sha256Accumulator::Impl final {
+    Sha256 hash;
+};
+
+Sha256Accumulator::Sha256Accumulator()
+    : impl_(std::make_unique<Impl>()) {}
+
+Sha256Accumulator::~Sha256Accumulator() = default;
+
+Sha256Accumulator::Sha256Accumulator(Sha256Accumulator&&) noexcept = default;
+
+Sha256Accumulator&
+Sha256Accumulator::operator=(Sha256Accumulator&&) noexcept = default;
+
+void Sha256Accumulator::update(const std::string_view bytes) {
+    if (impl_ == nullptr)
+        throw std::logic_error("SHA-256-Akkumulator wurde verschoben.");
+    impl_->hash.update(bytes);
+}
+
+std::string Sha256Accumulator::finish() {
+    if (impl_ == nullptr)
+        throw std::logic_error("SHA-256-Akkumulator wurde verschoben.");
+    return impl_->hash.finish();
+}
+
 std::string sha256_bytes(const std::string_view bytes) {
     Sha256 hash;
     hash.update(bytes);

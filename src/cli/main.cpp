@@ -7255,6 +7255,10 @@ int export_port_project(const std::filesystem::path& source_path,
                     katana::ProgressUnit::Steps,
                     "whole-export-cache");
                 cached_phase(
+                    katana::ProgressOperation::CandidateContractIteration,
+                    katana::ProgressUnit::Steps,
+                    "whole-export-cache");
+                cached_phase(
                     katana::ProgressOperation::FunctionValueAnalysis,
                     katana::ProgressUnit::Functions,
                     "whole-export-cache");

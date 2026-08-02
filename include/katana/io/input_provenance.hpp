@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,6 +34,26 @@ struct BuildProvenance {
 };
 
 using InputChunkCallback = std::function<void(std::uint64_t file_offset, std::string_view bytes)>;
+
+// Incremental SHA-256 for large canonical payloads. The implementation stays
+// opaque so callers can stream data without duplicating the complete input in
+// memory or depending on platform crypto types.
+class Sha256Accumulator final {
+  public:
+    Sha256Accumulator();
+    ~Sha256Accumulator();
+    Sha256Accumulator(Sha256Accumulator&&) noexcept;
+    Sha256Accumulator& operator=(Sha256Accumulator&&) noexcept;
+    Sha256Accumulator(const Sha256Accumulator&) = delete;
+    Sha256Accumulator& operator=(const Sha256Accumulator&) = delete;
+
+    void update(std::string_view bytes);
+    [[nodiscard]] std::string finish();
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 [[nodiscard]] std::string sha256_bytes(std::string_view bytes);
 [[nodiscard]] InputProvenance

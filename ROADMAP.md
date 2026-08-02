@@ -72,8 +72,8 @@ Die Aufgaben sind:
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | teilbare Critical-Path-Jobs nutzen die CPU ohne Paging oder semantisches Truncation |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | ProgramGraph-, SCC-, Inventory- und IR-Shards ueberleben sichere Whole-Analysis-Misses |
 | KR-4981 | 8-/12-/24-Thread-Kaltbuild-Performancegate | voller Kaltport bleibt auf 24/12/8 Threads unter 8/11/15 Minuten |
-| KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | GPU-Kandidaten werden inklusive Setup, Transfer, RAM/VRAM und CPU-Referenz ehrlich gemessen |
-| KR-4983 | Deterministische capability-gated GPU-Beschleunigung | nur ein mindestens 15 Prozent end-to-end schneller GPU-Pfad wird optional integriert |
+| KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur nach neuer ausdruecklicher Nutzerfreigabe |
+| KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur nach neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | alle betroffenen Analyse-, Cache-, Executor-, Build-, Runtime-CPU- und GPU-Ausgabepfade sind reviewed und P0/P1-frei |
 
 Die Reihenfolge ist normativ:
@@ -90,17 +90,9 @@ Telemetrie
   -> genau ein frischer realer NativeDisc-Sonic-Lauf
 ```
 
-Das GPU-Kernelinventar und ein frueher Reject duerfen nach KR-4974 parallel
-beginnen. Der finale KR-4982-Prototypvergleich wartet auf die optimierten
-Cachelinsen, Multi-Root-Daten und Executorarbeit aus KR-4975, KR-4977 und
-KR-4979. KR-4983 wird nur aktiviert, wenn ein Prototyp nach
-Geraeteerzeugung, Shadercompile und Transfers mindestens zweifachen
-Phasendurchsatz sowie mindestens 15 Prozent End-to-End-Kaltportgewinn
-belegt. Der CPU-only-Pfad bleibt vollstaendig und deterministisch; GPU-Waits
-sind gebunden, unbekannte oder langsamere Devices bleiben auf CPU und
-erkannte API-/Device-/Strukturfehler berechnen das ganze Batch erneut auf
-der CPU. Ein negatives GPU-Ergebnis schliesst das Entscheidungsgate und
-hinterlaesst keinen ungenutzten Produktbackend.
+KR-4982 und KR-4983 sind fuer den aktuellen Bring-up vorerst gestrichen. Es
+findet weder parallele Vorarbeit noch ein Prototyp statt; beide Tasks duerfen
+nur durch eine neue ausdrueckliche Nutzerfreigabe reaktiviert werden.
 
 Kein Performancewert darf durch weniger Funktionen, Bloecke, Resolutionen,
 Guarded-AOT-Einstiege oder Inventory-Sinks erreicht werden. Alle
@@ -122,8 +114,10 @@ verbindlicher P0-Plan:       ffd45ae / KR-4974 bis KR-4984
 aktueller Source:            Runtime-ABI 85 / Analyzer-ABI 23 /
                              Portprojektvertrag 75; nicht end-to-end
                              abgenommen
-naechste Produktabnahme:     erst nach KR-4974 bis KR-4984 genau ein
-                             frischer NativeDisc-Sonic-Lauf
+naechste Produktabnahme:     nach KR-4974 bis KR-4980 und dem eigenen
+                             Gesamtreview KR-4984 genau ein frischer
+                             NativeDisc-Sonic-Lauf; KR-4982/4983 sind
+                             vorerst gestrichen
 ```
 
 Der Runtime-only-Relink von `b064ee8` beweist die korrigierte

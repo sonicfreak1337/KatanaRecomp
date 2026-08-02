@@ -14,13 +14,41 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace katana::analysis {
+
+enum class ControlFlowAnalysisTerminationReason : std::uint8_t {
+    None,
+    AnalysisIterationBudgetExceeded,
+    InstructionBudgetExceeded,
+    AnalysisContextBudgetExceeded,
+};
+
+[[nodiscard]] constexpr std::string_view
+control_flow_analysis_termination_reason_name(
+    const ControlFlowAnalysisTerminationReason reason) noexcept {
+    switch (reason) {
+    case ControlFlowAnalysisTerminationReason::None:
+        return "none";
+    case ControlFlowAnalysisTerminationReason::
+        AnalysisIterationBudgetExceeded:
+        return "analysis-iteration-budget-exceeded";
+    case ControlFlowAnalysisTerminationReason::
+        InstructionBudgetExceeded:
+        return "instruction-budget-exceeded";
+    case ControlFlowAnalysisTerminationReason::
+        AnalysisContextBudgetExceeded:
+        return "analysis-context-budget-exceeded";
+    }
+    return "unknown";
+}
 
 enum class AnalysisDirectiveDiagnosticStatus : std::uint8_t {
     Accepted,
@@ -138,14 +166,101 @@ struct ControlFlowAnalysisResult {
     bool candidate_inventory_truncated = false;
     bool returned_table_scan_truncated = false;
     bool progress_callback_failed = false;
+    ControlFlowAnalysisTerminationReason termination_reason =
+        ControlFlowAnalysisTerminationReason::None;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
     std::vector<SymbolicAddress> symbolic_addresses;
+    // Canonical monotone seed ledger. Causes preserve why a target entered
+    // the decode/function contract without turning guarded candidates into
+    // fixed CFG edges.
+    enum class SeedCauseKind : std::uint8_t {
+        EntryPoint,
+        Symbol,
+        FunctionDirective,
+        RuntimeCodeCopySource,
+        RuntimeCodePatch,
+        StaticReturnContinuation,
+        IndirectControlFlowTarget,
+        IndirectAnalysisCandidate,
+        JumpTableEntry,
+        StoredCodeAddress,
+        ReturnedCodeAddressTable,
+    };
+    struct SeedCause {
+        SeedCauseKind kind = SeedCauseKind::EntryPoint;
+        // Guest address zero is valid.  Absence must therefore remain typed
+        // instead of sharing a sentinel with a real address/register/line.
+        std::optional<std::uint32_t> source_address;
+        std::optional<std::uint32_t> source_object;
+        std::optional<std::uint32_t> owner_address;
+        // Evidence dimensions are independent canonical sets. Keeping them
+        // on the cause avoids compressing provenance to the first element or
+        // inventing a call-site/callee Cartesian correlation.
+        std::vector<std::uint32_t> evidence_call_sites;
+        std::vector<std::uint32_t> evidence_callees;
+
+        bool operator==(const SeedCause&) const = default;
+    };
+    struct SeedFact {
+        std::uint32_t target_address = 0u;
+        std::vector<FunctionOrigin> origins;
+        bool proven = false;
+        ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
+        std::uint32_t function_size = 0u;
+        std::vector<SeedCause> causes;
+    };
+    std::vector<SeedFact> seed_facts;
+    std::size_t seed_targets_added = 0u;
+    std::size_t seed_targets_strengthened = 0u;
+    std::size_t seed_causes_added = 0u;
+    std::size_t seed_decode_targets = 0u;
+    std::size_t seed_metadata_targets = 0u;
+    std::size_t recursive_incremental_passes = 0u;
+    std::size_t recursive_full_recompute_fallbacks = 0u;
+    PersistentAnalysisBypassReason persistent_analysis_bypass_reason =
+        PersistentAnalysisBypassReason::None;
+    std::size_t recursive_snapshot_epochs = 0u;
+    std::size_t recursive_final_materializations = 0u;
+    RecursiveAnalysisPhysicalWork recursive_physical_work;
+    std::size_t runtime_copy_instruction_visits = 0u;
+    std::size_t runtime_copy_result_entries_visited = 0u;
+    std::size_t runtime_copy_result_entries_rebuilt = 0u;
+    std::size_t local_control_flow_instruction_visits = 0u;
+    std::size_t local_control_flow_result_entries_visited = 0u;
+    std::size_t local_control_flow_result_entries_rebuilt = 0u;
+    std::size_t dispatch_index_entries_visited = 0u;
+    std::size_t dispatch_index_entries_rebuilt = 0u;
+    // Candidate-contract normalization is delta-driven between the one cold
+    // baseline scan and the one terminal verification scan.  These ledgers
+    // make an accidental warm whole-program scan observable.
+    std::size_t runtime_contract_normalization_entries_visited = 0u;
+    std::size_t runtime_contract_normalization_full_scans = 0u;
+    std::size_t decode_boundary_normalization_entries_visited = 0u;
+    std::size_t decode_boundary_normalization_full_scans = 0u;
+    std::size_t jump_table_instruction_visits = 0u;
+    std::size_t jump_table_result_entries_visited = 0u;
+    std::size_t jump_table_result_entries_rebuilt = 0u;
+    std::size_t function_boundary_entries_visited = 0u;
+    std::size_t function_boundary_entries_rebuilt = 0u;
+    std::size_t function_edge_family_entries_visited = 0u;
+    std::size_t function_edge_family_entries_rebuilt = 0u;
+    std::size_t function_edge_state_encode_items = 0u;
+    std::size_t function_edge_state_copy_items = 0u;
+    std::size_t function_edge_state_exact_compare_items = 0u;
+    std::size_t function_value_inventory_topology_entries_visited = 0u;
+    std::size_t
+        function_value_resolution_preparation_entries_visited = 0u;
+    std::size_t result_index_copy_items = 0u;
+    std::size_t result_index_sort_items = 0u;
+    std::size_t result_index_materialized_items = 0u;
 };
 
 [[nodiscard]] constexpr bool
 guarded_aot_inventory_complete(
     const ControlFlowAnalysisResult& analysis) noexcept {
     return !analysis.function_budget_exhausted &&
+           analysis.termination_reason ==
+               ControlFlowAnalysisTerminationReason::None &&
            !analysis.raw_stored_code_inventory_truncated &&
            !analysis.guarded_code_inventory_candidate_budget_exhausted &&
            !analysis.guarded_code_inventory_walk.truncated() &&
@@ -167,6 +282,37 @@ struct ControlFlowAnalysisProgress {
     std::size_t candidate_contract_iteration_budget = 0u;
     std::size_t round_seed_baseline = 0u;
     std::size_t round_added_seeds = 0u;
+    std::size_t round_seed_facts_added = 0u;
+    std::size_t round_seed_targets_changed = 0u;
+    std::size_t round_decode_targets = 0u;
+    std::size_t round_metadata_targets = 0u;
+    std::size_t round_full_cpu_fallbacks = 0u;
+    PersistentAnalysisBypassReason persistent_analysis_bypass_reason =
+        PersistentAnalysisBypassReason::None;
+    std::size_t recursive_snapshot_epochs = 0u;
+    std::size_t recursive_final_materializations = 0u;
+    RecursiveAnalysisPhysicalWork recursive_physical_work;
+    std::size_t runtime_copy_instruction_visits = 0u;
+    std::size_t runtime_copy_result_entries_visited = 0u;
+    std::size_t runtime_copy_result_entries_rebuilt = 0u;
+    std::size_t local_control_flow_instruction_visits = 0u;
+    std::size_t local_control_flow_result_entries_visited = 0u;
+    std::size_t local_control_flow_result_entries_rebuilt = 0u;
+    std::size_t dispatch_index_entries_visited = 0u;
+    std::size_t dispatch_index_entries_rebuilt = 0u;
+    std::size_t jump_table_instruction_visits = 0u;
+    std::size_t jump_table_result_entries_visited = 0u;
+    std::size_t jump_table_result_entries_rebuilt = 0u;
+    std::size_t function_boundary_entries_visited = 0u;
+    std::size_t function_boundary_entries_rebuilt = 0u;
+    std::size_t function_edge_family_entries_visited = 0u;
+    std::size_t function_edge_family_entries_rebuilt = 0u;
+    std::size_t function_edge_state_encode_items = 0u;
+    std::size_t function_edge_state_copy_items = 0u;
+    std::size_t function_edge_state_exact_compare_items = 0u;
+    std::size_t result_index_copy_items = 0u;
+    std::size_t result_index_sort_items = 0u;
+    std::size_t result_index_materialized_items = 0u;
     bool growing_workset = false;
     bool function_value_active = false;
     std::string function_value_subphase;
@@ -276,10 +422,64 @@ struct ControlFlowAnalysisProgress {
     std::size_t function_value_summary_state_reuses = 0u;
     std::size_t function_value_analysis_epochs_published = 0u;
     std::size_t function_value_analysis_epochs_discarded = 0u;
+    std::size_t function_value_incremental_epochs_started = 0u;
+    std::size_t function_value_resolution_root_artifacts_total = 0u;
+    std::size_t function_value_resolution_root_artifacts_reused = 0u;
+    std::size_t function_value_resolution_root_artifacts_recomputed = 0u;
+    std::size_t function_value_resolution_root_artifacts_retained = 0u;
+    std::size_t function_value_resolution_epoch_retained_bytes = 0u;
+    ResolutionRetentionLimitReason
+        function_value_resolution_retention_limit_reason =
+            ResolutionRetentionLimitReason::None;
+    std::size_t function_value_dirty_sccs = 0u;
+    std::size_t function_value_dirty_functions = 0u;
+    std::size_t function_value_dirty_inventory_sinks = 0u;
+    std::size_t function_value_full_cpu_recompute_fallbacks = 0u;
+    PersistentAnalysisBypassReason
+        function_value_persistent_analysis_bypass_reason =
+            PersistentAnalysisBypassReason::None;
+    std::size_t function_value_program_delta_entries_visited = 0u;
+    std::size_t function_value_function_edge_full_scans = 0u;
+    std::size_t function_value_function_edge_full_sorts = 0u;
+    std::size_t function_value_candidate_call_edge_full_scans = 0u;
+    std::size_t function_value_candidate_call_edge_full_sorts = 0u;
+    std::size_t function_value_candidate_tail_edge_full_scans = 0u;
+    std::size_t function_value_candidate_tail_edge_full_sorts = 0u;
+    std::size_t function_value_graph_blocks_built = 0u;
+    std::size_t function_value_graph_blocks_reused = 0u;
+    std::size_t function_value_graph_sccs_built = 0u;
+    std::size_t function_value_graph_sccs_reused = 0u;
+    std::size_t function_value_resolution_dependency_nodes_built = 0u;
+    std::size_t function_value_resolution_dependency_nodes_reused = 0u;
+    std::size_t function_value_resolution_dependency_sccs_built = 0u;
+    std::size_t function_value_resolution_dependency_sccs_reused = 0u;
+    std::size_t function_value_abi_contract_entries_visited = 0u;
+    std::size_t function_value_abi_contract_entries_rebuilt = 0u;
+    std::size_t function_value_summary_candidate_entries_visited = 0u;
+    std::size_t function_value_summary_candidate_entries_rebuilt = 0u;
+    std::size_t function_value_inventory_topology_entries_visited = 0u;
+    std::size_t
+        function_value_resolution_preparation_entries_visited = 0u;
+    std::size_t function_value_final_materialized_blocks = 0u;
+    std::size_t function_value_final_materialized_functions = 0u;
 };
 
 using ControlFlowAnalysisProgressCallback =
     std::function<void(const ControlFlowAnalysisProgress& progress)>;
+
+struct ControlFlowAnalysisOptions {
+    // Detailed cache-miss history is diagnostic work and remains independent
+    // from live progress and execution limits.
+    bool detailed_cache_miss_telemetry = false;
+    // Limits are enforced by the analyzer itself. Progress observers remain
+    // observational and their exceptions can never request cancellation.
+    std::size_t maximum_fixpoint_iterations =
+        std::numeric_limits<std::size_t>::max();
+    std::size_t maximum_instructions =
+        std::numeric_limits<std::size_t>::max();
+    std::size_t maximum_contexts =
+        std::numeric_limits<std::size_t>::max();
+};
 
 [[nodiscard]] const char*
 analysis_directive_diagnostic_status_name(AnalysisDirectiveDiagnosticStatus status) noexcept;
@@ -306,5 +506,15 @@ analyze_control_flow(
     const AnalysisOverrides* overrides,
     const ControlFlowAnalysisProgressCallback& progress_callback,
     bool detailed_cache_miss_telemetry);
+
+// Bounded analysis is a product-work contract. A reached limit returns a
+// typed partial result through termination_reason; it is never signaled by a
+// progress callback.
+[[nodiscard]] ControlFlowAnalysisResult
+analyze_control_flow(
+    const katana::io::ExecutableImage& image,
+    const AnalysisOverrides* overrides,
+    const ControlFlowAnalysisProgressCallback& progress_callback,
+    const ControlFlowAnalysisOptions& options);
 
 } // namespace katana::analysis

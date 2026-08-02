@@ -687,7 +687,7 @@ def parse_stress_result(output: str) -> dict[str, object]:
     result_lines = [
         line
         for line in output.splitlines()
-        if '"schema":"katana-native-disc-cold-build-stress-result-v2"' in line
+        if '"schema":"katana-native-disc-cold-build-stress-result-v3"' in line
     ]
     if len(result_lines) != 1:
         raise SystemExit("stress runner emitted no unique terminal result record")
@@ -901,6 +901,15 @@ def read_complete_port_telemetry(
             and record.get("telemetry_complete") is True
         ):
             raise SystemExit(f"CLI telemetry stream is incomplete: {record}")
+        if record.get("schema") == "katana-port-build-progress":
+            progress = record.get("progress")
+            if not (
+                isinstance(progress, dict)
+                and progress.get("telemetry_complete") is True
+            ):
+                raise SystemExit(
+                    f"embedded CLI progress telemetry is incomplete: {record}"
+                )
     schemas = {record.get("schema") for record in records}
     required_schemas = {
         "katana-port-build-manifest",
@@ -1526,6 +1535,19 @@ def cached_progress_operations(
     return operations
 
 
+def completed_progress_operations(records: list[dict[str, object]]) -> set[str]:
+    operations: set[str] = set()
+    for record in records:
+        progress = record.get("progress")
+        if not isinstance(progress, dict):
+            continue
+        if progress.get("state") == "completed":
+            operation = progress.get("operation")
+            if isinstance(operation, str):
+                operations.add(operation)
+    return operations
+
+
 def run_cli_port_pass(
     name: str,
     arguments: argparse.Namespace,
@@ -1646,6 +1668,7 @@ def verify_cli_cold_warm_component_change(
     expected_whole_cache_operations = {
         "program-validation",
         "control-flow-analysis",
+        "candidate-contract-iteration",
         "function-value-analysis",
         "candidate-resolution",
         "latent-aot-analysis",
@@ -1794,8 +1817,17 @@ def verify_cli_cold_warm_component_change(
         "Analyse-/IR-Cache-Hit: nein" not in cold.output
         or output_counter(cold.output, "Codegen-Cache-Misses") == 0
         or cached_progress_operations(cold.telemetry, "whole-export-cache")
+        or not expected_whole_cache_operations.issubset(
+            completed_progress_operations(cold.telemetry)
+        )
     ):
-        raise SystemExit("CLI cold pass was not observably cold")
+        missing_completed = expected_whole_cache_operations - (
+            completed_progress_operations(cold.telemetry)
+        )
+        raise SystemExit(
+            "CLI cold pass was not observably cold and complete; "
+            f"missing completed progress operations: {sorted(missing_completed)}"
+        )
     require_whole_cache(warm, "identical warm pass")
     changed_manifests = [
         record
@@ -1958,6 +1990,265 @@ def main() -> int:
         }
         if any(result.get(key) != value for key, value in expected.items()):
             raise SystemExit(f"stress runner contract drifted: {result}")
+        incremental_numeric_fields = {
+            "analysis_epochs_published",
+            "analysis_epochs_discarded",
+            "incremental_epochs_started",
+            "resolution_root_artifacts_total",
+            "resolution_root_artifacts_reused",
+            "resolution_root_artifacts_recomputed",
+            "resolution_root_artifacts_retained",
+            "resolution_epoch_retained_bytes",
+            "dirty_sccs",
+            "dirty_functions",
+            "dirty_inventory_sinks",
+            "full_cpu_recompute_fallbacks",
+        }
+        incremental_fields = incremental_numeric_fields | {
+            "resolution_retention_limit_reason"
+        }
+        persistent_work_numeric_fields = {
+            "program_delta_entries_visited",
+            "function_edge_full_scans",
+            "function_edge_full_sorts",
+            "candidate_call_edge_full_scans",
+            "candidate_call_edge_full_sorts",
+            "candidate_tail_edge_full_scans",
+            "candidate_tail_edge_full_sorts",
+            "program_graph_blocks_built",
+            "program_graph_blocks_reused",
+            "program_graph_sccs_built",
+            "program_graph_sccs_reused",
+            "inventory_topology_entries_visited",
+            "resolution_preparation_entries_visited",
+            "resolution_dependency_nodes_built",
+            "resolution_dependency_nodes_reused",
+            "resolution_dependency_sccs_built",
+            "resolution_dependency_sccs_reused",
+            "abi_contract_entries_visited",
+            "abi_contract_entries_rebuilt",
+            "summary_candidate_entries_visited",
+            "summary_candidate_entries_rebuilt",
+            "final_materialized_blocks",
+            "final_materialized_functions",
+        }
+        persistent_work_fields = persistent_work_numeric_fields | {
+            "persistent_analysis_bypass_reason"
+        }
+        full_edge_prepass_fields = {
+            "function_edge_full_scans",
+            "function_edge_full_sorts",
+            "candidate_call_edge_full_scans",
+            "candidate_call_edge_full_sorts",
+            "candidate_tail_edge_full_scans",
+            "candidate_tail_edge_full_sorts",
+        }
+        fva_delta_audit_fields = {
+            "inventory_topology_entries_visited",
+            "abi_contract_entries_visited",
+            "summary_candidate_entries_visited",
+            "resolution_preparation_entries_visited",
+        }
+        recursive_work_fields = {
+            "trusted_snapshot_validations",
+            "seed_arena_copy_items",
+            "seed_arena_copy_bytes",
+            "seed_arena_shift_items",
+            "seed_arena_shift_bytes",
+            "epoch_index_lookups",
+            "epoch_index_updates",
+            "terminal_epoch_fold_items",
+            "seed_contract_items_visited",
+            "decoded_work_items",
+            "canonical_context_updates",
+            "canonical_instruction_updates",
+            "canonical_function_updates",
+            "public_baseline_hash_bytes",
+            "public_baseline_copy_items",
+            "public_sort_items",
+            "public_materialized_items",
+            "public_materializations",
+        }
+        cfa_work_numeric_fields = {
+            "recursive_snapshot_epochs",
+            "recursive_final_materializations",
+            "runtime_copy_instruction_visits",
+            "runtime_copy_result_entries_visited",
+            "runtime_copy_result_entries_rebuilt",
+            "local_control_flow_instruction_visits",
+            "local_control_flow_result_entries_visited",
+            "local_control_flow_result_entries_rebuilt",
+            "dispatch_index_entries_visited",
+            "dispatch_index_entries_rebuilt",
+            "jump_table_instruction_visits",
+            "jump_table_result_entries_visited",
+            "jump_table_result_entries_rebuilt",
+            "function_boundary_entries_visited",
+            "function_boundary_entries_rebuilt",
+            "function_edge_family_entries_visited",
+            "function_edge_family_entries_rebuilt",
+            "function_edge_state_encode_items",
+            "function_edge_state_copy_items",
+            "function_edge_state_exact_compare_items",
+            "result_index_copy_items",
+            "result_index_sort_items",
+            "result_index_materialized_items",
+        }
+        cfa_work_fields = cfa_work_numeric_fields | {"recursive"}
+        cfa_round_numeric_fields = {
+            "iteration",
+            "seed_facts_added",
+            "seed_targets_changed",
+            "decode_targets",
+            "metadata_targets",
+            "full_cpu_fallbacks",
+            "function_value_invocations",
+        }
+        cfa_round_fields = cfa_round_numeric_fields | {
+            "persistent_analysis_bypass_reason",
+            "cfa_work",
+            "function_value_work",
+            "function_value_incremental",
+        }
+
+        def valid_persistent_work(work: object) -> bool:
+            return bool(
+                isinstance(work, dict)
+                and set(work) == persistent_work_fields
+                and work.get("persistent_analysis_bypass_reason") == "none"
+                and all(
+                    isinstance(work.get(field), int) and work[field] >= 0
+                    for field in persistent_work_numeric_fields
+                )
+                and work.get("abi_contract_entries_rebuilt", -1)
+                <= work.get("abi_contract_entries_visited", -1)
+                and work.get("summary_candidate_entries_rebuilt", -1)
+                <= work.get("summary_candidate_entries_visited", -1)
+            )
+
+        def valid_recursive_work(work: object) -> bool:
+            return bool(
+                isinstance(work, dict)
+                and set(work) == recursive_work_fields
+                and all(
+                    isinstance(work.get(field), int) and work[field] >= 0
+                    for field in recursive_work_fields
+                )
+            )
+
+        def valid_cfa_work(work: object) -> bool:
+            return bool(
+                isinstance(work, dict)
+                and set(work) == cfa_work_fields
+                and all(
+                    isinstance(work.get(field), int) and work[field] >= 0
+                    for field in cfa_work_numeric_fields
+                )
+                and valid_recursive_work(work.get("recursive"))
+                and work.get("runtime_copy_result_entries_rebuilt", -1)
+                <= work.get("runtime_copy_result_entries_visited", -1)
+                and work.get(
+                    "local_control_flow_result_entries_rebuilt", -1
+                )
+                <= work.get(
+                    "local_control_flow_result_entries_visited", -1
+                )
+                and work.get("dispatch_index_entries_rebuilt", -1)
+                <= work.get("dispatch_index_entries_visited", -1)
+                and work.get("jump_table_result_entries_rebuilt", -1)
+                <= work.get("jump_table_result_entries_visited", -1)
+                and work.get("function_boundary_entries_rebuilt", -1)
+                <= work.get("function_boundary_entries_visited", -1)
+                and work.get("function_edge_family_entries_rebuilt", -1)
+                <= work.get("function_edge_family_entries_visited", -1)
+            )
+
+        def valid_incremental_ledger(ledger: object) -> bool:
+            return bool(
+                isinstance(ledger, dict)
+                and set(ledger) == incremental_fields
+                and all(
+                    isinstance(ledger.get(field), int)
+                    and ledger[field] >= 0
+                    for field in incremental_numeric_fields
+                )
+                and ledger.get("incremental_epochs_started")
+                == ledger.get("analysis_epochs_published")
+                + ledger.get("analysis_epochs_discarded")
+                and ledger.get("resolution_root_artifacts_total")
+                == ledger.get("resolution_root_artifacts_reused")
+                + ledger.get("resolution_root_artifacts_recomputed")
+                and ledger.get("resolution_retention_limit_reason") == "none"
+                and ledger.get("resolution_root_artifacts_retained", -1)
+                <= ledger.get("resolution_root_artifacts_total", -1)
+                and (
+                    ledger.get("resolution_root_artifacts_retained") == 0
+                    or ledger.get("resolution_epoch_retained_bytes", 0) > 0
+                )
+            )
+
+        def valid_cfa_round(round_ledger: object) -> bool:
+            return bool(
+                isinstance(round_ledger, dict)
+                and set(round_ledger) == cfa_round_fields
+                and all(
+                    isinstance(round_ledger.get(field), int)
+                    and round_ledger[field] >= 0
+                    for field in cfa_round_numeric_fields
+                )
+                and round_ledger.get("persistent_analysis_bypass_reason")
+                == "none"
+                and valid_cfa_work(round_ledger.get("cfa_work"))
+                and valid_persistent_work(
+                    round_ledger.get("function_value_work")
+                )
+                and valid_incremental_ledger(
+                    round_ledger.get("function_value_incremental")
+                )
+            )
+
+        def normal_retention_ledger(ledger: dict[str, object]) -> bool:
+            return bool(
+                ledger.get("resolution_retention_limit_reason") == "none"
+                and ledger.get("resolution_root_artifacts_retained", -1)
+                <= ledger.get("resolution_root_artifacts_total", -1)
+                and (
+                    ledger.get("resolution_root_artifacts_retained") == 0
+                    or ledger.get("resolution_epoch_retained_bytes", 0) > 0
+                )
+            )
+
+        seed_round_fields = {
+            "round_seed_facts_added",
+            "round_seed_targets_changed",
+            "round_decode_targets",
+            "round_metadata_targets",
+            "round_full_cpu_fallbacks",
+        }
+        if not (
+            all(
+                isinstance(result.get(field), int) and result[field] >= 0
+                for field in incremental_numeric_fields | seed_round_fields
+            )
+            and result["incremental_epochs_started"]
+            == result["analysis_epochs_published"]
+            + result["analysis_epochs_discarded"]
+            and result["resolution_root_artifacts_total"]
+            == result["resolution_root_artifacts_reused"]
+            + result["resolution_root_artifacts_recomputed"]
+            and result["incremental_epochs_started"] > 0
+            and result["resolution_root_artifacts_total"] > 0
+            and result["resolution_root_artifacts_reused"] > 0
+            and result["resolution_root_artifacts_recomputed"] > 0
+            and normal_retention_ledger(result)
+            and result["analysis_epochs_discarded"] == 0
+            and result["full_cpu_recompute_fallbacks"] == 0
+            and result["round_full_cpu_fallbacks"] == 0
+            and valid_persistent_work(result.get("persistent_work"))
+        ):
+            raise SystemExit(
+                f"incremental CFG/FVA terminal ledger drifted: {result}"
+            )
         reference_tree = regular_file_tree(port_root)
         for label, primary, legacy, expected_codegen_workers in (
             ("legacy-only", None, 2, 2),
@@ -2035,7 +2326,8 @@ def main() -> int:
             and result.get("cache_evictions", -1) >= 0
             and result.get("cache_entries", 0) > 0
             and result.get("cache_retained_payload_bytes", 0) > 0
-            and result.get("replay_hits", 0) > 0
+            and isinstance(result.get("replay_hits"), int)
+            and result.get("replay_hits", -1) >= 0
             and result.get("replay_misses") == 0
             and result.get("cache_diagnostic_bypass_evaluations") == 0
         ):
@@ -2093,40 +2385,126 @@ def main() -> int:
                 and isinstance(wave.get("multi_root_retained_payload_bytes"), int)
                 and (wave.get("multi_root_retained_contexts") == 0)
                 == (wave.get("multi_root_retained_payload_bytes") == 0)
+                and all(
+                    isinstance(wave.get(field), int) and wave[field] >= 0
+                    for field in incremental_numeric_fields
+                )
+                and wave.get("incremental_epochs_started")
+                == wave.get("analysis_epochs_published")
+                + wave.get("analysis_epochs_discarded")
+                and wave.get("resolution_root_artifacts_total")
+                == wave.get("resolution_root_artifacts_reused")
+                + wave.get("resolution_root_artifacts_recomputed")
+                and wave.get("incremental_epochs_started", 0) > 0
+                and wave.get("analysis_epochs_discarded") == 0
+                and wave.get("full_cpu_recompute_fallbacks") == 0
+                and normal_retention_ledger(wave)
+                and valid_persistent_work(wave.get("persistent_work"))
                 and set(wave.get("miss_reasons", {})) == miss_reason_names
                 and sum(wave["miss_reasons"].values()) == wave["cache_misses"]
                 and wave.get("cache_diagnostic_bypass_evaluations") == 0
             ):
                 raise SystemExit(f"FVA wave {index} is not exactly balanced: {wave}")
             if index < 4:
+                previous_roots = wave.get("boundaries", 0) - wave.get(
+                    "added_roots", 0
+                )
+                work = wave["persistent_work"]
                 if not (
                     wave.get("replay") is False
                     and wave.get("added_roots", 0) > 0
                     and wave.get("cache_misses", 0) > 0
-                    and (index == 0 or wave.get("cache_hits", 0) > 0)
+                    and wave.get("resolution_root_artifacts_total")
+                    == wave.get("boundaries")
+                    and wave.get("resolution_root_artifacts_reused")
+                    == previous_roots
+                    and wave.get("resolution_root_artifacts_recomputed")
+                    == wave.get("added_roots")
+                    and wave.get("dirty_sccs") == wave.get("added_roots")
+                    and wave.get("dirty_functions") == wave.get("added_roots")
+                    and wave.get("dirty_inventory_sinks") == 0
+                    and wave.get("full_cpu_recompute_fallbacks") == 0
+                    and (
+                        index == 0
+                        or (
+                            work.get("program_delta_entries_visited")
+                            == wave.get("added_roots")
+                            and all(
+                                work.get(field) == 0
+                                for field in full_edge_prepass_fields
+                            )
+                        )
+                    )
                 ):
                     raise SystemExit(f"FVA growth wave {index} is not real: {wave}")
             elif not (
                 wave.get("replay") is True
                 and wave.get("added_roots") == 0
-                and wave.get("cache_lookups") == wave.get("cache_hits") > 0
+                and wave.get("cache_lookups") == wave.get("cache_hits")
                 and wave.get("cache_misses") == 0
                 and wave.get("physical_evaluations") == 0
+                and wave.get("resolution_root_artifacts_recomputed") == 0
+                and wave.get("resolution_root_artifacts_total", 0) > 0
+                and wave.get("resolution_root_artifacts_reused")
+                == wave.get("resolution_root_artifacts_total")
+                and wave.get("dirty_sccs") == 0
+                and wave.get("dirty_functions") == 0
+                and wave.get("dirty_inventory_sinks") == 0
+                and wave.get("full_cpu_recompute_fallbacks") == 0
+                and all(
+                    wave["persistent_work"].get(field) == 0
+                    for field in persistent_work_numeric_fields
+                )
             ):
                 raise SystemExit(f"final exact FVA replay drifted: {wave}")
+        targeted_incremental = result.get("semantic_targeted_incremental")
+        targeted_work = result.get("semantic_targeted_work")
+        if not (
+            isinstance(targeted_incremental, dict)
+            and set(targeted_incremental) == incremental_fields
+            and all(
+                isinstance(targeted_incremental.get(field), int)
+                and targeted_incremental[field] >= 0
+                for field in incremental_numeric_fields
+            )
+            and targeted_incremental["incremental_epochs_started"]
+            == targeted_incremental["analysis_epochs_published"]
+            + targeted_incremental["analysis_epochs_discarded"]
+            and targeted_incremental["resolution_root_artifacts_total"]
+            == targeted_incremental["resolution_root_artifacts_reused"]
+            + targeted_incremental["resolution_root_artifacts_recomputed"]
+            and targeted_incremental["resolution_root_artifacts_reused"] > 0
+            and targeted_incremental["resolution_root_artifacts_recomputed"] > 0
+            and targeted_incremental["dirty_sccs"] > 0
+            and targeted_incremental["dirty_functions"] > 0
+            and targeted_incremental["dirty_inventory_sinks"] > 0
+            and targeted_incremental["analysis_epochs_discarded"] == 0
+            and targeted_incremental["full_cpu_recompute_fallbacks"] == 0
+            and normal_retention_ledger(targeted_incremental)
+            and valid_persistent_work(targeted_work)
+            and targeted_work["program_delta_entries_visited"] == 1
+            and all(
+                targeted_work[field] == 0
+                for field in full_edge_prepass_fields
+            )
+        ):
+            raise SystemExit(
+                "targeted semantic incremental ledger drifted: "
+                f"{targeted_incremental}"
+            )
         expected_targeted_reasons = dict.fromkeys(miss_reason_names, 0)
         expected_targeted_reasons.update(
             {
                 "function_shape_changed": 1,
-                "projected_ingress_changed": 17,
-                "summary_dependency_changed": 2,
+                "projected_ingress_changed": 13,
+                "summary_dependency_changed": 1,
                 "resolution_lens_changed": 1,
             }
         )
         if not (
             result.get("semantic_invalidation_baseline_version") == 1
             and result.get("semantic_targeted_hits") == 6
-            and result.get("semantic_targeted_misses") == 21
+            and result.get("semantic_targeted_misses") == 16
             and result.get("semantic_targeted_miss_reasons")
             == expected_targeted_reasons
             and result.get("semantic_ready_ahead", 0) >= 2
@@ -2139,20 +2517,390 @@ def main() -> int:
                 0x8D005000,
                 0x8D005040,
                 0x8D005080,
-                0x8D0050C0,
             ]
             and result.get("semantic_targeted_hit_only_functions")
-            == [0x8D005100]
+            == [0x8D0050C0]
         ):
             raise SystemExit(f"semantic SCC/HOL/invalidation contract drifted: {result}")
+        delta_scale_gate = result.get("fva_delta_scale_gate")
+        if not (
+            isinstance(delta_scale_gate, dict)
+            and set(delta_scale_gate) == {"n", "eight_n"}
+            and all(
+                isinstance(delta_scale_gate.get(name), dict)
+                for name in ("n", "eight_n")
+            )
+        ):
+            raise SystemExit(f"FVA O(delta) scale gate is absent: {result}")
+        delta_scale_sample_fields = {
+            "function_count",
+            "block_count",
+            "warm_equals_fresh",
+            "late_candidate_observed",
+            "dirty_sccs",
+            "dirty_functions",
+            "dirty_inventory_sinks",
+            "full_cpu_recompute_fallbacks",
+            "warm_work",
+            "terminal_presentation_work",
+            "fresh_work",
+        }
+        for name in ("n", "eight_n"):
+            sample = delta_scale_gate[name]
+            warm_work = sample.get("warm_work")
+            terminal_work = sample.get("terminal_presentation_work")
+            fresh_work = sample.get("fresh_work")
+            if not (
+                set(sample) == delta_scale_sample_fields
+                and isinstance(sample.get("function_count"), int)
+                and sample.get("function_count", 0) > 0
+                and isinstance(sample.get("block_count"), int)
+                and sample.get("block_count", 0) > 0
+                and sample.get("warm_equals_fresh") is True
+                and sample.get("late_candidate_observed") is True
+                and all(
+                    isinstance(sample.get(field), int)
+                    and sample[field] >= 0
+                    for field in (
+                        "dirty_sccs",
+                        "dirty_functions",
+                        "dirty_inventory_sinks",
+                    )
+                )
+                and sample.get("full_cpu_recompute_fallbacks") == 0
+                and valid_persistent_work(warm_work)
+                and valid_persistent_work(terminal_work)
+                and valid_persistent_work(fresh_work)
+                and warm_work["program_delta_entries_visited"] == 1
+                and all(warm_work[field] > 0 for field in fva_delta_audit_fields)
+                and warm_work["final_materialized_blocks"] == 0
+                and warm_work["final_materialized_functions"] == 0
+                and all(
+                    warm_work[field] == 0
+                    for field in full_edge_prepass_fields
+                )
+                and terminal_work["final_materialized_functions"] > 0
+                and all(
+                    terminal_work[field] == 0
+                    for field in persistent_work_numeric_fields
+                    - {
+                        "final_materialized_blocks",
+                        "final_materialized_functions",
+                    }
+                )
+                and all(
+                    fresh_work[field] == 1
+                    for field in full_edge_prepass_fields
+                )
+            ):
+                raise SystemExit(
+                    f"FVA O(delta) {name} sample drifted: {sample}"
+                )
+        n_sample = delta_scale_gate["n"]
+        eight_n_sample = delta_scale_gate["eight_n"]
+        if not (
+            eight_n_sample["function_count"] == n_sample["function_count"] * 8
+            and eight_n_sample["block_count"] > n_sample["block_count"]
+            and eight_n_sample["fresh_work"]["program_graph_blocks_built"]
+            > n_sample["fresh_work"]["program_graph_blocks_built"]
+            and all(
+                eight_n_sample["warm_work"][field]
+                == n_sample["warm_work"][field]
+                and eight_n_sample["fresh_work"][field]
+                > n_sample["fresh_work"][field]
+                for field in fva_delta_audit_fields
+            )
+            and all(
+                sample["warm_work"][field] == 0
+                for sample in (n_sample, eight_n_sample)
+                for field in full_edge_prepass_fields
+            )
+            and eight_n_sample["warm_work"] == n_sample["warm_work"]
+            and eight_n_sample["dirty_sccs"] == n_sample["dirty_sccs"]
+            and eight_n_sample["dirty_functions"]
+            == n_sample["dirty_functions"]
+            and eight_n_sample["dirty_inventory_sinks"]
+            == n_sample["dirty_inventory_sinks"]
+        ):
+            raise SystemExit(
+                f"FVA N-vs-8N work is not O(delta): {delta_scale_gate}"
+            )
+        cfa_delta_scale_gate = result.get("cfa_delta_scale_gate")
+        if not (
+            isinstance(cfa_delta_scale_gate, dict)
+            and set(cfa_delta_scale_gate) == {"n", "eight_n"}
+            and all(
+                isinstance(cfa_delta_scale_gate.get(name), dict)
+                for name in ("n", "eight_n")
+            )
+        ):
+            raise SystemExit(
+                f"production CFA O(delta) scale gate is absent: {result}"
+            )
+        cfa_sample_fields = {
+            "function_count",
+            "instruction_count",
+            "warm_equals_fresh",
+            "synthetic_fresh_hint_normalization_verified",
+            "late_candidate_observed",
+            "structure_delta_observed",
+            "terminal_public_materializations",
+            "terminal_presentation_work",
+            "terminal_function_value_presentation_work",
+            "baseline_round",
+            "delta_rounds",
+        }
+        recursive_global_delta_zero_fields = {
+            "seed_arena_shift_items",
+            "seed_arena_shift_bytes",
+            "terminal_epoch_fold_items",
+            "public_baseline_hash_bytes",
+            "public_baseline_copy_items",
+            "public_sort_items",
+            "public_materialized_items",
+            "public_materializations",
+        }
+        cfa_global_delta_zero_fields = {
+            "function_edge_state_exact_compare_items",
+            "result_index_copy_items",
+            "result_index_sort_items",
+            "result_index_materialized_items",
+        }
+        cfa_samples: dict[str, dict[str, object]] = {}
+        for name in ("n", "eight_n"):
+            sample = cfa_delta_scale_gate[name]
+            baseline = sample.get("baseline_round")
+            presentation = sample.get("terminal_presentation_work")
+            function_value_presentation = sample.get(
+                "terminal_function_value_presentation_work"
+            )
+            delta_rounds = sample.get("delta_rounds")
+            if not (
+                set(sample) == cfa_sample_fields
+                and isinstance(sample.get("function_count"), int)
+                and sample.get("function_count", 0) > 0
+                and isinstance(sample.get("instruction_count"), int)
+                and sample.get("instruction_count", 0) > 0
+                and sample.get("warm_equals_fresh") is True
+                and sample.get(
+                    "synthetic_fresh_hint_normalization_verified"
+                )
+                is True
+                and sample.get("late_candidate_observed") is True
+                and sample.get("structure_delta_observed") is True
+                and sample.get("terminal_public_materializations") == 1
+                and valid_cfa_round(baseline)
+                and isinstance(delta_rounds, list)
+                and len(delta_rounds) >= 2
+                and all(valid_cfa_round(round_) for round_ in delta_rounds)
+                and valid_cfa_work(presentation)
+                and valid_persistent_work(function_value_presentation)
+                and function_value_presentation[
+                    "final_materialized_blocks"
+                ]
+                > 0
+                and function_value_presentation[
+                    "final_materialized_functions"
+                ]
+                > 0
+                and all(
+                    function_value_presentation[field] == 0
+                    for field in persistent_work_numeric_fields
+                    - {
+                        "final_materialized_blocks",
+                        "final_materialized_functions",
+                    }
+                )
+                and presentation["recursive_final_materializations"] == 1
+                and presentation["recursive"]["public_materializations"] == 1
+                and presentation["recursive"][
+                    "public_baseline_hash_bytes"
+                ]
+                > 0
+                and presentation["recursive"][
+                    "public_baseline_copy_items"
+                ]
+                > 0
+                and presentation["recursive"]["public_sort_items"] > 0
+                and presentation["recursive"]["public_materialized_items"] > 0
+                and presentation["recursive"]["terminal_epoch_fold_items"] > 0
+                and presentation["result_index_copy_items"] > 0
+                and presentation["result_index_sort_items"] > 0
+                and presentation["result_index_materialized_items"] > 0
+                and all(
+                    presentation[field] == 0
+                    for field in cfa_work_numeric_fields
+                    - {
+                        "recursive_final_materializations",
+                        "result_index_copy_items",
+                        "result_index_sort_items",
+                        "result_index_materialized_items",
+                    }
+                )
+                and all(
+                    presentation["recursive"][field] == 0
+                    for field in recursive_work_fields
+                    - {
+                        "public_baseline_hash_bytes",
+                        "public_baseline_copy_items",
+                        "public_sort_items",
+                        "public_materialized_items",
+                        "public_materializations",
+                        "terminal_epoch_fold_items",
+                    }
+                )
+                and all(
+                    round_["full_cpu_fallbacks"] == 0
+                    and round_["function_value_invocations"] > 0
+                    and round_["cfa_work"][
+                        "recursive_final_materializations"
+                    ]
+                    == 0
+                    and round_["cfa_work"]["recursive"][
+                        "seed_arena_copy_items"
+                    ]
+                    == round_["seed_targets_changed"]
+                    and (
+                        (
+                            round_["seed_targets_changed"] == 0
+                            and round_["cfa_work"]["recursive"][
+                                "seed_arena_copy_bytes"
+                            ]
+                            == 0
+                        )
+                        or (
+                            round_["seed_targets_changed"] > 0
+                            and round_["cfa_work"]["recursive"][
+                                "seed_arena_copy_bytes"
+                            ]
+                            > 0
+                            and round_["cfa_work"]["recursive"][
+                                "seed_arena_copy_bytes"
+                            ]
+                            % round_["seed_targets_changed"]
+                            == 0
+                        )
+                    )
+                    and all(
+                        round_["cfa_work"]["recursive"][field] == 0
+                        for field in recursive_global_delta_zero_fields
+                    )
+                    and all(
+                        round_["cfa_work"][field] == 0
+                        for field in cfa_global_delta_zero_fields
+                    )
+                    and all(
+                        round_["function_value_work"][field] == 0
+                        for field in full_edge_prepass_fields
+                    )
+                    and round_["function_value_incremental"][
+                        "analysis_epochs_discarded"
+                    ]
+                    == 0
+                    and round_["function_value_incremental"][
+                        "full_cpu_recompute_fallbacks"
+                    ]
+                    == 0
+                    for round_ in delta_rounds
+                )
+                and any(
+                    round_["decode_targets"] > 0
+                    and round_["cfa_work"]["recursive"][
+                        "decoded_work_items"
+                    ]
+                    > 0
+                    and round_["cfa_work"]["recursive"][
+                        "canonical_instruction_updates"
+                    ]
+                    > 0
+                    and round_["function_value_work"][
+                        "program_graph_blocks_built"
+                    ]
+                    > 0
+                    for round_ in delta_rounds
+                )
+            ):
+                raise SystemExit(
+                    f"production CFA O(delta) {name} sample drifted: {sample}"
+                )
+            cfa_samples[name] = sample
+
+        def comparable_cfa_delta_round(round_: dict[str, object]) -> object:
+            incremental = round_["function_value_incremental"]
+            return {
+                "iteration": round_["iteration"],
+                "seed_facts_added": round_["seed_facts_added"],
+                "seed_targets_changed": round_["seed_targets_changed"],
+                "decode_targets": round_["decode_targets"],
+                "metadata_targets": round_["metadata_targets"],
+                "full_cpu_fallbacks": round_["full_cpu_fallbacks"],
+                "persistent_analysis_bypass_reason": round_[
+                    "persistent_analysis_bypass_reason"
+                ],
+                "function_value_invocations": round_[
+                    "function_value_invocations"
+                ],
+                "cfa_work": round_["cfa_work"],
+                "function_value_work": round_["function_value_work"],
+                "dirty_sccs": incremental["dirty_sccs"],
+                "dirty_functions": incremental["dirty_functions"],
+                "dirty_inventory_sinks": incremental[
+                    "dirty_inventory_sinks"
+                ],
+                "function_value_full_cpu_recompute_fallbacks": incremental[
+                    "full_cpu_recompute_fallbacks"
+                ],
+            }
+
+        cfa_n = cfa_samples["n"]
+        cfa_eight_n = cfa_samples["eight_n"]
+        if not (
+            cfa_eight_n["function_count"] == cfa_n["function_count"] * 8
+            and cfa_eight_n["instruction_count"] > cfa_n["instruction_count"]
+            and cfa_eight_n["baseline_round"]["cfa_work"]["recursive"][
+                "decoded_work_items"
+            ]
+            > cfa_n["baseline_round"]["cfa_work"]["recursive"][
+                "decoded_work_items"
+            ]
+            and cfa_eight_n["baseline_round"]["cfa_work"][
+                "local_control_flow_instruction_visits"
+            ]
+            > cfa_n["baseline_round"]["cfa_work"][
+                "local_control_flow_instruction_visits"
+            ]
+            and [
+                comparable_cfa_delta_round(round_)
+                for round_ in cfa_eight_n["delta_rounds"]
+            ]
+            == [
+                comparable_cfa_delta_round(round_)
+                for round_ in cfa_n["delta_rounds"]
+            ]
+        ):
+            raise SystemExit(
+                "production CFA N-vs-8N work is not O(delta): "
+                f"{cfa_delta_scale_gate}"
+            )
         timings = result.get("timings_ms")
         if not (
             isinstance(timings, dict)
-            and set(timings) == {"cfa", "fva_waves", "semantic_fva", "latent", "export"}
+            and set(timings)
+            == {
+                "cfa",
+                "fva_waves",
+                "semantic_fva",
+                "fva_delta_scale",
+                "cfa_delta_scale",
+                "latent",
+                "export",
+            }
             and all(isinstance(value, int) and value >= 0 for value in timings.values())
             and result.get("component_suite_elapsed_ms", 0) >= sum(timings.values())
             and result.get("structured_progress_events", 0) > 0
             and result.get("structured_progress_max_gap_ms", 10_001) <= 10_000
+            and result.get("structured_cfa_physical_work_ledger") is True
+            and result.get("structured_fva_persistent_work_ledger") is True
         ):
             raise SystemExit(f"component timing/progress evidence drifted: {result}")
         if not (
@@ -2307,7 +3055,7 @@ def main() -> int:
         print(
             json.dumps(
                 {
-                    "schema": "katana-native-disc-cold-build-stress-host-result-v2",
+                    "schema": "katana-native-disc-cold-build-stress-host-result-v3",
                     "stress_suite_elapsed_ms": round(
                         (time.monotonic() - total_started) * 1000
                     ),

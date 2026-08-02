@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 
@@ -109,6 +110,149 @@ template <typename Function> std::string failure(Function&& function) {
 #endif
 int main() {
     {
+        const auto bounded_image = code_image(
+            {0x09u, 0x00u, // nop
+             0x0Bu, 0x00u, // rts
+             0x09u, 0x00u}); // delay-slot nop
+
+        katana::analysis::ControlFlowAnalysisOptions iteration_options;
+        iteration_options.maximum_fixpoint_iterations = 0u;
+        const auto iteration_bounded =
+            katana::analysis::analyze_control_flow(
+                bounded_image,
+                nullptr,
+                katana::analysis::
+                    ControlFlowAnalysisProgressCallback{},
+                iteration_options);
+        require(
+            iteration_bounded.termination_reason ==
+                    katana::analysis::
+                        ControlFlowAnalysisTerminationReason::
+                            AnalysisIterationBudgetExceeded &&
+                iteration_bounded.fixpoint_iterations == 0u &&
+                iteration_bounded.recursive.instructions.empty() &&
+                !katana::analysis::guarded_aot_inventory_complete(
+                    iteration_bounded),
+            "Explizites CFA-Iterationsbudget wurde nicht vor der "
+            "Produktarbeit typisiert beendet.");
+
+        katana::analysis::ControlFlowAnalysisOptions instruction_options;
+        instruction_options.maximum_instructions = 1u;
+        const auto instruction_bounded =
+            katana::analysis::analyze_control_flow(
+                bounded_image,
+                nullptr,
+                [](const katana::analysis::
+                       ControlFlowAnalysisProgress&) {
+                    throw std::runtime_error(
+                        "synthetic-bounded-observer-failure");
+                },
+                instruction_options);
+        require(
+            instruction_bounded.termination_reason ==
+                    katana::analysis::
+                        ControlFlowAnalysisTerminationReason::
+                            InstructionBudgetExceeded &&
+                instruction_bounded.recursive.limit ==
+                    katana::analysis::RecursiveAnalysisLimit::
+                        InstructionBudgetExceeded &&
+                instruction_bounded.recursive.instructions.size() == 1u &&
+                instruction_bounded.progress_callback_failed,
+            "CFA-Instruktionsbudget und werfender Beobachter wurden "
+            "vermischt oder liessen Arbeit ueber das Limit zu.");
+
+        katana::analysis::ControlFlowAnalysisOptions context_options;
+        context_options.maximum_contexts = 1u;
+        const auto context_bounded =
+            katana::analysis::analyze_control_flow(
+                bounded_image,
+                nullptr,
+                katana::analysis::
+                    ControlFlowAnalysisProgressCallback{},
+                context_options);
+        const auto retains_initial_seed_ledger = [](const auto& result) {
+            if (result.seed_facts.size() != 1u ||
+                result.seed_targets_added != 1u ||
+                result.seed_causes_added != 1u ||
+                result.seed_decode_targets != 1u ||
+                result.seed_metadata_targets != 1u)
+                return false;
+            const auto& fact = result.seed_facts.front();
+            if (fact.target_address != 0u || fact.causes.size() != 1u)
+                return false;
+            const auto& cause = fact.causes.front();
+            return cause.kind ==
+                       katana::analysis::ControlFlowAnalysisResult::
+                           SeedCauseKind::EntryPoint &&
+                   cause.source_address == 0u &&
+                   !cause.source_object.has_value() &&
+                   cause.owner_address == 0u;
+        };
+        require(
+            context_bounded.termination_reason ==
+                    katana::analysis::
+                        ControlFlowAnalysisTerminationReason::
+                            AnalysisContextBudgetExceeded &&
+                context_bounded.recursive.limit ==
+                    katana::analysis::RecursiveAnalysisLimit::
+                        ContextBudgetExceeded &&
+                context_bounded.recursive.contextual_instructions.size() ==
+                    1u &&
+                retains_initial_seed_ledger(iteration_bounded) &&
+                retains_initial_seed_ledger(instruction_bounded) &&
+                retains_initial_seed_ledger(context_bounded),
+            "CFA-Kontextbudget stoppte den rekursiven Decodepfad nicht "
+            "am exakten Limit oder verlor dabei seine Seed-Provenienz.");
+        const auto iteration_json =
+            katana::analysis::format_control_flow_analysis_json(
+                iteration_bounded);
+        const auto context_frontier_json =
+            katana::analysis::format_control_flow_frontier_json(
+                context_bounded);
+        auto observability = iteration_bounded;
+        observability.recursive_incremental_passes = 7u;
+        observability.recursive_full_recompute_fallbacks = 3u;
+        const auto observability_json =
+            katana::analysis::format_control_flow_analysis_json(
+                observability);
+        const auto observability_frontier_json =
+            katana::analysis::format_control_flow_frontier_json(
+                observability);
+        require(
+            iteration_json.find(
+                "\"termination_reason\":"
+                "\"analysis-iteration-budget-exceeded\"") !=
+                    std::string::npos &&
+                iteration_json.find(
+                    "\"recursive_baseline_status\":"
+                    "\"not-requested\"") != std::string::npos &&
+                context_frontier_json.find(
+                    "\"termination_reason\":"
+                    "\"analysis-context-budget-exceeded\"") !=
+                    std::string::npos &&
+                context_frontier_json.find(
+                    "\"recursive_baseline_status\":"
+                    "\"not-requested\"") != std::string::npos &&
+                observability_json.find(
+                    "\"recursive_incremental_passes\":7") !=
+                    std::string::npos &&
+                observability_json.find(
+                    "\"recursive_full_recompute_fallbacks\":3") !=
+                    std::string::npos &&
+                observability_frontier_json.find(
+                    "\"recursive_incremental_passes\":7") !=
+                    std::string::npos &&
+                observability_frontier_json.find(
+                    "\"recursive_full_recompute_fallbacks\":3") !=
+                    std::string::npos &&
+                katana::analysis::
+                    control_flow_analysis_termination_reason_name(
+                        instruction_bounded.termination_reason) ==
+                    "instruction-budget-exceeded",
+            "Der typisierte CFA-Abbruch ging im oeffentlichen Voll-/"
+            "Frontier-JSON oder seiner Namensabbildung verloren.");
+    }
+    {
         std::vector<std::uint8_t> bytes(0x80u, 0x09u);
         const auto put_u16 = [&bytes](const std::size_t offset,
                                       const std::uint16_t value) {
@@ -148,6 +292,12 @@ int main() {
             katana::analysis::analyze_control_flow(image);
         require(!has_instruction(rejected_data_entry, 0x70u) &&
                     find_guarded_aot_entry(rejected_data_entry, 0x70u) == nullptr &&
+                    std::none_of(
+                        rejected_data_entry.seed_facts.begin(),
+                        rejected_data_entry.seed_facts.end(),
+                        [](const auto& seed) {
+                            return seed.target_address == 0x70u;
+                        }) &&
                     rejected_data_entry.guarded_code_inventory_candidates == 0u &&
                     !rejected_data_entry.candidate_inventory_truncated &&
                     rejected_data_entry
@@ -273,6 +423,21 @@ int main() {
                 "Unaufgeloeste ABI-Stackbasis blieb exportfaehig.");
         completeness_contract.guarded_code_inventory_walk
             .abi_stack_base_unresolved = false;
+        completeness_contract.guarded_code_inventory_walk
+            .inventory_tail_target_unresolved = true;
+        const auto unresolved_tail_json =
+            katana::analysis::format_control_flow_analysis_json(
+                completeness_contract);
+        require(
+            !katana::analysis::guarded_aot_inventory_complete(
+                completeness_contract) &&
+                unresolved_tail_json.find(
+                    "\"guarded_inventory_tail_target_unresolved\":true") !=
+                    std::string::npos,
+            "Ungebundenes typisiertes Tail-Ziel blieb exportfaehig oder "
+            "verschwand aus der oeffentlichen Diagnose.");
+        completeness_contract.guarded_code_inventory_walk
+            .inventory_tail_target_unresolved = false;
         completeness_contract.candidate_inventory_truncated = true;
         require(!katana::analysis::guarded_aot_inventory_complete(
                     completeness_contract),
@@ -726,6 +891,13 @@ int main() {
     bool exact_round_seed_accounting = true;
     bool exact_cache_accounting = true;
     bool observed_multi_root_cfa_bridge = false;
+    bool observed_incremental_seed_round = false;
+    bool observed_root_artifact_progress = false;
+    bool observed_function_value_terminal = false;
+    std::vector<std::string> outer_terminal_phases;
+    std::size_t terminal_result_index_copy_items = 0u;
+    std::size_t terminal_result_index_sort_items = 0u;
+    std::size_t terminal_result_index_materialized_items = 0u;
     const auto silent_progress_before =
         katana::analysis::detail::
             function_value_progress_runtime_statistics_for_testing();
@@ -750,6 +922,24 @@ int main() {
             nullptr,
             [&](const katana::analysis::ControlFlowAnalysisProgress&
                     progress) {
+                if (progress.phase ==
+                        "analysis-terminal-materialization-start" ||
+                    progress.phase == "analysis-terminal-materialized" ||
+                    progress.phase == "complete")
+                    outer_terminal_phases.push_back(progress.phase);
+                observed_function_value_terminal =
+                    observed_function_value_terminal ||
+                    progress.phase ==
+                        "function-values-terminal-materialized";
+                if (progress.phase ==
+                    "analysis-terminal-materialized") {
+                    terminal_result_index_copy_items =
+                        progress.result_index_copy_items;
+                    terminal_result_index_sort_items =
+                        progress.result_index_sort_items;
+                    terminal_result_index_materialized_items =
+                        progress.result_index_materialized_items;
+                }
                 exact_round_seed_accounting =
                     exact_round_seed_accounting &&
                     progress.seeds >=
@@ -758,7 +948,15 @@ int main() {
                         progress.seeds -
                             progress.round_seed_baseline &&
                     progress.growing_workset ==
-                        (progress.round_added_seeds != 0u);
+                        (progress.round_seed_targets_changed != 0u ||
+                         progress.round_decode_targets != 0u ||
+                         progress.round_metadata_targets != 0u ||
+                         progress.round_full_cpu_fallbacks != 0u);
+                observed_incremental_seed_round =
+                    observed_incremental_seed_round ||
+                    (progress.iteration > 1u &&
+                     progress.round_decode_targets != 0u &&
+                     progress.growing_workset);
                 if (progress.function_value_active) {
                     const auto explained_misses =
                         progress.function_value_session_cache_miss_cold +
@@ -787,6 +985,18 @@ int main() {
                                 progress.function_value_multi_root_in_flight_reuses &&
                         progress.function_value_multi_root_retained_contexts ==
                             progress.function_value_multi_root_unique_contexts;
+                    exact_cache_accounting =
+                        exact_cache_accounting &&
+                        progress
+                                .function_value_resolution_root_artifacts_total ==
+                            progress
+                                    .function_value_resolution_root_artifacts_reused +
+                                progress
+                                    .function_value_resolution_root_artifacts_recomputed &&
+                        progress.function_value_incremental_epochs_started >=
+                            progress.function_value_analysis_epochs_published +
+                                progress
+                                    .function_value_analysis_epochs_discarded;
                     observed_multi_root_cfa_bridge =
                         observed_multi_root_cfa_bridge ||
                         (progress.function_value_multi_root_context_requests > 0u &&
@@ -796,6 +1006,11 @@ int main() {
                          progress
                                  .function_value_multi_root_retained_payload_bytes >
                              0u);
+                    observed_root_artifact_progress =
+                        observed_root_artifact_progress ||
+                        progress
+                                .function_value_resolution_root_artifacts_total !=
+                            0u;
                 }
                 if (progress.phase != "function-values-start" &&
                     progress.phase !=
@@ -829,6 +1044,55 @@ int main() {
             enabled_progress_after.detailed_cache_sessions_started ==
                 enabled_progress_before.detailed_cache_sessions_started,
         "Aktiver CFA-Progress erreichte Callback-/Heartbeat-Bruecke nicht.");
+    auto recursive_retry_image = reconciled_candidate_call_image;
+    bool recursive_retry_mutation_applied = false;
+    const auto recursive_retry_result =
+        katana::analysis::analyze_control_flow(
+            recursive_retry_image,
+            nullptr,
+            [&](const katana::analysis::ControlFlowAnalysisProgress&
+                    progress) {
+                if (recursive_retry_mutation_applied ||
+                    !progress.growing_workset ||
+                    (progress.phase != "seed-expansion" &&
+                     progress.phase != "summary-seed-expansion"))
+                    return;
+                // Change only the revision, not the semantic bytes. The next
+                // optimistic Recursive delta must return ColdRetry, CFA must
+                // clear every dependent consumer and retry from the complete
+                // authoritative seed contract.
+                recursive_retry_image.write_u32_le(
+                    0u, recursive_retry_image.read_u32_le(0u));
+                recursive_retry_mutation_applied = true;
+            });
+    const auto retry_resolution = std::find_if(
+        recursive_retry_result.indirect_control_flow.begin(),
+        recursive_retry_result.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x14Cu;
+        });
+    require(
+        recursive_retry_mutation_applied &&
+            recursive_retry_result.recursive_full_recompute_fallbacks ==
+                1u &&
+            recursive_retry_result.persistent_analysis_bypass_reason ==
+                katana::analysis::PersistentAnalysisBypassReason::
+                    RecursiveBaselineRejected &&
+            retry_resolution !=
+                recursive_retry_result.indirect_control_flow.end() &&
+            retry_resolution->evidence ==
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            retry_resolution->analysis_candidates ==
+                std::vector<std::uint32_t>{0x180u} &&
+            recursive_retry_result.recursive.instructions.size() ==
+                reconciled_candidate_call.recursive.instructions.size() &&
+            recursive_retry_result.function_value_summaries.size() ==
+                reconciled_candidate_call.function_value_summaries.size() &&
+            recursive_retry_result.guarded_aot_entries.size() ==
+                reconciled_candidate_call.guarded_aot_entries.size() &&
+            recursive_retry_result.recursive_final_materializations == 1u,
+        "Unerwarteter Recursive-Cold-Retry liess partiellen oder stale "
+        "CFA-/FVA-Consumerstate im finalen Ergebnis zurueck.");
     const auto detailed_progress_before = enabled_progress_after;
     const auto detailed_reconciled_candidate_call =
         katana::analysis::analyze_control_flow(
@@ -875,6 +1139,49 @@ int main() {
         });
     const auto* reconciled_candidate_function =
         find_function(reconciled_candidate_call, 0x180u);
+    const auto find_seed_fact =
+        [&reconciled_candidate_call](const std::uint32_t target) {
+            return std::find_if(
+                reconciled_candidate_call.seed_facts.begin(),
+                reconciled_candidate_call.seed_facts.end(),
+                [target](const auto& fact) {
+                    return fact.target_address == target;
+                });
+        };
+    const auto candidate_seed = find_seed_fact(0x180u);
+    const auto stored_seed = find_seed_fact(0x1E0u);
+    const auto has_seed_cause = [](const auto& fact,
+                                   const auto kind,
+                                   const std::uint32_t source) {
+        return std::any_of(
+            fact.causes.begin(),
+            fact.causes.end(),
+            [kind, source](const auto& cause) {
+                return cause.kind == kind &&
+                       cause.source_address.has_value() &&
+                       *cause.source_address == source;
+            });
+    };
+    using SeedCause =
+        katana::analysis::ControlFlowAnalysisResult::SeedCause;
+    using SeedCauseKind =
+        katana::analysis::ControlFlowAnalysisResult::SeedCauseKind;
+    const SeedCause absent_source{
+        SeedCauseKind::StoredCodeAddress,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt};
+    const SeedCause real_zero_source{
+        SeedCauseKind::StoredCodeAddress,
+        std::uint32_t{0u},
+        std::nullopt,
+        std::nullopt};
+    require(
+        absent_source != real_zero_source &&
+            !absent_source.source_address.has_value() &&
+            real_zero_source.source_address == 0u,
+        "Die Seed-Provenienz vermischte eine fehlende Quelle mit der "
+        "gueltigen Gastadresse null.");
     require(
         reconciled_call !=
                 reconciled_candidate_call.indirect_control_flow.end() &&
@@ -920,17 +1227,80 @@ int main() {
             reconciled_candidate_call.guarded_code_inventory_walk
                     .abi_stack_argument_projection_truncated_functions == 0u &&
             find_guarded_aot_entry(reconciled_candidate_call, 0x1E0u) !=
-                nullptr &&
+                nullptr,
+        "Spaet entdeckter Function-Summary-Callcarrier wurde nicht bis zum "
+        "ABI-/Inventarvertrag rueckgekoppelt oder als feste CFG-Kante "
+        "eingefroren.");
+    require(
+            candidate_seed !=
+                reconciled_candidate_call.seed_facts.end() &&
+            stored_seed !=
+                reconciled_candidate_call.seed_facts.end() &&
+            has_seed_cause(
+                *candidate_seed,
+                katana::analysis::ControlFlowAnalysisResult::
+                    SeedCauseKind::IndirectAnalysisCandidate,
+                0x14Cu) &&
+            has_seed_cause(
+                *stored_seed,
+                katana::analysis::ControlFlowAnalysisResult::
+                    SeedCauseKind::StoredCodeAddress,
+                0x184u) &&
+            reconciled_candidate_call.seed_targets_added ==
+                reconciled_candidate_call.seed_facts.size() &&
+            reconciled_candidate_call.seed_causes_added >=
+                reconciled_candidate_call.seed_facts.size() &&
+            reconciled_candidate_call.recursive_incremental_passes != 0u &&
+            reconciled_candidate_call
+                    .recursive_full_recompute_fallbacks == 0u &&
+            reconciled_candidate_call
+                    .runtime_contract_normalization_full_scans == 1u &&
+            reconciled_candidate_call
+                    .decode_boundary_normalization_full_scans == 2u &&
+            reconciled_candidate_call
+                    .runtime_contract_normalization_entries_visited != 0u &&
+            reconciled_candidate_call
+                    .decode_boundary_normalization_entries_visited != 0u,
+        "Der kanonische Seed-Ledger verlor Ursache, Quelladresse oder den "
+        "inkrementellen Recursive-/Normalisierungsvertrag.");
+    require(
             explicit_candidate_iterations &&
-            exact_round_seed_accounting &&
-            exact_cache_accounting &&
-            observed_multi_root_cfa_bridge &&
             maximum_candidate_contract_passes >= 1u &&
             maximum_candidate_contract_passes <= 2u,
-        "Spaet entdeckter Function-Summary-Callcarrier wurde nicht bis zum "
-        "ABI-/Inventarvertrag rueckgekoppelt, als feste CFG-Kante "
-        "eingefroren oder benoetigte trotz zusammengelegter Proof-/"
-        "Boundary-Normalisierung mehr als einen Reconcile-Pass.");
+        "Der Candidate-Contract meldete keine exakten Reconcile-Paesse.");
+    require(
+        exact_round_seed_accounting,
+        "Die CFA-Progressbruecke verlor ihre exakte Seed-Rundenbilanz.");
+    require(
+        outer_terminal_phases ==
+                std::vector<std::string>{
+                    "analysis-terminal-materialization-start",
+                    "analysis-terminal-materialized", "complete"} &&
+            observed_function_value_terminal &&
+            reconciled_candidate_call.recursive_final_materializations ==
+                1u &&
+            reconciled_candidate_call.recursive.physical_work
+                    .public_materializations == 1u &&
+            terminal_result_index_copy_items ==
+                reconciled_candidate_call.result_index_copy_items &&
+            terminal_result_index_sort_items ==
+                reconciled_candidate_call.result_index_sort_items &&
+            terminal_result_index_materialized_items ==
+                reconciled_candidate_call
+                    .result_index_materialized_items &&
+            terminal_result_index_sort_items != 0u,
+        "Terminalmaterialisierung oder ihre physischen "
+        "Progresszaehler wurden mehrfach, unvollstaendig oder in falscher "
+        "Reihenfolge publiziert.");
+    require(
+        exact_cache_accounting && observed_multi_root_cfa_bridge,
+        "Die CFA-Progressbruecke verlor Cache- oder Multi-Root-Bilanzen.");
+    require(
+        observed_incremental_seed_round,
+        "Die CFA-Progressbruecke belegte kein inkrementelles Seed-Delta.");
+    require(
+        observed_root_artifact_progress,
+        "Die CFA-Progressbruecke belegte keine Root-Artefaktarbeit.");
 
     const auto tail_registered_callback_image = [] {
         std::vector<std::uint8_t> bytes(0xE0u, 0x09u);

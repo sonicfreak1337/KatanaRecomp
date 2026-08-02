@@ -22,6 +22,15 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 - Jeder P0-Task wird fokussiert verifiziert, einzeln committed und gepusht.
 - Vor dem naechsten privaten Sonic-Port folgt zwingend die unabhaengige
   Gesamtpruefung KR-4984 mit Schliessung und Re-Review aller P0/P1-Funde.
+- Jeder offene Roadmap-Task wird verbindlich in dieser Reihenfolge beendet:
+  implementieren, nur P0/P1 der betroffenen Pfade reviewen, alle bestaetigten
+  P0/P1 gebuendelt fixen, fokussiert verifizieren, committen und pushen. Erst
+  danach beginnt der naechste Task.
+- Refactoring, nicht genehmigte Architekturumbauten, Scope-Erweiterungen und
+  neue Tasks aus Reviews sind bis zum Sonic-Produktlauf verboten.
+- KR-4982 und KR-4983 sind vorerst gestrichen und werden nur nach neuer
+  ausdruecklicher Nutzerfreigabe reaktiviert. KR-4984 bleibt der eigene
+  abschliessende P0/P1-Gesamtreview-Task; bei belegter Soundness folgt Sonic.
 
 ## Getrennte Evidenzstaende
 
@@ -1334,13 +1343,19 @@ Status: Abgeschlossen in `4d17526`.
 
 ---
 
-## [ ] KR-4978 - Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt
+## [x] KR-4978 - Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt
 
 Prioritaet: P0
 
 Abhaengigkeiten: KR-4976, KR-4977
 
-Status: Geplant.
+Status: Abgeschlossen. Monotone Seed-, Struktur- und Candidate-Deltas
+invalidieren den exakten SCC-/Caller-/Inventory-Sink-Closure, publizieren
+vollstaendige atomare Analyseepochen und fallen bei nicht darstellbaren oder
+zu grossen lokalen Deltas konservativ auf die bestehende CPU-Neuberechnung
+zurueck. Der bereinigte 24-Worker-Endgate bestand alle 11 Stufen; N und 8N
+lieferten identische lokale Arbeit und Warmzustand und Fresh-Referenz waren
+semantisch gleich, ohne Full-CPU-Fallback.
 
 ### Umfang
 
@@ -1433,8 +1448,8 @@ Prioritaet: P0 Entscheidungsgate
 
 Abhaengigkeiten: KR-4974, KR-4975, KR-4977, KR-4979
 
-Status: Profil-/Reject-Inventar darf nach KR-4974 beginnen; finaler
-Prototypvergleich und Gateabschluss warten auf den optimierten CPU-Pfad.
+Status: Vorerst gestrichen. Keine Implementierung oder Vorarbeit ohne neue
+ausdrueckliche Nutzerfreigabe.
 
 ### Umfang
 
@@ -1465,7 +1480,8 @@ Prioritaet: bedingtes P0
 
 Abhaengigkeiten: positives KR-4982-Gate
 
-Status: Nur bei positivem Gate geplant.
+Status: Vorerst gestrichen. Keine Implementierung oder Vorarbeit ohne neue
+ausdrueckliche Nutzerfreigabe.
 
 ### Umfang
 

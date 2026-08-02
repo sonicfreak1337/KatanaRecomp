@@ -1212,6 +1212,72 @@ int main() {
             std::string::npos,
         "Terminalrecord verschweigt Upstreamverlust oder Fehlerausgang.");
 
+    const auto invalid_incremental_path =
+        root / "invalid-incremental-ledger.jsonl";
+    {
+        katana::cli::PortBuildTelemetryOptions options;
+        options.jsonl_path = invalid_incremental_path;
+        options.require_resolved_environment = false;
+        katana::cli::PortBuildTelemetryRecorder recorder(
+            std::move(options));
+        katana::ProgressEvent event;
+        event.operation =
+            katana::ProgressOperation::FunctionValueAnalysis;
+        event.state = katana::ProgressState::Completed;
+        event.scope_id = 10u;
+        event.telemetry_complete = true;
+        event.counters.analysis_epochs_published = 1u;
+        event.counters.analysis_epochs_discarded = 0u;
+        event.counters.incremental_epochs_started = 1u;
+        event.counters.resolution_root_artifacts_total = 2u;
+        event.counters.resolution_root_artifacts_reused = 2u;
+        event.counters.resolution_root_artifacts_recomputed = 1u;
+        event.counters.resolution_root_artifacts_retained = 2u;
+        event.counters.resolution_epoch_retained_bytes = 2'048u;
+        event.counters.resolution_retention_limit_reason = "none";
+        event.counters.persistent_analysis_bypass_reason = "none";
+        event.counters.dirty_sccs = 1u;
+        event.counters.dirty_functions = 1u;
+        event.counters.dirty_inventory_sinks = 0u;
+        event.counters.full_cpu_recompute_fallbacks = 0u;
+        recorder.observe_progress(event);
+        recorder.finish(
+            katana::cli::PortBuildTerminalOutcome::Completed,
+            0,
+            "complete");
+        require(
+            recorder.status().terminal_emitted &&
+                !recorder.status().telemetry_complete,
+            "Der Port-Recorder akzeptierte ein unausgeglichenes "
+            "Inkremental-Ledger als vollstaendig.");
+    }
+    const auto invalid_incremental_lines =
+        read_lines(invalid_incremental_path);
+    const auto invalid_incremental_progress = std::find_if(
+        invalid_incremental_lines.begin(),
+        invalid_incremental_lines.end(),
+        [](const auto& line) {
+            return line.find(
+                       "\"schema\":\"katana-port-build-progress\"") !=
+                   std::string::npos;
+        });
+    require(
+        invalid_incremental_progress !=
+                invalid_incremental_lines.end() &&
+            invalid_incremental_progress->find(
+                "\"progress\":{") != std::string::npos &&
+            invalid_incremental_progress->find(
+                "\"telemetry_complete\":false") !=
+                std::string::npos &&
+            invalid_incremental_lines.back().find(
+                "\"upstream_incomplete\":true") !=
+                std::string::npos &&
+            invalid_incremental_lines.back().find(
+                "\"telemetry_complete\":false") !=
+                std::string::npos,
+        "Eingebettetes oder aeusseres Port-Telemetrieledger blieb trotz "
+        "Root-Ungleichheit gruen.");
+
     const auto callback_seal_path = root / "callback-seal-loss.jsonl";
     {
         katana::cli::PortBuildTelemetryOptions options;

@@ -40,6 +40,10 @@ class StructuredControlFlowProgress final {
         control_counters.planned_work = progress.seeds;
         control_counters.added_work =
             progress.round_added_seeds;
+        append_seed_round_counters(
+            control_counters, progress);
+        append_control_physical_work_counters(
+            control_counters, progress);
         control_counters.growing_workset =
             progress.growing_workset;
         if (progress.function_value_active)
@@ -59,7 +63,9 @@ class StructuredControlFlowProgress final {
                 std::string_view::npos;
         const auto function_values_complete =
             progress.phase.starts_with(
-                "function-values-complete");
+                "function-values-complete") ||
+            progress.phase ==
+                "function-values-terminal-materialized";
         if (!progress.function_value_active) {
             if (failed) {
                 close_function_values(false);
@@ -110,6 +116,10 @@ class StructuredControlFlowProgress final {
         function_counters.started =
             progress.function_value_physical_evaluations;
         append_cache_counters(function_counters, progress);
+        append_incremental_epoch_counters(
+            function_counters, progress);
+        append_function_physical_work_counters(
+            function_counters, progress);
         function_values_->update(
             progress.function_value_logical_evaluations,
             std::move(function_counters));
@@ -175,6 +185,10 @@ class StructuredControlFlowProgress final {
             }
             append_cache_counters(
                 resolution_counters, progress);
+            append_incremental_epoch_counters(
+                resolution_counters, progress);
+            append_function_physical_work_counters(
+                resolution_counters, progress);
             resolution_->update(
                 std::min(
                     progress
@@ -204,16 +218,220 @@ class StructuredControlFlowProgress final {
     }
 
   private:
+    static void append_seed_round_counters(
+        katana::ProgressCounterSnapshot& counters,
+        const katana::analysis::ControlFlowAnalysisProgress&
+            progress) {
+        counters.round_seed_facts_added =
+            progress.round_seed_facts_added;
+        counters.round_seed_targets_changed =
+            progress.round_seed_targets_changed;
+        counters.round_decode_targets =
+            progress.round_decode_targets;
+        counters.round_metadata_targets =
+            progress.round_metadata_targets;
+        counters.round_full_cpu_fallbacks =
+            progress.round_full_cpu_fallbacks;
+    }
+
+    static void append_incremental_epoch_counters(
+        katana::ProgressCounterSnapshot& counters,
+        const katana::analysis::ControlFlowAnalysisProgress&
+            progress) {
+        counters.analysis_epochs_published =
+            progress.function_value_analysis_epochs_published;
+        counters.analysis_epochs_discarded =
+            progress.function_value_analysis_epochs_discarded;
+        counters.incremental_epochs_started =
+            progress.function_value_incremental_epochs_started;
+        counters.resolution_root_artifacts_total =
+            progress.function_value_resolution_root_artifacts_total;
+        counters.resolution_root_artifacts_reused =
+            progress.function_value_resolution_root_artifacts_reused;
+        counters.resolution_root_artifacts_recomputed =
+            progress.function_value_resolution_root_artifacts_recomputed;
+        counters.resolution_root_artifacts_retained =
+            progress.function_value_resolution_root_artifacts_retained;
+        counters.resolution_epoch_retained_bytes =
+            progress.function_value_resolution_epoch_retained_bytes;
+        counters.resolution_retention_limit_reason = std::string{
+            katana::analysis::resolution_retention_limit_reason_name(
+                progress
+                    .function_value_resolution_retention_limit_reason)};
+        counters.dirty_sccs =
+            progress.function_value_dirty_sccs;
+        counters.dirty_functions =
+            progress.function_value_dirty_functions;
+        counters.dirty_inventory_sinks =
+            progress.function_value_dirty_inventory_sinks;
+        counters.full_cpu_recompute_fallbacks =
+            progress.function_value_full_cpu_recompute_fallbacks;
+    }
+
+    static void append_control_physical_work_counters(
+        katana::ProgressCounterSnapshot& counters,
+        const katana::analysis::ControlFlowAnalysisProgress&
+            progress) {
+        counters.persistent_analysis_bypass_reason = std::string{
+            katana::analysis::persistent_analysis_bypass_reason_name(
+                progress.persistent_analysis_bypass_reason)};
+        counters.recursive_snapshot_epochs =
+            progress.recursive_snapshot_epochs;
+        counters.recursive_final_materializations =
+            progress.recursive_final_materializations;
+        const auto& recursive = progress.recursive_physical_work;
+        counters.recursive_trusted_snapshot_validations =
+            recursive.trusted_snapshot_validations;
+        counters.recursive_seed_arena_copy_items =
+            recursive.seed_arena_copy_items;
+        counters.recursive_seed_arena_copy_bytes =
+            recursive.seed_arena_copy_bytes;
+        counters.recursive_seed_arena_shift_items =
+            recursive.seed_arena_shift_items;
+        counters.recursive_seed_arena_shift_bytes =
+            recursive.seed_arena_shift_bytes;
+        counters.epoch_index_lookups =
+            recursive.epoch_index_lookups;
+        counters.epoch_index_updates =
+            recursive.epoch_index_updates;
+        counters.terminal_epoch_fold_items =
+            recursive.terminal_epoch_fold_items;
+        counters.recursive_seed_contract_items_visited =
+            recursive.seed_contract_items_visited;
+        counters.recursive_decoded_work_items =
+            recursive.decoded_work_items;
+        counters.recursive_canonical_context_updates =
+            recursive.canonical_context_updates;
+        counters.recursive_canonical_instruction_updates =
+            recursive.canonical_instruction_updates;
+        counters.recursive_canonical_function_updates =
+            recursive.canonical_function_updates;
+        counters.recursive_public_baseline_hash_bytes =
+            recursive.public_baseline_hash_bytes;
+        counters.recursive_public_baseline_copy_items =
+            recursive.public_baseline_copy_items;
+        counters.recursive_public_sort_items =
+            recursive.public_sort_items;
+        counters.recursive_public_materialized_items =
+            recursive.public_materialized_items;
+        counters.recursive_public_materializations =
+            recursive.public_materializations;
+        counters.runtime_copy_instruction_visits =
+            progress.runtime_copy_instruction_visits;
+        counters.runtime_copy_result_entries_visited =
+            progress.runtime_copy_result_entries_visited;
+        counters.runtime_copy_result_entries_rebuilt =
+            progress.runtime_copy_result_entries_rebuilt;
+        counters.local_control_flow_instruction_visits =
+            progress.local_control_flow_instruction_visits;
+        counters.local_control_flow_result_entries_visited =
+            progress.local_control_flow_result_entries_visited;
+        counters.local_control_flow_result_entries_rebuilt =
+            progress.local_control_flow_result_entries_rebuilt;
+        counters.dispatch_index_entries_visited =
+            progress.dispatch_index_entries_visited;
+        counters.dispatch_index_entries_rebuilt =
+            progress.dispatch_index_entries_rebuilt;
+        counters.jump_table_instruction_visits =
+            progress.jump_table_instruction_visits;
+        counters.jump_table_result_entries_visited =
+            progress.jump_table_result_entries_visited;
+        counters.jump_table_result_entries_rebuilt =
+            progress.jump_table_result_entries_rebuilt;
+        counters.function_boundary_entries_visited =
+            progress.function_boundary_entries_visited;
+        counters.function_boundary_entries_rebuilt =
+            progress.function_boundary_entries_rebuilt;
+        counters.function_edge_family_entries_visited =
+            progress.function_edge_family_entries_visited;
+        counters.function_edge_family_entries_rebuilt =
+            progress.function_edge_family_entries_rebuilt;
+        counters.function_edge_state_encode_items =
+            progress.function_edge_state_encode_items;
+        counters.function_edge_state_copy_items =
+            progress.function_edge_state_copy_items;
+        counters.function_edge_state_exact_compare_items =
+            progress.function_edge_state_exact_compare_items;
+        counters.result_index_copy_items =
+            progress.result_index_copy_items;
+        counters.result_index_sort_items =
+            progress.result_index_sort_items;
+        counters.result_index_materialized_items =
+            progress.result_index_materialized_items;
+    }
+
+    static void append_function_physical_work_counters(
+        katana::ProgressCounterSnapshot& counters,
+        const katana::analysis::ControlFlowAnalysisProgress&
+            progress) {
+        counters.persistent_analysis_bypass_reason = std::string{
+            katana::analysis::persistent_analysis_bypass_reason_name(
+                progress
+                    .function_value_persistent_analysis_bypass_reason)};
+        counters.program_delta_entries_visited =
+            progress.function_value_program_delta_entries_visited;
+        counters.function_edge_full_scans =
+            progress.function_value_function_edge_full_scans;
+        counters.function_edge_full_sorts =
+            progress.function_value_function_edge_full_sorts;
+        counters.candidate_call_edge_full_scans =
+            progress.function_value_candidate_call_edge_full_scans;
+        counters.candidate_call_edge_full_sorts =
+            progress.function_value_candidate_call_edge_full_sorts;
+        counters.candidate_tail_edge_full_scans =
+            progress.function_value_candidate_tail_edge_full_scans;
+        counters.candidate_tail_edge_full_sorts =
+            progress.function_value_candidate_tail_edge_full_sorts;
+        counters.program_graph_blocks_built =
+            progress.function_value_graph_blocks_built;
+        counters.program_graph_blocks_reused =
+            progress.function_value_graph_blocks_reused;
+        counters.program_graph_sccs_built =
+            progress.function_value_graph_sccs_built;
+        counters.program_graph_sccs_reused =
+            progress.function_value_graph_sccs_reused;
+        counters.resolution_dependency_nodes_built =
+            progress.function_value_resolution_dependency_nodes_built;
+        counters.resolution_dependency_nodes_reused =
+            progress.function_value_resolution_dependency_nodes_reused;
+        counters.resolution_dependency_sccs_built =
+            progress.function_value_resolution_dependency_sccs_built;
+        counters.resolution_dependency_sccs_reused =
+            progress.function_value_resolution_dependency_sccs_reused;
+        counters.abi_contract_entries_visited =
+            progress.function_value_abi_contract_entries_visited;
+        counters.abi_contract_entries_rebuilt =
+            progress.function_value_abi_contract_entries_rebuilt;
+        counters.summary_candidate_entries_visited =
+            progress.function_value_summary_candidate_entries_visited;
+        counters.summary_candidate_entries_rebuilt =
+            progress.function_value_summary_candidate_entries_rebuilt;
+        counters.inventory_topology_entries_visited =
+            progress.function_value_inventory_topology_entries_visited;
+        counters.resolution_preparation_entries_visited =
+            progress.function_value_resolution_preparation_entries_visited;
+        counters.final_materialized_blocks =
+            progress.function_value_final_materialized_blocks;
+        counters.final_materialized_functions =
+            progress.function_value_final_materialized_functions;
+    }
+
     static bool is_explicit_function_subphase(
         const std::string_view subphase) noexcept {
-        constexpr std::array<std::string_view, 7u> names{
+        constexpr std::array<std::string_view, 13u> names{
             "inventory-region-closure",
+            "inventory-region-sink-sources",
             "abi-return-signatures",
             "abi-stack-reads",
             "abi-register-reads",
             "persistent-store-signatures",
             "inventory-reachability",
-            "cache-key-plan"};
+            "cache-key-plan",
+            "resolution-root-dependencies",
+            "resolution-root-scc-order",
+            "resolution-root-scc-components",
+            "resolution-root-contracts",
+            "resolution-root-plan"};
         return std::find(names.begin(), names.end(), subphase) !=
                names.end();
     }
@@ -251,6 +469,7 @@ class StructuredControlFlowProgress final {
         counters.configured_workers =
             progress.function_value_configured_workers;
         append_cache_counters(counters, progress);
+        append_function_physical_work_counters(counters, progress);
         function_subphase_->update(
             progress.function_value_subphase_processed,
             std::move(counters));
@@ -486,10 +705,6 @@ class StructuredControlFlowProgress final {
             progress.function_value_abi_contract_epoch_reuses;
         counters.summary_state_reuses =
             progress.function_value_summary_state_reuses;
-        counters.analysis_epochs_published =
-            progress.function_value_analysis_epochs_published;
-        counters.analysis_epochs_discarded =
-            progress.function_value_analysis_epochs_discarded;
     }
 
     void ensure_round(
@@ -521,6 +736,8 @@ class StructuredControlFlowProgress final {
         counters.planned_work = progress.seeds;
         counters.discovered = progress.seeds;
         counters.added_work = progress.round_added_seeds;
+        append_seed_round_counters(counters, progress);
+        append_control_physical_work_counters(counters, progress);
         counters.growing_workset =
             progress.growing_workset;
         counters.committed_work = progress.instructions;
@@ -534,8 +751,20 @@ class StructuredControlFlowProgress final {
     void ensure_candidate_iteration(
         const katana::analysis::ControlFlowAnalysisProgress&
             progress) {
+        if (progress.candidate_contract_iteration == 0u) {
+            // A zero iteration is an explicit boundary between the
+            // candidate-contract fixpoint and later summary/TerminalFull
+            // work.  Close the candidate before the next FVA epoch resets
+            // its local counters to zero.
+            if (candidate_iteration_) {
+                close_function_values(
+                    !candidate_failed_ && !round_failed_);
+                close_candidate_iteration(
+                    !candidate_failed_ && !round_failed_);
+            }
+            return;
+        }
         if (round_failed_ ||
-            progress.candidate_contract_iteration == 0u ||
             current_candidate_iteration_ ==
                 progress.candidate_contract_iteration)
             return;
@@ -579,9 +808,12 @@ class StructuredControlFlowProgress final {
         counters.configured_workers =
             progress.function_value_configured_workers;
         counters.added_work = progress.round_added_seeds;
+        append_seed_round_counters(counters, progress);
         counters.growing_workset =
             progress.growing_workset;
         append_cache_counters(counters, progress);
+        append_incremental_epoch_counters(counters, progress);
+        append_function_physical_work_counters(counters, progress);
         candidate_iteration_->update(
             progress.function_value_logical_evaluations,
             std::move(counters));

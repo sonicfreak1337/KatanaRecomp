@@ -11710,6 +11710,8 @@ port_metadata(const PortExportOptions& options,
            << (analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated ? "true" : "false")
            << ",\"guarded_abi_stack_base_unresolved\":"
            << (analysis.guarded_code_inventory_walk.abi_stack_base_unresolved ? "true" : "false")
+           << ",\"guarded_inventory_tail_target_unresolved\":"
+           << (analysis.guarded_code_inventory_walk.inventory_tail_target_unresolved ? "true" : "false")
            << ",\"guarded_code_shape_validation_work\":"
            << analysis.guarded_code_shape_validation_work
            << ",\"guarded_code_shape_validation_work_budget\":"
@@ -12271,9 +12273,12 @@ static PortExportResult export_dreamcast_port_project_impl(
                       .maximum_local_fixpoint_iterations
                << " inventory_candidate_values_truncated="
                << prepared.analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated
-               << " abi_stack_base_unresolved="
-               << prepared.analysis.guarded_code_inventory_walk.abi_stack_base_unresolved
-               << " shape_budget_exceeded="
+                << " abi_stack_base_unresolved="
+                << prepared.analysis.guarded_code_inventory_walk.abi_stack_base_unresolved
+                << " inventory_tail_target_unresolved="
+                << prepared.analysis.guarded_code_inventory_walk
+                       .inventory_tail_target_unresolved
+                << " shape_budget_exceeded="
                << prepared.analysis
                       .guarded_code_shape_budget_exceeded_candidates
                << " entry_rejections="
@@ -13389,6 +13394,11 @@ PreparedBootAnalysisRun prepare_boot_analysis(
                     cached_phase(
                         katana::ProgressOperation::
                             ControlFlowAnalysis,
+                        katana::ProgressUnit::Steps,
+                        "boot-analysis-cache");
+                    cached_phase(
+                        katana::ProgressOperation::
+                            CandidateContractIteration,
                         katana::ProgressUnit::Steps,
                         "boot-analysis-cache");
                     cached_phase(

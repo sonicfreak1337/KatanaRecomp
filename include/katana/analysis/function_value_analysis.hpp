@@ -48,6 +48,90 @@ inline constexpr std::size_t evaluation_lens_count =
     return "unknown";
 }
 
+// Run-local reason why the optional persistent resolution-root epoch was not
+// retained. This is cache policy only: it never changes canonical analysis,
+// artifact identity, ABI identity, or fail-closed product semantics.
+enum class ResolutionRetentionLimitReason : std::uint8_t {
+    None,
+    DependencyNodeLimit,
+    RootEntryLimit,
+    ByteLimit,
+};
+
+// A persistent-state bypass is stronger than a cache miss: the complete
+// invocation must behave as a new session for ProgramGraph, ABI contracts,
+// summaries, candidate inputs, function evaluations and resolution roots.
+// The reason is run-local evidence and never enters canonical output.
+enum class PersistentAnalysisBypassReason : std::uint8_t {
+    None,
+    FunctionBoundaryChanged,
+    RecursiveBaselineRejected,
+    ProgramDeltaUnrepresentable,
+    ResolutionDependencyUnrepresentable,
+    ExplicitTest,
+};
+
+enum class FunctionValueResultMaterialization : std::uint8_t {
+    // Intermediate monotone Candidate/CFG rounds expose only changed semantic
+    // shards and never rebuild the complete public result vectors.
+    DeltaOnly,
+    // Presentation-only snapshot of the already published epoch. This mode
+    // must not start or publish another semantic analysis epoch.
+    TerminalFull,
+};
+
+[[nodiscard]] constexpr std::string_view
+persistent_analysis_bypass_reason_name(
+    const PersistentAnalysisBypassReason reason) noexcept {
+    switch (reason) {
+    case PersistentAnalysisBypassReason::None: return "none";
+    case PersistentAnalysisBypassReason::FunctionBoundaryChanged:
+        return "function-boundary-changed";
+    case PersistentAnalysisBypassReason::RecursiveBaselineRejected:
+        return "recursive-baseline-rejected";
+    case PersistentAnalysisBypassReason::ProgramDeltaUnrepresentable:
+        return "program-delta-unrepresentable";
+    case PersistentAnalysisBypassReason::ResolutionDependencyUnrepresentable:
+        return "resolution-dependency-unrepresentable";
+    case PersistentAnalysisBypassReason::ExplicitTest:
+        return "explicit-test";
+    }
+    return "unknown";
+}
+
+enum class FunctionValueDependencyNodeKind : std::uint8_t {
+    Function,
+    InventoryRegion,
+    AnalysisBaseline,
+};
+
+struct FunctionValueDependencyNodeId final {
+    std::uint32_t address = 0u;
+    FunctionValueDependencyNodeKind kind =
+        FunctionValueDependencyNodeKind::Function;
+
+    bool operator==(const FunctionValueDependencyNodeId&) const = default;
+    bool operator<(const FunctionValueDependencyNodeId& other) const noexcept {
+        if (address != other.address) return address < other.address;
+        return kind < other.kind;
+    }
+};
+
+[[nodiscard]] constexpr std::string_view
+resolution_retention_limit_reason_name(
+    const ResolutionRetentionLimitReason reason) noexcept {
+    switch (reason) {
+    case ResolutionRetentionLimitReason::None: return "none";
+    case ResolutionRetentionLimitReason::DependencyNodeLimit:
+        return "dependency-node-limit";
+    case ResolutionRetentionLimitReason::RootEntryLimit:
+        return "root-entry-limit";
+    case ResolutionRetentionLimitReason::ByteLimit:
+        return "byte-limit";
+    }
+    return "unknown";
+}
+
 // Run-local observability only. These counters never enter canonical analysis
 // output, cache keys or product identities.
 struct EvaluationLensTelemetry {
@@ -129,6 +213,11 @@ struct FunctionValueSummary {
     bool operator==(const FunctionValueSummary&) const = default;
 };
 
+struct FunctionValueSummaryShard final {
+    FunctionValueDependencyNodeId owner;
+    FunctionValueSummary summary;
+};
+
 struct InterproceduralTargetResolution {
     std::uint32_t instruction_address = 0u;
     std::uint8_t register_index = 0u;
@@ -142,6 +231,11 @@ struct InterproceduralTargetResolution {
     std::string reason;
 
     bool operator==(const InterproceduralTargetResolution&) const = default;
+};
+
+struct FunctionValueResolutionShard final {
+    FunctionValueDependencyNodeId owner;
+    std::vector<InterproceduralTargetResolution> resolutions;
 };
 
 // A finite code address stored through a non-stack 32-bit memory operation
@@ -236,6 +330,10 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t maximum_local_fixpoint_iterations = 0u;
     bool inventory_candidate_values_truncated = false;
     bool abi_stack_base_unresolved = false;
+    // A tail edge carried inventory-relevant state to a target which could
+    // not be bound as either an ordinary function or an inventory region.
+    // Silently dropping that edge would make product completeness unsound.
+    bool inventory_tail_target_unresolved = false;
 
     [[nodiscard]] constexpr bool truncated() const noexcept {
         return pending_inventory_region_count != 0u ||
@@ -246,7 +344,8 @@ struct GuardedCodeInventoryWalkDiagnostics {
                abi_stack_argument_projection_truncated_functions != 0u ||
                local_fixpoint_limited_evaluations != 0u ||
                inventory_candidate_values_truncated ||
-               abi_stack_base_unresolved;
+               abi_stack_base_unresolved ||
+               inventory_tail_target_unresolved;
     }
 
     bool operator==(const GuardedCodeInventoryWalkDiagnostics&) const = default;
@@ -271,6 +370,14 @@ struct GuardedCodeInventory {
     bool candidate_inventory_truncated = false;
     bool table_scan_truncated = false;
     GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
+};
+
+// Exact DeltaOnly ownership unit. Replacing a root shard replaces both its
+// candidate evidence and its walk diagnostics; consumers must not append the
+// flattened inventory because candidate-contract withdrawal is observable.
+struct FunctionValueGuardedInventoryShard final {
+    FunctionValueDependencyNodeId owner;
+    GuardedCodeInventory inventory;
 };
 
 namespace detail {
@@ -306,8 +413,21 @@ guarded_code_inventory_priority_order(
 } // namespace detail
 
 struct FunctionValueAnalysisResult {
+    FunctionValueResultMaterialization result_materialization =
+        FunctionValueResultMaterialization::TerminalFull;
     std::vector<FunctionValueSummary> summaries;
     std::vector<InterproceduralTargetResolution> resolutions;
+    // DeltaOnly replacement/deletion ledgers. The typed owner is the sole
+    // authoritative key for replacement and withdrawal.
+    std::vector<FunctionValueSummaryShard> summary_replacements;
+    std::vector<FunctionValueDependencyNodeId> removed_summary_shards;
+    std::vector<FunctionValueResolutionShard> resolution_replacements;
+    std::vector<FunctionValueDependencyNodeId>
+        removed_resolution_shards;
+    std::vector<FunctionValueGuardedInventoryShard>
+        guarded_code_inventory_replacements;
+    std::vector<FunctionValueDependencyNodeId>
+        removed_guarded_code_inventory_shards;
     GuardedCodeInventory guarded_code_inventory;
     std::size_t fixpoint_iterations = 0u;
     std::size_t strongly_connected_components = 0u;
@@ -326,6 +446,51 @@ struct FunctionValueAnalysisResult {
     // Observational callback failures never change canonical analysis, but
     // callers can propagate the sticky telemetry-loss state.
     bool progress_callback_failed = false;
+    // Run-local KR-4978 evidence. These address sets are observational and
+    // never participate in canonical reports, artifacts, or cache keys.
+    std::vector<FunctionValueDependencyNodeId>
+        incremental_dirty_scc_entries;
+    std::vector<std::uint32_t> incremental_dirty_functions;
+    std::vector<std::uint32_t> incremental_dirty_inventory_sinks;
+    std::vector<std::uint32_t> resolution_root_artifacts_reused;
+    std::vector<std::uint32_t> resolution_root_artifacts_recomputed;
+    std::size_t resolution_root_artifacts_retained = 0u;
+    std::size_t resolution_epoch_retained_bytes = 0u;
+    ResolutionRetentionLimitReason resolution_retention_limit_reason =
+        ResolutionRetentionLimitReason::None;
+    std::size_t full_cpu_recompute_fallbacks = 0u;
+    // Non-None is also the DeltaOnly consumer-reset signal. The producer has
+    // ignored every previously published semantic shard and the typed
+    // replacement vectors therefore form the complete current cold snapshot;
+    // consumers must discard all old owner shards before applying them.
+    PersistentAnalysisBypassReason persistent_analysis_bypass_reason =
+        PersistentAnalysisBypassReason::None;
+    std::size_t program_delta_entries_visited = 0u;
+    std::size_t function_edge_full_scans = 0u;
+    std::size_t function_edge_full_sorts = 0u;
+    std::size_t candidate_call_edge_full_scans = 0u;
+    std::size_t candidate_call_edge_full_sorts = 0u;
+    std::size_t candidate_tail_edge_full_scans = 0u;
+    std::size_t candidate_tail_edge_full_sorts = 0u;
+    std::size_t program_graph_blocks_built = 0u;
+    std::size_t program_graph_blocks_reused = 0u;
+    std::size_t program_graph_sccs_built = 0u;
+    std::size_t program_graph_sccs_reused = 0u;
+    // Physical ResolutionDependency work only. Untouched path-shared shards
+    // count in neither column; a shard is reused only after this invocation
+    // physically inspects it and retains its exact immutable object.
+    std::size_t resolution_dependency_nodes_built = 0u;
+    std::size_t resolution_dependency_nodes_reused = 0u;
+    std::size_t resolution_dependency_sccs_built = 0u;
+    std::size_t resolution_dependency_sccs_reused = 0u;
+    std::size_t abi_contract_entries_visited = 0u;
+    std::size_t abi_contract_entries_rebuilt = 0u;
+    std::size_t summary_candidate_entries_visited = 0u;
+    std::size_t summary_candidate_entries_rebuilt = 0u;
+    std::size_t inventory_topology_entries_visited = 0u;
+    std::size_t resolution_preparation_entries_visited = 0u;
+    std::size_t final_materialized_blocks = 0u;
+    std::size_t final_materialized_functions = 0u;
 };
 
 struct FunctionValueAnalysisProgress {
@@ -437,6 +602,45 @@ struct FunctionValueAnalysisProgress {
     std::size_t summary_state_reuses = 0u;
     std::size_t analysis_epochs_published = 0u;
     std::size_t analysis_epochs_discarded = 0u;
+    std::size_t incremental_epochs_started = 0u;
+    // Persistent terminal-root reuse. The total equation is exact for every
+    // snapshot: total = reused + recomputed.
+    std::size_t resolution_root_artifacts_total = 0u;
+    std::size_t resolution_root_artifacts_reused = 0u;
+    std::size_t resolution_root_artifacts_recomputed = 0u;
+    std::size_t resolution_root_artifacts_retained = 0u;
+    std::size_t resolution_epoch_retained_bytes = 0u;
+    ResolutionRetentionLimitReason resolution_retention_limit_reason =
+        ResolutionRetentionLimitReason::None;
+    std::size_t dirty_sccs = 0u;
+    std::size_t dirty_functions = 0u;
+    std::size_t dirty_inventory_sinks = 0u;
+    std::size_t full_cpu_recompute_fallbacks = 0u;
+    PersistentAnalysisBypassReason persistent_analysis_bypass_reason =
+        PersistentAnalysisBypassReason::None;
+    std::size_t program_delta_entries_visited = 0u;
+    std::size_t function_edge_full_scans = 0u;
+    std::size_t function_edge_full_sorts = 0u;
+    std::size_t candidate_call_edge_full_scans = 0u;
+    std::size_t candidate_call_edge_full_sorts = 0u;
+    std::size_t candidate_tail_edge_full_scans = 0u;
+    std::size_t candidate_tail_edge_full_sorts = 0u;
+    std::size_t program_graph_blocks_built = 0u;
+    std::size_t program_graph_blocks_reused = 0u;
+    std::size_t program_graph_sccs_built = 0u;
+    std::size_t program_graph_sccs_reused = 0u;
+    std::size_t resolution_dependency_nodes_built = 0u;
+    std::size_t resolution_dependency_nodes_reused = 0u;
+    std::size_t resolution_dependency_sccs_built = 0u;
+    std::size_t resolution_dependency_sccs_reused = 0u;
+    std::size_t abi_contract_entries_visited = 0u;
+    std::size_t abi_contract_entries_rebuilt = 0u;
+    std::size_t summary_candidate_entries_visited = 0u;
+    std::size_t summary_candidate_entries_rebuilt = 0u;
+    std::size_t inventory_topology_entries_visited = 0u;
+    std::size_t resolution_preparation_entries_visited = 0u;
+    std::size_t final_materialized_blocks = 0u;
+    std::size_t final_materialized_functions = 0u;
 };
 
 using FunctionValueAnalysisProgressCallback =

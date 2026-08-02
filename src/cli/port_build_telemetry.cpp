@@ -2407,9 +2407,7 @@ class PortBuildTelemetryRecorder::Impl final {
                            std::memory_order_relaxed,
                            std::memory_order_relaxed)) {
             }
-            if (!source_event.telemetry_complete ||
-                !progress_cache_accounting_valid(
-                    source_event.counters))
+            if (!progress_event_telemetry_complete(source_event))
                 upstream_incomplete_.store(
                     true, std::memory_order_relaxed);
 

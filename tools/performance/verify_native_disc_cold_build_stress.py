@@ -21,8 +21,28 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
-SCHEMA = "katana-native-disc-cold-build-stress-v2"
-SCHEMA_VERSION = 2
+SCHEMA = "katana-native-disc-cold-build-stress-v3"
+SCHEMA_VERSION = 3
+ROOT_SCHEMA_VERSION = 2
+WORKLOAD_SCHEMA = "katana-native-disc-workload-v3"
+WORKLOAD_SCHEMA_VERSION = 3
+PROVENANCE_CONTRACT_VERSION = 3
+DELTA_SCALE_FUNCTION_COUNTS = [16, 128]
+REQUIRED_FUNCTION_VALUE_SUBPHASES = [
+    "inventory-region-closure",
+    "inventory-region-sink-sources",
+    "abi-return-signatures",
+    "abi-stack-reads",
+    "abi-register-reads",
+    "persistent-store-signatures",
+    "inventory-reachability",
+    "cache-key-plan",
+    "resolution-root-dependencies",
+    "resolution-root-scc-order",
+    "resolution-root-scc-components",
+    "resolution-root-contracts",
+    "resolution-root-plan",
+]
 LOGICAL_SECTOR_SIZE = 2048
 RAW_SECTOR_SIZE = 2352
 DATA_TRACK_LBA = 45_000
@@ -34,6 +54,10 @@ SEMANTIC_HEAVY_BLOCKS = 4_096
 SEMANTIC_ROOT_TAIL = SEMANTIC_HEAVY_BLOCKS * 4
 SEMANTIC_SIZE = 0x5148
 ROOT_MAGIC = b"KSTRROOT"
+DETERMINISTIC_SEED = 0x00C0FFEE
+RESOLUTION_PROBE_VALUE_BLOCK = 0
+RESOLUTION_PROBE_STORE_BLOCK = 1
+RESOLUTION_PROBE_LOAD_BLOCK = 2
 MANIFEST_NAME = "stress-manifest.json"
 MANIFEST_DIGEST_NAME = "stress-manifest.sha256"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -89,8 +113,8 @@ PROFILES = {
 }
 
 EXPECTED_MANIFEST_DIGESTS = {
-    "smoke": "23acc483a0429578f9967fed888839f39335bfb626225c3a39aafd4eeb2081f0",
-    "reference": "3fa1027ec898483657b37e7bc3e6c79fdb4f7e908408cc5d04c4e1d2e85f0bea",
+    "smoke": "861af21607d2cdb1a1a8ea2a2ca5d85b0bab5995d58f4e62a49515bf94e818c6",
+    "reference": "dbe0500286adc3e05de122a99769707e83e95302f4376ee608631864ac12af55",
 }
 
 
@@ -467,6 +491,13 @@ def expected_wave(profile: Profile, root_index: int) -> int:
 
 def verify_boot(boot: bytes, profile: Profile) -> None:
     require(len(boot) == profile.functions * FUNCTION_SIZE, "BOOT.BIN besitzt falsche Groesse")
+    resolution_roots = {
+        (root_index * 37) % profile.functions for root_index in range(profile.roots)
+    }
+    require(
+        len(resolution_roots) == profile.roots,
+        "BOOT.BIN Resolution-Root-Menge ist nicht eindeutig",
+    )
     for function_index in range(profile.functions):
         function = boot[function_index * FUNCTION_SIZE : (function_index + 1) * FUNCTION_SIZE]
         for block_index in range(BLOCKS_PER_FUNCTION):
@@ -481,9 +512,24 @@ def verify_boot(boot: bytes, profile: Profile) -> None:
                 )
             else:
                 require(control == 0xA000, f"BOOT Funktion {function_index} Block {block_index}: kein bra 0")
+                register = (function_index + block_index) & 0x0F
+                immediate = (
+                    function_index * 29
+                    + block_index * 17
+                    + DETERMINISTIC_SEED
+                ) & 0xFF
+                expected_delay = 0xE000 | (register << 8) | immediate
+                if function_index in resolution_roots:
+                    if block_index == RESOLUTION_PROBE_VALUE_BLOCK:
+                        expected_delay = 0xE000 | immediate
+                    elif block_index == RESOLUTION_PROBE_STORE_BLOCK:
+                        expected_delay = 0x2F06
+                    elif block_index == RESOLUTION_PROBE_LOAD_BLOCK:
+                        expected_delay = 0x60F6
                 require(
-                    delay & 0xF000 == 0xE000,
-                    f"BOOT Funktion {function_index} Block {block_index}: Delay-Slot ist kein mov #imm,Rn",
+                    delay == expected_delay,
+                    f"BOOT Funktion {function_index} Block {block_index}: "
+                    "kein exakter deterministischer BRA-/Resolution-Delay-Slot",
                 )
 
 
@@ -518,7 +564,10 @@ def verify_roots(data: bytes, profile: Profile) -> list[int]:
     record = struct.Struct("<IIIII")
     require(len(data) >= header.size, "ROOTS.BIN ist abgeschnitten")
     magic, version, count, record_size, wave_count = header.unpack_from(data)
-    require(magic == ROOT_MAGIC and version == SCHEMA_VERSION, "ROOTS.BIN Header ungueltig")
+    require(
+        magic == ROOT_MAGIC and version == ROOT_SCHEMA_VERSION,
+        "ROOTS.BIN Header ungueltig",
+    )
     require(count == profile.roots and record_size == record.size, "ROOTS.BIN Counts ungueltig")
     require(wave_count == len(profile.wave_sizes), "ROOTS.BIN Wellenzahl ungueltig")
     require(len(data) == header.size + count * record.size, "ROOTS.BIN Groesse ungueltig")
@@ -558,15 +607,21 @@ def expected_workload(profile: Profile) -> dict[str, Any]:
         "declared_entry_count": profile.modules + 1,
         "declared_hint_count": profile.modules + 3,
         "declared_source_binding_count": profile.modules + 1,
+        "cfa_delta_scale_function_counts": DELTA_SCALE_FUNCTION_COUNTS,
+        "fva_delta_scale_function_counts": DELTA_SCALE_FUNCTION_COUNTS,
         "function_count": profile.functions,
         "module_count": profile.modules,
         "module_extent_count": profile.modules + 1,
         "partition_count": profile.partitions,
         "replay_passes": profile.replay_passes,
+        "resolution_root_count": profile.roots,
+        "resolution_root_probe": "r0-stack-roundtrip",
+        "persistent_physical_work_contract": "kr-4978-v1",
+        "required_function_value_subphases": REQUIRED_FUNCTION_VALUE_SUBPHASES,
         "root_count": profile.roots,
         "semantic_function_count": 6,
         "seed_wave_counts": list(profile.wave_sizes),
-        "throughput_topology": "independent-bra-chains",
+        "throughput_topology": "independent-bra-chains-with-resolution-roots",
         "wave_count": len(profile.wave_sizes),
     }
 
@@ -578,8 +633,12 @@ def verify_workload(data: bytes, profile: Profile) -> dict[str, Any]:
         set(workload) == {"profile", "schema", "version", "workload"},
         "WORKLOAD.JSN besitzt unerwartete oder fehlende Top-Level-Felder",
     )
-    require(workload["schema"] == "katana-native-disc-workload-v2", "Workload-Schema ungueltig")
-    require(exact_int(workload["version"], "Workload-Version") == 2, "Workload-Version ungueltig")
+    require(workload["schema"] == WORKLOAD_SCHEMA, "Workload-Schema ungueltig")
+    require(
+        exact_int(workload["version"], "Workload-Version")
+        == WORKLOAD_SCHEMA_VERSION,
+        "Workload-Version ungueltig",
+    )
     require(workload["profile"] == profile.name, "Workload-Profil falsch")
     require(
         as_mapping(workload["workload"], "Workload-Counts") == expected_workload(profile),
@@ -648,7 +707,8 @@ def verify_semantic_program(data: bytes, contract_data: bytes) -> None:
         0x5080: 0xD603, 0x5082: 0x2642, 0x5084: 0xD107,
         0x5086: 0x410B, 0x5088: 0x0009, 0x508A: 0x000B,
         0x508C: 0x0009, 0x50C0: 0x000B, 0x50C2: 0x0009,
-        0x5100: 0x000B, 0x5102: 0x0009,
+        0x5100: 0x2F06, 0x5102: 0x60F6, 0x5104: 0x000B,
+        0x5106: 0x0009,
     }.items():
         put_u16(offset, value)
     put_u32(tail + 0x20, SEMANTIC_ADDRESS + 0x50C0)
@@ -673,7 +733,7 @@ def verify_semantic_program(data: bytes, contract_data: bytes) -> None:
             {"offset": 0x5040, "size": 0x10},
             {"offset": 0x5080, "size": 0x0E},
             {"offset": 0x50C0, "size": 0x04},
-            {"offset": 0x5100, "size": 0x04},
+            {"offset": 0x5100, "size": 0x08},
         ],
         "call_chain": [0x00, 0x5000, 0x5040, 0x5080, 0x50C0],
         "heavy_prefix_blocks": SEMANTIC_HEAVY_BLOCKS,
@@ -826,7 +886,7 @@ def verify_manifest(root: Path, requested_profile: str | None) -> tuple[dict[str
     profile = PROFILES[profile_name]
     require(
         sha256_bytes(manifest_bytes) == EXPECTED_MANIFEST_DIGESTS[profile.name],
-        "Manifest-Digest weicht von der veroeffentlichten v2-Profilidentitaet ab",
+        "Manifest-Digest weicht von der veroeffentlichten v3-Profilidentitaet ab",
     )
     provenance = as_mapping(manifest["provenance"], "Manifest-Provenienz")
     require(
@@ -845,7 +905,8 @@ def verify_manifest(root: Path, requested_profile: str | None) -> tuple[dict[str
         "Manifest-Provenienz nennt nicht den oeffentlichen Generator",
     )
     require(
-        exact_int(provenance["contract_version"], "Provenienz-Vertragsversion") == 2,
+        exact_int(provenance["contract_version"], "Provenienz-Vertragsversion")
+        == PROVENANCE_CONTRACT_VERSION,
         "Provenienz-Vertragsversion ungueltig",
     )
     require(

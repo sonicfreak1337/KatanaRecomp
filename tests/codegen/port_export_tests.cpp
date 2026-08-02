@@ -4376,7 +4376,7 @@ int run_test(const int argc, char* argv[]) {
                           "\"${CMAKE_BINARY_DIR}/katana-runtime\" EXCLUDE_FROM_ALL)") !=
                 std::string::npos &&
             read_text(output / "CMakeLists.txt")
-                    .find("set(KATANA_PORT_EXPECTED_RUNTIME_ABI_VERSION \"85\")") !=
+                    .find("set(KATANA_PORT_EXPECTED_RUNTIME_ABI_VERSION \"86\")") !=
                 std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_PORT_EXPECTED_BLOCK_ABI_VERSION \"5\")") !=

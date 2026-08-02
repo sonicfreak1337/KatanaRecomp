@@ -228,13 +228,17 @@ constexpr std::size_t maximum_contextual_return_evaluations =
 constexpr std::size_t maximum_inventory_stack_coordinates = 64u;
 constexpr std::size_t maximum_inventory_regions = maximum_guarded_code_inventory;
 constexpr std::size_t maximum_inventory_region_blocks = 256u;
+// Small exact CFA discoveries must remain proportional to their changed
+// closure. Larger seed waves already carry material delta work and keep the
+// established bulk builder, which is more efficient for that domain.
+constexpr std::size_t maximum_local_derived_topology_lines = 512u;
+constexpr std::size_t maximum_local_derived_topology_functions = 8u;
 constexpr std::size_t maximum_memory_values = 256u;
 constexpr std::size_t maximum_parallel_resolution_jobs = 64u;
 constexpr std::size_t minimum_parallel_resolution_functions = 2u;
 constexpr std::size_t maximum_abi_stack_read_top_chain = 16u;
 constexpr std::size_t maximum_evaluation_inventory_replay_bytes =
     256u * 1024u * 1024u;
-
 enum class AbiStackReadTopReason : std::uint8_t {
     None,
     InvalidSlot,
@@ -1452,6 +1456,18 @@ bool merge_forwarded_inventory_payload(AbstractState& destination,
     return changed;
 }
 
+enum class TailIngressTargetKind : std::uint8_t {
+    Function,
+    InventoryRegion,
+};
+
+struct TailIngressTarget {
+    std::uint32_t address = 0u;
+    TailIngressTargetKind kind = TailIngressTargetKind::Function;
+
+    auto operator<=>(const TailIngressTarget&) const = default;
+};
+
 struct FunctionEvaluation {
     FunctionValueSummary summary;
     bool local_fixpoint_budget_exhausted = false;
@@ -1465,6 +1481,8 @@ struct FunctionEvaluation {
     struct InventoryTransfer {
         std::uint32_t transfer_site = 0u;
         std::uint32_t target = 0u;
+        TailIngressTargetKind target_kind =
+            TailIngressTargetKind::Function;
         AbstractState state;
         bool guarded = true;
         bool complete = false;
@@ -1506,15 +1524,335 @@ struct IndirectCalleeCandidates {
     bool requires_code_pointer = false;
     bool observes_abi_arguments = false;
 };
+
+struct PersistentIndirectCalleeIndex final {
+  private:
+    struct Node final {
+        std::uint32_t key = 0u;
+        IndirectCalleeCandidates value;
+        std::uint64_t priority = 0u;
+        std::shared_ptr<const Node> left;
+        std::shared_ptr<const Node> right;
+    };
+    using NodePtr = std::shared_ptr<const Node>;
+
+    [[nodiscard]] static std::uint64_t node_priority(
+        const std::uint32_t key) noexcept {
+        auto value = static_cast<std::uint64_t>(key) +
+                     0x9e3779b97f4a7c15ull;
+        value = (value ^ (value >> 30u)) *
+                0xbf58476d1ce4e5b9ull;
+        value = (value ^ (value >> 27u)) *
+                0x94d049bb133111ebull;
+        return value ^ (value >> 31u);
+    }
+
+    [[nodiscard]] static NodePtr make_node(
+        const std::uint32_t key,
+        IndirectCalleeCandidates value,
+        const std::uint64_t priority,
+        NodePtr left,
+        NodePtr right) {
+        return std::make_shared<const Node>(
+            Node{key,
+                 std::move(value),
+                 priority,
+                 std::move(left),
+                 std::move(right)});
+    }
+
+    [[nodiscard]] static std::pair<NodePtr, NodePtr> split(
+        const NodePtr& root,
+        const std::uint32_t key) {
+        if (root == nullptr) return {};
+        if (root->key < key) {
+            auto [left, right] = split(root->right, key);
+            return {make_node(root->key,
+                              root->value,
+                              root->priority,
+                              root->left,
+                              std::move(left)),
+                    std::move(right)};
+        }
+        auto [left, right] = split(root->left, key);
+        return {std::move(left),
+                make_node(root->key,
+                          root->value,
+                          root->priority,
+                          std::move(right),
+                          root->right)};
+    }
+
+    [[nodiscard]] static NodePtr insert(
+        const NodePtr& root,
+        const std::uint32_t key,
+        IndirectCalleeCandidates value) {
+        if (root == nullptr)
+            return make_node(key,
+                             std::move(value),
+                             node_priority(key),
+                             nullptr,
+                             nullptr);
+        if (root->key == key)
+            return make_node(key,
+                             std::move(value),
+                             root->priority,
+                             root->left,
+                             root->right);
+        const auto priority = node_priority(key);
+        if (priority > root->priority ||
+            (priority == root->priority && key < root->key)) {
+            auto [left, right] = split(root, key);
+            return make_node(key,
+                             std::move(value),
+                             priority,
+                             std::move(left),
+                             std::move(right));
+        }
+        if (key < root->key)
+            return make_node(root->key,
+                             root->value,
+                             root->priority,
+                             insert(root->left,
+                                    key,
+                                    std::move(value)),
+                             root->right);
+        return make_node(root->key,
+                         root->value,
+                         root->priority,
+                         root->left,
+                         insert(root->right,
+                                key,
+                                std::move(value)));
+    }
+
+    [[nodiscard]] static NodePtr merge(
+        const NodePtr& left,
+        const NodePtr& right) {
+        if (left == nullptr) return right;
+        if (right == nullptr) return left;
+        if (left->priority > right->priority)
+            return make_node(left->key,
+                             left->value,
+                             left->priority,
+                             left->left,
+                             merge(left->right, right));
+        return make_node(right->key,
+                         right->value,
+                         right->priority,
+                         merge(left, right->left),
+                         right->right);
+    }
+
+    [[nodiscard]] static NodePtr erase_node(
+        const NodePtr& root,
+        const std::uint32_t key) {
+        if (root == nullptr) return nullptr;
+        if (root->key == key) return merge(root->left, root->right);
+        if (key < root->key)
+            return make_node(root->key,
+                             root->value,
+                             root->priority,
+                             erase_node(root->left, key),
+                             root->right);
+        return make_node(root->key,
+                         root->value,
+                         root->priority,
+                         root->left,
+                         erase_node(root->right, key));
+    }
+
+    static void materialize_node(
+        const NodePtr& node,
+        std::map<std::uint32_t, IndirectCalleeCandidates>& output) {
+        if (node == nullptr) return;
+        materialize_node(node->left, output);
+        output.emplace(node->key, node->value);
+        materialize_node(node->right, output);
+    }
+
+    template <typename Callback>
+    static void for_each_node(const NodePtr& node,
+                              const Callback& callback) {
+        if (node == nullptr) return;
+        for_each_node(node->left, callback);
+        callback(node->key, node->value);
+        for_each_node(node->right, callback);
+    }
+
+  public:
+
+    [[nodiscard]] const IndirectCalleeCandidates* find_value(
+        const std::uint32_t site) const {
+        auto node = root_;
+        while (node != nullptr) {
+            if (site == node->key) return &node->value;
+            node = site < node->key ? node->left : node->right;
+        }
+        return nullptr;
+    }
+
+    void insert_or_assign(const std::uint32_t site,
+                          IndirectCalleeCandidates value) {
+        if (find_value(site) == nullptr) ++size_;
+        root_ = insert(root_, site, std::move(value));
+    }
+
+    void erase(const std::uint32_t site) {
+        if (find_value(site) == nullptr) return;
+        root_ = erase_node(root_, site);
+        --size_;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+
+    void materialize(
+        std::map<std::uint32_t, IndirectCalleeCandidates>& output) const {
+        materialize_node(root_, output);
+    }
+
+    template <typename Callback>
+    void for_each(const Callback& callback) const {
+        for_each_node(root_, callback);
+    }
+
+  private:
+    NodePtr root_;
+    std::size_t size_ = 0u;
+};
+
+// Common lookup facade used by evaluator, cache-key construction and ABI
+// analyses. It can borrow either a cold flat map or an Exact persistent
+// overlay without copying the complete candidate relation.
+class IndirectCalleeIndexView final {
+  public:
+    using FlatMap = std::unordered_map<
+        std::uint32_t, IndirectCalleeCandidates>;
+
+    struct value_proxy final {
+        std::uint32_t first;
+        const IndirectCalleeCandidates& second;
+    };
+
+    class const_iterator final {
+      public:
+        const_iterator() = default;
+        const_iterator(const std::uint32_t site,
+                       const IndirectCalleeCandidates* value)
+            : value_(value) {
+            if (value_ != nullptr) proxy_.emplace(value_proxy{site, *value_});
+        }
+
+        [[nodiscard]] const value_proxy& operator*() const {
+            return *proxy_;
+        }
+        [[nodiscard]] const value_proxy* operator->() const {
+            return &*proxy_;
+        }
+        [[nodiscard]] bool operator==(
+            const const_iterator& other) const noexcept {
+            return value_ == other.value_;
+        }
+
+      private:
+        const IndirectCalleeCandidates* value_ = nullptr;
+        std::optional<value_proxy> proxy_;
+    };
+
+    explicit IndirectCalleeIndexView(const FlatMap& flat)
+        : flat_(&flat) {}
+    explicit IndirectCalleeIndexView(
+        const PersistentIndirectCalleeIndex& persistent)
+        : persistent_(&persistent) {}
+
+    [[nodiscard]] const_iterator find(const std::uint32_t site) const {
+        const IndirectCalleeCandidates* value = nullptr;
+        if (flat_ != nullptr) {
+            const auto found = flat_->find(site);
+            if (found != flat_->end()) value = &found->second;
+        } else if (persistent_ != nullptr) {
+            value = persistent_->find_value(site);
+        }
+        return value == nullptr ? end() : const_iterator{site, value};
+    }
+
+    [[nodiscard]] const_iterator end() const noexcept { return {}; }
+
+    [[nodiscard]] bool contains(const std::uint32_t site) const {
+        return find(site) != end();
+    }
+
+    [[nodiscard]] const IndirectCalleeCandidates& at(
+        const std::uint32_t site) const {
+        const auto found = find(site);
+        if (found == end())
+            throw std::out_of_range("IndirectCalleeIndexView");
+        return found->second;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return flat_ != nullptr ? flat_->size()
+                               : persistent_ != nullptr
+                                     ? persistent_->size()
+                                     : 0u;
+    }
+
+    template <typename Callback>
+    void for_each(const Callback& callback) const {
+        if (flat_ != nullptr) {
+            for (const auto& [site, candidates] : *flat_)
+                callback(site, candidates);
+        } else if (persistent_ != nullptr) {
+            persistent_->for_each(callback);
+        }
+    }
+
+  private:
+    const FlatMap* flat_ = nullptr;
+    const PersistentIndirectCalleeIndex* persistent_ = nullptr;
+};
+
+struct TailIngressCandidates {
+    std::vector<TailIngressTarget> targets;
+    bool guarded = false;
+    bool complete = true;
+    bool requires_code_pointer = false;
+    bool observes_abi_arguments = false;
+};
 using TailIngressMap =
-    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>;
+    std::unordered_map<std::uint32_t, TailIngressCandidates>;
+
+enum class CallsiteContributionKind : std::uint8_t {
+    DirectCall,
+    ResolvedCall,
+    CandidateCall,
+    FunctionTail,
+    InventoryRegionTail,
+};
+
+struct CallsiteContributionKey final {
+    std::uint32_t caller = 0u;
+    std::uint32_t site = 0u;
+    CallsiteContributionKind kind =
+        CallsiteContributionKind::DirectCall;
+
+    auto operator<=>(const CallsiteContributionKey&) const = default;
+};
 
 struct CandidateInput {
     AbstractState state;
+    std::set<CallsiteContributionKey> expected_contributions;
+    std::map<CallsiteContributionKey, AbstractState>
+        contribution_observations;
+    // Derived compatibility projection used by the existing lattice merge.
+    // Its authority is the exact owner/site/kind relation above.
     std::set<std::uint32_t> expected_call_sites;
     std::map<std::uint32_t, AbstractState> observations;
     bool unknown_ingress = false;
 };
+
+using CallsiteContributionRelation =
+    std::map<std::uint32_t, std::set<CallsiteContributionKey>>;
 
 template <typename T>
 void normalize(std::vector<T>& values) {
@@ -1773,7 +2111,7 @@ bool merge_inventory_candidate_values(
            destination_truncated != previous_truncated;
 }
 
-[[nodiscard]] std::optional<IndirectCalleeCandidates>
+[[nodiscard]] std::optional<TailIngressCandidates>
 find_tail_ingress(const TailIngressMap& baseline,
                   const TailIngressMap* const local,
                   const std::uint32_t transfer_site) {
@@ -1784,6 +2122,29 @@ find_tail_ingress(const TailIngressMap& baseline,
     }
     if (baseline_ingress == baseline.end()) return std::nullopt;
     return baseline_ingress->second;
+}
+
+// A call target is always evaluated through the ordinary callee contract.
+// The only tail-like transfer attached to the same instruction is a private
+// inventory-region continuation which resumes after the call returns.  Keep
+// this selection in one helper: evaluator, cache key and persistent dependency
+// graph must consume precisely the same semantic input.
+[[nodiscard]] std::optional<TailIngressCandidates>
+select_evaluation_tail_ingress(
+    const katana::sh4::ControlFlowKind flow,
+    const TailIngressMap& baseline,
+    const TailIngressMap* const local,
+    const std::uint32_t transfer_site) {
+    const bool call =
+        flow == katana::sh4::ControlFlowKind::Call ||
+        flow == katana::sh4::ControlFlowKind::IndirectCall;
+    if (!call)
+        return find_tail_ingress(baseline, local, transfer_site);
+    if (local == nullptr) return std::nullopt;
+    const auto ingress = local->find(transfer_site);
+    return ingress == local->end()
+               ? std::optional<TailIngressCandidates>{}
+               : std::optional<TailIngressCandidates>{ingress->second};
 }
 
 } // namespace
@@ -1868,6 +2229,13 @@ class GuardedCodeInventoryCollector {
     [[nodiscard]] bool exact_replay_available() const noexcept {
         return !captures_exact_replay_ ||
                exact_replay_available_;
+    }
+
+    [[nodiscard]] bool replay_truncated() const noexcept {
+        return candidate_inventory_truncated_ ||
+               candidate_budget_exhausted_ ||
+               raw_stored_candidates_truncated_ ||
+               table_scan_truncated_;
     }
 
     void mark_stored_candidates_incomplete() {
@@ -1965,6 +2333,34 @@ class GuardedCodeInventoryCollector {
             candidate_inventory_truncated_;
         destination.candidate_budget_exhausted_ =
             destination.candidate_budget_exhausted_ || candidate_budget_exhausted_;
+        destination.raw_stored_candidates_truncated_ =
+            destination.raw_stored_candidates_truncated_ ||
+            raw_stored_candidates_truncated_;
+        destination.table_scan_truncated_ =
+            destination.table_scan_truncated_ || table_scan_truncated_;
+    }
+
+    void replay_copy_into(
+        GuardedCodeInventoryCollector& destination) const {
+        if (!defer_stored_admission_ || destination.defer_stored_admission_)
+            throw std::logic_error(
+                "Guarded-Code-Inventar besitzt einen ungueltigen "
+                "persistenten Replay-Vertrag.");
+        for (const auto& [target, candidate] : stored_candidates_) {
+            destination.collect_stored_candidate(
+                candidate,
+                complete_stored_targets_.contains(target));
+        }
+        for (const auto& [table_address, candidate] : returned_tables_) {
+            static_cast<void>(table_address);
+            destination.collect_returned_candidate(candidate);
+        }
+        destination.candidate_inventory_truncated_ =
+            destination.candidate_inventory_truncated_ ||
+            candidate_inventory_truncated_;
+        destination.candidate_budget_exhausted_ =
+            destination.candidate_budget_exhausted_ ||
+            candidate_budget_exhausted_;
         destination.raw_stored_candidates_truncated_ =
             destination.raw_stored_candidates_truncated_ ||
             raw_stored_candidates_truncated_;
@@ -2731,6 +3127,8 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     values.insert(values.end(), source.values.begin(), source.values.end());
     normalize(values);
     if (values.size() > maximum_summary_values) {
+        if (contextual_candidate_dependency)
+            destination.inventory_code_pointer_values_truncated = true;
         make_unknown_preserving_provenance(destination);
         return true;
     }
@@ -3124,8 +3522,12 @@ void coalesce_inventory_transfers(
     std::sort(observations.begin(),
               observations.end(),
               [](const auto& left, const auto& right) {
-                  return std::tie(left.transfer_site, left.target) <
-                         std::tie(right.transfer_site, right.target);
+                  return std::tie(left.transfer_site,
+                                  left.target,
+                                  left.target_kind) <
+                         std::tie(right.transfer_site,
+                                  right.target,
+                                  right.target_kind);
               });
     std::vector<FunctionEvaluation::InventoryTransfer> merged;
     merged.reserve(observations.size());
@@ -3133,7 +3535,8 @@ void coalesce_inventory_transfers(
         if (merged.empty() ||
             merged.back().transfer_site !=
                 observation.transfer_site ||
-            merged.back().target != observation.target) {
+            merged.back().target != observation.target ||
+            merged.back().target_kind != observation.target_kind) {
             merged.push_back(std::move(observation));
             continue;
         }
@@ -6509,7 +6912,7 @@ void observe_inventory_transfers(
     const AbstractState& state,
     const std::uint32_t owner,
     const std::uint32_t transfer_site,
-    const std::span<const std::uint32_t> candidate_callees,
+    const std::span<const TailIngressTarget> candidate_callees,
     const bool guarded,
     const bool complete,
     const bool requires_code_pointer,
@@ -6520,9 +6923,10 @@ void observe_inventory_transfers(
     if (transfers == nullptr || candidate_callees.empty()) return;
     for (const auto candidate_callee : candidate_callees) {
         const AbiStackArgumentReadSet* required_stack_reads = nullptr;
-        if (abi_stack_argument_reads != nullptr) {
+        if (candidate_callee.kind == TailIngressTargetKind::Function &&
+            abi_stack_argument_reads != nullptr) {
             if (const auto found =
-                    abi_stack_argument_reads->find(candidate_callee);
+                    abi_stack_argument_reads->find(candidate_callee.address);
                 found != abi_stack_argument_reads->end())
                 required_stack_reads = &found->second;
         }
@@ -6530,7 +6934,7 @@ void observe_inventory_transfers(
             state,
             owner,
             transfer_site,
-            candidate_callee,
+            candidate_callee.address,
             walk_diagnostics,
             required_stack_reads);
         if (observes_abi_arguments)
@@ -6581,7 +6985,8 @@ void observe_inventory_transfers(
             }
         }
         transfers->push_back({transfer_site,
-                              candidate_callee,
+                              candidate_callee.address,
+                              candidate_callee.kind,
                               std::move(observation),
                               guarded,
                               complete});
@@ -7036,6 +7441,139 @@ const katana::sh4::DisassemblyLine& controlling_line(const BasicBlock& block) {
                : block.lines[last];
 }
 
+// A read-only two-layer block index. Incremental inventory overlays contain
+// only the newly introduced local block leaders; keeping them separate avoids
+// copying the complete immutable ProgramGraph address map on every Exact
+// candidate-only epoch.
+class BasicBlockIndexView final {
+  public:
+    using Map =
+        std::unordered_map<std::uint32_t, const BasicBlock*>;
+    using value_type = Map::value_type;
+
+    class const_iterator final {
+      public:
+        const_iterator() = default;
+        explicit const_iterator(const value_type* value) : value_(value) {}
+
+        [[nodiscard]] const value_type& operator*() const {
+            return *value_;
+        }
+        [[nodiscard]] const value_type* operator->() const {
+            return value_;
+        }
+        [[nodiscard]] bool operator==(
+            const const_iterator&) const = default;
+
+      private:
+        const value_type* value_ = nullptr;
+    };
+
+    explicit BasicBlockIndexView(const Map& base) : layers_{&base} {}
+    explicit BasicBlockIndexView(std::vector<const Map*> layers)
+        : layers_(std::move(layers)) {}
+    BasicBlockIndexView(std::vector<const Map*> layers,
+                        const Map& overlay)
+        : layers_(std::move(layers)), overlay_(&overlay) {}
+
+    [[nodiscard]] const_iterator find(const std::uint32_t address) const {
+        if (overlay_ != nullptr) {
+            const auto found = overlay_->find(address);
+            if (found != overlay_->end())
+                return const_iterator{&*found};
+        }
+        for (auto layer = layers_.rbegin(); layer != layers_.rend(); ++layer) {
+            const auto found = (*layer)->find(address);
+            if (found != (*layer)->end()) return const_iterator{&*found};
+        }
+        return end();
+    }
+
+    [[nodiscard]] const_iterator end() const noexcept { return {}; }
+
+    [[nodiscard]] bool contains(const std::uint32_t address) const {
+        return find(address) != end();
+    }
+
+    [[nodiscard]] const BasicBlock* at(const std::uint32_t address) const {
+        const auto found = find(address);
+        if (found == end()) throw std::out_of_range("BasicBlockIndexView");
+        return found->second;
+    }
+
+  private:
+    std::vector<const Map*> layers_;
+    const Map* overlay_ = nullptr;
+};
+
+// Read-only newest-layer-first lookup over immutable ProgramGraph maps.  A
+// monotone Exact epoch contributes only its local address families and keeps
+// the complete previous graph alive through the owning graph pointer; no
+// unchanged map is copied merely to make a later lookup possible.
+template <typename Value>
+class LayeredAddressIndexView final {
+  public:
+    using Map = std::unordered_map<std::uint32_t, Value>;
+
+    struct value_proxy final {
+        std::uint32_t first = 0u;
+        const Value& second;
+    };
+
+    class const_iterator final {
+      public:
+        const_iterator() = default;
+        const_iterator(const std::uint32_t address, const Value* value)
+            : value_(value) {
+            if (value_ != nullptr)
+                proxy_.emplace(value_proxy{address, *value_});
+        }
+
+        [[nodiscard]] const value_proxy& operator*() const {
+            return *proxy_;
+        }
+        [[nodiscard]] const value_proxy* operator->() const {
+            return &*proxy_;
+        }
+        [[nodiscard]] bool operator==(
+            const const_iterator& other) const noexcept {
+            return value_ == other.value_;
+        }
+
+      private:
+        const Value* value_ = nullptr;
+        std::optional<value_proxy> proxy_;
+    };
+
+    LayeredAddressIndexView() = default;
+    explicit LayeredAddressIndexView(std::vector<const Map*> layers)
+        : layers_(std::move(layers)) {}
+
+    [[nodiscard]] const_iterator find(
+        const std::uint32_t address) const {
+        for (auto layer = layers_.rbegin(); layer != layers_.rend(); ++layer) {
+            const auto found = (*layer)->find(address);
+            if (found != (*layer)->end())
+                return const_iterator{address, &found->second};
+        }
+        return end();
+    }
+
+    [[nodiscard]] const_iterator end() const noexcept { return {}; }
+    [[nodiscard]] bool contains(const std::uint32_t address) const {
+        return find(address) != end();
+    }
+    [[nodiscard]] const Value& at(const std::uint32_t address) const {
+        const auto found = find(address);
+        if (found == end())
+            throw std::out_of_range("LayeredAddressIndexView");
+        return found->second;
+    }
+
+  private:
+    std::vector<const Map*> layers_;
+};
+
 std::vector<std::uint32_t> checked_targets(const katana::io::ExecutableImage& image,
                                            const katana::sh4::DisassemblyLine& line,
                                            const AbstractValue& value) {
@@ -7435,9 +7973,9 @@ enum class ResolutionCollectionMode : std::uint8_t {
 FunctionEvaluation evaluate_function(
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
-    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
-    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>& indirect_callees,
-    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>& tail_ingresses,
+    const BasicBlockIndexView& blocks,
+    const IndirectCalleeIndexView& indirect_callees,
+    const TailIngressMap& tail_ingresses,
     const std::map<std::uint32_t, FunctionValueSummary>& summaries,
     const AbstractState& initial_state,
     const ResolutionCollectionMode resolution_mode,
@@ -7532,7 +8070,7 @@ FunctionEvaluation evaluate_function(
         std::optional<DelayedCall> delayed_call;
         struct DelayedTailIngress {
             std::uint32_t transfer_site = 0u;
-            std::vector<std::uint32_t> candidate_callees;
+            std::vector<TailIngressTarget> candidate_callees;
             bool candidate_callees_guarded = true;
             bool candidate_callees_complete = false;
             bool requires_code_pointer = false;
@@ -7580,6 +8118,42 @@ FunctionEvaluation evaluate_function(
                     }
                 }
                 if (resolution.targets.empty() &&
+                    resolution_mode ==
+                        ResolutionCollectionMode::GuardedInventory &&
+                    contextual_summaries != nullptr &&
+                    value.contextual_candidate_dependency && value.known &&
+                    !value.values.empty()) {
+                    std::vector<std::uint32_t> targets;
+                    for (const auto candidate : value.values) {
+                        auto target = candidate;
+                        if (line.instruction.kind ==
+                                katana::sh4::InstructionKind::Braf ||
+                            line.instruction.kind ==
+                                katana::sh4::InstructionKind::Bsrf)
+                            target += line.address + 4u;
+                        const auto validation =
+                            validate_decode_candidate(image, target);
+                        if (validation.valid())
+                            targets.push_back(
+                                validation.resolved_address);
+                    }
+                    normalize(targets);
+                    if (!targets.empty()) {
+                        resolution.targets = std::move(targets);
+                        // A value reached through a guarded candidate context
+                        // is useful native-code inventory, but it is never an
+                        // authoritative CFG proof. Address provenance belongs
+                        // to the object used for a load, not to the loaded
+                        // function value, so no call-site/callee evidence is
+                        // copied here.
+                        resolution.guarded = true;
+                        resolution.complete = false;
+                        resolution.evidence =
+                            ControlFlowEvidence::GuardedPartial;
+                        resolution.reason = "guarded-function-memory";
+                    }
+                }
+                if (resolution.targets.empty() &&
                     !value.inventory_code_pointer_values.empty()) {
                     auto targets = checked_inventory_targets(image, line, value);
                     if (!targets.empty()) {
@@ -7609,6 +8183,11 @@ FunctionEvaluation evaluate_function(
             const bool call =
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
+            const auto tail_ingress = select_evaluation_tail_ingress(
+                line.instruction.control_flow,
+                tail_ingresses,
+                local_tail_ingresses,
+                line.address);
             if (!call && guarded_inventory_collector != nullptr) {
                 std::vector<StoredCodeAddressCandidate> stored_candidates;
                 observe_stored_code_addresses(
@@ -7642,8 +8221,6 @@ FunctionEvaluation evaluate_function(
                 }
             }
             if (!call) {
-                const auto tail_ingress = find_tail_ingress(
-                    tail_ingresses, local_tail_ingresses, line.address);
                 if (tail_ingress.has_value() &&
                     tail_ingress->observes_abi_arguments)
                     promote_tail_code_literal_arguments(
@@ -7723,16 +8300,7 @@ FunctionEvaluation evaluate_function(
                                 walk_diagnostics,
                                 abi_stack_argument_reads);
             }
-            if (!call &&
-                (line.instruction.control_flow ==
-                     katana::sh4::ControlFlowKind::UnconditionalBranch ||
-                 line.instruction.control_flow ==
-                     katana::sh4::ControlFlowKind::IndirectBranch ||
-                 line.instruction.control_flow ==
-                     katana::sh4::ControlFlowKind::ConditionalBranch)) {
-                const auto tail_ingress = find_tail_ingress(
-                    tail_ingresses, local_tail_ingresses, line.address);
-                if (!tail_ingress.has_value()) continue;
+            if (tail_ingress.has_value()) {
                 if (line.instruction.has_delay_slot) {
                     delayed_tail_ingress = DelayedTailIngress{
                         line.address,
@@ -8141,16 +8709,9 @@ callee_relative_stack_offset(const AbstractState& call_observation,
     return static_cast<std::int32_t>(rebased);
 }
 
-bool merge_candidate_input(
+bool recompute_candidate_input_state(
     CandidateInput& destination,
-    const FunctionEvaluation::CallArguments& observation,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics) {
-    const auto [stored, inserted] =
-        destination.observations.try_emplace(observation.call_site, observation.state);
-    if (!inserted) {
-        if (stored->second == observation.state) return false;
-        stored->second = observation.state;
-    }
     AbstractState merged;
     merged.stack_offsets[15u] = 0;
     for (const auto& [call_site, state] : destination.observations) {
@@ -8727,6 +9288,72 @@ bool merge_candidate_input(
     const bool changed = destination.state != merged;
     destination.state = std::move(merged);
     return changed;
+}
+
+void rebuild_candidate_input_observation_projection(
+    CandidateInput& destination) {
+    destination.expected_call_sites.clear();
+    for (const auto& contribution : destination.expected_contributions)
+        destination.expected_call_sites.insert(contribution.site);
+    destination.observations.clear();
+    for (const auto& [contribution, state] :
+         destination.contribution_observations) {
+        const auto [stored, inserted] =
+            destination.observations.try_emplace(
+                contribution.site, state);
+        if (!inserted)
+            static_cast<void>(merge_state(
+                stored->second, state, true));
+    }
+}
+
+bool reconcile_candidate_input_contract(
+    CandidateInput& destination,
+    std::set<CallsiteContributionKey> expected,
+    const bool unknown_ingress,
+    GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics) {
+    const bool contract_changed =
+        destination.expected_contributions != expected ||
+        destination.unknown_ingress != unknown_ingress;
+    destination.expected_contributions = std::move(expected);
+    destination.unknown_ingress = unknown_ingress;
+    bool removed = false;
+    for (auto observation =
+             destination.contribution_observations.begin();
+         observation !=
+         destination.contribution_observations.end();) {
+        if (destination.expected_contributions.contains(
+                observation->first)) {
+            ++observation;
+            continue;
+        }
+        observation =
+            destination.contribution_observations.erase(observation);
+        removed = true;
+    }
+    if (!contract_changed && !removed) return false;
+    rebuild_candidate_input_observation_projection(destination);
+    return recompute_candidate_input_state(
+        destination, walk_diagnostics) || contract_changed || removed;
+}
+
+bool merge_candidate_input(
+    CandidateInput& destination,
+    const CallsiteContributionKey contribution,
+    const FunctionEvaluation::CallArguments& observation,
+    GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics) {
+    if (!destination.expected_contributions.contains(contribution))
+        return false;
+    const auto [stored, inserted] =
+        destination.contribution_observations.try_emplace(
+            contribution, observation.state);
+    if (!inserted) {
+        if (stored->second == observation.state) return false;
+        stored->second = observation.state;
+    }
+    rebuild_candidate_input_observation_projection(destination);
+    return recompute_candidate_input_state(
+        destination, walk_diagnostics);
 }
 
 bool requires_isolated_store_harvest(
@@ -9338,6 +9965,13 @@ using AbiIndirectDispatchSourceMap =
 using AbiPersistentStoreSiteMap =
     std::unordered_map<std::uint32_t, std::vector<AbiPersistentStoreSite>>;
 
+struct AbiInventorySinkSources {
+    std::uint8_t persistent_store_sources = 0u;
+    std::uint8_t indirect_dispatch_sources = 0u;
+};
+using TailIngressSinkSourceMap =
+    std::map<TailIngressTarget, AbiInventorySinkSources>;
+
 [[nodiscard]] std::uint8_t compose_abi_return_taint(
     const AbiPersistentStoreFlowState& state,
     const std::uint8_t return_sources) {
@@ -9876,14 +10510,16 @@ void compose_abi_stack_argument_reads(
 analyze_abi_persistent_store_signature(
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
-    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
+    const BasicBlockIndexView& blocks,
     const AbiReturnSourceMap* const return_sources = nullptr,
     const AbiPersistentStoreSourceMap* const persistent_store_sources = nullptr,
     const AbiIndirectDispatchSourceMap* const indirect_dispatch_sources = nullptr,
-    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>* const
+    const IndirectCalleeIndexView* const
         inventory_indirect_callees = nullptr,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads = nullptr,
-    const TailIngressMap* const inventory_tail_ingresses = nullptr) {
+    const TailIngressMap* const inventory_tail_ingresses = nullptr,
+    const TailIngressSinkSourceMap* const tail_inventory_sink_sources =
+        nullptr) {
     std::unordered_set<std::uint32_t> members;
     members.reserve(function.block_addresses.size());
     members.insert(function.block_addresses.begin(), function.block_addresses.end());
@@ -9992,17 +10628,19 @@ analyze_abi_persistent_store_signature(
             const std::vector<std::uint32_t>& callees,
             const bool complete,
             const bool guarded,
-            const IndirectCalleeCandidates* const ingress) {
+            const bool ingress_present,
+            const bool ingress_guarded,
+            const bool ingress_complete) {
             const auto observation_frame =
                 [&](const AbiStackReadTopReason reason,
                     const std::uint32_t target) {
                     auto frame =
                         make_stack_read_top_frame(reason, site);
                     frame.target = target;
-                    frame.ingress_present = ingress != nullptr;
-                    if (ingress != nullptr) {
-                        frame.ingress_guarded = ingress->guarded;
-                        frame.ingress_complete = ingress->complete;
+                    frame.ingress_present = ingress_present;
+                    if (ingress_present) {
+                        frame.ingress_guarded = ingress_guarded;
+                        frame.ingress_complete = ingress_complete;
                     }
                     return frame;
                 };
@@ -10135,7 +10773,9 @@ analyze_abi_persistent_store_signature(
                     delayed_call->inventory_callees,
                     delayed_call->stack_reads_complete,
                     delayed_call->stack_reads_guarded,
-                    nullptr);
+                    false,
+                    false,
+                    false);
                 apply_call_return(state, delayed_call->return_callee);
                 delayed_call.reset();
             }
@@ -10182,7 +10822,9 @@ analyze_abi_persistent_store_signature(
                         inventory_callees,
                         stack_reads_complete,
                         stack_reads_guarded,
-                        nullptr);
+                        false,
+                        false,
+                        false);
                     apply_call_return(state, return_callee);
                 }
             }
@@ -10218,13 +10860,63 @@ analyze_abi_persistent_store_signature(
             inventory_tail_ingresses != nullptr &&
             ingress != inventory_tail_ingresses->end();
         if (has_contract_ingress) {
-            observe_callee_stack_reads(
-                state,
-                control.address,
-                ingress->second.targets,
-                ingress->second.complete,
-                ingress->second.guarded,
-                &ingress->second);
+            if (tail_inventory_sink_sources != nullptr) {
+                for (const auto target : ingress->second.targets) {
+                    const auto target_sources =
+                        tail_inventory_sink_sources->find(target);
+                    if (target_sources ==
+                        tail_inventory_sink_sources->end())
+                        continue;
+                    signature.persistent_store_sources =
+                        static_cast<std::uint8_t>(
+                            signature.persistent_store_sources |
+                            compose_abi_return_taint(
+                                state,
+                                target_sources->second
+                                    .persistent_store_sources));
+                    signature.indirect_dispatch_sources =
+                        static_cast<std::uint8_t>(
+                            signature.indirect_dispatch_sources |
+                            compose_abi_return_taint(
+                                state,
+                                target_sources->second
+                                    .indirect_dispatch_sources));
+                }
+            }
+            const auto region_target = std::find_if(
+                ingress->second.targets.begin(),
+                ingress->second.targets.end(),
+                [](const auto target) {
+                    return target.kind ==
+                           TailIngressTargetKind::InventoryRegion;
+                });
+            if (region_target != ingress->second.targets.end()) {
+                auto frame = make_stack_read_top_frame(
+                    AbiStackReadTopReason::CalleeTop,
+                    control.address);
+                frame.target = region_target->address;
+                frame.ingress_present = true;
+                frame.ingress_guarded = ingress->second.guarded;
+                frame.ingress_complete = ingress->second.complete;
+                mark_stack_reads_top(frame, nullptr);
+            }
+            std::vector<std::uint32_t> target_addresses;
+            target_addresses.reserve(ingress->second.targets.size());
+            for (const auto target : ingress->second.targets) {
+                if (target.kind == TailIngressTargetKind::Function)
+                    target_addresses.push_back(target.address);
+            }
+            if (region_target == ingress->second.targets.end()) {
+                observe_callee_stack_reads(
+                    state,
+                    control.address,
+                    target_addresses,
+                    ingress->second.complete,
+                    ingress->second.guarded,
+                    true,
+                    ingress->second.guarded,
+                    ingress->second.complete);
+            }
         }
         if (control.instruction.control_flow ==
                 katana::sh4::ControlFlowKind::UnconditionalBranch ||
@@ -10302,14 +10994,14 @@ analyze_abi_persistent_store_signature(
 [[nodiscard]] bool function_forwards_abi_argument_to_persistent_inventory_store(
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
-    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    const BasicBlockIndexView& blocks) {
     return analyze_abi_persistent_store_signature(image, function, blocks)
                .persistent_store_sources != 0u;
 }
 
 bool function_contains_non_stack_inventory_store_shape(
     const FunctionInfo& function,
-    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    const BasicBlockIndexView& blocks) {
     for (const auto block_address : function.block_addresses) {
         const auto block = blocks.find(block_address);
         if (block == blocks.end()) continue;
@@ -10540,9 +11232,9 @@ using ForwardedRegisterReadMap =
 
 [[nodiscard]] std::uint16_t entry_register_read_before_def_mask(
     const FunctionInfo& function,
-    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
+    const BasicBlockIndexView& blocks,
     const ForwardedRegisterReadMap* const forwarded_register_reads,
-    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>* const
+    const IndirectCalleeIndexView* const
         inventory_indirect_callees,
     const TailIngressMap* const inventory_tail_ingresses) {
     std::unordered_set<std::uint32_t> members;
@@ -10693,11 +11385,26 @@ using ForwardedRegisterReadMap =
             inventory_tail_ingresses != nullptr &&
             ingress != inventory_tail_ingresses->end();
         if (has_contract_ingress) {
+            const auto has_region_target = std::any_of(
+                ingress->second.targets.begin(),
+                ingress->second.targets.end(),
+                [](const auto target) {
+                    return target.kind ==
+                           TailIngressTargetKind::InventoryRegion;
+                });
+            std::vector<std::uint32_t> target_addresses;
+            target_addresses.reserve(ingress->second.targets.size());
+            for (const auto target : ingress->second.targets) {
+                if (target.kind == TailIngressTargetKind::Function)
+                    target_addresses.push_back(target.address);
+            }
             retain_undefined_registers(
-                target_register_reads(
-                    ingress->second.targets,
-                    ingress->second.complete,
-                    ingress->second.guarded),
+                has_region_target
+                    ? std::numeric_limits<std::uint16_t>::max()
+                    : target_register_reads(
+                          target_addresses,
+                          ingress->second.complete,
+                          ingress->second.guarded),
                 definitions);
         }
         if (reads == std::numeric_limits<std::uint16_t>::max())
@@ -11034,6 +11741,9 @@ bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage
 }
 
 struct FunctionEvaluationProjection final {
+    TailIngressTargetKind target_kind =
+        TailIngressTargetKind::Function;
+    bool abi_contract_authoritative = false;
     EvaluationLens requested_lens = EvaluationLens::FullState;
     EvaluationLens effective_lens = EvaluationLens::FullState;
     bool full_state_fallback = false;
@@ -11194,32 +11904,40 @@ make_function_evaluation_projection(
     const AbstractState& initial_state,
     const EvaluationLens requested_lens,
     const std::uint32_t function_entry,
+    const TailIngressTargetKind target_kind,
     const ForwardedRegisterReadMap& forwarded_register_reads,
     const AbiStackArgumentReadMap& abi_stack_argument_reads,
     const bool contracts_available) {
     FunctionEvaluationProjection projection;
+    projection.target_kind = target_kind;
+    projection.abi_contract_authoritative =
+        contracts_available &&
+        target_kind == TailIngressTargetKind::Function;
     projection.requested_lens = requested_lens;
 
-    const auto register_reads =
-        forwarded_register_reads.find(function_entry);
-    projection.register_contract_present =
-        register_reads != forwarded_register_reads.end();
-    if (projection.register_contract_present)
-        projection.register_read_mask = register_reads->second;
+    if (projection.abi_contract_authoritative) {
+        const auto register_reads =
+            forwarded_register_reads.find(function_entry);
+        projection.register_contract_present =
+            register_reads != forwarded_register_reads.end();
+        if (projection.register_contract_present)
+            projection.register_read_mask = register_reads->second;
 
-    const auto stack_reads =
-        abi_stack_argument_reads.find(function_entry);
-    projection.stack_contract_present =
-        stack_reads != abi_stack_argument_reads.end();
-    if (projection.stack_contract_present)
-        projection.stack_reads = stack_reads->second;
+        const auto stack_reads =
+            abi_stack_argument_reads.find(function_entry);
+        projection.stack_contract_present =
+            stack_reads != abi_stack_argument_reads.end();
+        if (projection.stack_contract_present)
+            projection.stack_reads = stack_reads->second;
+    }
 
     if (requested_lens == EvaluationLens::FullState) {
         projection.ingress = initial_state;
         return projection;
     }
     auto projected =
-        contracts_available && projection.register_contract_present &&
+        projection.abi_contract_authoritative &&
+                projection.register_contract_present &&
                 projection.stack_contract_present
             ? project_evaluation_ingress(
                   initial_state,
@@ -11260,8 +11978,14 @@ void canonicalize_evaluation_outputs(
         };
     for (auto& call : evaluation.call_arguments)
         reconstruct_state(call.callee, call.state);
-    for (auto& transfer : evaluation.inventory_transfers)
+    for (auto& transfer : evaluation.inventory_transfers) {
+        // InventoryRegion is a distinct typed node even when an ordinary
+        // Function exists at the same guest address. Its deliberately
+        // conservative FullState contract must not be narrowed through that
+        // function's address-keyed ABI maps.
+        if (transfer.target_kind != TailIngressTargetKind::Function) continue;
         reconstruct_state(transfer.target, transfer.state);
+    }
 }
 
 enum class EvaluationKeyComponent : std::uint8_t {
@@ -11629,6 +12353,20 @@ void encode(EvaluationKeyEncoder& key,
 }
 
 void encode(EvaluationKeyEncoder& key,
+            const TailIngressCandidates& candidates) {
+    key.append_range(
+        candidates.targets,
+        [&](const auto target) {
+            key.append(target.address);
+            key.append(target.kind);
+        });
+    key.append(candidates.guarded);
+    key.append(candidates.complete);
+    key.append(candidates.requires_code_pointer);
+    key.append(candidates.observes_abi_arguments);
+}
+
+void encode(EvaluationKeyEncoder& key,
             const AbiStackArgumentReadSet& reads) {
     key.append_range(reads.slots,
                      [&](const auto slot) { key.append(slot); });
@@ -11740,8 +12478,8 @@ struct FunctionEvaluationCacheKey {
 make_function_evaluation_cache_key(
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
-    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
-    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>&
+    const BasicBlockIndexView& blocks,
+    const IndirectCalleeIndexView&
         indirect_callees,
     const TailIngressMap& tail_ingresses,
     const std::map<std::uint32_t, FunctionValueSummary>& summaries,
@@ -11760,7 +12498,7 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{3u});
+    key.append(std::uint32_t{4u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -11769,6 +12507,7 @@ make_function_evaluation_cache_key(
     encode(key, projection.ingress);
     key.select_component(EvaluationKeyComponent::ResolutionLens);
     key.append(evaluation_lens_schema_version);
+    key.append(projection.target_kind);
     key.append(projection.requested_lens);
     key.append(projection.effective_lens);
     key.append(projection.full_state_fallback);
@@ -11790,6 +12529,7 @@ make_function_evaluation_cache_key(
     key.select_component(EvaluationKeyComponent::ResolutionLens);
     key.append(collect_walk_diagnostics);
     key.select_component(EvaluationKeyComponent::AbiContract);
+    key.append(projection.abi_contract_authoritative);
     key.append(abi_stack_argument_reads != nullptr);
     key.append(function.entry_address);
     key.append(projection.register_contract_present);
@@ -11852,10 +12592,10 @@ make_function_evaluation_cache_key(
                             candidates->second.targets.end());
                     }
                 }
-                continue;
             }
 
-            const auto ingress = find_tail_ingress(
+            const auto ingress = select_evaluation_tail_ingress(
+                line.instruction.control_flow,
                 tail_ingresses,
                 local_tail_ingresses,
                 line.address);
@@ -11865,8 +12605,10 @@ make_function_evaluation_cache_key(
             key.append(ingress.has_value());
             if (!ingress.has_value()) continue;
             encode(key, *ingress);
-            abi_dependencies.insert(ingress->targets.begin(),
-                                    ingress->targets.end());
+            for (const auto target : ingress->targets) {
+                if (target.kind == TailIngressTargetKind::Function)
+                    abi_dependencies.insert(target.address);
+            }
         }
     }
 
@@ -13766,7 +14508,253 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 1u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 4u;
+
+struct CandidateTailCarrier {
+    std::uint32_t transfer_site = 0u;
+    std::uint32_t target = 0u;
+
+    auto operator<=>(const CandidateTailCarrier&) const = default;
+};
+
+struct CandidateCallCarrier {
+    std::uint32_t call_site = 0u;
+    std::uint32_t target = 0u;
+
+    auto operator<=>(const CandidateCallCarrier&) const = default;
+};
+
+template <typename Value, typename Key = std::uint32_t>
+class PersistentProgramIndex final {
+    struct Node final {
+        Key key{};
+        Value value;
+        std::uint64_t priority = 0u;
+        std::shared_ptr<const Node> left;
+        std::shared_ptr<const Node> right;
+    };
+
+    using NodePtr = std::shared_ptr<const Node>;
+
+    [[nodiscard]] static std::uint64_t priority(
+        const Key& key) noexcept {
+        const auto key_value = [&] {
+            if constexpr (std::is_integral_v<Key>) {
+                return static_cast<std::uint64_t>(key);
+            } else {
+                return (static_cast<std::uint64_t>(key.address) << 8u) |
+                       static_cast<std::uint8_t>(key.kind);
+            }
+        }();
+        auto value = key_value +
+                     0x9e3779b97f4a7c15ull;
+        value = (value ^ (value >> 30u)) *
+                0xbf58476d1ce4e5b9ull;
+        value = (value ^ (value >> 27u)) *
+                0x94d049bb133111ebull;
+        return value ^ (value >> 31u);
+    }
+
+    [[nodiscard]] static NodePtr make_node(
+        Key key,
+        Value value,
+        const std::uint64_t node_priority,
+        NodePtr left,
+        NodePtr right) {
+        return std::make_shared<const Node>(
+            Node{std::move(key),
+                 std::move(value),
+                 node_priority,
+                 std::move(left),
+                 std::move(right)});
+    }
+
+    [[nodiscard]] static std::pair<NodePtr, NodePtr> split(
+        const NodePtr& root,
+        const Key& key) {
+        if (root == nullptr) return {};
+        if (root->key < key) {
+            auto [left, right] = split(root->right, key);
+            return {
+                make_node(root->key,
+                          root->value,
+                          root->priority,
+                          root->left,
+                          std::move(left)),
+                std::move(right)};
+        }
+        auto [left, right] = split(root->left, key);
+        return {
+            std::move(left),
+            make_node(root->key,
+                      root->value,
+                      root->priority,
+                      std::move(right),
+                      root->right)};
+    }
+
+    [[nodiscard]] static NodePtr insert(
+        const NodePtr& root,
+        const Key& key,
+        Value value) {
+        if (root == nullptr)
+            return make_node(key,
+                             std::move(value),
+                             priority(key),
+                             nullptr,
+                             nullptr);
+        if (root->key == key)
+            return make_node(key,
+                             std::move(value),
+                             root->priority,
+                             root->left,
+                             root->right);
+        const auto node_priority = priority(key);
+        if (node_priority > root->priority ||
+            (node_priority == root->priority && key < root->key)) {
+            auto [left, right] = split(root, key);
+            return make_node(key,
+                             std::move(value),
+                             node_priority,
+                             std::move(left),
+                             std::move(right));
+        }
+        if (key < root->key)
+            return make_node(root->key,
+                             root->value,
+                             root->priority,
+                             insert(root->left,
+                                    key,
+                                    std::move(value)),
+                             root->right);
+        return make_node(root->key,
+                         root->value,
+                         root->priority,
+                         root->left,
+                         insert(root->right,
+                                key,
+                                std::move(value)));
+    }
+
+    [[nodiscard]] static NodePtr merge(
+        const NodePtr& left,
+        const NodePtr& right) {
+        if (left == nullptr) return right;
+        if (right == nullptr) return left;
+        if (left->priority > right->priority) {
+            return make_node(left->key,
+                             left->value,
+                             left->priority,
+                             left->left,
+                             merge(left->right, right));
+        }
+        return make_node(right->key,
+                         right->value,
+                         right->priority,
+                         merge(left, right->left),
+                         right->right);
+    }
+
+    [[nodiscard]] static NodePtr erase(
+        const NodePtr& root,
+        const Key& key) {
+        if (root == nullptr) return nullptr;
+        if (root->key == key) return merge(root->left, root->right);
+        if (key < root->key)
+            return make_node(root->key,
+                             root->value,
+                             root->priority,
+                             erase(root->left, key),
+                             root->right);
+        return make_node(root->key,
+                         root->value,
+                         root->priority,
+                         root->left,
+                         erase(root->right, key));
+    }
+
+    static void materialize_node(
+        const NodePtr& node,
+        std::map<Key, Value>& output) {
+        if (node == nullptr) return;
+        materialize_node(node->left, output);
+        output.emplace(node->key, node->value);
+        materialize_node(node->right, output);
+    }
+
+  public:
+    PersistentProgramIndex() = default;
+    PersistentProgramIndex(const PersistentProgramIndex&) = default;
+    PersistentProgramIndex& operator=(const PersistentProgramIndex&) =
+        default;
+
+    [[nodiscard]] const Value* find(const Key& key) const {
+        auto node = root_;
+        while (node != nullptr) {
+            if (key == node->key) return &node->value;
+            node = key < node->key ? node->left : node->right;
+        }
+        return nullptr;
+    }
+
+    void insert_or_assign(Key key, Value value) {
+        if (find(key) == nullptr) ++size_;
+        root_ = insert(root_, key, std::move(value));
+    }
+
+    void erase(const Key& key) {
+        if (find(key) == nullptr) return;
+        root_ = erase(root_, key);
+        --size_;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+
+    [[nodiscard]] std::optional<Key> first_key() const {
+        auto node = root_;
+        if (node == nullptr) return std::nullopt;
+        while (node->left != nullptr) node = node->left;
+        return node->key;
+    }
+
+    void materialize(std::map<Key, Value>& output) const {
+        materialize_node(root_, output);
+    }
+
+  private:
+    NodePtr root_;
+    std::size_t size_ = 0u;
+};
+
+using ProgramLineIndex =
+    PersistentProgramIndex<katana::sh4::DisassemblyLine>;
+using ProgramBoundaryIndex =
+    PersistentProgramIndex<FunctionBoundary>;
+using ProgramEdgeSiteIndex =
+    PersistentProgramIndex<std::vector<ResolvedControlFlowEdge>>;
+using CandidateCallSiteIndex =
+    PersistentProgramIndex<std::vector<CandidateCallCarrier>>;
+using CandidateTailSiteIndex =
+    PersistentProgramIndex<std::vector<CandidateTailCarrier>>;
+
+struct FunctionProgramInputArena final {
+    std::shared_ptr<const ProgramLineIndex> lines;
+    std::shared_ptr<const ProgramBoundaryIndex> boundaries;
+    std::shared_ptr<const ProgramEdgeSiteIndex> semantic_edges;
+    std::shared_ptr<const ProgramEdgeSiteIndex> candidate_call_edges;
+    std::shared_ptr<const ProgramEdgeSiteIndex> candidate_tail_edges;
+    std::shared_ptr<const CandidateCallSiteIndex> candidate_calls;
+    std::shared_ptr<const CandidateTailSiteIndex> candidate_tails;
+};
+
+struct ResolutionDependencyColdRestart final {
+    std::shared_ptr<const FunctionProgramInputArena> input_arena;
+    FunctionValueResultMaterialization result_materialization =
+        FunctionValueResultMaterialization::TerminalFull;
+    PersistentAnalysisBypassReason reason =
+        PersistentAnalysisBypassReason::
+            ResolutionDependencyUnrepresentable;
+};
 
 [[nodiscard]] std::string digest_evaluation_key_material(
     EvaluationKeyEncoder&& encoder) {
@@ -13840,6 +14828,434 @@ void encode_program_edge(EvaluationKeyEncoder& key,
     return digest_evaluation_key_material(std::move(key));
 }
 
+void normalize_program_edge_family(
+    std::vector<ResolvedControlFlowEdge>& edges) {
+    for (auto& edge : edges) normalize(edge.evidence_origins);
+    std::sort(
+        edges.begin(),
+        edges.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.instruction_address,
+                            left.target_address,
+                            left.kind,
+                            left.guarded,
+                            left.evidence,
+                            left.evidence_origins,
+                            left.analysis_candidate_carrier) <
+                   std::tie(right.instruction_address,
+                            right.target_address,
+                            right.kind,
+                            right.guarded,
+                            right.evidence,
+                            right.evidence_origins,
+                            right.analysis_candidate_carrier);
+        });
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+}
+
+[[nodiscard]] const katana::sh4::DisassemblyLine*
+find_program_line(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::uint32_t address) {
+    const auto line = std::lower_bound(
+        lines.begin(),
+        lines.end(),
+        address,
+        [](const auto& candidate, const std::uint32_t key) {
+            return candidate.address < key;
+        });
+    return line == lines.end() || line->address != address
+               ? nullptr
+               : &*line;
+}
+
+enum class CandidateProgramEdgeFamily : std::uint8_t {
+    None,
+    Call,
+    Tail,
+};
+
+[[nodiscard]] CandidateProgramEdgeFamily classify_candidate_program_edge(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const ResolvedControlFlowEdge& edge) {
+    if (!edge.analysis_candidate_carrier ||
+        edge.kind != ResolvedControlFlowKind::Call ||
+        resolved_edge_evidence(edge) !=
+            ControlFlowEvidence::GuardedPartial)
+        return CandidateProgramEdgeFamily::None;
+    const auto* const line =
+        find_program_line(lines, edge.instruction_address);
+    const auto* const target =
+        find_program_line(lines, edge.target_address);
+    if (line == nullptr || target == nullptr || target->is_delay_slot)
+        return CandidateProgramEdgeFamily::None;
+    if (line->instruction.control_flow ==
+        katana::sh4::ControlFlowKind::IndirectCall)
+        return CandidateProgramEdgeFamily::Call;
+    if (line->instruction.control_flow !=
+        katana::sh4::ControlFlowKind::IndirectBranch ||
+        std::find(edge.evidence_origins.begin(),
+                  edge.evidence_origins.end(),
+                  AnalysisEvidenceOrigin::JumpTable) !=
+            edge.evidence_origins.end())
+        return CandidateProgramEdgeFamily::None;
+    return CandidateProgramEdgeFamily::Tail;
+}
+
+[[nodiscard]] CandidateProgramEdgeFamily classify_candidate_program_edge(
+    const FunctionProgramInputArena& arena,
+    const ResolvedControlFlowEdge& edge) {
+    if (!edge.analysis_candidate_carrier ||
+        edge.kind != ResolvedControlFlowKind::Call ||
+        resolved_edge_evidence(edge) !=
+            ControlFlowEvidence::GuardedPartial)
+        return CandidateProgramEdgeFamily::None;
+    const auto* const line =
+        arena.lines->find(edge.instruction_address);
+    const auto* const target = arena.lines->find(edge.target_address);
+    if (line == nullptr || target == nullptr || target->is_delay_slot)
+        return CandidateProgramEdgeFamily::None;
+    if (line->instruction.control_flow ==
+        katana::sh4::ControlFlowKind::IndirectCall)
+        return CandidateProgramEdgeFamily::Call;
+    if (line->instruction.control_flow !=
+            katana::sh4::ControlFlowKind::IndirectBranch ||
+        std::find(edge.evidence_origins.begin(),
+                  edge.evidence_origins.end(),
+                  AnalysisEvidenceOrigin::JumpTable) !=
+            edge.evidence_origins.end())
+        return CandidateProgramEdgeFamily::None;
+    return CandidateProgramEdgeFamily::Tail;
+}
+
+template <typename Delta>
+[[nodiscard]] bool exact_delta_keys_valid(
+    const std::vector<Delta>& deltas,
+    const auto key) {
+    for (std::size_t index = 0u; index < deltas.size(); ++index) {
+        if (index != 0u &&
+            key(deltas[index - 1u]) >= key(deltas[index]))
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool exact_program_delta_valid(
+    const detail::FunctionProgramDelta& delta,
+    const FunctionProgramInputArena& arena) {
+    if (delta.kind == detail::FunctionProgramDeltaKind::Unchanged)
+        return delta.changed_lines.empty() &&
+               delta.changed_boundaries.empty() &&
+               delta.changed_semantic_edge_sites.empty() &&
+               delta.changed_candidate_call_sites.empty() &&
+               delta.changed_candidate_tail_sites.empty();
+    if (delta.kind != detail::FunctionProgramDeltaKind::Exact)
+        return true;
+    if (!exact_delta_keys_valid(
+            delta.changed_lines,
+            [](const auto& value) { return value.address; }) ||
+        !exact_delta_keys_valid(
+            delta.changed_boundaries,
+            [](const auto& value) { return value.entry_address; }) ||
+        !exact_delta_keys_valid(
+            delta.changed_semantic_edge_sites,
+            [](const auto& value) {
+                return value.instruction_address;
+            }) ||
+        !exact_delta_keys_valid(
+            delta.changed_candidate_call_sites,
+            [](const auto& value) {
+                return value.instruction_address;
+            }) ||
+        !exact_delta_keys_valid(
+            delta.changed_candidate_tail_sites,
+            [](const auto& value) {
+                return value.instruction_address;
+            }))
+        return false;
+    for (const auto& changed : delta.changed_lines) {
+        if (changed.value.has_value() &&
+            changed.value->address != changed.address)
+            return false;
+    }
+    for (const auto& changed : delta.changed_boundaries) {
+        if (changed.value.has_value() &&
+            changed.value->entry_address != changed.entry_address)
+            return false;
+    }
+    const auto valid_family =
+        [&](const std::vector<detail::FunctionProgramEdgeSiteDelta>& sites,
+            const CandidateProgramEdgeFamily expected) {
+            for (const auto& site : sites) {
+                for (const auto& edge : site.values) {
+                    if (edge.instruction_address !=
+                        site.instruction_address)
+                        return false;
+                    if (expected == CandidateProgramEdgeFamily::None) {
+                        if (edge.analysis_candidate_carrier) return false;
+                    } else if (classify_candidate_program_edge(
+                                   arena, edge) != expected) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+    return valid_family(delta.changed_semantic_edge_sites,
+                        CandidateProgramEdgeFamily::None) &&
+           valid_family(delta.changed_candidate_call_sites,
+                        CandidateProgramEdgeFamily::Call) &&
+           valid_family(delta.changed_candidate_tail_sites,
+                        CandidateProgramEdgeFamily::Tail);
+}
+
+template <typename Index, typename Delta, typename Key, typename Value>
+[[nodiscard]] std::shared_ptr<const Index> overlay_program_index(
+    const std::shared_ptr<const Index>& base,
+    const std::vector<Delta>& deltas,
+    const Key key,
+    const Value value) {
+    if (deltas.empty()) return base;
+    auto overlay = std::make_shared<Index>(*base);
+    for (const auto& delta : deltas) {
+        auto replacement = value(delta);
+        if (replacement.has_value())
+            overlay->insert_or_assign(
+                key(delta), std::move(*replacement));
+        else
+            overlay->erase(key(delta));
+    }
+    return overlay;
+}
+
+[[nodiscard]] std::shared_ptr<const FunctionProgramInputArena>
+overlay_program_input_arena(
+    const FunctionProgramInputArena& base,
+    const detail::FunctionProgramDelta& delta) {
+    auto arena = std::make_shared<FunctionProgramInputArena>();
+    arena->lines = overlay_program_index<ProgramLineIndex>(
+        base.lines,
+        delta.changed_lines,
+        [](const auto& value) { return value.address; },
+        [](const auto& value) { return value.value; });
+    arena->boundaries = overlay_program_index<ProgramBoundaryIndex>(
+        base.boundaries,
+        delta.changed_boundaries,
+        [](const auto& value) { return value.entry_address; },
+        [](const auto& value) { return value.value; });
+    const auto overlay_edges = [](const auto& previous,
+                                  const auto& deltas) {
+        return overlay_program_index<ProgramEdgeSiteIndex>(
+            previous,
+            deltas,
+            [](const auto& value) {
+                return value.instruction_address;
+            },
+            [](const auto& value)
+                -> std::optional<std::vector<ResolvedControlFlowEdge>> {
+                if (value.values.empty()) return std::nullopt;
+                auto edges = value.values;
+                normalize_program_edge_family(edges);
+                return edges;
+            });
+    };
+    arena->semantic_edges = overlay_edges(
+        base.semantic_edges, delta.changed_semantic_edge_sites);
+    arena->candidate_call_edges = overlay_edges(
+        base.candidate_call_edges,
+        delta.changed_candidate_call_sites);
+    arena->candidate_tail_edges = overlay_edges(
+        base.candidate_tail_edges,
+        delta.changed_candidate_tail_sites);
+    const auto overlay_call_carriers = [](const auto& previous,
+                                          const auto& deltas) {
+        return overlay_program_index<CandidateCallSiteIndex>(
+            previous,
+            deltas,
+            [](const auto& value) {
+                return value.instruction_address;
+            },
+            [](const auto& value)
+                -> std::optional<std::vector<CandidateCallCarrier>> {
+                if (value.values.empty()) return std::nullopt;
+                std::vector<CandidateCallCarrier> carriers;
+                carriers.reserve(value.values.size());
+                for (const auto& edge : value.values)
+                    carriers.push_back(
+                        {edge.instruction_address,
+                         edge.target_address});
+                normalize(carriers);
+                return carriers;
+            });
+    };
+    const auto overlay_tail_carriers = [](const auto& previous,
+                                          const auto& deltas) {
+        return overlay_program_index<CandidateTailSiteIndex>(
+            previous,
+            deltas,
+            [](const auto& value) {
+                return value.instruction_address;
+            },
+            [](const auto& value)
+                -> std::optional<std::vector<CandidateTailCarrier>> {
+                if (value.values.empty()) return std::nullopt;
+                std::vector<CandidateTailCarrier> carriers;
+                carriers.reserve(value.values.size());
+                for (const auto& edge : value.values)
+                    carriers.push_back(
+                        {edge.instruction_address,
+                         edge.target_address});
+                normalize(carriers);
+                return carriers;
+            });
+    };
+    arena->candidate_calls = overlay_call_carriers(
+        base.candidate_calls,
+        delta.changed_candidate_call_sites);
+    arena->candidate_tails = overlay_tail_carriers(
+        base.candidate_tails,
+        delta.changed_candidate_tail_sites);
+    return arena;
+}
+
+[[nodiscard]] std::shared_ptr<const FunctionProgramInputArena>
+build_program_input_arena(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const FunctionBoundary> boundaries,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges) {
+    std::map<std::uint32_t, katana::sh4::DisassemblyLine> line_values;
+    std::map<std::uint32_t, FunctionBoundary> boundary_values;
+    std::map<std::uint32_t, std::vector<ResolvedControlFlowEdge>>
+        semantic_values;
+    std::map<std::uint32_t, std::vector<ResolvedControlFlowEdge>>
+        candidate_call_values;
+    std::map<std::uint32_t, std::vector<ResolvedControlFlowEdge>>
+        candidate_tail_values;
+    std::map<std::uint32_t, std::vector<CandidateCallCarrier>>
+        call_carrier_values;
+    std::map<std::uint32_t, std::vector<CandidateTailCarrier>>
+        tail_carrier_values;
+    for (const auto& line : lines)
+        line_values.insert_or_assign(line.address, line);
+    for (const auto& boundary : boundaries)
+        boundary_values.insert_or_assign(
+            boundary.entry_address, boundary);
+    for (const auto& edge : resolved_edges) {
+        if (!edge.analysis_candidate_carrier) {
+            semantic_values[edge.instruction_address].push_back(edge);
+            continue;
+        }
+        const auto family = classify_candidate_program_edge(lines, edge);
+        if (family == CandidateProgramEdgeFamily::Call) {
+            candidate_call_values[edge.instruction_address]
+                .push_back(edge);
+            call_carrier_values[edge.instruction_address].push_back(
+                {edge.instruction_address, edge.target_address});
+        } else if (family == CandidateProgramEdgeFamily::Tail) {
+            candidate_tail_values[edge.instruction_address]
+                .push_back(edge);
+            tail_carrier_values[edge.instruction_address].push_back(
+                {edge.instruction_address, edge.target_address});
+        }
+    }
+    auto line_index = std::make_shared<ProgramLineIndex>();
+    for (auto& [address, value] : line_values)
+        line_index->insert_or_assign(address, std::move(value));
+    auto boundary_index = std::make_shared<ProgramBoundaryIndex>();
+    for (auto& [address, value] : boundary_values)
+        boundary_index->insert_or_assign(address, std::move(value));
+    auto semantic_index = std::make_shared<ProgramEdgeSiteIndex>();
+    auto candidate_call_index =
+        std::make_shared<ProgramEdgeSiteIndex>();
+    auto candidate_tail_index =
+        std::make_shared<ProgramEdgeSiteIndex>();
+    auto candidate_calls =
+        std::make_shared<CandidateCallSiteIndex>();
+    auto candidate_tails =
+        std::make_shared<CandidateTailSiteIndex>();
+    const auto publish_edges = [](auto& destination, auto& source) {
+        for (auto& [site, values] : source) {
+            normalize_program_edge_family(values);
+            destination.insert_or_assign(site, std::move(values));
+        }
+    };
+    publish_edges(*semantic_index, semantic_values);
+    publish_edges(*candidate_call_index, candidate_call_values);
+    publish_edges(*candidate_tail_index, candidate_tail_values);
+    for (auto& [site, carriers] : call_carrier_values) {
+        normalize(carriers);
+        candidate_calls->insert_or_assign(site, std::move(carriers));
+    }
+    for (auto& [site, carriers] : tail_carrier_values) {
+        normalize(carriers);
+        candidate_tails->insert_or_assign(site, std::move(carriers));
+    }
+    auto arena = std::make_shared<FunctionProgramInputArena>();
+    arena->lines = std::move(line_index);
+    arena->boundaries = std::move(boundary_index);
+    arena->semantic_edges = std::move(semantic_index);
+    arena->candidate_call_edges = std::move(candidate_call_index);
+    arena->candidate_tail_edges = std::move(candidate_tail_index);
+    arena->candidate_calls = std::move(candidate_calls);
+    arena->candidate_tails = std::move(candidate_tails);
+    return arena;
+}
+
+template <typename Value>
+[[nodiscard]] std::vector<Value> materialize_program_values(
+    const PersistentProgramIndex<Value>& index) {
+    std::map<std::uint32_t, Value> values;
+    index.materialize(values);
+    std::vector<Value> result;
+    result.reserve(values.size());
+    for (auto& [key, value] : values) {
+        static_cast<void>(key);
+        result.push_back(std::move(value));
+    }
+    return result;
+}
+
+[[nodiscard]] std::vector<ResolvedControlFlowEdge>
+materialize_program_edges(const ProgramEdgeSiteIndex& index) {
+    std::map<std::uint32_t, std::vector<ResolvedControlFlowEdge>> sites;
+    index.materialize(sites);
+    std::size_t count = 0u;
+    for (const auto& [site, edges] : sites) {
+        static_cast<void>(site);
+        count += edges.size();
+    }
+    std::vector<ResolvedControlFlowEdge> result;
+    result.reserve(count);
+    for (auto& [site, edges] : sites) {
+        static_cast<void>(site);
+        result.insert(result.end(),
+                      std::make_move_iterator(edges.begin()),
+                      std::make_move_iterator(edges.end()));
+    }
+    return result;
+}
+
+template <typename Carrier>
+[[nodiscard]] std::vector<Carrier> materialize_program_carriers(
+    const PersistentProgramIndex<std::vector<Carrier>>& index) {
+    std::map<std::uint32_t, std::vector<Carrier>> sites;
+    index.materialize(sites);
+    std::size_t count = 0u;
+    for (const auto& [site, carriers] : sites) {
+        static_cast<void>(site);
+        count += carriers.size();
+    }
+    std::vector<Carrier> result;
+    result.reserve(count);
+    for (auto& [site, carriers] : sites) {
+        static_cast<void>(site);
+        result.insert(result.end(),
+                      std::make_move_iterator(carriers.begin()),
+                      std::make_move_iterator(carriers.end()));
+    }
+    return result;
+}
+
 template <typename T>
 class ImmutableShardArena final {
   public:
@@ -13888,8 +15304,122 @@ class ImmutableShardArena final {
     std::vector<std::shared_ptr<const T>> shards_;
 };
 
+template <typename T, typename Layer>
+class LayeredSequenceView final {
+  public:
+    class const_iterator final {
+      public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = T;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const T*;
+        using reference = const T&;
+
+        const_iterator() = default;
+        const_iterator(const LayeredSequenceView* view, const bool end)
+            : view_(view), layer_(end ? view->layers_.size() : 0u) {
+            advance_to_value();
+        }
+
+        [[nodiscard]] reference operator*() const {
+            return (*view_->layers_[layer_])[item_];
+        }
+        [[nodiscard]] pointer operator->() const { return &**this; }
+        const_iterator& operator++() {
+            ++item_;
+            advance_to_value();
+            return *this;
+        }
+        [[nodiscard]] bool operator==(
+            const const_iterator& other) const noexcept {
+            return view_ == other.view_ && layer_ == other.layer_ &&
+                   item_ == other.item_;
+        }
+
+      private:
+        void advance_to_value() {
+            if (view_ == nullptr) return;
+            for (;;) {
+                while (layer_ < view_->layers_.size() &&
+                       item_ >= view_->layers_[layer_]->size()) {
+                    ++layer_;
+                    item_ = 0u;
+                }
+                if (layer_ >= view_->layers_.size()) return;
+                if constexpr (std::is_same_v<T, BasicBlock> ||
+                              std::is_same_v<T, FunctionInfo>) {
+                    const auto address = [&] {
+                        if constexpr (std::is_same_v<T, BasicBlock>)
+                            return (*view_->layers_[layer_])[item_]
+                                .start_address;
+                        else
+                            return (*view_->layers_[layer_])[item_]
+                                .entry_address;
+                    }();
+                    bool shadowed = false;
+                    for (auto newer = layer_ + 1u;
+                         newer < view_->shadowed_.size(); ++newer) {
+                        if (view_->shadowed_[newer] != nullptr &&
+                            view_->shadowed_[newer]->contains(address)) {
+                            shadowed = true;
+                            break;
+                        }
+                    }
+                    if (!shadowed) return;
+                    ++item_;
+                    continue;
+                }
+                return;
+            }
+        }
+
+        const LayeredSequenceView* view_ = nullptr;
+        std::size_t layer_ = 0u;
+        std::size_t item_ = 0u;
+    };
+
+    LayeredSequenceView() = default;
+    explicit LayeredSequenceView(std::vector<const Layer*> layers)
+        : layers_(std::move(layers)), shadowed_(layers_.size(), nullptr) {
+        for (const auto* layer : layers_) size_ += layer->size();
+    }
+    LayeredSequenceView(
+        std::vector<const Layer*> layers,
+        std::vector<const std::unordered_set<std::uint32_t>*> shadowed,
+        const std::size_t logical_size)
+        : layers_(std::move(layers)),
+          shadowed_(std::move(shadowed)),
+          size_(logical_size) {}
+
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    [[nodiscard]] bool empty() const noexcept { return size_ == 0u; }
+    [[nodiscard]] const T& operator[](std::size_t index) const {
+        for (auto iterator = begin(); iterator != end(); ++iterator)
+            if (index-- == 0u) return *iterator;
+        throw std::out_of_range("LayeredSequenceView");
+    }
+    [[nodiscard]] const_iterator begin() const {
+        return const_iterator{this, false};
+    }
+    [[nodiscard]] const_iterator end() const {
+        return const_iterator{this, true};
+    }
+
+  private:
+    std::vector<const Layer*> layers_;
+    std::vector<const std::unordered_set<std::uint32_t>*> shadowed_;
+    std::size_t size_ = 0u;
+};
+
 struct FunctionProgramGraph final {
     std::string identity;
+    // Exact monotone structural epochs are immutable overlays.  Only their
+    // newly introduced shards live locally; all untouched graph state is
+    // reached through `base` and is never copied or revalidated.
+    std::shared_ptr<const FunctionProgramGraph> base;
+    std::shared_ptr<const FunctionProgramInputArena> input_arena;
+    std::shared_ptr<const std::vector<ResolvedControlFlowEdge>>
+        semantic_edges_materialized;
     ImmutableShardArena<BasicBlock> blocks;
     ImmutableShardArena<FunctionInfo> functions;
     std::unordered_map<std::uint32_t, const BasicBlock*> block_by_address;
@@ -13905,19 +15435,289 @@ struct FunctionProgramGraph final {
         owners_by_control;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
         callers_by_callee;
+    // Reverse ordinary-tail ownership is part of the structural dependency
+    // contract. A newly admitted Function entry can change an old tail from
+    // an inventory-region transfer into a normal function transfer even when
+    // no direct call edge changed.
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        tail_callers_by_target;
+    // Canonical semantic edge-site indices are staged with the graph. Exact
+    // candidate-only epochs borrow these immutable maps directly and never
+    // rescan or resort the complete resolved-edge set.
+    std::shared_ptr<const PersistentIndirectCalleeIndex>
+        summary_indirect_callees;
+    std::shared_ptr<const PersistentIndirectCalleeIndex>
+        indirect_jump_candidates;
+    std::shared_ptr<const std::unordered_set<std::uint32_t>>
+        jump_table_jump_sites;
+    // Direct decoded and resolved semantic targets are retained explicitly so
+    // an O(delta) append can reject an old->new reachability change without
+    // rescanning every old instruction or edge.
+    std::unordered_set<std::uint32_t> control_targets;
     std::vector<std::vector<std::uint32_t>> strongly_connected_components;
     std::unordered_map<std::uint32_t, std::size_t> scc_by_function;
     std::vector<std::vector<std::size_t>> caller_sccs;
     std::vector<std::vector<std::size_t>> callee_sccs;
+    std::unordered_map<std::size_t, std::vector<std::size_t>>
+        caller_scc_overrides;
+    std::unordered_map<std::size_t, std::vector<std::size_t>>
+        callee_scc_overrides;
     std::vector<std::string> scc_fingerprints;
     std::vector<std::uint64_t> scc_dependency_versions;
     std::unordered_map<std::uint32_t, std::string> function_fingerprints;
     std::unordered_map<std::uint32_t, std::string> block_fingerprints;
     std::unordered_map<std::uint32_t, std::uint64_t> dependency_versions;
+    std::unordered_map<std::size_t, std::string> scc_fingerprint_overrides;
+    std::unordered_map<std::size_t, std::uint64_t>
+        scc_dependency_version_overrides;
+    std::unordered_set<std::uint32_t> shadowed_block_addresses;
+    std::unordered_set<std::uint32_t> shadowed_function_addresses;
+    std::size_t logical_block_count = 0u;
+    std::size_t logical_function_count = 0u;
+    std::size_t scc_base_offset = 0u;
+    std::size_t next_block_id = 0u;
+    std::size_t next_function_id = 0u;
+    std::uint64_t next_scc_dependency_version = 1u;
     std::size_t physically_built_blocks = 0u;
     std::size_t physically_reused_blocks = 0u;
     std::size_t physically_built_functions = 0u;
     std::size_t physically_reused_functions = 0u;
+
+    using BlockView = LayeredSequenceView<
+        BasicBlock, ImmutableShardArena<BasicBlock>>;
+    using FunctionView = LayeredSequenceView<
+        FunctionInfo, ImmutableShardArena<FunctionInfo>>;
+    using ComponentView = LayeredSequenceView<
+        std::vector<std::uint32_t>,
+        std::vector<std::vector<std::uint32_t>>>;
+
+    void collect_block_arenas(
+        std::vector<const ImmutableShardArena<BasicBlock>*>& layers,
+        std::vector<const std::unordered_set<std::uint32_t>*>&
+            shadowed) const {
+        if (base != nullptr) base->collect_block_arenas(layers, shadowed);
+        layers.push_back(&blocks);
+        shadowed.push_back(&shadowed_block_addresses);
+    }
+    void collect_function_arenas(
+        std::vector<const ImmutableShardArena<FunctionInfo>*>& layers,
+        std::vector<const std::unordered_set<std::uint32_t>*>&
+            shadowed) const {
+        if (base != nullptr)
+            base->collect_function_arenas(layers, shadowed);
+        layers.push_back(&functions);
+        shadowed.push_back(&shadowed_function_addresses);
+    }
+    void collect_component_layers(
+        std::vector<const std::vector<std::vector<std::uint32_t>>*>&
+            layers) const {
+        if (base != nullptr) base->collect_component_layers(layers);
+        layers.push_back(&strongly_connected_components);
+    }
+    [[nodiscard]] BlockView block_view() const {
+        std::vector<const ImmutableShardArena<BasicBlock>*> layers;
+        std::vector<const std::unordered_set<std::uint32_t>*> shadowed;
+        collect_block_arenas(layers, shadowed);
+        return BlockView{std::move(layers), std::move(shadowed),
+                         logical_block_count};
+    }
+    [[nodiscard]] FunctionView function_view() const {
+        std::vector<const ImmutableShardArena<FunctionInfo>*> layers;
+        std::vector<const std::unordered_set<std::uint32_t>*> shadowed;
+        collect_function_arenas(layers, shadowed);
+        return FunctionView{std::move(layers), std::move(shadowed),
+                            logical_function_count};
+    }
+    [[nodiscard]] ComponentView component_view() const {
+        std::vector<const std::vector<std::vector<std::uint32_t>>*> layers;
+        collect_component_layers(layers);
+        return ComponentView{std::move(layers)};
+    }
+
+    void collect_block_maps(
+        std::vector<const BasicBlockIndexView::Map*>& layers) const {
+        if (base != nullptr) base->collect_block_maps(layers);
+        layers.push_back(&block_by_address);
+    }
+    [[nodiscard]] std::vector<const BasicBlockIndexView::Map*>
+    block_map_layers() const {
+        std::vector<const BasicBlockIndexView::Map*> layers;
+        collect_block_maps(layers);
+        return layers;
+    }
+
+    template <typename Value>
+    using AddressMap = std::unordered_map<std::uint32_t, Value>;
+
+    template <typename Value>
+    static void collect_address_maps(
+        const FunctionProgramGraph& graph,
+        const AddressMap<Value> FunctionProgramGraph::* member,
+        std::vector<const AddressMap<Value>*>& layers) {
+        if (graph.base != nullptr)
+            collect_address_maps(*graph.base, member, layers);
+        layers.push_back(&(graph.*member));
+    }
+
+    template <typename Value>
+    [[nodiscard]] LayeredAddressIndexView<Value> address_view(
+        const AddressMap<Value> FunctionProgramGraph::* member) const {
+        std::vector<const AddressMap<Value>*> layers;
+        collect_address_maps(*this, member, layers);
+        return LayeredAddressIndexView<Value>{std::move(layers)};
+    }
+
+    [[nodiscard]] auto function_index() const {
+        return address_view(&FunctionProgramGraph::function_by_address);
+    }
+    [[nodiscard]] auto owners_by_block_index() const {
+        return address_view(&FunctionProgramGraph::owners_by_block);
+    }
+    [[nodiscard]] auto owners_by_control_index() const {
+        return address_view(&FunctionProgramGraph::owners_by_control);
+    }
+    [[nodiscard]] auto callers_by_callee_index() const {
+        return address_view(&FunctionProgramGraph::callers_by_callee);
+    }
+    [[nodiscard]] auto tail_callers_by_target_index() const {
+        return address_view(&FunctionProgramGraph::tail_callers_by_target);
+    }
+    [[nodiscard]] bool has_tail_caller(
+        const std::uint32_t target) const {
+        const auto local = tail_callers_by_target.find(target);
+        if (local != tail_callers_by_target.end())
+            return !local->second.empty();
+        return base != nullptr && base->has_tail_caller(target);
+    }
+
+    [[nodiscard]] const BasicBlock* find_block(
+        const std::uint32_t address) const {
+        const auto local = block_by_address.find(address);
+        if (local != block_by_address.end()) return local->second;
+        return base == nullptr ? nullptr : base->find_block(address);
+    }
+    [[nodiscard]] std::shared_ptr<const BasicBlock> find_block_shard(
+        const std::uint32_t address) const {
+        const auto local = block_shards_by_address.find(address);
+        if (local != block_shards_by_address.end()) return local->second;
+        return base == nullptr
+                   ? nullptr
+                   : base->find_block_shard(address);
+    }
+    [[nodiscard]] const FunctionInfo* find_function(
+        const std::uint32_t address) const {
+        const auto local = function_by_address.find(address);
+        if (local != function_by_address.end()) return local->second;
+        return base == nullptr ? nullptr : base->find_function(address);
+    }
+    [[nodiscard]] std::shared_ptr<const FunctionInfo> find_function_shard(
+        const std::uint32_t address) const {
+        const auto local = function_shards_by_address.find(address);
+        if (local != function_shards_by_address.end()) return local->second;
+        return base == nullptr
+                   ? nullptr
+                   : base->find_function_shard(address);
+    }
+    [[nodiscard]] const std::string* find_function_fingerprint(
+        const std::uint32_t address) const {
+        const auto local = function_fingerprints.find(address);
+        if (local != function_fingerprints.end()) return &local->second;
+        return base == nullptr
+                   ? nullptr
+                   : base->find_function_fingerprint(address);
+    }
+    [[nodiscard]] const std::string* find_block_fingerprint(
+        const std::uint32_t address) const {
+        const auto local = block_fingerprints.find(address);
+        if (local != block_fingerprints.end()) return &local->second;
+        return base == nullptr
+                   ? nullptr
+                   : base->find_block_fingerprint(address);
+    }
+    [[nodiscard]] std::optional<std::size_t> find_scc(
+        const std::uint32_t address) const {
+        const auto local = scc_by_function.find(address);
+        if (local != scc_by_function.end()) return local->second;
+        return base == nullptr ? std::nullopt : base->find_scc(address);
+    }
+    [[nodiscard]] const std::uint64_t* find_dependency_version(
+        const std::uint32_t address) const {
+        const auto local = dependency_versions.find(address);
+        if (local != dependency_versions.end()) return &local->second;
+        return base == nullptr
+                   ? nullptr
+                   : base->find_dependency_version(address);
+    }
+    [[nodiscard]] const std::vector<std::uint32_t>& component_at(
+        const std::size_t index) const {
+        if (base != nullptr && index < scc_base_offset)
+            return base->component_at(index);
+        return strongly_connected_components.at(index - scc_base_offset);
+    }
+    [[nodiscard]] const std::vector<std::size_t>& caller_sccs_at(
+        const std::size_t index) const {
+        const auto override = caller_scc_overrides.find(index);
+        if (override != caller_scc_overrides.end())
+            return override->second;
+        if (base != nullptr && index < scc_base_offset)
+            return base->caller_sccs_at(index);
+        return caller_sccs.at(index - scc_base_offset);
+    }
+    [[nodiscard]] const std::vector<std::size_t>& callee_sccs_at(
+        const std::size_t index) const {
+        const auto override = callee_scc_overrides.find(index);
+        if (override != callee_scc_overrides.end())
+            return override->second;
+        if (base != nullptr && index < scc_base_offset)
+            return base->callee_sccs_at(index);
+        return callee_sccs.at(index - scc_base_offset);
+    }
+    [[nodiscard]] const std::string& scc_fingerprint_at(
+        const std::size_t index) const {
+        const auto override = scc_fingerprint_overrides.find(index);
+        if (override != scc_fingerprint_overrides.end())
+            return override->second;
+        if (base != nullptr && index < scc_base_offset)
+            return base->scc_fingerprint_at(index);
+        return scc_fingerprints.at(index - scc_base_offset);
+    }
+    [[nodiscard]] std::uint64_t scc_dependency_version_at(
+        const std::size_t index) const {
+        const auto override = scc_dependency_version_overrides.find(index);
+        if (override != scc_dependency_version_overrides.end())
+            return override->second;
+        if (base != nullptr && index < scc_base_offset)
+            return base->scc_dependency_version_at(index);
+        const auto local = index - scc_base_offset;
+        return local < scc_dependency_versions.size()
+                   ? scc_dependency_versions[local]
+                   : 0u;
+    }
+    [[nodiscard]] std::size_t component_count() const noexcept {
+        return scc_base_offset + strongly_connected_components.size();
+    }
+    [[nodiscard]] bool is_control_target(
+        const std::uint32_t address) const {
+        return control_targets.contains(address) ||
+               (base != nullptr && base->is_control_target(address));
+    }
+    [[nodiscard]] const BasicBlock* find_containing_block(
+        const std::uint32_t address) const {
+        const BasicBlock* best =
+            base == nullptr ? nullptr : base->find_containing_block(address);
+        const auto upper = std::upper_bound(
+            sorted_block_addresses.begin(),
+            sorted_block_addresses.end(),
+            address);
+        if (upper != sorted_block_addresses.begin()) {
+            const auto candidate = find_block(*std::prev(upper));
+            if (candidate != nullptr &&
+                (best == nullptr ||
+                 candidate->start_address >= best->start_address))
+                best = candidate;
+        }
+        return best;
+    }
 };
 
 [[nodiscard]] std::string basic_block_fingerprint(
@@ -13930,7 +15730,7 @@ struct FunctionProgramGraph final {
 
 [[nodiscard]] std::string function_program_fingerprint(
     const FunctionInfo& function,
-    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    const BasicBlockIndexView& blocks) {
     EvaluationKeyEncoder key;
     key.append(function_program_graph_schema_version);
     encode(key, function);
@@ -13948,12 +15748,80 @@ struct FunctionProgramGraph final {
 [[nodiscard]] std::shared_ptr<FunctionProgramGraph>
 build_function_program_graph(
     std::string identity,
+    std::shared_ptr<const FunctionProgramInputArena> input_arena,
     const std::span<const katana::sh4::DisassemblyLine> lines,
     const std::span<const FunctionBoundary> function_boundaries,
     const std::span<const ResolvedControlFlowEdge> semantic_edges,
     const FunctionProgramGraph* const previous) {
     auto graph = std::make_shared<FunctionProgramGraph>();
     graph->identity = std::move(identity);
+    graph->input_arena = std::move(input_arena);
+    graph->semantic_edges_materialized =
+        std::make_shared<const std::vector<ResolvedControlFlowEdge>>(
+            semantic_edges.begin(), semantic_edges.end());
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
+        summary_indirect_callee_storage;
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
+        indirect_jump_candidate_storage;
+    auto jump_table_jump_sites =
+        std::make_shared<std::unordered_set<std::uint32_t>>();
+    summary_indirect_callee_storage.reserve(semantic_edges.size());
+    indirect_jump_candidate_storage.reserve(semantic_edges.size());
+    jump_table_jump_sites->reserve(semantic_edges.size());
+    graph->control_targets.reserve(lines.size() + semantic_edges.size());
+    for (const auto& line : lines) {
+        if (line.target_address.has_value())
+            graph->control_targets.insert(*line.target_address);
+    }
+    for (const auto& edge : semantic_edges) {
+        graph->control_targets.insert(edge.target_address);
+        auto* candidates =
+            edge.kind == ResolvedControlFlowKind::Call
+                ? &summary_indirect_callee_storage[
+                      edge.instruction_address]
+                : edge.kind == ResolvedControlFlowKind::Jump
+                      ? &indirect_jump_candidate_storage[
+                            edge.instruction_address]
+                      : nullptr;
+        if (candidates == nullptr) continue;
+        candidates->targets.push_back(edge.target_address);
+        const auto evidence = resolved_edge_evidence(edge);
+        candidates->guarded =
+            candidates->guarded ||
+            evidence != ControlFlowEvidence::ProvenComplete;
+        candidates->complete =
+            candidates->complete &&
+            control_flow_evidence_complete(evidence);
+        if (edge.kind == ResolvedControlFlowKind::Jump &&
+            std::find(edge.evidence_origins.begin(),
+                      edge.evidence_origins.end(),
+                      AnalysisEvidenceOrigin::JumpTable) !=
+                edge.evidence_origins.end()) {
+            jump_table_jump_sites->insert(
+                edge.instruction_address);
+        }
+    }
+    const auto normalize_candidate_index = [](auto& index) {
+        for (auto& [site, candidates] : index) {
+            static_cast<void>(site);
+            normalize(candidates.targets);
+        }
+    };
+    normalize_candidate_index(summary_indirect_callee_storage);
+    normalize_candidate_index(indirect_jump_candidate_storage);
+    auto summary_indirect_callees =
+        std::make_shared<PersistentIndirectCalleeIndex>();
+    for (auto& [site, candidates] : summary_indirect_callee_storage)
+        summary_indirect_callees->insert_or_assign(
+            site, std::move(candidates));
+    auto indirect_jump_candidates =
+        std::make_shared<PersistentIndirectCalleeIndex>();
+    for (auto& [site, candidates] : indirect_jump_candidate_storage)
+        indirect_jump_candidates->insert_or_assign(
+            site, std::move(candidates));
+    graph->summary_indirect_callees = std::move(summary_indirect_callees);
+    graph->indirect_jump_candidates = std::move(indirect_jump_candidates);
+    graph->jump_table_jump_sites = std::move(jump_table_jump_sites);
     std::vector<std::uint32_t> leaders;
     leaders.reserve(function_boundaries.size() * 2u);
     for (const auto& boundary : function_boundaries) {
@@ -13972,33 +15840,27 @@ build_function_program_graph(
     graph->block_by_address.reserve(decoded_blocks.size());
     graph->block_shards_by_address.reserve(decoded_blocks.size());
     graph->block_fingerprints.reserve(decoded_blocks.size());
-    auto next_block_id = std::size_t{0u};
-    if (previous != nullptr) {
-        for (const auto& block : previous->blocks)
-            next_block_id = std::max(next_block_id, block.id + 1u);
-    }
+    auto next_block_id =
+        previous == nullptr ? std::size_t{0u} : previous->next_block_id;
     for (auto& block : decoded_blocks) {
         const auto address = block.start_address;
         auto fingerprint = basic_block_fingerprint(block);
         std::shared_ptr<const BasicBlock> shard;
         if (previous != nullptr) {
-            const auto old_fingerprint =
-                previous->block_fingerprints.find(address);
-            const auto old_shard =
-                previous->block_shards_by_address.find(address);
-            if (old_fingerprint != previous->block_fingerprints.end() &&
-                old_shard != previous->block_shards_by_address.end() &&
-                old_fingerprint->second == fingerprint) {
-                shard = old_shard->second;
+            const auto* const old_fingerprint =
+                previous->find_block_fingerprint(address);
+            const auto old_shard = previous->find_block_shard(address);
+            if (old_fingerprint != nullptr && old_shard != nullptr &&
+                *old_fingerprint == fingerprint) {
+                shard = old_shard;
                 ++graph->physically_reused_blocks;
             }
         }
         if (shard == nullptr) {
             if (previous != nullptr) {
-                const auto old =
-                    previous->block_shards_by_address.find(address);
-                if (old != previous->block_shards_by_address.end())
-                    block.id = old->second->id;
+                const auto old = previous->find_block_shard(address);
+                if (old != nullptr)
+                    block.id = old->id;
                 else
                     block.id = next_block_id++;
             }
@@ -14008,10 +15870,12 @@ build_function_program_graph(
         graph->block_fingerprints.emplace(address, std::move(fingerprint));
         graph->block_by_address.emplace(address, shard.get());
         graph->block_shards_by_address.emplace(address, shard);
+        next_block_id = std::max(next_block_id, shard->id + 1u);
         graph->blocks.push_back(std::move(shard));
         graph->sorted_block_addresses.push_back(address);
     }
     normalize(graph->sorted_block_addresses);
+    graph->logical_block_count = graph->blocks.size();
     graph->functions.reserve(discovered_functions.size());
     graph->function_by_address.reserve(graph->functions.size());
     graph->owners_by_block.reserve(graph->blocks.size());
@@ -14019,29 +15883,26 @@ build_function_program_graph(
     graph->callers_by_callee.reserve(graph->functions.size());
     graph->function_shards_by_address.reserve(discovered_functions.size());
     graph->function_fingerprints.reserve(discovered_functions.size());
-    auto next_function_id = std::size_t{0u};
-    if (previous != nullptr) {
-        for (const auto& function : previous->functions)
-            next_function_id = std::max(next_function_id, function.id + 1u);
-    }
+    auto next_function_id =
+        previous == nullptr ? std::size_t{0u} : previous->next_function_id;
+    const BasicBlockIndexView graph_block_index{
+        graph->block_by_address};
     for (auto& function : discovered_functions) {
         const auto address = function.entry_address;
         auto fingerprint =
-            function_program_fingerprint(function, graph->block_by_address);
+            function_program_fingerprint(function, graph_block_index);
         std::shared_ptr<const FunctionInfo> shard;
         if (previous != nullptr) {
-            const auto old_fingerprint =
-                previous->function_fingerprints.find(address);
+            const auto* const old_fingerprint =
+                previous->find_function_fingerprint(address);
             const auto old_shard =
-                previous->function_shards_by_address.find(address);
-            if (old_fingerprint != previous->function_fingerprints.end() &&
-                old_shard != previous->function_shards_by_address.end() &&
-                old_fingerprint->second == fingerprint) {
-                shard = old_shard->second;
+                previous->find_function_shard(address);
+            if (old_fingerprint != nullptr && old_shard != nullptr &&
+                *old_fingerprint == fingerprint) {
+                shard = old_shard;
                 ++graph->physically_reused_functions;
-            } else if (old_shard !=
-                       previous->function_shards_by_address.end()) {
-                function.id = old_shard->second->id;
+            } else if (old_shard != nullptr) {
+                function.id = old_shard->id;
             } else {
                 function.id = next_function_id++;
             }
@@ -14055,15 +15916,21 @@ build_function_program_graph(
             address, std::move(fingerprint));
         graph->function_by_address.emplace(address, shard.get());
         graph->function_shards_by_address.emplace(address, shard);
+        next_function_id =
+            std::max(next_function_id, shard->id + 1u);
         graph->functions.push_back(std::move(shard));
     }
     graph->function_by_address.reserve(graph->functions.size());
     graph->owners_by_block.reserve(graph->blocks.size());
     graph->owners_by_control.reserve(graph->blocks.size());
     graph->callers_by_callee.reserve(graph->functions.size());
+    graph->tail_callers_by_target.reserve(graph->functions.size());
     for (const auto& function : graph->functions) {
         for (const auto callee : function.direct_callees)
             graph->callers_by_callee[callee].push_back(
+                function.entry_address);
+        for (const auto target : function.tail_jump_targets)
+            graph->tail_callers_by_target[target].push_back(
                 function.entry_address);
         for (const auto block_address : function.block_addresses) {
             const auto block = graph->block_by_address.find(block_address);
@@ -14088,6 +15955,11 @@ build_function_program_graph(
         static_cast<void>(address);
         normalize(callers);
     }
+    for (auto& [address, callers] : graph->tail_callers_by_target) {
+        static_cast<void>(address);
+        normalize(callers);
+    }
+    graph->logical_function_count = graph->functions.size();
     graph->strongly_connected_components =
         strong_components(graph->functions);
     graph->caller_sccs.resize(
@@ -14172,6 +16044,1095 @@ build_function_program_graph(
         graph->scc_fingerprints.push_back(
             digest_evaluation_key_material(std::move(key)));
     }
+    graph->next_block_id = next_block_id;
+    graph->next_function_id = next_function_id;
+    return graph;
+}
+
+struct MonotoneProgramAppend final {
+    std::vector<katana::sh4::DisassemblyLine> lines;
+    std::vector<FunctionBoundary> boundaries;
+    std::vector<BasicBlock> reused_blocks;
+    std::vector<ResolvedControlFlowEdge> semantic_edges;
+};
+
+[[nodiscard]] std::optional<MonotoneProgramAppend>
+classify_monotone_program_append(
+    const FunctionProgramGraph& previous,
+    const detail::FunctionProgramDelta& delta) {
+    if (delta.kind != detail::FunctionProgramDeltaKind::Exact ||
+        (delta.changed_lines.empty() &&
+         delta.changed_boundaries.empty()) ||
+        !delta.changed_semantic_edge_sites.empty())
+        return std::nullopt;
+
+    MonotoneProgramAppend append;
+    append.lines.reserve(delta.changed_lines.size());
+    append.boundaries.reserve(delta.changed_boundaries.size());
+    std::unordered_set<std::uint32_t> new_line_addresses;
+    new_line_addresses.reserve(delta.changed_lines.size());
+    for (const auto& changed : delta.changed_lines) {
+        if (!changed.value.has_value() ||
+            previous.input_arena->lines->find(changed.address) != nullptr ||
+            !new_line_addresses.insert(changed.address).second)
+            return std::nullopt;
+        append.lines.push_back(*changed.value);
+    }
+    std::sort(append.lines.begin(), append.lines.end(),
+              [](const auto& left, const auto& right) {
+                  return left.address < right.address;
+              });
+
+    // Adjacency would extend or split an existing physical block.  Old
+    // direct/resolved targets becoming decodable would also alter old leader,
+    // owner or caller relations.  Both cases require the conservative cold
+    // builder; proving their dynamic closure is deliberately outside this
+    // strictly additive fast path.
+    for (const auto& line : append.lines) {
+        if (previous.is_control_target(line.address)) return std::nullopt;
+        if (line.address >= 2u &&
+            previous.input_arena->lines->find(line.address - 2u) != nullptr)
+            return std::nullopt;
+        if (line.address <=
+                std::numeric_limits<std::uint32_t>::max() - 2u &&
+            previous.input_arena->lines->find(line.address + 2u) != nullptr)
+            return std::nullopt;
+        if (line.target_address.has_value() &&
+            previous.input_arena->lines->find(*line.target_address) != nullptr)
+            return std::nullopt;
+    }
+    for (const auto& changed : delta.changed_boundaries) {
+        if (!changed.value.has_value() ||
+            previous.input_arena->boundaries->find(
+                changed.entry_address) != nullptr ||
+            (!new_line_addresses.contains(changed.entry_address) &&
+             previous.find_block(changed.entry_address) == nullptr))
+            return std::nullopt;
+        append.boundaries.push_back(*changed.value);
+    }
+    std::sort(append.boundaries.begin(), append.boundaries.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.entry_address, left.size) <
+                         std::tie(right.entry_address, right.size);
+              });
+
+    if (append.lines.empty()) {
+        std::unordered_set<std::uint32_t> new_entries;
+        new_entries.reserve(append.boundaries.size());
+        for (const auto& boundary : append.boundaries) {
+            if (previous.find_function(boundary.entry_address) != nullptr ||
+                previous.has_tail_caller(boundary.entry_address) ||
+                !new_entries.insert(boundary.entry_address).second)
+                return std::nullopt;
+            const auto previous_callers =
+                previous.callers_by_callee_index();
+            const auto callers = previous_callers.find(
+                boundary.entry_address);
+            if (callers != previous_callers.end() &&
+                !callers->second.empty())
+                return std::nullopt;
+        }
+        const auto previous_owners = previous.owners_by_block_index();
+        std::unordered_set<std::uint32_t> visited;
+        std::deque<std::pair<std::uint32_t, FunctionBoundary>> pending;
+        for (const auto& boundary : append.boundaries)
+            pending.emplace_back(boundary.entry_address, boundary);
+        while (!pending.empty()) {
+            const auto [address, boundary] = pending.front();
+            pending.pop_front();
+            if (address != boundary.entry_address &&
+                new_entries.contains(address))
+                continue;
+            if (boundary.size != 0u) {
+                const auto end =
+                    static_cast<std::uint64_t>(boundary.entry_address) +
+                    boundary.size;
+                if (address < boundary.entry_address ||
+                    static_cast<std::uint64_t>(address) >= end)
+                    continue;
+            }
+            if (visited.contains(address)) continue;
+            const auto* const block = previous.find_block(address);
+            if (block == nullptr) continue;
+            if (boundary.size != 0u) {
+                const auto boundary_end =
+                    static_cast<std::uint64_t>(boundary.entry_address) +
+                    boundary.size;
+                // A boundary whose exclusive end lands on or before an old
+                // block's controlling instruction would split that block.
+                // The additive arena cannot shadow only the suffix safely;
+                // force the exact cold rebuild instead of silently retaining
+                // instructions outside the new function extent.
+                if (static_cast<std::uint64_t>(block->end_address) >=
+                    boundary_end)
+                    return std::nullopt;
+            }
+            const auto owners = previous_owners.find(address);
+            if (owners != previous_owners.end() &&
+                !owners->second.empty())
+                return std::nullopt;
+            visited.insert(address);
+            append.reused_blocks.push_back(*block);
+            for (const auto& line : block->lines) {
+                const auto* const family =
+                    previous.input_arena->semantic_edges->find(line.address);
+                if (family != nullptr)
+                    append.semantic_edges.insert(
+                        append.semantic_edges.end(),
+                        family->begin(), family->end());
+                if (line.target_address.has_value()) {
+                    const auto* const target =
+                        previous.find_block(*line.target_address);
+                    if (target != nullptr) {
+                        const auto target_owners =
+                            previous_owners.find(target->start_address);
+                        if (target_owners != previous_owners.end() &&
+                            !target_owners->second.empty())
+                            return std::nullopt;
+                    }
+                }
+            }
+            for (const auto successor : block->successors) {
+                const auto* const target = previous.find_block(successor);
+                if (target == nullptr) continue;
+                const auto target_owners =
+                    previous_owners.find(target->start_address);
+                if (target_owners != previous_owners.end() &&
+                    !target_owners->second.empty())
+                    return std::nullopt;
+                pending.emplace_back(successor, boundary);
+            }
+        }
+        if (append.reused_blocks.empty()) return std::nullopt;
+        std::sort(append.reused_blocks.begin(),
+                  append.reused_blocks.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.start_address < right.start_address;
+                  });
+        append.reused_blocks.erase(
+            std::unique(
+                append.reused_blocks.begin(),
+                append.reused_blocks.end(),
+                [](const auto& left, const auto& right) {
+                    return left.start_address == right.start_address;
+                }),
+            append.reused_blocks.end());
+        normalize_program_edge_family(append.semantic_edges);
+        for (const auto& edge : append.semantic_edges) {
+            if (previous.find_function(edge.target_address) != nullptr)
+                return std::nullopt;
+        }
+    }
+    return append;
+}
+
+[[nodiscard]] std::string monotone_program_append_identity(
+    const FunctionProgramGraph& previous,
+    const MonotoneProgramAppend& append) {
+    EvaluationKeyEncoder key;
+    key.append(function_program_graph_schema_version);
+    key.append(std::string_view{"monotone-program-append-v1"});
+    key.append(std::string_view{previous.identity});
+    key.append_range(
+        append.lines, [&](const auto& line) { encode(key, line); });
+    key.append_range(
+        append.boundaries, [&](const auto& boundary) {
+            key.append(boundary.entry_address);
+            key.append(boundary.size);
+        });
+    return digest_evaluation_key_material(std::move(key));
+}
+
+[[nodiscard]] std::shared_ptr<FunctionProgramGraph>
+build_monotone_program_append(
+    std::shared_ptr<const FunctionProgramGraph> previous,
+    std::shared_ptr<const FunctionProgramInputArena> input_arena,
+    MonotoneProgramAppend append) {
+    std::vector<std::uint32_t> leaders;
+    leaders.reserve(append.boundaries.size() * 2u);
+    for (const auto& boundary : append.boundaries) {
+        leaders.push_back(boundary.entry_address);
+        if (boundary.size == 0u) continue;
+        const auto end = static_cast<std::uint64_t>(boundary.entry_address) +
+                         boundary.size;
+        if (end <= std::numeric_limits<std::uint32_t>::max())
+            leaders.push_back(static_cast<std::uint32_t>(end));
+    }
+    auto decoded_blocks = append.lines.empty()
+                              ? append.reused_blocks
+                              : build_basic_blocks(
+                                    append.lines,
+                                    append.semantic_edges,
+                                    leaders);
+    auto discovered_functions = discover_functions_from_blocks(
+        decoded_blocks, append.boundaries, append.semantic_edges);
+    if (decoded_blocks.empty()) return nullptr;
+
+    auto graph = std::make_shared<FunctionProgramGraph>();
+    graph->identity = monotone_program_append_identity(*previous, append);
+    graph->base = std::move(previous);
+    graph->input_arena = std::move(input_arena);
+    graph->semantic_edges_materialized =
+        graph->base->semantic_edges_materialized;
+    graph->summary_indirect_callees =
+        graph->base->summary_indirect_callees;
+    graph->indirect_jump_candidates =
+        graph->base->indirect_jump_candidates;
+    graph->jump_table_jump_sites =
+        graph->base->jump_table_jump_sites;
+    graph->scc_base_offset = graph->base->component_count();
+    graph->next_block_id = graph->base->next_block_id;
+    graph->next_function_id = graph->base->next_function_id;
+    graph->next_scc_dependency_version =
+        graph->base->next_scc_dependency_version;
+
+    if (append.lines.empty()) {
+        graph->physically_reused_blocks = decoded_blocks.size();
+    } else {
+        graph->blocks.reserve(decoded_blocks.size());
+        graph->block_by_address.reserve(decoded_blocks.size());
+        graph->block_shards_by_address.reserve(decoded_blocks.size());
+        graph->block_fingerprints.reserve(decoded_blocks.size());
+        for (auto& block : decoded_blocks) {
+            if (graph->base->find_block(block.start_address) != nullptr)
+                return nullptr;
+            block.id = graph->next_block_id++;
+            const auto address = block.start_address;
+            auto fingerprint = basic_block_fingerprint(block);
+            auto shard =
+                std::make_shared<const BasicBlock>(std::move(block));
+            graph->block_fingerprints.emplace(address,
+                                              std::move(fingerprint));
+            graph->block_by_address.emplace(address, shard.get());
+            graph->block_shards_by_address.emplace(address, shard);
+            graph->blocks.push_back(std::move(shard));
+            graph->sorted_block_addresses.push_back(address);
+            ++graph->physically_built_blocks;
+        }
+    }
+    normalize(graph->sorted_block_addresses);
+    graph->logical_block_count =
+        graph->base->logical_block_count + graph->blocks.size();
+
+    graph->functions.reserve(discovered_functions.size());
+    graph->function_by_address.reserve(discovered_functions.size());
+    graph->function_shards_by_address.reserve(discovered_functions.size());
+    graph->function_fingerprints.reserve(discovered_functions.size());
+    const BasicBlockIndexView graph_block_index{
+        graph->block_map_layers()};
+    for (auto& function : discovered_functions) {
+        if (graph->base->find_function(function.entry_address) != nullptr)
+            return nullptr;
+        if (graph->base->has_tail_caller(function.entry_address))
+            return nullptr;
+        for (const auto callee : function.direct_callees) {
+            if (graph->base->find_function(callee) != nullptr)
+                return nullptr;
+        }
+        function.id = graph->next_function_id++;
+        const auto address = function.entry_address;
+        auto fingerprint =
+            function_program_fingerprint(function, graph_block_index);
+        auto shard =
+            std::make_shared<const FunctionInfo>(std::move(function));
+        graph->function_fingerprints.emplace(address,
+                                             std::move(fingerprint));
+        graph->function_by_address.emplace(address, shard.get());
+        graph->function_shards_by_address.emplace(address, shard);
+        graph->functions.push_back(std::move(shard));
+        ++graph->physically_built_functions;
+    }
+    for (const auto& line : append.lines) {
+        if (line.target_address.has_value())
+            graph->control_targets.insert(*line.target_address);
+    }
+
+    graph->owners_by_block.reserve(decoded_blocks.size());
+    graph->owners_by_control.reserve(decoded_blocks.size());
+    graph->callers_by_callee.reserve(graph->functions.size());
+    graph->tail_callers_by_target.reserve(graph->functions.size());
+    for (const auto& function : graph->functions) {
+        for (const auto callee : function.direct_callees)
+            graph->callers_by_callee[callee].push_back(
+                function.entry_address);
+        for (const auto target : function.tail_jump_targets)
+            graph->tail_callers_by_target[target].push_back(
+                function.entry_address);
+        for (const auto block_address : function.block_addresses) {
+            const auto* const block = graph->find_block(block_address);
+            if (block == nullptr || block->lines.empty()) continue;
+            graph->owners_by_block[block_address].push_back(
+                function.entry_address);
+            graph->owners_by_control[controlling_line(*block).address]
+                .push_back(function.entry_address);
+        }
+    }
+    for (auto& [address, owners] : graph->owners_by_block) {
+        static_cast<void>(address);
+        normalize(owners);
+    }
+    for (auto& [address, owners] : graph->owners_by_control) {
+        static_cast<void>(address);
+        normalize(owners);
+    }
+    for (auto& [address, callers] : graph->callers_by_callee) {
+        static_cast<void>(address);
+        normalize(callers);
+    }
+    for (auto& [address, callers] : graph->tail_callers_by_target) {
+        static_cast<void>(address);
+        normalize(callers);
+    }
+    graph->logical_function_count =
+        graph->base->logical_function_count + graph->functions.size();
+
+    graph->strongly_connected_components =
+        strong_components(graph->functions);
+    graph->caller_sccs.resize(
+        graph->strongly_connected_components.size());
+    graph->callee_sccs.resize(
+        graph->strongly_connected_components.size());
+    for (std::size_t local = 0u;
+         local < graph->strongly_connected_components.size(); ++local) {
+        const auto global = graph->scc_base_offset + local;
+        for (const auto member :
+             graph->strongly_connected_components[local])
+            graph->scc_by_function.emplace(member, global);
+    }
+    for (const auto& function : graph->functions) {
+        const auto caller_global = *graph->find_scc(function.entry_address);
+        const auto caller_local = caller_global - graph->scc_base_offset;
+        for (const auto callee : function.direct_callees) {
+            const auto callee_global = graph->find_scc(callee);
+            if (!callee_global.has_value() ||
+                *callee_global == caller_global)
+                continue;
+            if (*callee_global < graph->scc_base_offset)
+                return nullptr;
+            const auto callee_local =
+                *callee_global - graph->scc_base_offset;
+            graph->caller_sccs[callee_local].push_back(caller_global);
+            graph->callee_sccs[caller_local].push_back(*callee_global);
+        }
+    }
+    for (auto& callers : graph->caller_sccs) normalize(callers);
+    for (auto& callees : graph->callee_sccs) normalize(callees);
+
+    graph->scc_fingerprints.reserve(
+        graph->strongly_connected_components.size());
+    for (std::size_t local = 0u;
+         local < graph->strongly_connected_components.size(); ++local) {
+        EvaluationKeyEncoder key;
+        key.append(function_program_graph_schema_version);
+        key.append_range(
+            graph->strongly_connected_components[local],
+            [&](const auto member) {
+                key.append(member);
+                key.append(std::string_view{
+                    *graph->find_function_fingerprint(member)});
+            });
+        std::vector<std::string> caller_fingerprints;
+        for (const auto caller_global : graph->caller_sccs[local]) {
+            EvaluationKeyEncoder edge;
+            edge.append_range(
+                graph->component_at(caller_global),
+                [&](const auto member) {
+                    edge.append(member);
+                    edge.append(std::string_view{
+                        *graph->find_function_fingerprint(member)});
+                    const auto* const function =
+                        graph->find_function(member);
+                    if (function == nullptr) return;
+                    std::vector<std::uint32_t> exact_targets;
+                    for (const auto target : function->direct_callees) {
+                        const auto component = graph->find_scc(target);
+                        if (component.has_value() &&
+                            *component == graph->scc_base_offset + local)
+                            exact_targets.push_back(target);
+                    }
+                    normalize(exact_targets);
+                    edge.append_range(
+                        exact_targets,
+                        [&](const auto target) { edge.append(target); });
+                });
+            caller_fingerprints.push_back(
+                digest_evaluation_key_material(std::move(edge)));
+        }
+        std::sort(caller_fingerprints.begin(),
+                  caller_fingerprints.end());
+        key.append_range(
+            caller_fingerprints,
+            [&](const auto& fingerprint) {
+                key.append(std::string_view{fingerprint});
+            });
+        graph->scc_fingerprints.push_back(
+            digest_evaluation_key_material(std::move(key)));
+    }
+    return graph;
+}
+
+[[nodiscard]] std::string additive_semantic_jump_identity(
+    const FunctionProgramGraph& previous,
+    const detail::FunctionProgramDelta& delta) {
+    EvaluationKeyEncoder key;
+    key.append(function_program_graph_schema_version);
+    key.append(std::string_view{"semantic-edge-overlay-v2"});
+    key.append(std::string_view{previous.identity});
+    key.append_range(
+        delta.changed_semantic_edge_sites,
+        [&](const auto& site) {
+            key.append(site.instruction_address);
+            key.append_range(
+                site.values,
+                [&](const auto& edge) {
+                    encode_program_edge(key, edge);
+                });
+        });
+    return digest_evaluation_key_material(std::move(key));
+}
+
+// Strictly additive resolved Jump families and exact indirect-Call family
+// replacements can update their real owner/SCC closure without rebuilding or
+// copying the complete program graph. Any edit which can change SCC membership
+// or block leaders deliberately returns nullptr for the exact cold CPU path.
+[[nodiscard]] std::shared_ptr<FunctionProgramGraph>
+build_additive_semantic_jump_overlay(
+    std::shared_ptr<const FunctionProgramGraph> previous,
+    std::shared_ptr<const FunctionProgramInputArena> input_arena,
+    const detail::FunctionProgramDelta& delta) {
+    if (delta.kind != detail::FunctionProgramDeltaKind::Exact ||
+        !delta.changed_lines.empty() ||
+        !delta.changed_boundaries.empty() ||
+        delta.changed_semantic_edge_sites.empty())
+        return nullptr;
+
+    std::map<std::uint32_t, BasicBlock> replacement_blocks;
+    std::unordered_set<std::uint32_t> affected_functions;
+    auto jump_index = std::make_shared<PersistentIndirectCalleeIndex>(
+        *previous->indirect_jump_candidates);
+    auto call_index = std::make_shared<PersistentIndirectCalleeIndex>(
+        *previous->summary_indirect_callees);
+    bool call_topology_changed = false;
+    const auto source_owners_by_control =
+        previous->owners_by_control_index();
+
+    for (const auto& changed : delta.changed_semantic_edge_sites) {
+        const auto* const old_family =
+            previous->input_arena->semantic_edges->find(
+                changed.instruction_address);
+        std::optional<ResolvedControlFlowKind> family_kind;
+        const auto accept_family_edge =
+            [&](const ResolvedControlFlowEdge& edge) {
+                if (edge.analysis_candidate_carrier ||
+                    (edge.kind != ResolvedControlFlowKind::Call &&
+                     edge.kind != ResolvedControlFlowKind::Jump))
+                    return false;
+                if (family_kind.has_value() && *family_kind != edge.kind)
+                    return false;
+                family_kind = edge.kind;
+                return true;
+            };
+        if (old_family != nullptr)
+            for (const auto& edge : *old_family)
+                if (!accept_family_edge(edge)) return nullptr;
+        for (const auto& edge : changed.values)
+            if (!accept_family_edge(edge)) return nullptr;
+        if (!family_kind.has_value()) return nullptr;
+
+        const auto* const source =
+            previous->find_containing_block(changed.instruction_address);
+        if (source == nullptr || source->lines.empty() ||
+            controlling_line(*source).address !=
+                changed.instruction_address)
+            return nullptr;
+        IndirectCalleeCandidates candidates;
+        if (*family_kind == ResolvedControlFlowKind::Jump) {
+            const auto old_size =
+                old_family == nullptr ? 0u : old_family->size();
+            if (changed.values.size() <= old_size ||
+                controlling_line(*source).instruction.control_flow !=
+                    katana::sh4::ControlFlowKind::IndirectBranch)
+                return nullptr;
+            if (old_family != nullptr) {
+                for (const auto& old_edge : *old_family) {
+                    if (std::find(changed.values.begin(),
+                                  changed.values.end(),
+                                  old_edge) == changed.values.end())
+                        return nullptr;
+                }
+            }
+            auto [stored_block, inserted_block] =
+                replacement_blocks.try_emplace(
+                    source->start_address, *source);
+            static_cast<void>(inserted_block);
+            auto& replacement = stored_block->second;
+            for (const auto& edge : changed.values) {
+                if (std::find(edge.evidence_origins.begin(),
+                              edge.evidence_origins.end(),
+                              AnalysisEvidenceOrigin::JumpTable) !=
+                    edge.evidence_origins.end())
+                    return nullptr;
+                const auto* const target =
+                    previous->find_block(edge.target_address);
+                if (target == nullptr ||
+                    target->start_address != edge.target_address)
+                    return nullptr;
+                replacement.successors.push_back(edge.target_address);
+                candidates.targets.push_back(edge.target_address);
+                const auto evidence = resolved_edge_evidence(edge);
+                candidates.guarded =
+                    candidates.guarded ||
+                    evidence != ControlFlowEvidence::ProvenComplete;
+                candidates.complete =
+                    candidates.complete &&
+                    control_flow_evidence_complete(evidence);
+            }
+            normalize(replacement.successors);
+            normalize(candidates.targets);
+            jump_index->insert_or_assign(
+                changed.instruction_address, std::move(candidates));
+        } else {
+            if (controlling_line(*source).instruction.control_flow !=
+                katana::sh4::ControlFlowKind::IndirectCall)
+                return nullptr;
+            if (old_family == nullptr || old_family->empty() ||
+                changed.values.empty())
+                return nullptr;
+            const auto validate_call_target =
+                [&](const ResolvedControlFlowEdge& edge) {
+                    return previous->find_function(edge.target_address) !=
+                           nullptr;
+                };
+            if (old_family != nullptr &&
+                !std::all_of(old_family->begin(), old_family->end(),
+                             validate_call_target))
+                return nullptr;
+            if (!std::all_of(changed.values.begin(), changed.values.end(),
+                             validate_call_target))
+                return nullptr;
+            const auto family_complete = [](const auto& family) {
+                return std::all_of(
+                    family.begin(), family.end(),
+                    [](const ResolvedControlFlowEdge& edge) {
+                        return control_flow_evidence_complete(
+                            resolved_edge_evidence(edge));
+                    });
+            };
+            if (family_complete(*old_family) !=
+                family_complete(changed.values))
+                return nullptr;
+            if (old_family != nullptr)
+                for (const auto& edge : *old_family)
+                    affected_functions.insert(edge.target_address);
+            for (const auto& edge : changed.values) {
+                affected_functions.insert(edge.target_address);
+                candidates.targets.push_back(edge.target_address);
+                const auto evidence = resolved_edge_evidence(edge);
+                candidates.guarded =
+                    candidates.guarded ||
+                    evidence != ControlFlowEvidence::ProvenComplete;
+                candidates.complete =
+                    candidates.complete &&
+                    control_flow_evidence_complete(evidence);
+            }
+            normalize(candidates.targets);
+            if (candidates.targets.empty())
+                call_index->erase(changed.instruction_address);
+            else
+                call_index->insert_or_assign(
+                    changed.instruction_address, std::move(candidates));
+            call_topology_changed = true;
+        }
+
+        const auto owners = source_owners_by_control.find(
+            changed.instruction_address);
+        if (owners == source_owners_by_control.end() ||
+            owners->second.empty())
+            return nullptr;
+        affected_functions.insert(
+            owners->second.begin(), owners->second.end());
+    }
+
+    const auto block_at = [&](const std::uint32_t address)
+        -> const BasicBlock* {
+        const auto replacement = replacement_blocks.find(address);
+        return replacement == replacement_blocks.end()
+                   ? previous->find_block(address)
+                   : &replacement->second;
+    };
+    const auto rebuild_function = [&](const FunctionInfo& old) {
+        FunctionInfo function;
+        function.id = old.id;
+        function.entry_address = old.entry_address;
+        function.size = old.size;
+        function.evidence = old.evidence;
+        const auto exact_end =
+            old.size == 0u
+                ? std::optional<std::uint64_t>{}
+                : std::optional<std::uint64_t>{
+                      static_cast<std::uint64_t>(old.entry_address) +
+                      old.size};
+        std::deque<std::uint32_t> pending{old.entry_address};
+        std::unordered_set<std::uint32_t> visited;
+        while (!pending.empty()) {
+            const auto address = pending.front();
+            pending.pop_front();
+            if (!visited.insert(address).second) continue;
+            if (address != old.entry_address &&
+                previous->find_function(address) != nullptr)
+                continue;
+            if (exact_end.has_value() &&
+                (address < old.entry_address ||
+                 static_cast<std::uint64_t>(address) >= *exact_end))
+                continue;
+            const auto* const block = block_at(address);
+            if (block == nullptr || block->lines.empty()) continue;
+            function.block_addresses.push_back(address);
+            const auto& control = controlling_line(*block);
+            const auto flow = control.instruction.control_flow;
+            if (flow == katana::sh4::ControlFlowKind::Call &&
+                control.target_address.has_value())
+                function.direct_callees.push_back(
+                    *control.target_address);
+            if (flow == katana::sh4::ControlFlowKind::IndirectCall)
+                function.indirect_call_sites.push_back(control.address);
+            const auto* const semantic =
+                input_arena->semantic_edges->find(control.address);
+            if (semantic != nullptr) {
+                for (const auto& edge : *semantic) {
+                    if (edge.kind != ResolvedControlFlowKind::Call)
+                        continue;
+                    function.direct_callees.push_back(
+                        edge.target_address);
+                    function.indirect_call_sites.push_back(
+                        control.address);
+                }
+            }
+            for (const auto successor : block->successors) {
+                const bool crosses_exact_boundary =
+                    exact_end.has_value() &&
+                    (successor < old.entry_address ||
+                     static_cast<std::uint64_t>(successor) >= *exact_end);
+                const bool reaches_other_function =
+                    successor != old.entry_address &&
+                    previous->find_function(successor) != nullptr;
+                if (crosses_exact_boundary || reaches_other_function) {
+                    if (flow ==
+                            katana::sh4::ControlFlowKind::
+                                UnconditionalBranch ||
+                        flow ==
+                            katana::sh4::ControlFlowKind::IndirectBranch)
+                        function.tail_jump_targets.push_back(successor);
+                    continue;
+                }
+                if (flow == katana::sh4::ControlFlowKind::Call &&
+                    control.target_address.has_value() &&
+                    successor == *control.target_address)
+                    continue;
+                pending.push_back(successor);
+            }
+        }
+        normalize(function.block_addresses);
+        normalize(function.direct_callees);
+        normalize(function.indirect_call_sites);
+        normalize(function.tail_jump_targets);
+        return function;
+    };
+
+    std::map<std::uint32_t, FunctionInfo> replacement_functions;
+    std::deque<std::uint32_t> pending_functions(
+        affected_functions.begin(), affected_functions.end());
+    const auto previous_owners_by_block = previous->owners_by_block_index();
+    while (!pending_functions.empty()) {
+        const auto entry = pending_functions.front();
+        pending_functions.pop_front();
+        if (replacement_functions.contains(entry)) continue;
+        const auto* const old = previous->find_function(entry);
+        if (old == nullptr) return nullptr;
+        auto current = rebuild_function(*old);
+        if (!call_topology_changed &&
+            current.direct_callees != old->direct_callees)
+            return nullptr;
+        for (const auto block_address : current.block_addresses) {
+            const auto owners = previous_owners_by_block.find(block_address);
+            if (owners == previous_owners_by_block.end()) continue;
+            for (const auto owner : owners->second) {
+                if (affected_functions.insert(owner).second)
+                    pending_functions.push_back(owner);
+            }
+        }
+        replacement_functions.emplace(entry, std::move(current));
+    }
+
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        current_owners;
+    for (const auto& [entry, function] : replacement_functions) {
+        for (const auto block_address : function.block_addresses)
+            current_owners[block_address].push_back(entry);
+    }
+    for (auto& [entry, function] : replacement_functions) {
+        static_cast<void>(entry);
+        for (const auto block_address : function.block_addresses) {
+            auto owners = current_owners[block_address];
+            const auto previous_owners =
+                previous_owners_by_block.find(block_address);
+            if (previous_owners != previous_owners_by_block.end())
+                owners.insert(owners.end(),
+                              previous_owners->second.begin(),
+                              previous_owners->second.end());
+            normalize(owners);
+            if (owners.size() > 1u)
+                function.shared_block_addresses.push_back(block_address);
+        }
+        normalize(function.shared_block_addresses);
+    }
+
+    auto graph = std::make_shared<FunctionProgramGraph>();
+    graph->identity = additive_semantic_jump_identity(*previous, delta);
+    graph->base = std::move(previous);
+    graph->input_arena = std::move(input_arena);
+    // The exact edge families remain path-shared in input_arena. Downstream
+    // Call classification consults that persistent site index directly.
+    graph->semantic_edges_materialized =
+        graph->base->semantic_edges_materialized;
+    graph->summary_indirect_callees = std::move(call_index);
+    graph->indirect_jump_candidates = std::move(jump_index);
+    graph->jump_table_jump_sites = graph->base->jump_table_jump_sites;
+    graph->scc_base_offset = graph->base->component_count();
+    graph->next_block_id = graph->base->next_block_id;
+    graph->next_function_id = graph->base->next_function_id;
+    graph->next_scc_dependency_version =
+        graph->base->next_scc_dependency_version;
+    graph->logical_block_count = graph->base->logical_block_count;
+    graph->logical_function_count = graph->base->logical_function_count;
+    graph->physically_reused_functions =
+        graph->logical_function_count - replacement_functions.size();
+
+    graph->blocks.reserve(replacement_blocks.size());
+    graph->block_by_address.reserve(replacement_blocks.size());
+    graph->block_shards_by_address.reserve(replacement_blocks.size());
+    graph->block_fingerprints.reserve(replacement_blocks.size());
+    for (auto& [address, block] : replacement_blocks) {
+        auto fingerprint = basic_block_fingerprint(block);
+        auto shard = std::make_shared<const BasicBlock>(std::move(block));
+        graph->shadowed_block_addresses.insert(address);
+        graph->block_fingerprints.emplace(address, std::move(fingerprint));
+        graph->block_by_address.emplace(address, shard.get());
+        graph->block_shards_by_address.emplace(address, shard);
+        graph->blocks.push_back(std::move(shard));
+        graph->sorted_block_addresses.push_back(address);
+        ++graph->physically_built_blocks;
+    }
+    normalize(graph->sorted_block_addresses);
+    for (const auto& changed : delta.changed_semantic_edge_sites) {
+        for (const auto& edge : changed.values)
+            graph->control_targets.insert(edge.target_address);
+    }
+
+    const BasicBlockIndexView graph_block_index{
+        graph->block_map_layers()};
+    graph->functions.reserve(replacement_functions.size());
+    graph->function_by_address.reserve(replacement_functions.size());
+    graph->function_shards_by_address.reserve(replacement_functions.size());
+    graph->function_fingerprints.reserve(replacement_functions.size());
+    for (auto& [entry, function] : replacement_functions) {
+        auto fingerprint =
+            function_program_fingerprint(function, graph_block_index);
+        auto shard =
+            std::make_shared<const FunctionInfo>(std::move(function));
+        graph->shadowed_function_addresses.insert(entry);
+        graph->function_fingerprints.emplace(entry, std::move(fingerprint));
+        graph->function_by_address.emplace(entry, shard.get());
+        graph->function_shards_by_address.emplace(entry, shard);
+        graph->functions.push_back(std::move(shard));
+        ++graph->physically_built_functions;
+    }
+
+    std::unordered_set<std::uint32_t> touched_blocks;
+    std::unordered_set<std::uint32_t> touched_controls;
+    for (const auto& function : graph->functions) {
+        const auto* const old =
+            graph->base->find_function(function.entry_address);
+        if (old != nullptr) {
+            touched_blocks.insert(old->block_addresses.begin(),
+                                  old->block_addresses.end());
+            for (const auto address : old->block_addresses) {
+                const auto* const block = graph->base->find_block(address);
+                if (block != nullptr && !block->lines.empty())
+                    touched_controls.insert(
+                        controlling_line(*block).address);
+            }
+        }
+        touched_blocks.insert(function.block_addresses.begin(),
+                              function.block_addresses.end());
+        for (const auto address : function.block_addresses) {
+            const auto* const block = graph->find_block(address);
+            if (block != nullptr && !block->lines.empty())
+                touched_controls.insert(controlling_line(*block).address);
+        }
+    }
+    for (const auto address : touched_blocks) {
+        std::vector<std::uint32_t> owners;
+        const auto old = previous_owners_by_block.find(address);
+        if (old != previous_owners_by_block.end()) owners = old->second;
+        for (const auto& function : graph->functions) {
+            const auto* const previous_function =
+                graph->base->find_function(function.entry_address);
+            const auto old_member =
+                previous_function != nullptr &&
+                std::binary_search(previous_function->block_addresses.begin(),
+                                   previous_function->block_addresses.end(),
+                                   address);
+            const auto new_member =
+                std::binary_search(function.block_addresses.begin(),
+                                   function.block_addresses.end(),
+                                   address);
+            if (old_member && !new_member)
+                std::erase(owners, function.entry_address);
+            else if (new_member)
+                owners.push_back(function.entry_address);
+        }
+        normalize(owners);
+        graph->owners_by_block.emplace(address, std::move(owners));
+    }
+    const auto previous_owners_by_control =
+        graph->base->owners_by_control_index();
+    for (const auto address : touched_controls) {
+        std::vector<std::uint32_t> owners;
+        const auto old = previous_owners_by_control.find(address);
+        if (old != previous_owners_by_control.end()) owners = old->second;
+        for (const auto& function : graph->functions) {
+            bool owns = false;
+            for (const auto block_address : function.block_addresses) {
+                const auto* const block = graph->find_block(block_address);
+                if (block != nullptr && !block->lines.empty() &&
+                    controlling_line(*block).address == address) {
+                    owns = true;
+                    break;
+                }
+            }
+            if (owns) owners.push_back(function.entry_address);
+        }
+        normalize(owners);
+        graph->owners_by_control.emplace(address, std::move(owners));
+    }
+
+    const auto previous_tail_callers =
+        graph->base->tail_callers_by_target_index();
+    std::unordered_set<std::uint32_t> touched_tail_targets;
+    for (const auto& function : graph->functions) {
+        const auto* const old =
+            graph->base->find_function(function.entry_address);
+        if (old != nullptr)
+            touched_tail_targets.insert(old->tail_jump_targets.begin(),
+                                        old->tail_jump_targets.end());
+        touched_tail_targets.insert(function.tail_jump_targets.begin(),
+                                    function.tail_jump_targets.end());
+    }
+    for (const auto target : touched_tail_targets) {
+        std::vector<std::uint32_t> callers;
+        const auto old = previous_tail_callers.find(target);
+        if (old != previous_tail_callers.end()) callers = old->second;
+        for (const auto& function : graph->functions) {
+            const auto* const previous_function =
+                graph->base->find_function(function.entry_address);
+            const auto old_member =
+                previous_function != nullptr &&
+                std::binary_search(
+                    previous_function->tail_jump_targets.begin(),
+                    previous_function->tail_jump_targets.end(), target);
+            const auto new_member =
+                std::binary_search(function.tail_jump_targets.begin(),
+                                   function.tail_jump_targets.end(), target);
+            if (old_member && !new_member)
+                std::erase(callers, function.entry_address);
+            else if (new_member)
+                callers.push_back(function.entry_address);
+        }
+        normalize(callers);
+        graph->tail_callers_by_target.emplace(target, std::move(callers));
+    }
+
+    std::unordered_set<std::size_t> changed_call_source_components;
+    std::unordered_set<std::size_t> changed_call_target_components;
+    if (call_topology_changed) {
+        const auto previous_callers =
+            graph->base->callers_by_callee_index();
+        for (const auto& function : graph->functions) {
+            const auto* const old =
+                graph->base->find_function(function.entry_address);
+            if (old == nullptr ||
+                old->direct_callees == function.direct_callees)
+                continue;
+            const auto source_component =
+                graph->base->find_scc(function.entry_address);
+            if (!source_component.has_value()) return nullptr;
+            changed_call_source_components.insert(*source_component);
+            std::vector<std::uint32_t> changed_targets;
+            std::set_symmetric_difference(
+                old->direct_callees.begin(), old->direct_callees.end(),
+                function.direct_callees.begin(),
+                function.direct_callees.end(),
+                std::back_inserter(changed_targets));
+            for (const auto target : changed_targets) {
+                const auto target_component = graph->base->find_scc(target);
+                if (!target_component.has_value() ||
+                    *target_component == *source_component)
+                    return nullptr;
+                changed_call_target_components.insert(*target_component);
+                std::vector<std::uint32_t> callers;
+                const auto staged = graph->callers_by_callee.find(target);
+                if (staged != graph->callers_by_callee.end()) {
+                    callers = staged->second;
+                } else {
+                    const auto previous = previous_callers.find(target);
+                    if (previous != previous_callers.end())
+                        callers = previous->second;
+                }
+                std::erase(callers, function.entry_address);
+                if (std::binary_search(function.direct_callees.begin(),
+                                       function.direct_callees.end(),
+                                       target))
+                    callers.push_back(function.entry_address);
+                normalize(callers);
+                graph->callers_by_callee.insert_or_assign(
+                    target, std::move(callers));
+            }
+        }
+
+        for (const auto source_component :
+             changed_call_source_components) {
+            std::vector<std::size_t> callees;
+            for (const auto member :
+                 graph->base->component_at(source_component)) {
+                const auto* const function = graph->find_function(member);
+                if (function == nullptr) return nullptr;
+                for (const auto callee : function->direct_callees) {
+                    const auto target_component = graph->find_scc(callee);
+                    if (!target_component.has_value()) continue;
+                    if (*target_component != source_component)
+                        callees.push_back(*target_component);
+                }
+            }
+            normalize(callees);
+            graph->callee_scc_overrides.insert_or_assign(
+                source_component, callees);
+            changed_call_target_components.insert(
+                graph->base->callee_sccs_at(source_component).begin(),
+                graph->base->callee_sccs_at(source_component).end());
+            changed_call_target_components.insert(
+                callees.begin(), callees.end());
+        }
+
+        for (const auto target_component :
+             changed_call_target_components) {
+            auto callers =
+                graph->base->caller_sccs_at(target_component);
+            for (const auto source_component :
+                 changed_call_source_components) {
+                std::erase(callers, source_component);
+                const auto& callees =
+                    graph->callee_sccs_at(source_component);
+                if (std::binary_search(callees.begin(), callees.end(),
+                                       target_component))
+                    callers.push_back(source_component);
+            }
+            normalize(callers);
+            graph->caller_scc_overrides.insert_or_assign(
+                target_component, std::move(callers));
+        }
+
+        for (const auto source_component :
+             changed_call_source_components) {
+            for (const auto target_component :
+                 graph->callee_sccs_at(source_component)) {
+                std::unordered_set<std::size_t> visited;
+                std::deque<std::size_t> pending{target_component};
+                while (!pending.empty()) {
+                    const auto current = pending.front();
+                    pending.pop_front();
+                    if (!visited.insert(current).second) continue;
+                    if (current == source_component) return nullptr;
+                    const auto& callees = graph->callee_sccs_at(current);
+                    pending.insert(pending.end(),
+                                   callees.begin(), callees.end());
+                }
+            }
+        }
+    }
+
+    std::unordered_set<std::size_t> changed_components;
+    for (const auto& function : graph->functions) {
+        const auto component = graph->base->find_scc(
+            function.entry_address);
+        if (component.has_value()) changed_components.insert(*component);
+    }
+    changed_components.insert(changed_call_source_components.begin(),
+                              changed_call_source_components.end());
+    changed_components.insert(changed_call_target_components.begin(),
+                              changed_call_target_components.end());
+    for (const auto component : changed_components) {
+        EvaluationKeyEncoder key;
+        key.append(function_program_graph_schema_version);
+        key.append_range(
+            graph->component_at(component),
+            [&](const auto member) {
+                key.append(member);
+                const auto* const fingerprint =
+                    graph->find_function_fingerprint(member);
+                if (fingerprint == nullptr)
+                    throw std::logic_error(
+                        "Semantisches SCC-Overlay verlor einen "
+                        "Function-Fingerprint.");
+                key.append(std::string_view{*fingerprint});
+            });
+        std::vector<std::string> caller_fingerprints;
+        for (const auto caller : graph->caller_sccs_at(component)) {
+            EvaluationKeyEncoder edge;
+            edge.append_range(
+                graph->component_at(caller),
+                [&](const auto member) {
+                    edge.append(member);
+                    const auto* const fingerprint =
+                        graph->find_function_fingerprint(member);
+                    if (fingerprint == nullptr)
+                        throw std::logic_error(
+                            "Semantisches SCC-Overlay verlor einen "
+                            "Caller-Fingerprint.");
+                    edge.append(std::string_view{*fingerprint});
+                    const auto* const function =
+                        graph->find_function(member);
+                    if (function == nullptr) return;
+                    std::vector<std::uint32_t> exact_targets;
+                    for (const auto target :
+                         function->direct_callees) {
+                        const auto target_component =
+                            graph->find_scc(target);
+                        if (target_component.has_value() &&
+                            *target_component == component)
+                            exact_targets.push_back(target);
+                    }
+                    normalize(exact_targets);
+                    edge.append_range(
+                        exact_targets,
+                        [&](const auto target) { edge.append(target); });
+                });
+            caller_fingerprints.push_back(
+                digest_evaluation_key_material(std::move(edge)));
+        }
+        std::sort(caller_fingerprints.begin(),
+                  caller_fingerprints.end());
+        key.append_range(
+            caller_fingerprints,
+            [&](const auto& fingerprint) {
+                key.append(std::string_view{fingerprint});
+            });
+        graph->scc_fingerprint_overrides.emplace(
+            component,
+            digest_evaluation_key_material(std::move(key)));
+        graph->scc_dependency_version_overrides.emplace(
+            component, graph->next_scc_dependency_version++);
+    }
     return graph;
 }
 
@@ -14182,23 +17143,22 @@ scc_caller_closure(
     std::unordered_set<std::size_t> dirty_components;
     std::deque<std::size_t> pending;
     for (const auto seed : seeds) {
-        const auto component = current.scc_by_function.find(seed);
-        if (component != current.scc_by_function.end() &&
-            dirty_components.insert(component->second).second)
-            pending.push_back(component->second);
+        const auto component = current.find_scc(seed);
+        if (component.has_value() &&
+            dirty_components.insert(*component).second)
+            pending.push_back(*component);
     }
     while (!pending.empty()) {
         const auto component = pending.front();
         pending.pop_front();
-        for (const auto caller : current.caller_sccs[component]) {
+        for (const auto caller : current.caller_sccs_at(component)) {
             if (dirty_components.insert(caller).second)
                 pending.push_back(caller);
         }
     }
     std::unordered_set<std::uint32_t> dirty_functions;
     for (const auto component : dirty_components) {
-        const auto& members =
-            current.strongly_connected_components[component];
+        const auto& members = current.component_at(component);
         dirty_functions.insert(members.begin(), members.end());
     }
     return dirty_functions;
@@ -14209,33 +17169,36 @@ caller_scc_dirty_closure(
     const FunctionProgramGraph* const previous,
     const FunctionProgramGraph& current) {
     std::vector<std::uint32_t> seeds;
+    const auto current_functions = current.function_view();
     if (previous == nullptr) {
-        seeds.reserve(current.functions.size());
-        for (const auto& function : current.functions)
+        seeds.reserve(current_functions.size());
+        for (const auto& function : current_functions)
             seeds.push_back(function.entry_address);
     } else {
-        seeds.reserve(current.functions.size());
-        for (const auto& [address, fingerprint] :
-             current.function_fingerprints) {
-            const auto old = previous->function_fingerprints.find(address);
-            if (old == previous->function_fingerprints.end() ||
-                old->second != fingerprint) {
+        seeds.reserve(current_functions.size());
+        for (const auto& function : current_functions) {
+            const auto address = function.entry_address;
+            const auto* const fingerprint =
+                current.find_function_fingerprint(address);
+            const auto* const old =
+                previous->find_function_fingerprint(address);
+            if (old == nullptr || fingerprint == nullptr ||
+                *old != *fingerprint) {
                 seeds.push_back(address);
-                const auto old_function =
-                    previous->function_by_address.find(address);
-                const auto new_function =
-                    current.function_by_address.find(address);
-                if (old_function != previous->function_by_address.end() &&
-                    new_function != current.function_by_address.end()) {
+                const auto* const old_function =
+                    previous->find_function(address);
+                const auto* const new_function =
+                    current.find_function(address);
+                if (old_function != nullptr && new_function != nullptr) {
                     std::vector<std::uint32_t> changed_callees;
                     std::set_symmetric_difference(
-                        old_function->second->direct_callees.begin(),
-                        old_function->second->direct_callees.end(),
-                        new_function->second->direct_callees.begin(),
-                        new_function->second->direct_callees.end(),
+                        old_function->direct_callees.begin(),
+                        old_function->direct_callees.end(),
+                        new_function->direct_callees.begin(),
+                        new_function->direct_callees.end(),
                         std::back_inserter(changed_callees));
                     for (const auto callee : changed_callees) {
-                        if (current.scc_by_function.contains(callee))
+                        if (current.find_scc(callee).has_value())
                             seeds.push_back(callee);
                     }
                 }
@@ -14245,21 +17208,18 @@ caller_scc_dirty_closure(
         // their own FunctionInfo fingerprint normally changes as well, but
         // retaining this explicit edge makes the fail-closed dependency
         // contract independent of that representation detail.
-        for (const auto& [address, fingerprint] :
-             previous->function_fingerprints) {
-            static_cast<void>(fingerprint);
-            if (current.function_fingerprints.contains(address)) continue;
-            const auto removed =
-                previous->function_by_address.find(address);
-            if (removed != previous->function_by_address.end()) {
-                for (const auto callee :
-                     removed->second->direct_callees) {
-                    if (current.scc_by_function.contains(callee))
+        const auto previous_functions = previous->function_view();
+        const auto previous_callers = previous->callers_by_callee_index();
+        for (const auto& old_function : previous_functions) {
+            const auto address = old_function.entry_address;
+            if (current.find_function_fingerprint(address) != nullptr)
+                continue;
+            for (const auto callee : old_function.direct_callees) {
+                if (current.find_scc(callee).has_value())
                         seeds.push_back(callee);
-                }
             }
-            const auto callers = previous->callers_by_callee.find(address);
-            if (callers == previous->callers_by_callee.end()) continue;
+            const auto callers = previous_callers.find(address);
+            if (callers == previous_callers.end()) continue;
             seeds.insert(seeds.end(),
                          callers->second.begin(),
                          callers->second.end());
@@ -14273,11 +17233,16 @@ struct FunctionAnalysisEpoch final {
     std::uint64_t version = 0u;
     std::uint32_t schema_version = function_analysis_epoch_schema_version;
     std::shared_ptr<const FunctionProgramGraph> program;
+    std::shared_ptr<const FunctionProgramInputArena> program_input_arena;
+    std::shared_ptr<const PersistentIndirectCalleeIndex>
+        inventory_indirect_callees;
     std::string abi_identity;
     std::unordered_map<std::uint32_t, std::string>
         abi_input_fingerprints;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
         abi_callers_by_callee;
+    CallsiteContributionRelation abi_callsite_contributions;
+    CallsiteContributionRelation summary_callsite_contributions;
     AbiReturnSourceMap abi_return_sources;
     AbiStackArgumentReadMap abi_stack_argument_reads;
     ForwardedRegisterReadMap forwarded_register_reads;
@@ -14289,7 +17254,321 @@ struct FunctionAnalysisEpoch final {
     std::map<std::uint32_t, CandidateInput> candidate_inputs;
     std::unordered_map<std::uint32_t, std::uint64_t> summary_versions;
     std::unordered_map<std::uint32_t, std::uint64_t> input_versions;
+    std::unordered_set<std::uint32_t> inventory_sink_functions;
+
+    // KR-4978: the four derived preparation domains are retained as
+    // immutable, path-copying owner shards.  The legacy flat maps above are
+    // still the cold-builder's convenient working representation; exact warm
+    // rounds and TerminalFull presentation use these indices and therefore do
+    // not copy or enumerate unrelated functions merely to publish a new
+    // epoch.
+    struct InventoryTopologyShard final {
+        std::vector<std::uint32_t> callers;
+        bool reaches_guarded_inventory_sink = false;
+        bool operator==(const InventoryTopologyShard&) const = default;
+    };
+    using InventoryTopologyIndex =
+        PersistentProgramIndex<InventoryTopologyShard>;
+    std::shared_ptr<const InventoryTopologyIndex>
+        inventory_topology_shards;
+
+    struct AbiContractShard final {
+        std::string input_fingerprint;
+        std::vector<std::uint32_t> callers;
+        std::set<CallsiteContributionKey> callsite_contributions;
+        std::uint8_t return_sources = abi_argument_taint_mask;
+        AbiStackArgumentReadSet stack_argument_reads;
+        std::uint16_t forwarded_register_reads = 0u;
+        std::uint8_t persistent_store_sources = 0u;
+        std::uint8_t indirect_dispatch_sources = 0u;
+        std::vector<AbiPersistentStoreSite> direct_local_store_sites;
+        bool operator==(const AbiContractShard&) const = default;
+    };
+    using AbiContractIndex = PersistentProgramIndex<AbiContractShard>;
+    std::shared_ptr<const AbiContractIndex> abi_contract_shards;
+
+    struct SummaryCandidateShard final {
+        FunctionValueSummary summary;
+        CandidateInput input;
+        std::set<CallsiteContributionKey> callsite_contributions;
+        std::uint64_t summary_version = 0u;
+        std::uint64_t input_version = 0u;
+        bool operator==(const SummaryCandidateShard&) const = default;
+    };
+    using SummaryCandidateIndex =
+        PersistentProgramIndex<SummaryCandidateShard>;
+    std::shared_ptr<const SummaryCandidateIndex>
+        summary_candidate_shards;
+    enum class ResolutionDependencyNodeKind : std::uint8_t {
+        Function,
+        InventoryRegion,
+    };
+    struct ResolutionDependencyNodeId final {
+        std::uint32_t address = 0u;
+        ResolutionDependencyNodeKind kind =
+            ResolutionDependencyNodeKind::Function;
+
+        bool operator==(const ResolutionDependencyNodeId&) const =
+            default;
+        bool operator<(
+            const ResolutionDependencyNodeId& other) const noexcept {
+            return std::tie(address, kind) <
+                   std::tie(other.address, other.kind);
+        }
+    };
+    struct ResolutionDependencySccContract final {
+        std::vector<ResolutionDependencyNodeId> members;
+        std::vector<
+            std::shared_ptr<const std::vector<std::uint8_t>>>
+            node_contracts;
+        std::vector<std::shared_ptr<
+            const ResolutionDependencySccContract>>
+            dependencies;
+        std::size_t retained_bytes = 0u;
+    };
+    struct ResolutionDependencyNodeShard final {
+        std::shared_ptr<const std::vector<std::uint8_t>> contract;
+        std::vector<ResolutionDependencyNodeId> outgoing;
+        std::vector<ResolutionDependencyNodeId> incoming;
+        bool unrepresentable = false;
+        std::size_t retained_bytes = 0u;
+    };
+    using ResolutionDependencyNodeIndex = PersistentProgramIndex<
+        std::shared_ptr<const ResolutionDependencyNodeShard>,
+        ResolutionDependencyNodeId>;
+    using ResolutionDependencyComponentIndex = PersistentProgramIndex<
+        std::shared_ptr<const ResolutionDependencySccContract>,
+        ResolutionDependencyNodeId>;
+
+    struct ResolutionPreparationShard final {
+        std::shared_ptr<const ResolutionDependencyNodeShard>
+            dependency_node;
+        std::shared_ptr<const ResolutionDependencySccContract>
+            dependency_component;
+        bool operator==(const ResolutionPreparationShard&) const = default;
+    };
+    using ResolutionPreparationIndex = PersistentProgramIndex<
+        ResolutionPreparationShard,
+        ResolutionDependencyNodeId>;
+    std::shared_ptr<const ResolutionPreparationIndex>
+        resolution_preparation_shards;
+    // Node contracts, both adjacency directions and node-to-SCC bindings are
+    // immutable path-copy shards. Exact rounds replace only the touched weak
+    // dependency component; disconnected graph inventory is never scanned or
+    // copied merely to prove that it is unchanged.
+    std::shared_ptr<const ResolutionDependencyNodeIndex>
+        resolution_dependency_nodes;
+    std::shared_ptr<const ResolutionDependencyComponentIndex>
+        resolution_dependency_components_by_node;
+    std::size_t resolution_dependency_scc_count = 0u;
+    std::size_t resolution_dependency_retained_bytes = 0u;
+    struct ResolutionRootArtifact final {
+        std::uint32_t root_address = 0u;
+        // Root-global contract plus exact, interned SCC-DAG roots. Unchanged
+        // SCC contracts preserve pointer identity across epochs only after
+        // byte-for-byte node and outgoing-contract comparison; no digest
+        // collision can authorize reuse.
+        std::vector<std::uint8_t> root_contract_bytes;
+        std::vector<std::shared_ptr<
+            const ResolutionDependencySccContract>>
+            dependency_roots;
+        std::vector<InterproceduralTargetResolution> resolutions;
+        GuardedCodeInventoryCollector inventory{true};
+        GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
+    };
+    using ResolutionRootArtifactIndex = PersistentProgramIndex<
+        std::shared_ptr<const ResolutionRootArtifact>>;
+    // Immutable path-copying treaps retain unchanged roots without an
+    // unbounded recursive epoch chain. A changed root copies O(log N) nodes.
+    std::shared_ptr<const ResolutionRootArtifactIndex>
+        resolution_root_artifacts;
+    std::shared_ptr<const ResolutionRootArtifactIndex>
+        presentation_root_artifacts;
+    GuardedCodeInventoryWalkDiagnostics
+        presentation_baseline_diagnostics;
+    FunctionValueAnalysisResult presentation_metadata;
 };
+
+void collect_presentation_root_artifacts(
+    const FunctionAnalysisEpoch& epoch,
+    std::map<std::uint32_t,
+             std::shared_ptr<const FunctionAnalysisEpoch::
+                 ResolutionRootArtifact>>& output) {
+    if (epoch.presentation_root_artifacts != nullptr)
+        epoch.presentation_root_artifacts->materialize(output);
+}
+
+[[nodiscard]] std::shared_ptr<const FunctionAnalysisEpoch::
+    ResolutionRootArtifact>
+find_reusable_resolution_root_artifact(
+    const FunctionAnalysisEpoch& epoch,
+    const std::uint32_t root) {
+    if (epoch.resolution_root_artifacts == nullptr) return nullptr;
+    const auto artifact = epoch.resolution_root_artifacts->find(root);
+    return artifact == nullptr ? nullptr : *artifact;
+}
+
+void merge_root_walk_diagnostics(
+    GuardedCodeInventoryWalkDiagnostics& destination,
+    const GuardedCodeInventoryWalkDiagnostics& source) {
+    destination.forwarded_store_context_limited_functions +=
+        source.forwarded_store_context_limited_functions;
+    destination.forwarded_store_evaluation_cache_hits +=
+        source.forwarded_store_evaluation_cache_hits;
+    destination.forwarded_store_evaluation_cache_misses +=
+        source.forwarded_store_evaluation_cache_misses;
+    destination.forwarded_store_context_limit_diagnostics.insert(
+        destination.forwarded_store_context_limit_diagnostics.end(),
+        source.forwarded_store_context_limit_diagnostics.begin(),
+        source.forwarded_store_context_limit_diagnostics.end());
+    destination.contextual_return_context_limited_functions +=
+        source.contextual_return_context_limited_functions;
+    destination.contextual_return_evaluation_limited_functions +=
+        source.contextual_return_evaluation_limited_functions;
+    destination.abi_stack_argument_projection_truncated_functions +=
+        source.abi_stack_argument_projection_truncated_functions;
+    destination.local_fixpoint_limited_evaluations +=
+        source.local_fixpoint_limited_evaluations;
+    destination.maximum_local_fixpoint_iterations = std::max(
+        destination.maximum_local_fixpoint_iterations,
+        source.maximum_local_fixpoint_iterations);
+    destination.inventory_candidate_values_truncated =
+        destination.inventory_candidate_values_truncated ||
+        source.inventory_candidate_values_truncated;
+    destination.abi_stack_base_unresolved =
+        destination.abi_stack_base_unresolved ||
+        source.abi_stack_base_unresolved;
+    destination.inventory_tail_target_unresolved =
+        destination.inventory_tail_target_unresolved ||
+        source.inventory_tail_target_unresolved;
+}
+
+[[nodiscard]] FunctionValueAnalysisResult
+materialize_function_analysis_epoch(
+    const FunctionAnalysisEpoch& epoch,
+    detail::GuardedNativeEntryShapeCache& guarded_native_entry_shapes) {
+    auto result = epoch.presentation_metadata;
+    result.result_materialization =
+        FunctionValueResultMaterialization::TerminalFull;
+    result.summaries.clear();
+    result.resolutions.clear();
+    result.summary_replacements.clear();
+    result.removed_summary_shards.clear();
+    result.resolution_replacements.clear();
+    result.removed_resolution_shards.clear();
+    if (epoch.summary_candidate_shards != nullptr) {
+        std::map<std::uint32_t,
+                 FunctionAnalysisEpoch::SummaryCandidateShard>
+            summary_shards;
+        epoch.summary_candidate_shards->materialize(summary_shards);
+        result.summaries.reserve(summary_shards.size());
+        for (const auto& [address, shard] : summary_shards) {
+            static_cast<void>(address);
+            result.summaries.push_back(shard.summary);
+        }
+    } else {
+        result.summaries.reserve(epoch.summaries.size());
+        for (const auto& [address, summary] : epoch.summaries) {
+            static_cast<void>(address);
+            result.summaries.push_back(summary);
+        }
+    }
+    std::map<std::uint32_t,
+             std::shared_ptr<const FunctionAnalysisEpoch::
+                 ResolutionRootArtifact>> roots;
+    collect_presentation_root_artifacts(epoch, roots);
+    GuardedCodeInventoryCollector inventory{
+        false, &guarded_native_entry_shapes};
+    auto inventory_diagnostics =
+        epoch.presentation_baseline_diagnostics;
+    for (const auto& [root, artifact] : roots) {
+        static_cast<void>(root);
+        result.resolutions.insert(
+            result.resolutions.end(),
+            artifact->resolutions.begin(),
+            artifact->resolutions.end());
+        artifact->inventory.replay_copy_into(inventory);
+        merge_root_walk_diagnostics(
+            inventory_diagnostics, artifact->walk_diagnostics);
+    }
+    coalesce_resolutions(result.resolutions);
+    result.guarded_code_inventory = inventory.finish();
+    result.guarded_code_inventory.walk_diagnostics =
+        std::move(inventory_diagnostics);
+    result.final_materialized_functions = result.summaries.size();
+    result.final_materialized_blocks =
+        epoch.program == nullptr ? 0u : epoch.program->blocks.size();
+    return result;
+}
+
+[[nodiscard]] FunctionValueAnalysisResult
+materialize_aborted_function_analysis(
+    const std::shared_ptr<const FunctionAnalysisEpoch>& previous,
+    const FunctionValueAnalysisResult& delta) {
+    auto result = delta;
+    result.result_materialization =
+        FunctionValueResultMaterialization::TerminalFull;
+    result.budget_exhausted = true;
+
+    std::map<std::uint32_t, FunctionValueSummary> summaries;
+    if (previous != nullptr) summaries = previous->summaries;
+    for (const auto& shard : delta.summary_replacements)
+        summaries.insert_or_assign(shard.owner.address, shard.summary);
+    for (const auto owner : delta.removed_summary_shards)
+        summaries.erase(owner.address);
+    result.summaries.clear();
+    result.summaries.reserve(summaries.size());
+    for (const auto& [address, summary] : summaries) {
+        static_cast<void>(address);
+        result.summaries.push_back(summary);
+    }
+
+    std::map<FunctionValueDependencyNodeId,
+             std::vector<InterproceduralTargetResolution>>
+        resolution_shards;
+    if (previous != nullptr) {
+        std::map<std::uint32_t,
+                 std::shared_ptr<const FunctionAnalysisEpoch::
+                     ResolutionRootArtifact>> roots;
+        collect_presentation_root_artifacts(*previous, roots);
+        for (const auto& [root, artifact] : roots) {
+            resolution_shards.emplace(
+                FunctionValueDependencyNodeId{
+                    root,
+                    FunctionValueDependencyNodeKind::Function},
+                artifact->resolutions);
+        }
+    }
+    for (const auto owner : delta.removed_resolution_shards)
+        resolution_shards.erase(owner);
+    for (const auto& shard : delta.resolution_replacements)
+        resolution_shards.insert_or_assign(
+            shard.owner, shard.resolutions);
+    result.resolutions.clear();
+    for (const auto& [owner, values] : resolution_shards) {
+        static_cast<void>(owner);
+        result.resolutions.insert(result.resolutions.end(),
+                                  values.begin(), values.end());
+    }
+    coalesce_resolutions(result.resolutions);
+
+    // An aborted transaction is explicitly fail-closed. Returning stale
+    // candidates from the last good epoch would be less exact than returning
+    // no executable inventory together with the sticky abort state.
+    const auto abort_diagnostics =
+        delta.guarded_code_inventory.walk_diagnostics;
+    result.guarded_code_inventory = {};
+    result.guarded_code_inventory.walk_diagnostics = abort_diagnostics;
+    result.summary_replacements.clear();
+    result.removed_summary_shards.clear();
+    result.resolution_replacements.clear();
+    result.removed_resolution_shards.clear();
+    result.guarded_code_inventory_replacements.clear();
+    result.removed_guarded_code_inventory_shards.clear();
+    result.final_materialized_functions = result.summaries.size();
+    result.final_materialized_blocks = 0u;
+    return result;
+}
 
 } // namespace
 
@@ -14297,11 +17576,20 @@ struct detail::FunctionValueAnalysisSession::Impl {
     Impl(const std::size_t maximum_entries,
          const std::size_t maximum_retained_payload_bytes,
          const bool detailed_telemetry,
-         FunctionEvaluationCacheDecisionObserver decision_observer)
+         FunctionEvaluationCacheDecisionObserver decision_observer,
+         const std::size_t maximum_resolution_dependency_nodes,
+         const std::size_t maximum_resolution_root_artifacts,
+         const std::size_t maximum_resolution_epoch_retained_bytes)
         : evaluations(maximum_entries,
                       maximum_retained_payload_bytes,
                       detailed_telemetry,
-                      std::move(decision_observer)) {
+                      std::move(decision_observer)),
+          maximum_resolution_dependency_nodes(
+              maximum_resolution_dependency_nodes),
+          maximum_resolution_root_artifacts(
+              maximum_resolution_root_artifacts),
+          maximum_resolution_epoch_retained_bytes(
+              maximum_resolution_epoch_retained_bytes) {
         if (detailed_telemetry) {
             function_value_detailed_cache_sessions_started.fetch_add(
                 1u, std::memory_order_relaxed);
@@ -14317,6 +17605,10 @@ struct detail::FunctionValueAnalysisSession::Impl {
             return;
         evaluations.clear();
         published_epoch.reset();
+        pending_terminal_abort_snapshot.reset();
+        pending_terminal_abort_image_identity = 0u;
+        pending_terminal_abort_image_revision = 0u;
+        pending_terminal_abort_epoch_version = 0u;
         program_graph_builds.store(0u, std::memory_order_relaxed);
         program_graph_reuses.store(0u, std::memory_order_relaxed);
         program_graph_functions_built.store(0u, std::memory_order_relaxed);
@@ -14326,6 +17618,59 @@ struct detail::FunctionValueAnalysisSession::Impl {
         summary_state_reuses.store(0u, std::memory_order_relaxed);
         analysis_epochs_published.store(0u, std::memory_order_relaxed);
         analysis_epochs_discarded.store(0u, std::memory_order_relaxed);
+        incremental_epochs_started.store(0u, std::memory_order_relaxed);
+        resolution_root_artifacts_reused.store(0u,
+                                               std::memory_order_relaxed);
+        resolution_root_artifacts_recomputed.store(
+            0u, std::memory_order_relaxed);
+        resolution_root_artifacts_retained.store(
+            0u, std::memory_order_relaxed);
+        resolution_epoch_retained_bytes.store(
+            0u, std::memory_order_relaxed);
+        resolution_retention_limit_reason.store(
+            ResolutionRetentionLimitReason::None,
+            std::memory_order_relaxed);
+        full_cpu_recompute_fallbacks.store(0u,
+                                          std::memory_order_relaxed);
+        latest_persistent_analysis_bypass_reason.store(
+            PersistentAnalysisBypassReason::None,
+            std::memory_order_relaxed);
+        program_delta_entries_visited.store(0u,
+                                            std::memory_order_relaxed);
+        function_edge_full_scans.store(0u, std::memory_order_relaxed);
+        function_edge_full_sorts.store(0u, std::memory_order_relaxed);
+        candidate_call_edge_full_scans.store(
+            0u, std::memory_order_relaxed);
+        candidate_call_edge_full_sorts.store(
+            0u, std::memory_order_relaxed);
+        candidate_tail_edge_full_scans.store(
+            0u, std::memory_order_relaxed);
+        candidate_tail_edge_full_sorts.store(
+            0u, std::memory_order_relaxed);
+        program_graph_blocks_built.store(0u, std::memory_order_relaxed);
+        program_graph_blocks_reused.store(0u, std::memory_order_relaxed);
+        program_graph_sccs_built.store(0u, std::memory_order_relaxed);
+        program_graph_sccs_reused.store(0u, std::memory_order_relaxed);
+        resolution_dependency_nodes_built.store(
+            0u, std::memory_order_relaxed);
+        resolution_dependency_nodes_reused.store(
+            0u, std::memory_order_relaxed);
+        resolution_dependency_sccs_built.store(
+            0u, std::memory_order_relaxed);
+        resolution_dependency_sccs_reused.store(
+            0u, std::memory_order_relaxed);
+        abi_contract_entries_visited.store(0u, std::memory_order_relaxed);
+        abi_contract_entries_rebuilt.store(0u, std::memory_order_relaxed);
+        summary_candidate_entries_visited.store(
+            0u, std::memory_order_relaxed);
+        summary_candidate_entries_rebuilt.store(
+            0u, std::memory_order_relaxed);
+        inventory_topology_entries_visited.store(
+            0u, std::memory_order_relaxed);
+        resolution_preparation_entries_visited.store(
+            0u, std::memory_order_relaxed);
+        final_materialized_blocks.store(0u, std::memory_order_relaxed);
+        final_materialized_functions.store(0u, std::memory_order_relaxed);
         bound_image_identity = identity;
         bound_image_revision = revision;
     }
@@ -14333,6 +17678,11 @@ struct detail::FunctionValueAnalysisSession::Impl {
     std::mutex analysis_mutex;
     FunctionEvaluationCache evaluations;
     std::shared_ptr<const FunctionAnalysisEpoch> published_epoch;
+    std::optional<FunctionValueAnalysisResult>
+        pending_terminal_abort_snapshot;
+    std::uint64_t pending_terminal_abort_image_identity = 0u;
+    std::uint64_t pending_terminal_abort_image_revision = 0u;
+    std::uint64_t pending_terminal_abort_epoch_version = 0u;
     std::atomic_size_t program_graph_builds = 0u;
     std::atomic_size_t program_graph_reuses = 0u;
     std::atomic_size_t program_graph_functions_built = 0u;
@@ -14342,6 +17692,47 @@ struct detail::FunctionValueAnalysisSession::Impl {
     std::atomic_size_t summary_state_reuses = 0u;
     std::atomic_size_t analysis_epochs_published = 0u;
     std::atomic_size_t analysis_epochs_discarded = 0u;
+    std::atomic_size_t incremental_epochs_started = 0u;
+    std::atomic_size_t resolution_root_artifacts_reused = 0u;
+    std::atomic_size_t resolution_root_artifacts_recomputed = 0u;
+    std::atomic_size_t resolution_root_artifacts_retained = 0u;
+    std::atomic_size_t resolution_epoch_retained_bytes = 0u;
+    std::atomic<ResolutionRetentionLimitReason>
+        resolution_retention_limit_reason{
+            ResolutionRetentionLimitReason::None};
+    std::atomic_size_t full_cpu_recompute_fallbacks = 0u;
+    std::atomic<PersistentAnalysisBypassReason>
+        latest_persistent_analysis_bypass_reason{
+            PersistentAnalysisBypassReason::None};
+    std::atomic_size_t program_delta_entries_visited = 0u;
+    std::atomic_size_t function_edge_full_scans = 0u;
+    std::atomic_size_t function_edge_full_sorts = 0u;
+    std::atomic_size_t candidate_call_edge_full_scans = 0u;
+    std::atomic_size_t candidate_call_edge_full_sorts = 0u;
+    std::atomic_size_t candidate_tail_edge_full_scans = 0u;
+    std::atomic_size_t candidate_tail_edge_full_sorts = 0u;
+    std::atomic_size_t program_graph_blocks_built = 0u;
+    std::atomic_size_t program_graph_blocks_reused = 0u;
+    std::atomic_size_t program_graph_sccs_built = 0u;
+    std::atomic_size_t program_graph_sccs_reused = 0u;
+    std::atomic_size_t resolution_dependency_nodes_built = 0u;
+    std::atomic_size_t resolution_dependency_nodes_reused = 0u;
+    std::atomic_size_t resolution_dependency_sccs_built = 0u;
+    std::atomic_size_t resolution_dependency_sccs_reused = 0u;
+    std::atomic_size_t abi_contract_entries_visited = 0u;
+    std::atomic_size_t abi_contract_entries_rebuilt = 0u;
+    std::atomic_size_t summary_candidate_entries_visited = 0u;
+    std::atomic_size_t summary_candidate_entries_rebuilt = 0u;
+    std::atomic_size_t inventory_topology_entries_visited = 0u;
+    std::atomic_size_t resolution_preparation_entries_visited = 0u;
+    std::atomic_size_t final_materialized_blocks = 0u;
+    std::atomic_size_t final_materialized_functions = 0u;
+    std::size_t maximum_resolution_dependency_nodes = 0u;
+    std::size_t maximum_resolution_root_artifacts = 0u;
+    std::size_t maximum_resolution_epoch_retained_bytes = 0u;
+    std::optional<detail::FunctionProgramDelta> pending_program_delta;
+    PersistentAnalysisBypassReason pending_persistent_analysis_bypass_reason =
+        PersistentAnalysisBypassReason::None;
     std::uint64_t bound_image_identity = 0u;
     std::uint64_t bound_image_revision = 0u;
 };
@@ -14350,12 +17741,18 @@ detail::FunctionValueAnalysisSession::FunctionValueAnalysisSession(
     const std::size_t maximum_entries,
     const std::size_t maximum_retained_payload_bytes,
     const bool detailed_telemetry,
-    FunctionEvaluationCacheDecisionObserver decision_observer)
+    FunctionEvaluationCacheDecisionObserver decision_observer,
+    const std::size_t maximum_resolution_dependency_nodes,
+    const std::size_t maximum_resolution_root_artifacts,
+    const std::size_t maximum_resolution_epoch_retained_bytes)
     : impl_(std::make_unique<Impl>(
           maximum_entries,
           maximum_retained_payload_bytes,
           detailed_telemetry,
-          std::move(decision_observer))) {}
+          std::move(decision_observer),
+          maximum_resolution_dependency_nodes,
+          maximum_resolution_root_artifacts,
+          maximum_resolution_epoch_retained_bytes)) {}
 
 detail::FunctionValueAnalysisSession::~FunctionValueAnalysisSession() =
     default;
@@ -14394,7 +17791,137 @@ detail::FunctionValueAnalysisSession::statistics() const {
     statistics.analysis_epochs_discarded =
         impl_->analysis_epochs_discarded.load(
             std::memory_order_relaxed);
+    statistics.incremental_epochs_started =
+        impl_->incremental_epochs_started.load(
+            std::memory_order_relaxed);
+    statistics.resolution_root_artifacts_reused =
+        impl_->resolution_root_artifacts_reused.load(
+            std::memory_order_relaxed);
+    statistics.resolution_root_artifacts_recomputed =
+        impl_->resolution_root_artifacts_recomputed.load(
+            std::memory_order_relaxed);
+    statistics.resolution_root_artifacts_retained =
+        impl_->resolution_root_artifacts_retained.load(
+            std::memory_order_relaxed);
+    statistics.resolution_epoch_retained_bytes =
+        impl_->resolution_epoch_retained_bytes.load(
+            std::memory_order_relaxed);
+    statistics.resolution_retention_limit_reason =
+        impl_->resolution_retention_limit_reason.load(
+            std::memory_order_relaxed);
+    statistics.full_cpu_recompute_fallbacks =
+        impl_->full_cpu_recompute_fallbacks.load(
+            std::memory_order_relaxed);
+    statistics.persistent_analysis_bypass_reason =
+        impl_->latest_persistent_analysis_bypass_reason.load(
+            std::memory_order_relaxed);
+    statistics.program_delta_entries_visited =
+        impl_->program_delta_entries_visited.load(
+            std::memory_order_relaxed);
+    statistics.function_edge_full_scans =
+        impl_->function_edge_full_scans.load(std::memory_order_relaxed);
+    statistics.function_edge_full_sorts =
+        impl_->function_edge_full_sorts.load(std::memory_order_relaxed);
+    statistics.candidate_call_edge_full_scans =
+        impl_->candidate_call_edge_full_scans.load(
+            std::memory_order_relaxed);
+    statistics.candidate_call_edge_full_sorts =
+        impl_->candidate_call_edge_full_sorts.load(
+            std::memory_order_relaxed);
+    statistics.candidate_tail_edge_full_scans =
+        impl_->candidate_tail_edge_full_scans.load(
+            std::memory_order_relaxed);
+    statistics.candidate_tail_edge_full_sorts =
+        impl_->candidate_tail_edge_full_sorts.load(
+            std::memory_order_relaxed);
+    statistics.program_graph_blocks_built =
+        impl_->program_graph_blocks_built.load(
+            std::memory_order_relaxed);
+    statistics.program_graph_blocks_reused =
+        impl_->program_graph_blocks_reused.load(
+            std::memory_order_relaxed);
+    statistics.program_graph_sccs_built =
+        impl_->program_graph_sccs_built.load(
+            std::memory_order_relaxed);
+    statistics.program_graph_sccs_reused =
+        impl_->program_graph_sccs_reused.load(
+            std::memory_order_relaxed);
+    statistics.resolution_dependency_nodes_built =
+        impl_->resolution_dependency_nodes_built.load(
+            std::memory_order_relaxed);
+    statistics.resolution_dependency_nodes_reused =
+        impl_->resolution_dependency_nodes_reused.load(
+            std::memory_order_relaxed);
+    statistics.resolution_dependency_sccs_built =
+        impl_->resolution_dependency_sccs_built.load(
+            std::memory_order_relaxed);
+    statistics.resolution_dependency_sccs_reused =
+        impl_->resolution_dependency_sccs_reused.load(
+            std::memory_order_relaxed);
+    statistics.abi_contract_entries_visited =
+        impl_->abi_contract_entries_visited.load(
+            std::memory_order_relaxed);
+    statistics.abi_contract_entries_rebuilt =
+        impl_->abi_contract_entries_rebuilt.load(
+            std::memory_order_relaxed);
+    statistics.summary_candidate_entries_visited =
+        impl_->summary_candidate_entries_visited.load(
+            std::memory_order_relaxed);
+    statistics.summary_candidate_entries_rebuilt =
+        impl_->summary_candidate_entries_rebuilt.load(
+            std::memory_order_relaxed);
+    statistics.inventory_topology_entries_visited =
+        impl_->inventory_topology_entries_visited.load(
+            std::memory_order_relaxed);
+    statistics.resolution_preparation_entries_visited =
+        impl_->resolution_preparation_entries_visited.load(
+            std::memory_order_relaxed);
+    statistics.final_materialized_blocks =
+        impl_->final_materialized_blocks.load(
+            std::memory_order_relaxed);
+    statistics.final_materialized_functions =
+        impl_->final_materialized_functions.load(
+            std::memory_order_relaxed);
     return statistics;
+}
+
+std::uint64_t detail::FunctionValueAnalysisSession::
+published_epoch_version() const {
+    const std::lock_guard lock(impl_->analysis_mutex);
+    return impl_->published_epoch == nullptr
+               ? 0u
+               : impl_->published_epoch->version;
+}
+
+void detail::FunctionValueAnalysisSession::
+stage_next_function_program_delta(FunctionProgramDelta delta) {
+    const std::lock_guard lock(impl_->analysis_mutex);
+    if (impl_->pending_program_delta.has_value())
+        throw std::logic_error(
+            "Ein FunctionProgramDelta ist bereits fuer den naechsten "
+            "Analyselauf vorgemerkt.");
+    impl_->pending_program_delta = std::move(delta);
+}
+
+void detail::FunctionValueAnalysisSession::
+bypass_all_persistent_analysis_state_once(
+    const PersistentAnalysisBypassReason reason) {
+    if (reason == PersistentAnalysisBypassReason::None)
+        throw std::invalid_argument(
+            "Persistenter Analyse-Bypass benoetigt einen Grund.");
+    const std::lock_guard lock(impl_->analysis_mutex);
+    if (impl_->pending_persistent_analysis_bypass_reason !=
+        PersistentAnalysisBypassReason::None)
+        throw std::logic_error(
+            "Ein persistenter Analyse-Bypass ist bereits fuer den "
+            "naechsten Analyselauf vorgemerkt.");
+    impl_->pending_persistent_analysis_bypass_reason = reason;
+}
+
+void detail::FunctionValueAnalysisSession::
+force_full_cpu_recompute_once() {
+    bypass_all_persistent_analysis_state_once(
+        PersistentAnalysisBypassReason::ExplicitTest);
 }
 
 FunctionValueAnalysisResult
@@ -14505,7 +18032,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
 }
 
 FunctionValueAnalysisResult
-detail::analyze_function_values_with_guarded_entry_cache(
+detail::analyze_function_values_with_guarded_entry_cache_attempt(
     const katana::io::ExecutableImage& image,
     const std::span<const katana::sh4::DisassemblyLine> lines,
     const std::span<const FunctionBoundary> function_boundaries,
@@ -14518,11 +18045,237 @@ detail::analyze_function_values_with_guarded_entry_cache(
         session.impl_->analysis_mutex);
     guarded_native_entry_shapes.bind(image);
     session.impl_->bind(image);
-    const auto session_statistics_at_start =
-        session.statistics();
-    begin_detailed_analyzer_diagnostic_epoch();
     FunctionValueAnalysisResult result;
     result.iteration_budget = maximum_fixpoint_iterations;
+    // A non-analysis request neither opens an epoch nor consumes a pending
+    // fail-closed recompute. Keeping this gate ahead of every session counter
+    // makes the public epoch ledger exact even for empty/unsupported inputs.
+    const auto* const staged_delta =
+        session.impl_->pending_program_delta.has_value()
+            ? &*session.impl_->pending_program_delta
+            : nullptr;
+    const bool staged_terminal_presentation =
+        staged_delta != nullptr &&
+        (session.impl_->published_epoch != nullptr ||
+         session.impl_->pending_terminal_abort_snapshot.has_value()) &&
+        staged_delta->kind ==
+            detail::FunctionProgramDeltaKind::Unchanged &&
+        staged_delta->result_materialization ==
+            FunctionValueResultMaterialization::TerminalFull &&
+        staged_delta->changed_lines.empty() &&
+        staged_delta->changed_boundaries.empty() &&
+        staged_delta->changed_semantic_edge_sites.empty() &&
+        staged_delta->changed_candidate_call_sites.empty() &&
+        staged_delta->changed_candidate_tail_sites.empty() &&
+        staged_delta->expected_published_epoch_version ==
+            (session.impl_->published_epoch == nullptr
+                 ? 0u
+                 : session.impl_->published_epoch->version) &&
+        staged_delta->image_identity ==
+            image.analysis_instance_identity() &&
+        staged_delta->image_revision == image.analysis_revision();
+    const bool staged_incremental_analysis =
+        staged_delta != nullptr &&
+        session.impl_->pending_persistent_analysis_bypass_reason ==
+            PersistentAnalysisBypassReason::None &&
+        session.impl_->published_epoch != nullptr &&
+        staged_delta->kind !=
+            detail::FunctionProgramDeltaKind::Unknown &&
+        staged_delta->expected_published_epoch_version ==
+            session.impl_->published_epoch->version &&
+        staged_delta->image_identity ==
+            image.analysis_instance_identity() &&
+        staged_delta->image_revision == image.analysis_revision();
+    // Exact/Unchanged rounds intentionally pass only their typed journal;
+    // empty legacy spans therefore do not mean "no analysis" once a matching
+    // immutable program epoch supplies the unchanged portion.
+    if ((!staged_terminal_presentation && !staged_incremental_analysis &&
+         (lines.empty() || function_boundaries.empty())) ||
+        image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC)
+        return result;
+    // A terminal snapshot is presentation, not another semantic round. The
+    // bound Unchanged journal is consumed before any epoch/cache counter and
+    // the already published immutable shards are flattened exactly once.
+    if (session.impl_->pending_persistent_analysis_bypass_reason ==
+            PersistentAnalysisBypassReason::None &&
+        session.impl_->pending_program_delta.has_value()) {
+        const auto& terminal =
+            *session.impl_->pending_program_delta;
+        const bool empty_delta =
+            terminal.changed_lines.empty() &&
+            terminal.changed_boundaries.empty() &&
+            terminal.changed_semantic_edge_sites.empty() &&
+            terminal.changed_candidate_call_sites.empty() &&
+            terminal.changed_candidate_tail_sites.empty();
+        if (terminal.kind ==
+                detail::FunctionProgramDeltaKind::Unchanged &&
+            terminal.result_materialization ==
+                FunctionValueResultMaterialization::TerminalFull &&
+            empty_delta &&
+            terminal.expected_published_epoch_version ==
+                (session.impl_->published_epoch == nullptr
+                     ? 0u
+                     : session.impl_->published_epoch->version) &&
+            terminal.image_identity ==
+                image.analysis_instance_identity() &&
+            terminal.image_revision == image.analysis_revision()) {
+            session.impl_->pending_program_delta.reset();
+            const bool pinned_abort_matches =
+                session.impl_->pending_terminal_abort_snapshot.has_value() &&
+                session.impl_->pending_terminal_abort_image_identity ==
+                    image.analysis_instance_identity() &&
+                session.impl_->pending_terminal_abort_image_revision ==
+                    image.analysis_revision() &&
+                session.impl_->pending_terminal_abort_epoch_version ==
+                    terminal.expected_published_epoch_version;
+            if (pinned_abort_matches) {
+                result = std::move(
+                    *session.impl_->pending_terminal_abort_snapshot);
+                session.impl_->pending_terminal_abort_snapshot.reset();
+                result.result_materialization =
+                    FunctionValueResultMaterialization::TerminalFull;
+            } else if (session.impl_->published_epoch != nullptr) {
+                result = materialize_function_analysis_epoch(
+                    *session.impl_->published_epoch,
+                    guarded_native_entry_shapes);
+            } else {
+                throw std::logic_error(
+                    "TerminalFull besitzt weder Epoch noch gepinnten Abort-Snapshot.");
+            }
+            session.impl_->final_materialized_blocks.fetch_add(
+                result.final_materialized_blocks,
+                std::memory_order_relaxed);
+            session.impl_->final_materialized_functions.fetch_add(
+                result.final_materialized_functions,
+                std::memory_order_relaxed);
+            if (progress_callback) {
+                try {
+                    FunctionValueAnalysisProgress progress;
+                    progress.phase = "terminal-materialized";
+                    progress.functions = result.summaries.size();
+                    progress.resolutions = result.resolutions.size();
+                    progress.final_materialized_blocks =
+                        result.final_materialized_blocks;
+                    progress.final_materialized_functions =
+                        result.final_materialized_functions;
+                    progress_callback(progress);
+                } catch (...) {
+                    result.progress_callback_failed = true;
+                }
+            }
+            return result;
+        }
+    }
+    const auto session_statistics_at_start =
+        session.statistics();
+    session.impl_->incremental_epochs_started.fetch_add(
+        1u, std::memory_order_relaxed);
+    struct AnalysisEpochPublicationGuard final {
+        std::atomic_size_t* discarded = nullptr;
+        std::optional<FunctionValueAnalysisResult>* abort_snapshot = nullptr;
+        FunctionValueAnalysisResult* result = nullptr;
+        const std::shared_ptr<const FunctionAnalysisEpoch>*
+            published_epoch = nullptr;
+        std::uint64_t* abort_image_identity = nullptr;
+        std::uint64_t* abort_image_revision = nullptr;
+        std::uint64_t* abort_epoch_version = nullptr;
+        std::uint64_t image_identity = 0u;
+        std::uint64_t image_revision = 0u;
+        std::uint64_t epoch_version = 0u;
+        bool finished = false;
+        void pin_abort_snapshot() noexcept {
+            if (abort_snapshot == nullptr || result == nullptr ||
+                result->result_materialization !=
+                    FunctionValueResultMaterialization::DeltaOnly)
+                return;
+            try {
+                auto pinned = materialize_aborted_function_analysis(
+                    published_epoch == nullptr
+                        ? std::shared_ptr<const FunctionAnalysisEpoch>{}
+                        : *published_epoch,
+                    *result);
+                *abort_snapshot = std::move(pinned);
+                if (abort_image_identity != nullptr)
+                    *abort_image_identity = image_identity;
+                if (abort_image_revision != nullptr)
+                    *abort_image_revision = image_revision;
+                if (abort_epoch_version != nullptr)
+                    *abort_epoch_version = epoch_version;
+            } catch (...) {
+                // Never replace the original analysis failure with an
+                // observational snapshot-allocation failure.
+            }
+        }
+        void discard_now() noexcept {
+            if (finished) return;
+            finished = true;
+            pin_abort_snapshot();
+            if (discarded != nullptr)
+                discarded->fetch_add(1u, std::memory_order_relaxed);
+        }
+        void mark_published() noexcept { finished = true; }
+        ~AnalysisEpochPublicationGuard() {
+            discard_now();
+        }
+    } epoch_publication_guard{
+        &session.impl_->analysis_epochs_discarded,
+        &session.impl_->pending_terminal_abort_snapshot,
+        &result,
+        &session.impl_->published_epoch,
+        &session.impl_->pending_terminal_abort_image_identity,
+        &session.impl_->pending_terminal_abort_image_revision,
+        &session.impl_->pending_terminal_abort_epoch_version};
+    auto program_delta =
+        std::exchange(session.impl_->pending_program_delta,
+                      std::optional<detail::FunctionProgramDelta>{});
+    result.result_materialization =
+        program_delta.has_value()
+            ? program_delta->result_materialization
+            : FunctionValueResultMaterialization::TerminalFull;
+    auto persistent_analysis_bypass_reason = std::exchange(
+        session.impl_->pending_persistent_analysis_bypass_reason,
+        PersistentAnalysisBypassReason::None);
+    const auto published_epoch_version =
+        session.impl_->published_epoch == nullptr
+            ? 0u
+            : session.impl_->published_epoch->version;
+    epoch_publication_guard.image_identity =
+        image.analysis_instance_identity();
+    epoch_publication_guard.image_revision = image.analysis_revision();
+    epoch_publication_guard.epoch_version = published_epoch_version;
+    if (persistent_analysis_bypass_reason ==
+            PersistentAnalysisBypassReason::None &&
+        program_delta.has_value() &&
+        program_delta->kind != detail::FunctionProgramDeltaKind::Unknown &&
+        (program_delta->expected_published_epoch_version !=
+             published_epoch_version ||
+         program_delta->image_identity !=
+             image.analysis_instance_identity() ||
+         program_delta->image_revision != image.analysis_revision())) {
+        persistent_analysis_bypass_reason =
+            PersistentAnalysisBypassReason::ProgramDeltaUnrepresentable;
+    }
+    bool bypass_all_persistent_analysis_state =
+        persistent_analysis_bypass_reason !=
+        PersistentAnalysisBypassReason::None;
+    if (bypass_all_persistent_analysis_state) {
+        session.impl_->full_cpu_recompute_fallbacks.fetch_add(
+            1u, std::memory_order_relaxed);
+        session.impl_->latest_persistent_analysis_bypass_reason.store(
+            persistent_analysis_bypass_reason,
+            std::memory_order_relaxed);
+        result.full_cpu_recompute_fallbacks = 1u;
+        result.persistent_analysis_bypass_reason =
+            persistent_analysis_bypass_reason;
+        program_delta.reset();
+        session.impl_->evaluations.clear();
+        guarded_native_entry_shapes.clear();
+    } else {
+        session.impl_->latest_persistent_analysis_bypass_reason.store(
+            PersistentAnalysisBypassReason::None,
+            std::memory_order_relaxed);
+    }
+    begin_detailed_analyzer_diagnostic_epoch();
     std::size_t summarized_functions = 0u;
     std::size_t resolution_functions_committed = 0u;
     std::size_t resolution_count = 0u;
@@ -14558,6 +18311,51 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::atomic_size_t progress_resolution_functions_started = 0u;
     std::atomic_size_t progress_resolution_functions_ready = 0u;
     std::atomic_size_t progress_resolution_functions_committed = 0u;
+    std::atomic_size_t progress_resolution_root_artifacts_total = 0u;
+    std::atomic_size_t progress_resolution_root_artifacts_reused = 0u;
+    std::atomic_size_t progress_resolution_root_artifacts_recomputed = 0u;
+    struct RunPersistentPhysicalWork final {
+        std::atomic_size_t program_delta_entries_visited = 0u;
+        std::atomic_size_t function_edge_full_scans = 0u;
+        std::atomic_size_t function_edge_full_sorts = 0u;
+        std::atomic_size_t candidate_call_edge_full_scans = 0u;
+        std::atomic_size_t candidate_call_edge_full_sorts = 0u;
+        std::atomic_size_t candidate_tail_edge_full_scans = 0u;
+        std::atomic_size_t candidate_tail_edge_full_sorts = 0u;
+        std::atomic_size_t program_graph_blocks_built = 0u;
+        std::atomic_size_t program_graph_blocks_reused = 0u;
+        std::atomic_size_t program_graph_sccs_built = 0u;
+        std::atomic_size_t program_graph_sccs_reused = 0u;
+        std::atomic_size_t resolution_dependency_nodes_built = 0u;
+        std::atomic_size_t resolution_dependency_nodes_reused = 0u;
+        std::atomic_size_t resolution_dependency_sccs_built = 0u;
+        std::atomic_size_t resolution_dependency_sccs_reused = 0u;
+        std::atomic_size_t abi_contract_entries_visited = 0u;
+        std::atomic_size_t abi_contract_entries_rebuilt = 0u;
+        std::atomic_size_t summary_candidate_entries_visited = 0u;
+        std::atomic_size_t summary_candidate_entries_rebuilt = 0u;
+        std::atomic_size_t inventory_topology_entries_visited = 0u;
+        std::atomic_size_t resolution_preparation_entries_visited = 0u;
+    } run_work;
+    // These ledgers count actual top-level/nested container entries inspected
+    // by the remaining full preparation passes. They are observational only;
+    // unlike dirty-set cardinalities, they grow whenever a supposedly warm
+    // path still walks an unchanged global relation.
+    std::size_t inventory_topology_entries_visited = 0u;
+    std::size_t abi_contract_entries_visited = 0u;
+    std::size_t summary_candidate_entries_visited = 0u;
+    std::size_t resolution_preparation_entries_visited = 0u;
+    // Protected by progress_callback_mutex so every observer sees one exact
+    // all-or-none retention tuple instead of a torn overflow transition.
+    std::size_t progress_resolution_root_artifacts_retained = 0u;
+    std::size_t progress_resolution_epoch_retained_bytes = 0u;
+    ResolutionRetentionLimitReason
+        progress_resolution_retention_limit_reason =
+            ResolutionRetentionLimitReason::None;
+    std::atomic_size_t progress_dirty_sccs = 0u;
+    std::atomic_size_t progress_dirty_functions = 0u;
+    std::atomic_size_t progress_dirty_inventory_sinks = 0u;
+    std::atomic_size_t progress_full_cpu_recompute_fallbacks = 0u;
     std::atomic_size_t progress_resolution_head_of_line_index = 0u;
     std::atomic<std::int64_t>
         progress_resolution_head_started_nanoseconds{0};
@@ -14915,6 +18713,103 @@ detail::analyze_function_values_with_guarded_entry_cache(
             progress.analysis_epochs_discarded = cache_delta(
                 session_statistics.analysis_epochs_discarded,
                 session_statistics_at_start.analysis_epochs_discarded);
+            progress.incremental_epochs_started = cache_delta(
+                session_statistics.incremental_epochs_started,
+                session_statistics_at_start.incremental_epochs_started);
+            progress.resolution_root_artifacts_total =
+                progress_resolution_root_artifacts_total.load(
+                    std::memory_order_relaxed);
+            progress.resolution_root_artifacts_reused =
+                progress_resolution_root_artifacts_reused.load(
+                    std::memory_order_relaxed);
+            progress.resolution_root_artifacts_recomputed =
+                progress_resolution_root_artifacts_recomputed.load(
+                    std::memory_order_relaxed);
+            progress.resolution_root_artifacts_retained =
+                progress_resolution_root_artifacts_retained;
+            progress.resolution_epoch_retained_bytes =
+                progress_resolution_epoch_retained_bytes;
+            progress.resolution_retention_limit_reason =
+                progress_resolution_retention_limit_reason;
+            progress.dirty_sccs = progress_dirty_sccs.load(
+                std::memory_order_relaxed);
+            progress.dirty_functions = progress_dirty_functions.load(
+                std::memory_order_relaxed);
+            progress.dirty_inventory_sinks =
+                progress_dirty_inventory_sinks.load(
+                    std::memory_order_relaxed);
+            progress.full_cpu_recompute_fallbacks =
+                progress_full_cpu_recompute_fallbacks.load(
+                    std::memory_order_relaxed);
+            progress.persistent_analysis_bypass_reason =
+                result.persistent_analysis_bypass_reason;
+            progress.program_delta_entries_visited =
+                run_work.program_delta_entries_visited.load(
+                    std::memory_order_relaxed);
+            progress.function_edge_full_scans =
+                run_work.function_edge_full_scans.load(
+                    std::memory_order_relaxed);
+            progress.function_edge_full_sorts =
+                run_work.function_edge_full_sorts.load(
+                    std::memory_order_relaxed);
+            progress.candidate_call_edge_full_scans =
+                run_work.candidate_call_edge_full_scans.load(
+                    std::memory_order_relaxed);
+            progress.candidate_call_edge_full_sorts =
+                run_work.candidate_call_edge_full_sorts.load(
+                    std::memory_order_relaxed);
+            progress.candidate_tail_edge_full_scans =
+                run_work.candidate_tail_edge_full_scans.load(
+                    std::memory_order_relaxed);
+            progress.candidate_tail_edge_full_sorts =
+                run_work.candidate_tail_edge_full_sorts.load(
+                    std::memory_order_relaxed);
+            progress.program_graph_blocks_built =
+                run_work.program_graph_blocks_built.load(
+                    std::memory_order_relaxed);
+            progress.program_graph_blocks_reused =
+                run_work.program_graph_blocks_reused.load(
+                    std::memory_order_relaxed);
+            progress.program_graph_sccs_built =
+                run_work.program_graph_sccs_built.load(
+                    std::memory_order_relaxed);
+            progress.program_graph_sccs_reused =
+                run_work.program_graph_sccs_reused.load(
+                    std::memory_order_relaxed);
+            progress.resolution_dependency_nodes_built =
+                run_work.resolution_dependency_nodes_built.load(
+                    std::memory_order_relaxed);
+            progress.resolution_dependency_nodes_reused =
+                run_work.resolution_dependency_nodes_reused.load(
+                    std::memory_order_relaxed);
+            progress.resolution_dependency_sccs_built =
+                run_work.resolution_dependency_sccs_built.load(
+                    std::memory_order_relaxed);
+            progress.resolution_dependency_sccs_reused =
+                run_work.resolution_dependency_sccs_reused.load(
+                    std::memory_order_relaxed);
+            progress.abi_contract_entries_visited =
+                run_work.abi_contract_entries_visited.load(
+                    std::memory_order_relaxed);
+            progress.abi_contract_entries_rebuilt =
+                run_work.abi_contract_entries_rebuilt.load(
+                    std::memory_order_relaxed);
+            progress.summary_candidate_entries_visited =
+                run_work.summary_candidate_entries_visited.load(
+                    std::memory_order_relaxed);
+            progress.summary_candidate_entries_rebuilt =
+                run_work.summary_candidate_entries_rebuilt.load(
+                    std::memory_order_relaxed);
+            progress.inventory_topology_entries_visited =
+                run_work.inventory_topology_entries_visited.load(
+                    std::memory_order_relaxed);
+            progress.resolution_preparation_entries_visited =
+                run_work.resolution_preparation_entries_visited.load(
+                    std::memory_order_relaxed);
+            progress.final_materialized_blocks =
+                result.final_materialized_blocks;
+            progress.final_materialized_functions =
+                result.final_materialized_functions;
             progress_callback(progress);
         } catch (...) {
             // Progress is observational. A failing UI/logger callback must
@@ -15002,9 +18897,6 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 std::memory_order_relaxed);
             emit_progress_snapshot_locked(phase);
         };
-    if (lines.empty() || function_boundaries.empty() ||
-        image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC)
-        return result;
     if (progress_callback) {
         function_value_progress_callback_activations.fetch_add(
             1u, std::memory_order_relaxed);
@@ -15045,161 +18937,282 @@ detail::analyze_function_values_with_guarded_entry_cache(
         progress_pulse_condition.notify_all();
         progress_pulse.join();
     };
-    struct CandidateTailCarrier {
-        std::uint32_t transfer_site = 0u;
-        std::uint32_t target = 0u;
-    };
-    struct CandidateCallCarrier {
-        std::uint32_t call_site = 0u;
-        std::uint32_t target = 0u;
-    };
-    std::vector<CandidateCallCarrier> candidate_call_carriers;
-    std::vector<CandidateTailCarrier> candidate_tail_carriers;
-    for (const auto& edge : resolved_edges) {
-        if (!edge.analysis_candidate_carrier ||
-            edge.kind != ResolvedControlFlowKind::Call ||
-            resolved_edge_evidence(edge) != ControlFlowEvidence::GuardedPartial)
-            continue;
-        const auto line = std::lower_bound(
-            lines.begin(),
-            lines.end(),
-            edge.instruction_address,
-            [](const auto& candidate, const std::uint32_t address) {
-                return candidate.address < address;
-            });
-        const auto target =
-            std::lower_bound(lines.begin(),
-                             lines.end(),
-                             edge.target_address,
-                             [](const auto& candidate, const std::uint32_t address) {
-                                 return candidate.address < address;
-                             });
-        if (line == lines.end() || line->address != edge.instruction_address ||
-            target == lines.end() || target->address != edge.target_address ||
-            target->is_delay_slot)
-            continue;
-        if (line->instruction.control_flow ==
-            katana::sh4::ControlFlowKind::IndirectCall) {
-            candidate_call_carriers.push_back(
-                {edge.instruction_address, edge.target_address});
-            continue;
+    const auto published_epoch = session.impl_->published_epoch;
+    const auto published_program =
+        published_epoch == nullptr ? nullptr : published_epoch->program;
+    std::shared_ptr<const FunctionProgramInputArena> program_input_arena;
+    bool exact_program_input = false;
+    const auto record_persistent_bypass =
+        [&](const PersistentAnalysisBypassReason reason) {
+            persistent_analysis_bypass_reason = reason;
+            bypass_all_persistent_analysis_state = true;
+            if (result.persistent_analysis_bypass_reason !=
+                PersistentAnalysisBypassReason::None)
+                return;
+            session.impl_->full_cpu_recompute_fallbacks.fetch_add(
+                1u, std::memory_order_relaxed);
+            session.impl_->latest_persistent_analysis_bypass_reason.store(
+                reason, std::memory_order_relaxed);
+            result.full_cpu_recompute_fallbacks = 1u;
+            result.persistent_analysis_bypass_reason = reason;
+        };
+    if (!bypass_all_persistent_analysis_state &&
+        published_program != nullptr && program_delta.has_value() &&
+        program_delta->kind ==
+            detail::FunctionProgramDeltaKind::Unchanged) {
+        if (exact_program_delta_valid(
+                *program_delta, *published_program->input_arena)) {
+            program_input_arena =
+                published_epoch->program_input_arena;
+            exact_program_input = true;
+        } else {
+            record_persistent_bypass(
+                PersistentAnalysisBypassReason::
+                    ProgramDeltaUnrepresentable);
         }
-        if (line->instruction.control_flow !=
-            katana::sh4::ControlFlowKind::IndirectBranch)
-            continue;
-        if (std::find(edge.evidence_origins.begin(),
-                      edge.evidence_origins.end(),
-                      AnalysisEvidenceOrigin::JumpTable) != edge.evidence_origins.end())
-            continue;
-        candidate_tail_carriers.push_back(
-            {edge.instruction_address, edge.target_address});
+    } else if (!bypass_all_persistent_analysis_state &&
+               published_program != nullptr &&
+               program_delta.has_value() &&
+               program_delta->kind ==
+                   detail::FunctionProgramDeltaKind::Exact) {
+        auto overlaid = overlay_program_input_arena(
+            *published_epoch->program_input_arena, *program_delta);
+        if (exact_program_delta_valid(*program_delta, *overlaid)) {
+            program_input_arena = std::move(overlaid);
+            exact_program_input = true;
+            run_work.program_delta_entries_visited.store(
+                program_delta->changed_lines.size() +
+                program_delta->changed_boundaries.size() +
+                program_delta->changed_semantic_edge_sites.size() +
+                program_delta->changed_candidate_call_sites.size() +
+                program_delta->changed_candidate_tail_sites.size(),
+                std::memory_order_relaxed);
+        } else {
+            record_persistent_bypass(
+                PersistentAnalysisBypassReason::
+                    ProgramDeltaUnrepresentable);
+        }
     }
-    std::sort(candidate_call_carriers.begin(),
-              candidate_call_carriers.end(),
-              [](const auto& left, const auto& right) {
-                  return std::tie(left.call_site, left.target) <
-                         std::tie(right.call_site, right.target);
-              });
-    candidate_call_carriers.erase(
-        std::unique(candidate_call_carriers.begin(),
-                    candidate_call_carriers.end(),
-                    [](const auto& left, const auto& right) {
-                        return left.call_site == right.call_site &&
-                               left.target == right.target;
-                    }),
-        candidate_call_carriers.end());
-    std::sort(candidate_tail_carriers.begin(),
-              candidate_tail_carriers.end(),
-              [](const auto& left, const auto& right) {
-                  return std::tie(left.transfer_site, left.target) <
-                         std::tie(right.transfer_site, right.target);
-              });
-    candidate_tail_carriers.erase(
-        std::unique(candidate_tail_carriers.begin(),
-                    candidate_tail_carriers.end(),
-                    [](const auto& left, const auto& right) {
-                        return left.transfer_site == right.transfer_site &&
-                               left.target == right.target;
-                    }),
-        candidate_tail_carriers.end());
-    std::vector<ResolvedControlFlowEdge> function_edges;
-    function_edges.reserve(resolved_edges.size());
-    for (const auto& edge : resolved_edges) {
-        if (!edge.analysis_candidate_carrier)
-            function_edges.push_back(edge);
+    if (bypass_all_persistent_analysis_state)
+        record_persistent_bypass(persistent_analysis_bypass_reason);
+    if (program_input_arena == nullptr) {
+        if (lines.empty() || function_boundaries.empty())
+            throw std::logic_error(
+                "Ein nicht darstellbares ProgramDelta besitzt keinen "
+                "vollstaendigen Cold-Snapshot.");
+        program_input_arena = build_program_input_arena(
+            lines, function_boundaries, resolved_edges);
+        run_work.function_edge_full_scans.store(
+            1u, std::memory_order_relaxed);
+        run_work.function_edge_full_sorts.store(
+            1u, std::memory_order_relaxed);
+        run_work.candidate_call_edge_full_scans.store(
+            1u, std::memory_order_relaxed);
+        run_work.candidate_call_edge_full_sorts.store(
+            1u, std::memory_order_relaxed);
+        run_work.candidate_tail_edge_full_scans.store(
+            1u, std::memory_order_relaxed);
+        run_work.candidate_tail_edge_full_sorts.store(
+            1u, std::memory_order_relaxed);
     }
 
-    const auto previous_epoch = session.impl_->published_epoch;
-    struct AnalysisEpochPublicationGuard final {
-        std::atomic_size_t* discarded = nullptr;
-        bool finished = false;
-        void discard_now() noexcept {
-            if (finished) return;
-            finished = true;
-            if (discarded != nullptr)
-                discarded->fetch_add(1u, std::memory_order_relaxed);
+    // The DerivedTopology fast path below currently represents complete
+    // CandidateCall site-family replacement. Candidate-tail edits still take
+    // the typed cold path. Structural Line/Boundary and Jump deltas are
+    // admitted only by the strict monotone/additive builders below; those
+    // builders select the same cold fallback when their contract is not
+    // representable.
+    if (!bypass_all_persistent_analysis_state &&
+        program_delta.has_value() &&
+        program_delta->kind == detail::FunctionProgramDeltaKind::Exact &&
+        !program_delta->changed_candidate_tail_sites.empty()) {
+        record_persistent_bypass(
+            PersistentAnalysisBypassReason::ProgramDeltaUnrepresentable);
+    }
+
+    const bool candidate_derived_topology_attempt =
+        !bypass_all_persistent_analysis_state &&
+        published_epoch != nullptr && program_delta.has_value() &&
+        program_delta->kind == detail::FunctionProgramDeltaKind::Exact &&
+        program_delta->result_materialization ==
+            FunctionValueResultMaterialization::DeltaOnly &&
+        !program_delta->changed_candidate_call_sites.empty() &&
+        program_delta->changed_lines.empty() &&
+        program_delta->changed_boundaries.empty() &&
+        program_delta->changed_semantic_edge_sites.empty() &&
+        program_delta->changed_candidate_tail_sites.empty() &&
+        published_epoch->inventory_topology_shards != nullptr &&
+        published_epoch->abi_contract_shards != nullptr &&
+        published_epoch->summary_candidate_shards != nullptr &&
+        published_epoch->resolution_preparation_shards != nullptr &&
+        published_epoch->resolution_dependency_nodes != nullptr &&
+        published_epoch->resolution_dependency_components_by_node != nullptr &&
+        published_epoch->resolution_root_artifacts != nullptr &&
+        published_epoch->presentation_root_artifacts != nullptr;
+
+    std::vector<CandidateCallCarrier> candidate_call_carriers;
+    std::vector<CandidateTailCarrier> candidate_tail_carriers;
+    if (candidate_derived_topology_attempt) {
+        for (const auto& changed :
+             program_delta->changed_candidate_call_sites) {
+            const auto* const family =
+                program_input_arena->candidate_calls->find(
+                    changed.instruction_address);
+            if (family != nullptr)
+                candidate_call_carriers.insert(
+                    candidate_call_carriers.end(),
+                    family->begin(), family->end());
         }
-        void mark_published() noexcept { finished = true; }
-        ~AnalysisEpochPublicationGuard() {
-            discard_now();
-        }
-    } epoch_publication_guard{
-        &session.impl_->analysis_epochs_discarded, false};
-    const auto previous_program =
+        normalize(candidate_call_carriers);
+    } else {
+        candidate_call_carriers = materialize_program_carriers(
+            *program_input_arena->candidate_calls);
+        candidate_tail_carriers = materialize_program_carriers(
+            *program_input_arena->candidate_tails);
+    }
+    inventory_topology_entries_visited +=
+        candidate_call_carriers.size() + candidate_tail_carriers.size();
+
+    std::shared_ptr<const FunctionAnalysisEpoch> previous_epoch =
+        bypass_all_persistent_analysis_state ? nullptr : published_epoch;
+    auto previous_program =
         previous_epoch == nullptr ? nullptr : previous_epoch->program;
-    const auto program_identity = function_program_graph_identity(
-        lines, function_boundaries, function_edges);
+    const bool program_structure_unchanged =
+        exact_program_input && previous_program != nullptr &&
+        (program_delta->kind ==
+             detail::FunctionProgramDeltaKind::Unchanged ||
+         (program_delta->changed_lines.empty() &&
+          program_delta->changed_boundaries.empty() &&
+          program_delta->changed_semantic_edge_sites.empty()));
     std::shared_ptr<const FunctionProgramGraph> program_graph;
     std::unordered_set<std::uint32_t> graph_dirty_functions;
     bool staged_program_graph_build = false;
+    bool staged_monotone_append = false;
     std::size_t staged_program_functions_built = 0u;
     std::size_t staged_program_functions_reused = 0u;
-    if (previous_program != nullptr &&
-        previous_program->identity == program_identity) {
-        program_graph = previous_program;
-        staged_program_functions_reused = program_graph->functions.size();
+    std::shared_ptr<FunctionProgramGraph> staged_program;
+    if (!program_structure_unchanged && exact_program_input &&
+        previous_program != nullptr && program_delta.has_value()) {
+        if ((!program_delta->changed_lines.empty() ||
+             !program_delta->changed_boundaries.empty()) &&
+            program_delta->changed_semantic_edge_sites.empty()) {
+            auto append = classify_monotone_program_append(
+                *previous_program, *program_delta);
+            if (append.has_value()) {
+                staged_program = build_monotone_program_append(
+                    previous_program, program_input_arena,
+                    std::move(*append));
+            }
+        } else if (program_delta->changed_lines.empty() &&
+                   program_delta->changed_boundaries.empty() &&
+                   !program_delta->changed_semantic_edge_sites.empty()) {
+            staged_program = build_additive_semantic_jump_overlay(
+                previous_program, program_input_arena, *program_delta);
+        }
+        if (staged_program == nullptr) {
+            // The overlaid persistent input arena is already the exact full
+            // snapshot.  Keep it, discard every previous semantic shard and
+            // perform one explicit cold CPU rebuild; the legacy spans are
+            // intentionally empty in an Exact CFA round.
+            record_persistent_bypass(
+                PersistentAnalysisBypassReason::
+                    ProgramDeltaUnrepresentable);
+            previous_epoch.reset();
+            previous_program.reset();
+        } else {
+            staged_monotone_append = true;
+        }
+    }
+
+    std::shared_ptr<const std::vector<ResolvedControlFlowEdge>>
+        function_edges_owner;
+    std::vector<katana::sh4::DisassemblyLine> materialized_lines;
+    std::vector<FunctionBoundary> materialized_boundaries;
+    std::string program_identity;
+    if (program_structure_unchanged) {
+        function_edges_owner =
+            previous_program->semantic_edges_materialized;
+        program_identity = previous_program->identity;
+    } else if (staged_monotone_append) {
+        function_edges_owner =
+            staged_program->semantic_edges_materialized;
+        program_identity = staged_program->identity;
     } else {
-        auto staged_program = build_function_program_graph(
-            program_identity,
-            lines,
-            function_boundaries,
-            function_edges,
-            previous_program.get());
-        graph_dirty_functions = caller_scc_dirty_closure(
-            previous_program.get(), *staged_program);
+        auto function_edges = materialize_program_edges(
+            *program_input_arena->semantic_edges);
+        function_edges_owner = std::make_shared<const std::vector<
+            ResolvedControlFlowEdge>>(std::move(function_edges));
+        materialized_lines = materialize_program_values(
+            *program_input_arena->lines);
+        materialized_boundaries = materialize_program_values(
+            *program_input_arena->boundaries);
+        program_identity = function_program_graph_identity(
+            materialized_lines,
+            materialized_boundaries,
+            *function_edges_owner);
+    }
+    const auto& function_edges = *function_edges_owner;
+
+    if (program_structure_unchanged ||
+        (previous_program != nullptr && !staged_monotone_append &&
+         previous_program->identity == program_identity)) {
+        program_graph = previous_program;
+        staged_program_functions_reused =
+            program_graph->function_view().size();
+    } else {
+        if (!staged_monotone_append) {
+            staged_program = build_function_program_graph(
+                program_identity,
+                program_input_arena,
+                materialized_lines,
+                materialized_boundaries,
+                function_edges,
+                previous_program.get());
+        }
+        if (staged_monotone_append) {
+            std::vector<std::uint32_t> appended_entries;
+            appended_entries.reserve(staged_program->functions.size());
+            for (const auto& function : staged_program->functions)
+                appended_entries.push_back(function.entry_address);
+            graph_dirty_functions = scc_caller_closure(
+                *staged_program, appended_entries);
+        } else {
+            graph_dirty_functions = caller_scc_dirty_closure(
+                previous_program.get(), *staged_program);
+        }
         staged_program_functions_built =
             staged_program->physically_built_functions;
         staged_program_functions_reused =
             staged_program->physically_reused_functions;
         for (const auto& function : staged_program->functions) {
             auto previous_version = std::uint64_t{0u};
-            if (previous_program != nullptr) {
-                const auto old_version =
-                    previous_program->dependency_versions.find(
-                        function.entry_address);
-                if (old_version !=
-                    previous_program->dependency_versions.end())
-                    previous_version = old_version->second;
-            }
+            if (previous_program != nullptr)
+                if (const auto* const old_version =
+                        previous_program->find_dependency_version(
+                            function.entry_address))
+                    previous_version = *old_version;
             staged_program->dependency_versions.emplace(
                 function.entry_address,
                 graph_dirty_functions.contains(function.entry_address)
                     ? previous_version + 1u
                     : previous_version);
         }
-        auto next_scc_version = std::uint64_t{1u};
+        auto next_scc_version =
+            previous_program == nullptr
+                ? std::uint64_t{1u}
+                : previous_program->next_scc_dependency_version;
         std::unordered_map<std::string, std::uint64_t>
             previous_scc_versions;
-        if (previous_program != nullptr) {
+        if (previous_program != nullptr && !staged_monotone_append) {
+            previous_scc_versions.reserve(
+                previous_program->component_count());
             for (std::size_t index = 0u;
-                 index < previous_program->scc_fingerprints.size();
+                 index < previous_program->component_count();
                  ++index) {
                 const auto version =
-                    index < previous_program->scc_dependency_versions.size()
-                        ? previous_program->scc_dependency_versions[index]
-                        : 0u;
+                    previous_program->scc_dependency_version_at(index);
                 previous_scc_versions.emplace(
-                    previous_program->scc_fingerprints[index], version);
+                    previous_program->scc_fingerprint_at(index), version);
                 next_scc_version =
                     std::max(next_scc_version, version + 1u);
             }
@@ -15215,25 +19228,1076 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     ? next_scc_version
                     : previous->second);
         }
+        staged_program->next_scc_dependency_version =
+            std::max(staged_program->next_scc_dependency_version,
+                     next_scc_version + 1u);
         program_graph = std::move(staged_program);
-        staged_program_graph_build = true;
+        // An immutable local overlay retains the complete base graph and is a
+        // graph reuse event. Its physically rebuilt shards remain visible in
+        // the separate block/function work counters.
+        staged_program_graph_build = !staged_monotone_append;
     }
-    const auto& blocks = program_graph->blocks;
-    const auto& functions = program_graph->functions;
-    const auto& components =
-        program_graph->strongly_connected_components;
-    const auto& function_owners_by_block =
-        program_graph->owners_by_block;
-    const auto& function_owners_by_control =
-        program_graph->owners_by_control;
-    std::unordered_map<std::uint32_t, const BasicBlock*> block_index =
-        program_graph->block_by_address;
+    if (program_graph != previous_program &&
+        !program_structure_unchanged) {
+        run_work.program_graph_blocks_built.store(
+            program_graph->physically_built_blocks,
+            std::memory_order_relaxed);
+        run_work.program_graph_blocks_reused.store(
+            program_graph->physically_reused_blocks,
+            std::memory_order_relaxed);
+        // Exact monotone appends count only locally condensed SCC shards.  A
+        // path-shared base component was not physically inspected and is
+        // therefore neither a build nor a reuse event.
+        run_work.program_graph_sccs_built.store(
+            program_graph->strongly_connected_components.size(),
+            std::memory_order_relaxed);
+    }
+    const auto blocks = program_graph->block_view();
+    const auto functions = program_graph->function_view();
+    const auto components = program_graph->component_view();
+    const auto graph_function_index = program_graph->function_index();
+    const auto function_owners_by_block =
+        program_graph->owners_by_block_index();
+    const auto function_owners_by_control =
+        program_graph->owners_by_control_index();
+    BasicBlockIndexView::Map inventory_overlay_block_index;
+    const BasicBlockIndexView block_index{
+        program_graph->block_map_layers(),
+        inventory_overlay_block_index};
+
+    const bool staged_derived_topology_attempt =
+        candidate_derived_topology_attempt ||
+        (staged_monotone_append && previous_epoch != nullptr &&
+         program_delta.has_value() &&
+         program_delta->result_materialization ==
+             FunctionValueResultMaterialization::DeltaOnly &&
+         !graph_dirty_functions.empty() &&
+         program_delta->changed_lines.size() <=
+             maximum_local_derived_topology_lines &&
+         program_delta->changed_boundaries.size() <=
+             maximum_local_derived_topology_functions &&
+         graph_dirty_functions.size() <=
+             maximum_local_derived_topology_functions &&
+         previous_epoch->inventory_topology_shards != nullptr &&
+         previous_epoch->abi_contract_shards != nullptr &&
+         previous_epoch->summary_candidate_shards != nullptr &&
+         previous_epoch->resolution_preparation_shards != nullptr &&
+         previous_epoch->resolution_dependency_nodes != nullptr &&
+         previous_epoch->resolution_dependency_components_by_node !=
+             nullptr &&
+         previous_epoch->resolution_root_artifacts != nullptr &&
+         previous_epoch->presentation_root_artifacts != nullptr);
+
+    if (staged_derived_topology_attempt) {
+        using DependencyNodeId =
+            FunctionAnalysisEpoch::ResolutionDependencyNodeId;
+        using DependencyNodeKind =
+            FunctionAnalysisEpoch::ResolutionDependencyNodeKind;
+        const auto cold_restart = [&]() -> void {
+            throw ResolutionDependencyColdRestart{
+                program_input_arena,
+                result.result_materialization,
+                PersistentAnalysisBypassReason::
+                    ProgramDeltaUnrepresentable};
+        };
+
+        std::vector<std::uint32_t> changed_candidate_sites;
+        changed_candidate_sites.reserve(
+            program_delta->changed_candidate_call_sites.size());
+        for (const auto& changed :
+             program_delta->changed_candidate_call_sites)
+            changed_candidate_sites.push_back(
+                changed.instruction_address);
+        normalize(changed_candidate_sites);
+        if (changed_candidate_sites.size() !=
+            program_delta->changed_candidate_call_sites.size())
+            cold_restart();
+
+        if (previous_epoch->program_input_arena == nullptr)
+            cold_restart();
+
+        std::set<DependencyNodeId> affected_nodes;
+        std::deque<DependencyNodeId> pending_nodes;
+        const auto enqueue_node = [&](const DependencyNodeId node) {
+            if (!affected_nodes.contains(node))
+                pending_nodes.push_back(node);
+        };
+        const auto enqueue_function = [&](const std::uint32_t address) {
+            enqueue_node({address, DependencyNodeKind::Function});
+        };
+        const auto current_callers =
+            program_graph->callers_by_callee_index();
+        const auto previous_owners =
+            previous_program->owners_by_control_index();
+        for (const auto address : graph_dirty_functions)
+            enqueue_function(address);
+        for (const auto site : changed_candidate_sites) {
+            const auto current_owner =
+                function_owners_by_control.find(site);
+            const auto previous_owner = previous_owners.find(site);
+            if (current_owner == function_owners_by_control.end() ||
+                previous_owner == previous_owners.end() ||
+                current_owner->second.empty() ||
+                current_owner->second != previous_owner->second)
+                cold_restart();
+            for (const auto owner : current_owner->second)
+                enqueue_function(owner);
+            const auto enqueue_family_targets =
+                [&](const FunctionProgramInputArena& arena) {
+                    const auto* const family =
+                        arena.candidate_calls->find(site);
+                    if (family == nullptr) return;
+                    for (const auto& carrier : *family)
+                        enqueue_function(carrier.target);
+                };
+            enqueue_family_targets(*program_input_arena);
+            enqueue_family_targets(
+                *previous_epoch->program_input_arena);
+        }
+        if (pending_nodes.empty()) cold_restart();
+
+        while (!pending_nodes.empty()) {
+            const auto node = pending_nodes.front();
+            pending_nodes.pop_front();
+            if (!affected_nodes.insert(node).second) continue;
+            // The localized snapshot currently has an exact address-preserving
+            // representation for ordinary functions. Inventory-region nodes
+            // require their ephemeral FunctionInfo owner slice; until that is
+            // retained as a shard, take the typed full cold path.
+            if (node.kind != DependencyNodeKind::Function)
+                cold_restart();
+            const auto* const function =
+                program_graph->find_function(node.address);
+            const auto* const preparation =
+                previous_epoch->resolution_preparation_shards->find(node);
+            if (function == nullptr)
+                cold_restart();
+            // A monotone decode can make an already-published candidate
+            // target executable without changing the carrier site itself.
+            // Its owning caller is therefore absent from the delta journal,
+            // but remains a semantic predecessor of the new function.
+            for (const auto& carrier : candidate_call_carriers) {
+                if (carrier.target != node.address) continue;
+                const auto owners =
+                    function_owners_by_control.find(carrier.call_site);
+                if (owners == function_owners_by_control.end())
+                    continue;
+                for (const auto owner : owners->second)
+                    enqueue_function(owner);
+            }
+            for (const auto& carrier : candidate_tail_carriers) {
+                if (carrier.target != node.address) continue;
+                const auto owners =
+                    function_owners_by_control.find(carrier.transfer_site);
+                if (owners == function_owners_by_control.end())
+                    continue;
+                for (const auto owner : owners->second)
+                    enqueue_function(owner);
+            }
+            if (preparation != nullptr &&
+                preparation->dependency_node != nullptr) {
+                for (const auto target :
+                     preparation->dependency_node->outgoing)
+                    enqueue_node(target);
+                for (const auto source :
+                     preparation->dependency_node->incoming)
+                    enqueue_node(source);
+            } else if (previous_program->find_function(node.address) !=
+                       nullptr) {
+                cold_restart();
+            }
+            for (const auto callee : function->direct_callees)
+                enqueue_function(callee);
+            for (const auto block_address :
+                 function->block_addresses) {
+                const auto block = block_index.find(block_address);
+                if (block == block_index.end()) cold_restart();
+                for (const auto& line : block->second->lines) {
+                    const auto enqueue_carrier_targets =
+                        [&](const auto& index) {
+                            const auto* const family =
+                                index.find(line.address);
+                            if (family == nullptr) return;
+                            for (const auto& carrier : *family)
+                                enqueue_function(carrier.target);
+                        };
+                    enqueue_carrier_targets(
+                        *program_input_arena->candidate_calls);
+                    enqueue_carrier_targets(
+                        *program_input_arena->candidate_tails);
+                }
+            }
+            const auto callers = current_callers.find(node.address);
+            if (callers != current_callers.end()) {
+                for (const auto caller : callers->second)
+                    enqueue_function(caller);
+            }
+            const auto previous_callers =
+                previous_epoch->abi_callers_by_callee.find(node.address);
+            if (previous_callers !=
+                previous_epoch->abi_callers_by_callee.end()) {
+                for (const auto caller : previous_callers->second)
+                    enqueue_function(caller);
+            }
+        }
+
+        std::vector<std::uint32_t> affected_functions;
+        affected_functions.reserve(affected_nodes.size());
+        for (const auto node : affected_nodes) {
+            if (node.kind != DependencyNodeKind::Function)
+                cold_restart();
+            affected_functions.push_back(node.address);
+        }
+        normalize(affected_functions);
+        if (affected_functions.empty() ||
+            (staged_monotone_append &&
+             affected_functions.size() >
+                 maximum_local_derived_topology_functions))
+            cold_restart();
+
+        std::vector<FunctionBoundary> local_boundaries;
+        std::vector<katana::sh4::DisassemblyLine> local_lines;
+        std::vector<ResolvedControlFlowEdge> local_edges;
+        local_boundaries.reserve(affected_functions.size());
+        std::set<std::uint32_t> local_line_addresses;
+        for (const auto address : affected_functions) {
+            const auto* const boundary =
+                program_input_arena->boundaries->find(address);
+            const auto* const function =
+                program_graph->find_function(address);
+            if (boundary == nullptr || function == nullptr)
+                cold_restart();
+            local_boundaries.push_back(*boundary);
+            for (const auto block_address :
+                 function->block_addresses) {
+                const auto block = block_index.find(block_address);
+                if (block == block_index.end()) cold_restart();
+                for (const auto& line : block->second->lines)
+                    local_line_addresses.insert(line.address);
+            }
+        }
+        local_lines.reserve(local_line_addresses.size());
+        for (const auto address : local_line_addresses) {
+            const auto* const line =
+                program_input_arena->lines->find(address);
+            if (line == nullptr) continue;
+            local_lines.push_back(*line);
+            const auto append_edge_family =
+                [&](const ProgramEdgeSiteIndex& index) {
+                    const auto* const family = index.find(address);
+                    if (family == nullptr) return;
+                    local_edges.insert(local_edges.end(),
+                                       family->begin(), family->end());
+                };
+            append_edge_family(*program_input_arena->semantic_edges);
+            append_edge_family(
+                *program_input_arena->candidate_call_edges);
+            append_edge_family(
+                *program_input_arena->candidate_tail_edges);
+        }
+        if (local_lines.empty() ||
+            (staged_monotone_append &&
+             local_lines.size() > maximum_local_derived_topology_lines) ||
+            local_boundaries.empty())
+            cold_restart();
+        std::sort(local_lines.begin(),
+                  local_lines.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.address < right.address;
+                  });
+        local_lines.erase(
+            std::unique(local_lines.begin(),
+                        local_lines.end(),
+                        [](const auto& left, const auto& right) {
+                            return left.address == right.address;
+                        }),
+            local_lines.end());
+        std::sort(local_boundaries.begin(),
+                  local_boundaries.end(),
+                  [](const auto& left, const auto& right) {
+                      return std::tie(left.entry_address, left.size) <
+                             std::tie(right.entry_address, right.size);
+                  });
+        local_boundaries.erase(
+            std::unique(
+                local_boundaries.begin(),
+                local_boundaries.end(),
+                [](const auto& left, const auto& right) {
+                    return left.entry_address == right.entry_address &&
+                           left.size == right.size;
+                }),
+            local_boundaries.end());
+        normalize_program_edge_family(local_edges);
+        detail::FunctionValueAnalysisSession local_session(
+            16'384u,
+            1'024u * 1024u * 1024u,
+            false,
+            {},
+            session.impl_->maximum_resolution_dependency_nodes,
+            session.impl_->maximum_resolution_root_artifacts,
+            session.impl_->maximum_resolution_epoch_retained_bytes);
+        detail::FunctionProgramDelta local_delta;
+        local_delta.kind = detail::FunctionProgramDeltaKind::Unknown;
+        local_delta.result_materialization =
+            FunctionValueResultMaterialization::DeltaOnly;
+        local_delta.expected_published_epoch_version = 0u;
+        local_delta.image_identity = image.analysis_instance_identity();
+        local_delta.image_revision = image.analysis_revision();
+        local_session.stage_next_function_program_delta(
+            std::move(local_delta));
+        detail::GuardedNativeEntryShapeCache local_shapes{image};
+        const auto store_local_physical_work =
+            [&](const FunctionValueAnalysisProgress& progress) {
+                run_work.program_graph_blocks_built.store(
+                    progress.program_graph_blocks_built,
+                    std::memory_order_relaxed);
+                run_work.program_graph_blocks_reused.store(
+                    progress.program_graph_blocks_reused,
+                    std::memory_order_relaxed);
+                run_work.program_graph_sccs_built.store(
+                    progress.program_graph_sccs_built,
+                    std::memory_order_relaxed);
+                run_work.program_graph_sccs_reused.store(
+                    progress.program_graph_sccs_reused,
+                    std::memory_order_relaxed);
+                run_work.resolution_dependency_nodes_built.store(
+                    progress.resolution_dependency_nodes_built,
+                    std::memory_order_relaxed);
+                run_work.resolution_dependency_nodes_reused.store(
+                    progress.resolution_dependency_nodes_reused,
+                    std::memory_order_relaxed);
+                run_work.resolution_dependency_sccs_built.store(
+                    progress.resolution_dependency_sccs_built,
+                    std::memory_order_relaxed);
+                run_work.resolution_dependency_sccs_reused.store(
+                    progress.resolution_dependency_sccs_reused,
+                    std::memory_order_relaxed);
+                run_work.abi_contract_entries_visited.store(
+                    progress.abi_contract_entries_visited,
+                    std::memory_order_relaxed);
+                run_work.abi_contract_entries_rebuilt.store(
+                    progress.abi_contract_entries_rebuilt,
+                    std::memory_order_relaxed);
+                run_work.summary_candidate_entries_visited.store(
+                    progress.summary_candidate_entries_visited,
+                    std::memory_order_relaxed);
+                run_work.summary_candidate_entries_rebuilt.store(
+                    progress.summary_candidate_entries_rebuilt,
+                    std::memory_order_relaxed);
+                run_work.inventory_topology_entries_visited.store(
+                    progress.inventory_topology_entries_visited,
+                    std::memory_order_relaxed);
+                run_work.resolution_preparation_entries_visited.store(
+                    progress.resolution_preparation_entries_visited,
+                    std::memory_order_relaxed);
+            };
+        FunctionValueAnalysisProgressCallback local_progress_callback;
+        if (progress_callback) {
+            local_progress_callback =
+                [&](const FunctionValueAnalysisProgress& progress) {
+                    store_local_physical_work(progress);
+                    report_subphase_progress(
+                        "derived-topology-local-progress",
+                        progress.subphase,
+                        progress.subphase_planned,
+                        progress.subphase_processed,
+                        progress.subphase_queued,
+                        progress.subphase_iterations);
+                };
+        }
+        const auto local_result =
+            detail::analyze_function_values_with_guarded_entry_cache(
+                image,
+                local_lines,
+                local_boundaries,
+                local_edges,
+                local_progress_callback,
+                local_shapes,
+                local_session);
+        if (local_result.progress_callback_failed)
+            progress_callback_failed.store(
+                true, std::memory_order_relaxed);
+        const auto local_epoch = local_session.impl_->published_epoch;
+        if (local_result.budget_exhausted || local_epoch == nullptr ||
+            local_epoch->inventory_topology_shards == nullptr ||
+            local_epoch->abi_contract_shards == nullptr ||
+            local_epoch->summary_candidate_shards == nullptr ||
+            local_epoch->resolution_preparation_shards == nullptr ||
+            local_epoch->resolution_dependency_nodes == nullptr ||
+            local_epoch->resolution_dependency_components_by_node == nullptr ||
+            local_epoch->resolution_root_artifacts == nullptr ||
+            local_epoch->presentation_root_artifacts == nullptr)
+            cold_restart();
+        const auto& local_baseline =
+            local_epoch->presentation_baseline_diagnostics;
+        const auto& previous_baseline =
+            previous_epoch->presentation_baseline_diagnostics;
+        const bool baseline_budgets_match =
+            local_baseline.inventory_region_budget ==
+                previous_baseline.inventory_region_budget &&
+            local_baseline.inventory_region_block_budget ==
+                previous_baseline.inventory_region_block_budget &&
+            local_baseline.forwarded_store_context_budget ==
+                previous_baseline.forwarded_store_context_budget &&
+            local_baseline.contextual_return_evaluation_budget ==
+                previous_baseline.contextual_return_evaluation_budget &&
+            local_baseline.abi_stack_argument_slot_budget ==
+                previous_baseline.abi_stack_argument_slot_budget &&
+            local_baseline.local_fixpoint_iteration_budget ==
+                previous_baseline.local_fixpoint_iteration_budget;
+        if (!baseline_budgets_match || local_baseline.truncated() ||
+            previous_baseline.truncated())
+            cold_restart();
+        auto next_inventory_topology =
+            std::make_shared<FunctionAnalysisEpoch::
+                InventoryTopologyIndex>(
+                *previous_epoch->inventory_topology_shards);
+        auto next_abi_contracts =
+            std::make_shared<FunctionAnalysisEpoch::AbiContractIndex>(
+                *previous_epoch->abi_contract_shards);
+        auto next_summary_candidates =
+            std::make_shared<FunctionAnalysisEpoch::
+                SummaryCandidateIndex>(
+                *previous_epoch->summary_candidate_shards);
+        auto next_resolution_preparation =
+            std::make_shared<FunctionAnalysisEpoch::
+                ResolutionPreparationIndex>(
+                *previous_epoch->resolution_preparation_shards);
+        auto next_dependency_nodes =
+            std::make_shared<FunctionAnalysisEpoch::
+                ResolutionDependencyNodeIndex>(
+                *previous_epoch->resolution_dependency_nodes);
+        auto next_dependency_components =
+            std::make_shared<FunctionAnalysisEpoch::
+                ResolutionDependencyComponentIndex>(
+                *previous_epoch
+                     ->resolution_dependency_components_by_node);
+        auto next_resolution_roots =
+            std::make_shared<FunctionAnalysisEpoch::
+                ResolutionRootArtifactIndex>(
+                *previous_epoch->resolution_root_artifacts);
+        auto next_presentation_roots =
+            std::make_shared<FunctionAnalysisEpoch::
+                ResolutionRootArtifactIndex>(
+                *previous_epoch->presentation_root_artifacts);
+
+        const auto replace_function_shard =
+            [&](const std::uint32_t address) {
+                if (const auto* const shard =
+                        local_epoch->inventory_topology_shards->find(
+                            address);
+                    shard != nullptr)
+                    next_inventory_topology->insert_or_assign(
+                        address, *shard);
+                else
+                    next_inventory_topology->erase(address);
+                if (const auto* const shard =
+                        local_epoch->abi_contract_shards->find(address);
+                    shard != nullptr)
+                    next_abi_contracts->insert_or_assign(address, *shard);
+                else
+                    next_abi_contracts->erase(address);
+                if (const auto* const shard =
+                        local_epoch->summary_candidate_shards->find(
+                            address);
+                    shard != nullptr)
+                    next_summary_candidates->insert_or_assign(
+                        address, *shard);
+                else
+                    next_summary_candidates->erase(address);
+            };
+        for (const auto address : affected_functions)
+            replace_function_shard(address);
+        std::vector<std::uint32_t> affected_inventory_sinks;
+        affected_inventory_sinks.reserve(affected_functions.size());
+        for (const auto address : affected_functions) {
+            const auto* const previous_shard =
+                previous_epoch->inventory_topology_shards->find(address);
+            const auto* const local_shard =
+                local_epoch->inventory_topology_shards->find(address);
+            if ((previous_shard != nullptr &&
+                 previous_shard->reaches_guarded_inventory_sink) ||
+                (local_shard != nullptr &&
+                 local_shard->reaches_guarded_inventory_sink))
+                affected_inventory_sinks.push_back(address);
+        }
+        normalize(affected_inventory_sinks);
+        for (const auto node : affected_nodes) {
+            if (const auto* const shard =
+                    local_epoch->resolution_preparation_shards->find(
+                        node);
+                shard != nullptr)
+                next_resolution_preparation->insert_or_assign(
+                    node, *shard);
+            else
+                next_resolution_preparation->erase(node);
+            if (const auto* const shard =
+                    local_epoch->resolution_dependency_nodes->find(node);
+                shard != nullptr)
+                next_dependency_nodes->insert_or_assign(node, *shard);
+            else
+                next_dependency_nodes->erase(node);
+            if (const auto* const shard = local_epoch
+                    ->resolution_dependency_components_by_node->find(node);
+                shard != nullptr)
+                next_dependency_components->insert_or_assign(node, *shard);
+            else
+                next_dependency_components->erase(node);
+        }
+
+        std::vector<std::uint32_t> replaced_roots;
+        std::vector<std::uint32_t> removed_roots;
+        for (const auto address : affected_functions) {
+            const auto* const local_root =
+                local_epoch->resolution_root_artifacts->find(address);
+            const auto* const local_presentation =
+                local_epoch->presentation_root_artifacts->find(address);
+            if (local_root != nullptr) {
+                next_resolution_roots->insert_or_assign(
+                    address, *local_root);
+            } else {
+                next_resolution_roots->erase(address);
+            }
+            if (local_presentation != nullptr) {
+                next_presentation_roots->insert_or_assign(
+                    address, *local_presentation);
+                replaced_roots.push_back(address);
+            } else {
+                if (previous_epoch->presentation_root_artifacts->find(
+                        address) != nullptr)
+                    removed_roots.push_back(address);
+                next_presentation_roots->erase(address);
+            }
+        }
+        normalize(replaced_roots);
+        normalize(removed_roots);
+
+        if (previous_epoch->presentation_metadata
+                    .resolution_retention_limit_reason !=
+                ResolutionRetentionLimitReason::None ||
+            local_result.resolution_retention_limit_reason !=
+                ResolutionRetentionLimitReason::None)
+            cold_restart();
+
+        const auto checked_subtract =
+            [&](std::size_t& total, const std::size_t value) {
+                if (value > total) cold_restart();
+                total -= value;
+            };
+        const auto checked_add =
+            [&](std::size_t& total, const std::size_t value) {
+                if (value >
+                    std::numeric_limits<std::size_t>::max() - total)
+                    cold_restart();
+                total += value;
+            };
+        auto next_dependency_scc_count =
+            previous_epoch->resolution_dependency_scc_count;
+        auto next_dependency_retained_bytes =
+            previous_epoch->resolution_dependency_retained_bytes;
+        using DependencyComponent =
+            FunctionAnalysisEpoch::ResolutionDependencySccContract;
+        std::set<std::shared_ptr<const DependencyComponent>,
+                 std::owner_less<std::shared_ptr<const DependencyComponent>>>
+            previous_components;
+        std::set<std::shared_ptr<const DependencyComponent>,
+                 std::owner_less<std::shared_ptr<const DependencyComponent>>>
+            local_components;
+        auto local_dependency_retained_bytes = std::size_t{0u};
+        auto local_dependency_nodes = std::size_t{0u};
+        for (const auto node : affected_nodes) {
+            if (const auto* const previous_node =
+                    previous_epoch->resolution_dependency_nodes->find(node);
+                previous_node != nullptr) {
+                for (const auto adjacent : (*previous_node)->outgoing)
+                    if (!affected_nodes.contains(adjacent)) cold_restart();
+                for (const auto adjacent : (*previous_node)->incoming)
+                    if (!affected_nodes.contains(adjacent)) cold_restart();
+                checked_subtract(next_dependency_retained_bytes,
+                                 (*previous_node)->retained_bytes);
+            }
+            if (const auto* const previous_component =
+                    previous_epoch
+                        ->resolution_dependency_components_by_node
+                        ->find(node);
+                previous_component != nullptr)
+                previous_components.insert(*previous_component);
+
+            if (const auto* const local_node =
+                    local_epoch->resolution_dependency_nodes->find(node);
+                local_node != nullptr) {
+                ++local_dependency_nodes;
+                checked_add(next_dependency_retained_bytes,
+                            (*local_node)->retained_bytes);
+                checked_add(local_dependency_retained_bytes,
+                            (*local_node)->retained_bytes);
+            }
+            if (const auto* const local_component =
+                    local_epoch
+                        ->resolution_dependency_components_by_node
+                        ->find(node);
+                local_component != nullptr)
+                local_components.insert(*local_component);
+        }
+        for (const auto& component : previous_components) {
+            for (const auto member : component->members)
+                if (!affected_nodes.contains(member)) cold_restart();
+            checked_subtract(next_dependency_retained_bytes,
+                             component->retained_bytes);
+            if (next_dependency_scc_count == 0u) cold_restart();
+            --next_dependency_scc_count;
+        }
+        for (const auto& component : local_components) {
+            for (const auto member : component->members)
+                if (!affected_nodes.contains(member)) cold_restart();
+            checked_add(next_dependency_retained_bytes,
+                        component->retained_bytes);
+            checked_add(local_dependency_retained_bytes,
+                        component->retained_bytes);
+            if (next_dependency_scc_count ==
+                std::numeric_limits<std::size_t>::max())
+                cold_restart();
+            ++next_dependency_scc_count;
+        }
+        if (local_dependency_nodes !=
+                local_epoch->resolution_dependency_nodes->size() ||
+            local_components.size() !=
+                local_epoch->resolution_dependency_scc_count ||
+            local_dependency_retained_bytes !=
+                local_epoch->resolution_dependency_retained_bytes)
+            cold_restart();
+
+        const auto resolution_root_retained_bytes =
+            [&](const FunctionAnalysisEpoch::ResolutionRootArtifact& artifact)
+                -> std::optional<std::size_t> {
+                std::size_t bytes = 0u;
+                bool valid = true;
+                const auto add = [&](const std::size_t count) {
+                    if (!valid) return;
+                    const auto limit = session.impl_
+                                           ->maximum_resolution_epoch_retained_bytes;
+                    if (count > limit - std::min(bytes, limit)) {
+                        valid = false;
+                        return;
+                    }
+                    bytes += count;
+                };
+                add(sizeof(FunctionAnalysisEpoch::ResolutionRootArtifact));
+                add(artifact.root_contract_bytes.capacity() *
+                    sizeof(std::uint8_t));
+                add(artifact.dependency_roots.capacity() *
+                    sizeof(std::shared_ptr<const DependencyComponent>));
+                add(artifact.resolutions.capacity() *
+                    sizeof(InterproceduralTargetResolution));
+                add(artifact.inventory.retained_heap_bytes());
+                add(artifact.walk_diagnostics
+                        .forwarded_store_context_limit_diagnostics.capacity() *
+                    sizeof(ForwardedStoreContextLimitDiagnostic));
+                add(sizeof(std::uint32_t));
+                add(sizeof(std::shared_ptr<const FunctionAnalysisEpoch::
+                                                ResolutionRootArtifact>));
+                add(5u * sizeof(void*));
+                for (const auto& resolution : artifact.resolutions) {
+                    add(resolution.targets.capacity() *
+                        sizeof(std::uint32_t));
+                    add(resolution.call_sites.capacity() *
+                        sizeof(std::uint32_t));
+                    add(resolution.callees.capacity() *
+                        sizeof(std::uint32_t));
+                    add(retained_heap_bytes(resolution.reason));
+                }
+                if (!valid) return std::nullopt;
+                return bytes;
+            };
+        auto next_epoch_retained_bytes =
+            previous_epoch->presentation_metadata
+                .resolution_epoch_retained_bytes;
+        checked_subtract(
+            next_epoch_retained_bytes,
+            previous_epoch->resolution_dependency_retained_bytes);
+        checked_add(next_epoch_retained_bytes,
+                    next_dependency_retained_bytes);
+        auto local_epoch_retained_bytes =
+            local_dependency_retained_bytes;
+        auto local_resolution_roots = std::size_t{0u};
+        for (const auto address : affected_functions) {
+            if (const auto* const previous_root =
+                    previous_epoch->resolution_root_artifacts->find(address);
+                previous_root != nullptr) {
+                const auto retained =
+                    resolution_root_retained_bytes(**previous_root);
+                if (!retained.has_value()) cold_restart();
+                checked_subtract(next_epoch_retained_bytes, *retained);
+            }
+            if (const auto* const local_root =
+                    local_epoch->resolution_root_artifacts->find(address);
+                local_root != nullptr) {
+                ++local_resolution_roots;
+                const auto retained =
+                    resolution_root_retained_bytes(**local_root);
+                if (!retained.has_value()) cold_restart();
+                checked_add(next_epoch_retained_bytes, *retained);
+                checked_add(local_epoch_retained_bytes, *retained);
+            }
+        }
+        if (local_resolution_roots !=
+                local_epoch->resolution_root_artifacts->size() ||
+            local_resolution_roots !=
+                local_result.resolution_root_artifacts_retained ||
+            local_epoch_retained_bytes !=
+                local_result.resolution_epoch_retained_bytes)
+            cold_restart();
+        const auto next_resolution_root_count =
+            next_resolution_roots->size();
+        const auto next_presentation_root_count =
+            next_presentation_roots->size();
+        if (next_dependency_nodes->size() >
+                session.impl_->maximum_resolution_dependency_nodes ||
+            next_dependency_scc_count >
+                session.impl_->maximum_resolution_dependency_nodes ||
+            next_resolution_root_count >
+                session.impl_->maximum_resolution_root_artifacts ||
+            next_epoch_retained_bytes >
+                session.impl_->maximum_resolution_epoch_retained_bytes ||
+            replaced_roots.size() > next_presentation_root_count)
+            cold_restart();
+        const auto reused_root_count =
+            next_presentation_root_count - replaced_roots.size();
+
+        auto next_indirect_callees =
+            std::make_shared<PersistentIndirectCalleeIndex>(
+                *previous_epoch->inventory_indirect_callees);
+        for (const auto site : changed_candidate_sites) {
+            IndirectCalleeCandidates candidates;
+            if (const auto* const semantic =
+                    program_graph->summary_indirect_callees->find_value(site);
+                semantic != nullptr)
+                candidates = *semantic;
+            const auto* const family =
+                program_input_arena->candidate_calls->find(site);
+            if (family != nullptr) {
+                for (const auto& carrier : *family)
+                    candidates.targets.push_back(carrier.target);
+                candidates.guarded = true;
+                candidates.complete = false;
+            }
+            normalize(candidates.targets);
+            if (candidates.targets.empty())
+                next_indirect_callees->erase(site);
+            else
+                next_indirect_callees->insert_or_assign(
+                    site, std::move(candidates));
+        }
+
+        auto next_epoch = std::make_shared<FunctionAnalysisEpoch>();
+        if (published_epoch_version ==
+            std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error(
+                "Function-Analysis-Epoch-Version ist erschoepft.");
+        next_epoch->version = published_epoch_version + 1u;
+        next_epoch->program = program_graph;
+        next_epoch->program_input_arena = program_input_arena;
+        next_epoch->inventory_indirect_callees =
+            std::move(next_indirect_callees);
+        next_epoch->inventory_topology_shards =
+            std::move(next_inventory_topology);
+        next_epoch->abi_contract_shards =
+            std::move(next_abi_contracts);
+        next_epoch->summary_candidate_shards =
+            std::move(next_summary_candidates);
+        next_epoch->resolution_preparation_shards =
+            std::move(next_resolution_preparation);
+        next_epoch->resolution_dependency_nodes =
+            std::move(next_dependency_nodes);
+        next_epoch->resolution_dependency_components_by_node =
+            std::move(next_dependency_components);
+        next_epoch->resolution_dependency_scc_count =
+            next_dependency_scc_count;
+        next_epoch->resolution_dependency_retained_bytes =
+            next_dependency_retained_bytes;
+        next_epoch->resolution_root_artifacts =
+            std::move(next_resolution_roots);
+        next_epoch->presentation_root_artifacts =
+            std::move(next_presentation_roots);
+        next_epoch->presentation_baseline_diagnostics =
+            previous_epoch->presentation_baseline_diagnostics;
+        next_epoch->presentation_baseline_diagnostics
+            .contextual_return_context_budget = functions.size();
+        next_epoch->presentation_metadata =
+            previous_epoch->presentation_metadata;
+        next_epoch->presentation_metadata.strongly_connected_components =
+            components.size();
+        next_epoch->presentation_metadata.budget_exhausted = false;
+        next_epoch->presentation_metadata.resolution_root_artifacts_retained =
+            next_resolution_root_count;
+        next_epoch->presentation_metadata.resolution_epoch_retained_bytes =
+            next_epoch_retained_bytes;
+        next_epoch->presentation_metadata.resolution_retention_limit_reason =
+            ResolutionRetentionLimitReason::None;
+
+        result.result_materialization =
+            FunctionValueResultMaterialization::DeltaOnly;
+        result.strongly_connected_components = components.size();
+        result.fixpoint_iterations = local_result.fixpoint_iterations;
+        result.fixpoint_worker_count = local_result.fixpoint_worker_count;
+        result.fixpoint_parallel_batches =
+            local_result.fixpoint_parallel_batches;
+        result.fixpoint_speculative_evaluations =
+            local_result.fixpoint_speculative_evaluations;
+        result.fixpoint_stale_repairs =
+            local_result.fixpoint_stale_repairs;
+        result.maximum_fixpoint_batch_size =
+            local_result.maximum_fixpoint_batch_size;
+        result.unchanged_ingress_skips =
+            local_result.unchanged_ingress_skips;
+        result.resolution_root_artifacts_retained =
+            next_resolution_root_count;
+        result.resolution_epoch_retained_bytes =
+            next_epoch_retained_bytes;
+        result.resolution_retention_limit_reason =
+            ResolutionRetentionLimitReason::None;
+        result.program_delta_entries_visited =
+            run_work.program_delta_entries_visited.load(
+                std::memory_order_relaxed);
+        result.program_graph_blocks_built =
+            local_result.program_graph_blocks_built;
+        result.program_graph_blocks_reused =
+            local_result.program_graph_blocks_reused;
+        result.program_graph_sccs_built =
+            local_result.program_graph_sccs_built;
+        result.program_graph_sccs_reused =
+            local_result.program_graph_sccs_reused;
+        result.resolution_dependency_nodes_built =
+            local_result.resolution_dependency_nodes_built;
+        result.resolution_dependency_nodes_reused =
+            local_result.resolution_dependency_nodes_reused;
+        result.resolution_dependency_sccs_built =
+            local_result.resolution_dependency_sccs_built;
+        result.resolution_dependency_sccs_reused =
+            local_result.resolution_dependency_sccs_reused;
+        result.abi_contract_entries_visited =
+            local_result.abi_contract_entries_visited;
+        result.abi_contract_entries_rebuilt =
+            local_result.abi_contract_entries_rebuilt;
+        result.summary_candidate_entries_visited =
+            local_result.summary_candidate_entries_visited;
+        result.summary_candidate_entries_rebuilt =
+            local_result.summary_candidate_entries_rebuilt;
+        result.inventory_topology_entries_visited =
+            local_result.inventory_topology_entries_visited;
+        result.resolution_preparation_entries_visited =
+            local_result.resolution_preparation_entries_visited;
+        result.final_materialized_blocks =
+            local_result.final_materialized_blocks;
+        result.final_materialized_functions =
+            local_result.final_materialized_functions;
+        result.incremental_dirty_functions = affected_functions;
+        result.incremental_dirty_inventory_sinks =
+            std::move(affected_inventory_sinks);
+        for (const auto node : affected_nodes) {
+            result.incremental_dirty_scc_entries.push_back(
+                {node.address,
+                 node.kind == DependencyNodeKind::Function
+                     ? FunctionValueDependencyNodeKind::Function
+                     : FunctionValueDependencyNodeKind::InventoryRegion});
+        }
+        result.resolution_root_artifacts_recomputed = replaced_roots;
+        for (const auto address : affected_functions) {
+            const auto* const shard =
+                local_epoch->summary_candidate_shards->find(address);
+            if (shard == nullptr) {
+                result.removed_summary_shards.push_back(
+                    {address,
+                     FunctionValueDependencyNodeKind::Function});
+                continue;
+            }
+            result.summary_replacements.push_back(
+                {{address,
+                  FunctionValueDependencyNodeKind::Function},
+                 shard->summary});
+        }
+        for (const auto address : replaced_roots) {
+            const auto* const artifact =
+                local_epoch->presentation_root_artifacts->find(address);
+            if (artifact == nullptr) cold_restart();
+            const auto owner = FunctionValueDependencyNodeId{
+                address, FunctionValueDependencyNodeKind::Function};
+            result.resolution_replacements.push_back(
+                {owner, (*artifact)->resolutions});
+            // DeltaOnly owner shards carry raw, root-owned evidence. The CFA
+            // consumer and terminal materializer apply the one shared shape
+            // budget; classifying here would make a local replay depend on
+            // unrelated candidates admitted earlier in the outer cache.
+            GuardedCodeInventoryCollector inventory{false};
+            (*artifact)->inventory.replay_copy_into(inventory);
+            auto owner_inventory = inventory.finish();
+            owner_inventory.walk_diagnostics =
+                (*artifact)->walk_diagnostics;
+            result.guarded_code_inventory_replacements.push_back(
+                {owner, std::move(owner_inventory)});
+        }
+        for (const auto address : removed_roots) {
+            const auto owner = FunctionValueDependencyNodeId{
+                address, FunctionValueDependencyNodeKind::Function};
+            result.removed_resolution_shards.push_back(owner);
+            result.removed_guarded_code_inventory_shards.push_back(owner);
+        }
+        normalize(result.incremental_dirty_scc_entries);
+        normalize(result.removed_summary_shards);
+        normalize(result.removed_resolution_shards);
+        normalize(result.removed_guarded_code_inventory_shards);
+
+        function_count = functions.size();
+        block_count = blocks.size();
+        summarized_functions = functions.size();
+        resolution_functions_total = replaced_roots.size();
+        resolution_functions_committed = replaced_roots.size();
+        progress_dirty_sccs.store(affected_nodes.size(),
+                                  std::memory_order_relaxed);
+        progress_dirty_functions.store(affected_functions.size(),
+                                       std::memory_order_relaxed);
+        progress_dirty_inventory_sinks.store(
+            result.incremental_dirty_inventory_sinks.size(),
+            std::memory_order_relaxed);
+        progress_resolution_root_artifacts_total.store(
+            next_presentation_root_count, std::memory_order_relaxed);
+        progress_resolution_root_artifacts_reused.store(
+            reused_root_count, std::memory_order_relaxed);
+        progress_resolution_root_artifacts_recomputed.store(
+            replaced_roots.size(), std::memory_order_relaxed);
+        {
+            const std::lock_guard lock(progress_callback_mutex);
+            progress_resolution_root_artifacts_retained =
+                result.resolution_root_artifacts_retained;
+            progress_resolution_epoch_retained_bytes =
+                result.resolution_epoch_retained_bytes;
+            progress_resolution_retention_limit_reason =
+                result.resolution_retention_limit_reason;
+        }
+
+        run_work.program_delta_entries_visited.store(
+            result.program_delta_entries_visited,
+            std::memory_order_relaxed);
+        run_work.program_graph_blocks_built.store(
+            result.program_graph_blocks_built,
+            std::memory_order_relaxed);
+        run_work.program_graph_blocks_reused.store(
+            result.program_graph_blocks_reused,
+            std::memory_order_relaxed);
+        run_work.program_graph_sccs_built.store(
+            result.program_graph_sccs_built,
+            std::memory_order_relaxed);
+        run_work.program_graph_sccs_reused.store(
+            result.program_graph_sccs_reused,
+            std::memory_order_relaxed);
+        run_work.resolution_dependency_nodes_built.store(
+            result.resolution_dependency_nodes_built,
+            std::memory_order_relaxed);
+        run_work.resolution_dependency_nodes_reused.store(
+            result.resolution_dependency_nodes_reused,
+            std::memory_order_relaxed);
+        run_work.resolution_dependency_sccs_built.store(
+            result.resolution_dependency_sccs_built,
+            std::memory_order_relaxed);
+        run_work.resolution_dependency_sccs_reused.store(
+            result.resolution_dependency_sccs_reused,
+            std::memory_order_relaxed);
+        run_work.abi_contract_entries_visited.store(
+            result.abi_contract_entries_visited,
+            std::memory_order_relaxed);
+        run_work.abi_contract_entries_rebuilt.store(
+            result.abi_contract_entries_rebuilt,
+            std::memory_order_relaxed);
+        run_work.summary_candidate_entries_visited.store(
+            result.summary_candidate_entries_visited,
+            std::memory_order_relaxed);
+        run_work.summary_candidate_entries_rebuilt.store(
+            result.summary_candidate_entries_rebuilt,
+            std::memory_order_relaxed);
+        run_work.inventory_topology_entries_visited.store(
+            result.inventory_topology_entries_visited,
+            std::memory_order_relaxed);
+        run_work.resolution_preparation_entries_visited.store(
+            result.resolution_preparation_entries_visited,
+            std::memory_order_relaxed);
+
+        session.impl_->published_epoch = std::move(next_epoch);
+        session.impl_->pending_terminal_abort_snapshot.reset();
+        session.impl_->program_graph_reuses.fetch_add(
+            1u, std::memory_order_relaxed);
+        session.impl_->program_graph_functions_reused.fetch_add(
+            affected_functions.size(), std::memory_order_relaxed);
+        session.impl_->caller_scc_invalidations.fetch_add(
+            affected_nodes.size(), std::memory_order_relaxed);
+        session.impl_->resolution_root_artifacts_recomputed.fetch_add(
+            replaced_roots.size(), std::memory_order_relaxed);
+        session.impl_->resolution_root_artifacts_reused.fetch_add(
+            reused_root_count, std::memory_order_relaxed);
+        session.impl_->resolution_root_artifacts_retained.store(
+            result.resolution_root_artifacts_retained,
+            std::memory_order_relaxed);
+        session.impl_->resolution_epoch_retained_bytes.store(
+            result.resolution_epoch_retained_bytes,
+            std::memory_order_relaxed);
+        session.impl_->resolution_retention_limit_reason.store(
+            result.resolution_retention_limit_reason,
+            std::memory_order_relaxed);
+        const auto add_physical = [](std::atomic_size_t& destination,
+                                     const std::size_t value) {
+            destination.fetch_add(value, std::memory_order_relaxed);
+        };
+        add_physical(session.impl_->program_delta_entries_visited,
+                     result.program_delta_entries_visited);
+        add_physical(session.impl_->program_graph_blocks_built,
+                     result.program_graph_blocks_built);
+        add_physical(session.impl_->program_graph_blocks_reused,
+                     result.program_graph_blocks_reused);
+        add_physical(session.impl_->program_graph_sccs_built,
+                     result.program_graph_sccs_built);
+        add_physical(session.impl_->program_graph_sccs_reused,
+                     result.program_graph_sccs_reused);
+        add_physical(session.impl_->resolution_dependency_nodes_built,
+                     result.resolution_dependency_nodes_built);
+        add_physical(session.impl_->resolution_dependency_nodes_reused,
+                     result.resolution_dependency_nodes_reused);
+        add_physical(session.impl_->resolution_dependency_sccs_built,
+                     result.resolution_dependency_sccs_built);
+        add_physical(session.impl_->resolution_dependency_sccs_reused,
+                     result.resolution_dependency_sccs_reused);
+        add_physical(session.impl_->abi_contract_entries_visited,
+                     result.abi_contract_entries_visited);
+        add_physical(session.impl_->abi_contract_entries_rebuilt,
+                     result.abi_contract_entries_rebuilt);
+        add_physical(session.impl_->summary_candidate_entries_visited,
+                     result.summary_candidate_entries_visited);
+        add_physical(session.impl_->summary_candidate_entries_rebuilt,
+                     result.summary_candidate_entries_rebuilt);
+        add_physical(session.impl_->inventory_topology_entries_visited,
+                     result.inventory_topology_entries_visited);
+        add_physical(session.impl_->resolution_preparation_entries_visited,
+                     result.resolution_preparation_entries_visited);
+        session.impl_->final_materialized_blocks.store(
+            result.final_materialized_blocks,
+            std::memory_order_relaxed);
+        session.impl_->final_materialized_functions.store(
+            result.final_materialized_functions,
+            std::memory_order_relaxed);
+        session.impl_->analysis_epochs_published.fetch_add(
+            1u, std::memory_order_relaxed);
+        epoch_publication_guard.mark_published();
+        stop_progress_pulse();
+        report_progress("complete");
+        result.progress_callback_failed =
+            progress_callback_failed.load(std::memory_order_relaxed);
+        return result;
+    }
 
     // Candidate-only tail targets are an inventory overlay. They may require
     // a legal mid-block entry without changing the semantic function graph.
     // Retain the immutable core block for ordinary function evaluation and
     // publish only missing overlay leaders into the mixed lookup map.
     std::vector<std::uint32_t> overlay_leaders;
+    inventory_topology_entries_visited += candidate_tail_carriers.size();
     for (const auto& carrier : candidate_tail_carriers) {
         if (!block_index.contains(carrier.target))
             overlay_leaders.push_back(carrier.target);
@@ -15243,25 +20307,54 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
         inventory_overlay_owners_by_block;
     if (!overlay_leaders.empty()) {
-        std::vector<std::uint32_t> split_leaders = overlay_leaders;
-        split_leaders.reserve(
-            split_leaders.size() + function_boundaries.size() * 2u);
-        for (const auto& boundary : function_boundaries) {
-            split_leaders.push_back(boundary.entry_address);
-            if (boundary.size == 0u) continue;
-            const auto end =
-                static_cast<std::uint64_t>(boundary.entry_address) +
-                boundary.size;
-            if (end <= std::numeric_limits<std::uint32_t>::max())
-                split_leaders.push_back(static_cast<std::uint32_t>(end));
+        std::map<std::uint32_t, std::vector<std::uint32_t>>
+            leaders_by_containing_block;
+        for (const auto leader : overlay_leaders) {
+            const auto* const containing =
+                program_graph->find_containing_block(leader);
+            if (containing == nullptr)
+                throw std::logic_error(
+                    "Candidate-Region besitzt keinen ProgramGraph-Block.");
+            const auto containing_address = containing->start_address;
+            if (leader > containing->end_address ||
+                std::none_of(
+                    containing->lines.begin(),
+                    containing->lines.end(),
+                    [&](const auto& line) {
+                        return line.address == leader &&
+                               !line.is_delay_slot;
+                    }))
+                throw std::logic_error(
+                    "Candidate-Region ist keine lokale Decode-Grenze.");
+            leaders_by_containing_block[containing_address]
+                .push_back(leader);
         }
-        normalize(split_leaders);
-        auto split_blocks =
-            build_basic_blocks(lines, function_edges, split_leaders);
+        std::vector<BasicBlock> split_blocks;
+        for (auto& [containing_address, local_leaders] :
+             leaders_by_containing_block) {
+            const auto containing = block_index.at(containing_address);
+            local_leaders.push_back(containing_address);
+            normalize(local_leaders);
+            std::vector<ResolvedControlFlowEdge> local_edges;
+            for (const auto& line : containing->lines) {
+                const auto* const family =
+                    program_input_arena->semantic_edges->find(
+                        line.address);
+                if (family == nullptr) continue;
+                local_edges.insert(local_edges.end(),
+                                   family->begin(),
+                                   family->end());
+            }
+            auto local_blocks = build_basic_blocks(
+                containing->lines, local_edges, local_leaders);
+            split_blocks.insert(
+                split_blocks.end(),
+                std::make_move_iterator(local_blocks.begin()),
+                std::make_move_iterator(local_blocks.end()));
+        }
         inventory_overlay_blocks.reserve(overlay_leaders.size());
         for (auto& block : split_blocks) {
-            if (program_graph->block_by_address.contains(
-                    block.start_address))
+            if (block_index.contains(block.start_address))
                 continue;
             if (!std::binary_search(
                     overlay_leaders.begin(),
@@ -15270,26 +20363,21 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 continue;
             inventory_overlay_blocks.push_back(std::move(block));
         }
+        inventory_overlay_block_index.reserve(
+            inventory_overlay_blocks.size());
         for (const auto& block : inventory_overlay_blocks)
-            block_index.emplace(block.start_address, &block);
+            inventory_overlay_block_index.emplace(
+                block.start_address, &block);
         inventory_overlay_owners_by_block.reserve(
             inventory_overlay_blocks.size());
         for (const auto& block : inventory_overlay_blocks) {
-            const auto upper = std::upper_bound(
-                program_graph->sorted_block_addresses.begin(),
-                program_graph->sorted_block_addresses.end(),
-                block.start_address);
-            if (upper ==
-                program_graph->sorted_block_addresses.begin())
+            const auto* const containing =
+                program_graph->find_containing_block(
+                    block.start_address);
+            if (containing == nullptr ||
+                block.start_address > containing->end_address)
                 continue;
-            const auto containing_address = *std::prev(upper);
-            const auto containing =
-                program_graph->block_by_address.find(
-                    containing_address);
-            if (containing ==
-                    program_graph->block_by_address.end() ||
-                block.start_address > containing->second->end_address)
-                continue;
+            const auto containing_address = containing->start_address;
             const auto owners =
                 function_owners_by_block.find(containing_address);
             if (owners != function_owners_by_block.end())
@@ -15311,54 +20399,55 @@ detail::analyze_function_values_with_guarded_entry_cache(
     // members, that can create a non-converging replacement cycle.  Keep the
     // proven call graph for summaries and add the private carriers only to the
     // bounded final inventory pass.
+    const IndirectCalleeIndexView summary_indirect_callees{
+        *program_graph->summary_indirect_callees};
+    const IndirectCalleeIndexView summary_indirect_callee_index{
+        *program_graph->summary_indirect_callees};
     std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
-        summary_indirect_callees;
-    summary_indirect_callees.reserve(function_edges.size());
-    for (const auto& edge : function_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Call) continue;
-        auto& candidates =
-            summary_indirect_callees[edge.instruction_address];
-        candidates.targets.push_back(edge.target_address);
-        const auto evidence = resolved_edge_evidence(edge);
-        candidates.guarded = candidates.guarded || evidence != ControlFlowEvidence::ProvenComplete;
-        candidates.complete = candidates.complete && control_flow_evidence_complete(evidence);
-    }
-    for (auto& [call_site, candidates] : summary_indirect_callees) {
-        static_cast<void>(call_site);
-        normalize(candidates.targets);
-    }
-    auto inventory_indirect_callees = summary_indirect_callees;
-    inventory_indirect_callees.reserve(summary_indirect_callees.size() +
-                                       candidate_call_carriers.size());
+        inventory_indirect_callee_storage;
+    inventory_indirect_callee_storage.reserve(
+        summary_indirect_callees.size() +
+        candidate_call_carriers.size());
+    summary_indirect_callees.for_each(
+        [&](const std::uint32_t site,
+            const IndirectCalleeCandidates& candidates) {
+            ++inventory_topology_entries_visited;
+            inventory_indirect_callee_storage.emplace(site, candidates);
+        });
     for (const auto& carrier : candidate_call_carriers) {
-        auto& candidates = inventory_indirect_callees[carrier.call_site];
+        auto& candidates =
+            inventory_indirect_callee_storage[carrier.call_site];
         candidates.targets.push_back(carrier.target);
         candidates.guarded = true;
         candidates.complete = false;
     }
-    for (auto& [call_site, candidates] : inventory_indirect_callees) {
+    for (auto& [call_site, candidates] :
+         inventory_indirect_callee_storage) {
         static_cast<void>(call_site);
         normalize(candidates.targets);
     }
-    std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_jump_candidates;
-    indirect_jump_candidates.reserve(function_edges.size());
-    std::unordered_set<std::uint32_t> jump_table_jump_sites;
-    for (const auto& edge : function_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Jump) continue;
-        if (std::find(edge.evidence_origins.begin(),
-                      edge.evidence_origins.end(),
-                      AnalysisEvidenceOrigin::JumpTable) != edge.evidence_origins.end())
-            jump_table_jump_sites.insert(edge.instruction_address);
-        auto& candidates = indirect_jump_candidates[edge.instruction_address];
-        candidates.targets.push_back(edge.target_address);
-        const auto evidence = resolved_edge_evidence(edge);
-        candidates.guarded = candidates.guarded || evidence != ControlFlowEvidence::ProvenComplete;
-        candidates.complete = candidates.complete && control_flow_evidence_complete(evidence);
-    }
-    for (auto& [transfer_site, candidates] : indirect_jump_candidates) {
-        static_cast<void>(transfer_site);
-        normalize(candidates.targets);
-    }
+    auto staged_inventory_indirect_callees =
+        std::make_shared<PersistentIndirectCalleeIndex>();
+    for (const auto& [call_site, candidates] :
+         inventory_indirect_callee_storage)
+        staged_inventory_indirect_callees->insert_or_assign(
+            call_site, candidates);
+    const IndirectCalleeIndexView inventory_indirect_callees{
+        *staged_inventory_indirect_callees};
+    const IndirectCalleeIndexView indirect_jump_candidate_index{
+        *program_graph->indirect_jump_candidates};
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
+        indirect_jump_candidates;
+    indirect_jump_candidates.reserve(
+        indirect_jump_candidate_index.size());
+    indirect_jump_candidate_index.for_each(
+        [&](const std::uint32_t site,
+            const IndirectCalleeCandidates& candidates) {
+            ++inventory_topology_entries_visited;
+            indirect_jump_candidates.emplace(site, candidates);
+        });
+    const auto& jump_table_jump_sites =
+        *program_graph->jump_table_jump_sites;
     struct InventoryRegionTailIngress {
         std::uint32_t transfer_site = 0u;
         std::uint32_t target = 0u;
@@ -15377,6 +20466,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::vector<InventoryRegionTailIngress> inventory_region_tail_ingresses;
     std::deque<std::uint32_t> pending_inventory_regions;
     std::unordered_set<std::uint32_t> queued_inventory_regions;
+    std::unordered_set<std::uint32_t> ordinary_function_entries;
+    ordinary_function_entries.reserve(functions.size());
+    inventory_topology_entries_visited += functions.size();
+    for (const auto& function : functions)
+        ordinary_function_entries.insert(function.entry_address);
     GuardedCodeInventoryWalkDiagnostics inventory_walk_diagnostics;
     inventory_walk_diagnostics.inventory_region_budget = maximum_inventory_regions;
     inventory_walk_diagnostics.inventory_region_block_budget =
@@ -15398,14 +20492,52 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 return;
             pending_inventory_regions.push_back(target);
         };
+    inventory_topology_entries_visited += candidate_tail_carriers.size();
     for (const auto& carrier : candidate_tail_carriers)
         enqueue_inventory_region(carrier.target);
+    inventory_topology_entries_visited += indirect_jump_candidates.size();
     for (const auto& [transfer_site, candidates] : indirect_jump_candidates) {
         if (!candidates.guarded || candidates.complete ||
             candidates.targets.size() != 1u ||
             jump_table_jump_sites.contains(transfer_site))
             continue;
         enqueue_inventory_region(candidates.targets.front());
+    }
+    // Ordinary inter-function tail calls are transported through their normal
+    // FunctionInfo and must not consume the bounded inventory-region budget.
+    // Only a shared/mid-block target, or a guarded candidate-conditioned tail,
+    // needs the private region overlay.
+    for (const auto& function : functions) {
+        ++inventory_topology_entries_visited;
+        inventory_topology_entries_visited +=
+            function.block_addresses.size();
+        for (const auto block_address : function.block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end() || block->second->lines.empty())
+                continue;
+            const auto& control = controlling_line(*block->second);
+            if (control.target_address.has_value() &&
+                std::binary_search(function.tail_jump_targets.begin(),
+                                   function.tail_jump_targets.end(),
+                                   *control.target_address) &&
+                !ordinary_function_entries.contains(*control.target_address))
+                enqueue_inventory_region(*control.target_address);
+            const auto candidates =
+                indirect_jump_candidates.find(control.address);
+            if (candidates == indirect_jump_candidates.end() ||
+                jump_table_jump_sites.contains(control.address))
+                continue;
+            for (const auto target : candidates->second.targets) {
+                if (!std::binary_search(function.tail_jump_targets.begin(),
+                                        function.tail_jump_targets.end(),
+                                        target))
+                    continue;
+                if (candidates->second.guarded ||
+                    !candidates->second.complete ||
+                    !ordinary_function_entries.contains(target))
+                    enqueue_inventory_region(target);
+            }
+        }
     }
 
     const std::vector<std::uint32_t> no_function_owners;
@@ -15432,6 +20564,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
            inventory_regions.size() < maximum_inventory_regions) {
         const auto target = pending_inventory_regions.front();
         pending_inventory_regions.pop_front();
+        ++inventory_topology_entries_visited;
         ++inventory_region_iterations;
         if (inventory_region_iterations <= 16u ||
             (inventory_region_iterations &
@@ -15468,6 +20601,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         while (!pending_blocks.empty()) {
             const auto block_address = pending_blocks.front();
             pending_blocks.pop_front();
+            ++inventory_topology_entries_visited;
             if (visited_blocks.contains(block_address) ||
                 !block_within_owner_domain(block_address))
                 continue;
@@ -15572,36 +20706,101 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::unordered_map<std::uint32_t, const FunctionInfo*>
         inventory_region_by_address;
     inventory_region_by_address.reserve(inventory_regions.size());
+    inventory_topology_entries_visited += inventory_regions.size();
     for (const auto& region : inventory_regions)
         inventory_region_by_address.emplace(region.function.entry_address,
                                             &region.function);
 
-    std::unordered_map<std::uint32_t, IndirectCalleeCandidates> tail_ingresses;
+    // A guarded candidate can enter a small owner-domain region which only
+    // forwards into a second region containing the actual store. Looking at
+    // the first region's local blocks alone drops that real transport before
+    // the typed Region -> Region sink-source fixpoint can ever observe it.
+    // Compute the structural store reachability once over the bounded region
+    // graph. Exact ABI source masks are still solved below; this set merely
+    // decides whether the candidate ingress is relevant at all.
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        inventory_region_predecessors;
+    inventory_region_predecessors.reserve(inventory_regions.size());
+    inventory_topology_entries_visited +=
+        inventory_region_tail_ingresses.size();
+    for (const auto& ingress : inventory_region_tail_ingresses) {
+        if (!inventory_region_by_address.contains(ingress.source_region) ||
+            !inventory_region_by_address.contains(ingress.target))
+            continue;
+        inventory_region_predecessors[ingress.target].push_back(
+            ingress.source_region);
+    }
+    for (auto& [target, predecessors] : inventory_region_predecessors) {
+        static_cast<void>(target);
+        normalize(predecessors);
+    }
+    std::unordered_set<std::uint32_t>
+        inventory_regions_reaching_non_stack_store;
+    inventory_regions_reaching_non_stack_store.reserve(
+        inventory_regions.size());
+    std::deque<std::uint32_t> pending_store_reachability;
+    inventory_topology_entries_visited += inventory_regions.size();
+    for (const auto& region : inventory_regions) {
+        if (!function_contains_non_stack_inventory_store_shape(
+                region.function, block_index))
+            continue;
+        inventory_regions_reaching_non_stack_store.insert(
+            region.function.entry_address);
+        pending_store_reachability.push_back(
+            region.function.entry_address);
+    }
+    while (!pending_store_reachability.empty()) {
+        const auto target = pending_store_reachability.front();
+        pending_store_reachability.pop_front();
+        ++inventory_topology_entries_visited;
+        const auto predecessors = inventory_region_predecessors.find(target);
+        if (predecessors == inventory_region_predecessors.end()) continue;
+        inventory_topology_entries_visited += predecessors->second.size();
+        for (const auto predecessor : predecessors->second) {
+            if (inventory_regions_reaching_non_stack_store.insert(predecessor)
+                    .second)
+                pending_store_reachability.push_back(predecessor);
+        }
+    }
+
+    TailIngressMap tail_ingresses;
     tail_ingresses.reserve(indirect_jump_candidates.size() +
                            candidate_tail_carriers.size() +
                            inventory_region_tail_ingresses.size());
     const auto add_tail_ingress =
         [&tail_ingresses,
-         &inventory_region_by_address](const std::uint32_t transfer_site,
-                                       const std::span<const std::uint32_t> targets,
-                                       const bool guarded,
-                                       const bool complete,
-                                       const bool requires_code_pointer = false,
-                                       const bool observes_abi_arguments = false) {
+         &ordinary_function_entries,
+         &inventory_region_by_address,
+         &inventory_walk_diagnostics](
+            const std::uint32_t transfer_site,
+            const std::span<const TailIngressTarget> targets,
+            const bool guarded,
+            const bool complete,
+            const bool requires_code_pointer = false,
+            const bool observes_abi_arguments = false) {
         if (targets.empty()) return;
-        auto accepted = std::vector<std::uint32_t>{};
+        auto accepted = std::vector<TailIngressTarget>{};
         accepted.reserve(targets.size());
         for (const auto target : targets) {
-            if (inventory_region_by_address.contains(target))
+            const auto available =
+                target.kind == TailIngressTargetKind::Function
+                    ? ordinary_function_entries.contains(target.address)
+                    : inventory_region_by_address.contains(target.address);
+            if (available) {
                 accepted.push_back(target);
+            } else {
+                inventory_walk_diagnostics.inventory_tail_target_unresolved =
+                    true;
+            }
         }
         if (accepted.empty()) return;
+        const auto all_targets_accepted = accepted.size() == targets.size();
         const auto [stored, inserted] =
             tail_ingresses.try_emplace(transfer_site);
         auto& ingress = stored->second;
         ingress.targets.insert(ingress.targets.end(), accepted.begin(), accepted.end());
-        ingress.guarded = ingress.guarded || guarded;
-        ingress.complete = ingress.complete && complete;
+        ingress.guarded = ingress.guarded || guarded || !all_targets_accepted;
+        ingress.complete = ingress.complete && complete && all_targets_accepted;
         ingress.requires_code_pointer =
             inserted ? requires_code_pointer
                      : ingress.requires_code_pointer &&
@@ -15609,11 +20808,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
         ingress.observes_abi_arguments =
             ingress.observes_abi_arguments || observes_abi_arguments;
     };
+    inventory_topology_entries_visited += candidate_tail_carriers.size();
     for (const auto& carrier : candidate_tail_carriers) {
-        const std::array target{carrier.target};
+        const std::array target{TailIngressTarget{
+            carrier.target, TailIngressTargetKind::InventoryRegion}};
         add_tail_ingress(
             carrier.transfer_site, target, true, false, true, true);
     }
+    inventory_topology_entries_visited += indirect_jump_candidates.size();
     for (const auto& [transfer_site, candidates] : indirect_jump_candidates) {
         if (!candidates.guarded || candidates.complete ||
             candidates.targets.size() != 1u ||
@@ -15622,9 +20824,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto region =
             inventory_region_by_address.find(candidates.targets.front());
         if (region == inventory_region_by_address.end() ||
-            !function_contains_non_stack_inventory_store_shape(
-                *region->second,
-                block_index))
+            !inventory_regions_reaching_non_stack_store.contains(
+                candidates.targets.front()))
             continue;
         // A region with a local PC-relative callback literal still needs an
         // ingress even when no ABI value reaches its store. Only demand and
@@ -15633,14 +20834,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto forwards_abi_argument =
             function_forwards_abi_argument_to_persistent_inventory_store(
                 image, *region->second, block_index);
+        const std::array target{TailIngressTarget{
+            candidates.targets.front(),
+            TailIngressTargetKind::InventoryRegion}};
         add_tail_ingress(transfer_site,
-                         candidates.targets,
+                         target,
                          candidates.guarded,
                          candidates.complete,
                          forwards_abi_argument,
                          forwards_abi_argument);
     }
+    inventory_topology_entries_visited += functions.size();
     for (const auto& function : functions) {
+        inventory_topology_entries_visited += function.block_addresses.size();
         for (const auto block_address : function.block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end() || block->second->lines.empty()) continue;
@@ -15653,19 +20859,33 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 std::binary_search(function.tail_jump_targets.begin(),
                                    function.tail_jump_targets.end(),
                                    *control.target_address)) {
-                const std::array target{*control.target_address};
+                const auto kind = ordinary_function_entries.contains(
+                                      *control.target_address)
+                                      ? TailIngressTargetKind::Function
+                                      : TailIngressTargetKind::InventoryRegion;
+                const std::array target{TailIngressTarget{
+                    *control.target_address, kind}};
                 add_tail_ingress(
                     control.address, target, false, true, false, true);
             }
             const auto candidates = indirect_jump_candidates.find(control.address);
-            if (candidates == indirect_jump_candidates.end()) continue;
-            std::vector<std::uint32_t> tail_targets;
+            if (candidates == indirect_jump_candidates.end() ||
+                jump_table_jump_sites.contains(control.address))
+                continue;
+            std::vector<TailIngressTarget> tail_targets;
             tail_targets.reserve(candidates->second.targets.size());
             for (const auto target : candidates->second.targets) {
                 if (std::binary_search(function.tail_jump_targets.begin(),
                                        function.tail_jump_targets.end(),
-                                       target))
-                    tail_targets.push_back(target);
+                                       target)) {
+                    const auto kind =
+                        !candidates->second.guarded &&
+                                candidates->second.complete &&
+                                ordinary_function_entries.contains(target)
+                            ? TailIngressTargetKind::Function
+                            : TailIngressTargetKind::InventoryRegion;
+                    tail_targets.push_back({target, kind});
+                }
             }
             add_tail_ingress(control.address,
                              tail_targets,
@@ -15680,16 +20900,21 @@ detail::analyze_function_values_with_guarded_entry_cache(
     inventory_region_tail_ingresses_by_entry.reserve(inventory_regions.size());
     const auto add_region_tail_ingress =
         [&inventory_region_by_address,
-         &inventory_region_tail_ingresses_by_entry](
+         &inventory_region_tail_ingresses_by_entry,
+         &inventory_walk_diagnostics](
             const InventoryRegionTailIngress& source) {
             if (!inventory_region_by_address.contains(source.source_region) ||
-                !inventory_region_by_address.contains(source.target))
+                !inventory_region_by_address.contains(source.target)) {
+                inventory_walk_diagnostics.inventory_tail_target_unresolved =
+                    true;
                 return;
+            }
             auto& regional = inventory_region_tail_ingresses_by_entry[source.source_region];
             const auto [stored, inserted] =
                 regional.try_emplace(source.transfer_site);
             auto& ingress = stored->second;
-            ingress.targets.push_back(source.target);
+            ingress.targets.push_back(
+                {source.target, TailIngressTargetKind::InventoryRegion});
             ingress.guarded = ingress.guarded || source.guarded;
             ingress.complete =
                 inserted ? source.complete : ingress.complete && source.complete;
@@ -15700,54 +20925,114 @@ detail::analyze_function_values_with_guarded_entry_cache(
             ingress.observes_abi_arguments =
                 ingress.observes_abi_arguments || source.observes_abi_arguments;
         };
+    inventory_topology_entries_visited +=
+        inventory_region_tail_ingresses.size();
     for (const auto& ingress : inventory_region_tail_ingresses) {
         add_region_tail_ingress(ingress);
     }
+    inventory_topology_entries_visited += tail_ingresses.size();
     for (auto& [transfer_site, ingress] : tail_ingresses) {
         static_cast<void>(transfer_site);
         normalize(ingress.targets);
     }
+    inventory_topology_entries_visited +=
+        inventory_region_tail_ingresses_by_entry.size();
     for (auto& [region_entry, regional] : inventory_region_tail_ingresses_by_entry) {
         static_cast<void>(region_entry);
+        inventory_topology_entries_visited += regional.size();
         for (auto& [transfer_site, ingress] : regional) {
             static_cast<void>(transfer_site);
             normalize(ingress.targets);
         }
     }
-    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>
-        no_tail_ingresses;
+    const TailIngressMap no_tail_ingresses;
     std::map<std::uint32_t, FunctionValueSummary> summaries;
     std::map<std::uint32_t, CandidateInput> candidate_inputs;
+    CallsiteContributionRelation summary_callsite_contributions;
     std::unordered_map<std::uint32_t, const FunctionInfo*> function_by_address;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> callers_by_callee;
     function_by_address.reserve(functions.size());
     callers_by_callee.reserve(functions.size());
+    summary_candidate_entries_visited += functions.size();
     for (const auto& function : functions)
         summaries.emplace(function.entry_address, FunctionValueSummary{function.entry_address, {}});
+    summary_candidate_entries_visited += functions.size();
     for (const auto& function : functions)
         candidate_inputs.emplace(function.entry_address, CandidateInput{});
+    summary_candidate_entries_visited += functions.size();
     for (const auto& function : functions) {
+        summary_candidate_entries_visited +=
+            function.direct_callees.size() + function.block_addresses.size();
         function_by_address.emplace(function.entry_address, &function);
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
+        for (const auto block_address : function.block_addresses) {
+            const auto block = block_index.find(block_address);
+            if (block == block_index.end()) continue;
+            summary_candidate_entries_visited += block->second->lines.size();
+            for (const auto& line : block->second->lines) {
+                const bool call =
+                    line.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::Call ||
+                    line.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::IndirectCall;
+                if (!call) continue;
+                if (line.target_address.has_value()) {
+                    if (candidate_inputs.contains(
+                            *line.target_address)) {
+                        summary_callsite_contributions[
+                            *line.target_address]
+                            .insert({function.entry_address,
+                                     line.address,
+                                     CallsiteContributionKind::
+                                         DirectCall});
+                    }
+                    continue;
+                }
+                const auto candidates =
+                    summary_indirect_callees.find(line.address);
+                if (candidates == summary_indirect_callees.end())
+                    continue;
+                summary_candidate_entries_visited +=
+                    candidates->second.targets.size();
+                for (const auto target :
+                     candidates->second.targets) {
+                    if (!candidate_inputs.contains(target)) continue;
+                    summary_callsite_contributions[target].insert(
+                        {function.entry_address,
+                         line.address,
+                         CallsiteContributionKind::ResolvedCall});
+                }
+            }
+        }
     }
+    summary_candidate_entries_visited += callers_by_callee.size();
     for (auto& [callee, callers] : callers_by_callee) {
         static_cast<void>(callee);
         normalize(callers);
     }
+    summary_candidate_entries_visited += candidate_inputs.size();
+    for (auto& [address, input] : candidate_inputs) {
+        const auto relation =
+            summary_callsite_contributions.find(address);
+        if (relation != summary_callsite_contributions.end())
+            input.expected_contributions = relation->second;
+        input.unknown_ingress =
+            input.expected_contributions.empty() ||
+            std::find(image.entry_points().begin(),
+                      image.entry_points().end(),
+                      address) != image.entry_points().end();
+        rebuild_candidate_input_observation_projection(input);
+    }
 
-    // The final inventory graph intentionally keeps only tail regions which
-    // can contribute a persistent callback store. ABI live-in contracts need
-    // a different graph: a pure epilogue or forwarding tail can consume stack
-    // and register inputs even when it has no local inventory store. Reusing
-    // the store-filtered graph turns those known tails into false Top.
+    // ABI contracts are exact only for ordinary functions. Inventory regions
+    // can share the same guest entry address with a different block closure;
+    // placing both in an address-keyed map silently selects one contract. A
+    // typed Region tail is therefore treated as Stack-Top/register-full below
+    // and receives the complete forwarded state. Function tails retain the
+    // exact address-keyed contract without conflating the two node kinds.
     std::unordered_map<std::uint32_t, const FunctionInfo*>
         abi_contract_function_by_address = function_by_address;
-    abi_contract_function_by_address.reserve(
-        function_by_address.size() + inventory_regions.size());
-    for (const auto& region : inventory_regions)
-        abi_contract_function_by_address.try_emplace(
-            region.function.entry_address, &region.function);
 
     TailIngressMap abi_contract_tail_ingresses;
     abi_contract_tail_ingresses.reserve(
@@ -15755,15 +21040,23 @@ detail::analyze_function_values_with_guarded_entry_cache(
         inventory_region_tail_ingresses.size());
     const auto add_abi_contract_tail_ingress =
         [&](const std::uint32_t transfer_site,
-            const std::span<const std::uint32_t> targets,
+            const std::span<const TailIngressTarget> targets,
             const bool guarded,
             const bool complete) {
             if (targets.empty()) return;
-            std::vector<std::uint32_t> accepted;
+            std::vector<TailIngressTarget> accepted;
             accepted.reserve(targets.size());
             for (const auto target : targets) {
-                if (abi_contract_function_by_address.contains(target))
+                const auto available =
+                    target.kind == TailIngressTargetKind::Function
+                        ? ordinary_function_entries.contains(target.address)
+                        : inventory_region_by_address.contains(target.address);
+                if (available) {
                     accepted.push_back(target);
+                } else {
+                    inventory_walk_diagnostics
+                        .inventory_tail_target_unresolved = true;
+                }
             }
             const auto all_targets_accepted =
                 accepted.size() == targets.size();
@@ -15785,33 +21078,32 @@ detail::analyze_function_values_with_guarded_entry_cache(
                           all_targets_accepted && complete;
             ingress.guarded =
                 merged_contract_known && !ingress.complete;
-        };
+    };
+    abi_contract_entries_visited += candidate_tail_carriers.size();
     for (const auto& carrier : candidate_tail_carriers) {
-        const std::array target{carrier.target};
+        const std::array target{TailIngressTarget{
+            carrier.target, TailIngressTargetKind::InventoryRegion}};
         add_abi_contract_tail_ingress(
             carrier.transfer_site, target, true, false);
     }
+    abi_contract_entries_visited += indirect_jump_candidates.size();
     for (const auto& [transfer_site, candidates] :
          indirect_jump_candidates) {
         if (!candidates.guarded || candidates.complete ||
             candidates.targets.size() != 1u ||
             jump_table_jump_sites.contains(transfer_site))
             continue;
-        add_abi_contract_tail_ingress(
-            transfer_site,
-            candidates.targets,
-            candidates.guarded,
-            candidates.complete);
+        const std::array target{TailIngressTarget{
+            candidates.targets.front(),
+            TailIngressTargetKind::InventoryRegion}};
+        add_abi_contract_tail_ingress(transfer_site,
+                                      target,
+                                      candidates.guarded,
+                                      candidates.complete);
     }
-    for (const auto& ingress : inventory_region_tail_ingresses) {
-        const std::array target{ingress.target};
-        add_abi_contract_tail_ingress(
-            ingress.transfer_site,
-            target,
-            ingress.guarded,
-            ingress.complete);
-    }
+    abi_contract_entries_visited += functions.size();
     for (const auto& function : functions) {
+        abi_contract_entries_visited += function.block_addresses.size();
         for (const auto block_address : function.block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end() ||
@@ -15828,20 +21120,35 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     function.tail_jump_targets.begin(),
                     function.tail_jump_targets.end(),
                     *control.target_address)) {
-                const std::array target{*control.target_address};
+                const auto kind = ordinary_function_entries.contains(
+                                      *control.target_address)
+                                      ? TailIngressTargetKind::Function
+                                      : TailIngressTargetKind::InventoryRegion;
+                const std::array target{TailIngressTarget{
+                    *control.target_address, kind}};
                 add_abi_contract_tail_ingress(
                     control.address, target, false, true);
             }
             const auto candidates =
                 indirect_jump_candidates.find(control.address);
-            if (candidates == indirect_jump_candidates.end()) continue;
-            std::vector<std::uint32_t> tail_targets;
+            if (candidates == indirect_jump_candidates.end() ||
+                jump_table_jump_sites.contains(control.address))
+                continue;
+            std::vector<TailIngressTarget> tail_targets;
+            abi_contract_entries_visited += candidates->second.targets.size();
             for (const auto target : candidates->second.targets) {
                 if (std::binary_search(
                         function.tail_jump_targets.begin(),
                         function.tail_jump_targets.end(),
-                        target))
-                    tail_targets.push_back(target);
+                        target)) {
+                    const auto kind =
+                        !candidates->second.guarded &&
+                                candidates->second.complete &&
+                                ordinary_function_entries.contains(target)
+                            ? TailIngressTargetKind::Function
+                            : TailIngressTargetKind::InventoryRegion;
+                    tail_targets.push_back({target, kind});
+                }
             }
             add_abi_contract_tail_ingress(
                 control.address,
@@ -15850,6 +21157,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 candidates->second.complete);
         }
     }
+    abi_contract_entries_visited += abi_contract_tail_ingresses.size();
     for (auto& [transfer_site, ingress] :
          abi_contract_tail_ingresses) {
         static_cast<void>(transfer_site);
@@ -15858,10 +21166,26 @@ detail::analyze_function_values_with_guarded_entry_cache(
 
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
         abi_contract_callers_by_callee;
+    CallsiteContributionRelation abi_callsite_contributions;
+    const auto call_pair_identity =
+        [](const std::uint32_t site, const std::uint32_t target) {
+            return (static_cast<std::uint64_t>(site) << 32u) |
+                   target;
+        };
+    std::unordered_set<std::uint64_t> candidate_call_pairs_for_relation;
+    candidate_call_pairs_for_relation.reserve(
+        candidate_call_carriers.size());
+    abi_contract_entries_visited += candidate_call_carriers.size();
+    for (const auto& carrier : candidate_call_carriers)
+        candidate_call_pairs_for_relation.insert(
+            call_pair_identity(carrier.call_site, carrier.target));
     abi_contract_callers_by_callee.reserve(
         abi_contract_function_by_address.size());
+    abi_contract_entries_visited +=
+        abi_contract_function_by_address.size();
     for (const auto& [caller, function] :
          abi_contract_function_by_address) {
+        abi_contract_entries_visited += function->block_addresses.size();
         for (const auto block_address : function->block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end() ||
@@ -15877,24 +21201,56 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 abi_contract_callers_by_callee[
                     *control.target_address]
                     .push_back(caller);
+                abi_callsite_contributions[*control.target_address]
+                    .insert({caller,
+                             control.address,
+                             CallsiteContributionKind::DirectCall});
             } else if (call) {
                 const auto candidates =
                     inventory_indirect_callees.find(control.address);
                 if (candidates != inventory_indirect_callees.end()) {
+                    abi_contract_entries_visited +=
+                        candidates->second.targets.size();
                     for (const auto target :
-                         candidates->second.targets)
+                         candidates->second.targets) {
                         abi_contract_callers_by_callee[target]
                             .push_back(caller);
+                        const auto candidate =
+                            candidate_call_pairs_for_relation.contains(
+                                call_pair_identity(
+                                    control.address, target));
+                        abi_callsite_contributions[target].insert(
+                            {caller,
+                             control.address,
+                             candidate
+                                 ? CallsiteContributionKind::CandidateCall
+                                 : CallsiteContributionKind::ResolvedCall});
+                    }
                 }
             }
             const auto tail =
                 abi_contract_tail_ingresses.find(control.address);
             if (tail == abi_contract_tail_ingresses.end()) continue;
-            for (const auto target : tail->second.targets)
-                abi_contract_callers_by_callee[target]
+            abi_contract_entries_visited += tail->second.targets.size();
+            for (const auto target : tail->second.targets) {
+                // The address-keyed ABI graph contains ordinary functions
+                // only. A same-address InventoryRegion has a deliberately
+                // separate, conservative contract and must not invalidate or
+                // wake the ordinary function node through this graph.
+                if (target.kind != TailIngressTargetKind::Function) continue;
+                abi_contract_callers_by_callee[target.address]
                     .push_back(caller);
+                abi_callsite_contributions[target.address].insert(
+                    {caller,
+                     control.address,
+                     target.kind == TailIngressTargetKind::Function
+                         ? CallsiteContributionKind::FunctionTail
+                         : CallsiteContributionKind::InventoryRegionTail});
+            }
         }
     }
+    abi_contract_entries_visited +=
+        abi_contract_callers_by_callee.size();
     for (auto& [callee, callers] :
          abi_contract_callers_by_callee) {
         static_cast<void>(callee);
@@ -15913,12 +21269,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
     // statically complete.
     EvaluationKeyEncoder abi_identity_key;
     abi_identity_key.append(function_analysis_epoch_schema_version);
+    abi_contract_entries_visited += candidate_call_carriers.size();
     abi_identity_key.append_range(
         candidate_call_carriers,
         [&](const auto& carrier) {
             abi_identity_key.append(carrier.call_site);
             abi_identity_key.append(carrier.target);
         });
+    abi_contract_entries_visited += candidate_tail_carriers.size();
     abi_identity_key.append_range(
         candidate_tail_carriers,
         [&](const auto& carrier) {
@@ -15927,6 +21285,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
         });
     const auto encode_candidate_map =
         [&](const auto& candidates_by_site) {
+            // One pass collects a deterministic site order; append_range
+            // then visits the same physical entries to encode their values.
+            abi_contract_entries_visited += candidates_by_site.size() * 2u;
             std::vector<std::uint32_t> sites;
             sites.reserve(candidates_by_site.size());
             for (const auto& [site, candidates] : candidates_by_site) {
@@ -15942,7 +21303,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                            candidates_by_site.at(site));
                 });
         };
-    encode_candidate_map(inventory_indirect_callees);
+    encode_candidate_map(inventory_indirect_callee_storage);
     encode_candidate_map(indirect_jump_candidates);
     encode_candidate_map(abi_contract_tail_ingresses);
     const auto abi_identity =
@@ -15951,17 +21312,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
         abi_input_fingerprints;
     abi_input_fingerprints.reserve(
         abi_contract_function_by_address.size());
+    abi_contract_entries_visited +=
+        abi_contract_function_by_address.size();
     for (const auto& [address, function] :
          abi_contract_function_by_address) {
+        abi_contract_entries_visited +=
+            function->block_addresses.size() * 2u;
         EvaluationKeyEncoder key;
         key.append(function_analysis_epoch_schema_version);
-        const auto semantic_fingerprint =
-            program_graph->function_fingerprints.find(address);
-        key.append(semantic_fingerprint !=
-                   program_graph->function_fingerprints.end());
-        if (semantic_fingerprint !=
-            program_graph->function_fingerprints.end()) {
-            key.append(std::string_view{semantic_fingerprint->second});
+        const auto* const semantic_fingerprint =
+            program_graph->find_function_fingerprint(address);
+        key.append(semantic_fingerprint != nullptr);
+        if (semantic_fingerprint != nullptr) {
+            key.append(std::string_view{*semantic_fingerprint});
         } else {
             encode(key, *function);
             for (const auto block_address : function->block_addresses) {
@@ -15996,14 +21359,16 @@ detail::analyze_function_values_with_guarded_entry_cache(
     if (previous_epoch == nullptr ||
         previous_epoch->schema_version !=
             function_analysis_epoch_schema_version) {
+        abi_contract_entries_visited += abi_input_fingerprints.size();
         for (const auto& [address, fingerprint] :
              abi_input_fingerprints) {
             static_cast<void>(fingerprint);
             abi_contract_dirty.insert(address);
-            if (program_graph->scc_by_function.contains(address))
+            if (program_graph->find_scc(address).has_value())
                 abi_dirty_seeds.push_back(address);
         }
     } else {
+        abi_contract_entries_visited += abi_input_fingerprints.size();
         for (const auto& [address, fingerprint] :
              abi_input_fingerprints) {
             const auto previous =
@@ -16011,7 +21376,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             const auto complete_previous_contract =
                 previous_epoch->abi_stack_argument_reads.contains(address) &&
                 previous_epoch->forwarded_register_reads.contains(address) &&
-                (!program_graph->function_by_address.contains(address) ||
+                (!graph_function_index.contains(address) ||
                  (previous_epoch->abi_return_sources.contains(address) &&
                   previous_epoch->abi_persistent_store_sources.contains(
                       address) &&
@@ -16023,7 +21388,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 complete_previous_contract)
                 continue;
             abi_contract_dirty.insert(address);
-            if (program_graph->scc_by_function.contains(address)) {
+            if (program_graph->find_scc(address).has_value()) {
                 abi_dirty_seeds.push_back(address);
                 continue;
             }
@@ -16034,6 +21399,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                        callers->second.begin(),
                                        callers->second.end());
         }
+        abi_contract_entries_visited +=
+            previous_epoch->abi_input_fingerprints.size();
         for (const auto& [address, fingerprint] :
              previous_epoch->abi_input_fingerprints) {
             static_cast<void>(fingerprint);
@@ -16045,13 +21412,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 abi_dirty_seeds.insert(abi_dirty_seeds.end(),
                                        callers->second.begin(),
                                        callers->second.end());
+            abi_contract_entries_visited +=
+                previous_epoch->abi_callers_by_callee.size();
             for (const auto& [target, old_callers] :
                  previous_epoch->abi_callers_by_callee) {
                 if (!std::binary_search(old_callers.begin(),
                                         old_callers.end(),
                                         address))
                     continue;
-                if (program_graph->scc_by_function.contains(target))
+                if (program_graph->find_scc(target).has_value())
                     abi_dirty_seeds.push_back(target);
                 else if (abi_input_fingerprints.contains(target))
                     abi_contract_dirty.insert(target);
@@ -16063,11 +21432,15 @@ detail::analyze_function_values_with_guarded_entry_cache(
         relation_targets.reserve(
             abi_contract_callers_by_callee.size() +
             previous_epoch->abi_callers_by_callee.size());
+        abi_contract_entries_visited +=
+            abi_contract_callers_by_callee.size();
         for (const auto& [target, callers] :
              abi_contract_callers_by_callee) {
             static_cast<void>(callers);
             relation_targets.push_back(target);
         }
+        abi_contract_entries_visited +=
+            previous_epoch->abi_callers_by_callee.size();
         for (const auto& [target, callers] :
              previous_epoch->abi_callers_by_callee) {
             static_cast<void>(callers);
@@ -16075,6 +21448,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         }
         normalize(relation_targets);
         const std::vector<std::uint32_t> no_callers;
+        abi_contract_entries_visited += relation_targets.size();
         for (const auto target : relation_targets) {
             const auto current =
                 abi_contract_callers_by_callee.find(target);
@@ -16094,28 +21468,90 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 previous_callers.begin(), previous_callers.end(),
                 std::back_inserter(changed_callers));
             if (changed_callers.empty()) continue;
-            if (program_graph->scc_by_function.contains(target))
+            if (program_graph->find_scc(target).has_value())
                 abi_dirty_seeds.push_back(target);
             else if (abi_input_fingerprints.contains(target))
                 abi_contract_dirty.insert(target);
+            abi_contract_entries_visited += changed_callers.size();
             for (const auto caller : changed_callers) {
-                if (program_graph->scc_by_function.contains(caller))
+                if (program_graph->find_scc(caller).has_value())
                     abi_dirty_seeds.push_back(caller);
                 else if (abi_input_fingerprints.contains(caller))
                     abi_contract_dirty.insert(caller);
             }
         }
     }
+    if (previous_epoch != nullptr) {
+        std::vector<std::uint32_t> relation_targets;
+        relation_targets.reserve(
+            abi_callsite_contributions.size() +
+            previous_epoch->abi_callsite_contributions.size());
+        abi_contract_entries_visited +=
+            abi_callsite_contributions.size();
+        for (const auto& [target, contributions] :
+             abi_callsite_contributions) {
+            static_cast<void>(contributions);
+            relation_targets.push_back(target);
+        }
+        abi_contract_entries_visited +=
+            previous_epoch->abi_callsite_contributions.size();
+        for (const auto& [target, contributions] :
+             previous_epoch->abi_callsite_contributions) {
+            static_cast<void>(contributions);
+            relation_targets.push_back(target);
+        }
+        normalize(relation_targets);
+        const std::set<CallsiteContributionKey> no_contributions;
+        abi_contract_entries_visited += relation_targets.size();
+        for (const auto target : relation_targets) {
+            const auto current =
+                abi_callsite_contributions.find(target);
+            const auto previous =
+                previous_epoch->abi_callsite_contributions.find(target);
+            const auto& current_contributions =
+                current == abi_callsite_contributions.end()
+                    ? no_contributions
+                    : current->second;
+            const auto& previous_contributions =
+                previous ==
+                        previous_epoch->abi_callsite_contributions.end()
+                    ? no_contributions
+                    : previous->second;
+            std::vector<CallsiteContributionKey> changed;
+            std::set_symmetric_difference(
+                current_contributions.begin(),
+                current_contributions.end(),
+                previous_contributions.begin(),
+                previous_contributions.end(),
+                std::back_inserter(changed));
+            if (changed.empty()) continue;
+            if (program_graph->find_scc(target).has_value())
+                abi_dirty_seeds.push_back(target);
+            else if (abi_input_fingerprints.contains(target))
+                abi_contract_dirty.insert(target);
+            abi_contract_entries_visited += changed.size();
+            for (const auto& contribution : changed) {
+                if (program_graph->find_scc(
+                        contribution.caller).has_value())
+                    abi_dirty_seeds.push_back(contribution.caller);
+                else if (abi_input_fingerprints.contains(
+                             contribution.caller))
+                    abi_contract_dirty.insert(contribution.caller);
+            }
+        }
+    }
     std::deque<std::uint32_t> pending_abi_dirty_callers{
         abi_contract_dirty.begin(), abi_contract_dirty.end()};
     while (!pending_abi_dirty_callers.empty()) {
+        ++abi_contract_entries_visited;
         const auto changed = pending_abi_dirty_callers.front();
         pending_abi_dirty_callers.pop_front();
         const auto callers =
             abi_contract_callers_by_callee.find(changed);
         if (callers == abi_contract_callers_by_callee.end()) continue;
+        abi_contract_entries_visited += callers->second.size();
         for (const auto caller : callers->second) {
-            if (program_graph->scc_by_function.contains(caller)) {
+            if (program_graph->find_scc(caller).has_value()) {
                 abi_dirty_seeds.push_back(caller);
                 continue;
             }
@@ -16134,6 +21570,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
             function_analysis_epoch_schema_version &&
         previous_epoch->abi_identity == abi_identity &&
         abi_contract_dirty.empty();
+    run_work.abi_contract_entries_visited.store(
+        abi_contract_entries_visited, std::memory_order_relaxed);
+    run_work.abi_contract_entries_rebuilt.store(
+        reuse_abi_contract_epoch ? 0u : abi_contract_dirty.size(),
+        std::memory_order_relaxed);
     AbiReturnSourceMap abi_return_sources;
     std::unordered_map<std::uint32_t, std::uint8_t>
         abi_persistent_store_sources;
@@ -16144,7 +21585,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
     abi_persistent_store_sources.reserve(functions.size());
     abi_indirect_dispatch_sources.reserve(functions.size());
     abi_return_callers_by_callee.reserve(functions.size());
+    abi_contract_entries_visited += functions.size();
     for (const auto& function : functions) {
+        abi_contract_entries_visited += function.block_addresses.size();
         const auto clean = previous_epoch != nullptr &&
                            !abi_contract_dirty.contains(
                                function.entry_address);
@@ -16192,6 +21635,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 function.entry_address);
         }
     }
+    abi_contract_entries_visited += abi_return_callers_by_callee.size();
     for (auto& [callee, callers] : abi_return_callers_by_callee) {
         static_cast<void>(callee);
         normalize(callers);
@@ -16200,6 +21644,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::unordered_set<std::uint32_t> queued_abi_signatures;
     queued_abi_signatures.reserve(functions.size());
     if (!reuse_abi_contract_epoch) {
+        abi_contract_entries_visited += functions.size();
         for (const auto& function : functions) {
             if (!abi_contract_dirty.contains(function.entry_address))
                 continue;
@@ -16216,6 +21661,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         pending_abi_signatures.size(),
         0u);
     while (!pending_abi_signatures.empty()) {
+        ++abi_contract_entries_visited;
         if (abi_signature_iterations >= maximum_fixpoint_iterations) {
             result.budget_exhausted = true;
             break;
@@ -16248,6 +21694,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         returned_sources = narrowed_returned_sources;
         const auto callers = abi_return_callers_by_callee.find(address);
         if (callers == abi_return_callers_by_callee.end()) continue;
+        abi_contract_entries_visited += callers->second.size();
         for (const auto caller : callers->second) {
             if (queued_abi_signatures.insert(caller).second)
                 pending_abi_signatures.push_back(caller);
@@ -16269,6 +21716,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
     AbiStackArgumentReadMap abi_stack_argument_reads;
     abi_stack_argument_reads.reserve(
         abi_contract_function_by_address.size());
+    abi_contract_entries_visited +=
+        abi_contract_function_by_address.size();
     for (const auto& [address, function] :
          abi_contract_function_by_address) {
         static_cast<void>(function);
@@ -16295,6 +21744,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         std::unordered_set<std::uint32_t> queued_abi_stack_reads;
         queued_abi_stack_reads.reserve(
             abi_contract_function_by_address.size());
+        abi_contract_entries_visited +=
+            abi_contract_function_by_address.size();
         for (const auto& [address, function] :
              abi_contract_function_by_address) {
             static_cast<void>(function);
@@ -16311,6 +21762,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             pending_abi_stack_reads.size(),
             0u);
         while (!pending_abi_stack_reads.empty()) {
+            ++abi_contract_entries_visited;
             if (abi_stack_read_iterations >= maximum_fixpoint_iterations) {
                 result.budget_exhausted = true;
                 break;
@@ -16372,6 +21824,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             if (callers ==
                 abi_contract_callers_by_callee.end())
                 continue;
+            abi_contract_entries_visited += callers->second.size();
             for (const auto caller : callers->second) {
                 if (queued_abi_stack_reads.insert(caller).second)
                     pending_abi_stack_reads.push_back(caller);
@@ -16394,6 +21847,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
     ForwardedRegisterReadMap forwarded_register_reads;
     forwarded_register_reads.reserve(
         abi_contract_function_by_address.size());
+    abi_contract_entries_visited +=
+        abi_contract_function_by_address.size();
     for (const auto& [address, function] :
          abi_contract_function_by_address) {
         static_cast<void>(function);
@@ -16414,6 +21869,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
             queued_forwarded_register_reads;
         queued_forwarded_register_reads.reserve(
             abi_contract_function_by_address.size());
+        abi_contract_entries_visited +=
+            abi_contract_function_by_address.size();
         for (const auto& [address, function] :
              abi_contract_function_by_address) {
             static_cast<void>(function);
@@ -16432,6 +21889,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             pending_forwarded_register_reads.size(),
             0u);
         while (!pending_forwarded_register_reads.empty()) {
+            ++abi_contract_entries_visited;
             if (forwarded_register_read_iterations >=
                 maximum_fixpoint_iterations) {
                 result.budget_exhausted = true;
@@ -16477,6 +21935,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             if (callers ==
                 abi_contract_callers_by_callee.end())
                 continue;
+            abi_contract_entries_visited += callers->second.size();
             for (const auto caller : callers->second) {
                 if (queued_forwarded_register_reads
                         .insert(caller)
@@ -16500,6 +21959,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
     // its own exact contract.
     AbiPersistentStoreSiteMap direct_local_persistent_store_sites;
     direct_local_persistent_store_sites.reserve(functions.size());
+    abi_contract_entries_visited += functions.size();
     for (const auto& function : functions) {
         if (previous_epoch != nullptr &&
             !abi_contract_dirty.contains(function.entry_address)) {
@@ -16527,14 +21987,19 @@ detail::analyze_function_values_with_guarded_entry_cache(
     // the semantic call graph. A target narrowing therefore requeues every
     // direct or guarded inventory caller without inventing a fixed CFG edge.
     auto abi_store_callers_by_callee = callers_by_callee;
-    for (const auto& [call_site, candidates] : inventory_indirect_callees) {
+    abi_contract_entries_visited += callers_by_callee.size();
+    abi_contract_entries_visited += inventory_indirect_callee_storage.size();
+    for (const auto& [call_site, candidates] :
+         inventory_indirect_callee_storage) {
         const auto owners = function_owners_by_control.find(call_site);
         if (owners == function_owners_by_control.end()) continue;
+        abi_contract_entries_visited += candidates.targets.size();
         for (const auto target : candidates.targets) {
             auto& callers = abi_store_callers_by_callee[target];
             callers.insert(callers.end(), owners->second.begin(), owners->second.end());
         }
     }
+    abi_contract_entries_visited += abi_store_callers_by_callee.size();
     for (auto& [callee, callers] : abi_store_callers_by_callee) {
         static_cast<void>(callee);
         normalize(callers);
@@ -16549,6 +22014,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         std::deque<std::uint32_t> pending_abi_store_signatures;
         std::unordered_set<std::uint32_t> queued_abi_store_signatures;
         queued_abi_store_signatures.reserve(functions.size());
+        abi_contract_entries_visited += functions.size();
         for (const auto& function : functions) {
             if (!abi_contract_dirty.contains(function.entry_address))
                 continue;
@@ -16564,6 +22030,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             pending_abi_store_signatures.size(),
             0u);
         while (!pending_abi_store_signatures.empty()) {
+            ++abi_contract_entries_visited;
             if (abi_store_signature_iterations >= maximum_fixpoint_iterations) {
                 result.budget_exhausted = true;
                 break;
@@ -16609,6 +22076,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             dispatch_sources = expanded_dispatch_sources;
             const auto callers = abi_store_callers_by_callee.find(address);
             if (callers == abi_store_callers_by_callee.end()) continue;
+            abi_contract_entries_visited += callers->second.size();
             for (const auto caller : callers->second) {
                 if (queued_abi_store_signatures.insert(caller).second)
                     pending_abi_store_signatures.push_back(caller);
@@ -16624,6 +22092,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
             abi_store_signature_iterations);
     }
     if (abi_contract_observer) {
+        abi_contract_entries_visited += functions.size();
         for (const auto& function : functions) {
             const auto reads =
                 abi_stack_argument_reads.find(
@@ -16638,22 +22107,81 @@ detail::analyze_function_values_with_guarded_entry_cache(
                      function.entry_address)});
         }
     }
-
+    run_work.abi_contract_entries_visited.store(
+        abi_contract_entries_visited, std::memory_order_relaxed);
     std::unordered_set<std::uint32_t> summary_dirty_functions;
     summary_dirty_functions.reserve(functions.size());
     if (previous_epoch == nullptr ||
         previous_epoch->schema_version !=
             function_analysis_epoch_schema_version) {
+        summary_candidate_entries_visited += functions.size();
         for (const auto& function : functions)
             summary_dirty_functions.insert(function.entry_address);
     } else {
+        summary_candidate_entries_visited += abi_contract_dirty.size();
         for (const auto address : abi_contract_dirty) {
-            if (program_graph->function_by_address.contains(address))
+            if (graph_function_index.contains(address))
                 summary_dirty_functions.insert(address);
+        }
+        std::vector<std::uint32_t> relation_targets;
+        relation_targets.reserve(
+            summary_callsite_contributions.size() +
+            previous_epoch->summary_callsite_contributions.size());
+        summary_candidate_entries_visited +=
+            summary_callsite_contributions.size();
+        for (const auto& [target, contributions] :
+             summary_callsite_contributions) {
+            static_cast<void>(contributions);
+            relation_targets.push_back(target);
+        }
+        summary_candidate_entries_visited +=
+            previous_epoch->summary_callsite_contributions.size();
+        for (const auto& [target, contributions] :
+             previous_epoch->summary_callsite_contributions) {
+            static_cast<void>(contributions);
+            relation_targets.push_back(target);
+        }
+        normalize(relation_targets);
+        const std::set<CallsiteContributionKey> no_contributions;
+        summary_candidate_entries_visited += relation_targets.size();
+        for (const auto target : relation_targets) {
+            const auto current =
+                summary_callsite_contributions.find(target);
+            const auto previous = previous_epoch
+                                      ->summary_callsite_contributions
+                                      .find(target);
+            const auto& current_contributions =
+                current == summary_callsite_contributions.end()
+                    ? no_contributions
+                    : current->second;
+            const auto& previous_contributions =
+                previous == previous_epoch
+                                ->summary_callsite_contributions.end()
+                    ? no_contributions
+                    : previous->second;
+            if (current_contributions == previous_contributions)
+                continue;
+            if (graph_function_index.contains(target))
+                summary_dirty_functions.insert(target);
+            std::vector<CallsiteContributionKey> changed;
+            std::set_symmetric_difference(
+                current_contributions.begin(),
+                current_contributions.end(),
+                previous_contributions.begin(),
+                previous_contributions.end(),
+                std::back_inserter(changed));
+            summary_candidate_entries_visited += changed.size();
+            for (const auto& contribution : changed) {
+                if (graph_function_index.contains(
+                        contribution.caller))
+                    summary_dirty_functions.insert(
+                        contribution.caller);
+            }
         }
     }
     std::size_t staged_summary_state_reuses = 0u;
     if (previous_epoch != nullptr) {
+        summary_candidate_entries_visited += functions.size();
         for (const auto& function : functions) {
             const auto address = function.entry_address;
             if (summary_dirty_functions.contains(address)) continue;
@@ -16667,13 +22195,33 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 continue;
             }
             summaries.at(address) = previous_summary->second;
-            candidate_inputs.at(address) = previous_input->second;
+            auto retained_input = previous_input->second;
+            const auto current_contract =
+                summary_callsite_contributions.find(address);
+            std::set<CallsiteContributionKey> expected;
+            if (current_contract !=
+                summary_callsite_contributions.end())
+                expected = current_contract->second;
+            const auto unknown_ingress =
+                expected.empty() ||
+                std::find(image.entry_points().begin(),
+                          image.entry_points().end(),
+                          address) != image.entry_points().end();
+            static_cast<void>(reconcile_candidate_input_contract(
+                retained_input,
+                std::move(expected),
+                unknown_ingress,
+                &inventory_walk_diagnostics));
+            candidate_inputs.at(address) =
+                std::move(retained_input);
             ++staged_summary_state_reuses;
         }
     }
     std::size_t staged_caller_scc_invalidations = 0u;
     if (previous_epoch != nullptr) {
+        summary_candidate_entries_visited += components.size();
         for (const auto& component : components) {
+            summary_candidate_entries_visited += component.size();
             if (std::any_of(
                     component.begin(),
                     component.end(),
@@ -16683,6 +22231,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 ++staged_caller_scc_invalidations;
         }
     }
+    run_work.summary_candidate_entries_visited.store(
+        summary_candidate_entries_visited, std::memory_order_relaxed);
+    run_work.summary_candidate_entries_rebuilt.store(
+        summary_dirty_functions.size(), std::memory_order_relaxed);
 
     // Tail ingress itself is a control-flow contract, not proof that every
     // caller needs an isolated callback inventory harvest. Restrict that
@@ -16697,42 +22249,173 @@ detail::analyze_function_values_with_guarded_entry_cache(
     candidate_tail_carrier_sites.reserve(candidate_tail_carriers.size());
     for (const auto& carrier : candidate_tail_carriers)
         candidate_tail_carrier_sites.insert(carrier.transfer_site);
-    std::unordered_map<std::uint32_t, std::uint8_t>
+
+    // Inventory regions form their own typed tail graph. A region which only
+    // forwards an ABI value into a second region must still make every normal
+    // caller of its owning function reachable by the isolated inventory walk.
+    // Solve the exact source masks monotonically over that graph instead of
+    // looking only at each region's local store shape.
+    TailIngressSinkSourceMap tail_inventory_sink_source_contracts;
+    inventory_topology_entries_visited += functions.size();
+    for (const auto& function : functions) {
+        tail_inventory_sink_source_contracts.emplace(
+            TailIngressTarget{function.entry_address,
+                              TailIngressTargetKind::Function},
+            AbiInventorySinkSources{
+                abi_persistent_store_sources.at(function.entry_address),
+                abi_indirect_dispatch_sources.at(function.entry_address)});
+    }
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        inventory_region_tail_callers;
+    inventory_region_tail_callers.reserve(inventory_regions.size());
+    std::deque<std::uint32_t> pending_inventory_region_sink_sources;
+    std::unordered_set<std::uint32_t> queued_inventory_region_sink_sources;
+    queued_inventory_region_sink_sources.reserve(inventory_regions.size());
+    inventory_topology_entries_visited += inventory_regions.size();
+    for (const auto& region : inventory_regions) {
+        tail_inventory_sink_source_contracts.try_emplace(
+            TailIngressTarget{region.function.entry_address,
+                              TailIngressTargetKind::InventoryRegion});
+        pending_inventory_region_sink_sources.push_back(
+            region.function.entry_address);
+        queued_inventory_region_sink_sources.insert(
+            region.function.entry_address);
+    }
+    inventory_topology_entries_visited +=
+        inventory_region_tail_ingresses_by_entry.size();
+    for (const auto& [source_region, regional] :
+         inventory_region_tail_ingresses_by_entry) {
+        inventory_topology_entries_visited += regional.size();
+        for (const auto& [transfer_site, ingress] : regional) {
+            static_cast<void>(transfer_site);
+            inventory_topology_entries_visited += ingress.targets.size();
+            for (const auto target : ingress.targets) {
+                if (target.kind !=
+                    TailIngressTargetKind::InventoryRegion)
+                    continue;
+                inventory_region_tail_callers[target.address]
+                    .push_back(source_region);
+            }
+        }
+    }
+    inventory_topology_entries_visited += inventory_region_tail_callers.size();
+    for (auto& [target, callers] : inventory_region_tail_callers) {
+        static_cast<void>(target);
+        normalize(callers);
+    }
+    std::size_t inventory_region_sink_source_iterations = 0u;
+    report_subphase_progress(
+        "inventory-region-sink-sources-start",
+        "inventory-region-sink-sources",
+        pending_inventory_region_sink_sources.size(),
+        0u,
+        pending_inventory_region_sink_sources.size(),
+        0u);
+    while (!result.budget_exhausted &&
+           !pending_inventory_region_sink_sources.empty()) {
+        ++inventory_topology_entries_visited;
+        if (inventory_region_sink_source_iterations >=
+            maximum_fixpoint_iterations) {
+            result.budget_exhausted = true;
+            break;
+        }
+        ++inventory_region_sink_source_iterations;
+        const auto address = pending_inventory_region_sink_sources.front();
+        pending_inventory_region_sink_sources.pop_front();
+        if (inventory_region_sink_source_iterations <= 16u ||
+            (inventory_region_sink_source_iterations &
+             (inventory_region_sink_source_iterations - 1u)) == 0u ||
+            inventory_region_sink_source_iterations % 128u == 0u) {
+            report_subphase_progress(
+                "inventory-region-sink-sources-progress",
+                "inventory-region-sink-sources",
+                inventory_region_sink_source_iterations +
+                    pending_inventory_region_sink_sources.size(),
+                inventory_region_sink_source_iterations - 1u,
+                pending_inventory_region_sink_sources.size() + 1u,
+                inventory_region_sink_source_iterations);
+        }
+        queued_inventory_region_sink_sources.erase(address);
+        const auto region = inventory_region_by_address.find(address);
+        if (region == inventory_region_by_address.end()) {
+            inventory_walk_diagnostics.inventory_tail_target_unresolved = true;
+            continue;
+        }
+        const TailIngressMap* regional_tail_ingresses = nullptr;
+        if (const auto regional =
+                inventory_region_tail_ingresses_by_entry.find(address);
+            regional != inventory_region_tail_ingresses_by_entry.end())
+            regional_tail_ingresses = &regional->second;
+        const auto signature = analyze_abi_persistent_store_signature(
+            image,
+            *region->second,
+            block_index,
+            &abi_return_sources,
+            &abi_persistent_store_sources,
+            &abi_indirect_dispatch_sources,
+            &inventory_indirect_callees,
+            &abi_stack_argument_reads,
+            regional_tail_ingresses,
+            &tail_inventory_sink_source_contracts);
+        auto& previous = tail_inventory_sink_source_contracts.at(
+            TailIngressTarget{address,
+                              TailIngressTargetKind::InventoryRegion});
+        const auto expanded_persistent_sources =
+            static_cast<std::uint8_t>(
+                previous.persistent_store_sources |
+                signature.persistent_store_sources);
+        const auto expanded_dispatch_sources =
+            static_cast<std::uint8_t>(
+                previous.indirect_dispatch_sources |
+                signature.indirect_dispatch_sources);
+        if (expanded_persistent_sources ==
+                previous.persistent_store_sources &&
+            expanded_dispatch_sources ==
+                previous.indirect_dispatch_sources)
+            continue;
+        previous.persistent_store_sources = expanded_persistent_sources;
+        previous.indirect_dispatch_sources = expanded_dispatch_sources;
+        const auto callers = inventory_region_tail_callers.find(address);
+        if (callers == inventory_region_tail_callers.end()) continue;
+        inventory_topology_entries_visited += callers->second.size();
+        for (const auto caller : callers->second) {
+            if (queued_inventory_region_sink_sources.insert(caller).second)
+                pending_inventory_region_sink_sources.push_back(caller);
+        }
+    }
+    report_subphase_progress(
+        "inventory-region-sink-sources-complete",
+        "inventory-region-sink-sources",
+        inventory_region_sink_source_iterations +
+            pending_inventory_region_sink_sources.size(),
+        inventory_region_sink_source_iterations,
+        pending_inventory_region_sink_sources.size(),
+        inventory_region_sink_source_iterations);
+    std::map<TailIngressTarget, std::uint8_t>
         tail_target_abi_sink_sources;
-    tail_target_abi_sink_sources.reserve(inventory_region_by_address.size());
     const auto cache_tail_target_abi_sink_sources =
-        [&](const std::uint32_t target) {
+        [&](const TailIngressTarget target) {
             if (const auto cached = tail_target_abi_sink_sources.find(target);
                 cached != tail_target_abi_sink_sources.end())
                 return cached->second;
             auto sources = std::uint8_t{0u};
-            if (const auto function = abi_persistent_store_sources.find(target);
-                function != abi_persistent_store_sources.end())
-                sources = function->second;
-            if (const auto function =
-                    abi_indirect_dispatch_sources.find(target);
-                function != abi_indirect_dispatch_sources.end())
+            if (const auto contract =
+                    tail_inventory_sink_source_contracts.find(target);
+                contract != tail_inventory_sink_source_contracts.end()) {
                 sources = static_cast<std::uint8_t>(
-                    sources | function->second);
-            if (const auto region = inventory_region_by_address.find(target);
-                region != inventory_region_by_address.end()) {
-                const auto signature = analyze_abi_persistent_store_signature(
-                    image,
-                    *region->second,
-                    block_index,
-                    &abi_return_sources,
-                    &abi_persistent_store_sources,
-                    &abi_indirect_dispatch_sources,
-                    &inventory_indirect_callees);
-                sources = static_cast<std::uint8_t>(
-                    sources | signature.persistent_store_sources |
-                    signature.indirect_dispatch_sources);
+                    contract->second.persistent_store_sources |
+                    contract->second.indirect_dispatch_sources);
+            } else {
+                inventory_walk_diagnostics.inventory_tail_target_unresolved =
+                    true;
             }
             tail_target_abi_sink_sources.emplace(target, sources);
             return sources;
         };
     if (!result.budget_exhausted) {
-        for (const auto& [transfer_site, ingress] : tail_ingresses) {
+        inventory_topology_entries_visited += tail_ingresses.size();
+        for (auto& [transfer_site, ingress] : tail_ingresses) {
+            inventory_topology_entries_visited += ingress.targets.size();
             for (const auto target : ingress.targets)
                 static_cast<void>(
                     cache_tail_target_abi_sink_sources(target));
@@ -16743,6 +22426,23 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     [&](const auto target) {
                         return tail_target_abi_sink_sources.at(target) != 0u;
                     });
+            // The exact region sink-source fixpoint can discover an ABI
+            // forwarding chain which is not local to the first ingress
+            // region. Bind that result back into the final evaluation
+            // contract before any caller is evaluated. Candidate-only tail
+            // edges still require concrete code-pointer evidence; purely
+            // structural region tails do not acquire that restriction.
+            const auto guarded_candidate =
+                indirect_jump_candidates.find(transfer_site);
+            if (target_forwards_abi_to_inventory_sink &&
+                guarded_candidate != indirect_jump_candidates.end() &&
+                guarded_candidate->second.guarded &&
+                !guarded_candidate->second.complete &&
+                guarded_candidate->second.targets.size() == 1u &&
+                !jump_table_jump_sites.contains(transfer_site)) {
+                ingress.requires_code_pointer = true;
+                ingress.observes_abi_arguments = true;
+            }
             auto requires_isolated_harvest =
                 candidate_tail_carrier_sites.contains(transfer_site) ||
                 target_forwards_abi_to_inventory_sink;
@@ -16765,12 +22465,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 function != abi_indirect_dispatch_sources.end())
                 sources = static_cast<std::uint8_t>(
                     sources | function->second);
-            if (const auto region =
-                    tail_target_abi_sink_sources.find(target);
-                region != tail_target_abi_sink_sources.end())
-                sources = static_cast<std::uint8_t>(
-                    sources | region->second);
             return sources;
+        };
+    const auto tail_abi_inventory_sink_sources =
+        [&](const TailIngressTarget target) {
+            return cache_tail_target_abi_sink_sources(target);
         };
     const auto unresolved_stack_callback_loss_reaches_inventory_sink =
         [&](const AbstractState& state, const std::uint32_t target) {
@@ -16795,12 +22494,33 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         stored.second);
                 });
         };
+    const auto unresolved_stack_callback_loss_reaches_tail_sink =
+        [&](const AbstractState& state, const TailIngressTarget target) {
+            const auto sources = tail_abi_inventory_sink_sources(target);
+            for (std::uint8_t index = 0u; index < 4u; ++index) {
+                if ((sources & static_cast<std::uint8_t>(1u << index)) != 0u &&
+                    carries_unresolved_stack_callback(state[4u + index]))
+                    return true;
+            }
+            if ((sources & abi_stack_argument_taint) == 0u)
+                return false;
+            if (state.inventory_unresolved_stack_callback_loss)
+                return true;
+            return std::any_of(
+                state.stack_values.begin(),
+                state.stack_values.end(),
+                [](const auto& stored) {
+                    return carries_unresolved_stack_callback(stored.second);
+                });
+        };
 
     // Candidate call carriers are private inventory transport, not semantic
     // call-graph edges.  They still have to participate in the inventory-only
     // backwards reachability walk or a wrapper which merely forwards a
     // code-pointer to a guarded tail registrar is never evaluated.
     auto inventory_callers_by_callee = callers_by_callee;
+    inventory_topology_entries_visited += callers_by_callee.size();
+    inventory_topology_entries_visited += candidate_call_carriers.size();
     for (const auto& carrier : candidate_call_carriers) {
         const auto owners =
             function_owners_by_control.find(carrier.call_site);
@@ -16810,6 +22530,20 @@ detail::analyze_function_values_with_guarded_entry_cache(
                        owners->second.begin(),
                        owners->second.end());
     }
+    inventory_topology_entries_visited += tail_ingresses.size();
+    for (const auto& [transfer_site, ingress] : tail_ingresses) {
+        const auto owners = function_owners_by_control.find(transfer_site);
+        if (owners == function_owners_by_control.end()) continue;
+        inventory_topology_entries_visited += ingress.targets.size();
+        for (const auto target : ingress.targets) {
+            if (target.kind != TailIngressTargetKind::Function) continue;
+            auto& callers = inventory_callers_by_callee[target.address];
+            callers.insert(callers.end(),
+                           owners->second.begin(),
+                           owners->second.end());
+        }
+    }
+    inventory_topology_entries_visited += inventory_callers_by_callee.size();
     for (auto& [callee, callers] : inventory_callers_by_callee) {
         static_cast<void>(callee);
         normalize(callers);
@@ -16821,6 +22555,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         if (functions_reaching_guarded_inventory_sink.insert(address).second)
             pending_inventory_reachability.push_back(address);
     };
+    inventory_topology_entries_visited += functions.size();
     for (const auto& function : functions) {
         // Only functions that can carry an incoming ABI value into a persistent
         // callback store or an indirect dispatch are roots for the expensive
@@ -16842,6 +22577,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         pending_inventory_reachability.size(),
         0u);
     while (!pending_inventory_reachability.empty()) {
+        ++inventory_topology_entries_visited;
         const auto callee = pending_inventory_reachability.front();
         pending_inventory_reachability.pop_front();
         ++inventory_reachability_iterations;
@@ -16859,6 +22595,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         }
         const auto callers = inventory_callers_by_callee.find(callee);
         if (callers == inventory_callers_by_callee.end()) continue;
+        inventory_topology_entries_visited += callers->second.size();
         for (const auto caller : callers->second) {
             add_inventory_sink(caller);
         }
@@ -16870,29 +22607,16 @@ detail::analyze_function_values_with_guarded_entry_cache(
         inventory_reachability_iterations,
         pending_inventory_reachability.size(),
         inventory_reachability_iterations);
+    run_work.inventory_topology_entries_visited.store(
+        inventory_topology_entries_visited,
+        std::memory_order_relaxed);
     // `forwarded_register_reads` is the interprocedural target contract used
     // below for ordinary calls, guarded tail owners and root-isolated walks.
     // Missing targets deliberately retain the full input.
-    for (const auto& line : lines) {
-        if (line.instruction.control_flow != katana::sh4::ControlFlowKind::Call ||
-            !line.target_address.has_value())
-            continue;
-        if (const auto input = candidate_inputs.find(*line.target_address);
-            input != candidate_inputs.end())
-            input->second.expected_call_sites.insert(line.address);
-    }
-    for (const auto& edge : function_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Call) continue;
-        const auto input = candidate_inputs.find(edge.target_address);
-        if (input == candidate_inputs.end()) continue;
-        input->second.expected_call_sites.insert(edge.instruction_address);
-    }
+    summary_candidate_entries_visited += candidate_inputs.size();
     for (auto& [address, input] : candidate_inputs) {
         input.state.stack_offsets[15u] = 0;
-        if (input.expected_call_sites.empty() ||
-            std::find(image.entry_points().begin(), image.entry_points().end(), address) !=
-                image.entry_points().end())
-            input.unknown_ingress = true;
+        static_cast<void>(address);
     }
     std::unordered_map<std::uint32_t, std::size_t>
         fixpoint_function_index;
@@ -16908,6 +22632,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         0u,
         key_plan_work,
         0u);
+    summary_candidate_entries_visited += functions.size();
     for (const auto& function : functions) {
         fixpoint_function_index.emplace(
             function.entry_address, fixpoint_functions.size());
@@ -16927,9 +22652,12 @@ detail::analyze_function_values_with_guarded_entry_cache(
     }
     std::vector<std::vector<std::size_t>>
         fixpoint_summary_dependencies(functions.size());
+    summary_candidate_entries_visited += functions.size();
     for (std::size_t index = 0u; index < functions.size(); ++index) {
         const auto& function = functions[index];
         auto dependencies = function.direct_callees;
+        summary_candidate_entries_visited +=
+            function.direct_callees.size() + function.block_addresses.size();
         // Keep this dependency contract aligned with evaluate_function rather
         // than assuming FunctionInfo will forever be the only call source.
         // Version validation is allowed to over-approximate, never to miss a
@@ -16937,6 +22665,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         for (const auto block_address : function.block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end()) continue;
+            summary_candidate_entries_visited += block->second->lines.size();
             for (const auto& line : block->second->lines) {
                 const bool call =
                     line.instruction.control_flow ==
@@ -16961,6 +22690,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         auto& dependency_indices =
             fixpoint_summary_dependencies[index];
         dependency_indices.reserve(dependencies.size());
+        summary_candidate_entries_visited += dependencies.size();
         for (const auto dependency : dependencies) {
             const auto found =
                 fixpoint_function_index.find(dependency);
@@ -16992,6 +22722,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::vector<std::uint64_t> fixpoint_input_versions(
         functions.size(), 0u);
     if (previous_epoch != nullptr) {
+        summary_candidate_entries_visited += functions.size();
         for (std::size_t index = 0u; index < functions.size(); ++index) {
             const auto address = functions[index].entry_address;
             if (const auto previous =
@@ -17008,6 +22739,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
             }
         }
     }
+    run_work.summary_candidate_entries_visited.store(
+        summary_candidate_entries_visited, std::memory_order_relaxed);
     struct GlobalFixpointBatchItem {
         std::uint32_t address = 0u;
         std::size_t function_index = 0u;
@@ -17041,6 +22774,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
             destination.abi_stack_base_unresolved =
                 destination.abi_stack_base_unresolved ||
                 source.abi_stack_base_unresolved;
+            destination.inventory_tail_target_unresolved =
+                destination.inventory_tail_target_unresolved ||
+                source.inventory_tail_target_unresolved;
         };
     struct PhysicalEvaluationScope {
         EvaluationActivityScope activity;
@@ -17057,9 +22793,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
     };
     const auto cached_evaluate_function =
         [&](const FunctionInfo& function,
-            const std::unordered_map<
-                std::uint32_t,
-                IndirectCalleeCandidates>& indirect_callees,
+            const IndirectCalleeIndexView& indirect_callees,
             const TailIngressMap& evaluation_tail_ingresses,
             const std::map<
                 std::uint32_t,
@@ -17084,7 +22818,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
             const bool account_request = true,
             MultiRootEvaluationCoordinator* const multi_root_coordinator =
                 nullptr,
-            const bool retain_unbounded_exact_replay = false) {
+            const bool retain_unbounded_exact_replay = false,
+            const TailIngressTargetKind evaluation_target_kind =
+                TailIngressTargetKind::Function) {
             auto& evaluation_cache = session.impl_->evaluations;
             const EvaluationActivityScope request_activity{
                 account_request
@@ -17103,6 +22839,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 initial_state,
                 requested_lens,
                 function.entry_address,
+                evaluation_target_kind,
                 forwarded_register_reads,
                 abi_stack_argument_reads,
                 !result.budget_exhausted);
@@ -17112,9 +22849,13 @@ detail::analyze_function_values_with_guarded_entry_cache(
             // and is not the product performance path. Consequently the
             // MultiRoot single-flight guarantee is a normal-product contract;
             // this opt-in trace mode intentionally remains outside it.
-            if (analyzer_stack_diagnostics_enabled()) {
-                cache_diagnostic_bypass_evaluations.fetch_add(
-                    1u, std::memory_order_relaxed);
+            const bool stack_diagnostic_bypass =
+                analyzer_stack_diagnostics_enabled();
+            if (stack_diagnostic_bypass ||
+                bypass_all_persistent_analysis_state) {
+                if (stack_diagnostic_bypass)
+                    cache_diagnostic_bypass_evaluations.fetch_add(
+                        1u, std::memory_order_relaxed);
                 const PhysicalEvaluationScope physical{
                     evaluation_activity_if_observed,
                     physical_evaluations};
@@ -17136,7 +22877,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     indirect_callees,
                     evaluation_tail_ingresses,
                     evaluation_summaries,
-                    initial_state,
+                    stack_diagnostic_bypass
+                        ? initial_state
+                        : projection.ingress,
                     resolution_mode,
                     may_merge_stack_inventory,
                     inventory_target,
@@ -17437,7 +23180,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     item.evaluation.emplace(
                         cached_evaluate_function(
                             *fixpoint_functions[item.function_index],
-                            summary_indirect_callees,
+                            summary_indirect_callee_index,
                             no_tail_ingresses,
                             summaries,
                             item.input,
@@ -17559,10 +23302,21 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 const auto input =
                     candidate_inputs.find(observation.callee);
                 if (input == candidate_inputs.end()) continue;
-                if (merge_candidate_input(
-                        input->second,
-                        observation,
-                        &inventory_walk_diagnostics)) {
+                bool candidate_input_changed = false;
+                for (const auto& contribution :
+                     input->second.expected_contributions) {
+                    if (contribution.caller != item.address ||
+                        contribution.site != observation.call_site)
+                        continue;
+                    candidate_input_changed =
+                        merge_candidate_input(
+                            input->second,
+                            contribution,
+                            observation,
+                            &inventory_walk_diagnostics) ||
+                        candidate_input_changed;
+                }
+                if (candidate_input_changed) {
                     const auto callee_index =
                         fixpoint_function_index.find(
                             observation.callee);
@@ -17608,8 +23362,41 @@ detail::analyze_function_values_with_guarded_entry_cache(
         }
     }
 
-    for (const auto& [address, summary] : summaries)
-        result.summaries.push_back(summary);
+    if (result.result_materialization ==
+        FunctionValueResultMaterialization::DeltaOnly) {
+        for (const auto address : summary_dirty_functions) {
+            const auto summary = summaries.find(address);
+            if (summary != summaries.end()) {
+                result.summary_replacements.push_back(
+                    {{address,
+                      FunctionValueDependencyNodeKind::Function},
+                     summary->second});
+            }
+        }
+        if (program_delta.has_value()) {
+            for (const auto& changed :
+                 program_delta->changed_boundaries) {
+                if (!changed.value.has_value() &&
+                    previous_epoch != nullptr &&
+                    previous_epoch->summaries.contains(
+                        changed.entry_address)) {
+                    result.removed_summary_shards.push_back(
+                        {changed.entry_address,
+                         FunctionValueDependencyNodeKind::Function});
+                }
+            }
+        }
+        normalize(result.removed_summary_shards);
+    } else {
+        result.summaries.reserve(summaries.size());
+        for (const auto& [address, summary] : summaries) {
+            static_cast<void>(address);
+            result.summaries.push_back(summary);
+        }
+        result.final_materialized_functions =
+            result.summaries.size();
+        result.final_materialized_blocks = blocks.size();
+    }
     report_progress("resolution-start");
     GuardedCodeInventoryCollector guarded_inventory_collector{
         false, &guarded_native_entry_shapes};
@@ -17634,6 +23421,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
     struct ForwardedStoreContext {
         const FunctionInfo* function = nullptr;
         std::uint32_t target = 0u;
+        TailIngressTargetKind target_kind =
+            TailIngressTargetKind::Function;
         bool tail = false;
         bool isolated = false;
         AbstractState input;
@@ -17645,9 +23434,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
         std::vector<InterproceduralTargetResolution> resolutions;
     };
     struct ResolutionFunctionResult {
+        std::size_t root_index =
+            std::numeric_limits<std::size_t>::max();
         FunctionEvaluation evaluation;
         GuardedCodeInventoryCollector inventory{true};
         GuardedCodeInventoryWalkDiagnostics walk_diagnostics;
+        std::shared_ptr<const FunctionAnalysisEpoch::ResolutionRootArtifact>
+            persistent_artifact;
+        bool persistent_artifact_reused = false;
         std::vector<ForwardedStoreContext> forwarded_store_contexts;
         std::deque<std::size_t> pending_forwarded_store_contexts;
         std::vector<bool> forwarded_store_context_queued;
@@ -17672,14 +23466,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
             return (static_cast<std::uint64_t>(call_site) << 32u) |
                    callee;
         };
-    std::unordered_set<std::uint64_t> semantic_call_pairs;
-    semantic_call_pairs.reserve(function_edges.size() + blocks.size());
-    for (const auto& edge : function_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Call) continue;
-        semantic_call_pairs.insert(
-            candidate_call_pair_key(edge.instruction_address,
-                                    edge.target_address));
-    }
+    std::unordered_set<std::uint64_t> decoded_call_pairs;
+    decoded_call_pairs.reserve(blocks.size());
+    resolution_preparation_entries_visited += blocks.size();
     for (const auto& block : blocks) {
         if (block.lines.empty()) continue;
         const auto& control = controlling_line(block);
@@ -17687,21 +23476,44 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 katana::sh4::ControlFlowKind::Call ||
             !control.target_address.has_value())
             continue;
-        semantic_call_pairs.insert(
+        decoded_call_pairs.insert(
             candidate_call_pair_key(control.address,
                                     *control.target_address));
     }
+    const auto is_semantic_call_pair =
+        [&](const std::uint32_t call_site,
+            const std::uint32_t callee) {
+            if (decoded_call_pairs.contains(
+                    candidate_call_pair_key(call_site, callee)))
+                return true;
+            const auto* const family =
+                program_input_arena->semantic_edges->find(call_site);
+            return family != nullptr &&
+                   std::any_of(
+                       family->begin(), family->end(),
+                       [&](const ResolvedControlFlowEdge& edge) {
+                           return !edge.analysis_candidate_carrier &&
+                                  edge.kind ==
+                                      ResolvedControlFlowKind::Call &&
+                                  edge.target_address == callee;
+                       });
+        };
     std::vector<std::vector<std::size_t>>
         contextual_summary_dependencies(functions.size());
+    resolution_preparation_entries_visited += fixpoint_functions.size();
     for (std::size_t index = 0u;
          index < fixpoint_functions.size();
          ++index) {
         const auto& function = *fixpoint_functions[index];
         auto dependencies = function.direct_callees;
+        resolution_preparation_entries_visited +=
+            function.direct_callees.size() + function.block_addresses.size();
         for (const auto block_address :
              function.block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end()) continue;
+            resolution_preparation_entries_visited +=
+                block->second->lines.size();
             for (const auto& line : block->second->lines) {
                 const bool call =
                     line.instruction.control_flow ==
@@ -17731,6 +23543,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         auto& dependency_indices =
             contextual_summary_dependencies[index];
         dependency_indices.reserve(dependencies.size());
+        resolution_preparation_entries_visited += dependencies.size();
         for (const auto dependency : dependencies) {
             const auto found =
                 fixpoint_function_index.find(dependency);
@@ -17751,15 +23564,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
     std::unordered_set<std::uint64_t> candidate_call_pairs;
     std::unordered_set<std::uint32_t> candidate_call_owner_functions;
     candidate_call_pairs.reserve(candidate_call_carriers.size());
+    resolution_preparation_entries_visited += candidate_call_carriers.size();
     for (const auto& carrier : candidate_call_carriers) {
-        const auto global_summary = summaries.find(carrier.target);
-        const auto* global_return =
-            global_summary == summaries.end()
-                ? nullptr
-                : register_summary(global_summary->second, 0u);
-        if (global_return != nullptr && global_return->complete &&
-            !global_return->values.empty())
-            continue;
         candidate_call_pairs.insert(
             candidate_call_pair_key(carrier.call_site, carrier.target));
         const auto owners =
@@ -17780,10 +23586,14 @@ detail::analyze_function_values_with_guarded_entry_cache(
                   contextual_candidate_return_owners.front()};
     const auto contains_resolution_or_inventory_instruction =
         [&](const FunctionInfo& function) {
+            resolution_preparation_entries_visited +=
+                function.block_addresses.size();
             for (const auto block_address :
                  function.block_addresses) {
                 const auto block = block_index.find(block_address);
                 if (block == block_index.end()) continue;
+                resolution_preparation_entries_visited +=
+                    block->second->lines.size();
                 for (const auto& line : block->second->lines) {
                     const auto kind = line.instruction.kind;
                     if (kind == katana::sh4::InstructionKind::Jmp ||
@@ -17813,6 +23623,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         };
     std::vector<const FunctionInfo*> resolution_functions;
     resolution_functions.reserve(functions.size());
+    resolution_preparation_entries_visited += functions.size();
     for (const auto& candidate : functions) {
         const auto address = candidate.entry_address;
         if (!contains_resolution_or_inventory_instruction(candidate) &&
@@ -17834,14 +23645,20 @@ detail::analyze_function_values_with_guarded_entry_cache(
         forwarded_evidence_reserved_addresses;
     forwarded_evidence_reserved_addresses.reserve(
         functions.size() * 2u + blocks.size() * 4u);
+    resolution_preparation_entries_visited += functions.size();
     for (const auto& candidate : functions) {
+        resolution_preparation_entries_visited +=
+            candidate.direct_callees.size();
         forwarded_evidence_reserved_addresses.insert(
             candidate.entry_address);
         forwarded_evidence_reserved_addresses.insert(
             candidate.direct_callees.begin(),
             candidate.direct_callees.end());
     }
+    resolution_preparation_entries_visited += blocks.size();
     for (const auto& block : blocks) {
+        resolution_preparation_entries_visited +=
+            block.successors.size() + block.lines.size();
         forwarded_evidence_reserved_addresses.insert(
             block.start_address);
         forwarded_evidence_reserved_addresses.insert(
@@ -17856,20 +23673,38 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     *line.target_address);
         }
     }
-    const auto reserve_candidate_map =
+    const auto reserve_indirect_candidate_map =
         [&](const auto& candidates) {
+            resolution_preparation_entries_visited += candidates.size();
             for (const auto& [site, values] : candidates) {
+                resolution_preparation_entries_visited +=
+                    values.targets.size();
                 forwarded_evidence_reserved_addresses.insert(site);
                 forwarded_evidence_reserved_addresses.insert(
                     values.targets.begin(), values.targets.end());
             }
         };
-    reserve_candidate_map(inventory_indirect_callees);
-    reserve_candidate_map(tail_ingresses);
+    const auto reserve_tail_candidate_map =
+        [&](const TailIngressMap& candidates) {
+            resolution_preparation_entries_visited += candidates.size();
+            for (const auto& [site, values] : candidates) {
+                forwarded_evidence_reserved_addresses.insert(site);
+                resolution_preparation_entries_visited +=
+                    values.targets.size();
+                for (const auto target : values.targets)
+                    forwarded_evidence_reserved_addresses.insert(
+                        target.address);
+            }
+        };
+    reserve_indirect_candidate_map(
+        inventory_indirect_callee_storage);
+    reserve_tail_candidate_map(tail_ingresses);
+    resolution_preparation_entries_visited +=
+        final_inventory_region_tail_ingresses_by_entry.size();
     for (const auto& [entry, ingresses] :
          final_inventory_region_tail_ingresses_by_entry) {
         forwarded_evidence_reserved_addresses.insert(entry);
-        reserve_candidate_map(ingresses);
+        reserve_tail_candidate_map(ingresses);
     }
     std::unordered_map<std::uint32_t,
                        std::unordered_set<std::uint32_t>>
@@ -17885,6 +23720,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         final_inventory_region_by_address.size());
     const auto collect_locally_observable_evidence =
         [&](const FunctionInfo& candidate) {
+        ++resolution_preparation_entries_visited;
         auto& local_call_sites =
             locally_observable_call_sites_by_function[
                 candidate.entry_address];
@@ -17901,12 +23737,18 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         value.evidence_callees.begin(),
                         value.evidence_callees.end());
             };
+        resolution_preparation_entries_visited +=
+            candidate.direct_callees.size();
         for (const auto callee : candidate.direct_callees)
             add_local_callee(callee);
+        resolution_preparation_entries_visited +=
+            candidate.block_addresses.size();
         for (const auto block_address :
              candidate.block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end()) continue;
+            resolution_preparation_entries_visited +=
+                block->second->lines.size();
             for (const auto& line : block->second->lines) {
                 // Keeping every local instruction address concrete is a
                 // deliberately conservative correlation partition. The
@@ -17919,13 +23761,17 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 const auto indirect =
                     inventory_indirect_callees.find(line.address);
                 if (indirect != inventory_indirect_callees.end()) {
+                    resolution_preparation_entries_visited +=
+                        indirect->second.targets.size();
                     for (const auto callee : indirect->second.targets)
                         add_local_callee(callee);
                 }
                 const auto tail = tail_ingresses.find(line.address);
                 if (tail != tail_ingresses.end()) {
+                    resolution_preparation_entries_visited +=
+                        tail->second.targets.size();
                     for (const auto callee : tail->second.targets)
-                        add_local_callee(callee);
+                        add_local_callee(callee.address);
                 }
             }
         }
@@ -17934,20 +23780,27 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 candidate.entry_address);
         if (local_tail_ingresses !=
             final_inventory_region_tail_ingresses_by_entry.end()) {
+            resolution_preparation_entries_visited +=
+                local_tail_ingresses->second.size();
             for (const auto& [site, ingress] :
                  local_tail_ingresses->second) {
                 local_call_sites.insert(site);
+                resolution_preparation_entries_visited +=
+                    ingress.targets.size();
                 for (const auto callee : ingress.targets)
-                    add_local_callee(callee);
+                    add_local_callee(callee.address);
             }
         }
     };
+    resolution_preparation_entries_visited += functions.size();
     for (const auto& candidate : functions)
         collect_locally_observable_evidence(candidate);
     // Inventory regions are executable FunctionInfo slices as well. They may
     // begin at an internal shared tail which has no ordinary function entry,
     // so excluding them leaves a real coordinator context unregistered and
     // loses the conservative local-evidence partition.
+    resolution_preparation_entries_visited +=
+        final_inventory_region_by_address.size();
     for (const auto& [entry, candidate] :
          final_inventory_region_by_address) {
         static_cast<void>(entry);
@@ -17973,8 +23826,1470 @@ detail::analyze_function_values_with_guarded_entry_cache(
         if (token_candidate == 0u) break;
         --token_candidate;
     }
+
+    // Build each dependency node in the dirty weak closure once. A root
+    // retains immutable SCC contracts; disconnected node/adjacency/SCC shards
+    // survive by pointer identity. Negative per-site reads remain part of the
+    // exact node contract without multiplying the payload by every root.
+    using ResolutionRootArtifact =
+        FunctionAnalysisEpoch::ResolutionRootArtifact;
+    using ResolutionDependencyNodeId =
+        FunctionAnalysisEpoch::ResolutionDependencyNodeId;
+    using ResolutionDependencyNodeKind =
+        FunctionAnalysisEpoch::ResolutionDependencyNodeKind;
+    using ResolutionDependencySccContract =
+        FunctionAnalysisEpoch::ResolutionDependencySccContract;
+    using ResolutionDependencyNodeShard =
+        FunctionAnalysisEpoch::ResolutionDependencyNodeShard;
+    using ResolutionDependencyNodeIndex =
+        FunctionAnalysisEpoch::ResolutionDependencyNodeIndex;
+    using ResolutionDependencyComponentIndex =
+        FunctionAnalysisEpoch::ResolutionDependencyComponentIndex;
+    std::map<ResolutionDependencyNodeId,
+             std::shared_ptr<const std::vector<std::uint8_t>>>
+        resolution_dependency_nodes;
+    std::map<ResolutionDependencyNodeId,
+             std::vector<ResolutionDependencyNodeId>>
+        resolution_dependency_adjacency;
+    std::map<ResolutionDependencyNodeId,
+             std::shared_ptr<const ResolutionDependencyNodeShard>>
+        built_resolution_dependency_nodes;
+    const bool reusable_resolution_dependency_epoch =
+        previous_epoch != nullptr &&
+        previous_epoch->schema_version ==
+            function_analysis_epoch_schema_version &&
+        previous_epoch->resolution_dependency_nodes != nullptr &&
+        previous_epoch->resolution_dependency_nodes->size() != 0u &&
+        previous_epoch->resolution_dependency_components_by_node != nullptr &&
+        previous_epoch->resolution_dependency_components_by_node->size() !=
+            0u;
+    const bool incremental_resolution_dependency_epoch =
+        reusable_resolution_dependency_epoch && exact_program_input &&
+        program_delta.has_value();
+    auto staged_resolution_dependency_nodes =
+        reusable_resolution_dependency_epoch
+            ? std::make_shared<ResolutionDependencyNodeIndex>(
+                  *previous_epoch->resolution_dependency_nodes)
+            : std::make_shared<ResolutionDependencyNodeIndex>();
+    auto staged_resolution_dependency_components_by_node =
+        reusable_resolution_dependency_epoch
+            ? std::make_shared<ResolutionDependencyComponentIndex>(
+                  *previous_epoch
+                       ->resolution_dependency_components_by_node)
+            : std::make_shared<ResolutionDependencyComponentIndex>();
+    auto staged_resolution_dependency_scc_count =
+        reusable_resolution_dependency_epoch
+            ? previous_epoch->resolution_dependency_scc_count
+            : 0u;
+    auto staged_resolution_dependency_retained_bytes =
+        reusable_resolution_dependency_epoch
+            ? previous_epoch->resolution_dependency_retained_bytes
+            : 0u;
+    const auto add_staged_resolution_dependency_retained_bytes =
+        [&](const std::size_t bytes) {
+            const auto maximum =
+                std::numeric_limits<std::size_t>::max();
+            if (bytes > maximum -
+                            staged_resolution_dependency_retained_bytes) {
+                staged_resolution_dependency_retained_bytes = maximum;
+            } else {
+                staged_resolution_dependency_retained_bytes += bytes;
+            }
+        };
+    const auto previous_resolution_dependency_node =
+        [&](const ResolutionDependencyNodeId node)
+            -> std::shared_ptr<const ResolutionDependencyNodeShard> {
+        if (!reusable_resolution_dependency_epoch) return nullptr;
+        const auto* const found =
+            previous_epoch->resolution_dependency_nodes->find(node);
+        return found == nullptr ? nullptr : *found;
+    };
+    const auto previous_resolution_dependency_component =
+        [&](const ResolutionDependencyNodeId node)
+            -> std::shared_ptr<const ResolutionDependencySccContract> {
+        if (!reusable_resolution_dependency_epoch) return nullptr;
+        const auto* const found = previous_epoch
+                                      ->resolution_dependency_components_by_node
+                                      ->find(node);
+        return found == nullptr ? nullptr : *found;
+    };
+    std::vector<ResolutionDependencyNodeId> dependency_node_ids;
+    const auto dependency_function =
+        [&](const ResolutionDependencyNodeId node)
+            -> const FunctionInfo* {
+        if (node.kind == ResolutionDependencyNodeKind::Function) {
+            const auto function =
+                final_function_by_address.find(node.address);
+            return function == final_function_by_address.end()
+                       ? nullptr
+                       : function->second;
+        }
+        const auto region =
+            final_inventory_region_by_address.find(node.address);
+        if (region != final_inventory_region_by_address.end())
+            return region->second;
+        return nullptr;
+    };
+    const auto function_dependency_node =
+        [&](const std::uint32_t address)
+            -> std::optional<ResolutionDependencyNodeId> {
+        if (!final_function_by_address.contains(address))
+            return std::nullopt;
+        return ResolutionDependencyNodeId{
+            address, ResolutionDependencyNodeKind::Function};
+    };
+    const auto inventory_dependency_node =
+        [&](const std::uint32_t address)
+            -> std::optional<ResolutionDependencyNodeId> {
+        if (!final_inventory_region_by_address.contains(address))
+            return std::nullopt;
+        return ResolutionDependencyNodeId{
+            address,
+             ResolutionDependencyNodeKind::InventoryRegion};
+    };
+    const auto tail_dependency_node =
+        [&](const TailIngressTarget target)
+            -> std::optional<ResolutionDependencyNodeId> {
+        return target.kind == TailIngressTargetKind::Function
+                   ? function_dependency_node(target.address)
+                   : inventory_dependency_node(target.address);
+    };
+    const auto build_resolution_dependency_node =
+        [&](const ResolutionDependencyNodeId node_id)
+            -> std::shared_ptr<const ResolutionDependencyNodeShard> {
+        const auto address = node_id.address;
+        const auto* const function = dependency_function(node_id);
+        if (function == nullptr) return nullptr;
+        bool node_unrepresentable = false;
+        EvaluationKeyEncoder key;
+        key.append(function_analysis_epoch_schema_version);
+        key.append(image.analysis_instance_identity());
+        key.append(image.analysis_revision());
+        key.append(image.guest_call_abi());
+        key.append(address);
+        key.append(node_id.kind);
+        encode(key, *function);
+
+        const auto* const graph_fingerprint =
+            program_graph->find_function_fingerprint(address);
+        const bool ordinary_graph_node =
+            node_id.kind ==
+            ResolutionDependencyNodeKind::Function;
+        key.append(ordinary_graph_node && graph_fingerprint != nullptr);
+        if (ordinary_graph_node && graph_fingerprint != nullptr)
+            key.append(std::string_view{*graph_fingerprint});
+        const auto component = program_graph->find_scc(address);
+        key.append(ordinary_graph_node && component.has_value());
+        if (ordinary_graph_node && component.has_value()) {
+            // `component->second` is only this epoch's vector position. New
+            // unrelated lower-address SCCs may shift it without changing
+            // this function or any dependency. Persistent identity therefore
+            // uses the exact stable SCC fingerprint; the typed SCC-DAG below
+            // carries its dependency identity.
+            key.append(std::string_view{
+                program_graph->scc_fingerprint_at(*component)});
+        }
+
+        const auto input = ordinary_graph_node
+                               ? final_candidate_inputs.find(address)
+                               : final_candidate_inputs.end();
+        key.append(ordinary_graph_node &&
+                   input != final_candidate_inputs.end());
+        if (ordinary_graph_node &&
+            input != final_candidate_inputs.end()) {
+            encode(key, input->second.state);
+            key.append_range(
+                input->second.expected_contributions,
+                [&](const auto& contribution) {
+                    key.append(contribution.caller);
+                    key.append(contribution.site);
+                    key.append(contribution.kind);
+                });
+            key.append_range(
+                input->second.contribution_observations,
+                [&](const auto& observation) {
+                    key.append(observation.first.caller);
+                    key.append(observation.first.site);
+                    key.append(observation.first.kind);
+                    encode(key, observation.second);
+                });
+            key.append_range(
+                input->second.expected_call_sites,
+                [&](const auto site) { key.append(site); });
+            key.append_range(
+                input->second.observations,
+                [&](const auto& observation) {
+                    key.append(observation.first);
+                    encode(key, observation.second);
+                });
+            key.append(input->second.unknown_ingress);
+        }
+        const auto summary = ordinary_graph_node
+                                 ? summaries.find(address)
+                                 : summaries.end();
+        key.append(ordinary_graph_node && summary != summaries.end());
+        if (ordinary_graph_node && summary != summaries.end())
+            encode(key, summary->second);
+        const auto function_index = ordinary_graph_node
+                                        ? fixpoint_function_index.find(address)
+                                        : fixpoint_function_index.end();
+        key.append(ordinary_graph_node &&
+                   function_index != fixpoint_function_index.end());
+
+        const auto abi_fingerprint =
+            abi_input_fingerprints.find(address);
+        key.append(ordinary_graph_node &&
+                   abi_fingerprint != abi_input_fingerprints.end());
+        if (ordinary_graph_node &&
+            abi_fingerprint != abi_input_fingerprints.end())
+            key.append(std::string_view{abi_fingerprint->second});
+        const auto return_sources = abi_return_sources.find(address);
+        key.append(ordinary_graph_node &&
+                   return_sources != abi_return_sources.end());
+        if (ordinary_graph_node &&
+            return_sources != abi_return_sources.end())
+            key.append(return_sources->second);
+        const auto stack_reads =
+            abi_stack_argument_reads.find(address);
+        key.append(ordinary_graph_node &&
+                   stack_reads != abi_stack_argument_reads.end());
+        if (ordinary_graph_node &&
+            stack_reads != abi_stack_argument_reads.end())
+            encode(key, stack_reads->second);
+        const auto register_reads =
+            forwarded_register_reads.find(address);
+        key.append(ordinary_graph_node &&
+                   register_reads != forwarded_register_reads.end());
+        if (ordinary_graph_node &&
+            register_reads != forwarded_register_reads.end())
+            key.append(register_reads->second);
+        const auto store_sources =
+            abi_persistent_store_sources.find(address);
+        key.append(ordinary_graph_node && store_sources !=
+                   abi_persistent_store_sources.end());
+        if (ordinary_graph_node &&
+            store_sources != abi_persistent_store_sources.end())
+            key.append(store_sources->second);
+        const auto dispatch_sources =
+            abi_indirect_dispatch_sources.find(address);
+        key.append(ordinary_graph_node && dispatch_sources !=
+                   abi_indirect_dispatch_sources.end());
+        if (ordinary_graph_node && dispatch_sources !=
+            abi_indirect_dispatch_sources.end())
+            key.append(dispatch_sources->second);
+        const auto local_store_sites =
+            final_direct_local_persistent_store_sites.find(address);
+        key.append(ordinary_graph_node && local_store_sites !=
+                   final_direct_local_persistent_store_sites.end());
+        if (ordinary_graph_node && local_store_sites !=
+            final_direct_local_persistent_store_sites.end()) {
+            key.append_range(
+                local_store_sites->second,
+                [&](const auto& site) {
+                    key.append(site.store_instruction_address);
+                    key.append(site.value_sources);
+                    key.append(site.destination_registers);
+                });
+        }
+        key.append(ordinary_graph_node &&
+                   functions_reaching_guarded_inventory_sink.contains(
+                       address));
+        key.append(ordinary_graph_node &&
+                   functions_with_guarded_abi_inventory_tail.contains(
+                       address));
+        key.append(
+            node_id.kind == ResolutionDependencyNodeKind::Function
+                ? target_abi_inventory_sink_sources(address)
+                : tail_abi_inventory_sink_sources(
+                      {address,
+                       TailIngressTargetKind::InventoryRegion}));
+
+        std::vector<ResolutionDependencyNodeId> direct_dependencies;
+        for (const auto callee : function->direct_callees) {
+            if (const auto target = function_dependency_node(callee))
+                direct_dependencies.push_back(*target);
+        }
+        std::vector<std::uint32_t> block_addresses =
+            function->block_addresses;
+        block_addresses.push_back(function->entry_address);
+        normalize(block_addresses);
+        for (const auto block_address : block_addresses) {
+            key.append(block_address);
+            const auto block = block_index.find(block_address);
+            key.append(block != block_index.end());
+            if (block == block_index.end()) continue;
+            encode(key, *block->second);
+            for (const auto& line : block->second->lines) {
+                key.append(line.address);
+                const bool direct_call =
+                    line.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::Call;
+                if (direct_call && line.target_address.has_value()) {
+                    if (const auto target = function_dependency_node(
+                            *line.target_address))
+                        direct_dependencies.push_back(*target);
+                }
+                const auto calls =
+                    inventory_indirect_callees.find(line.address);
+                key.append(calls != inventory_indirect_callees.end());
+                if (calls != inventory_indirect_callees.end()) {
+                    encode(key, calls->second);
+                    for (const auto target : calls->second.targets) {
+                        key.append(target);
+                        const auto dependency =
+                            function_dependency_node(target);
+                        key.append(dependency.has_value());
+                        if (dependency.has_value())
+                            direct_dependencies.push_back(*dependency);
+                        const auto pair = candidate_call_pair_key(
+                            line.address, target);
+                        key.append(is_semantic_call_pair(
+                            line.address, target));
+                        key.append(candidate_call_pairs.contains(pair));
+                    }
+                }
+                const auto jumps =
+                    indirect_jump_candidates.find(line.address);
+                key.append(jumps != indirect_jump_candidates.end());
+                if (jumps != indirect_jump_candidates.end())
+                    encode(key, jumps->second);
+                const auto local_tail_map =
+                    node_id.kind ==
+                            ResolutionDependencyNodeKind::InventoryRegion
+                        ? final_inventory_region_tail_ingresses_by_entry.find(
+                              address)
+                        : final_inventory_region_tail_ingresses_by_entry.end();
+                const auto* local_tail_ingresses =
+                    local_tail_map ==
+                            final_inventory_region_tail_ingresses_by_entry.end()
+                        ? nullptr
+                        : &local_tail_map->second;
+                const auto ingress = select_evaluation_tail_ingress(
+                    line.instruction.control_flow,
+                    tail_ingresses,
+                    local_tail_ingresses,
+                    line.address);
+                key.append(ingress.has_value());
+                if (ingress.has_value()) {
+                    encode(key, *ingress);
+                    for (const auto target : ingress->targets) {
+                        key.append(target.address);
+                        key.append(target.kind);
+                        const auto dependency = tail_dependency_node(target);
+                        key.append(dependency.has_value());
+                        if (dependency.has_value()) {
+                            direct_dependencies.push_back(*dependency);
+                        } else {
+                            node_unrepresentable = true;
+                            inventory_walk_diagnostics
+                                .inventory_tail_target_unresolved = true;
+                        }
+                    }
+                }
+            }
+        }
+        normalize(direct_dependencies);
+        const auto local_call_sites =
+            locally_observable_call_sites_by_function.find(address);
+        key.append(local_call_sites !=
+                   locally_observable_call_sites_by_function.end());
+        if (local_call_sites !=
+            locally_observable_call_sites_by_function.end()) {
+            std::vector<std::uint32_t> values{
+                local_call_sites->second.begin(),
+                local_call_sites->second.end()};
+            normalize(values);
+            key.append_range(values,
+                             [&](const auto value) { key.append(value); });
+        }
+        const auto local_callees =
+            locally_observable_callees_by_function.find(address);
+        key.append(local_callees !=
+                   locally_observable_callees_by_function.end());
+        if (local_callees !=
+            locally_observable_callees_by_function.end()) {
+            std::vector<std::uint32_t> values{
+                local_callees->second.begin(),
+                local_callees->second.end()};
+            normalize(values);
+            key.append_range(values,
+                             [&](const auto value) { key.append(value); });
+        }
+        auto bytes = std::move(key).finish();
+        auto contract =
+            std::make_shared<const std::vector<std::uint8_t>>(
+                std::move(bytes));
+        const auto retained_bytes =
+            sizeof(ResolutionDependencyNodeShard) +
+            sizeof(ResolutionDependencyNodeId) +
+            contract->capacity() * sizeof(std::uint8_t) +
+            direct_dependencies.capacity() *
+                sizeof(ResolutionDependencyNodeId) +
+            6u * sizeof(void*);
+        return std::make_shared<const ResolutionDependencyNodeShard>(
+            ResolutionDependencyNodeShard{
+                std::move(contract),
+                std::move(direct_dependencies),
+                {},
+                node_unrepresentable,
+                retained_bytes});
+    };
+
+    std::set<ResolutionDependencyNodeId> affected_dependency_nodes;
+    std::deque<ResolutionDependencyNodeId> pending_dependency_nodes;
+    const auto enqueue_dependency_node =
+        [&](const ResolutionDependencyNodeId node) {
+            if (!affected_dependency_nodes.contains(node))
+                pending_dependency_nodes.push_back(node);
+        };
+    const auto enqueue_function_dependency =
+        [&](const std::uint32_t address) {
+            enqueue_dependency_node(
+                {address, ResolutionDependencyNodeKind::Function});
+        };
+    const auto enqueue_tail_dependency =
+        [&](const std::uint32_t address) {
+            // A candidate-tail carrier does not itself encode whether the
+            // target is an ordinary entry or an internal inventory region.
+            // Enqueue both typed identities; nonexistent identities are
+            // discarded after their previous adjacency has been withdrawn.
+            enqueue_dependency_node(
+                {address, ResolutionDependencyNodeKind::Function});
+            enqueue_dependency_node(
+                {address,
+                 ResolutionDependencyNodeKind::InventoryRegion});
+        };
+    const auto enqueue_control_site_owners =
+        [&](const std::uint32_t site) {
+            const auto current =
+                function_owners_by_control.find(site);
+            if (current != function_owners_by_control.end()) {
+                for (const auto owner : current->second)
+                    enqueue_function_dependency(owner);
+            }
+            if (previous_program == nullptr) return;
+            const auto previous_owners =
+                previous_program->owners_by_control_index();
+            const auto previous = previous_owners.find(site);
+            if (previous == previous_owners.end())
+                return;
+            for (const auto owner : previous->second)
+                enqueue_function_dependency(owner);
+        };
+    const auto enqueue_candidate_call_targets =
+        [&](const FunctionProgramInputArena* const arena,
+            const std::uint32_t site) {
+            if (arena == nullptr) return;
+            const auto* const carriers = arena->candidate_calls->find(site);
+            if (carriers == nullptr) return;
+            for (const auto& carrier : *carriers)
+                enqueue_function_dependency(carrier.target);
+        };
+    const auto enqueue_candidate_tail_targets =
+        [&](const FunctionProgramInputArena* const arena,
+            const std::uint32_t site) {
+            if (arena == nullptr) return;
+            const auto* const carriers = arena->candidate_tails->find(site);
+            if (carriers == nullptr) return;
+            for (const auto& carrier : *carriers)
+                enqueue_tail_dependency(carrier.target);
+        };
+    const auto enqueue_changed_site =
+        [&](const std::uint32_t site) {
+            enqueue_control_site_owners(site);
+            enqueue_candidate_call_targets(program_input_arena.get(), site);
+            enqueue_candidate_tail_targets(program_input_arena.get(), site);
+            enqueue_candidate_call_targets(
+                previous_epoch == nullptr
+                    ? nullptr
+                    : previous_epoch->program_input_arena.get(),
+                site);
+            enqueue_candidate_tail_targets(
+                previous_epoch == nullptr
+                    ? nullptr
+                    : previous_epoch->program_input_arena.get(),
+                site);
+        };
+
+    if (!incremental_resolution_dependency_epoch) {
+        for (const auto& [address, function] :
+             final_function_by_address) {
+            static_cast<void>(function);
+            enqueue_function_dependency(address);
+        }
+        for (const auto& [address, function] :
+             final_inventory_region_by_address) {
+            static_cast<void>(function);
+            enqueue_dependency_node(
+                {address,
+                 ResolutionDependencyNodeKind::InventoryRegion});
+        }
+    } else {
+        for (const auto address : summary_dirty_functions)
+            enqueue_function_dependency(address);
+        for (const auto address : graph_dirty_functions)
+            enqueue_function_dependency(address);
+        for (const auto address : abi_contract_dirty)
+            enqueue_function_dependency(address);
+        for (const auto address :
+             functions_reaching_guarded_inventory_sink) {
+            if (!previous_epoch->inventory_sink_functions.contains(address))
+                enqueue_function_dependency(address);
+        }
+        for (const auto address :
+             previous_epoch->inventory_sink_functions) {
+            if (!functions_reaching_guarded_inventory_sink.contains(address))
+                enqueue_function_dependency(address);
+        }
+        for (const auto& changed : program_delta->changed_lines)
+            enqueue_changed_site(changed.address);
+        for (const auto& changed : program_delta->changed_boundaries)
+            enqueue_function_dependency(changed.entry_address);
+        const auto enqueue_site_family = [&](const auto& sites) {
+            for (const auto& changed : sites) {
+                enqueue_changed_site(changed.instruction_address);
+                for (const auto& edge : changed.values) {
+                    enqueue_function_dependency(edge.target_address);
+                    if (edge.analysis_candidate_carrier)
+                        enqueue_tail_dependency(edge.target_address);
+                }
+            }
+        };
+        enqueue_site_family(program_delta->changed_semantic_edge_sites);
+        enqueue_site_family(program_delta->changed_candidate_call_sites);
+        enqueue_site_family(program_delta->changed_candidate_tail_sites);
+    }
+
+    report_subphase_progress(
+        "resolution-root-dependencies-start",
+        "resolution-root-dependencies",
+        pending_dependency_nodes.size(),
+        0u,
+        pending_dependency_nodes.size(),
+        0u);
+    std::size_t dependency_nodes_processed = 0u;
+    bool tail_dependency_unrepresentable = false;
+    while (!pending_dependency_nodes.empty()) {
+        const auto node_id = pending_dependency_nodes.front();
+        pending_dependency_nodes.pop_front();
+        if (!affected_dependency_nodes.insert(node_id).second)
+            continue;
+
+        const auto previous =
+            previous_resolution_dependency_node(node_id);
+        if (previous != nullptr) {
+            for (const auto dependency : previous->outgoing)
+                enqueue_dependency_node(dependency);
+            for (const auto dependent : previous->incoming)
+                enqueue_dependency_node(dependent);
+        }
+        const auto previous_component =
+            previous_resolution_dependency_component(node_id);
+        if (previous_component != nullptr) {
+            for (const auto member : previous_component->members)
+                enqueue_dependency_node(member);
+        }
+
+        const auto shard = build_resolution_dependency_node(node_id);
+        if (shard != nullptr) {
+            built_resolution_dependency_nodes.emplace(node_id, shard);
+            for (const auto dependency : shard->outgoing)
+                enqueue_dependency_node(dependency);
+            tail_dependency_unrepresentable =
+                tail_dependency_unrepresentable ||
+                shard->unrepresentable;
+        }
+        ++dependency_nodes_processed;
+        progress_subphase_processed.store(
+            dependency_nodes_processed,
+            std::memory_order_relaxed);
+        progress_subphase_queued.store(
+            pending_dependency_nodes.size(),
+            std::memory_order_relaxed);
+        progress_subphase_iterations.store(
+            dependency_nodes_processed,
+            std::memory_order_relaxed);
+        if (dependency_nodes_processed % 128u == 0u ||
+            pending_dependency_nodes.empty()) {
+            report_subphase_progress(
+                "resolution-root-dependencies-progress",
+                "resolution-root-dependencies",
+                affected_dependency_nodes.size() +
+                    pending_dependency_nodes.size(),
+                dependency_nodes_processed,
+                pending_dependency_nodes.size(),
+                dependency_nodes_processed);
+        }
+    }
+
+    // The touched set is a union of complete previous and current weak
+    // components. Reconstruct reverse adjacency locally, then path-copy only
+    // those typed nodes into the next immutable epoch index.
+    std::map<ResolutionDependencyNodeId,
+             std::vector<ResolutionDependencyNodeId>>
+        rebuilt_dependency_incoming;
+    for (const auto& [node, shard] :
+         built_resolution_dependency_nodes) {
+        static_cast<void>(shard);
+        rebuilt_dependency_incoming.try_emplace(node);
+    }
+    for (const auto& [source, shard] :
+         built_resolution_dependency_nodes) {
+        for (const auto target : shard->outgoing) {
+            const auto incoming =
+                rebuilt_dependency_incoming.find(target);
+            if (incoming == rebuilt_dependency_incoming.end()) {
+                tail_dependency_unrepresentable = true;
+                continue;
+            }
+            incoming->second.push_back(source);
+        }
+    }
+    for (auto& [node, incoming] : rebuilt_dependency_incoming) {
+        static_cast<void>(node);
+        normalize(incoming);
+    }
+
+    std::size_t physical_dependency_nodes_built = 0u;
+    std::size_t physical_dependency_nodes_reused = 0u;
+    std::set<ResolutionDependencyNodeId> changed_dependency_nodes;
+    for (auto& [node, staged] : built_resolution_dependency_nodes) {
+        const auto& incoming = rebuilt_dependency_incoming.at(node);
+        const auto retained_bytes =
+            sizeof(ResolutionDependencyNodeShard) +
+            sizeof(std::vector<std::uint8_t>) +
+            staged->contract->capacity() * sizeof(std::uint8_t) +
+            staged->outgoing.capacity() *
+                sizeof(ResolutionDependencyNodeId) +
+            incoming.capacity() * sizeof(ResolutionDependencyNodeId) +
+            2u * (sizeof(ResolutionDependencyNodeId) +
+                  sizeof(std::shared_ptr<const void>) +
+                  5u * sizeof(void*));
+        const auto previous =
+            previous_resolution_dependency_node(node);
+        if (previous != nullptr &&
+            *previous->contract == *staged->contract &&
+            previous->outgoing == staged->outgoing &&
+            previous->incoming == incoming &&
+            previous->unrepresentable == staged->unrepresentable) {
+            staged = previous;
+            ++physical_dependency_nodes_reused;
+        } else {
+            changed_dependency_nodes.insert(node);
+            staged = std::make_shared<const ResolutionDependencyNodeShard>(
+                ResolutionDependencyNodeShard{
+                    staged->contract,
+                    staged->outgoing,
+                    incoming,
+                    staged->unrepresentable,
+                    retained_bytes});
+            ++physical_dependency_nodes_built;
+        }
+        dependency_node_ids.push_back(node);
+        resolution_dependency_nodes.emplace(node, staged->contract);
+        resolution_dependency_adjacency.emplace(node, staged->outgoing);
+    }
+    for (const auto node : affected_dependency_nodes) {
+        if (previous_resolution_dependency_node(node) != nullptr &&
+            !built_resolution_dependency_nodes.contains(node))
+            changed_dependency_nodes.insert(node);
+    }
+    normalize(dependency_node_ids);
+
+    std::set<std::shared_ptr<const ResolutionDependencySccContract>,
+             std::owner_less<std::shared_ptr<
+                 const ResolutionDependencySccContract>>>
+        withdrawn_dependency_components;
+    for (const auto node : affected_dependency_nodes) {
+        const auto previous =
+            previous_resolution_dependency_node(node);
+        if (previous != nullptr) {
+            if (previous->retained_bytes >
+                staged_resolution_dependency_retained_bytes)
+                throw std::logic_error(
+                    "Resolution-Node-Retention lief unter Null.");
+            staged_resolution_dependency_retained_bytes -=
+                previous->retained_bytes;
+        }
+        const auto component =
+            previous_resolution_dependency_component(node);
+        if (component != nullptr)
+            withdrawn_dependency_components.insert(component);
+        staged_resolution_dependency_nodes->erase(node);
+        staged_resolution_dependency_components_by_node->erase(node);
+    }
+    for (const auto& component : withdrawn_dependency_components) {
+        if (component->retained_bytes >
+            staged_resolution_dependency_retained_bytes)
+            throw std::logic_error(
+                "Resolution-SCC-Retention lief unter Null.");
+        staged_resolution_dependency_retained_bytes -=
+            component->retained_bytes;
+        if (staged_resolution_dependency_scc_count == 0u)
+            throw std::logic_error(
+                "Resolution-SCC-Zaehler lief unter Null.");
+        --staged_resolution_dependency_scc_count;
+    }
+    for (const auto& [node, shard] :
+         built_resolution_dependency_nodes) {
+        staged_resolution_dependency_nodes->insert_or_assign(node, shard);
+        add_staged_resolution_dependency_retained_bytes(
+            shard->retained_bytes);
+    }
+
+    // Condense only the affected typed weak closure. The previous per-root
+    // transitive BFS multiplied graph work and retained bytes by the number of
+    // roots; a full-epoch condensation additionally made disconnected filler
+    // inventory physical work in every Exact round.
+    std::map<ResolutionDependencyNodeId, std::size_t>
+        resolution_dependency_node_index;
+    for (std::size_t index = 0u;
+         index < dependency_node_ids.size();
+         ++index) {
+        resolution_dependency_node_index.emplace(
+            dependency_node_ids[index], index);
+    }
+    std::vector<std::vector<std::size_t>>
+        resolution_dependency_edges(dependency_node_ids.size());
+    bool root_dependency_unrepresentable =
+        tail_dependency_unrepresentable;
+    for (std::size_t index = 0u;
+         index < dependency_node_ids.size();
+         ++index) {
+        const auto found = resolution_dependency_adjacency.find(
+            dependency_node_ids[index]);
+        if (found == resolution_dependency_adjacency.end()) continue;
+        auto& edges = resolution_dependency_edges[index];
+        edges.reserve(found->second.size());
+        for (const auto target : found->second) {
+            const auto target_index =
+                resolution_dependency_node_index.find(target);
+            if (target_index ==
+                resolution_dependency_node_index.end()) {
+                root_dependency_unrepresentable = true;
+                continue;
+            }
+            edges.push_back(target_index->second);
+        }
+        normalize(edges);
+    }
+
+    constexpr auto unvisited_dependency_index =
+        std::numeric_limits<std::size_t>::max();
+    std::vector<std::vector<std::size_t>>
+        reverse_resolution_dependency_edges(
+            dependency_node_ids.size());
+    for (std::size_t source = 0u;
+         source < resolution_dependency_edges.size();
+         ++source) {
+        for (const auto target : resolution_dependency_edges[source])
+            reverse_resolution_dependency_edges[target].push_back(source);
+    }
+    for (auto& incoming : reverse_resolution_dependency_edges)
+        normalize(incoming);
+
+    // Iterative Kosaraju avoids making the host call stack proportional to a
+    // guest call chain. Both graph passes expose independently monotone
+    // progress instead of hiding a potentially long DFS behind one pulse.
+    std::vector<std::uint8_t> dependency_visit_state(
+        dependency_node_ids.size(), 0u);
+    std::vector<std::size_t> dependency_finish_order;
+    dependency_finish_order.reserve(dependency_node_ids.size());
+    struct DependencyDfsFrame final {
+        std::size_t node = 0u;
+        std::size_t next_edge = 0u;
+    };
+    std::vector<DependencyDfsFrame> dependency_dfs_stack;
+    dependency_dfs_stack.reserve(dependency_node_ids.size());
+    report_subphase_progress(
+        "resolution-root-scc-order-start",
+        "resolution-root-scc-order",
+        dependency_node_ids.size(),
+        0u,
+        dependency_node_ids.size(),
+        0u);
+    std::size_t dependency_ordered_nodes = 0u;
+    for (std::size_t seed = 0u;
+         seed < dependency_node_ids.size();
+         ++seed) {
+        if (dependency_visit_state[seed] != 0u) continue;
+        dependency_visit_state[seed] = 1u;
+        dependency_dfs_stack.push_back({seed, 0u});
+        while (!dependency_dfs_stack.empty()) {
+            auto& frame = dependency_dfs_stack.back();
+            const auto& outgoing =
+                resolution_dependency_edges[frame.node];
+            if (frame.next_edge < outgoing.size()) {
+                const auto target = outgoing[frame.next_edge++];
+                if (dependency_visit_state[target] != 0u) continue;
+                dependency_visit_state[target] = 1u;
+                dependency_dfs_stack.push_back({target, 0u});
+                continue;
+            }
+            dependency_visit_state[frame.node] = 2u;
+            dependency_finish_order.push_back(frame.node);
+            dependency_dfs_stack.pop_back();
+            ++dependency_ordered_nodes;
+            progress_subphase_processed.store(
+                dependency_ordered_nodes,
+                std::memory_order_relaxed);
+            progress_subphase_queued.store(
+                dependency_node_ids.size() -
+                    dependency_ordered_nodes,
+                std::memory_order_relaxed);
+            progress_subphase_iterations.store(
+                dependency_ordered_nodes,
+                std::memory_order_relaxed);
+            if (dependency_ordered_nodes % 128u == 0u ||
+                dependency_ordered_nodes ==
+                    dependency_node_ids.size()) {
+                report_subphase_progress(
+                    "resolution-root-scc-order-progress",
+                    "resolution-root-scc-order",
+                    dependency_node_ids.size(),
+                    dependency_ordered_nodes,
+                    dependency_node_ids.size() -
+                        dependency_ordered_nodes,
+                    dependency_ordered_nodes);
+            }
+        }
+    }
+
+    std::vector<std::vector<std::size_t>>
+        resolution_dependency_components;
+    std::vector<bool> dependency_component_assigned(
+        dependency_node_ids.size(), false);
+    std::vector<std::size_t> dependency_component_stack;
+    dependency_component_stack.reserve(dependency_node_ids.size());
+    report_subphase_progress(
+        "resolution-root-scc-components-start",
+        "resolution-root-scc-components",
+        dependency_node_ids.size(),
+        0u,
+        dependency_node_ids.size(),
+        0u);
+    std::size_t dependency_component_nodes = 0u;
+    for (auto order = dependency_finish_order.rbegin();
+         order != dependency_finish_order.rend();
+         ++order) {
+        if (dependency_component_assigned[*order]) continue;
+        auto& component =
+            resolution_dependency_components.emplace_back();
+        dependency_component_assigned[*order] = true;
+        dependency_component_stack.push_back(*order);
+        while (!dependency_component_stack.empty()) {
+            const auto node = dependency_component_stack.back();
+            dependency_component_stack.pop_back();
+            component.push_back(node);
+            ++dependency_component_nodes;
+            for (const auto predecessor :
+                 reverse_resolution_dependency_edges[node]) {
+                if (dependency_component_assigned[predecessor])
+                    continue;
+                dependency_component_assigned[predecessor] = true;
+                dependency_component_stack.push_back(predecessor);
+            }
+            progress_subphase_processed.store(
+                dependency_component_nodes,
+                std::memory_order_relaxed);
+            progress_subphase_queued.store(
+                dependency_node_ids.size() -
+                    dependency_component_nodes,
+                std::memory_order_relaxed);
+            progress_subphase_iterations.store(
+                dependency_component_nodes,
+                std::memory_order_relaxed);
+            if (dependency_component_nodes % 128u == 0u ||
+                dependency_component_nodes ==
+                    dependency_node_ids.size()) {
+                report_subphase_progress(
+                    "resolution-root-scc-components-progress",
+                    "resolution-root-scc-components",
+                    dependency_node_ids.size(),
+                    dependency_component_nodes,
+                    dependency_node_ids.size() -
+                        dependency_component_nodes,
+                    dependency_component_nodes);
+            }
+        }
+        std::sort(
+            component.begin(),
+            component.end(),
+            [&](const auto left, const auto right) {
+                return dependency_node_ids[left] <
+                       dependency_node_ids[right];
+            });
+    }
+    std::vector<std::size_t> dependency_component_by_node(
+        dependency_node_ids.size(), unvisited_dependency_index);
+    for (std::size_t component = 0u;
+         component < resolution_dependency_components.size();
+         ++component) {
+        for (const auto node :
+             resolution_dependency_components[component]) {
+            dependency_component_by_node[node] = component;
+        }
+    }
+    std::vector<std::vector<std::size_t>>
+        resolution_dependency_component_edges(
+            resolution_dependency_components.size());
+    for (std::size_t node = 0u;
+         node < resolution_dependency_edges.size();
+         ++node) {
+        const auto source_component =
+            dependency_component_by_node[node];
+        if (source_component == unvisited_dependency_index) {
+            root_dependency_unrepresentable = true;
+            continue;
+        }
+        auto& outgoing =
+            resolution_dependency_component_edges[source_component];
+        for (const auto target : resolution_dependency_edges[node]) {
+            const auto target_component =
+                dependency_component_by_node[target];
+            if (target_component == unvisited_dependency_index) {
+                root_dependency_unrepresentable = true;
+                continue;
+            }
+            if (target_component != source_component)
+                outgoing.push_back(target_component);
+        }
+    }
+    for (auto& outgoing : resolution_dependency_component_edges)
+        normalize(outgoing);
+
+    std::vector<std::shared_ptr<
+        const ResolutionDependencySccContract>>
+        current_dependency_contracts(
+            resolution_dependency_components.size());
+    std::vector<std::vector<std::size_t>>
+        resolution_dependency_component_parents(
+            resolution_dependency_components.size());
+    std::vector<std::size_t> remaining_component_dependencies(
+        resolution_dependency_components.size(), 0u);
+    for (std::size_t component = 0u;
+         component < resolution_dependency_component_edges.size();
+         ++component) {
+        remaining_component_dependencies[component] =
+            resolution_dependency_component_edges[component].size();
+        for (const auto dependency :
+             resolution_dependency_component_edges[component]) {
+            resolution_dependency_component_parents[dependency]
+                .push_back(component);
+        }
+    }
+    for (auto& parents : resolution_dependency_component_parents)
+        normalize(parents);
+    std::set<std::pair<ResolutionDependencyNodeId, std::size_t>>
+        ready_dependency_components;
+    for (std::size_t component = 0u;
+         component < resolution_dependency_components.size();
+         ++component) {
+        if (remaining_component_dependencies[component] == 0u) {
+            ready_dependency_components.emplace(
+                dependency_node_ids[
+                    resolution_dependency_components[component].front()],
+                component);
+        }
+    }
+    report_subphase_progress(
+        "resolution-root-contracts-start",
+        "resolution-root-contracts",
+        resolution_dependency_components.size(),
+        0u,
+        resolution_dependency_components.size(),
+        0u);
+    std::size_t dependency_contracts_materialized = 0u;
+    std::size_t physical_dependency_sccs_built = 0u;
+    std::size_t physical_dependency_sccs_reused = 0u;
+    std::set<std::shared_ptr<const ResolutionDependencySccContract>,
+             std::owner_less<std::shared_ptr<
+                 const ResolutionDependencySccContract>>>
+        reused_dependency_components;
+    std::set<ResolutionDependencyNodeId>
+        changed_dependency_scc_entries;
+    while (!ready_dependency_components.empty()) {
+        const auto component =
+            ready_dependency_components.begin()->second;
+        ready_dependency_components.erase(
+            ready_dependency_components.begin());
+        std::vector<ResolutionDependencyNodeId> members;
+        std::vector<std::shared_ptr<const std::vector<std::uint8_t>>>
+            node_contracts;
+        members.reserve(
+            resolution_dependency_components[component].size());
+        node_contracts.reserve(
+            resolution_dependency_components[component].size());
+        for (const auto node :
+             resolution_dependency_components[component]) {
+            const auto id = dependency_node_ids[node];
+            members.push_back(id);
+            const auto contract = resolution_dependency_nodes.find(id);
+            if (contract == resolution_dependency_nodes.end()) {
+                root_dependency_unrepresentable = true;
+                node_contracts.push_back(
+                    std::make_shared<const std::vector<std::uint8_t>>());
+            } else {
+                node_contracts.push_back(contract->second);
+            }
+        }
+        std::vector<std::shared_ptr<
+            const ResolutionDependencySccContract>> dependencies;
+        dependencies.reserve(
+            resolution_dependency_component_edges[component].size());
+        for (const auto target :
+             resolution_dependency_component_edges[component]) {
+            if (current_dependency_contracts[target] == nullptr)
+                throw std::logic_error(
+                    "Resolution-SCC-Vertrag wurde nicht callee-first aufgebaut.");
+            dependencies.push_back(
+                current_dependency_contracts[target]);
+        }
+        std::sort(
+            dependencies.begin(),
+            dependencies.end(),
+            [](const auto& left, const auto& right) {
+                return std::lexicographical_compare(
+                    left->members.begin(), left->members.end(),
+                    right->members.begin(), right->members.end());
+            });
+
+        std::shared_ptr<const ResolutionDependencySccContract> contract;
+        if (!members.empty()) {
+            const auto previous =
+                previous_resolution_dependency_component(members.front());
+            if (previous != nullptr) {
+                const auto& candidate = *previous;
+                bool exact =
+                    candidate.members == members &&
+                    candidate.node_contracts.size() ==
+                        node_contracts.size() &&
+                    candidate.dependencies.size() ==
+                        dependencies.size();
+                for (std::size_t index = 0u;
+                     exact && index < node_contracts.size();
+                     ++index) {
+                    exact = *candidate.node_contracts[index] ==
+                            *node_contracts[index];
+                }
+                for (std::size_t index = 0u;
+                     exact && index < dependencies.size();
+                     ++index) {
+                    exact = candidate.dependencies[index] ==
+                            dependencies[index];
+                }
+                if (exact) contract = previous;
+            }
+        }
+        if (contract == nullptr) {
+            auto created =
+                std::make_shared<ResolutionDependencySccContract>();
+            created->members = std::move(members);
+            created->node_contracts = std::move(node_contracts);
+            created->dependencies = std::move(dependencies);
+            created->retained_bytes =
+                sizeof(ResolutionDependencySccContract) +
+                created->members.capacity() *
+                    sizeof(ResolutionDependencyNodeId) +
+                created->node_contracts.capacity() *
+                    sizeof(std::shared_ptr<const std::vector<
+                        std::uint8_t>>) +
+                created->dependencies.capacity() *
+                    sizeof(std::shared_ptr<const
+                               ResolutionDependencySccContract>);
+            contract = std::shared_ptr<
+                const ResolutionDependencySccContract>{
+                    std::move(created)};
+            changed_dependency_scc_entries.insert(
+                contract->members.front());
+            ++physical_dependency_sccs_built;
+        } else {
+            reused_dependency_components.insert(contract);
+            ++physical_dependency_sccs_reused;
+        }
+        current_dependency_contracts[component] = contract;
+        for (const auto member : contract->members) {
+            staged_resolution_dependency_components_by_node
+                ->insert_or_assign(member, contract);
+        }
+        ++staged_resolution_dependency_scc_count;
+        add_staged_resolution_dependency_retained_bytes(
+            contract->retained_bytes);
+        ++dependency_contracts_materialized;
+        progress_subphase_processed.store(
+            dependency_contracts_materialized,
+            std::memory_order_relaxed);
+        progress_subphase_queued.store(
+            resolution_dependency_components.size() -
+                dependency_contracts_materialized,
+            std::memory_order_relaxed);
+        progress_subphase_iterations.store(
+            dependency_contracts_materialized,
+            std::memory_order_relaxed);
+        if (dependency_contracts_materialized % 128u == 0u ||
+            dependency_contracts_materialized ==
+                resolution_dependency_components.size()) {
+            report_subphase_progress(
+                "resolution-root-contracts-progress",
+                "resolution-root-contracts",
+                resolution_dependency_components.size(),
+                dependency_contracts_materialized,
+                resolution_dependency_components.size() -
+                    dependency_contracts_materialized,
+                dependency_contracts_materialized);
+        }
+        for (const auto parent :
+             resolution_dependency_component_parents[component]) {
+            if (remaining_component_dependencies[parent] == 0u)
+                throw std::logic_error(
+                    "Resolution-SCC-Abhaengigkeitszaehler lief unter Null.");
+            --remaining_component_dependencies[parent];
+            if (remaining_component_dependencies[parent] == 0u) {
+                ready_dependency_components.emplace(
+                    dependency_node_ids[
+                        resolution_dependency_components[parent].front()],
+                    parent);
+            }
+        }
+    }
+    if (dependency_contracts_materialized !=
+        resolution_dependency_components.size())
+        throw std::logic_error(
+            "Der kondensierte Resolution-Abhaengigkeitsgraph blieb unvollstaendig.");
+    for (const auto& component : withdrawn_dependency_components) {
+        if (!reused_dependency_components.contains(component) &&
+            !component->members.empty())
+            changed_dependency_scc_entries.insert(
+                component->members.front());
+    }
+
+    struct ResolutionRootPlan final {
+        std::vector<std::uint8_t> root_contract_bytes;
+        std::vector<std::shared_ptr<
+            const ResolutionDependencySccContract>> dependency_roots;
+        std::shared_ptr<const ResolutionRootArtifact> reused_artifact;
+        bool representable = true;
+    };
+    std::vector<ResolutionRootPlan> resolution_root_plans(
+        resolution_functions.size());
+    report_subphase_progress(
+        "resolution-root-plan-start",
+        "resolution-root-plan",
+        resolution_functions.size(),
+        0u,
+        resolution_functions.size(),
+        0u);
+    resolution_preparation_entries_visited += resolution_functions.size();
+    for (std::size_t index = 0u;
+         index < resolution_functions.size();
+         ++index) {
+        const auto root =
+            resolution_functions[index]->entry_address;
+        auto& plan = resolution_root_plans[index];
+        std::vector<ResolutionDependencyNodeId> root_nodes{
+            {root, ResolutionDependencyNodeKind::Function}};
+        const bool contextual_coordinator =
+            global_contextual_return_coordinator.has_value() &&
+            root == *global_contextual_return_coordinator;
+        if (contextual_coordinator) {
+            resolution_preparation_entries_visited +=
+                contextual_candidate_return_owners.size();
+            for (const auto owner :
+                 contextual_candidate_return_owners) {
+                root_nodes.push_back(
+                    {owner,
+                     ResolutionDependencyNodeKind::Function});
+            }
+        }
+        normalize(root_nodes);
+        resolution_preparation_entries_visited += root_nodes.size();
+        for (const auto node : root_nodes) {
+            const auto* const component =
+                staged_resolution_dependency_components_by_node->find(
+                    node);
+            if (component == nullptr || *component == nullptr) {
+                plan.representable = false;
+                continue;
+            }
+            plan.dependency_roots.push_back(*component);
+        }
+        std::sort(
+            plan.dependency_roots.begin(),
+            plan.dependency_roots.end(),
+            [](const auto& left, const auto& right) {
+                return std::lexicographical_compare(
+                    left->members.begin(), left->members.end(),
+                    right->members.begin(), right->members.end());
+            });
+        plan.dependency_roots.erase(
+            std::unique(plan.dependency_roots.begin(),
+                        plan.dependency_roots.end()),
+            plan.dependency_roots.end());
+        EvaluationKeyEncoder root_key;
+        root_key.append(function_analysis_epoch_schema_version);
+        root_key.append(image.analysis_instance_identity());
+        root_key.append(image.analysis_revision());
+        root_key.append(image.guest_call_abi());
+        root_key.append(root);
+        root_key.append(contextual_coordinator);
+        root_key.append(forwarded_evidence_tokens.empty());
+        root_key.append_range(
+            root_nodes,
+            [&](const auto node) {
+                root_key.append(node.address);
+                root_key.append(
+                    static_cast<std::uint8_t>(node.kind));
+            });
+        if (contextual_coordinator) {
+            root_key.append_range(
+                contextual_candidate_return_owners,
+                [&](const auto owner) { root_key.append(owner); });
+            std::vector<std::uint64_t> pairs{
+                candidate_call_pairs.begin(),
+                candidate_call_pairs.end()};
+            resolution_preparation_entries_visited += pairs.size();
+            normalize(pairs);
+            root_key.append_range(
+                pairs,
+                [&](const auto pair) { root_key.append(pair); });
+        }
+        plan.root_contract_bytes =
+            std::move(root_key).finish();
+        root_dependency_unrepresentable =
+            root_dependency_unrepresentable || !plan.representable;
+        const auto planned = index + 1u;
+        progress_subphase_processed.store(
+            planned, std::memory_order_relaxed);
+        progress_subphase_queued.store(
+            resolution_functions.size() - planned,
+            std::memory_order_relaxed);
+        progress_subphase_iterations.store(
+            planned, std::memory_order_relaxed);
+        if (planned % 128u == 0u ||
+            planned == resolution_functions.size()) {
+            report_subphase_progress(
+                "resolution-root-plan-progress",
+                "resolution-root-plan",
+                resolution_functions.size(),
+                planned,
+                resolution_functions.size() - planned,
+                planned);
+        }
+    }
+
+    std::size_t resolution_epoch_retained_bytes =
+        staged_resolution_dependency_retained_bytes;
+    auto resolution_retention_limit_reason =
+        ResolutionRetentionLimitReason::None;
+    bool resolution_epoch_retention_enabled = true;
+    const auto mark_resolution_retention_limit =
+        [&](const ResolutionRetentionLimitReason reason) {
+            if (resolution_retention_limit_reason ==
+                ResolutionRetentionLimitReason::None) {
+                resolution_retention_limit_reason = reason;
+            }
+            resolution_epoch_retention_enabled = false;
+            resolution_epoch_retained_bytes = 0u;
+        };
+    if (staged_resolution_dependency_nodes->size() >
+            session.impl_->maximum_resolution_dependency_nodes ||
+        staged_resolution_dependency_scc_count >
+            session.impl_->maximum_resolution_dependency_nodes) {
+        mark_resolution_retention_limit(
+            ResolutionRetentionLimitReason::DependencyNodeLimit);
+    }
+    if (resolution_epoch_retention_enabled &&
+        resolution_epoch_retained_bytes >
+            session.impl_->maximum_resolution_epoch_retained_bytes) {
+        mark_resolution_retention_limit(
+            ResolutionRetentionLimitReason::ByteLimit);
+    }
+    const auto retain_resolution_bytes =
+        [&](const std::size_t count) {
+            if (!resolution_epoch_retention_enabled) return;
+            const auto limit =
+                session.impl_->maximum_resolution_epoch_retained_bytes;
+            if (count > limit -
+                            std::min(resolution_epoch_retained_bytes,
+                                     limit)) {
+                mark_resolution_retention_limit(
+                    ResolutionRetentionLimitReason::ByteLimit);
+                return;
+            }
+            resolution_epoch_retained_bytes += count;
+        };
+
+    if (root_dependency_unrepresentable &&
+        !bypass_all_persistent_analysis_state) {
+        throw ResolutionDependencyColdRestart{
+            program_input_arena, result.result_materialization};
+    }
+
+    bool root_full_cpu_recompute =
+        bypass_all_persistent_analysis_state;
+    if (root_dependency_unrepresentable) {
+        root_full_cpu_recompute = true;
+        if (!bypass_all_persistent_analysis_state) {
+            session.impl_->full_cpu_recompute_fallbacks.fetch_add(
+                1u, std::memory_order_relaxed);
+        }
+    }
+    if (!resolution_epoch_retention_enabled) {
+        staged_resolution_dependency_nodes =
+            std::make_shared<ResolutionDependencyNodeIndex>();
+        staged_resolution_dependency_components_by_node =
+            std::make_shared<ResolutionDependencyComponentIndex>();
+        staged_resolution_dependency_scc_count = 0u;
+        staged_resolution_dependency_retained_bytes = 0u;
+    }
+    result.full_cpu_recompute_fallbacks =
+        root_full_cpu_recompute ? 1u : 0u;
+    const auto root_artifact_matches =
+        [&](const ResolutionRootArtifact& artifact,
+            const ResolutionRootPlan& plan) {
+        return previous_epoch != nullptr &&
+               plan.representable &&
+               artifact.root_contract_bytes ==
+                   plan.root_contract_bytes &&
+               artifact.dependency_roots == plan.dependency_roots;
+    };
+    if (!root_full_cpu_recompute &&
+        resolution_epoch_retention_enabled &&
+        previous_epoch != nullptr &&
+        previous_epoch->schema_version ==
+            function_analysis_epoch_schema_version) {
+        resolution_preparation_entries_visited +=
+            resolution_functions.size();
+        for (std::size_t index = 0u;
+             index < resolution_functions.size();
+             ++index) {
+            auto& plan = resolution_root_plans[index];
+            const auto root =
+                resolution_functions[index]->entry_address;
+            const auto previous_artifact =
+                find_reusable_resolution_root_artifact(
+                    *previous_epoch, root);
+            if (previous_artifact == nullptr ||
+                !root_artifact_matches(*previous_artifact, plan))
+                continue;
+            plan.reused_artifact = previous_artifact;
+        }
+    }
+
+    std::set<std::uint32_t> dirty_function_addresses{
+        summary_dirty_functions.begin(),
+        summary_dirty_functions.end()};
+    resolution_preparation_entries_visited +=
+        summary_dirty_functions.size() + graph_dirty_functions.size() +
+        abi_contract_dirty.size() + changed_dependency_nodes.size();
+    dirty_function_addresses.insert(graph_dirty_functions.begin(),
+                                    graph_dirty_functions.end());
+    dirty_function_addresses.insert(abi_contract_dirty.begin(),
+                                    abi_contract_dirty.end());
+    for (const auto node : changed_dependency_nodes) {
+        if (node.kind == ResolutionDependencyNodeKind::Function &&
+            (dependency_function(node) != nullptr ||
+             previous_resolution_dependency_node(node) != nullptr))
+            dirty_function_addresses.insert(node.address);
+    }
+    result.incremental_dirty_functions.assign(
+        dirty_function_addresses.begin(),
+        dirty_function_addresses.end());
+    const auto public_dependency_node =
+        [](const ResolutionDependencyNodeId node) {
+            return FunctionValueDependencyNodeId{
+                node.address,
+                node.kind == ResolutionDependencyNodeKind::Function
+                    ? FunctionValueDependencyNodeKind::Function
+                    : FunctionValueDependencyNodeKind::InventoryRegion};
+        };
+    resolution_preparation_entries_visited +=
+        changed_dependency_scc_entries.size();
+    for (const auto component : changed_dependency_scc_entries) {
+        result.incremental_dirty_scc_entries.push_back(
+            public_dependency_node(component));
+    }
+    normalize(result.incremental_dirty_scc_entries);
+    std::set<std::uint32_t> dirty_inventory_sinks;
+    resolution_preparation_entries_visited +=
+        functions_reaching_guarded_inventory_sink.size();
+    for (const auto address :
+         functions_reaching_guarded_inventory_sink) {
+        const bool membership_changed =
+            previous_epoch == nullptr ||
+            !previous_epoch->inventory_sink_functions.contains(address);
+        if (membership_changed ||
+            dirty_function_addresses.contains(address))
+            dirty_inventory_sinks.insert(address);
+    }
+    if (previous_epoch != nullptr) {
+        resolution_preparation_entries_visited +=
+            previous_epoch->inventory_sink_functions.size();
+        for (const auto address :
+             previous_epoch->inventory_sink_functions) {
+            if (!functions_reaching_guarded_inventory_sink.contains(
+                    address))
+                dirty_inventory_sinks.insert(address);
+        }
+    }
+    result.incremental_dirty_inventory_sinks.assign(
+        dirty_inventory_sinks.begin(),
+        dirty_inventory_sinks.end());
+    run_work.resolution_dependency_nodes_built.store(
+        physical_dependency_nodes_built,
+        std::memory_order_relaxed);
+    run_work.resolution_dependency_nodes_reused.store(
+        physical_dependency_nodes_reused,
+        std::memory_order_relaxed);
+    run_work.resolution_dependency_sccs_built.store(
+        physical_dependency_sccs_built,
+        std::memory_order_relaxed);
+    run_work.resolution_dependency_sccs_reused.store(
+        physical_dependency_sccs_reused,
+        std::memory_order_relaxed);
+    resolution_preparation_entries_visited += resolution_functions.size();
+    for (std::size_t index = 0u;
+         index < resolution_functions.size();
+         ++index) {
+        const auto root = resolution_functions[index]->entry_address;
+        if (resolution_root_plans[index].reused_artifact != nullptr)
+            result.resolution_root_artifacts_reused.push_back(root);
+        else
+            result.resolution_root_artifacts_recomputed.push_back(root);
+    }
+    run_work.resolution_preparation_entries_visited.store(
+        resolution_preparation_entries_visited,
+        std::memory_order_relaxed);
+    {
+        // The heartbeat reads this ledger while analysis continues. Publish
+        // total/reused/recomputed and the associated dirty/fallback snapshot
+        // under its callback mutex so no observer can see a torn equation.
+        const std::lock_guard lock(progress_callback_mutex);
+        progress_resolution_root_artifacts_total.store(
+            resolution_functions_total,
+            std::memory_order_relaxed);
+        progress_resolution_root_artifacts_reused.store(
+            result.resolution_root_artifacts_reused.size(),
+            std::memory_order_relaxed);
+        progress_resolution_root_artifacts_recomputed.store(
+            result.resolution_root_artifacts_recomputed.size(),
+            std::memory_order_relaxed);
+        progress_dirty_sccs.store(
+            result.incremental_dirty_scc_entries.size(),
+            std::memory_order_relaxed);
+        progress_dirty_functions.store(
+            result.incremental_dirty_functions.size(),
+            std::memory_order_relaxed);
+        progress_dirty_inventory_sinks.store(
+            result.incremental_dirty_inventory_sinks.size(),
+            std::memory_order_relaxed);
+        progress_full_cpu_recompute_fallbacks.store(
+            result.full_cpu_recompute_fallbacks,
+            std::memory_order_relaxed);
+    }
     const auto make_multi_root_provenance_lens =
         [&](const std::uint32_t function_entry,
+            const TailIngressTargetKind target_kind,
             const AbstractState& input,
             const EvaluationLens requested_lens,
             const std::set<std::uint32_t>* const isolated_call_sites)
@@ -17986,6 +25301,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     input,
                     requested_lens,
                     function_entry,
+                    target_kind,
                     forwarded_register_reads,
                     abi_stack_argument_reads,
                     !result.budget_exhausted);
@@ -18019,6 +25335,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 1u, std::memory_order_relaxed);
             auto evidence_lens = make_multi_root_provenance_lens(
                 context.function->entry_address,
+                context.target_kind,
                 context.input,
                 context.isolated
                     ? EvaluationLens::IsolatedObservation
@@ -18050,12 +25367,16 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 local_tail_ingresses,
                 &diagnostics,
                 &abi_stack_argument_reads,
-                target_abi_inventory_sink_sources(
-                    context.target),
+                context.tail
+                    ? tail_abi_inventory_sink_sources(
+                          {context.target, context.target_kind})
+                    : target_abi_inventory_sink_sources(
+                          context.target),
                 false,
                 false,
                 &multi_root_context_evaluations,
-                true);
+                true,
+                context.target_kind);
             if (evidence_lens.has_value())
                 multi_root_provenance_links.fetch_add(
                     evidence_lens->link_count(),
@@ -18071,8 +25392,6 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 cached.second};
         };
     const auto evaluate_resolution_function = [&](const std::size_t function_index) {
-        progress_resolution_functions_started.fetch_add(
-            1u, std::memory_order_relaxed);
         ResolutionFunctionResult function_result;
         std::size_t next_root_resolution_compaction =
             std::size_t{1'024u};
@@ -18133,6 +25452,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto record_forwarded_store_limit =
             [&](const ForwardedStoreContextLimitReason reason,
                 const std::uint32_t target,
+                const TailIngressTargetKind target_kind,
                 const bool tail,
                 const bool isolated,
                 const std::set<std::uint32_t>& root_call_sites,
@@ -18163,6 +25483,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         function_result.forwarded_store_contexts.end(),
                         [&](const auto& context) {
                             return context.target == target &&
+                                   context.target_kind == target_kind &&
                                    context.tail == tail &&
                                    context.isolated == isolated;
                         }));
@@ -18223,6 +25544,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto enqueue_forwarded_context =
             [&](const FunctionInfo* target_function,
                 const std::uint32_t target,
+                const TailIngressTargetKind target_kind,
                 const bool tail,
                 const bool isolated,
                 AbstractState forwarded_input,
@@ -18234,8 +25556,11 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 // the exact-shape path below, so their evidence is never
                 // cross-correlated by widening.
                 const auto context_key =
-                    (static_cast<std::uint64_t>(target) << 2u) |
-                    (tail ? 2u : 0u) |
+                    (static_cast<std::uint64_t>(target) << 3u) |
+                    (tail ? 4u : 0u) |
+                    (target_kind == TailIngressTargetKind::InventoryRegion
+                         ? 2u
+                         : 0u) |
                     (isolated ? 1u : 0u);
                 auto& context_indices =
                     function_result
@@ -18285,6 +25610,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                             record_forwarded_store_limit(
                                 ForwardedStoreContextLimitReason::RootCallSites,
                                 context.target,
+                                context.target_kind,
                                 context.tail,
                                 context.isolated,
                                 root_call_sites,
@@ -18335,6 +25661,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     record_forwarded_store_limit(
                         ForwardedStoreContextLimitReason::ContextCount,
                         target,
+                        target_kind,
                         tail,
                         isolated,
                         root_call_sites,
@@ -18354,6 +25681,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     record_forwarded_store_limit(
                         ForwardedStoreContextLimitReason::RootCallSites,
                         target,
+                        target_kind,
                         tail,
                         isolated,
                         root_call_sites,
@@ -18367,6 +25695,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 ForwardedStoreContext context;
                 context.function = target_function;
                 context.target = target;
+                context.target_kind = target_kind;
                 context.tail = tail;
                 context.isolated = isolated;
                 context.input = std::move(forwarded_input);
@@ -18393,9 +25722,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
         const auto harvest_direct_local_persistent_store =
             [&](const FunctionEvaluation::CallArguments& forwarded)
                 -> DirectLocalPersistentStoreHarvest {
-                if (!semantic_call_pairs.contains(
-                        candidate_call_pair_key(forwarded.call_site,
-                                                forwarded.callee)))
+                if (!is_semantic_call_pair(forwarded.call_site,
+                                           forwarded.callee))
                     return DirectLocalPersistentStoreHarvest::NotApplicable;
                 const auto sites = final_direct_local_persistent_store_sites.find(
                     forwarded.callee);
@@ -18578,6 +25906,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 enqueue_forwarded_context(
                     forwarded_function->second,
                     forwarded.callee,
+                    TailIngressTargetKind::Function,
                     false,
                     isolated,
                     isolated_store_input(forwarded.call_site,
@@ -18593,8 +25922,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
             [&](const FunctionEvaluation::InventoryTransfer& forwarded,
                 const bool isolated,
                 const std::set<std::uint32_t>& root_call_sites) {
-                if (unresolved_stack_callback_loss_reaches_inventory_sink(
-                        forwarded.state, forwarded.target)) {
+                const TailIngressTarget target{
+                    forwarded.target, forwarded.target_kind};
+                if (unresolved_stack_callback_loss_reaches_tail_sink(
+                        forwarded.state, target)) {
                     function_result.walk_diagnostics.abi_stack_base_unresolved =
                         true;
                     emit_analyzer_stack_diagnostic(
@@ -18603,21 +25934,44 @@ detail::analyze_function_values_with_guarded_entry_cache(
                 }
                 if (!has_forwarded_inventory_payload(forwarded.state))
                     return;
-                const auto region =
-                    final_inventory_region_by_address.find(forwarded.target);
-                if (region == final_inventory_region_by_address.end()) return;
+                const FunctionInfo* target_function = nullptr;
+                if (forwarded.target_kind ==
+                    TailIngressTargetKind::Function) {
+                    const auto target_entry =
+                        final_function_by_address.find(forwarded.target);
+                    if (target_entry != final_function_by_address.end())
+                        target_function = target_entry->second;
+                } else {
+                    const auto region =
+                        final_inventory_region_by_address.find(
+                            forwarded.target);
+                    if (region != final_inventory_region_by_address.end())
+                        target_function = region->second;
+                }
+                if (target_function == nullptr) {
+                    function_result.walk_diagnostics
+                        .inventory_tail_target_unresolved = true;
+                    return;
+                }
                 const AbiStackArgumentReadSet* required_stack_reads = nullptr;
-                if (const auto reads =
-                        abi_stack_argument_reads.find(forwarded.target);
-                    reads != abi_stack_argument_reads.end())
-                    required_stack_reads = &reads->second;
+                if (forwarded.target_kind ==
+                    TailIngressTargetKind::Function) {
+                    if (const auto reads =
+                            abi_stack_argument_reads.find(forwarded.target);
+                        reads != abi_stack_argument_reads.end())
+                        required_stack_reads = &reads->second;
+                }
                 const std::uint16_t* required_register_reads = nullptr;
-                if (const auto reads =
-                        forwarded_register_reads.find(forwarded.target);
-                    reads != forwarded_register_reads.end())
-                    required_register_reads = &reads->second;
-                enqueue_forwarded_context(region->second,
+                if (forwarded.target_kind ==
+                    TailIngressTargetKind::Function) {
+                    if (const auto reads =
+                            forwarded_register_reads.find(forwarded.target);
+                        reads != forwarded_register_reads.end())
+                        required_register_reads = &reads->second;
+                }
+                enqueue_forwarded_context(target_function,
                                           forwarded.target,
+                                          forwarded.target_kind,
                                           true,
                                           isolated,
                                           tail_store_input(
@@ -18701,7 +26055,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                                     item.context_index];
                             const TailIngressMap*
                                 local_tail_ingresses = nullptr;
-                            if (context.tail) {
+                            if (context.tail &&
+                                context.target_kind ==
+                                    TailIngressTargetKind::InventoryRegion) {
                                 const auto local =
                                     final_inventory_region_tail_ingresses_by_entry
                                         .find(context.target);
@@ -18764,6 +26120,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                             ForwardedStoreContextLimitReason::
                                 ReevaluationCount,
                             context.target,
+                            context.target_kind,
                             context.tail,
                             context.isolated,
                             context.root_call_sites,
@@ -18784,7 +26141,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         item.error = {};
                         const TailIngressMap*
                             local_tail_ingresses = nullptr;
-                        if (context.tail) {
+                        if (context.tail &&
+                            context.target_kind ==
+                                TailIngressTargetKind::InventoryRegion) {
                             const auto local =
                                 final_inventory_region_tail_ingresses_by_entry
                                     .find(context.target);
@@ -19109,7 +26468,9 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         const bool contextual_helper_call =
                             candidate_context_functions.contains(
                                 item.address) &&
-                            semantic_call_pairs.contains(pair) &&
+                            is_semantic_call_pair(
+                                observation.call_site,
+                                observation.callee) &&
                             has_contextual_candidate_abi_argument(
                                 observation.state,
                                 contextual_entry_register_reads(
@@ -19299,7 +26660,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         resolution.reason =
                             resolution.targets.empty()
                                 ? "global-contexts-unknown"
-                                : "global-contexts-partial";
+                                : "merged-contexts-partial";
                     }
                     for (auto& transfer :
                          stable.evaluation.inventory_transfers) {
@@ -19411,6 +26772,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         isolated.evidence_lens =
                             make_multi_root_provenance_lens(
                                 function->entry_address,
+                                TailIngressTargetKind::Function,
                                 concrete_input,
                                 EvaluationLens::IsolatedObservation,
                                 &root_call_sites);
@@ -19522,6 +26884,32 @@ detail::analyze_function_values_with_guarded_entry_cache(
         return finalize_root_result();
     };
 
+    const auto evaluate_or_reuse_resolution_function =
+        [&](const std::size_t function_index) {
+        progress_resolution_functions_started.fetch_add(
+            1u, std::memory_order_relaxed);
+        const auto& plan = resolution_root_plans.at(function_index);
+        if (plan.reused_artifact != nullptr) {
+            ResolutionFunctionResult reused;
+            reused.root_index = function_index;
+            reused.persistent_artifact = plan.reused_artifact;
+            reused.persistent_artifact_reused = true;
+            reused.walk_diagnostics =
+                plan.reused_artifact->walk_diagnostics;
+            // Cache hit/miss counts describe physical work in this run. They
+            // are never semantic artifact state and must not be replayed from
+            // the epoch that produced the root.
+            reused.walk_diagnostics
+                .forwarded_store_evaluation_cache_hits = 0u;
+            reused.walk_diagnostics
+                .forwarded_store_evaluation_cache_misses = 0u;
+            return reused;
+        }
+        auto resolved = evaluate_resolution_function(function_index);
+        resolved.root_index = function_index;
+        return resolved;
+    };
+
     // Resolution roots are pure and may finish in any order, but inventory
     // admission is deliberately order-sensitive: the bounded raw-candidate
     // collector keeps deterministic top-K evidence and supports later
@@ -19531,12 +26919,213 @@ detail::analyze_function_values_with_guarded_entry_cache(
     // resolution inventory is published.
     std::optional<GuardedCodeInventoryCollector>
         resolution_inventory_candidate;
-    if (!result.budget_exhausted)
+    const auto staged_presentation_baseline_diagnostics =
+        inventory_walk_diagnostics;
+    const auto publish_owner_deltas =
+        result.result_materialization ==
+        FunctionValueResultMaterialization::DeltaOnly;
+    if (publish_owner_deltas) {
+        auto baseline_inventory =
+            GuardedCodeInventoryCollector{false}.finish();
+        baseline_inventory.walk_diagnostics =
+            staged_presentation_baseline_diagnostics;
+        result.guarded_code_inventory_replacements.push_back(
+            {{0u,
+              FunctionValueDependencyNodeKind::AnalysisBaseline},
+             std::move(baseline_inventory)});
+    }
+    if (!result.budget_exhausted &&
+        result.result_materialization ==
+            FunctionValueResultMaterialization::TerminalFull)
         resolution_inventory_candidate.emplace(
             guarded_inventory_collector);
     bool resolution_local_fixpoint_budget_exhausted = false;
+    using ResolutionRootArtifactIndex =
+        FunctionAnalysisEpoch::ResolutionRootArtifactIndex;
+    auto staged_resolution_root_artifacts =
+        previous_epoch != nullptr &&
+                previous_epoch->resolution_root_artifacts != nullptr
+            ? std::make_shared<ResolutionRootArtifactIndex>(
+                  *previous_epoch->resolution_root_artifacts)
+            : std::make_shared<ResolutionRootArtifactIndex>();
+    auto staged_presentation_root_artifacts =
+        previous_epoch != nullptr &&
+                previous_epoch->presentation_root_artifacts != nullptr
+            ? std::make_shared<ResolutionRootArtifactIndex>(
+                  *previous_epoch->presentation_root_artifacts)
+            : std::make_shared<ResolutionRootArtifactIndex>();
+    // Recomputed roots are withdrawn from the semantic reuse index before
+    // evaluation. They become visible again only after complete retention.
+    for (const auto root : result.resolution_root_artifacts_recomputed)
+        staged_resolution_root_artifacts->erase(root);
+    for (const auto removed : result.removed_summary_shards) {
+        if (removed.kind !=
+            FunctionValueDependencyNodeKind::Function)
+            continue;
+        staged_resolution_root_artifacts->erase(removed.address);
+        staged_presentation_root_artifacts->erase(removed.address);
+        if (publish_owner_deltas) {
+            result.removed_guarded_code_inventory_shards.push_back(
+                removed);
+            result.removed_resolution_shards.push_back(
+                removed);
+        }
+    }
+    // A surviving function can cease to be a resolution/inventory root after
+    // a local contract withdrawal. Remove that old owner shard explicitly;
+    // summary-removal alone only covers functions which disappeared entirely.
+    for (const auto address : result.incremental_dirty_functions) {
+        const auto current_root = std::lower_bound(
+            resolution_functions.begin(),
+            resolution_functions.end(),
+            address,
+            [](const FunctionInfo* const function,
+               const std::uint32_t candidate_address) {
+                return function->entry_address < candidate_address;
+            });
+        const auto still_a_root =
+            current_root != resolution_functions.end() &&
+            (*current_root)->entry_address == address;
+        if (still_a_root || previous_epoch == nullptr ||
+            previous_epoch->presentation_root_artifacts == nullptr ||
+            previous_epoch->presentation_root_artifacts->find(address) ==
+                nullptr)
+            continue;
+        staged_resolution_root_artifacts->erase(address);
+        staged_presentation_root_artifacts->erase(address);
+        const FunctionValueDependencyNodeId owner{
+            address, FunctionValueDependencyNodeKind::Function};
+        if (publish_owner_deltas) {
+            result.removed_resolution_shards.push_back(owner);
+            result.removed_guarded_code_inventory_shards.push_back(owner);
+        }
+    }
+    normalize(result.removed_resolution_shards);
+    normalize(result.removed_guarded_code_inventory_shards);
+    std::size_t retained_resolution_root_artifacts = 0u;
+    const auto resolution_root_retained_bytes =
+        [&](const ResolutionRootArtifact& artifact)
+            -> std::optional<std::size_t> {
+        std::size_t bytes = 0u;
+        bool valid = true;
+        const auto add = [&](const std::size_t count) {
+            if (!valid) return;
+            if (count >
+                    session.impl_->maximum_resolution_epoch_retained_bytes -
+                            std::min(
+                                bytes,
+                                session.impl_->
+                                    maximum_resolution_epoch_retained_bytes)) {
+                valid = false;
+                return;
+            }
+            bytes += count;
+        };
+        add(sizeof(ResolutionRootArtifact));
+        add(artifact.root_contract_bytes.capacity() *
+            sizeof(std::uint8_t));
+        add(artifact.dependency_roots.capacity() *
+            sizeof(std::shared_ptr<
+                const ResolutionDependencySccContract>));
+        add(artifact.resolutions.capacity() *
+            sizeof(InterproceduralTargetResolution));
+        add(artifact.inventory.retained_heap_bytes());
+        add(artifact.walk_diagnostics
+                .forwarded_store_context_limit_diagnostics.capacity() *
+            sizeof(ForwardedStoreContextLimitDiagnostic));
+        add(sizeof(std::uint32_t));
+        add(sizeof(std::shared_ptr<const ResolutionRootArtifact>));
+        add(5u * sizeof(void*));
+        for (const auto& resolution : artifact.resolutions) {
+            add(resolution.targets.capacity() * sizeof(std::uint32_t));
+            add(resolution.call_sites.capacity() * sizeof(std::uint32_t));
+            add(resolution.callees.capacity() * sizeof(std::uint32_t));
+            add(retained_heap_bytes(resolution.reason));
+        }
+        if (!valid) return std::nullopt;
+        return bytes;
+    };
+    const auto disable_resolution_epoch_retention =
+        [&](const ResolutionRetentionLimitReason reason) {
+        mark_resolution_retention_limit(reason);
+        retained_resolution_root_artifacts = 0u;
+        staged_resolution_root_artifacts =
+            std::make_shared<ResolutionRootArtifactIndex>();
+        staged_resolution_dependency_nodes =
+            std::make_shared<ResolutionDependencyNodeIndex>();
+        staged_resolution_dependency_components_by_node =
+            std::make_shared<ResolutionDependencyComponentIndex>();
+        staged_resolution_dependency_scc_count = 0u;
+        staged_resolution_dependency_retained_bytes = 0u;
+    };
     const auto commit_resolution_result =
         [&](ResolutionFunctionResult resolved) {
+        bool retain_artifact_for_next_epoch = false;
+        bool artifact_representable =
+            resolved.persistent_artifact_reused;
+        if (resolved.persistent_artifact == nullptr &&
+            resolved.root_index < resolution_root_plans.size() &&
+            !resolved.local_fixpoint_budget_exhausted &&
+            !resolved.walk_diagnostics.truncated() &&
+            !resolved.inventory.replay_truncated()) {
+            const auto& plan =
+                resolution_root_plans[resolved.root_index];
+            artifact_representable = plan.representable;
+            resolved.inventory.discard_transient_caches();
+            auto artifact =
+                std::make_shared<ResolutionRootArtifact>();
+            artifact->root_address =
+                resolution_functions
+                    .at(resolved.root_index)
+                    ->entry_address;
+            if (plan.representable) {
+                artifact->root_contract_bytes =
+                    plan.root_contract_bytes;
+                artifact->dependency_roots =
+                    plan.dependency_roots;
+            }
+            artifact->resolutions =
+                std::move(resolved.evaluation.resolutions);
+            artifact->inventory =
+                std::move(resolved.inventory);
+            artifact->walk_diagnostics =
+                resolved.walk_diagnostics;
+            artifact->walk_diagnostics
+                .forwarded_store_evaluation_cache_hits = 0u;
+            artifact->walk_diagnostics
+                .forwarded_store_evaluation_cache_misses = 0u;
+            resolved.persistent_artifact =
+                std::shared_ptr<const ResolutionRootArtifact>{
+                    std::move(artifact)};
+            staged_presentation_root_artifacts->insert_or_assign(
+                resolved.persistent_artifact->root_address,
+                resolved.persistent_artifact);
+        }
+        if (resolved.persistent_artifact != nullptr &&
+            artifact_representable &&
+            resolution_epoch_retention_enabled) {
+            if (retained_resolution_root_artifacts >=
+                session.impl_->maximum_resolution_root_artifacts) {
+                disable_resolution_epoch_retention(
+                    ResolutionRetentionLimitReason::RootEntryLimit);
+            } else if (const auto retained_bytes =
+                           resolution_root_retained_bytes(
+                               *resolved.persistent_artifact)) {
+                retain_resolution_bytes(*retained_bytes);
+                if (resolution_epoch_retention_enabled) {
+                    ++retained_resolution_root_artifacts;
+                    retain_artifact_for_next_epoch = true;
+                } else {
+                    disable_resolution_epoch_retention(
+                        ResolutionRetentionLimitReason::ByteLimit);
+                }
+            } else {
+                disable_resolution_epoch_retention(
+                    ResolutionRetentionLimitReason::ByteLimit);
+            }
+        }
+        if (result.result_materialization ==
+            FunctionValueResultMaterialization::TerminalFull) {
         inventory_walk_diagnostics.forwarded_store_context_limited_functions +=
             resolved.walk_diagnostics.forwarded_store_context_limited_functions;
         inventory_walk_diagnostics.forwarded_store_evaluation_cache_hits +=
@@ -19571,6 +27160,10 @@ detail::analyze_function_values_with_guarded_entry_cache(
         inventory_walk_diagnostics.abi_stack_base_unresolved =
             inventory_walk_diagnostics.abi_stack_base_unresolved ||
             resolved.walk_diagnostics.abi_stack_base_unresolved;
+        inventory_walk_diagnostics.inventory_tail_target_unresolved =
+            inventory_walk_diagnostics.inventory_tail_target_unresolved ||
+            resolved.walk_diagnostics.inventory_tail_target_unresolved;
+        }
         if (resolved.local_fixpoint_budget_exhausted) {
             resolution_local_fixpoint_budget_exhausted = true;
             resolution_inventory_candidate.reset();
@@ -19581,16 +27174,69 @@ detail::analyze_function_values_with_guarded_entry_cache(
             !result.budget_exhausted &&
             !resolution_local_fixpoint_budget_exhausted;
         if (publish_resolution_outputs) {
-            std::move(resolved.inventory).replay_into(
-                *resolution_inventory_candidate);
-            resolution_count +=
-                resolved.evaluation.resolutions.size();
-            result.resolutions.insert(
-                result.resolutions.end(),
-                std::make_move_iterator(
-                    resolved.evaluation.resolutions.begin()),
-                std::make_move_iterator(
-                    resolved.evaluation.resolutions.end()));
+            if (resolved.persistent_artifact != nullptr) {
+                if (resolution_inventory_candidate.has_value()) {
+                    resolved.persistent_artifact->inventory
+                        .replay_copy_into(
+                            *resolution_inventory_candidate);
+                }
+                if (result.result_materialization ==
+                    FunctionValueResultMaterialization::TerminalFull) {
+                    resolution_count +=
+                        resolved.persistent_artifact->resolutions.size();
+                    result.resolutions.insert(
+                        result.resolutions.end(),
+                        resolved.persistent_artifact->resolutions.begin(),
+                        resolved.persistent_artifact->resolutions.end());
+                }
+                if (!resolved.persistent_artifact_reused &&
+                    publish_owner_deltas) {
+                    resolution_count +=
+                        resolved.persistent_artifact->resolutions.size();
+                    result.resolution_replacements.push_back(
+                        {{resolved.persistent_artifact->root_address,
+                          FunctionValueDependencyNodeKind::Function},
+                         resolved.persistent_artifact->resolutions});
+                    GuardedCodeInventoryCollector shard_collector{false};
+                    resolved.persistent_artifact->inventory
+                        .replay_copy_into(shard_collector);
+                    auto shard_inventory = shard_collector.finish();
+                    shard_inventory.walk_diagnostics =
+                        resolved.persistent_artifact->walk_diagnostics;
+                    result.guarded_code_inventory_replacements.push_back(
+                        {{resolved.persistent_artifact->root_address,
+                          FunctionValueDependencyNodeKind::Function},
+                         std::move(shard_inventory)});
+                }
+                if (retain_artifact_for_next_epoch) {
+                    staged_resolution_root_artifacts->insert_or_assign(
+                        resolved.persistent_artifact->root_address,
+                        resolved.persistent_artifact);
+                }
+            } else {
+                if (result.result_materialization ==
+                    FunctionValueResultMaterialization::DeltaOnly) {
+                    result.budget_exhausted = true;
+                    resolution_local_fixpoint_budget_exhausted = true;
+                    resolution_inventory_candidate.reset();
+                    result.resolutions.clear();
+                    resolution_count = 0u;
+                }
+                if (resolution_inventory_candidate.has_value()) {
+                    std::move(resolved.inventory).replay_into(
+                        *resolution_inventory_candidate);
+                }
+                if (!result.budget_exhausted) {
+                    resolution_count +=
+                        resolved.evaluation.resolutions.size();
+                    result.resolutions.insert(
+                        result.resolutions.end(),
+                        std::make_move_iterator(
+                            resolved.evaluation.resolutions.begin()),
+                        std::make_move_iterator(
+                            resolved.evaluation.resolutions.end()));
+                }
+            }
         }
         ++resolution_functions_committed;
         if (resolution_functions_committed <= 16u ||
@@ -19613,7 +27259,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     .count(),
                 std::memory_order_relaxed);
             commit_resolution_result(
-                evaluate_resolution_function(index));
+                evaluate_or_reuse_resolution_function(index));
         }
         progress_resolution_head_started_nanoseconds.store(
             0, std::memory_order_relaxed);
@@ -19642,7 +27288,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                         std::exception_ptr error;
                         try {
                             resolved.emplace(
-                                evaluate_resolution_function(index));
+                                evaluate_or_reuse_resolution_function(
+                                    index));
                         } catch (...) {
                             error = std::current_exception();
                         }
@@ -19735,6 +27382,25 @@ detail::analyze_function_values_with_guarded_entry_cache(
     }
     if (resolution_local_fixpoint_budget_exhausted)
         result.budget_exhausted = true;
+    result.resolution_root_artifacts_retained =
+        result.budget_exhausted
+            ? 0u
+            : staged_resolution_root_artifacts->size();
+    result.resolution_epoch_retained_bytes =
+        result.budget_exhausted
+            ? 0u
+            : resolution_epoch_retained_bytes;
+    result.resolution_retention_limit_reason =
+        resolution_retention_limit_reason;
+    {
+        const std::lock_guard lock(progress_callback_mutex);
+        progress_resolution_root_artifacts_retained =
+            result.resolution_root_artifacts_retained;
+        progress_resolution_epoch_retained_bytes =
+            result.resolution_epoch_retained_bytes;
+        progress_resolution_retention_limit_reason =
+            result.resolution_retention_limit_reason;
+    }
     if (resolution_inventory_candidate)
         guarded_inventory_collector =
             std::move(*resolution_inventory_candidate);
@@ -19770,18 +27436,275 @@ detail::analyze_function_values_with_guarded_entry_cache(
     result.guarded_code_inventory.walk_diagnostics = inventory_walk_diagnostics;
     coalesce_resolutions(result.resolutions);
     resolution_count = result.resolutions.size();
+
+    // Publish the derived preparation domains independently from their cold
+    // flat working maps.  Exact rounds path-copy the previous treap roots and
+    // replace only dirty owners; a cold round seeds every owner once.  These
+    // indices are also the authority used by the localized Exact-delta path
+    // below, so a warm epoch never needs to reconstruct an all-function
+    // relation merely to find its two changed owners.
+    auto staged_inventory_topology_shards =
+        previous_epoch != nullptr &&
+                previous_epoch->inventory_topology_shards != nullptr
+            ? std::make_shared<FunctionAnalysisEpoch::
+                  InventoryTopologyIndex>(
+                  *previous_epoch->inventory_topology_shards)
+            : std::make_shared<FunctionAnalysisEpoch::
+                  InventoryTopologyIndex>();
+    auto staged_abi_contract_shards =
+        previous_epoch != nullptr &&
+                previous_epoch->abi_contract_shards != nullptr
+            ? std::make_shared<FunctionAnalysisEpoch::AbiContractIndex>(
+                  *previous_epoch->abi_contract_shards)
+            : std::make_shared<FunctionAnalysisEpoch::AbiContractIndex>();
+    auto staged_summary_candidate_shards =
+        previous_epoch != nullptr &&
+                previous_epoch->summary_candidate_shards != nullptr
+            ? std::make_shared<FunctionAnalysisEpoch::
+                  SummaryCandidateIndex>(
+                  *previous_epoch->summary_candidate_shards)
+            : std::make_shared<FunctionAnalysisEpoch::
+                  SummaryCandidateIndex>();
+    auto staged_resolution_preparation_shards =
+        previous_epoch != nullptr &&
+                previous_epoch->resolution_preparation_shards != nullptr
+            ? std::make_shared<FunctionAnalysisEpoch::
+                  ResolutionPreparationIndex>(
+                  *previous_epoch->resolution_preparation_shards)
+            : std::make_shared<FunctionAnalysisEpoch::
+                  ResolutionPreparationIndex>();
+
+    std::vector<std::uint32_t> derived_function_owners;
+    if (previous_epoch == nullptr) {
+        derived_function_owners.reserve(functions.size());
+        for (const auto& function : functions)
+            derived_function_owners.push_back(function.entry_address);
+    } else {
+        derived_function_owners.reserve(
+            abi_contract_dirty.size() + summary_dirty_functions.size() +
+            graph_dirty_functions.size());
+        derived_function_owners.insert(derived_function_owners.end(),
+                                       abi_contract_dirty.begin(),
+                                       abi_contract_dirty.end());
+        derived_function_owners.insert(derived_function_owners.end(),
+                                       summary_dirty_functions.begin(),
+                                       summary_dirty_functions.end());
+        derived_function_owners.insert(derived_function_owners.end(),
+                                       graph_dirty_functions.begin(),
+                                       graph_dirty_functions.end());
+    }
+    normalize(derived_function_owners);
+    for (const auto address : derived_function_owners) {
+        if (!function_by_address.contains(address)) {
+            staged_inventory_topology_shards->erase(address);
+            staged_abi_contract_shards->erase(address);
+            staged_summary_candidate_shards->erase(address);
+            continue;
+        }
+
+        FunctionAnalysisEpoch::InventoryTopologyShard inventory_shard;
+        if (const auto callers = inventory_callers_by_callee.find(address);
+            callers != inventory_callers_by_callee.end())
+            inventory_shard.callers = callers->second;
+        inventory_shard.reaches_guarded_inventory_sink =
+            functions_reaching_guarded_inventory_sink.contains(address);
+        staged_inventory_topology_shards->insert_or_assign(
+            address, std::move(inventory_shard));
+
+        FunctionAnalysisEpoch::AbiContractShard abi_shard;
+        if (const auto value = abi_input_fingerprints.find(address);
+            value != abi_input_fingerprints.end())
+            abi_shard.input_fingerprint = value->second;
+        if (const auto value = abi_contract_callers_by_callee.find(address);
+            value != abi_contract_callers_by_callee.end())
+            abi_shard.callers = value->second;
+        if (const auto value = abi_callsite_contributions.find(address);
+            value != abi_callsite_contributions.end())
+            abi_shard.callsite_contributions = value->second;
+        if (const auto value = abi_return_sources.find(address);
+            value != abi_return_sources.end())
+            abi_shard.return_sources = value->second;
+        if (const auto value = abi_stack_argument_reads.find(address);
+            value != abi_stack_argument_reads.end())
+            abi_shard.stack_argument_reads = value->second;
+        if (const auto value = forwarded_register_reads.find(address);
+            value != forwarded_register_reads.end())
+            abi_shard.forwarded_register_reads = value->second;
+        if (const auto value = abi_persistent_store_sources.find(address);
+            value != abi_persistent_store_sources.end())
+            abi_shard.persistent_store_sources = value->second;
+        if (const auto value = abi_indirect_dispatch_sources.find(address);
+            value != abi_indirect_dispatch_sources.end())
+            abi_shard.indirect_dispatch_sources = value->second;
+        if (const auto value = direct_local_persistent_store_sites.find(address);
+            value != direct_local_persistent_store_sites.end())
+            abi_shard.direct_local_store_sites = value->second;
+        staged_abi_contract_shards->insert_or_assign(
+            address, std::move(abi_shard));
+
+        const auto summary = summaries.find(address);
+        const auto input = candidate_inputs.find(address);
+        if (summary == summaries.end() || input == candidate_inputs.end()) {
+            staged_summary_candidate_shards->erase(address);
+        } else {
+            FunctionAnalysisEpoch::SummaryCandidateShard summary_shard;
+            summary_shard.summary = summary->second;
+            summary_shard.input = input->second;
+            if (const auto contributions =
+                    summary_callsite_contributions.find(address);
+                contributions != summary_callsite_contributions.end())
+                summary_shard.callsite_contributions =
+                    contributions->second;
+            if (const auto index = fixpoint_function_index.find(address);
+                index != fixpoint_function_index.end()) {
+                summary_shard.summary_version =
+                    fixpoint_summary_versions[index->second];
+                summary_shard.input_version =
+                    fixpoint_input_versions[index->second];
+            }
+            staged_summary_candidate_shards->insert_or_assign(
+                address, std::move(summary_shard));
+        }
+    }
+    run_work.inventory_topology_entries_visited.fetch_add(
+        derived_function_owners.size(), std::memory_order_relaxed);
+    run_work.abi_contract_entries_visited.fetch_add(
+        derived_function_owners.size(), std::memory_order_relaxed);
+    run_work.summary_candidate_entries_visited.fetch_add(
+        derived_function_owners.size(), std::memory_order_relaxed);
+
+    for (const auto node : affected_dependency_nodes) {
+        const auto* const dependency =
+            staged_resolution_dependency_nodes->find(node);
+        if (dependency == nullptr) {
+            staged_resolution_preparation_shards->erase(node);
+            continue;
+        }
+        FunctionAnalysisEpoch::ResolutionPreparationShard shard;
+        shard.dependency_node = *dependency;
+        if (const auto* const component =
+                staged_resolution_dependency_components_by_node->find(node);
+            component != nullptr)
+            shard.dependency_component = *component;
+        staged_resolution_preparation_shards->insert_or_assign(
+            node, std::move(shard));
+    }
+    run_work.resolution_preparation_entries_visited.fetch_add(
+        affected_dependency_nodes.size(), std::memory_order_relaxed);
+
+    const auto load_run_work = [](const std::atomic_size_t& value) {
+        return value.load(std::memory_order_relaxed);
+    };
+    result.program_delta_entries_visited =
+        load_run_work(run_work.program_delta_entries_visited);
+    result.function_edge_full_scans =
+        load_run_work(run_work.function_edge_full_scans);
+    result.function_edge_full_sorts =
+        load_run_work(run_work.function_edge_full_sorts);
+    result.candidate_call_edge_full_scans =
+        load_run_work(run_work.candidate_call_edge_full_scans);
+    result.candidate_call_edge_full_sorts =
+        load_run_work(run_work.candidate_call_edge_full_sorts);
+    result.candidate_tail_edge_full_scans =
+        load_run_work(run_work.candidate_tail_edge_full_scans);
+    result.candidate_tail_edge_full_sorts =
+        load_run_work(run_work.candidate_tail_edge_full_sorts);
+    result.program_graph_blocks_built =
+        load_run_work(run_work.program_graph_blocks_built);
+    result.program_graph_blocks_reused =
+        load_run_work(run_work.program_graph_blocks_reused);
+    result.program_graph_sccs_built =
+        load_run_work(run_work.program_graph_sccs_built);
+    result.program_graph_sccs_reused =
+        load_run_work(run_work.program_graph_sccs_reused);
+    result.resolution_dependency_nodes_built =
+        load_run_work(run_work.resolution_dependency_nodes_built);
+    result.resolution_dependency_nodes_reused =
+        load_run_work(run_work.resolution_dependency_nodes_reused);
+    result.resolution_dependency_sccs_built =
+        load_run_work(run_work.resolution_dependency_sccs_built);
+    result.resolution_dependency_sccs_reused =
+        load_run_work(run_work.resolution_dependency_sccs_reused);
+    result.abi_contract_entries_visited =
+        load_run_work(run_work.abi_contract_entries_visited);
+    result.abi_contract_entries_rebuilt =
+        load_run_work(run_work.abi_contract_entries_rebuilt);
+    result.summary_candidate_entries_visited =
+        load_run_work(run_work.summary_candidate_entries_visited);
+    result.summary_candidate_entries_rebuilt =
+        load_run_work(run_work.summary_candidate_entries_rebuilt);
+    result.inventory_topology_entries_visited =
+        load_run_work(run_work.inventory_topology_entries_visited);
+    result.resolution_preparation_entries_visited =
+        load_run_work(run_work.resolution_preparation_entries_visited);
+    // Build the small terminal metadata record directly. Copying `result`
+    // first would deep-copy every DeltaOnly owner shard and dirty ledger only
+    // to clear them again immediately afterwards.
+    FunctionValueAnalysisResult staged_presentation_metadata;
+    staged_presentation_metadata.result_materialization =
+        FunctionValueResultMaterialization::TerminalFull;
+    staged_presentation_metadata.fixpoint_iterations =
+        result.fixpoint_iterations;
+    staged_presentation_metadata.strongly_connected_components =
+        result.strongly_connected_components;
+    staged_presentation_metadata.unchanged_ingress_skips =
+        result.unchanged_ingress_skips;
+    staged_presentation_metadata.fixpoint_worker_count =
+        result.fixpoint_worker_count;
+    staged_presentation_metadata.fixpoint_parallel_batches =
+        result.fixpoint_parallel_batches;
+    staged_presentation_metadata.fixpoint_speculative_evaluations =
+        result.fixpoint_speculative_evaluations;
+    staged_presentation_metadata.fixpoint_stale_repairs =
+        result.fixpoint_stale_repairs;
+    staged_presentation_metadata.maximum_fixpoint_batch_size =
+        result.maximum_fixpoint_batch_size;
+    staged_presentation_metadata.iteration_budget =
+        result.iteration_budget;
+    staged_presentation_metadata.budget_exhausted =
+        result.budget_exhausted;
+    staged_presentation_metadata.resolution_root_artifacts_retained =
+        result.resolution_root_artifacts_retained;
+    staged_presentation_metadata.resolution_epoch_retained_bytes =
+        result.resolution_epoch_retained_bytes;
+    staged_presentation_metadata.resolution_retention_limit_reason =
+        result.resolution_retention_limit_reason;
+    if (result.result_materialization ==
+        FunctionValueResultMaterialization::DeltaOnly) {
+        // The flattened inventory belongs to the pinned presentation arena.
+        // Intermediate consumers reconcile the exact owner shards above.
+        result.guarded_code_inventory = {};
+        result.final_materialized_blocks = 0u;
+        result.final_materialized_functions = 0u;
+    }
     if (!result.budget_exhausted) {
         auto staged_epoch = std::make_shared<FunctionAnalysisEpoch>();
-        staged_epoch->version =
-            previous_epoch == nullptr
-                ? 1u
-                : previous_epoch->version + 1u;
+        if (published_epoch_version ==
+            std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error(
+                "Function-Analysis-Epoch-Version ist erschoepft.");
+        staged_epoch->version = published_epoch_version + 1u;
         staged_epoch->program = program_graph;
+        staged_epoch->program_input_arena = program_input_arena;
+        staged_epoch->inventory_indirect_callees =
+            std::move(staged_inventory_indirect_callees);
+        staged_epoch->inventory_topology_shards =
+            std::move(staged_inventory_topology_shards);
+        staged_epoch->abi_contract_shards =
+            std::move(staged_abi_contract_shards);
+        staged_epoch->summary_candidate_shards =
+            std::move(staged_summary_candidate_shards);
+        staged_epoch->resolution_preparation_shards =
+            std::move(staged_resolution_preparation_shards);
         staged_epoch->abi_identity = abi_identity;
         staged_epoch->abi_input_fingerprints =
             std::move(abi_input_fingerprints);
         staged_epoch->abi_callers_by_callee =
             std::move(abi_contract_callers_by_callee);
+        staged_epoch->abi_callsite_contributions =
+            std::move(abi_callsite_contributions);
+        staged_epoch->summary_callsite_contributions =
+            std::move(summary_callsite_contributions);
         staged_epoch->abi_return_sources =
             std::move(abi_return_sources);
         staged_epoch->abi_stack_argument_reads =
@@ -19796,6 +27719,25 @@ detail::analyze_function_values_with_guarded_entry_cache(
             std::move(direct_local_persistent_store_sites);
         staged_epoch->summaries = std::move(summaries);
         staged_epoch->candidate_inputs = std::move(candidate_inputs);
+        staged_epoch->inventory_sink_functions =
+            functions_reaching_guarded_inventory_sink;
+        staged_epoch->resolution_dependency_nodes =
+            std::move(staged_resolution_dependency_nodes);
+        staged_epoch->resolution_dependency_components_by_node =
+            std::move(
+                staged_resolution_dependency_components_by_node);
+        staged_epoch->resolution_dependency_scc_count =
+            staged_resolution_dependency_scc_count;
+        staged_epoch->resolution_dependency_retained_bytes =
+            staged_resolution_dependency_retained_bytes;
+        staged_epoch->resolution_root_artifacts =
+            std::move(staged_resolution_root_artifacts);
+        staged_epoch->presentation_root_artifacts =
+            std::move(staged_presentation_root_artifacts);
+        staged_epoch->presentation_baseline_diagnostics =
+            staged_presentation_baseline_diagnostics;
+        staged_epoch->presentation_metadata =
+            std::move(staged_presentation_metadata);
         staged_epoch->summary_versions.reserve(functions.size());
         staged_epoch->input_versions.reserve(functions.size());
         for (std::size_t index = 0u; index < functions.size(); ++index) {
@@ -19810,6 +27752,7 @@ detail::analyze_function_values_with_guarded_entry_cache(
         // epoch. Every object above was staged privately; any exception or
         // budget exit before this assignment leaves the previous epoch whole.
         session.impl_->published_epoch = std::move(staged_epoch);
+        session.impl_->pending_terminal_abort_snapshot.reset();
         if (staged_program_graph_build) {
             session.impl_->program_graph_builds.fetch_add(
                 1u, std::memory_order_relaxed);
@@ -19832,6 +27775,71 @@ detail::analyze_function_values_with_guarded_entry_cache(
         session.impl_->summary_state_reuses.fetch_add(
             staged_summary_state_reuses,
             std::memory_order_relaxed);
+        session.impl_->resolution_root_artifacts_reused.fetch_add(
+            result.resolution_root_artifacts_reused.size(),
+            std::memory_order_relaxed);
+        session.impl_->resolution_root_artifacts_recomputed.fetch_add(
+            result.resolution_root_artifacts_recomputed.size(),
+            std::memory_order_relaxed);
+        session.impl_->resolution_root_artifacts_retained.store(
+            result.resolution_root_artifacts_retained,
+            std::memory_order_relaxed);
+        session.impl_->resolution_epoch_retained_bytes.store(
+            result.resolution_epoch_retained_bytes,
+            std::memory_order_relaxed);
+        session.impl_->resolution_retention_limit_reason.store(
+            result.resolution_retention_limit_reason,
+            std::memory_order_relaxed);
+        const auto add_physical = [](std::atomic_size_t& destination,
+                                     const std::size_t value) {
+            destination.fetch_add(value, std::memory_order_relaxed);
+        };
+        add_physical(session.impl_->program_delta_entries_visited,
+                     result.program_delta_entries_visited);
+        add_physical(session.impl_->function_edge_full_scans,
+                     result.function_edge_full_scans);
+        add_physical(session.impl_->function_edge_full_sorts,
+                     result.function_edge_full_sorts);
+        add_physical(session.impl_->candidate_call_edge_full_scans,
+                     result.candidate_call_edge_full_scans);
+        add_physical(session.impl_->candidate_call_edge_full_sorts,
+                     result.candidate_call_edge_full_sorts);
+        add_physical(session.impl_->candidate_tail_edge_full_scans,
+                     result.candidate_tail_edge_full_scans);
+        add_physical(session.impl_->candidate_tail_edge_full_sorts,
+                     result.candidate_tail_edge_full_sorts);
+        add_physical(session.impl_->program_graph_blocks_built,
+                     result.program_graph_blocks_built);
+        add_physical(session.impl_->program_graph_blocks_reused,
+                     result.program_graph_blocks_reused);
+        add_physical(session.impl_->program_graph_sccs_built,
+                     result.program_graph_sccs_built);
+        add_physical(session.impl_->program_graph_sccs_reused,
+                     result.program_graph_sccs_reused);
+        add_physical(session.impl_->resolution_dependency_nodes_built,
+                     result.resolution_dependency_nodes_built);
+        add_physical(session.impl_->resolution_dependency_nodes_reused,
+                     result.resolution_dependency_nodes_reused);
+        add_physical(session.impl_->resolution_dependency_sccs_built,
+                     result.resolution_dependency_sccs_built);
+        add_physical(session.impl_->resolution_dependency_sccs_reused,
+                     result.resolution_dependency_sccs_reused);
+        add_physical(session.impl_->abi_contract_entries_visited,
+                     result.abi_contract_entries_visited);
+        add_physical(session.impl_->abi_contract_entries_rebuilt,
+                     result.abi_contract_entries_rebuilt);
+        add_physical(session.impl_->summary_candidate_entries_visited,
+                     result.summary_candidate_entries_visited);
+        add_physical(session.impl_->summary_candidate_entries_rebuilt,
+                     result.summary_candidate_entries_rebuilt);
+        add_physical(session.impl_->inventory_topology_entries_visited,
+                     result.inventory_topology_entries_visited);
+        add_physical(session.impl_->resolution_preparation_entries_visited,
+                     result.resolution_preparation_entries_visited);
+        add_physical(session.impl_->final_materialized_blocks,
+                     result.final_materialized_blocks);
+        add_physical(session.impl_->final_materialized_functions,
+                     result.final_materialized_functions);
         session.impl_->analysis_epochs_published.fetch_add(
             1u, std::memory_order_relaxed);
         epoch_publication_guard.mark_published();
@@ -19844,6 +27852,90 @@ detail::analyze_function_values_with_guarded_entry_cache(
         progress_callback_failed.load(
             std::memory_order_relaxed);
     return result;
+}
+
+FunctionValueAnalysisResult
+detail::analyze_function_values_with_guarded_entry_cache(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> input_lines,
+    const std::span<const FunctionBoundary> input_function_boundaries,
+    const std::span<const ResolvedControlFlowEdge> input_resolved_edges,
+    const FunctionValueAnalysisProgressCallback& progress_callback,
+    detail::GuardedNativeEntryShapeCache& guarded_native_entry_shapes,
+    detail::FunctionValueAnalysisSession& session,
+    const AbiContractObserver& abi_contract_observer) {
+    auto lines = input_lines;
+    auto function_boundaries = input_function_boundaries;
+    auto resolved_edges = input_resolved_edges;
+    std::vector<katana::sh4::DisassemblyLine> cold_lines;
+    std::vector<FunctionBoundary> cold_boundaries;
+    std::vector<ResolvedControlFlowEdge> cold_edges;
+    bool restarted_cold = false;
+    for (;;) {
+        try {
+            return analyze_function_values_with_guarded_entry_cache_attempt(
+                image,
+                lines,
+                function_boundaries,
+                resolved_edges,
+                progress_callback,
+                guarded_native_entry_shapes,
+                session,
+                abi_contract_observer);
+        } catch (const ResolutionDependencyColdRestart& restart) {
+            if (restarted_cold || restart.input_arena == nullptr)
+                throw std::logic_error(
+                    "ResolutionDependency blieb nach dem All-Layer-Coldrestart undarstellbar.");
+            cold_lines = materialize_program_values(
+                *restart.input_arena->lines);
+            cold_boundaries = materialize_program_values(
+                *restart.input_arena->boundaries);
+            cold_edges = materialize_program_edges(
+                *restart.input_arena->semantic_edges);
+            auto candidate_calls = materialize_program_edges(
+                *restart.input_arena->candidate_call_edges);
+            auto candidate_tails = materialize_program_edges(
+                *restart.input_arena->candidate_tail_edges);
+            cold_edges.insert(
+                cold_edges.end(),
+                std::make_move_iterator(candidate_calls.begin()),
+                std::make_move_iterator(candidate_calls.end()));
+            cold_edges.insert(
+                cold_edges.end(),
+                std::make_move_iterator(candidate_tails.begin()),
+                std::make_move_iterator(candidate_tails.end()));
+            // The aborted attempt published nothing. Clear every persistent
+            // lookup layer before re-entering so the restarted invocation has
+            // exactly zero graph/ABI/summary/evaluation/root reuse.
+            {
+                const std::unique_lock lock(session.impl_->analysis_mutex);
+                session.impl_->evaluations.clear();
+                session.impl_->pending_terminal_abort_snapshot.reset();
+                detail::FunctionProgramDelta cold_restart_delta;
+                cold_restart_delta.kind =
+                    detail::FunctionProgramDeltaKind::Unknown;
+                cold_restart_delta.result_materialization =
+                    restart.result_materialization;
+                cold_restart_delta.expected_published_epoch_version =
+                    session.impl_->published_epoch == nullptr
+                        ? 0u
+                        : session.impl_->published_epoch->version;
+                cold_restart_delta.image_identity =
+                    image.analysis_instance_identity();
+                cold_restart_delta.image_revision =
+                    image.analysis_revision();
+                session.impl_->pending_program_delta =
+                    std::move(cold_restart_delta);
+                session.impl_->pending_persistent_analysis_bypass_reason =
+                    restart.reason;
+            }
+            guarded_native_entry_shapes.clear();
+            lines = cold_lines;
+            function_boundaries = cold_boundaries;
+            resolved_edges = cold_edges;
+            restarted_cold = true;
+        }
+    }
 }
 
 } // namespace katana::analysis

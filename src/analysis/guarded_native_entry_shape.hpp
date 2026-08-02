@@ -62,6 +62,12 @@ class GuardedNativeEntryShapeCache {
         statistics_.work_budget = maximum_total_instructions;
     }
 
+    void clear() noexcept {
+        results_.clear();
+        statistics_ = {};
+        statistics_.work_budget = maximum_total_instructions;
+    }
+
     [[nodiscard]] GuardedNativeEntryShapeStatus
     classify(const std::uint32_t address) {
         // Direct users of the cache do not pass the image again. Detect
@@ -282,6 +288,47 @@ enum class FunctionEvaluationCacheLookupOutcome : std::uint8_t {
     Miss,
 };
 
+enum class FunctionProgramDeltaKind : std::uint8_t {
+    Unknown,
+    Unchanged,
+    Exact,
+};
+
+struct FunctionProgramLineDelta final {
+    std::uint32_t address = 0u;
+    // nullopt is a deletion. Otherwise value.address must equal address.
+    std::optional<katana::sh4::DisassemblyLine> value;
+};
+
+struct FunctionProgramBoundaryDelta final {
+    std::uint32_t entry_address = 0u;
+    // nullopt is a deletion. Otherwise value.entry_address must match.
+    std::optional<FunctionBoundary> value;
+};
+
+// Each entry replaces the complete family for one instruction site. An empty
+// vector therefore means deletion and cannot be confused with "unchanged".
+struct FunctionProgramEdgeSiteDelta final {
+    std::uint32_t instruction_address = 0u;
+    std::vector<ResolvedControlFlowEdge> values;
+};
+
+struct FunctionProgramDelta final {
+    FunctionProgramDeltaKind kind = FunctionProgramDeltaKind::Unknown;
+    FunctionValueResultMaterialization result_materialization =
+        FunctionValueResultMaterialization::TerminalFull;
+    std::uint64_t expected_published_epoch_version = 0u;
+    std::uint64_t image_identity = 0u;
+    std::uint64_t image_revision = 0u;
+    std::vector<FunctionProgramLineDelta> changed_lines;
+    std::vector<FunctionProgramBoundaryDelta> changed_boundaries;
+    std::vector<FunctionProgramEdgeSiteDelta> changed_semantic_edge_sites;
+    std::vector<FunctionProgramEdgeSiteDelta>
+        changed_candidate_call_sites;
+    std::vector<FunctionProgramEdgeSiteDelta>
+        changed_candidate_tail_sites;
+};
+
 struct FunctionEvaluationCacheDecision final {
     std::uint32_t function_entry = 0u;
     EvaluationLens lens = EvaluationLens::FullState;
@@ -332,6 +379,42 @@ struct FunctionValueAnalysisSessionStatistics {
     std::size_t summary_state_reuses = 0u;
     std::size_t analysis_epochs_published = 0u;
     std::size_t analysis_epochs_discarded = 0u;
+    std::size_t incremental_epochs_started = 0u;
+    std::size_t resolution_root_artifacts_reused = 0u;
+    std::size_t resolution_root_artifacts_recomputed = 0u;
+    // Latest successfully published epoch, not cumulative event counters.
+    // A limit drops the whole optional retention set, so retained roots and
+    // bytes are both zero while the typed run-local reason stays observable.
+    std::size_t resolution_root_artifacts_retained = 0u;
+    std::size_t resolution_epoch_retained_bytes = 0u;
+    ResolutionRetentionLimitReason resolution_retention_limit_reason =
+        ResolutionRetentionLimitReason::None;
+    std::size_t full_cpu_recompute_fallbacks = 0u;
+    PersistentAnalysisBypassReason persistent_analysis_bypass_reason =
+        PersistentAnalysisBypassReason::None;
+    std::size_t program_delta_entries_visited = 0u;
+    std::size_t function_edge_full_scans = 0u;
+    std::size_t function_edge_full_sorts = 0u;
+    std::size_t candidate_call_edge_full_scans = 0u;
+    std::size_t candidate_call_edge_full_sorts = 0u;
+    std::size_t candidate_tail_edge_full_scans = 0u;
+    std::size_t candidate_tail_edge_full_sorts = 0u;
+    std::size_t program_graph_blocks_built = 0u;
+    std::size_t program_graph_blocks_reused = 0u;
+    std::size_t program_graph_sccs_built = 0u;
+    std::size_t program_graph_sccs_reused = 0u;
+    std::size_t resolution_dependency_nodes_built = 0u;
+    std::size_t resolution_dependency_nodes_reused = 0u;
+    std::size_t resolution_dependency_sccs_built = 0u;
+    std::size_t resolution_dependency_sccs_reused = 0u;
+    std::size_t abi_contract_entries_visited = 0u;
+    std::size_t abi_contract_entries_rebuilt = 0u;
+    std::size_t summary_candidate_entries_visited = 0u;
+    std::size_t summary_candidate_entries_rebuilt = 0u;
+    std::size_t inventory_topology_entries_visited = 0u;
+    std::size_t resolution_preparation_entries_visited = 0u;
+    std::size_t final_materialized_blocks = 0u;
+    std::size_t final_materialized_functions = 0u;
 
     [[nodiscard]] std::size_t classified_misses() const noexcept {
         std::size_t total = 0u;
@@ -394,12 +477,26 @@ probe_function_evaluation_cache_telemetry_for_testing();
 
 class FunctionValueAnalysisSession {
   public:
+    static constexpr std::size_t
+        default_maximum_resolution_dependency_nodes = 65'536u;
+    static constexpr std::size_t
+        default_maximum_resolution_root_artifacts = 16'384u;
+    static constexpr std::size_t
+        default_maximum_resolution_epoch_retained_bytes =
+            512u * 1024u * 1024u;
+
     explicit FunctionValueAnalysisSession(
         std::size_t maximum_entries = 16'384u,
         std::size_t maximum_retained_payload_bytes =
             1'024u * 1024u * 1024u,
         bool detailed_telemetry = false,
-        FunctionEvaluationCacheDecisionObserver decision_observer = {});
+        FunctionEvaluationCacheDecisionObserver decision_observer = {},
+        std::size_t maximum_resolution_dependency_nodes =
+            default_maximum_resolution_dependency_nodes,
+        std::size_t maximum_resolution_root_artifacts =
+            default_maximum_resolution_root_artifacts,
+        std::size_t maximum_resolution_epoch_retained_bytes =
+            default_maximum_resolution_epoch_retained_bytes);
     ~FunctionValueAnalysisSession();
 
     FunctionValueAnalysisSession(FunctionValueAnalysisSession&&) noexcept;
@@ -414,6 +511,21 @@ class FunctionValueAnalysisSession {
     [[nodiscard]] FunctionValueAnalysisSessionStatistics
     statistics() const;
 
+    [[nodiscard]] std::uint64_t published_epoch_version() const;
+
+    // The next real analysis invocation consumes this exact producer journal.
+    // It is bound to image identity/revision and the expected published epoch;
+    // mismatches become a typed full persistent-state bypass.
+    void stage_next_function_program_delta(FunctionProgramDelta delta);
+
+    // Strong fail-closed contract: the next real invocation reads no
+    // persistent graph, ABI, summary, candidate, evaluation or root state.
+    void bypass_all_persistent_analysis_state_once(
+        PersistentAnalysisBypassReason reason);
+
+    // Compatibility test hook; now aliases the strong full-state bypass.
+    void force_full_cpu_recompute_once();
+
     struct Impl;
 
   private:
@@ -421,6 +533,16 @@ class FunctionValueAnalysisSession {
 
     friend FunctionValueAnalysisResult
     analyze_function_values_with_guarded_entry_cache(
+        const katana::io::ExecutableImage& image,
+        std::span<const katana::sh4::DisassemblyLine> lines,
+        std::span<const FunctionBoundary> function_boundaries,
+        std::span<const ResolvedControlFlowEdge> resolved_edges,
+        const FunctionValueAnalysisProgressCallback& progress_callback,
+        GuardedNativeEntryShapeCache& guarded_native_entry_shapes,
+        FunctionValueAnalysisSession& session,
+        const AbiContractObserver& abi_contract_observer);
+    friend FunctionValueAnalysisResult
+    analyze_function_values_with_guarded_entry_cache_attempt(
         const katana::io::ExecutableImage& image,
         std::span<const katana::sh4::DisassemblyLine> lines,
         std::span<const FunctionBoundary> function_boundaries,

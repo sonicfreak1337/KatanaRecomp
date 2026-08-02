@@ -424,6 +424,145 @@ int main() {
                 katana::format_progress_event_json(invalid_accounting)
                         .find("\"telemetry_complete\":false") != std::string::npos,
             "Unvollstaendige Cachezaehlung wird als vollstaendige Telemetrie ausgegeben.");
+    auto invalid_incremental_ledger = formatted;
+    invalid_incremental_ledger.state =
+        katana::ProgressState::Completed;
+    invalid_incremental_ledger.counters.analysis_epochs_published = 1u;
+    invalid_incremental_ledger.counters.analysis_epochs_discarded = 0u;
+    invalid_incremental_ledger.counters.incremental_epochs_started = 1u;
+    invalid_incremental_ledger.counters.resolution_root_artifacts_total = 2u;
+    invalid_incremental_ledger.counters.resolution_root_artifacts_reused = 2u;
+    invalid_incremental_ledger.counters.resolution_root_artifacts_recomputed = 1u;
+    invalid_incremental_ledger.counters.resolution_root_artifacts_retained = 2u;
+    invalid_incremental_ledger.counters.resolution_epoch_retained_bytes =
+        2'048u;
+    invalid_incremental_ledger.counters.resolution_retention_limit_reason =
+        "none";
+    invalid_incremental_ledger.counters.persistent_analysis_bypass_reason =
+        "none";
+    invalid_incremental_ledger.counters.dirty_sccs = 1u;
+    invalid_incremental_ledger.counters.dirty_functions = 1u;
+    invalid_incremental_ledger.counters.dirty_inventory_sinks = 0u;
+    invalid_incremental_ledger.counters.full_cpu_recompute_fallbacks = 0u;
+    require(
+        !katana::progress_event_telemetry_complete(
+            invalid_incremental_ledger) &&
+            katana::format_progress_event_json(
+                invalid_incremental_ledger)
+                    .find("\"telemetry_complete\":false") !=
+                std::string::npos,
+        "Ein unausgeglichenes Root-Artefaktledger blieb telemetrisch "
+        "vollstaendig.");
+    auto partial_seed_ledger = formatted;
+    partial_seed_ledger.counters.round_seed_facts_added = 1u;
+    require(
+        !katana::progress_event_telemetry_complete(partial_seed_ledger),
+        "Eine partielle Seed-Rundengruppe blieb telemetrisch vollstaendig.");
+    katana::ProgressEvent partial_physical_work;
+    partial_physical_work.counters.program_delta_entries_visited = 1u;
+    require(
+        !katana::progress_event_telemetry_complete(
+            partial_physical_work),
+        "Eine partielle physische Arbeitsgruppe blieb telemetrisch "
+        "vollstaendig.");
+    katana::ProgressEvent invalid_seed_subset;
+    invalid_seed_subset.counters.round_seed_facts_added = 2u;
+    invalid_seed_subset.counters.round_seed_targets_changed = 1u;
+    invalid_seed_subset.counters.round_decode_targets = 2u;
+    invalid_seed_subset.counters.round_metadata_targets = 0u;
+    invalid_seed_subset.counters.round_full_cpu_fallbacks = 0u;
+    invalid_seed_subset.counters.growing_workset = true;
+    require(
+        !katana::progress_event_telemetry_complete(invalid_seed_subset),
+        "Decode-Targets ausserhalb der geaenderten Seedmenge blieben gruen.");
+    auto invalid_growing_workset = invalid_seed_subset;
+    invalid_growing_workset.counters.round_seed_targets_changed = 0u;
+    invalid_growing_workset.counters.round_decode_targets = 0u;
+    require(
+        !katana::progress_event_telemetry_complete(
+            invalid_growing_workset),
+        "Ein wachsender Workset ohne Seeddelta oder Fallback blieb gruen.");
+    katana::ProgressEvent partial_epoch_ledger;
+    partial_epoch_ledger.counters.analysis_epochs_published = 1u;
+    require(
+        !katana::progress_event_telemetry_complete(partial_epoch_ledger),
+        "Ein allein publizierter Epoch-Zaehler blieb vollstaendig.");
+    auto impossible_live_epoch = invalid_incremental_ledger;
+    impossible_live_epoch.state = katana::ProgressState::Running;
+    impossible_live_epoch.counters.resolution_root_artifacts_total = 3u;
+    impossible_live_epoch.counters.analysis_epochs_published = 2u;
+    require(
+        !katana::progress_event_telemetry_complete(
+            impossible_live_epoch),
+        "Mehr abgeschlossene als gestartete Live-Epochen blieben gruen.");
+    auto unsettled_terminal_epoch = invalid_incremental_ledger;
+    unsettled_terminal_epoch.counters.resolution_root_artifacts_total = 3u;
+    unsettled_terminal_epoch.counters.analysis_epochs_published = 0u;
+    require(
+        !katana::progress_event_telemetry_complete(
+            unsettled_terminal_epoch),
+        "Eine terminal unvollstaendige Epochenbilanz blieb gruen.");
+    auto overflowing_root_ledger = invalid_incremental_ledger;
+    overflowing_root_ledger.counters.resolution_root_artifacts_total =
+        std::numeric_limits<std::uint64_t>::max();
+    overflowing_root_ledger.counters.resolution_root_artifacts_reused =
+        std::numeric_limits<std::uint64_t>::max();
+    require(
+        !katana::progress_event_telemetry_complete(
+            overflowing_root_ledger),
+        "Ein ueberlaufendes Root-Artefaktledger blieb gruen.");
+    auto partial_retention_after_limit = invalid_incremental_ledger;
+    partial_retention_after_limit.counters.resolution_root_artifacts_total =
+        3u;
+    partial_retention_after_limit.counters
+        .resolution_root_artifacts_retained = 1u;
+    partial_retention_after_limit.counters
+        .resolution_retention_limit_reason = "byte-limit";
+    require(
+        !katana::progress_event_telemetry_complete(
+            partial_retention_after_limit),
+        "Ein Byte-Limit mit partiell behaltenem Root blieb gruen.");
+    auto unknown_retention_reason = invalid_incremental_ledger;
+    unknown_retention_reason.counters.resolution_root_artifacts_total = 3u;
+    unknown_retention_reason.counters.resolution_retention_limit_reason =
+        "mystery-limit";
+    require(
+        !katana::progress_event_telemetry_complete(
+            unknown_retention_reason),
+        "Ein untypisierter Retention-Limitgrund blieb gruen.");
+    katana::ProgressEvent unknown_bypass_reason;
+    unknown_bypass_reason.counters.persistent_analysis_bypass_reason =
+        "mystery-fallback";
+    require(
+        !katana::progress_event_telemetry_complete(
+            unknown_bypass_reason),
+        "Ein untypisierter Persistent-Bypassgrund blieb gruen.");
+
+    std::atomic_bool callback_saw_invalid_incremental = false;
+    const katana::ProgressReporter invalid_incremental_reporter(
+        [&](const katana::ProgressEvent& event) {
+            if (event.label == "invalid-incremental-ledger" &&
+                event.state != katana::ProgressState::Started &&
+                !event.telemetry_complete)
+                callback_saw_invalid_incremental.store(
+                    true, std::memory_order_release);
+        },
+        std::chrono::milliseconds(0));
+    auto invalid_incremental_scope =
+        invalid_incremental_reporter.begin(
+            katana::ProgressOperation::FunctionValueAnalysis,
+            katana::ProgressUnit::Functions,
+            1u,
+            "invalid-incremental-ledger");
+    invalid_incremental_scope.update(
+        0u, invalid_incremental_ledger.counters);
+    invalid_incremental_scope.complete(1u);
+    require(
+        invalid_incremental_reporter.seal_and_flush() &&
+            callback_saw_invalid_incremental.load(
+                std::memory_order_acquire),
+        "Der Progress-Callback markierte ein ungueltiges "
+        "Inkremental-Ledger faelschlich als vollstaendig.");
     auto invalid_hit_aggregate = formatted;
     invalid_hit_aggregate.counters.cache_hits = 9u;
     require(
