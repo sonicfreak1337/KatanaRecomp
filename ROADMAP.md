@@ -38,52 +38,76 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 - keine neuen breiten Testmatrizen waehrend des Spiel-Bring-ups
 - Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach fixer Hostzeit
 
-## Aktueller P0-Block: Root 0 / Candidate-Resolution
+## Aktueller P0-Block: Candidate-Resolution / Contextual-State-Explosion
 
 KR-4974 bis KR-4980 und die KR-4984-Sourcepruefung haben den urspruenglichen
 stundenlangen Vollneuberechnungs-, Cache- und Copy-Pfad erheblich verbessert.
-Der erneute reale v56-Messstand auf `a521999` belegt jedoch einen engeren
+Der reale Sonic-v56-Export auf dem funktionalen Source-Checkpoint `a521999`
+beendet die Diagnose jetzt terminal und belegt einen engeren
 Produktblocker:
 
 ```text
-verstrichene Walltime am
-unvollstaendigen 0/1191-Stand: 401 s
-physische Auswertungszeit:     430,1 s
-eindeutige Contexts:           9.135
-physische Auswertungen:        11.279
-Eviction-Recomputes:           0
-mittlere effektive Kerne:      1,073
-Auswertungen je Context:       1,235
+Gesamtlaufzeit:                                1:28:24
+Exitcode:                                      5
+5-Stunden-Hardlimit erreicht:                  nein
+kanonisch committed Roots:                     1 / 1.191
+contextual_return_evaluation_limited_functions: 1
+Per-Function-Evaluationsbudget:                65.536, ausgeschoepft
+Context-Limit:                                 nicht erreicht
+eindeutige Contexts:                           25.728
+physische Auswertungen:                        27.872
+Cache-Eviction-Recomputes:                     0
+Resolution-Epoch-Retention:                    verworfen / incomplete-root
+Portartefakt / game.exe / Screenshot:          keines / keine / keiner
 ```
 
-Der Executor ist nicht defekt. Spaetere Roots sind absichtlich bis zum
-kanonischen Commit von Root 0 gesperrt; die innere Jacobi-Welle sieht meist
-nur ein bis zwei ausfuehrbare Lanes und veroeffentlicht Folgearbeit erst nach
-einer globalen Merge-/Evidence-/Commitbarriere. Gleichzeitig wachsen
+Der Lauf widerlegt Cache-Churn und die fruehere unnoetige
+Deep-Copy-Verstaerkung als verbleibende Hauptursache. `27.872 / 25.728`
+entsprechen nur rund `1,083` physischen Auswertungen je eindeutigem Context;
+rund `92,3 %` der physischen Arbeit waren damit Erstberechnungen tatsaechlich
+verschiedener Context-Keys. Gleichzeitig verbrauchten `65.536` logische
+Contextual-Evaluationen das autoritative Budget, also rund `2,547` logische
+Zulassungen je eindeutigem Context. `37.664` logische Evaluationen wurden
+damit ohne neue physische Berechnung erneut geplant, validiert oder aus dem
+Cache bedient.
+
+Root 0 ist nicht mehr als terminal gescheitert belegt: Der Endstand mit
+`1/1191` spricht dafuer, dass Root 0 letztlich committed wurde und der
+folgende schwere Root beziehungsweise eine dort erreichte Funktion das
+Per-Function-Budget erschoepfte. Bis Rootindex, Rootadresse und limitierte
+Funktionsadresse terminal ausgegeben werden, lautet der P0 deshalb allgemein:
+Die ersten schweren Candidate-Resolution-Roots erzeugen eine echte
+Contextual-State-Explosion auf einem ueberwiegend seriellen kritischen Pfad.
+
+Der Executor ist nicht defekt. Spaetere Roots bleiben bis zum kanonischen
+Commit des Head-of-Line-Roots weitgehend gesperrt; die innere Jacobi-Welle
+sieht meist nur ein bis zwei ausfuehrbare Lanes und veroeffentlicht Folgearbeit
+erst nach einer Merge-/Evidence-/Commitbarriere. Gleichzeitig wachsen
 Snapshot-, Cache-Key-, Binding-, Equality-/Copy-/Merge- und
-Provenienzauswahlkosten mit dem Contextual-Graphen. Die starke, zuerst zu
-messende Hypothese ist eine zu feine Full-State-/Provenienz-
-Contextidentitaet.
+Provenienzauswahlkosten mit dem Contextual-Graphen. Die zuerst zu belegende
+strukturelle Hypothese bleibt eine zu feine Full-State-/Provenienz-
+Contextidentitaet. Eine blosse Erhoehung des 65.536er-Budgets wuerde den Fehler
+nur verschieben und ist kein zulaessiger Performancefix.
 
 Der uebergeordnete Kaltbuildvertrag steht in
 [`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-Der verbindliche Root-0-Folgeplan mit Messgates, Korrektheitsinvarianten und
-Rollbackgrenzen steht in
+Der verbindliche Root-0-/Candidate-Resolution-Folgeplan mit Messgates,
+Korrektheitsinvarianten und Rollbackgrenzen steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
-Dieser Planungscommit genehmigt keine Implementierung, keinen Build und keinen
+Dieser Planungsstand genehmigt keine Implementierung, keinen Build und keinen
 Lauf; jeder Task benoetigt eine neue ausdrueckliche Nutzeranweisung.
 
 | ID | Titel | Ergebnis |
 |---|---|---|
-| KR-4985 | Root-0-Phasen- und Kardinalitaetstelemetrie | spaete Auswertungskosten und Full-/Projected-/Provenance-Contextzahlen sind eindeutig zugeordnet |
-| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | physische Full-State-Fixpunktarbeit und exakte Contributions/Evidence sind getrennt |
+| KR-4985 | Root-0-/Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | limitierter Root und Funktion, logische gegen physische Arbeit, Requeue-Ursachen, späte Auswertungskosten sowie Full-/Projected-/Provenance-Contextzahlen sind eindeutig zugeordnet |
+| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | physische Full-State-Fixpunktarbeit, logische Zulassungen und exakte Contributions/Evidence sind getrennt |
 | KR-4987 | Read-Lens-projizierte Context-Identitaet | nur vollstaendig bewiesene, semantisch relevante Eingaenge erzeugen eigene Lanes; sonst FullState |
 | KR-4988 | Internierte AbstractStates und Function-Value-Summaries | nur bei positivem Zehn-Prozent-Kostengate besitzen unveraenderliche States/Summaries O(1)-Identitaetsfastpaths und stabile Content-Digests |
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Zehn-Prozent-Kostengate vermeiden exakte Binding-Treffer den linearen Scan; der Join-Fallback bleibt unveraendert |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten- und 50-Prozent-Reusegate werden unveraenderte View-Shards wiederverwendet |
-| KR-4991 | Versionierte monotone Context-Worklist | freigesetzte unabhaengige Arbeit startet ohne globale Jacobi-Barriere; stale Ergebnisse publizieren nichts |
+| KR-4991 | Versionierte monotone Context-Worklist | kausal begruendete Folgearbeit startet ohne globale Jacobi-Barriere; unveraenderte semantische Versionen werden nicht erneut logisch zugelassen und stale Ergebnisse publizieren nichts |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate nutzt ein kleiner isolierter Anteil sonst idle Kerne |
-| KR-4993 | Unabhaengige Root-0-P0/P1-Abschlusspruefung | alle aktivierten Context-, Dependency-, Cache- und Schedulingpfade sind reviewt und P0/P1-frei |
+| KR-4993 | Unabhaengige Root-0-/Candidate-Resolution-P0/P1-Abschlusspruefung | alle aktivierten Context-, Dependency-, Cache- und Schedulingpfade sind reviewt, P0/P1-frei und erreichen weder Evaluation-Limit noch `incomplete-root` |
 | KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | je reviewtem Sourcekandidaten hoechstens ein voller Kaltport belegt oder verfehlt das Acht-Minuten-Ziel |
 
 Die Reihenfolge ist normativ:
@@ -105,16 +129,16 @@ D1 in KR-4985: Telemetrie und Messgate G1
 
 Ein negatives Messgate wird dokumentiert und laesst den konservativen Pfad
 aktiv; es erzwingt keinen unnuetzen Architekturumbau. Vor KR-4993 sind nur D1
-und D2 als jeweils separat freizugebende, begrenzte reale Root-0-
-Diagnoseexporte zulaessig. KR-4992 blockiert den ersten KR-4993-/KR-4981-Pfad
-nicht. KR-4982 und KR-4983 bleiben gestrichen.
+und D2 als jeweils separat freizugebende, begrenzte reale Root-0-/
+Candidate-Resolution-Diagnoseexporte zulaessig. KR-4992 blockiert den ersten
+KR-4993-/KR-4981-Pfad nicht. KR-4982 und KR-4983 bleiben gestrichen.
 
 Kein Performancewert darf durch weniger Funktionen, Bloecke, Resolutionen,
 Guarded-AOT-Einstiege, Evidence oder Inventory-Sinks erreicht werden. Alle
 fail-closed Read-Lens-, Cache-Key-, Budget-, Truncation- und
-Vollstaendigkeitsdiagnosen bleiben erhalten. Mehr Cache oder Threads,
-vollstaendige Freigabe spaeterer Roots und ein Revert von `a521999` sind
-ausdruecklich keine Tasks.
+Vollstaendigkeitsdiagnosen bleiben erhalten. Mehr Cache, mehr Threads, ein
+hoeheres Contextual-Evaluationsbudget, vollstaendige Freigabe spaeterer Roots
+und ein Revert von `a521999` sind ausdruecklich keine Tasks.
 
 ## Verifizierter Ausgangsstand
 
@@ -125,7 +149,10 @@ letzte reale Produktevidenz: historischer ABI-77/78-NativeDisc-Stand
 funktionaler Source-Checkpoint:
                             a521999 / Runtime-ABI 87 / Analyzer-ABI 31 /
                              Portprojektvertrag 75
-aktueller Diagnosebefund:    v56 Root 0 fast seriell; 0/1191; kein Port
+aktueller Diagnosebefund:    v56 terminal nach 1:28:24, Exitcode 5;
+                             1/1191 Roots, 65.536 Evaluationsbudget,
+                             25.728 eindeutige Contexts, 27.872 physische
+                             Auswertungen, incomplete-root, kein Port
 verbindlicher Folgeplan:     gegateter Kern KR-4985..KR-4991, dann KR-4993
 naechste Produktabnahme:     erster KR-4981-Lauf erst nach KR-4993
 ```
@@ -644,7 +671,7 @@ und sichtbar ausgefuehrt:
 Gastzyklus am typisierten Fehler: 553.990.562
 externe Produktzeit:              6,701 s
 Rate bis Fehler:                  82,67 MHz (kein 600-Millionen-Gate)
-zentrale Dispatches:              11.080.283
+zentrale Dispatches:             11.080.283
 Hostframes:                       127
 PVR Gast-/Direct-/Softwareframes: 2 / 2 / 1
 hoechster sichtbarer Screen:      Sega ab 2,032 s
