@@ -878,6 +878,20 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                    << katana::io::quote_json(hex32(value.address))
                    << ",\"width\":" << value.width << '}';
         }
+        output << "],\"memory_read_complete\":"
+               << (function_summary.memory_read_complete ? "true" : "false")
+               << ",\"memory_read_unknown\":"
+               << (function_summary.memory_read_unknown ? "true" : "false")
+               << ",\"memory_read_ranges\":[";
+        for (std::size_t range = 0u;
+             range < function_summary.memory_read_ranges.size();
+             ++range) {
+            if (range != 0u) output << ',';
+            const auto& value = function_summary.memory_read_ranges[range];
+            output << "{\"address\":"
+                   << katana::io::quote_json(hex32(value.address))
+                   << ",\"width\":" << value.width << '}';
+        }
         output << "],\"memory_values\":[";
         for (std::size_t memory = 0u; memory < function_summary.memory_values.size(); ++memory) {
             if (memory != 0u) output << ',';

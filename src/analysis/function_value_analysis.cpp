@@ -676,6 +676,11 @@ struct AbstractState {
     // callee ABI boundary and is never part of an ingress cache identity.
     bool memory_write_unknown = false;
     std::vector<FunctionMemoryWriteRange> memory_write_ranges;
+    // Path-local must fact used only to suppress reads of bytes already
+    // defined inside this evaluation. It is intersected at CFG joins and is
+    // never part of an ingress cache identity.
+    std::vector<FunctionMemoryWriteRange>
+        memory_definitely_written_ranges;
     // A payload-free saved-SP alias whose exact bounded cell identity was
     // widened away. Unlike callback loss, this is harmless until the current
     // stack epoch later receives a relevant callback candidate. Source bits
@@ -813,6 +818,209 @@ bool merge_memory_write_effect(AbstractState& destination,
     }
     if (merged == destination.memory_write_ranges) return false;
     destination.memory_write_ranges = std::move(merged);
+    return true;
+}
+
+struct MemoryReadObservation final {
+    bool complete = true;
+    bool unknown = false;
+    std::vector<FunctionMemoryWriteRange> ranges;
+};
+
+void mark_memory_read_incomplete(
+    MemoryReadObservation* const observation) {
+    if (observation != nullptr && !observation->unknown)
+        observation->complete = false;
+}
+
+void mark_unknown_memory_read(
+    MemoryReadObservation* const observation) {
+    if (observation == nullptr) return;
+    observation->complete = true;
+    observation->unknown = true;
+    observation->ranges.clear();
+}
+
+[[nodiscard]] bool insert_normalized_memory_range(
+    std::vector<FunctionMemoryWriteRange>& ranges,
+    const std::uint32_t address,
+    const std::size_t width) {
+    if (width == 0u ||
+        width > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(address) + width >
+            (std::uint64_t{1u} << 32u))
+        return false;
+    auto begin = static_cast<std::uint64_t>(address);
+    auto end = begin + width;
+    auto first = std::lower_bound(
+        ranges.begin(), ranges.end(), begin,
+        [](const auto& range, const std::uint64_t candidate) {
+            return static_cast<std::uint64_t>(range.address) +
+                       range.width <
+                   candidate;
+        });
+    auto last = first;
+    while (last != ranges.end() &&
+           static_cast<std::uint64_t>(last->address) <= end) {
+        begin = std::min(begin,
+                         static_cast<std::uint64_t>(last->address));
+        end = std::max(
+            end,
+            static_cast<std::uint64_t>(last->address) + last->width);
+        ++last;
+    }
+    if (end - begin > std::numeric_limits<std::uint32_t>::max())
+        return false;
+    const FunctionMemoryWriteRange merged{
+        static_cast<std::uint32_t>(begin),
+        static_cast<std::uint32_t>(end - begin)};
+    if (first != last && std::next(first) == last &&
+        *first == merged)
+        return true;
+    const auto index = static_cast<std::size_t>(
+        std::distance(ranges.begin(), first));
+    ranges.erase(first, last);
+    ranges.insert(ranges.begin() +
+                      static_cast<std::ptrdiff_t>(index),
+                  merged);
+    return true;
+}
+
+[[nodiscard]] bool memory_range_fully_covered(
+    const std::span<const FunctionMemoryWriteRange> ranges,
+    const std::uint32_t address,
+    const std::size_t width) noexcept {
+    if (width == 0u ||
+        width > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(address) + width >
+            (std::uint64_t{1u} << 32u))
+        return false;
+    const auto end = static_cast<std::uint64_t>(address) + width;
+    const auto candidate = std::upper_bound(
+        ranges.begin(), ranges.end(), address,
+        [](const std::uint32_t value, const auto& range) {
+            return value < range.address;
+        });
+    if (candidate == ranges.begin()) return false;
+    const auto& range = *std::prev(candidate);
+    return range.address <= address &&
+           static_cast<std::uint64_t>(range.address) + range.width >= end;
+}
+
+void record_memory_read_range(MemoryReadObservation* const observation,
+                              const AbstractState& state,
+                              const std::uint32_t address,
+                              const std::size_t width) {
+    if (observation == nullptr || observation->unknown ||
+        memory_range_fully_covered(
+            state.memory_definitely_written_ranges, address, width))
+        return;
+    if (!insert_normalized_memory_range(
+            observation->ranges, address, width)) {
+        mark_unknown_memory_read(observation);
+        return;
+    }
+    if (observation->ranges.size() > maximum_memory_values)
+        mark_unknown_memory_read(observation);
+}
+
+void record_definite_memory_write_range(AbstractState& state,
+                                        const std::uint32_t address,
+                                        const std::size_t width) {
+    if (width == 0u ||
+        width > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(address) + width >
+            (std::uint64_t{1u} << 32u)) {
+        state.memory_definitely_written_ranges.clear();
+        return;
+    }
+    if (!insert_normalized_memory_range(
+            state.memory_definitely_written_ranges,
+            address,
+            width) ||
+        state.memory_definitely_written_ranges.size() >
+            maximum_memory_values)
+        state.memory_definitely_written_ranges.clear();
+}
+
+void merge_memory_read_contract(
+    MemoryReadObservation* const observation,
+    const bool complete,
+    const bool unknown,
+    const std::span<const FunctionMemoryWriteRange> ranges,
+    const AbstractState* const state = nullptr) {
+    if (observation == nullptr || observation->unknown) return;
+    if (unknown) {
+        mark_unknown_memory_read(observation);
+        return;
+    }
+    if (!complete) mark_memory_read_incomplete(observation);
+    for (const auto& range : ranges) {
+        if (state != nullptr) {
+            record_memory_read_range(
+                observation, *state, range.address, range.width);
+        } else if (!insert_normalized_memory_range(
+                       observation->ranges,
+                       range.address,
+                       range.width) ||
+                   observation->ranges.size() >
+                       maximum_memory_values) {
+            mark_unknown_memory_read(observation);
+            return;
+        }
+    }
+}
+
+void widen_function_memory_read_contract(
+    FunctionValueSummary& destination,
+    const FunctionValueSummary& previous) {
+    MemoryReadObservation widened{
+        destination.memory_read_complete,
+        destination.memory_read_unknown,
+        destination.memory_read_ranges};
+    merge_memory_read_contract(
+        &widened,
+        previous.memory_read_complete,
+        previous.memory_read_unknown,
+        previous.memory_read_ranges);
+    destination.memory_read_complete = widened.complete;
+    destination.memory_read_unknown = widened.unknown;
+    destination.memory_read_ranges = std::move(widened.ranges);
+}
+
+bool merge_definite_memory_writes(AbstractState& destination,
+                                  const AbstractState& source) {
+    std::vector<FunctionMemoryWriteRange> intersection;
+    intersection.reserve(std::min(
+        destination.memory_definitely_written_ranges.size(),
+        source.memory_definitely_written_ranges.size()));
+    std::size_t left = 0u;
+    std::size_t right = 0u;
+    while (left < destination.memory_definitely_written_ranges.size() &&
+           right < source.memory_definitely_written_ranges.size()) {
+        const auto& first =
+            destination.memory_definitely_written_ranges[left];
+        const auto& second =
+            source.memory_definitely_written_ranges[right];
+        const auto begin = std::max(first.address, second.address);
+        const auto first_end =
+            static_cast<std::uint64_t>(first.address) + first.width;
+        const auto second_end =
+            static_cast<std::uint64_t>(second.address) + second.width;
+        const auto end = std::min(first_end, second_end);
+        if (static_cast<std::uint64_t>(begin) < end)
+            intersection.push_back(
+                {begin, static_cast<std::uint32_t>(end - begin)});
+        if (first_end < second_end)
+            ++left;
+        else
+            ++right;
+    }
+    if (intersection ==
+        destination.memory_definitely_written_ranges)
+        return false;
+    destination.memory_definitely_written_ranges =
+        std::move(intersection);
     return true;
 }
 
@@ -1300,7 +1508,20 @@ bool merge_state(AbstractState& destination,
 [[nodiscard]] bool canonicalize_evaluation_ingress_in_place(
     AbstractState& state,
     std::uint16_t register_read_mask,
-    const AbiStackArgumentReadSet& stack_reads);
+    const AbiStackArgumentReadSet& stack_reads,
+    bool memory_read_complete = false,
+    bool memory_read_unknown = false,
+    std::span<const FunctionMemoryWriteRange>
+        memory_read_ranges = {});
+[[nodiscard]] bool valid_exact_memory_read_contract(
+    bool complete,
+    bool unknown,
+    std::span<const FunctionMemoryWriteRange> ranges);
+[[nodiscard]] bool memory_value_requires_projection_retention(
+    const AbstractValue& value);
+[[nodiscard]] bool memory_cell_required_by_contract(
+    std::uint32_t address,
+    std::span<const FunctionMemoryWriteRange> ranges);
 [[nodiscard]] bool has_saved_stack_epoch(const AbstractValue& value);
 [[nodiscard]] bool carries_unresolved_stack_callback(
     const AbstractValue& value);
@@ -3725,6 +3946,7 @@ bool merge_state(AbstractState& destination,
                  const bool may_merge_stack_values = false) {
     bool changed = false;
     changed = merge_memory_write_effect(destination, source) || changed;
+    changed = merge_definite_memory_writes(destination, source) || changed;
     const bool destination_has_active_stack_payload =
         has_active_inventory_stack_payload(destination);
     const bool source_has_active_stack_payload =
@@ -4442,11 +4664,13 @@ std::optional<ImageValue> read_image_value(const katana::io::ExecutableImage& im
 void invalidate_memory_values_conservatively(AbstractState& state);
 
 void load_memory_values(AbstractValue& destination,
-                        const AbstractState& state,
+                        AbstractState& state,
                         const std::vector<std::uint32_t>& addresses,
                         const std::size_t width,
                         const katana::io::ExecutableImage& image,
-                        const AbstractValue* address_evidence = nullptr) {
+                        const AbstractValue* address_evidence = nullptr,
+                        MemoryReadObservation* const
+                            memory_read_observation = nullptr) {
     // Capture this before a same-register load mutates its destination. The
     // taint selects only the bounded contextual helper slice; it is not
     // code-pointer provenance and never proves a control-flow edge.
@@ -4469,6 +4693,15 @@ void load_memory_values(AbstractValue& destination,
         (address_evidence == nullptr ||
          (address_evidence->known &&
           address_evidence->complete));
+    if (width == 4u) {
+        if (!address_domain_complete) {
+            mark_unknown_memory_read(memory_read_observation);
+        } else {
+            for (const auto address : addresses)
+                record_memory_read_range(
+                    memory_read_observation, state, address, width);
+        }
+    }
     const auto may_load_stack_callback_payload = [&] {
         if (width != 4u) return false;
         if (!address_domain_complete) {
@@ -4594,6 +4827,7 @@ void store_memory_values(AbstractState& state,
     const AbstractValue& value,
     const AbstractValue& address_evidence) {
     if (!address_evidence.known || !address_evidence.complete || addresses.empty()) {
+        state.memory_definitely_written_ranges.clear();
         mark_unknown_memory_write(state);
         note_imprecise_memory_stack_callback_store(
             state, width, value);
@@ -4604,6 +4838,7 @@ void store_memory_values(AbstractState& state,
             return width == 0u ||
                    address > std::numeric_limits<std::uint32_t>::max() - (width - 1u);
         })) {
+        state.memory_definitely_written_ranges.clear();
         mark_unknown_memory_write(state);
         note_imprecise_memory_stack_callback_store(
             state, width, value);
@@ -4679,6 +4914,8 @@ void store_memory_values(AbstractState& state,
         }
         return;
     }
+    record_definite_memory_write_range(
+        state, addresses.front(), width);
     for (const auto address : addresses) {
         for (auto existing = state.memory_values.begin(); existing != state.memory_values.end();) {
             if (memory_ranges_overlap(existing->first, 4u, address, width))
@@ -5101,11 +5338,14 @@ template <std::size_t RegisterCount>
 
 void merge_saved_stack_epoch_memory_forward(
     AbstractValue& destination,
-    const AbstractState& state,
+    AbstractState& state,
     const std::span<const std::uint32_t> addresses,
-    const std::size_t width) {
+    const std::size_t width,
+    MemoryReadObservation* const memory_read_observation = nullptr) {
     if (width != 4u) return;
     for (const auto address : addresses) {
+        record_memory_read_range(
+            memory_read_observation, state, address, width);
         const auto forwarded = state.memory_values.find(address);
         if (forwarded == state.memory_values.end()) continue;
         if (has_saved_stack_epoch(forwarded->second)) {
@@ -5866,7 +6106,9 @@ std::vector<std::uint32_t> indexed_addresses(const AbstractValue& left,
 void apply_transfer(AbstractState& state,
                     const katana::sh4::DisassemblyLine& line,
                     const katana::io::ExecutableImage& image,
-                    const bool preserve_guarded_stack_inventory = false) {
+                    const bool preserve_guarded_stack_inventory = false,
+                    MemoryReadObservation* const
+                        memory_read_observation = nullptr) {
     [[maybe_unused]] const InventoryStackOffsetLossDiagnostic
         inventory_sp_loss_diagnostic{
             state, line.address, state.inventory_stack_offsets[15u]};
@@ -6272,7 +6514,9 @@ void apply_transfer(AbstractState& state,
                            state,
                            {base + static_cast<std::uint32_t>(instruction.displacement)},
                            width,
-                           image);
+                           image,
+                           nullptr,
+                           memory_read_observation);
         auto& loaded = state[instruction.destination_register];
         loaded.inventory_pc_relative_code_literal_values.clear();
         loaded.inventory_pc_relative_code_literal_values_truncated = false;
@@ -6466,13 +6710,15 @@ void apply_transfer(AbstractState& state,
                                memory_addresses,
                                width,
                                image,
-                               &state[instruction.source_register]);
+                               &state[instruction.source_register],
+                               memory_read_observation);
         }
         merge_saved_stack_epoch_memory_forward(
             state[instruction.destination_register],
             state,
             memory_addresses,
-            width);
+            width,
+            memory_read_observation);
         state[instruction.destination_register]
             .inventory_stack_callback_loss_unresolved =
             state[instruction.destination_register]
@@ -6525,13 +6771,15 @@ void apply_transfer(AbstractState& state,
                                memory_addresses,
                                width,
                                image,
-                               &state[instruction.source_register]);
+                               &state[instruction.source_register],
+                               memory_read_observation);
         }
         merge_saved_stack_epoch_memory_forward(
             state[instruction.destination_register],
             state,
             memory_addresses,
-            width);
+            width,
+            memory_read_observation);
         state[instruction.destination_register]
             .inventory_stack_callback_loss_unresolved =
             state[instruction.destination_register]
@@ -6598,13 +6846,15 @@ void apply_transfer(AbstractState& state,
                 memory_addresses,
                 width,
                 image,
-                &state[instruction.source_register]);
+                &state[instruction.source_register],
+                memory_read_observation);
         }
         merge_saved_stack_epoch_memory_forward(
             state[instruction.destination_register],
             state,
             memory_addresses,
-            width);
+            width,
+            memory_read_observation);
         state[instruction.destination_register]
             .inventory_stack_callback_loss_unresolved =
             state[instruction.destination_register]
@@ -6993,13 +7243,15 @@ void apply_transfer(AbstractState& state,
                 memory_addresses,
                 width,
                 image,
-                &evidence);
+                &evidence,
+                memory_read_observation);
         }
         merge_saved_stack_epoch_memory_forward(
             state[instruction.destination_register],
             state,
             memory_addresses,
-            width);
+            width,
+            memory_read_observation);
         state[instruction.destination_register]
             .inventory_stack_callback_loss_unresolved =
             state[instruction.destination_register]
@@ -7178,7 +7430,8 @@ AbstractState make_callee_abi_input(
     const std::uint32_t call_site,
     const std::uint32_t callee,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
-    const AbiStackArgumentReadSet* const required_stack_reads = nullptr) {
+    const AbiStackArgumentReadSet* const required_stack_reads = nullptr,
+    const FunctionValueSummary* const memory_read_summary = nullptr) {
     // Construct the projected ABI state directly. Copying the complete caller
     // and immediately clearing stack_values used to deep-copy every stack
     // payload on every call edge. Stack coordinates and selected stack values
@@ -7192,9 +7445,27 @@ AbstractState make_callee_abi_input(
     input.inventory_vbr_relative = caller.inventory_vbr_relative;
     input.inventory_fixed_storage_reference =
         caller.inventory_fixed_storage_reference;
-    // Register and memory facts remain deliberately conservative here:
-    // callees and the return/persistent-store fixpoints can observe them.
-    input.memory_values = caller.memory_values;
+    // Build Memory directly through the exact read-before-definition
+    // contract. This avoids copying the complete caller map only to erase it
+    // immediately afterwards. Top/undiscovered contracts remain FullState;
+    // inventory loss/provenance markers are always retained independently.
+    const bool project_memory =
+        memory_read_summary != nullptr &&
+        valid_exact_memory_read_contract(
+            memory_read_summary->memory_read_complete,
+            memory_read_summary->memory_read_unknown,
+            memory_read_summary->memory_read_ranges);
+    if (!project_memory) {
+        input.memory_values = caller.memory_values;
+    } else {
+        for (const auto& [address, value] : caller.memory_values) {
+            if (memory_value_requires_projection_retention(value) ||
+                memory_cell_required_by_contract(
+                    address,
+                    memory_read_summary->memory_read_ranges))
+                input.memory_values.emplace(address, value);
+        }
+    }
     input.inventory_unresolved_saved_stack_alias_sources =
         caller.inventory_unresolved_saved_stack_alias_sources;
     input.inventory_unresolved_saved_stack_alias_tracks_current_epoch =
@@ -7505,7 +7776,10 @@ void observe_callee_arguments(
     ObservedCalleeInputs* const observed_inputs,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
     const ForwardedRegisterReadMap* const forwarded_register_reads,
-    const AbiStackArgumentReadMap* const abi_stack_argument_reads) {
+    const AbiStackArgumentReadMap* const abi_stack_argument_reads,
+    const std::map<std::uint32_t, FunctionValueSummary>* const
+        memory_read_summaries = nullptr,
+    const bool memory_read_contracts_authoritative = false) {
     if ((call_arguments == nullptr && observed_inputs == nullptr) ||
         candidate_callees.empty())
         return;
@@ -7517,13 +7791,21 @@ void observe_callee_arguments(
                 found != abi_stack_argument_reads->end())
                 required_stack_reads = &found->second;
         }
+        const FunctionValueSummary* memory_read_summary = nullptr;
+        if (memory_read_contracts_authoritative &&
+            memory_read_summaries != nullptr) {
+            const auto found = memory_read_summaries->find(candidate);
+            if (found != memory_read_summaries->end())
+                memory_read_summary = &found->second;
+        }
         auto observation = make_callee_abi_input(
             state,
             owner,
             call_site,
             candidate,
             walk_diagnostics,
-            required_stack_reads);
+            required_stack_reads,
+            memory_read_summary);
         mark_observed_code_pointer_arguments(image, observation);
         auto register_mask =
             std::numeric_limits<std::uint16_t>::max();
@@ -7540,7 +7822,15 @@ void observe_callee_arguments(
             register_mask,
             required_stack_reads == nullptr
                 ? no_stack_projection
-                : *required_stack_reads));
+                : *required_stack_reads,
+            memory_read_summary != nullptr &&
+                memory_read_summary->memory_read_complete,
+            memory_read_summary != nullptr &&
+                memory_read_summary->memory_read_unknown,
+            memory_read_summary != nullptr
+                ? std::span<const FunctionMemoryWriteRange>{
+                      memory_read_summary->memory_read_ranges}
+                : std::span<const FunctionMemoryWriteRange>{}));
         if (candidate_callees_guarded) {
             for (auto& value : observation)
                 value.guarded = true;
@@ -7628,7 +7918,10 @@ void observe_inventory_transfers(
     const bool observes_abi_arguments,
     std::vector<FunctionEvaluation::InventoryTransfer>* const transfers,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
-    const AbiStackArgumentReadMap* const abi_stack_argument_reads) {
+    const AbiStackArgumentReadMap* const abi_stack_argument_reads,
+    const std::map<std::uint32_t, FunctionValueSummary>* const
+        memory_read_summaries = nullptr,
+    const bool memory_read_contracts_authoritative = false) {
     if (transfers == nullptr || candidate_callees.empty()) return;
     for (const auto candidate_callee : candidate_callees) {
         const AbiStackArgumentReadSet* required_stack_reads = nullptr;
@@ -7639,13 +7932,23 @@ void observe_inventory_transfers(
                 found != abi_stack_argument_reads->end())
                 required_stack_reads = &found->second;
         }
+        const FunctionValueSummary* memory_read_summary = nullptr;
+        if (candidate_callee.kind == TailIngressTargetKind::Function &&
+            memory_read_contracts_authoritative &&
+            memory_read_summaries != nullptr) {
+            const auto found =
+                memory_read_summaries->find(candidate_callee.address);
+            if (found != memory_read_summaries->end())
+                memory_read_summary = &found->second;
+        }
         auto observation = make_callee_abi_input(
             state,
             owner,
             transfer_site,
             candidate_callee.address,
             walk_diagnostics,
-            required_stack_reads);
+            required_stack_reads,
+            memory_read_summary);
         if (observes_abi_arguments)
             promote_tail_code_literal_arguments(
                 image, transfer_site, observation);
@@ -7719,7 +8022,10 @@ void apply_call(AbstractState& state,
                 const ForwardedRegisterReadMap* const
                     forwarded_register_reads = nullptr,
                 const AbiStackArgumentReadMap* const
-                    abi_stack_argument_reads = nullptr) {
+                    abi_stack_argument_reads = nullptr,
+                const bool memory_read_contracts_authoritative = false,
+                MemoryReadObservation* const
+                    memory_read_observation = nullptr) {
     ObservedCalleeInputs observed_inputs;
     observe_callee_arguments(
         image,
@@ -7732,8 +8038,10 @@ void apply_call(AbstractState& state,
         contextual_summaries == nullptr ? nullptr : &observed_inputs,
         walk_diagnostics,
         forwarded_register_reads,
-        abi_stack_argument_reads);
-    const auto caller_memory = state.memory_values;
+        abi_stack_argument_reads,
+        &summaries,
+        memory_read_contracts_authoritative);
+    const auto& caller_memory = state.memory_values;
     const auto discard_stack_values = [&] {
         for (const auto& [slot, value] : state.stack_values) {
             static_cast<void>(slot);
@@ -7751,6 +8059,8 @@ void apply_call(AbstractState& state,
         state.stack_values.clear();
     };
     if (image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC) {
+        mark_unknown_memory_read(memory_read_observation);
+        state.memory_definitely_written_ranges.clear();
         for (std::size_t index = 0u; index < state.size(); ++index) {
             make_unknown(state[index]);
             state.stack_offsets[index].reset();
@@ -7806,11 +8116,17 @@ void apply_call(AbstractState& state,
     else
         callees.assign(candidate_callees.begin(), candidate_callees.end());
     if (callees.empty()) {
+        mark_unknown_memory_read(memory_read_observation);
+        state.memory_definitely_written_ranges.clear();
         mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
     }
     normalize(callees);
+    if (!candidate_callees_complete) {
+        mark_unknown_memory_read(memory_read_observation);
+        state.memory_definitely_written_ranges.clear();
+    }
     std::vector<std::uint32_t> returned_values;
     std::set<std::uint32_t> evidence_callees;
     bool returned_guarded = candidate_callees_guarded;
@@ -7867,11 +8183,25 @@ void apply_call(AbstractState& state,
             if (global != summaries.end()) summary = &global->second;
         }
         if (summary == nullptr) {
+            mark_unknown_memory_read(memory_read_observation);
+            state.memory_definitely_written_ranges.clear();
             returned_complete = false;
             returned_may_alias_stack = true;
             returned_memory_complete = false;
             mark_unknown_memory_write(state);
             continue;
+        }
+        if (summary->memory_read_unknown) {
+            mark_unknown_memory_read(memory_read_observation);
+        } else {
+            if (!summary->memory_read_complete)
+                mark_memory_read_incomplete(memory_read_observation);
+            for (const auto& range : summary->memory_read_ranges)
+                record_memory_read_range(
+                    memory_read_observation,
+                    state,
+                    range.address,
+                    range.width);
         }
         returned_unresolved_saved_stack_alias_sources =
             static_cast<std::uint8_t>(
@@ -7943,16 +8273,9 @@ void apply_call(AbstractState& state,
                     record_memory_write_range(
                         state, range.address, range.width);
             }
-            AbstractState candidate_state;
-            candidate_state.memory_values = caller_memory;
-            if (summary->memory_write_unknown) {
-                invalidate_memory_values_conservatively(
-                    candidate_state);
-            } else {
-                invalidate_memory_write_ranges_conservatively(
-                    candidate_state, summary->memory_write_ranges);
-            }
-            for (const auto& memory : summary->memory_values) {
+            const auto materialize_summary_memory =
+                [&](const FunctionMemoryValueSummary& memory)
+                    -> std::optional<AbstractValue> {
                 AbstractValue value;
                 value.known = !memory.values.empty();
                 value.guarded = memory.guarded || candidate_callees_guarded;
@@ -7975,22 +8298,97 @@ void apply_call(AbstractState& state,
                     value
                         .inventory_stack_callback_loss_unresolved ||
                     has_saved_stack_epoch(value))
-                    candidate_state.memory_values.insert_or_assign(
-                        memory.address, std::move(value));
-            }
-            auto candidate_memory =
-                std::move(candidate_state.memory_values);
+                    return value;
+                return std::nullopt;
+            };
             if (!returned_memory_initialized) {
-                returned_memory = std::move(candidate_memory);
+                // The first complete callee establishes the intersection
+                // baseline and therefore needs one copy of caller Memory.
+                // Later callees are intersected cell-by-cell below instead of
+                // repeating this deep map copy for every candidate.
+                AbstractState candidate_state;
+                candidate_state.memory_values = caller_memory;
+                if (summary->memory_write_unknown) {
+                    invalidate_memory_values_conservatively(
+                        candidate_state);
+                } else {
+                    invalidate_memory_write_ranges_conservatively(
+                        candidate_state, summary->memory_write_ranges);
+                }
+                for (const auto& memory : summary->memory_values) {
+                    auto value = materialize_summary_memory(memory);
+                    if (value.has_value())
+                        candidate_state.memory_values.insert_or_assign(
+                            memory.address, std::move(*value));
+                }
+                returned_memory =
+                    std::move(candidate_state.memory_values);
                 returned_memory_initialized = true;
             } else {
-                for (auto value = returned_memory.begin(); value != returned_memory.end();) {
-                    const auto candidate_value = candidate_memory.find(value->first);
-                    if (candidate_value == candidate_memory.end()) {
+                auto summary_memory = summary->memory_values.begin();
+                for (auto value = returned_memory.begin();
+                     value != returned_memory.end();) {
+                    while (summary_memory !=
+                               summary->memory_values.end() &&
+                           summary_memory->address < value->first)
+                        ++summary_memory;
+                    bool candidate_present = false;
+                    if (summary_memory !=
+                            summary->memory_values.end() &&
+                        summary_memory->address == value->first) {
+                        auto candidate_value =
+                            materialize_summary_memory(*summary_memory);
+                        if (candidate_value.has_value()) {
+                            merge_value(
+                                value->second, *candidate_value);
+                            candidate_present = true;
+                        }
+                    }
+                    if (!candidate_present) {
+                        const auto caller_value =
+                            caller_memory.find(value->first);
+                        if (caller_value != caller_memory.end()) {
+                            const bool invalidated =
+                                summary->memory_write_unknown ||
+                                std::any_of(
+                                    summary->memory_write_ranges.begin(),
+                                    summary->memory_write_ranges.end(),
+                                    [&](const auto& range) {
+                                        return memory_ranges_overlap(
+                                            value->first,
+                                            4u,
+                                            range.address,
+                                            range.width);
+                                    });
+                            if (!invalidated) {
+                                // The common no-/disjoint-write case can join
+                                // the immutable caller payload directly. Do
+                                // not deep-copy its candidate/evidence sets.
+                                merge_value(
+                                    value->second,
+                                    caller_value->second);
+                                candidate_present = true;
+                            } else if (has_saved_stack_epoch(
+                                           caller_value->second) ||
+                                       carries_unresolved_stack_callback(
+                                           caller_value->second)) {
+                                    auto candidate_value =
+                                        caller_value->second;
+                                    make_unknown_preserving_provenance(
+                                        candidate_value);
+                                    candidate_value.guarded = true;
+                                    candidate_value.complete = false;
+                                    merge_value(
+                                        value->second,
+                                        candidate_value);
+                                    candidate_present = true;
+                            }
+                        }
+                    }
+                    if (!candidate_present) {
                         value = returned_memory.erase(value);
                         continue;
                     }
-                    merge_value(value->second, candidate_value->second);
                     if (!value->second.known &&
                         !has_saved_stack_epoch(value->second) &&
                         !carries_unresolved_stack_callback(
@@ -8718,6 +9116,7 @@ enum class ResolutionCollectionMode : std::uint8_t {
 // analysis frame alive until an unrelated heavy root naturally converges.
 struct ResolutionEvaluationCancelled final {};
 struct ResolutionSiblingEvaluationCancelled final {};
+struct MemoryReadContractExpanded final {};
 
 // Resolution work may be cancelled by more than one independently owned
 // scope.  In particular, an exact-contribution batch must be able to stop its
@@ -8834,10 +9233,12 @@ FunctionEvaluation evaluate_function(
         abi_stack_argument_reads = nullptr,
     const std::uint8_t inventory_sink_sources = 0u,
     const FunctionEvaluationPlan* const prepared_plan = nullptr,
+    const bool memory_read_contracts_authoritative = false,
     const ResolutionCancellation* const cancel_requested = nullptr) {
     throw_if_resolution_cancelled(cancel_requested);
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
+    evaluation.summary.memory_read_complete = true;
     // Sink relevance is now checked against the exact carrying register or
     // stack slot at each transfer. Retain the parameter for call-site API
     // stability, but never reintroduce the former function-wide OR.
@@ -8882,6 +9283,7 @@ FunctionEvaluation evaluate_function(
     // it must never become part of the callee's relative summary.
     entry_state.memory_write_unknown = false;
     entry_state.memory_write_ranges.clear();
+    entry_state.memory_definitely_written_ranges.clear();
     inputs.at(plan.entry_index).emplace(std::move(entry_state));
     pending.push_back(plan.entry_index);
     queued.at(plan.entry_index) = 1u;
@@ -8890,6 +9292,7 @@ FunctionEvaluation evaluate_function(
     // AbstractState makes both memory and the final summary pass scale with
     // visit history instead of program size.
     std::map<std::uint32_t, AbstractState> returns;
+    MemoryReadObservation evaluation_memory_reads;
     std::size_t local_fixpoint_iterations = 0u;
     while (!pending.empty()) {
         throw_if_resolution_cancelled(cancel_requested);
@@ -9099,7 +9502,11 @@ FunctionEvaluation evaluate_function(
                     promote_tail_code_literal_arguments(
                         image, line.address, state);
                 apply_transfer(
-                    state, line, image, may_merge_stack_inventory);
+                    state,
+                    line,
+                    image,
+                    may_merge_stack_inventory,
+                    &evaluation_memory_reads);
             }
             if (delayed_call.has_value()) {
                 apply_call(state,
@@ -9116,7 +9523,9 @@ FunctionEvaluation evaluate_function(
                             contextual_summaries,
                             walk_diagnostics,
                             forwarded_register_reads,
-                            abi_stack_argument_reads);
+                            abi_stack_argument_reads,
+                            memory_read_contracts_authoritative,
+                            &evaluation_memory_reads);
                 delayed_call.reset();
             }
             if (delayed_tail_ingress.has_value()) {
@@ -9132,7 +9541,9 @@ FunctionEvaluation evaluate_function(
                     delayed_tail_ingress->observes_abi_arguments,
                     inventory_transfers,
                     walk_diagnostics,
-                    abi_stack_argument_reads);
+                    abi_stack_argument_reads,
+                    &summaries,
+                    memory_read_contracts_authoritative);
                 delayed_tail_ingress.reset();
             }
             if (call) {
@@ -9173,7 +9584,9 @@ FunctionEvaluation evaluate_function(
                                 contextual_summaries,
                                 walk_diagnostics,
                                 forwarded_register_reads,
-                                abi_stack_argument_reads);
+                                abi_stack_argument_reads,
+                                memory_read_contracts_authoritative,
+                                &evaluation_memory_reads);
             }
             if (tail_ingress.has_value()) {
                 if (line.instruction.has_delay_slot) {
@@ -9196,7 +9609,9 @@ FunctionEvaluation evaluate_function(
                                                 tail_ingress->observes_abi_arguments,
                                                 inventory_transfers,
                                                 walk_diagnostics,
-                                                abi_stack_argument_reads);
+                                                abi_stack_argument_reads,
+                                                &summaries,
+                                                memory_read_contracts_authoritative);
                 }
             }
         }
@@ -9423,6 +9838,28 @@ FunctionEvaluation evaluate_function(
                                                      : "return-path-unknown");
         evaluation.summary.registers.push_back(std::move(summary));
     }
+    for (const auto target : function.tail_jump_targets) {
+        const auto tail_summary = summaries.find(target);
+        if (tail_summary == summaries.end() ||
+            tail_summary->second.memory_read_unknown) {
+            mark_unknown_memory_read(&evaluation_memory_reads);
+            break;
+        }
+        if (!tail_summary->second.memory_read_complete)
+            mark_memory_read_incomplete(&evaluation_memory_reads);
+        merge_memory_read_contract(
+            &evaluation_memory_reads,
+            tail_summary->second.memory_read_complete,
+            tail_summary->second.memory_read_unknown,
+            tail_summary->second.memory_read_ranges);
+    }
+    evaluation.summary.memory_read_complete =
+        !evaluation.local_fixpoint_budget_exhausted &&
+        evaluation_memory_reads.complete;
+    evaluation.summary.memory_read_unknown =
+        evaluation_memory_reads.unknown;
+    evaluation.summary.memory_read_ranges =
+        std::move(evaluation_memory_reads.ranges);
     evaluation.summary.memory_complete = !returns.empty();
     if (!returns.empty()) {
         for (const auto& [return_site, state] : returns) {
@@ -12483,6 +12920,7 @@ AbstractState tail_store_input(
     auto input = observation;
     input.memory_write_unknown = false;
     input.memory_write_ranges.clear();
+    input.memory_definitely_written_ranges.clear();
     if (entry_register_reads != nullptr) {
         for (std::uint8_t index = 0u; index < input.size(); ++index) {
             if ((*entry_register_reads & register_bit(index)) != 0u)
@@ -12656,9 +13094,13 @@ struct FunctionEvaluationProjection final {
     bool full_state_fallback = false;
     bool register_contract_present = false;
     bool stack_contract_present = false;
+    bool memory_contract_present = false;
     std::uint16_t register_read_mask =
         std::numeric_limits<std::uint16_t>::max();
     AbiStackArgumentReadSet stack_reads;
+    bool memory_read_complete = false;
+    bool memory_read_unknown = false;
+    std::vector<FunctionMemoryWriteRange> memory_read_ranges;
     AbstractState ingress;
 };
 
@@ -12677,17 +13119,137 @@ struct FunctionEvaluationProjection final {
         });
 }
 
+[[nodiscard]] bool valid_exact_memory_read_contract(
+    const bool complete,
+    const bool unknown,
+    const std::span<const FunctionMemoryWriteRange> ranges) {
+    if (!complete || unknown || ranges.size() > maximum_memory_values)
+        return false;
+    if (!std::is_sorted(ranges.begin(), ranges.end()) ||
+        std::any_of(ranges.begin(), ranges.end(), [](const auto& range) {
+            return !valid_memory_write_range(range);
+        }))
+        return false;
+    auto canonical = std::vector<FunctionMemoryWriteRange>{
+        ranges.begin(), ranges.end()};
+    normalize_memory_write_ranges(canonical);
+    return std::equal(canonical.begin(), canonical.end(),
+                      ranges.begin(), ranges.end());
+}
+
+[[nodiscard]] bool evaluation_memory_read_contract_holds(
+    const FunctionEvaluationProjection& projection,
+    const FunctionValueSummary& observed) {
+    if (!projection.memory_contract_present ||
+        !valid_exact_memory_read_contract(
+            projection.memory_read_complete,
+            projection.memory_read_unknown,
+            projection.memory_read_ranges))
+        return true;
+    if (!observed.memory_read_complete ||
+        observed.memory_read_unknown)
+        return false;
+    return std::all_of(
+        observed.memory_read_ranges.begin(),
+        observed.memory_read_ranges.end(),
+        [&](const auto& range) {
+            return memory_range_fully_covered(
+                projection.memory_read_ranges,
+                range.address,
+                range.width);
+        });
+}
+
+[[nodiscard]] bool memory_projection_covers_tail_ingresses(
+    const FunctionInfo& function,
+    const BasicBlockIndexView& blocks,
+    const TailIngressMap& baseline,
+    const TailIngressMap* const local) {
+    if (baseline.empty() && (local == nullptr || local->empty()))
+        return true;
+    const auto block_is_covered = [&](const std::uint32_t block_address) {
+        const auto block = blocks.find(block_address);
+        if (block == blocks.end()) return true;
+        for (const auto& line : block->second->lines) {
+            const auto ingress = select_evaluation_tail_ingress(
+                line.instruction.control_flow,
+                baseline,
+                local,
+                line.address);
+            if (!ingress.has_value()) continue;
+            // The global function summary composes only the ordinary static
+            // Function tails. An incomplete family, an InventoryRegion, or a
+            // dynamically added Function tail can consume caller Memory which
+            // that summary never observed. Keep Memory FullState for precisely
+            // those evaluations; register/stack projection remains independent.
+            if (!ingress->complete) return false;
+            for (const auto target : ingress->targets) {
+                if (target.kind != TailIngressTargetKind::Function ||
+                    std::find(function.tail_jump_targets.begin(),
+                              function.tail_jump_targets.end(),
+                              target.address) ==
+                        function.tail_jump_targets.end())
+                    return false;
+            }
+        }
+        return true;
+    };
+    for (const auto block_address : function.block_addresses) {
+        if (!block_is_covered(block_address)) return false;
+    }
+    if (std::find(function.block_addresses.begin(),
+                  function.block_addresses.end(),
+                  function.entry_address) ==
+            function.block_addresses.end() &&
+        !block_is_covered(function.entry_address))
+        return false;
+    return true;
+}
+
+[[nodiscard]] bool memory_value_requires_projection_retention(
+    const AbstractValue& value) {
+    return has_inventory_candidate_values(value) ||
+           inventory_candidate_values_truncated(value) ||
+           value.contextual_candidate_dependency ||
+           carries_unresolved_stack_callback(value) ||
+           has_saved_stack_epoch(value);
+}
+
+[[nodiscard]] bool memory_cell_required_by_contract(
+    const std::uint32_t address,
+    const std::span<const FunctionMemoryWriteRange> ranges) {
+    const auto cell_begin = static_cast<std::uint64_t>(address);
+    const auto cell_end = cell_begin + 4u;
+    const auto candidate = std::lower_bound(
+        ranges.begin(), ranges.end(), cell_begin,
+        [](const auto& range, const std::uint64_t value) {
+            return static_cast<std::uint64_t>(range.address) +
+                       range.width <=
+                   value;
+        });
+    return candidate != ranges.end() &&
+           static_cast<std::uint64_t>(candidate->address) < cell_end;
+}
+
 [[nodiscard]] std::optional<AbstractState>
 project_evaluation_ingress(
     const AbstractState& source,
     const std::uint16_t register_read_mask,
-    const AbiStackArgumentReadSet& stack_reads) {
+    const AbiStackArgumentReadSet& stack_reads,
+    const bool memory_read_complete,
+    const bool memory_read_unknown,
+    const std::span<const FunctionMemoryWriteRange> memory_read_ranges) {
     const bool project_registers =
         register_read_mask !=
         std::numeric_limits<std::uint16_t>::max();
     const bool project_stack =
         valid_complete_stack_read_contract(stack_reads);
-    if (!project_registers && !project_stack)
+    const bool project_memory =
+        valid_exact_memory_read_contract(
+            memory_read_complete,
+            memory_read_unknown,
+            memory_read_ranges);
+    if (!project_registers && !project_stack && !project_memory)
         return std::nullopt;
     constexpr auto stack_pointer_bit =
         static_cast<std::uint16_t>(1u << 15u);
@@ -12699,9 +13261,8 @@ project_evaluation_ingress(
             : register_read_mask;
 
     AbstractState projected = source;
-    // Memory remains FullState until an address-read contract exists. The
-    // state-wide inventory loss/watchers are likewise observable independent
-    // of one concrete register or stack-slot identity.
+    // State-wide inventory loss/watchers remain observable independent of
+    // one concrete register, stack slot, or ordinary memory identity.
     if (project_registers) {
         for (std::size_t index = 0u;
              index < projected.registers.size();
@@ -12743,19 +13304,36 @@ project_evaluation_ingress(
             stored = projected.stack_values.erase(stored);
         }
     }
+    if (project_memory) {
+        std::erase_if(projected.memory_values, [&](const auto& stored) {
+            return !memory_value_requires_projection_retention(
+                       stored.second) &&
+                   !memory_cell_required_by_contract(
+                       stored.first, memory_read_ranges);
+        });
+    }
     return projected;
 }
 
 [[nodiscard]] bool canonicalize_evaluation_ingress_in_place(
     AbstractState& state,
     const std::uint16_t register_read_mask,
-    const AbiStackArgumentReadSet& stack_reads) {
+    const AbiStackArgumentReadSet& stack_reads,
+    const bool memory_read_complete,
+    const bool memory_read_unknown,
+    const std::span<const FunctionMemoryWriteRange>
+        memory_read_ranges) {
     const bool project_registers =
         register_read_mask !=
         std::numeric_limits<std::uint16_t>::max();
     const bool project_stack =
         valid_complete_stack_read_contract(stack_reads);
-    if (!project_registers && !project_stack)
+    const bool project_memory =
+        valid_exact_memory_read_contract(
+            memory_read_complete,
+            memory_read_unknown,
+            memory_read_ranges);
+    if (!project_registers && !project_stack && !project_memory)
         return false;
     constexpr auto stack_pointer_bit =
         static_cast<std::uint16_t>(1u << 15u);
@@ -12803,6 +13381,14 @@ project_evaluation_ingress(
             stored = state.stack_values.erase(stored);
         }
     }
+    if (project_memory) {
+        std::erase_if(state.memory_values, [&](const auto& stored) {
+            return !memory_value_requires_projection_retention(
+                       stored.second) &&
+                   !memory_cell_required_by_contract(
+                       stored.first, memory_read_ranges);
+        });
+    }
     return true;
 }
 
@@ -12816,7 +13402,11 @@ inventory_loss_in_evaluation_projection(
     const AbstractState& state,
     const std::uint16_t register_read_mask,
     const AbiStackArgumentReadSet& stack_reads,
-    const std::uint8_t inventory_sink_sources) {
+    const std::uint8_t inventory_sink_sources,
+    const bool memory_read_complete = false,
+    const bool memory_read_unknown = false,
+    const std::span<const FunctionMemoryWriteRange>
+        memory_read_ranges = {}) {
     // Keep this predicate structurally identical to
     // project_evaluation_ingress(): state-wide loss and Memory remain
     // observable, while exact ABI contracts may prove individual register or
@@ -12832,6 +13422,11 @@ inventory_loss_in_evaluation_projection(
         std::numeric_limits<std::uint16_t>::max();
     const bool project_stack =
         valid_complete_stack_read_contract(stack_reads);
+    const bool project_memory =
+        valid_exact_memory_read_contract(
+            memory_read_complete,
+            memory_read_unknown,
+            memory_read_ranges);
     constexpr auto stack_pointer_bit =
         static_cast<std::uint16_t>(1u << 15u);
     const auto effective_register_read_mask =
@@ -12878,7 +13473,13 @@ inventory_loss_in_evaluation_projection(
         std::any_of(
             state.memory_values.begin(),
             state.memory_values.end(),
-            [](const auto& stored) {
+            [&](const auto& stored) {
+                if (project_memory &&
+                    !memory_value_requires_projection_retention(
+                        stored.second) &&
+                    !memory_cell_required_by_contract(
+                        stored.first, memory_read_ranges))
+                    return false;
                 return inventory_candidate_values_truncated(
                     stored.second);
             });
@@ -12893,6 +13494,10 @@ make_function_evaluation_projection(
     const TailIngressTargetKind target_kind,
     const ForwardedRegisterReadMap& forwarded_register_reads,
     const AbiStackArgumentReadMap& abi_stack_argument_reads,
+    const std::map<std::uint32_t, FunctionValueSummary>&
+        memory_read_summaries,
+    const bool memory_read_contracts_authoritative,
+    const bool memory_projection_covers_tails,
     const bool contracts_available) {
     FunctionEvaluationProjection projection;
     // Absence is Top, not an exact empty stack-read contract. The ABI type's
@@ -12919,6 +13524,22 @@ make_function_evaluation_projection(
             stack_reads != abi_stack_argument_reads.end();
         if (projection.stack_contract_present)
             projection.stack_reads = stack_reads->second;
+
+        if (memory_read_contracts_authoritative &&
+            memory_projection_covers_tails) {
+            const auto memory_reads =
+                memory_read_summaries.find(function_entry);
+            projection.memory_contract_present =
+                memory_reads != memory_read_summaries.end();
+            if (projection.memory_contract_present) {
+                projection.memory_read_complete =
+                    memory_reads->second.memory_read_complete;
+                projection.memory_read_unknown =
+                    memory_reads->second.memory_read_unknown;
+                projection.memory_read_ranges =
+                    memory_reads->second.memory_read_ranges;
+            }
+        }
     }
 
     if (requested_lens == EvaluationLens::FullState) {
@@ -12935,12 +13556,23 @@ make_function_evaluation_projection(
         projection.stack_contract_present &&
         valid_complete_stack_read_contract(
             projection.stack_reads);
+    const bool memory_domain_precise =
+        projection.abi_contract_authoritative &&
+        projection.memory_contract_present &&
+        valid_exact_memory_read_contract(
+            projection.memory_read_complete,
+            projection.memory_read_unknown,
+            projection.memory_read_ranges);
     auto projected =
-        register_domain_precise || stack_domain_precise
+        register_domain_precise || stack_domain_precise ||
+                memory_domain_precise
             ? project_evaluation_ingress(
                   initial_state,
                   projection.register_read_mask,
-                  projection.stack_reads)
+                  projection.stack_reads,
+                  projection.memory_read_complete,
+                  projection.memory_read_unknown,
+                  projection.memory_read_ranges)
             : std::nullopt;
     if (!projected.has_value()) {
         projection.full_state_fallback = true;
@@ -12955,7 +13587,10 @@ make_function_evaluation_projection(
 void canonicalize_evaluation_outputs(
     FunctionEvaluation& evaluation,
     const ForwardedRegisterReadMap& forwarded_register_reads,
-    const AbiStackArgumentReadMap& abi_stack_argument_reads) {
+    const AbiStackArgumentReadMap& abi_stack_argument_reads,
+    const std::map<std::uint32_t, FunctionValueSummary>&
+        memory_read_summaries,
+    const bool memory_read_contracts_authoritative) {
     // Function summaries encode ABI-preserved values as passthroughs. Keep
     // those symbolic summaries and canonicalize concrete outgoing states for
     // the next target's complete ingress contract.
@@ -12965,8 +13600,12 @@ void canonicalize_evaluation_outputs(
             forwarded_register_reads.find(target);
         const auto stack_reads =
             abi_stack_argument_reads.find(target);
+        const auto memory_reads =
+            memory_read_summaries.find(target);
         if (register_reads == forwarded_register_reads.end() &&
-            stack_reads == abi_stack_argument_reads.end())
+            stack_reads == abi_stack_argument_reads.end() &&
+            (!memory_read_contracts_authoritative ||
+             memory_reads == memory_read_summaries.end()))
             return;
         const auto register_mask =
             register_reads == forwarded_register_reads.end()
@@ -12978,11 +13617,22 @@ void canonicalize_evaluation_outputs(
             stack_reads == abi_stack_argument_reads.end()
                 ? no_stack_projection
                 : stack_reads->second;
+        const auto memory_contract_present =
+            memory_read_contracts_authoritative &&
+            memory_reads != memory_read_summaries.end();
         static_cast<void>(
             canonicalize_evaluation_ingress_in_place(
                 state,
                 register_mask,
-                stack_contract));
+                stack_contract,
+                memory_contract_present &&
+                    memory_reads->second.memory_read_complete,
+                memory_contract_present &&
+                    memory_reads->second.memory_read_unknown,
+                memory_contract_present
+                    ? std::span<const FunctionMemoryWriteRange>{
+                          memory_reads->second.memory_read_ranges}
+                    : std::span<const FunctionMemoryWriteRange>{}));
         };
     for (auto& call : evaluation.call_arguments)
         reconstruct_state(call.callee, call.state);
@@ -13354,6 +14004,10 @@ void encode(EvaluationKeyEncoder& key,
     key.append(summary.memory_write_unknown);
     key.append_range(summary.memory_write_ranges,
                      [&](const auto& range) { encode(key, range); });
+    key.append(summary.memory_read_complete);
+    key.append(summary.memory_read_unknown);
+    key.append_range(summary.memory_read_ranges,
+                     [&](const auto& range) { encode(key, range); });
     key.append_range(summary.memory_values,
                      [&](const auto& value) { encode(key, value); });
     key.append(
@@ -13376,6 +14030,10 @@ void encode_function_call_effect(
     key.append(summary.memory_complete);
     key.append(summary.memory_write_unknown);
     key.append_range(summary.memory_write_ranges,
+                     [&](const auto& range) { encode(key, range); });
+    key.append(summary.memory_read_complete);
+    key.append(summary.memory_read_unknown);
+    key.append_range(summary.memory_read_ranges,
                      [&](const auto& range) { encode(key, range); });
     key.append_range(summary.memory_values,
                      [&](const auto& value) { encode(key, value); });
@@ -13421,6 +14079,9 @@ void encode_function_call_effect(
         left.memory_complete != right.memory_complete ||
         left.memory_write_unknown != right.memory_write_unknown ||
         left.memory_write_ranges != right.memory_write_ranges ||
+        left.memory_read_complete != right.memory_read_complete ||
+        left.memory_read_unknown != right.memory_read_unknown ||
+        left.memory_read_ranges != right.memory_read_ranges ||
         left.memory_values != right.memory_values ||
         left.inventory_unresolved_saved_stack_alias_sources !=
             right.inventory_unresolved_saved_stack_alias_sources ||
@@ -13619,7 +14280,7 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{8u});
+    key.append(std::uint32_t{9u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -13659,6 +14320,14 @@ make_function_evaluation_cache_key(
     key.append(projection.stack_contract_present);
     if (projection.stack_contract_present)
         encode(key, projection.stack_reads);
+    key.append(projection.memory_contract_present);
+    if (projection.memory_contract_present) {
+        key.append(projection.memory_read_complete);
+        key.append(projection.memory_read_unknown);
+        key.append_range(
+            projection.memory_read_ranges,
+            [&](const auto& range) { encode(key, range); });
+    }
     key.select_component(EvaluationKeyComponent::InventorySink);
     // inventory_sink_sources is used to prune outer context admission. The
     // evaluator deliberately ignores it, so it cannot distinguish artifacts.
@@ -13738,6 +14407,18 @@ make_function_evaluation_cache_key(
 
     key.select_component(
         EvaluationKeyComponent::SummaryDependency);
+    // evaluate_function() composes ordinary Function tail summaries directly
+    // after its CFG walk. They are global (never contextual), but must still
+    // invalidate the artifact whenever their externally visible effect grows.
+    key.append_range(
+        function.tail_jump_targets,
+        [&](const auto target) {
+            key.append(target);
+            const auto global = summaries.find(target);
+            key.append(global != summaries.end());
+            if (global != summaries.end())
+                encode_function_call_effect(key, global->second);
+        });
     key.append_range(
         summary_dependencies,
         [&](const auto dependency) {
@@ -13893,6 +14574,8 @@ make_function_evaluation_cache_key(
     bytes += evaluation.summary.memory_values.capacity() *
              sizeof(FunctionMemoryValueSummary);
     bytes += evaluation.summary.memory_write_ranges.capacity() *
+             sizeof(FunctionMemoryWriteRange);
+    bytes += evaluation.summary.memory_read_ranges.capacity() *
              sizeof(FunctionMemoryWriteRange);
     for (const auto& summary :
          evaluation.summary.memory_values) {
@@ -15923,7 +16606,7 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 9u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 10u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -19531,6 +20214,12 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         writer.scalar(range.address);
         writer.scalar(range.width);
     });
+    writer.boolean(summary.memory_read_complete);
+    writer.boolean(summary.memory_read_unknown);
+    writer.sequence(summary.memory_read_ranges, [&](const auto& range) {
+        writer.scalar(range.address);
+        writer.scalar(range.width);
+    });
     writer.sequence(summary.memory_values, [&](const auto& value) {
         writer.scalar(value.address);
         writer.boolean(value.complete);
@@ -19617,6 +20306,37 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
     auto canonical_write_ranges = summary.memory_write_ranges;
     normalize_memory_write_ranges(canonical_write_ranges);
     if (canonical_write_ranges != summary.memory_write_ranges)
+        throw PersistentFunctionEpochIncomplete{};
+    summary.memory_read_complete = reader.boolean();
+    summary.memory_read_unknown = reader.boolean();
+    const auto memory_read_range_count =
+        reader.count(maximum_memory_values);
+    summary.memory_read_ranges.reserve(memory_read_range_count);
+    std::uint64_t previous_read_end = 0u;
+    bool has_read_range = false;
+    for (std::size_t index = 0u;
+         index < memory_read_range_count;
+         ++index) {
+        FunctionMemoryWriteRange range;
+        range.address = reader.scalar<std::uint32_t>();
+        range.width = reader.scalar<std::uint32_t>();
+        if (!valid_memory_write_range(range) ||
+            (has_read_range &&
+             static_cast<std::uint64_t>(range.address) <=
+                 previous_read_end))
+            throw PersistentFunctionEpochIncomplete{};
+        previous_read_end =
+            static_cast<std::uint64_t>(range.address) + range.width;
+        has_read_range = true;
+        summary.memory_read_ranges.push_back(range);
+    }
+    if (!summary.memory_read_complete ||
+        (summary.memory_read_unknown &&
+         !summary.memory_read_ranges.empty()))
+        throw PersistentFunctionEpochIncomplete{};
+    auto canonical_read_ranges = summary.memory_read_ranges;
+    normalize_memory_write_ranges(canonical_read_ranges);
+    if (canonical_read_ranges != summary.memory_read_ranges)
         throw PersistentFunctionEpochIncomplete{};
     const auto memory_count = reader.count(
         persistent_function_epoch_maximum_string_bytes /
@@ -24487,6 +25207,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     }
     const TailIngressMap no_tail_ingresses;
     std::map<std::uint32_t, FunctionValueSummary> summaries;
+    std::unordered_set<std::uint32_t>
+        memory_read_tail_top_functions;
+    memory_read_tail_top_functions.reserve(functions.size());
     std::map<std::uint32_t, CandidateInput> candidate_inputs;
     CallsiteContributionRelation summary_callsite_contributions;
     std::unordered_map<std::uint32_t, const FunctionInfo*> function_by_address;
@@ -24494,8 +25217,18 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     function_by_address.reserve(functions.size());
     callers_by_callee.reserve(functions.size());
     summary_candidate_entries_visited += functions.size();
-    for (const auto& function : functions)
-        summaries.emplace(function.entry_address, FunctionValueSummary{function.entry_address, {}});
+    for (const auto& function : functions) {
+        FunctionValueSummary summary;
+        summary.function_address = function.entry_address;
+        // Internal functions begin at the monotone exact-empty Bottom. Memory
+        // projection remains disabled until the entire worklist converges.
+        summary.memory_read_complete = true;
+        summaries.emplace(function.entry_address, std::move(summary));
+        if (!memory_projection_covers_tail_ingresses(
+                function, block_index, tail_ingresses, nullptr))
+            memory_read_tail_top_functions.insert(
+                function.entry_address);
+    }
     summary_candidate_entries_visited += functions.size();
     for (const auto& function : functions)
         candidate_inputs.emplace(function.entry_address, CandidateInput{});
@@ -24506,6 +25239,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         function_by_address.emplace(function.entry_address, &function);
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
+        for (const auto target : function.tail_jump_targets)
+            callers_by_callee[target].push_back(function.entry_address);
         for (const auto block_address : function.block_addresses) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end()) continue;
@@ -25719,6 +26454,22 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             }
         }
     }
+    // A dynamic/incomplete/typed-region tail can consume ordinary Memory
+    // which FunctionInfo's static tail summary does not model. Force that
+    // function to Read-Top inside the global fixpoint so Top propagates to all
+    // callers before any root/context projection becomes authoritative.
+    for (const auto address : memory_read_tail_top_functions) {
+        const FunctionValueSummary* previous = nullptr;
+        if (previous_epoch != nullptr) {
+            const auto found = previous_epoch->summaries.find(address);
+            if (found != previous_epoch->summaries.end())
+                previous = &found->second;
+        }
+        if (previous == nullptr ||
+            !previous->memory_read_complete ||
+            !previous->memory_read_unknown)
+            summary_dirty_functions.insert(address);
+    }
     std::size_t staged_summary_state_reuses = 0u;
     if (previous_epoch != nullptr) {
         summary_candidate_entries_visited += functions.size();
@@ -26022,11 +26773,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             if (const auto reads = abi_stack_argument_reads.find(target);
                 reads != abi_stack_argument_reads.end())
                 stack_reads = reads->second;
+            const auto memory_reads = summaries.find(target);
             return inventory_loss_in_evaluation_projection(
                 state,
                 register_read_mask,
                 stack_reads,
-                target_abi_inventory_sink_sources(target));
+                target_abi_inventory_sink_sources(target),
+                memory_reads != summaries.end() &&
+                    memory_reads->second.memory_read_complete,
+                memory_reads != summaries.end() &&
+                    memory_reads->second.memory_read_unknown,
+                memory_reads != summaries.end()
+                    ? std::span<const FunctionMemoryWriteRange>{
+                          memory_reads->second.memory_read_ranges}
+                    : std::span<const FunctionMemoryWriteRange>{});
         };
     const auto inventory_loss_reaches_tail_sink =
         [&](const AbstractState& state, const TailIngressTarget target) {
@@ -26044,11 +26804,23 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     reads != abi_stack_argument_reads.end())
                     stack_reads = reads->second;
             }
+            const auto memory_reads =
+                target.kind == TailIngressTargetKind::Function
+                    ? summaries.find(target.address)
+                    : summaries.end();
             return inventory_loss_in_evaluation_projection(
                 state,
                 register_read_mask,
                 stack_reads,
-                tail_abi_inventory_sink_sources(target));
+                tail_abi_inventory_sink_sources(target),
+                memory_reads != summaries.end() &&
+                    memory_reads->second.memory_read_complete,
+                memory_reads != summaries.end() &&
+                    memory_reads->second.memory_read_unknown,
+                memory_reads != summaries.end()
+                    ? std::span<const FunctionMemoryWriteRange>{
+                          memory_reads->second.memory_read_ranges}
+                    : std::span<const FunctionMemoryWriteRange>{});
         };
 
     // Candidate call carriers are private inventory transport, not semantic
@@ -26201,6 +26973,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     for (std::size_t index = 0u; index < functions.size(); ++index) {
         const auto& function = functions[index];
         auto dependencies = function.direct_callees;
+        dependencies.insert(dependencies.end(),
+                            function.tail_jump_targets.begin(),
+                            function.tail_jump_targets.end());
         summary_candidate_entries_visited +=
             function.direct_callees.size() + function.block_addresses.size();
         // Keep this dependency contract aligned with evaluate_function rather
@@ -26357,6 +27132,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 1u, std::memory_order_relaxed);
         }
     };
+    bool memory_read_contracts_authoritative = false;
     const auto cached_evaluate_function =
         [&](const FunctionInfo& function,
             const IndirectCalleeIndexView& indirect_callees,
@@ -26385,8 +27161,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             const bool retain_unbounded_exact_replay = false,
             const TailIngressTargetKind evaluation_target_kind =
                 TailIngressTargetKind::Function,
-            const ResolutionCancellation* const cancel_requested = nullptr) {
+            const ResolutionCancellation* const cancel_requested = nullptr,
+            const bool allow_memory_projection = true) {
             throw_if_resolution_cancelled(cancel_requested);
+            const bool effective_memory_read_contracts_authoritative =
+                memory_read_contracts_authoritative &&
+                allow_memory_projection;
             auto& evaluation_cache = session.impl_->evaluations;
             const EvaluationActivityScope request_activity{
                 account_request
@@ -26408,6 +27188,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 evaluation_target_kind,
                 forwarded_register_reads,
                 abi_stack_argument_reads,
+                summaries,
+                effective_memory_read_contracts_authoritative,
+                !effective_memory_read_contracts_authoritative ||
+                    memory_projection_covers_tail_ingresses(
+                        function,
+                        block_index,
+                        evaluation_tail_ingresses,
+                        local_tail_ingresses),
                 !result.budget_exhausted);
             const FunctionEvaluationPlan* prepared_plan = nullptr;
             if (evaluation_target_kind ==
@@ -26484,11 +27272,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                     prepared_plan,
+                    effective_memory_read_contracts_authoritative,
                     cancel_requested);
+                if (!evaluation_memory_read_contract_holds(
+                        projection, artifact->evaluation.summary))
+                    throw MemoryReadContractExpanded{};
                 canonicalize_evaluation_outputs(
                     artifact->evaluation,
                     forwarded_register_reads,
-                    abi_stack_argument_reads);
+                    abi_stack_argument_reads,
+                    summaries,
+                    effective_memory_read_contracts_authoritative);
                 if (replay_outputs &&
                     walk_diagnostics != nullptr) {
                     merge_fixpoint_diagnostics(
@@ -26573,11 +27367,18 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     evaluation_abi_stack_argument_reads,
                                     inventory_sink_sources,
                                     prepared_plan,
+                                    effective_memory_read_contracts_authoritative,
                                     cancel_requested);
+                            if (!evaluation_memory_read_contract_holds(
+                                    projection,
+                                    artifact->evaluation.summary))
+                                throw MemoryReadContractExpanded{};
                             canonicalize_evaluation_outputs(
                                 artifact->evaluation,
                                 forwarded_register_reads,
-                                abi_stack_argument_reads);
+                                abi_stack_argument_reads,
+                                summaries,
+                                effective_memory_read_contracts_authoritative);
                             if (projection.effective_lens !=
                                 EvaluationLens::FullState)
                                 evaluation_cache
@@ -26677,11 +27478,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                     prepared_plan,
+                    effective_memory_read_contracts_authoritative,
                     cancel_requested);
+                if (!evaluation_memory_read_contract_holds(
+                        projection, fallback->evaluation.summary))
+                    throw MemoryReadContractExpanded{};
                 canonicalize_evaluation_outputs(
                     fallback->evaluation,
                     forwarded_register_reads,
-                    abi_stack_argument_reads);
+                    abi_stack_argument_reads,
+                    summaries,
+                    effective_memory_read_contracts_authoritative);
                 if (projection.effective_lens !=
                     EvaluationLens::FullState)
                     evaluation_cache
@@ -26837,17 +27644,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     fixpoint_summary_versions[dependency] !=
                         version;
             }
-            if (stale) {
-                ++result.fixpoint_stale_repairs;
-                item.input =
-                    candidate_inputs.at(item.address).state;
-                item.evaluation.reset();
-                item.diagnostics = {};
-                item.diagnostics.local_fixpoint_iteration_budget =
-                    maximum_local_fixpoint_iterations;
-                item.error = {};
-                evaluate_batch_item(item);
-            }
             if (pending.empty() ||
                 pending.front() != item.address)
                 throw std::logic_error(
@@ -26856,6 +27652,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             queued.erase(item.address);
             ++result.fixpoint_iterations;
             pending_count = pending.size();
+            if (stale) {
+                ++result.fixpoint_stale_repairs;
+                // Never repair stale speculative work synchronously on the
+                // commit thread. Requeue it through the same global executor
+                // so a heavy function cannot recreate the serial head-of-line
+                // bottleneck which this parallel fixpoint is meant to remove.
+                if (queued.insert(item.address).second)
+                    pending.push_back(item.address);
+                pending_count = pending.size();
+                continue;
+            }
             const bool sampled_iteration =
                 result.fixpoint_iterations <= 16u ||
                 (result.fixpoint_iterations &
@@ -26889,6 +27696,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 result.budget_exhausted = true;
                 break;
             }
+            if (memory_read_tail_top_functions.contains(
+                    item.address)) {
+                evaluation.summary.memory_read_complete = true;
+                evaluation.summary.memory_read_unknown = true;
+                evaluation.summary.memory_read_ranges.clear();
+            }
             emit_analyzer_fixpoint_trace(
                 "global-complete",
                 result.fixpoint_iterations,
@@ -26898,6 +27711,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             if (sampled_iteration)
                 report_progress("fixpoint-evaluate-complete");
             auto& previous = summaries[item.address];
+            widen_function_memory_read_contract(
+                evaluation.summary, previous);
             if (previous != evaluation.summary) {
                 previous = std::move(evaluation.summary);
                 ++fixpoint_summary_versions[item.function_index];
@@ -26969,6 +27784,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     if (!result.budget_exhausted)
         summarized_functions = summaries.size();
     report_progress("fixpoint-complete");
+    memory_read_contracts_authoritative =
+        !result.budget_exhausted;
 
     if (result.budget_exhausted) {
         for (auto& [address, summary] : summaries) {
@@ -26976,6 +27793,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             summary.memory_complete = false;
             summary.memory_write_unknown = true;
             summary.memory_write_ranges.clear();
+            summary.memory_read_complete = true;
+            summary.memory_read_unknown = true;
+            summary.memory_read_ranges.clear();
             summary.memory_values.clear();
             for (auto& value : summary.registers) {
                 value.complete = false;
@@ -27550,9 +28370,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         value.evidence_callees.end());
             };
         resolution_preparation_entries_visited +=
-            candidate.direct_callees.size();
+            candidate.direct_callees.size() +
+            candidate.tail_jump_targets.size();
         for (const auto callee : candidate.direct_callees)
             add_local_callee(callee);
+        for (const auto target : candidate.tail_jump_targets) {
+            add_local_callee(target);
+            summary_dependencies.push_back(target);
+        }
         auto evaluation_block_addresses =
             candidate.block_addresses;
         evaluation_block_addresses.push_back(
@@ -29113,10 +29938,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              const std::span<const std::uint32_t> available_tokens,
              const ContextualSummaryBindings* const
                  contextual_summaries,
-             const EvidenceTokenAssignments* const
-                 prior_call_site_assignments,
-             const EvidenceTokenAssignments* const
-                 prior_callee_assignments)
+              const TailIngressMap* const local_tail_ingresses,
+              const EvidenceTokenAssignments* const
+                  prior_call_site_assignments,
+              const EvidenceTokenAssignments* const
+                  prior_callee_assignments,
+              const bool allow_memory_projection)
              -> std::optional<EvidenceProvenanceLens> {
             if (available_tokens.empty())
                 return std::nullopt;
@@ -29159,6 +29986,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     target_kind,
                     forwarded_register_reads,
                     abi_stack_argument_reads,
+                    summaries,
+                    memory_read_contracts_authoritative &&
+                        allow_memory_projection,
+                    target_kind == TailIngressTargetKind::Function &&
+                        memory_projection_covers_tail_ingresses(
+                            *final_function_by_address.at(function_entry),
+                            block_index,
+                            tail_ingresses,
+                            local_tail_ingresses),
                     !result.budget_exhausted);
             auto lens = EvidenceProvenanceLens(
                 projection.ingress,
@@ -29204,7 +30040,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         [&](const ForwardedStoreContext& context,
             const std::set<std::uint32_t>& root_call_sites,
             const TailIngressMap* const local_tail_ingresses,
-            const ResolutionCancellation* const cancel_requested) {
+            const ResolutionCancellation* const cancel_requested,
+            const bool allow_memory_projection) {
             throw_if_resolution_cancelled(cancel_requested);
             const EvaluationActivityScope request_activity{
                 evaluation_activity_if_observed,
@@ -29221,8 +30058,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 context.isolated ? &root_call_sites : nullptr,
                 forwarded_evidence_tokens,
                 nullptr,
+                local_tail_ingresses,
                 &context.call_site_tokens,
-                &context.callee_tokens);
+                &context.callee_tokens,
+                allow_memory_projection);
             const auto& evaluation_input =
                 evidence_lens.has_value()
                     ? evidence_lens->ingress()
@@ -29263,7 +30102,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 &multi_root_context_evaluations,
                 true,
                 context.target_kind,
-                cancel_requested);
+                cancel_requested,
+                allow_memory_projection);
             if (evidence_lens.has_value())
                 multi_root_provenance_links.fetch_add(
                     evidence_lens->link_count(),
@@ -29286,7 +30126,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const AbstractState*>> input_observations,
             const bool input_family_complete,
             ResolutionRootLogicalBudget& logical_budget,
-            const ResolutionCancellation* const cancel_requested) {
+            const ResolutionCancellation* const cancel_requested,
+            const bool allow_memory_projection) {
         throw_if_resolution_cancelled(cancel_requested);
         ResolutionFunctionResult function_result;
         std::size_t next_root_resolution_compaction =
@@ -29440,7 +30281,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 nullptr,
                 false,
                 TailIngressTargetKind::Function,
-                cancel_requested)
+                cancel_requested,
+                allow_memory_projection)
                 .first->evaluation;
         if (function_result.evaluation.local_fixpoint_budget_exhausted) {
             record_local_fixpoint_limit();
@@ -29479,6 +30321,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 target_stack_reads.complete = false;
                 auto target_inventory_sink_sources =
                     abi_argument_taint_mask;
+                const FunctionValueSummary* target_memory_reads = nullptr;
                 if (target_kind ==
                     TailIngressTargetKind::Function) {
                     if (const auto reads =
@@ -29491,6 +30334,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         target_stack_reads = reads->second;
                     target_inventory_sink_sources =
                         target_abi_inventory_sink_sources(target);
+                    if (const auto reads = summaries.find(target);
+                        reads != summaries.end())
+                        target_memory_reads = &reads->second;
                 }
                 const auto join_creates_projected_loss =
                     [&](const AbstractState& left,
@@ -29502,7 +30348,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     state,
                                     target_register_read_mask,
                                     target_stack_reads,
-                                    target_inventory_sink_sources);
+                                    target_inventory_sink_sources,
+                                    allow_memory_projection &&
+                                        target_memory_reads != nullptr &&
+                                        target_memory_reads
+                                            ->memory_read_complete,
+                                    target_memory_reads != nullptr &&
+                                        target_memory_reads
+                                            ->memory_read_unknown,
+                                    target_memory_reads != nullptr
+                                        ? std::span<const FunctionMemoryWriteRange>{
+                                              target_memory_reads
+                                                  ->memory_read_ranges}
+                                        : std::span<const FunctionMemoryWriteRange>{});
                             };
                         const auto left_loss = loss(left);
                         const auto right_loss = loss(right);
@@ -30088,7 +30946,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     context,
                                     context.root_call_sites,
                                     local_tail_ingresses,
-                                    cancel_requested));
+                                    cancel_requested,
+                                    allow_memory_projection));
                         } catch (...) {
                             item.error =
                                 std::current_exception();
@@ -30168,35 +31027,22 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         context.evaluation_count !=
                             item.evaluation_count;
                     if (stale) {
-                        throw_if_resolution_cancelled(
-                            cancel_requested);
-                        item.evaluation.reset();
-                        item.error = {};
-                        const TailIngressMap*
-                            local_tail_ingresses = nullptr;
-                        if (context.tail &&
-                            context.target_kind ==
-                                TailIngressTargetKind::InventoryRegion) {
-                            const auto local =
-                                final_inventory_region_tail_ingresses_by_entry
-                                    .find(context.target);
-                            if (local !=
-                                final_inventory_region_tail_ingresses_by_entry
-                                    .end())
-                                local_tail_ingresses =
-                                    &local->second;
+                        // A prior commit widened this context after the batch
+                        // snapshot. Discard the stale result and route the
+                        // fresh attempt through the normal parallel FIFO; a
+                        // synchronous repair here recreates a serial HOL lane.
+                        context.evaluation_dirty = true;
+                        if (!function_result
+                                 .forwarded_store_context_queued[
+                                     item.context_index]) {
+                            function_result
+                                .pending_forwarded_store_contexts
+                                .push_back(item.context_index);
+                            function_result
+                                .forwarded_store_context_queued[
+                                    item.context_index] = true;
                         }
-                        try {
-                            item.evaluation.emplace(
-                                evaluate_forwarded_context(
-                                    context,
-                                    context.root_call_sites,
-                                    local_tail_ingresses,
-                                    cancel_requested));
-                        } catch (...) {
-                            item.error =
-                                std::current_exception();
-                        }
+                        continue;
                     }
                     ++context.evaluation_count;
                     if (item.error)
@@ -30520,7 +31366,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     forwarded_evidence_tokens,
                                     &item.bindings,
                                     nullptr,
-                                    nullptr);
+                                    nullptr,
+                                    nullptr,
+                                    allow_memory_projection);
                             const auto& evaluation_input =
                                 item.evidence_lens.has_value()
                                     ? item.evidence_lens->ingress()
@@ -30557,7 +31405,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     &multi_root_context_evaluations,
                                     true,
                                     TailIngressTargetKind::Function,
-                                    cancel_requested);
+                                    cancel_requested,
+                                    allow_memory_projection);
                             item.evaluation.emplace(
                                 cached.first->evaluation);
                             if (item.evidence_lens.has_value()) {
@@ -30648,6 +31497,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                     auto& current_lane =
                         contextual_lanes.at(item.lane_id);
+                    if (current_lane.summary.has_value())
+                        widen_function_memory_read_contract(
+                            context_evaluation.summary,
+                            *current_lane.summary);
                     const bool summary_changed =
                         !current_lane.summary.has_value() ||
                         !same_function_call_effect(
@@ -30942,7 +31795,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 forwarded_evidence_tokens,
                                 &stable.bindings,
                                 nullptr,
-                                nullptr);
+                                nullptr,
+                                nullptr,
+                                allow_memory_projection);
                         const auto& evaluation_input =
                             stable.evidence_lens.has_value()
                                 ? stable.evidence_lens->ingress()
@@ -30979,7 +31834,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             &multi_root_context_evaluations,
                             true,
                             TailIngressTargetKind::Function,
-                            cancel_requested);
+                            cancel_requested,
+                            allow_memory_projection);
                         stable.evaluation =
                             cached.first->evaluation;
                         if (stable.evidence_lens.has_value()) {
@@ -31154,7 +32010,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 forwarded_evidence_tokens,
                                 nullptr,
                                 nullptr,
-                                nullptr);
+                                nullptr,
+                                nullptr,
+                                allow_memory_projection);
                         const auto& evaluation_input =
                             isolated.evidence_lens.has_value()
                                 ? isolated.evidence_lens->ingress()
@@ -31191,7 +32049,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             &multi_root_context_evaluations,
                             true,
                             TailIngressTargetKind::Function,
-                            cancel_requested);
+                            cancel_requested,
+                            allow_memory_projection);
                         isolated.evaluation =
                             cached.first->evaluation;
                         if (isolated.evidence_lens.has_value()) {
@@ -31285,7 +32144,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
 
     const auto evaluate_resolution_function =
         [&](const std::size_t function_index,
-            const ResolutionCancellation* const cancel_requested) {
+            const ResolutionCancellation* const cancel_requested,
+            const bool allow_memory_projection) {
         throw_if_resolution_cancelled(cancel_requested);
         const auto* const function =
             resolution_functions.at(function_index);
@@ -31324,7 +32184,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 aggregate_observations,
                 aggregate_family_complete,
                 logical_budget,
-                cancel_requested);
+                cancel_requested,
+                allow_memory_projection);
 
         struct ContributionPartition final {
             std::optional<CallsiteContributionKey> key;
@@ -31358,6 +32219,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         bool source_stack_base_unresolved = false;
         const auto source_inventory_sink_sources =
             target_abi_inventory_sink_sources(function->entry_address);
+        const auto source_memory_reads =
+            summaries.find(function->entry_address);
         for (const auto& contribution :
              aggregate_input.expected_contributions) {
             const auto observation = aggregate_input
@@ -31373,7 +32236,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     observation->second,
                     source_register_read_mask,
                     source_stack_reads,
-                    source_inventory_sink_sources);
+                    source_inventory_sink_sources,
+                    allow_memory_projection &&
+                        source_memory_reads != summaries.end() &&
+                        source_memory_reads->second.memory_read_complete,
+                    source_memory_reads != summaries.end() &&
+                        source_memory_reads->second.memory_read_unknown,
+                    source_memory_reads != summaries.end()
+                        ? std::span<const FunctionMemoryWriteRange>{
+                              source_memory_reads->second.memory_read_ranges}
+                        : std::span<const FunctionMemoryWriteRange>{});
             source_candidate_values_truncated =
                 source_candidate_values_truncated ||
                 source_loss.candidate_values_truncated;
@@ -31459,7 +32331,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     observations,
                                     partition.input_family_complete,
                                     logical_budget,
-                                    &partition_cancellation));
+                                    &partition_cancellation,
+                                    allow_memory_projection));
                         } else {
                             const std::span<const std::pair<
                                 std::uint32_t,
@@ -31471,7 +32344,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     no_observations,
                                     partition.input_family_complete,
                                     logical_budget,
-                                    &partition_cancellation));
+                                    &partition_cancellation,
+                                    allow_memory_projection));
                         }
                         const auto& resolved =
                             *batch[index].result;
@@ -31607,8 +32481,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 .forwarded_store_evaluation_cache_misses = 0u;
             return reused;
         }
-        auto resolved = evaluate_resolution_function(
-            function_index, cancel_requested);
+        ResolutionFunctionResult resolved;
+        try {
+            resolved = evaluate_resolution_function(
+                function_index, cancel_requested, true);
+        } catch (const MemoryReadContractExpanded&) {
+            // A contextual disjunct may reveal a Memory dependency that the
+            // global exact contract could not see. The whole private root is
+            // transactional, so discard it and monotonically retry this root
+            // once with Memory at Top while retaining register/stack lenses.
+            throw_if_resolution_cancelled(cancel_requested);
+            resolved = evaluate_resolution_function(
+                function_index, cancel_requested, false);
+        }
         resolved.root_index = function_index;
         return resolved;
     };
@@ -32010,7 +32895,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::size_t ready_retained_bytes = 0u;
             std::size_t maximum_ready_retained_bytes = 0u;
             std::size_t next_root_to_submit = 0u;
-            std::size_t committed_prefix = 0u;
             std::size_t active_initial_roots = 0u;
             std::size_t initial_root_tasks_completed = 0u;
             std::size_t recompute_required_slots = 0u;
@@ -32082,9 +32966,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         const auto maximum_active_initial_roots = std::min(
             maximum_parallel_resolution_jobs,
             resolution_executor.maximum_jobs());
-        const auto maximum_uncommitted_resolution_roots = std::max(
-            maximum_active_initial_roots,
-            maximum_parallel_resolution_jobs);
         const auto global_memory_capacity =
             resolution_executor.memory_budget().capacity();
         const auto evaluation_cache_limit =
@@ -32269,10 +33150,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 // before admitting root 25, leaving 23 workers idle for long
                 // serial forwarded chains. Individual submissions refill a
                 // lane immediately. The ready-result arena, executor leases
-                // and a canonical-prefix-relative root-count window jointly
-                // bound speculation. This keeps all lanes useful behind a
-                // slow canonical head without allowing arbitrarily many
-                // small later roots to churn the shared context caches.
+                // and their byte budgets bound speculation. Admission stays
+                // elastic behind a slow canonical head: a completed tiny root
+                // immediately releases its lane, and the producer may submit
+                // another while ready-result and executor memory remain.
                 // The first eviction pauses further admission until its
                 // canonical replacement commits. Already-active roots may
                 // finish, bounding duplicate work to one in-flight wave rather
@@ -32292,9 +33173,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                            resolution_functions.size() ||
                                         (dispatch->active_initial_roots <
                                              maximum_active_initial_roots &&
-                                        dispatch->next_root_to_submit -
-                                                dispatch->committed_prefix <
-                                            maximum_uncommitted_resolution_roots &&
                                         dispatch->recompute_required_slots ==
                                             0u &&
                                         (dispatch
@@ -32628,7 +33506,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 "Resolution-Recomputezaehler ist inkonsistent.");
                         --dispatch->recompute_required_slots;
                     }
-                    dispatch->committed_prefix = index + 1u;
                 }
                 resolution_executor.notify_waiters();
                 if (resolution_root_incomplete) {

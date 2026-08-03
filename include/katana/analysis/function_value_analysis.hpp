@@ -31,7 +31,7 @@ enum class EvaluationLens : std::uint8_t {
     Count,
 };
 
-inline constexpr std::uint32_t evaluation_lens_schema_version = 2u;
+inline constexpr std::uint32_t evaluation_lens_schema_version = 3u;
 inline constexpr std::size_t evaluation_lens_count =
     static_cast<std::size_t>(EvaluationLens::Count);
 
@@ -218,6 +218,13 @@ struct FunctionValueSummary {
     // be replaced by memory_values. Omitted, untouched cells are preserved.
     bool memory_write_unknown = false;
     std::vector<FunctionMemoryWriteRange> memory_write_ranges;
+    // Read-before-definition dependency of this function, including callees.
+    // `memory_read_complete == false` is the monotone fixpoint's undiscovered
+    // value and is never projectable. A complete unknown contract is Top;
+    // otherwise the normalized ranges are the exact external byte facts read.
+    bool memory_read_complete = false;
+    bool memory_read_unknown = false;
+    std::vector<FunctionMemoryWriteRange> memory_read_ranges;
     std::vector<FunctionMemoryValueSummary> memory_values;
     // Bounded top for payload-free aliases whose exact storage identity was
     // widened away inside this function (stack=1, memory=2).
