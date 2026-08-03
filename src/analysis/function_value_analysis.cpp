@@ -30125,6 +30125,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 std::uint32_t,
                 const AbstractState*>> input_observations,
             const bool input_family_complete,
+            const std::span<const AbstractState* const>
+                contextual_root_inputs,
             ResolutionRootLogicalBudget& logical_budget,
             const ResolutionCancellation* const cancel_requested,
             const bool allow_memory_projection) {
@@ -31136,6 +31138,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             if (!candidate_call_owner_functions.contains(
                     function->entry_address))
                 return;
+            if (contextual_root_inputs.empty()) return;
             if (logical_budget.exhausted()) return;
             using ContextualLaneId = std::size_t;
             struct ContextualEntryFamilyKey final {
@@ -31205,26 +31208,33 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                     return bindings;
                 };
-            // Keep each candidate-call owner as an independent resolution
-            // root. The run-local MultiRootEvaluationCoordinator single-
-            // flights identical helper contexts across roots, while distinct
-            // owner states remain parallel, precise, and independently
-            // cacheable instead of becoming one serial global tail.
-            if (!logical_budget.reserve_contextual_context()) {
-                function_result.walk_diagnostics
-                    .resolution_root_logical_budget_exhausted =
-                    true;
-                return;
+            // Exact contribution partitions are correlation boundaries, not
+            // independent physical fixpoints. Seed every contribution as its
+            // own root lane, then share only descendant helper lanes through
+            // the existing lossless family join and edge-local matcher. This
+            // preserves every disjunct while avoiding one complete contextual
+            // worklist per contribution.
+            for (const auto* const root_input : contextual_root_inputs) {
+                if (root_input == nullptr)
+                    throw std::logic_error(
+                        "Contextual-Root-Session erhielt keinen Eingang.");
+                if (!logical_budget.reserve_contextual_context()) {
+                    function_result.walk_diagnostics
+                        .resolution_root_logical_budget_exhausted =
+                        true;
+                    return;
+                }
+                const auto lane_id = contextual_lanes.size();
+                contextual_lanes.push_back(
+                    {function->entry_address,
+                     *root_input,
+                     *root_input,
+                     std::nullopt,
+                     false,
+                     0u,
+                     0u});
+                enqueue_context(lane_id);
             }
-            contextual_lanes.push_back(
-                {function->entry_address,
-                 input_state,
-                 input_state,
-                 std::nullopt,
-                 false,
-                 0u,
-                 0u});
-            enqueue_context(0u);
             std::size_t contextual_evaluations = 0u;
             struct ContextualCountPublisher final {
                 ResolutionFunctionResult* result = nullptr;
@@ -32177,15 +32187,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              aggregate_input.observations)
             aggregate_observations.emplace_back(site, &observation);
         if (!uses_exact_contribution_partitions(
-                function->entry_address, aggregate_input))
+                function->entry_address, aggregate_input)) {
+            const std::array<const AbstractState*, 1u>
+                contextual_root_inputs{&aggregate_input.state};
             return evaluate_resolution_partition(
                 function_index,
                 aggregate_input.state,
                 aggregate_observations,
                 aggregate_family_complete,
+                contextual_root_inputs,
                 logical_budget,
                 cancel_requested,
                 allow_memory_projection);
+        }
 
         struct ContributionPartition final {
             std::optional<CallsiteContributionKey> key;
@@ -32279,6 +32293,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             return combined;
         }
 
+        std::vector<const AbstractState*> contextual_root_inputs;
+        contextual_root_inputs.reserve(partitions.size());
+        for (const auto& partition : partitions) {
+            if (partition.state == nullptr)
+                throw std::logic_error(
+                    "Resolution-Contribution ohne Contextual-Eingang.");
+            contextual_root_inputs.push_back(partition.state);
+        }
+
         struct ContributionPartitionResult final {
             std::optional<ResolutionFunctionResult> result;
             std::exception_ptr error;
@@ -32315,6 +32338,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             &partition_cancellation);
                         const auto& partition =
                             partitions[first + index];
+                        const auto contextual_inputs =
+                            first + index == 0u
+                                ? std::span<const AbstractState* const>{
+                                      contextual_root_inputs}
+                                : std::span<const AbstractState* const>{};
                         if (partition.state == nullptr)
                             throw std::logic_error(
                                 "Resolution-Contribution ohne State.");
@@ -32330,6 +32358,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     *partition.state,
                                     observations,
                                     partition.input_family_complete,
+                                    contextual_inputs,
                                     logical_budget,
                                     &partition_cancellation,
                                     allow_memory_projection));
@@ -32343,6 +32372,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     *partition.state,
                                     no_observations,
                                     partition.input_family_complete,
+                                    contextual_inputs,
                                     logical_budget,
                                     &partition_cancellation,
                                     allow_memory_projection));
