@@ -86,6 +86,14 @@ ohne echte Arbeitsbewegung gilt der Prozess als festgefahren und sein
 Prozessbaum wird sofort quiesziert. Die 15-Minuten-Grenze ist eine absolute
 Obergrenze und keine Mindestwartezeit.
 
+CPU-Auslastung und wachsende Evaluation-, Cache-, Miss-, Requeue- oder
+Kontextzaehler belegen ebenfalls keinen Produktfortschritt. Bleiben
+abgeschlossene beziehungsweise kanonisch publizierte Arbeit und der
+Head-of-Line-Fortschritt stehen, waehrend interne Arbeit wiederholt neu
+erzeugt, invalidiert oder verdraengt wird, gilt der Lauf nach kurzer
+Gegenprobe als fehlerhaft und wird beendet. Diese Konvergenzregel bleibt auch
+bei einer fuer einen benannten Lauf aufgehobenen Zeitgrenze verbindlich.
+
 Fokussierte Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
 Entwicklungsrechner mit 24 logischen CPUs gilt `--parallel 24`. Der
 CLI-Portbuild verwendet dafuer

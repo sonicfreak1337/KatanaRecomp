@@ -672,6 +672,10 @@ struct AbstractState {
     std::array<bool, 16u> inventory_fixed_storage_reference{};
     std::map<std::int32_t, AbstractValue> stack_values;
     std::map<std::uint32_t, AbstractValue> memory_values;
+    // Evaluation-local relative write effect. This metadata is reset at every
+    // callee ABI boundary and is never part of an ingress cache identity.
+    bool memory_write_unknown = false;
+    std::vector<FunctionMemoryWriteRange> memory_write_ranges;
     // A payload-free saved-SP alias whose exact bounded cell identity was
     // widened away. Unlike callback loss, this is harmless until the current
     // stack epoch later receives a relevant callback candidate. Source bits
@@ -723,6 +727,94 @@ struct AbstractState {
 
     bool operator==(const AbstractState&) const = default;
 };
+
+[[nodiscard]] bool valid_memory_write_range(
+    const FunctionMemoryWriteRange& range) noexcept {
+    return range.width != 0u &&
+           static_cast<std::uint64_t>(range.address) + range.width <=
+               (std::uint64_t{1u} << 32u);
+}
+
+void normalize_memory_write_ranges(
+    std::vector<FunctionMemoryWriteRange>& ranges) {
+    std::erase_if(ranges, [](const auto& range) {
+        return !valid_memory_write_range(range);
+    });
+    std::sort(ranges.begin(), ranges.end());
+    std::vector<FunctionMemoryWriteRange> normalized;
+    normalized.reserve(ranges.size());
+    for (const auto& range : ranges) {
+        if (normalized.empty()) {
+            normalized.push_back(range);
+            continue;
+        }
+        auto& previous = normalized.back();
+        const auto previous_end =
+            static_cast<std::uint64_t>(previous.address) + previous.width;
+        const auto range_end =
+            static_cast<std::uint64_t>(range.address) + range.width;
+        if (static_cast<std::uint64_t>(range.address) > previous_end) {
+            normalized.push_back(range);
+            continue;
+        }
+        const auto merged_width =
+            std::max(previous_end, range_end) - previous.address;
+        if (merged_width >
+            std::numeric_limits<std::uint32_t>::max()) {
+            // The public range format cannot encode the complete 4-GiB
+            // domain in one width. Keep two valid adjacent ranges instead of
+            // wrapping the width to zero.
+            normalized.push_back(range);
+            continue;
+        }
+        previous.width = static_cast<std::uint32_t>(merged_width);
+    }
+    ranges = std::move(normalized);
+}
+
+void mark_unknown_memory_write(AbstractState& state) {
+    state.memory_write_unknown = true;
+    state.memory_write_ranges.clear();
+}
+
+void record_memory_write_range(AbstractState& state,
+                               const std::uint32_t address,
+                               const std::size_t width) {
+    if (state.memory_write_unknown) return;
+    if (width == 0u ||
+        width > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(address) + width >
+            (std::uint64_t{1u} << 32u)) {
+        mark_unknown_memory_write(state);
+        return;
+    }
+    state.memory_write_ranges.push_back(
+        {address, static_cast<std::uint32_t>(width)});
+    normalize_memory_write_ranges(state.memory_write_ranges);
+    if (state.memory_write_ranges.size() > maximum_memory_values)
+        mark_unknown_memory_write(state);
+}
+
+bool merge_memory_write_effect(AbstractState& destination,
+                               const AbstractState& source) {
+    if (destination.memory_write_unknown) return false;
+    if (source.memory_write_unknown) {
+        mark_unknown_memory_write(destination);
+        return true;
+    }
+    auto merged = destination.memory_write_ranges;
+    merged.insert(merged.end(),
+                  source.memory_write_ranges.begin(),
+                  source.memory_write_ranges.end());
+    normalize_memory_write_ranges(merged);
+    if (merged.size() > maximum_memory_values) {
+        mark_unknown_memory_write(destination);
+        return true;
+    }
+    if (merged == destination.memory_write_ranges) return false;
+    destination.memory_write_ranges = std::move(merged);
+    return true;
+}
 
 enum class EvidenceProvenanceDomain : std::uint8_t {
     CallSite,
@@ -3632,6 +3724,7 @@ bool merge_state(AbstractState& destination,
                  const AbstractState& source,
                  const bool may_merge_stack_values = false) {
     bool changed = false;
+    changed = merge_memory_write_effect(destination, source) || changed;
     const bool destination_has_active_stack_payload =
         has_active_inventory_stack_payload(destination);
     const bool source_has_active_stack_payload =
@@ -4501,6 +4594,7 @@ void store_memory_values(AbstractState& state,
     const AbstractValue& value,
     const AbstractValue& address_evidence) {
     if (!address_evidence.known || !address_evidence.complete || addresses.empty()) {
+        mark_unknown_memory_write(state);
         note_imprecise_memory_stack_callback_store(
             state, width, value);
         invalidate_memory_values_conservatively(state);
@@ -4510,11 +4604,14 @@ void store_memory_values(AbstractState& state,
             return width == 0u ||
                    address > std::numeric_limits<std::uint32_t>::max() - (width - 1u);
         })) {
+        mark_unknown_memory_write(state);
         note_imprecise_memory_stack_callback_store(
             state, width, value);
         invalidate_memory_values_conservatively(state);
         return;
     }
+    for (const auto address : addresses)
+        record_memory_write_range(state, address, width);
     if (addresses.size() > 1u) {
         auto possible_store = value;
         make_unknown_preserving_provenance(possible_store);
@@ -5027,6 +5124,32 @@ void merge_saved_stack_epoch_memory_forward(
 void invalidate_memory_values_conservatively(AbstractState& state) {
     for (auto value = state.memory_values.begin();
          value != state.memory_values.end();) {
+        if (!has_saved_stack_epoch(value->second) &&
+            !carries_unresolved_stack_callback(value->second)) {
+            value = state.memory_values.erase(value);
+            continue;
+        }
+        make_unknown_preserving_provenance(value->second);
+        value->second.guarded = true;
+        value->second.complete = false;
+        ++value;
+    }
+}
+
+void invalidate_memory_write_ranges_conservatively(
+    AbstractState& state,
+    const std::span<const FunctionMemoryWriteRange> ranges) {
+    for (auto value = state.memory_values.begin();
+         value != state.memory_values.end();) {
+        const bool overlaps = std::any_of(
+            ranges.begin(), ranges.end(), [&](const auto& range) {
+                return memory_ranges_overlap(
+                    value->first, 4u, range.address, range.width);
+            });
+        if (!overlaps) {
+            ++value;
+            continue;
+        }
         if (!has_saved_stack_epoch(value->second) &&
             !carries_unresolved_stack_callback(value->second)) {
             value = state.memory_values.erase(value);
@@ -6179,7 +6302,8 @@ void apply_transfer(AbstractState& state,
     }
     case katana::sh4::InstructionKind::MovByteStore:
     case katana::sh4::InstructionKind::MovWordStore:
-    case katana::sh4::InstructionKind::MovLongStore: {
+    case katana::sh4::InstructionKind::MovLongStore:
+    case katana::sh4::InstructionKind::MovcaLong: {
         const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteStore   ? 1u
                            : instruction.kind == katana::sh4::InstructionKind::MovWordStore ? 2u
                                                                                             : 4u;
@@ -6598,6 +6722,7 @@ void apply_transfer(AbstractState& state,
                     [instruction.destination_register] ||
                 state.inventory_stack_may_alias
                     [instruction.destination_register]);
+        mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
     }
@@ -6639,6 +6764,7 @@ void apply_transfer(AbstractState& state,
         state.inventory_fixed_storage_reference
             [instruction.destination_register] =
                 incoming_destination_fixed_storage_reference;
+        mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
     }
@@ -6681,6 +6807,7 @@ void apply_transfer(AbstractState& state,
                 state.inventory_stack_may_alias
                     [instruction.destination_register] ||
                 inventory_coordinate_enumeration_failed);
+        mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
     }
@@ -6706,6 +6833,7 @@ void apply_transfer(AbstractState& state,
     case katana::sh4::InstructionKind::TestAndSetByte:
     case katana::sh4::InstructionKind::Prefetch:
     case katana::sh4::InstructionKind::TrapAlways:
+        mark_unknown_memory_write(state);
         invalidate_stack_values_conservatively(state);
         invalidate_memory_values_conservatively(state);
         clear_written(state, instruction);
@@ -6892,6 +7020,7 @@ void apply_transfer(AbstractState& state,
     }
     default:
         if (instruction.kind == katana::sh4::InstructionKind::Unknown) {
+            mark_unknown_memory_write(state);
             invalidate_stack_values_conservatively(state);
             invalidate_memory_values_conservatively(state);
         }
@@ -7604,19 +7733,7 @@ void apply_call(AbstractState& state,
         walk_diagnostics,
         forwarded_register_reads,
         abi_stack_argument_reads);
-    std::map<std::uint32_t, AbstractValue>
-        preserved_saved_stack_memory;
-    for (const auto& [address, value] : state.memory_values) {
-        if (!has_saved_stack_epoch(value) &&
-            !carries_unresolved_stack_callback(value))
-            continue;
-        auto preserved = value;
-        make_unknown_preserving_provenance(preserved);
-        preserved.guarded = true;
-        preserved.complete = false;
-        preserved_saved_stack_memory.emplace(
-            address, std::move(preserved));
-    }
+    const auto caller_memory = state.memory_values;
     const auto discard_stack_values = [&] {
         for (const auto& [slot, value] : state.stack_values) {
             static_cast<void>(slot);
@@ -7646,8 +7763,8 @@ void apply_call(AbstractState& state,
         }
         state[15u].inventory_stack_derived = true;
         discard_stack_values();
-        state.memory_values =
-            std::move(preserved_saved_stack_memory);
+        mark_unknown_memory_write(state);
+        invalidate_memory_values_conservatively(state);
         return;
     }
     const bool escaped_stack_alias =
@@ -7665,7 +7782,6 @@ void apply_call(AbstractState& state,
             discard_stack_values();
         }
     }
-    state.memory_values = preserved_saved_stack_memory;
     for (std::uint8_t index = 0u; index <= 7u; ++index)
         make_unknown(state[index]);
     for (std::uint8_t index = 0u; index <= 7u; ++index)
@@ -7689,7 +7805,11 @@ void apply_call(AbstractState& state,
         callees.push_back(*callee);
     else
         callees.assign(candidate_callees.begin(), candidate_callees.end());
-    if (callees.empty()) return;
+    if (callees.empty()) {
+        mark_unknown_memory_write(state);
+        invalidate_memory_values_conservatively(state);
+        return;
+    }
     normalize(callees);
     std::vector<std::uint32_t> returned_values;
     std::set<std::uint32_t> evidence_callees;
@@ -7721,6 +7841,8 @@ void apply_call(AbstractState& state,
         returned_memory_stack_callback_loss_unresolved;
     std::map<std::uint32_t, bool>
         returned_memory_saved_stack_alias_latent;
+    if (!candidate_callees_complete)
+        mark_unknown_memory_write(state);
     for (const auto candidate : callees) {
         const FunctionValueSummary* summary = nullptr;
         if (contextual_summaries != nullptr) {
@@ -7748,6 +7870,7 @@ void apply_call(AbstractState& state,
             returned_complete = false;
             returned_may_alias_stack = true;
             returned_memory_complete = false;
+            mark_unknown_memory_write(state);
             continue;
         }
         returned_unresolved_saved_stack_alias_sources =
@@ -7811,8 +7934,24 @@ void apply_call(AbstractState& state,
         }
         if (!summary->memory_complete) {
             returned_memory_complete = false;
+            mark_unknown_memory_write(state);
         } else {
-            std::map<std::uint32_t, AbstractValue> candidate_memory;
+            if (summary->memory_write_unknown) {
+                mark_unknown_memory_write(state);
+            } else {
+                for (const auto& range : summary->memory_write_ranges)
+                    record_memory_write_range(
+                        state, range.address, range.width);
+            }
+            AbstractState candidate_state;
+            candidate_state.memory_values = caller_memory;
+            if (summary->memory_write_unknown) {
+                invalidate_memory_values_conservatively(
+                    candidate_state);
+            } else {
+                invalidate_memory_write_ranges_conservatively(
+                    candidate_state, summary->memory_write_ranges);
+            }
             for (const auto& memory : summary->memory_values) {
                 AbstractValue value;
                 value.known = !memory.values.empty();
@@ -7836,9 +7975,11 @@ void apply_call(AbstractState& state,
                     value
                         .inventory_stack_callback_loss_unresolved ||
                     has_saved_stack_epoch(value))
-                    candidate_memory.emplace(
+                    candidate_state.memory_values.insert_or_assign(
                         memory.address, std::move(value));
             }
+            auto candidate_memory =
+                std::move(candidate_state.memory_values);
             if (!returned_memory_initialized) {
                 returned_memory = std::move(candidate_memory);
                 returned_memory_initialized = true;
@@ -7914,12 +8055,9 @@ void apply_call(AbstractState& state,
                                 returned->evidence_callees.end());
     }
     if (returned_memory_complete && returned_memory_initialized) {
-        for (const auto& [address, value] :
-             preserved_saved_stack_memory) {
-            if (!returned_memory.contains(address))
-                returned_memory.emplace(address, value);
-        }
         state.memory_values = std::move(returned_memory);
+    } else {
+        invalidate_memory_values_conservatively(state);
     }
     add_unresolved_saved_stack_alias(
         state,
@@ -8244,6 +8382,7 @@ void observe_stored_code_addresses(
     };
     switch (instruction.kind) {
     case K::MovLongStore:
+    case K::MovcaLong:
         supported = true;
         vbr_relative_destination =
             state.inventory_vbr_relative[instruction.destination_register];
@@ -8738,7 +8877,12 @@ FunctionEvaluation evaluate_function(
         plan.blocks.size());
     std::deque<std::size_t> pending;
     std::vector<std::uint8_t> queued(plan.blocks.size(), 0u);
-    inputs.at(plan.entry_index).emplace(initial_state);
+    auto entry_state = initial_state;
+    // Caller-local write provenance describes effects before this ABI entry;
+    // it must never become part of the callee's relative summary.
+    entry_state.memory_write_unknown = false;
+    entry_state.memory_write_ranges.clear();
+    inputs.at(plan.entry_index).emplace(std::move(entry_state));
     pending.push_back(plan.entry_index);
     queued.at(plan.entry_index) = 1u;
     // Keep only the monotone joined state per physical RTS. A loop can revisit
@@ -9281,6 +9425,41 @@ FunctionEvaluation evaluate_function(
     }
     evaluation.summary.memory_complete = !returns.empty();
     if (!returns.empty()) {
+        for (const auto& [return_site, state] : returns) {
+            static_cast<void>(return_site);
+            if (state.memory_write_unknown) {
+                evaluation.summary.memory_write_unknown = true;
+                evaluation.summary.memory_write_ranges.clear();
+                break;
+            }
+            evaluation.summary.memory_write_ranges.insert(
+                evaluation.summary.memory_write_ranges.end(),
+                state.memory_write_ranges.begin(),
+                state.memory_write_ranges.end());
+        }
+        if (!evaluation.summary.memory_write_unknown) {
+            normalize_memory_write_ranges(
+                evaluation.summary.memory_write_ranges);
+            if (evaluation.summary.memory_write_ranges.size() >
+                maximum_memory_values) {
+                evaluation.summary.memory_write_unknown = true;
+                evaluation.summary.memory_write_ranges.clear();
+            }
+        }
+        const auto memory_cell_was_written =
+            [&](const std::uint32_t address) {
+                return evaluation.summary.memory_write_unknown ||
+                       std::any_of(
+                           evaluation.summary.memory_write_ranges.begin(),
+                           evaluation.summary.memory_write_ranges.end(),
+                           [&](const auto& range) {
+                               return memory_ranges_overlap(
+                                   address,
+                                   4u,
+                                   range.address,
+                                   range.width);
+                           });
+            };
         std::set<std::uint32_t>
             returned_memory_stack_callback_loss_unresolved;
         std::map<std::uint32_t, bool>
@@ -9297,13 +9476,12 @@ FunctionEvaluation evaluate_function(
                     continue;
                 const auto initial =
                     initial_state.memory_values.find(address);
-                // apply_call() keeps the caller's exact saved-stack memory
-                // unless a callee summary replaces that cell. A no-op helper
-                // must therefore not downgrade an unchanged finite epoch to
-                // an unresolved marker. A newly created, changed or already
-                // unresolved payload still cannot cross the public summary
-                // structurally and must fail closed at this exact address.
-                if (!carries_unresolved_stack_callback(value) &&
+                // Non-memory stack-epoch transitions may still change an
+                // address-scoped fail-closed marker. Preserve those changes,
+                // while an untouched no-op helper keeps the caller's exact
+                // finite provenance without exporting a false loss.
+                if (!memory_cell_was_written(address) &&
+                    !carries_unresolved_stack_callback(value) &&
                     initial != initial_state.memory_values.end() &&
                     same_stack_callback_provenance(
                         initial->second, value))
@@ -9351,6 +9529,9 @@ FunctionEvaluation evaluate_function(
                     ++value;
             }
         }
+        std::erase_if(returned_memory, [&](const auto& stored) {
+            return !memory_cell_was_written(stored.first);
+        });
         for (auto& [address, value] : returned_memory) {
             FunctionMemoryValueSummary memory;
             memory.address = address;
@@ -10161,6 +10342,7 @@ bool guarded_inventory_store_instruction(
     using K = katana::sh4::InstructionKind;
     switch (kind) {
     case K::MovLongStore:
+    case K::MovcaLong:
     case K::MovLongStorePreDecrement:
     case K::MovLongStoreDisplacement:
     case K::MovLongStoreR0Indexed:
@@ -10645,6 +10827,7 @@ void normalize_abi_persistent_store_sites(
     using K = katana::sh4::InstructionKind;
     switch (instruction.kind) {
     case K::MovLongStore:
+    case K::MovcaLong:
     case K::MovLongStorePreDecrement:
     case K::MovLongStoreDisplacement:
         return register_bit(instruction.destination_register);
@@ -10993,6 +11176,7 @@ void compose_abi_stack_argument_reads(
             });
         return std::uint8_t{0u};
     case K::MovLongStore:
+    case K::MovcaLong:
         return stack_store(instruction.destination_register);
     case K::MovByteStore:
     case K::MovWordStore:
@@ -11882,6 +12066,7 @@ known_general_register_read_mask(const katana::sh4::DecodedInstruction& instruct
     case K::MovByteStore:
     case K::MovWordStore:
     case K::MovLongStore:
+    case K::MovcaLong:
     case K::MovByteStorePreDecrement:
     case K::MovWordStorePreDecrement:
     case K::MovLongStorePreDecrement:
@@ -12296,6 +12481,8 @@ AbstractState tail_store_input(
     const AbiStackArgumentReadSet* const required_stack_reads = nullptr,
     const std::uint16_t* const entry_register_reads = nullptr) {
     auto input = observation;
+    input.memory_write_unknown = false;
+    input.memory_write_ranges.clear();
     if (entry_register_reads != nullptr) {
         for (std::uint8_t index = 0u; index < input.size(); ++index) {
             if ((*entry_register_reads & register_bit(index)) != 0u)
@@ -13153,11 +13340,20 @@ void encode(EvaluationKeyEncoder& key,
 }
 
 void encode(EvaluationKeyEncoder& key,
+            const FunctionMemoryWriteRange& range) {
+    key.append(range.address);
+    key.append(range.width);
+}
+
+void encode(EvaluationKeyEncoder& key,
             const FunctionValueSummary& summary) {
     key.append(summary.function_address);
     key.append_range(summary.registers,
                      [&](const auto& value) { encode(key, value); });
     key.append(summary.memory_complete);
+    key.append(summary.memory_write_unknown);
+    key.append_range(summary.memory_write_ranges,
+                     [&](const auto& range) { encode(key, range); });
     key.append_range(summary.memory_values,
                      [&](const auto& value) { encode(key, value); });
     key.append(
@@ -13178,6 +13374,9 @@ void encode_function_call_effect(
     const FunctionValueSummary& summary) {
     key.append(summary.function_address);
     key.append(summary.memory_complete);
+    key.append(summary.memory_write_unknown);
+    key.append_range(summary.memory_write_ranges,
+                     [&](const auto& range) { encode(key, range); });
     key.append_range(summary.memory_values,
                      [&](const auto& value) { encode(key, value); });
     key.append(
@@ -13220,6 +13419,8 @@ void encode_function_call_effect(
     const FunctionValueSummary& right) noexcept {
     if (left.function_address != right.function_address ||
         left.memory_complete != right.memory_complete ||
+        left.memory_write_unknown != right.memory_write_unknown ||
+        left.memory_write_ranges != right.memory_write_ranges ||
         left.memory_values != right.memory_values ||
         left.inventory_unresolved_saved_stack_alias_sources !=
             right.inventory_unresolved_saved_stack_alias_sources ||
@@ -13418,7 +13619,7 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{7u});
+    key.append(std::uint32_t{8u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -13650,6 +13851,8 @@ make_function_evaluation_cache_key(
 [[nodiscard]] std::size_t retained_heap_bytes(
     const AbstractState& state) noexcept {
     std::size_t bytes = 0u;
+    bytes += state.memory_write_ranges.capacity() *
+             sizeof(FunctionMemoryWriteRange);
     for (const auto& value : state.registers)
         bytes += retained_heap_bytes(value);
     for (const auto& coordinates :
@@ -13689,6 +13892,8 @@ make_function_evaluation_cache_key(
     }
     bytes += evaluation.summary.memory_values.capacity() *
              sizeof(FunctionMemoryValueSummary);
+    bytes += evaluation.summary.memory_write_ranges.capacity() *
+             sizeof(FunctionMemoryWriteRange);
     for (const auto& summary :
          evaluation.summary.memory_values) {
         bytes += summary.values.capacity() *
@@ -15718,7 +15923,7 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 8u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 9u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -19321,6 +19526,11 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         writer.string(value.reason);
     });
     writer.boolean(summary.memory_complete);
+    writer.boolean(summary.memory_write_unknown);
+    writer.sequence(summary.memory_write_ranges, [&](const auto& range) {
+        writer.scalar(range.address);
+        writer.scalar(range.width);
+    });
     writer.sequence(summary.memory_values, [&](const auto& value) {
         writer.scalar(value.address);
         writer.boolean(value.complete);
@@ -19379,6 +19589,35 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         summary.registers.push_back(std::move(value));
     }
     summary.memory_complete = reader.boolean();
+    summary.memory_write_unknown = reader.boolean();
+    const auto memory_write_range_count =
+        reader.count(maximum_memory_values);
+    summary.memory_write_ranges.reserve(memory_write_range_count);
+    std::uint64_t previous_write_end = 0u;
+    bool has_write_range = false;
+    for (std::size_t index = 0u;
+         index < memory_write_range_count;
+         ++index) {
+        FunctionMemoryWriteRange range;
+        range.address = reader.scalar<std::uint32_t>();
+        range.width = reader.scalar<std::uint32_t>();
+        if (!valid_memory_write_range(range) ||
+            (has_write_range &&
+             static_cast<std::uint64_t>(range.address) <
+                 previous_write_end))
+            throw PersistentFunctionEpochIncomplete{};
+        previous_write_end =
+            static_cast<std::uint64_t>(range.address) + range.width;
+        has_write_range = true;
+        summary.memory_write_ranges.push_back(range);
+    }
+    if (summary.memory_write_unknown &&
+        !summary.memory_write_ranges.empty())
+        throw PersistentFunctionEpochIncomplete{};
+    auto canonical_write_ranges = summary.memory_write_ranges;
+    normalize_memory_write_ranges(canonical_write_ranges);
+    if (canonical_write_ranges != summary.memory_write_ranges)
+        throw PersistentFunctionEpochIncomplete{};
     const auto memory_count = reader.count(
         persistent_function_epoch_maximum_string_bytes /
         sizeof(FunctionMemoryValueSummary));
@@ -19399,6 +19638,23 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         value.inventory_saved_stack_alias_tracks_current_epoch =
             reader.boolean();
         value.values = read_u32_values(reader);
+        const bool address_scoped_marker =
+            value.inventory_stack_callback_loss_unresolved ||
+            value.inventory_saved_stack_alias_latent;
+        const bool overlaps_write =
+            summary.memory_write_unknown ||
+            std::any_of(
+                summary.memory_write_ranges.begin(),
+                summary.memory_write_ranges.end(),
+                [&](const auto& range) {
+                    return memory_ranges_overlap(
+                        value.address,
+                        4u,
+                        range.address,
+                        range.width);
+                });
+        if (!address_scoped_marker && !overlaps_write)
+            throw PersistentFunctionEpochIncomplete{};
         summary.memory_values.push_back(std::move(value));
     }
     summary.inventory_unresolved_saved_stack_alias_sources =
@@ -26718,6 +26974,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         for (auto& [address, summary] : summaries) {
             static_cast<void>(address);
             summary.memory_complete = false;
+            summary.memory_write_unknown = true;
+            summary.memory_write_ranges.clear();
             summary.memory_values.clear();
             for (auto& value : summary.registers) {
                 value.complete = false;
@@ -27045,6 +27303,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         kind == katana::sh4::InstructionKind::Braf ||
                         kind == katana::sh4::InstructionKind::Bsrf ||
                         kind == katana::sh4::InstructionKind::MovLongStore ||
+                        kind == katana::sh4::InstructionKind::MovcaLong ||
                         kind == katana::sh4::InstructionKind::
                                     MovLongStorePreDecrement ||
                         kind == katana::sh4::InstructionKind::
@@ -30354,13 +30613,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             current.summary_version !=
                                 dependency.summary_version;
                     }
-                    if (stale) {
-                        throw_if_resolution_cancelled(
-                            cancel_requested);
-                        prepare_contextual_item(
-                            item, item.lane_id);
-                        evaluate_contextual_item(item);
-                    }
                     if (pending_contexts.empty() ||
                         pending_contexts.front() != item.lane_id)
                         throw std::logic_error(
@@ -30369,6 +30621,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     pending_contexts.pop_front();
                     queued_contexts.at(item.lane_id) = 0u;
                     ++contextual_evaluations;
+                    if (stale) {
+                        // A later item from this parallel snapshot may have
+                        // become stale while an earlier item was committed.
+                        // Do not recompute it synchronously on the commit
+                        // thread: that work bypasses the reserved batch
+                        // budget and can itself be invalidated again by a
+                        // later commit from the same snapshot.  Discard the
+                        // stale result and let the normal queue coalesce all
+                        // current invalidations before the next parallel
+                        // batch captures a fresh snapshot.
+                        enqueue_context(item.lane_id);
+                        continue;
+                    }
                     if (item.error)
                         std::rethrow_exception(item.error);
                     auto context_evaluation =
@@ -31745,6 +32010,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::size_t ready_retained_bytes = 0u;
             std::size_t maximum_ready_retained_bytes = 0u;
             std::size_t next_root_to_submit = 0u;
+            std::size_t committed_prefix = 0u;
             std::size_t active_initial_roots = 0u;
             std::size_t initial_root_tasks_completed = 0u;
             std::size_t recompute_required_slots = 0u;
@@ -31816,6 +32082,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         const auto maximum_active_initial_roots = std::min(
             maximum_parallel_resolution_jobs,
             resolution_executor.maximum_jobs());
+        const auto maximum_uncommitted_resolution_roots = std::max(
+            maximum_active_initial_roots,
+            maximum_parallel_resolution_jobs);
         const auto global_memory_capacity =
             resolution_executor.memory_budget().capacity();
         const auto evaluation_cache_limit =
@@ -31999,10 +32268,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 // synchronous batches waited for the slowest of 24 roots
                 // before admitting root 25, leaving 23 workers idle for long
                 // serial forwarded chains. Individual submissions refill a
-                // lane immediately. The ready-result arena and executor
-                // leases, rather than an arbitrary root-count window, bound
-                // speculation. This keeps all lanes useful behind a slow
-                // canonical head and lets later roots warm shared contexts.
+                // lane immediately. The ready-result arena, executor leases
+                // and a canonical-prefix-relative root-count window jointly
+                // bound speculation. This keeps all lanes useful behind a
+                // slow canonical head without allowing arbitrarily many
+                // small later roots to churn the shared context caches.
                 // The first eviction pauses further admission until its
                 // canonical replacement commits. Already-active roots may
                 // finish, bounding duplicate work to one in-flight wave rather
@@ -32022,6 +32292,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                            resolution_functions.size() ||
                                         (dispatch->active_initial_roots <
                                              maximum_active_initial_roots &&
+                                        dispatch->next_root_to_submit -
+                                                dispatch->committed_prefix <
+                                            maximum_uncommitted_resolution_roots &&
                                         dispatch->recompute_required_slots ==
                                             0u &&
                                         (dispatch
@@ -32347,12 +32620,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 }
                 commit_resolution_result(std::move(*resolved));
                 result_lease.reset();
-                if (recompute) {
+                {
                     const std::lock_guard lock(dispatch->mutex);
-                    if (dispatch->recompute_required_slots == 0u)
-                        throw std::logic_error(
-                            "Resolution-Recomputezaehler ist inkonsistent.");
-                    --dispatch->recompute_required_slots;
+                    if (recompute) {
+                        if (dispatch->recompute_required_slots == 0u)
+                            throw std::logic_error(
+                                "Resolution-Recomputezaehler ist inkonsistent.");
+                        --dispatch->recompute_required_slots;
+                    }
+                    dispatch->committed_prefix = index + 1u;
                 }
                 resolution_executor.notify_waiters();
                 if (resolution_root_incomplete) {

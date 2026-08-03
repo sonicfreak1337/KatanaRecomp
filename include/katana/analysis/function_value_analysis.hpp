@@ -6,6 +6,7 @@
 #include "katana/sh4/disassembler.hpp"
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -201,10 +202,22 @@ struct FunctionMemoryValueSummary {
     bool operator==(const FunctionMemoryValueSummary&) const = default;
 };
 
+struct FunctionMemoryWriteRange {
+    std::uint32_t address = 0u;
+    std::uint32_t width = 0u;
+
+    auto operator<=>(const FunctionMemoryWriteRange&) const = default;
+};
+
 struct FunctionValueSummary {
     std::uint32_t function_address = 0u;
     std::vector<FunctionRegisterValueSummary> registers;
     bool memory_complete = false;
+    // Relative memory effect. An unknown write invalidates every caller fact;
+    // otherwise only facts overlapping one of these bounded byte ranges may
+    // be replaced by memory_values. Omitted, untouched cells are preserved.
+    bool memory_write_unknown = false;
+    std::vector<FunctionMemoryWriteRange> memory_write_ranges;
     std::vector<FunctionMemoryValueSummary> memory_values;
     // Bounded top for payload-free aliases whose exact storage identity was
     // widened away inside this function (stack=1, memory=2).

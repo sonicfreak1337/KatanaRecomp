@@ -866,7 +866,19 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             output << "]}";
         }
         output << "],\"memory_complete\":" << (function_summary.memory_complete ? "true" : "false")
-               << ",\"memory_values\":[";
+               << ",\"memory_write_unknown\":"
+               << (function_summary.memory_write_unknown ? "true" : "false")
+               << ",\"memory_write_ranges\":[";
+        for (std::size_t range = 0u;
+             range < function_summary.memory_write_ranges.size();
+             ++range) {
+            if (range != 0u) output << ',';
+            const auto& value = function_summary.memory_write_ranges[range];
+            output << "{\"address\":"
+                   << katana::io::quote_json(hex32(value.address))
+                   << ",\"width\":" << value.width << '}';
+        }
+        output << "],\"memory_values\":[";
         for (std::size_t memory = 0u; memory < function_summary.memory_values.size(); ++memory) {
             if (memory != 0u) output << ',';
             const auto& value = function_summary.memory_values[memory];

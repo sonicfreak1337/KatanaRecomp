@@ -39,6 +39,14 @@ in diesem Repository. Sie sind keine Empfehlung.
   Bleibt ein Prozess 60 Sekunden ohne nachweisliche Arbeitsbewegung, wird er
   vor der 15-Minuten-Obergrenze als Stall beendet und sein Prozessbaum
   quiesziert.
+- Steigende CPU-Last, Evaluation-, Cache-, Miss-, Requeue- oder
+  Kontextzaehler gelten fuer sich niemals als Produktfortschritt. Bleiben
+  abgeschlossene beziehungsweise kanonisch publizierte Arbeit und der
+  Head-of-Line-Fortschritt stehen, waehrend interne Arbeit wiederholt neu
+  erzeugt, invalidiert oder verdraengt wird, ist der Lauf nach kurzer
+  Gegenprobe als Konvergenz- beziehungsweise Requeue-Fehler abzubrechen. Das
+  gilt auch bei einer ausdruecklich aufgehobenen Zeitgrenze; eine
+  Timeoutfreigabe erlaubt keinen nachweislich divergierenden Lauf.
 
 Die ausfuehrlichen Projektvertraege in `docs/CODEX_HANDOFF.md` und
 `docs/TASKS.md` gelten zusaetzlich. Bei einer ausdruecklichen aktuellen
