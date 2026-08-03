@@ -31326,7 +31326,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                ? nullptr
                                : &found->second;
                 };
-            std::uint64_t contextual_topology_epoch = 0u;
             struct ContextualBatchItem {
                 ContextualLaneId lane_id = 0u;
                 std::uint32_t address = 0u;
@@ -31405,265 +31404,35 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             struct ContextualScheduledLane final {
                 ContextualLaneId lane_id = 0u;
             };
-            struct ContextualSccCache final {
-                std::uint64_t topology_epoch =
-                    std::numeric_limits<std::uint64_t>::max();
-                std::size_t lane_count = 0u;
-                std::vector<std::size_t> component_by_lane;
-                std::vector<std::vector<ContextualLaneId>> components;
-                std::vector<std::uint8_t> cyclic_components;
-                std::vector<std::vector<std::size_t>>
-                    component_dependencies;
-            } contextual_scc_cache;
-            const auto for_each_contextual_dependency =
-                [&](const ContextualLaneId lane_id,
-                    const auto& callback) {
-                    const auto callees =
-                        contextual_callees.find(lane_id);
-                    if (callees == contextual_callees.end()) return;
-                    for (const auto& call : callees->second) {
-                        for (const auto& dependency : call.second)
-                            callback(dependency.first);
-                    }
-                };
-            const auto rebuild_contextual_scc_cache = [&] {
-                if (contextual_scc_cache.topology_epoch ==
-                        contextual_topology_epoch &&
-                    contextual_scc_cache.lane_count ==
-                        contextual_lanes.size())
-                    return;
-                const auto absent =
-                    std::numeric_limits<std::size_t>::max();
-                std::vector<std::vector<ContextualLaneId>> adjacency(
-                    contextual_lanes.size());
-                std::vector<std::vector<ContextualLaneId>> reverse(
-                    contextual_lanes.size());
-                for (ContextualLaneId lane_id = 0u;
-                     lane_id < contextual_lanes.size();
-                     ++lane_id) {
-                    if ((lane_id & 0xffu) == 0u)
-                        throw_if_resolution_cancelled(cancel_requested);
-                    auto& targets = adjacency[lane_id];
-                    for_each_contextual_dependency(
-                        lane_id,
-                        [&](const ContextualLaneId dependency) {
-                            targets.push_back(dependency);
-                        });
-                    std::sort(targets.begin(), targets.end());
-                    targets.erase(
-                        std::unique(targets.begin(), targets.end()),
-                        targets.end());
-                    for (const auto target : targets)
-                        reverse.at(target).push_back(lane_id);
-                }
-
-                struct DfsFrame final {
-                    ContextualLaneId lane_id = 0u;
-                    std::size_t next_dependency = 0u;
-                };
-                std::vector<std::uint8_t> visited(
-                    contextual_lanes.size(), 0u);
-                std::vector<ContextualLaneId> finish_order;
-                finish_order.reserve(contextual_lanes.size());
-                std::vector<DfsFrame> frames;
-                std::size_t traversal_steps = 0u;
-                for (ContextualLaneId start = 0u;
-                     start < contextual_lanes.size();
-                     ++start) {
-                    if (visited[start] != 0u) continue;
-                    visited[start] = 1u;
-                    frames.push_back({start, 0u});
-                    while (!frames.empty()) {
-                        if ((++traversal_steps & 0xffu) == 0u)
-                            throw_if_resolution_cancelled(
-                                cancel_requested);
-                        auto& frame = frames.back();
-                        const auto& targets =
-                            adjacency[frame.lane_id];
-                        if (frame.next_dependency < targets.size()) {
-                            const auto dependency =
-                                targets[frame.next_dependency++];
-                            if (visited[dependency] == 0u) {
-                                visited[dependency] = 1u;
-                                frames.push_back({dependency, 0u});
-                            }
-                            continue;
-                        }
-                        finish_order.push_back(frame.lane_id);
-                        frames.pop_back();
-                    }
-                }
-
-                contextual_scc_cache.component_by_lane.assign(
-                    contextual_lanes.size(), absent);
-                contextual_scc_cache.components.clear();
-                std::vector<ContextualLaneId> component_stack;
-                std::size_t reverse_traversal_steps = 0u;
-                for (auto position = finish_order.size();
-                     position > 0u;
-                     --position) {
-                    const auto start = finish_order[position - 1u];
-                    if (contextual_scc_cache
-                            .component_by_lane[start] != absent)
-                        continue;
-                    const auto component =
-                        contextual_scc_cache.components.size();
-                    contextual_scc_cache.components.emplace_back();
-                    contextual_scc_cache
-                        .component_by_lane[start] = component;
-                    component_stack.push_back(start);
-                    while (!component_stack.empty()) {
-                        if ((++reverse_traversal_steps & 0xffu) == 0u)
-                            throw_if_resolution_cancelled(
-                                cancel_requested);
-                        const auto lane_id = component_stack.back();
-                        component_stack.pop_back();
-                        contextual_scc_cache.components[component]
-                            .push_back(lane_id);
-                        for (const auto predecessor : reverse[lane_id]) {
-                            if (contextual_scc_cache
-                                    .component_by_lane[predecessor] !=
-                                absent)
-                                continue;
-                            contextual_scc_cache
-                                .component_by_lane[predecessor] =
-                                component;
-                            component_stack.push_back(predecessor);
-                        }
-                    }
-                }
-                contextual_scc_cache.cyclic_components.assign(
-                    contextual_scc_cache.components.size(), 0u);
-                contextual_scc_cache.component_dependencies.assign(
-                    contextual_scc_cache.components.size(), {});
-                for (std::size_t component = 0u;
-                     component < contextual_scc_cache.components.size();
-                     ++component) {
-                    if (contextual_scc_cache.components[component].size() >
-                        1u) {
-                        contextual_scc_cache
-                            .cyclic_components[component] = 1u;
-                    }
-                    auto& component_dependencies =
-                        contextual_scc_cache
-                            .component_dependencies[component];
-                    for (const auto lane_id :
-                         contextual_scc_cache.components[component]) {
-                        for (const auto dependency : adjacency[lane_id]) {
-                            const auto target_component =
-                                contextual_scc_cache
-                                    .component_by_lane[dependency];
-                            if (target_component == component) {
-                                if (dependency == lane_id)
-                                    contextual_scc_cache
-                                        .cyclic_components[component] = 1u;
-                                continue;
-                            }
-                            component_dependencies.push_back(
-                                target_component);
-                        }
-                    }
-                    std::sort(component_dependencies.begin(),
-                              component_dependencies.end());
-                    component_dependencies.erase(
-                        std::unique(component_dependencies.begin(),
-                                    component_dependencies.end()),
-                        component_dependencies.end());
-                }
-                contextual_scc_cache.topology_epoch =
-                    contextual_topology_epoch;
-                contextual_scc_cache.lane_count =
-                    contextual_lanes.size();
-            };
+            // The three-phase commit below is a Jacobi wave: every item reads
+            // the same pre-commit versions, all monotone discoveries land
+            // first, and only then may summaries advance. Consequently a
+            // caller and its queued callee are safe in one bounded batch; a
+            // changed callee wakes the caller for the next wave. FIFO keeps
+            // this fair across cycles and avoids rebuilding the complete SCC
+            // graph after every newly discovered edge.
             const auto select_contextual_batch =
                 [&](const std::size_t maximum_batch_size) {
                     std::vector<ContextualScheduledLane> selected;
                     if (maximum_batch_size == 0u ||
                         pending_contexts.empty())
                         return selected;
-
-                    rebuild_contextual_scc_cache();
-                    const auto absent =
-                        std::numeric_limits<std::size_t>::max();
-                    std::vector<std::size_t> pending_position(
-                        contextual_lanes.size(), absent);
-                    for (std::size_t position = 0u;
-                         position < pending_contexts.size();
-                         ++position) {
-                        pending_position.at(
-                            pending_contexts[position]) = position;
+                    const auto batch_size = std::min(
+                        maximum_batch_size, pending_contexts.size());
+                    selected.reserve(batch_size);
+                    for (std::size_t index = 0u;
+                         index < batch_size;
+                         ++index) {
+                        const auto lane_id = pending_contexts.front();
+                        pending_contexts.pop_front();
+                        if (lane_id >= queued_contexts.size() ||
+                            queued_contexts[lane_id] == 0u)
+                            throw std::logic_error(
+                                "Contextual-Jacobi-Worklist verlor ihren "
+                                "Queuevertrag.");
+                        queued_contexts[lane_id] = 0u;
+                        selected.push_back({lane_id});
                     }
-                    std::vector<std::uint8_t> active_component(
-                        contextual_scc_cache.components.size(), 0u);
-                    for (const auto lane_id : pending_contexts) {
-                        active_component[contextual_scc_cache
-                                             .component_by_lane.at(
-                                                 lane_id)] = 1u;
-                    }
-                    std::vector<std::uint8_t> sink_component(
-                        contextual_scc_cache.components.size(), 1u);
-                    for (std::size_t component = 0u;
-                         component < active_component.size();
-                         ++component) {
-                        if (active_component[component] == 0u) continue;
-                        for (const auto dependency :
-                             contextual_scc_cache
-                                 .component_dependencies[component]) {
-                            if (active_component[dependency] != 0u) {
-                                sink_component[component] = 0u;
-                                break;
-                            }
-                        }
-                    }
-
-                    std::vector<std::uint8_t> component_selected(
-                        contextual_scc_cache.components.size(), 0u);
-                    std::vector<std::uint8_t> lane_selected(
-                        contextual_lanes.size(), 0u);
-                    for (const auto lane_id : pending_contexts) {
-                        const auto component =
-                            contextual_scc_cache.component_by_lane.at(
-                                lane_id);
-                        if (sink_component.at(component) == 0u ||
-                            component_selected.at(component) != 0u)
-                            continue;
-                        component_selected[component] = 1u;
-                        std::vector<ContextualLaneId> members;
-                        for (const auto member :
-                             contextual_scc_cache.components[component]) {
-                            if (member < queued_contexts.size() &&
-                                queued_contexts[member] != 0u)
-                                members.push_back(member);
-                        }
-                        std::sort(
-                            members.begin(), members.end(),
-                            [&](const auto left, const auto right) {
-                                return pending_position.at(left) <
-                                       pending_position.at(right);
-                            });
-                        for (const auto member : members) {
-                            if (selected.size() >= maximum_batch_size)
-                                break;
-                            selected.push_back({member});
-                            lane_selected[member] = 1u;
-                        }
-                        if (selected.size() >= maximum_batch_size)
-                            break;
-                    }
-                    if (selected.empty())
-                        throw std::logic_error(
-                            "Contextual-SCC-Scheduler fand keine "
-                            "callee-first Komponente.");
-                    pending_contexts.erase(
-                        std::remove_if(
-                            pending_contexts.begin(),
-                            pending_contexts.end(),
-                            [&](const auto lane_id) {
-                                return lane_selected.at(lane_id) != 0u;
-                            }),
-                        pending_contexts.end());
-                    for (const auto& item : selected)
-                        queued_contexts.at(item.lane_id) = 0u;
                     return selected;
                 };
             auto& contextual_executor = global_analysis_executor();
@@ -31797,7 +31566,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         });
                 }
                 contextual_evaluations += batch.size();
-                bool batch_topology_changed = false;
                 for (auto& item : batch) {
                     throw_if_resolution_cancelled(cancel_requested);
                     if (item.error)
@@ -32001,8 +31769,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 selected_lane_created
                                      ? observed_match_input
                                      : callee_match_input);
-                        batch_topology_changed =
-                            batch_topology_changed || forward_inserted;
                         bool forward_match_changed = false;
                         if (!forward_inserted) {
                             auto joined = forward->second;
@@ -32030,9 +31796,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         break;
                 }
                 if (contextual_context_budget_exhausted) break;
-                if (batch_topology_changed)
-                    ++contextual_topology_epoch;
-
                 // Freeze validity for the complete Jacobi snapshot before any
                 // Summary version is advanced. Otherwise the first member of
                 // a cyclic parallel batch would invalidate every later member
@@ -32133,24 +31896,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (callers != contextual_callers.end()) {
                         for (const auto caller : callers->second)
                             enqueue_context(caller);
-                    }
-                }
-                if (!summary_changed_lanes.empty()) {
-                    rebuild_contextual_scc_cache();
-                    std::vector<std::uint8_t> component_requeued(
-                        contextual_scc_cache.components.size(), 0u);
-                    for (const auto lane_id : summary_changed_lanes) {
-                        const auto component = contextual_scc_cache
-                                                   .component_by_lane
-                                                   .at(lane_id);
-                        if (contextual_scc_cache
-                                    .cyclic_components[component] == 0u ||
-                            component_requeued[component] != 0u)
-                            continue;
-                        component_requeued[component] = 1u;
-                        for (const auto member :
-                             contextual_scc_cache.components[component])
-                            enqueue_context(member);
                     }
                 }
             }
@@ -33413,10 +33158,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         const auto initial_root_admission_available_locked = [&] {
             if (!canonical_root_committed.load(
                     std::memory_order_acquire)) {
-                // Root zero owns the canonical head of line. Give its nested
-                // contextual/SCC work the complete executor and cache budget;
-                // admitting later outer roots here only creates retained work
-                // which cannot commit and previously evicted Root-0 contexts.
+                // Root zero owns the canonical head of line. Its broad
+                // contextual Jacobi waves may use the complete executor and
+                // cache budget without speculative later roots evicting the
+                // very contexts needed to release that head.
                 return dispatch->next_root_to_submit == 0u &&
                        dispatch->active_initial_roots == 0u;
             }
