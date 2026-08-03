@@ -38,85 +38,96 @@ KatanaRecomp und KatanaRuntime bleiben im selben Repository, sind aber getrennte
 - keine neuen breiten Testmatrizen waehrend des Spiel-Bring-ups
 - Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach fixer Hostzeit
 
-## Neuer P0-Block: NativeDisc-Kaltbuild in Minuten statt Stunden
+## Aktueller P0-Block: Root 0 / Candidate-Resolution
 
-Der aktuelle reale Exportpfad ist trotz eines gemeinsamen Workerpools,
-Whole-Export-, Boot-Analysis-, Latent-AOT-, Codegen- und Hostbuildcaches nicht
-produktiviaetstauglich. Im privaten v24-Lauf benoetigte allein die
-Candidate-Resolution von CFG-Pass 15 `89,71 min`. CFG-Pass 22 startete nach
-spaet entdeckten Seeds erneut eine vollstaendige Function-Value-Analyse und
-schloss `1.416` Roots nach weiteren `110,71 min` ab. Nochmals entdeckte
-Seeds starteten Pass 24 als dritte volle Function-Value-Neuberechnung mit
-`1.426` Roots. Der Lauf wurde nach insgesamt etwa `3 h 27 min` bei
-`7` kanonisch publizierten Pass-24-Roots beendet. Er erzeugte kein
-Portartefakt, keinen Sonic-Lauf und keinen Screenshot.
+KR-4974 bis KR-4980 und die KR-4984-Sourcepruefung haben den urspruenglichen
+stundenlangen Vollneuberechnungs-, Cache- und Copy-Pfad erheblich verbessert.
+Der erneute reale v56-Messstand auf `a521999` belegt jedoch einen engeren
+Produktblocker:
 
-Der Prozess nutzte im Langzeitmittel etwa 15 CPU-Kerne auf dem
-24-Thread-Host. Der P0 ist deshalb kein blosser Schalter auf mehr Threads:
-ProgramGraph, SCCs und ABI-Vertraege werden mehrfach aufgebaut, semantisch
-gleiche Guarded-Inventory-Kontexte werden root-lokal wiederholt, exakte
-Evaluationkeys treffen nur etwa acht Prozent und grobe Rootjobs erzeugen
-lange Head-of-Line-Tails.
+```text
+verstrichene Walltime am
+unvollstaendigen 0/1191-Stand: 401 s
+physische Auswertungszeit:     430,1 s
+eindeutige Contexts:           9.135
+physische Auswertungen:        11.279
+Eviction-Recomputes:           0
+mittlere effektive Kerne:      1,073
+Auswertungen je Context:       1,235
+```
 
-Der verbindliche Architektur-, Mess-, GPU- und Gatevertrag steht in
+Der Executor ist nicht defekt. Spaetere Roots sind absichtlich bis zum
+kanonischen Commit von Root 0 gesperrt; die innere Jacobi-Welle sieht meist
+nur ein bis zwei ausfuehrbare Lanes und veroeffentlicht Folgearbeit erst nach
+einer globalen Merge-/Evidence-/Commitbarriere. Gleichzeitig wachsen
+Snapshot-, Cache-Key-, Binding-, Equality-/Copy-/Merge- und
+Provenienzauswahlkosten mit dem Contextual-Graphen. Die starke, zuerst zu
+messende Hypothese ist eine zu feine Full-State-/Provenienz-
+Contextidentitaet.
+
+Der uebergeordnete Kaltbuildvertrag steht in
 [`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-Die Aufgaben sind:
+Der verbindliche Root-0-Folgeplan mit Messgates, Korrektheitsinvarianten und
+Rollbackgrenzen steht in
+[`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
+Dieser Planungscommit genehmigt keine Implementierung, keinen Build und keinen
+Lauf; jeder Task benoetigt eine neue ausdrueckliche Nutzeranweisung.
 
 | ID | Titel | Ergebnis |
 |---|---|---|
-| KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | Phasen, Workset, CPU/RAM, Cacheevictions und jeder Missgrund sind belastbar sichtbar |
-| KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | nur tatsaechlich beobachtbare ABI-/Stateeingaben invalidieren Evaluationen |
-| KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | ProgramGraph, SCC-DAG, ABI-Vertraege und stabile Zustande ueberleben CFG-/Candidate-Runden |
-| KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | identische Kontexte werden rootuebergreifend einmal ausgewertet, ohne Korrelation zu erfinden |
-| KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | spaete Seeds invalidieren nur betroffene SCCs, Caller und Inventory-Sinks |
-| KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | teilbare Critical-Path-Jobs nutzen die CPU ohne Paging oder semantisches Truncation |
-| KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | ProgramGraph-, SCC-, Inventory- und IR-Shards ueberleben sichere Whole-Analysis-Misses |
-| KR-4981 | 8-/12-/24-Thread-Kaltbuild-Performancegate | voller Kaltport bleibt auf 24/12/8 Threads unter 8/11/15 Minuten |
-| KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur nach neuer ausdruecklicher Nutzerfreigabe |
-| KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur nach neuer ausdruecklicher Nutzerfreigabe |
-| KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | alle betroffenen Analyse-, Cache-, Executor-, Build-, Runtime-CPU- und GPU-Ausgabepfade sind reviewed und P0/P1-frei |
+| KR-4985 | Root-0-Phasen- und Kardinalitaetstelemetrie | spaete Auswertungskosten und Full-/Projected-/Provenance-Contextzahlen sind eindeutig zugeordnet |
+| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | physische Full-State-Fixpunktarbeit und exakte Contributions/Evidence sind getrennt |
+| KR-4987 | Read-Lens-projizierte Context-Identitaet | nur vollstaendig bewiesene, semantisch relevante Eingaenge erzeugen eigene Lanes; sonst FullState |
+| KR-4988 | Internierte AbstractStates und Function-Value-Summaries | nur bei positivem Zehn-Prozent-Kostengate besitzen unveraenderliche States/Summaries O(1)-Identitaetsfastpaths und stabile Content-Digests |
+| KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Zehn-Prozent-Kostengate vermeiden exakte Binding-Treffer den linearen Scan; der Join-Fallback bleibt unveraendert |
+| KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten- und 50-Prozent-Reusegate werden unveraenderte View-Shards wiederverwendet |
+| KR-4991 | Versionierte monotone Context-Worklist | freigesetzte unabhaengige Arbeit startet ohne globale Jacobi-Barriere; stale Ergebnisse publizieren nichts |
+| KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate nutzt ein kleiner isolierter Anteil sonst idle Kerne |
+| KR-4993 | Unabhaengige Root-0-P0/P1-Abschlusspruefung | alle aktivierten Context-, Dependency-, Cache- und Schedulingpfade sind reviewt und P0/P1-frei |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | je reviewtem Sourcekandidaten hoechstens ein voller Kaltport belegt oder verfehlt das Acht-Minuten-Ziel |
 
 Die Reihenfolge ist normativ:
 
 ```text
-Telemetrie
-  -> semantische Cachelinsen
-  -> persistente Programm-/SCC-Session
-  -> globaler Multi-Root-Fixpunkt
-  -> inkrementeller Seed-/CFG-Fixpunkt
-  -> Executor/RAM und persistente Shards
-  -> 8-/12-/24-Thread-Gate
-  -> unabhaengige Gesamtpruefung und P0/P1-Schliessung
-  -> genau ein frischer realer NativeDisc-Sonic-Lauf
+D1 in KR-4985: Telemetrie und Messgate G1
+  -> KR-4986 semantische Lane / exakte Provenienz
+  -> KR-4987 Read-Lens-Projektion nur bei positivem G1
+  -> KR-4988 State-/Summary-Interning nur bei positivem Kostengate
+  -> KR-4989 Exact-Binding-Index nur bei positivem Kostengate
+  -> KR-4990 inkrementelle Views nur bei positivem Kosten-/Reusegate
+  -> D2 zu Beginn KR-4991 und Messgate G2
+  -> KR-4991 monotone Worklist nur bei positivem G2
+  -> KR-4993 unabhaengige P0/P1-Abschlusspruefung
+  -> KR-4981 erster voller 24-Thread-NativeDisc-Sonic-Produktlauf
+     -> bei verfehltem Acht-Minuten-Ziel und positivem Restkosten-/RAM-Gate:
+        KR-4992 -> KR-4993 erneut -> separat autorisierter KR-4981-Retry
 ```
 
-KR-4982 und KR-4983 sind fuer den aktuellen Bring-up vorerst gestrichen. Es
-findet weder parallele Vorarbeit noch ein Prototyp statt; beide Tasks duerfen
-nur durch eine neue ausdrueckliche Nutzerfreigabe reaktiviert werden.
+Ein negatives Messgate wird dokumentiert und laesst den konservativen Pfad
+aktiv; es erzwingt keinen unnuetzen Architekturumbau. Vor KR-4993 sind nur D1
+und D2 als jeweils separat freizugebende, begrenzte reale Root-0-
+Diagnoseexporte zulaessig. KR-4992 blockiert den ersten KR-4993-/KR-4981-Pfad
+nicht. KR-4982 und KR-4983 bleiben gestrichen.
 
 Kein Performancewert darf durch weniger Funktionen, Bloecke, Resolutionen,
-Guarded-AOT-Einstiege oder Inventory-Sinks erreicht werden. Alle
-fail-closed Budget- und Vollstaendigkeitsdiagnosen bleiben erhalten.
-KR-4984 vergleicht ausserdem Runtime-CPU-Zeit, CPU pro Gastzyklus,
-Busy-Wait/Framepacing, Hostframes, Presenterfallbacks und GPU-Uploads bei
-derselben Gastarbeit. Bestaetigte Runtime-Hotspotarbeit muss mindestens
-20 Prozent sinken; Multicore oder GPU gilt nur mit end-to-end CPU- oder
-Walltimegewinn als Verbesserung.
+Guarded-AOT-Einstiege, Evidence oder Inventory-Sinks erreicht werden. Alle
+fail-closed Read-Lens-, Cache-Key-, Budget-, Truncation- und
+Vollstaendigkeitsdiagnosen bleiben erhalten. Mehr Cache oder Threads,
+vollstaendige Freigabe spaeterer Roots und ein Revert von `a521999` sind
+ausdruecklich keine Tasks.
 
 ## Verifizierter Ausgangsstand
 
-Die Roadmap trennt ab jetzt drei voneinander unabhaengige Staende:
+Die Roadmap trennt weiterhin Diagnose-, Source- und Produktevidenz:
 
 ```text
 letzte reale Produktevidenz: historischer ABI-77/78-NativeDisc-Stand
-Implementierungsstand:       KR-4979
-verbindlicher P0-Plan:       ffd45ae / KR-4974 bis KR-4984
-aktueller Source:            Runtime-ABI 87 / Analyzer-ABI 25 /
-                             Portprojektvertrag 75; nicht end-to-end
-                             abgenommen
-naechste Produktabnahme:     auf aktuelle Nutzeranweisung sofort nach
-                             KR-4979 genau ein frischer NativeDisc-Sonic-
-                             Lauf; KR-4980/4984 warten bis danach
+funktionaler Source-Checkpoint:
+                            a521999 / Runtime-ABI 87 / Analyzer-ABI 31 /
+                             Portprojektvertrag 75
+aktueller Diagnosebefund:    v56 Root 0 fast seriell; 0/1191; kein Port
+verbindlicher Folgeplan:     gegateter Kern KR-4985..KR-4991, dann KR-4993
+naechste Produktabnahme:     erster KR-4981-Lauf erst nach KR-4993
 ```
 
 Der Runtime-only-Relink von `b064ee8` beweist die korrigierte
@@ -301,8 +312,8 @@ vorcompilierten Bloecken ueber 128 Byte reviewt. Der Finalreview der
 FixedAddress-Probe, Provenienz, Snapshotreihenfolge, Autorisierung,
 Generationen, ABI-/Cachebindung und Diagnosegrenze ist ohne P0/P1/P2.
 Der damalige Produktproof ist mit NativeDisc-v37 erbracht. Fuer den
-aktuellen Arbeitsbaum gilt stattdessen der KR-4974-bis-KR-4984-Block am
-Dokumentanfang; vor dessen Gesamtpruefung ist kein weiterer privater
+aktuellen Arbeitsbaum gilt stattdessen der KR-4985-bis-KR-4993-Block am
+Dokumentanfang; vor dessen Gesamtpruefung ist kein weiterer voller privater
 NativeDisc-Lauf zulaessig. Titelbezogene Sonderfaelle bleiben ausgeschlossen.
 
 Auf `24d6132` sind die konkret reviewten Vertraege fuer
@@ -317,7 +328,7 @@ Candidate-Call, Candidate-Tail, bewachten Runtime-Stackframe und
 Runtime-Objektstore ist allgemein inventarisierbar. Die fokussierten
 Funktionswert-, Kontrollfluss- und Portexportvertraege waren fuer diesen
 historischen Stand gruen; der damals als naechster Schritt vorgesehene
-Sonic-Produktproof ist durch den aktuellen KR-4974-bis-KR-4984-Block
+Sonic-Produktproof ist durch den aktuellen KR-4985-bis-KR-4993-Block
 ueberholt.
 Registerlokalisierung ist weiterhin nur teilweise am Architekturziel:
 Liveness ist IR-basiert, die Ausdrucksumschreibung bleibt eine nun
@@ -655,7 +666,7 @@ KR-4973 ist durch diese historische Abnahme abgeschlossen. Der
 `KR-4972`-AOT-Vertrag ist im Source vorhanden, die aktuelle Gesamtanalyse
 aber durch den abgebrochenen v24-Iterationslauf nicht als exportfaehig
 belegt. Ob der gemeinsame Blocker damit im realen Produkt passiert wird,
-muss der nach KR-4974 bis KR-4984 zulaessige ABI-passende Sonic-Lauf zeigen. Ein
+muss der nach KR-4993 zulaessige ABI-passende Sonic-Lauf zeigen. Ein
 Sega-Screen ist im DirectBoot wegen
 uebersprungener IP.BIN weiterhin kein Pflichtmeilenstein.
 
@@ -727,7 +738,7 @@ den Export ab, falls ein akzeptierter Einstieg weder emittiert noch begruendet
 abgelehnt wurde. Der anschliessende v24-Iterationslauf wurde nach rund
 3 h 27 min ohne Portartefakt abgebrochen und bestaetigt diesen Vertrag daher
 nicht im Produkt. Ob der historische Blocker real passiert wird, bleibt bis
-zum nach KR-4974 bis KR-4984 zulaessigen ABI-passenden Sonic-Lauf offen.
+zum nach KR-4993 zulaessigen ABI-passenden Sonic-Lauf offen.
 Interpreter, JIT, Runtime-Dekodierung und Emulationsfallback bleiben
 verboten.
 
@@ -754,7 +765,7 @@ Die Handoff- und Gate-P0-Quellvertraege sind implementiert:
   weiterentwickelt, ist aber noch nicht im Produkt abgenommen.
 
 Die reale ABI-passende Produktabnahme dieser vier Source-Vertraege bleibt
-offen und folgt erst nach KR-4974 bis KR-4984.
+offen und folgt erst nach KR-4993.
 Davon getrennte Langzeitpunkte bleiben:
 
 - KR-4953 braucht weiterhin einen zweiten unabhaengigen Capture sowie
@@ -866,8 +877,7 @@ Geraetenutzlasten und die Ereignisbijektion und hat einen realen
 Produkt-Apply ohne `first_problem` erreicht. Im aktuellen Quellstand bereitet
 `KR-4967` alle falliblen Subsystemzustaende vor Commitbeginn vor und
 veroeffentlicht CPU-PC/PR zuletzt. Die ABI-passende Produktabnahme nach
-KR-4974 bis KR-4984 und weitergehende normative per-Subsystem-Digests stehen
-noch aus.
+KR-4993 und weitergehende normative per-Subsystem-Digests stehen noch aus.
 
 Verbindliche Reihenfolge:
 
@@ -891,8 +901,8 @@ Produktdaten werden getrennt:
 
 Ein Produkt-Handoff darf keine alte VMU-Working-Copy ueber aktuelle Nutzerdaten schreiben.
 Der dafuer allgemeingueltige, Save-erhaltende `KR-4970`-Quellvertrag ist
-implementiert; sein realer ABI-passender Produktnachweis nach KR-4974 bis
-KR-4984 steht noch aus.
+implementiert; sein realer ABI-passender Produktnachweis nach KR-4993 steht
+noch aus.
 
 ## Phase C - Produktgates
 
@@ -908,7 +918,7 @@ Schedulermaximum von `600.000.000`. v24 fuehrte dadurch nach dem Restore nur
 Post-Entry-Zyklen am AOT-Coveragefehler. Der aktuelle `KR-4966`-Quellvertrag
 berichtet Startzyklus, Post-Entry-Gastzyklen, Hostzeit und daraus berechnete
 effektive Gast-MHz und verweigert einem vorzeitig beendeten Budgetlauf
-Exitcode 0. Die reale ABI-passende Abnahme nach KR-4974 bis KR-4984 ist noch
+Exitcode 0. Die reale ABI-passende Abnahme nach KR-4993 ist noch
 ausstehend.
 
 Das Spielprojekt definiert einen erforderlichen Meilenstein. Ein schwarzer Lauf darf nicht mit Exitcode 0 als vollstaendiger Produkterfolg gelten.
@@ -1036,7 +1046,7 @@ Maple-/VMU-Erkennung, nicht mehr AOT oder PVR.
 Ein realer Capture-/Apply-Lauf ist mit v24 belegt. Zur Abnahme fehlen
 weiterhin ein zweiter unabhaengiger Capture, Offline-Inspect/Verify, die
 normativen per-Subsystem-Digests und ein realer ABI-passender Nachweis des
-implementierten Save-erhaltenden ProductHandoff nach KR-4974 bis KR-4984.
+implementierten Save-erhaltenden ProductHandoff nach KR-4993.
 
 Verbindlich bleiben zwei reale Laeufe:
 

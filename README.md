@@ -2,19 +2,29 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller Implementierungsstand: KR-4984-Sourcegate. Der reviewte Source
-traegt Runtime-ABI 87, Analyzer-ABI 27, Application-Contract 8 und
-Portprojektvertrag 75. Die vollstaendige P0/P1-Gesamtpruefung ist quellseitig
-ohne offenen Befund abgeschlossen; ein neues Portartefakt, ein Sonic-Lauf und
-ein neuer Screenshot existieren aus diesem Stand noch nicht. Als naechstes
-folgt genau der freigegebene sichtbare 24-Thread-Sonic-Produktlauf samt
-Buildzeitmessung. Der verbindliche Fahrplan steht in
+Aktueller funktionaler Source-Checkpoint: `a521999`, Runtime-ABI 87,
+Analyzer-ABI 31,
+Application-Contract 8 und Portprojektvertrag 75. Die erneute unabhaengige
+Root-0-Pruefung fand keinen neuen bestaetigten P0/P1-Soundnessfehler, aber der
+v56-Messstand bleibt ein P0-Performanceblocker: `9.135` eindeutige Contexts,
+`11.279` physische Auswertungen und nur etwa `1,073` effektiv genutzte Kerne
+halten den kanonischen Fortschritt bei `0/1191`. Ein neues Portartefakt, ein
+Sonic-Lauf und ein neuer Screenshot existieren aus diesem Stand nicht.
+
+Als naechstes sind ausschliesslich der gegatete Kernpfad KR-4985 bis KR-4991
+und danach KR-4993 vorgesehen; jeder Task und die Diagnoseexporte D1/D2
+benoetigen jeweils eine neue ausdrueckliche Nutzeranweisung. Erst danach ist
+der erste KR-4981-Produktlauf zulaessig. KR-4992 kommt nur nach einem
+verfehlten KR-4981 und positivem Restkosten-/RAM-Gate infrage. Der
+verbindliche Folgeplan steht in
+[`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
+der uebergeordnete Kaltbuildvertrag in
 [`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
 
 ```text
 Runtime-ABI:                    87
 Block-ABI:                       5
-Analyzer-ABI:                   27
+Analyzer-ABI:                   31
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             75
@@ -139,8 +149,8 @@ Portprojektvertrag 75. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
-Produktport belegt. Der naechste private NativeDisc-Lauf ist erst nach
-KR-4974 bis KR-4984 und der dort verlangten Gesamtpruefung zulaessig.
+Produktport belegt. Der naechste vollstaendige private NativeDisc-Lauf ist
+erst nach KR-4993 und der dort verlangten Gesamtpruefung zulaessig.
 
 `GameProjectArtifact` Format 4 transportiert fuer Spielprojektvertrag 5 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
@@ -235,7 +245,8 @@ Framemarker und das erste neue AOT-, Runtime- oder Geraeteproblem; ein
 sichtbarer Bildschirm wird separat anhand einer realen Ausgabeaufnahme
 klassifiziert. Dieser Vertrag ist im Source-Checkpoint `18f8537`
 implementiert, aber noch nicht mit einem aktuellen Sonic-Port abgenommen.
-Vor dem naechsten privaten Produktlauf stehen KR-4974 bis KR-4984.
+Vor dem naechsten vollstaendigen privaten Produktlauf stehen der gegatete
+Kernpfad KR-4985 bis KR-4991 und KR-4993.
 
 Die **historische v24-`CompletePlatform`-Vergleichsbasis** endete in beiden Pfaden bei
 Schedulerzyklus 600.000.000 ohne erstes neues AOT-, Runtime- oder
@@ -273,7 +284,7 @@ Callback jetzt ueber begrenzte Tail-Jump- und Runtime-Frame-Pfade, erkennt
 Der aktuelle Quellstand transportiert solche bewachten AOT-Einstiege durch
 CFG, Source-Map und AOT und erzwingt ihre Exportvollstaendigkeit. Der
 aktuelle Produktnachweis steht weiterhin aus und darf erst nach dem
-KR-4974-bis-KR-4984-Gate erfolgen.
+KR-4993-Gate erfolgen.
 Die terminale Diagnose unterscheidet diesen Fall jetzt korrekt als
 `aot-template-mismatch` von echten Byteidentitaetsfehlern.
 

@@ -22,18 +22,27 @@ Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische Aufgab
 - Jeder potentiell lange Prozess besitzt spaetestens alle zehn Sekunden einen
   belastbaren Fortschrittsindikator oder Heartbeat.
 - Jeder P0-Task wird fokussiert verifiziert, einzeln committed und gepusht.
-- Aktuelle ausdrueckliche Reihenfolge: KR-4980 ist implementiert; nach dem
-  jetzt gruenen KR-4984-Sourcegate folgt sofort genau ein privater sichtbarer
-  Sonic-Produktbuild und -lauf.
+- Vorgesehene Reihenfolge nach jeweils neuer ausdruecklicher
+  Implementierungsanweisung: D1/KR-4985, KR-4986, nur positiv gegatete
+  KR-4987 bis KR-4990, D2/KR-4991 und nur bei positivem G2 dessen
+  Schedulerumbau, danach KR-4993 und der erste KR-4981-Produktbuild und
+  -lauf. KR-4992 ist nur nach einem verfehlten KR-4981 und positivem
+  Restkosten-/RAM-Gate zulaessig. Dieser Planungscommit genehmigt keine
+  Umsetzung; D1 und D2 benoetigen ebenfalls jeweils eine neue Freigabe.
 - Jeder offene Roadmap-Task wird verbindlich in dieser Reihenfolge beendet:
   implementieren, nur P0/P1 der betroffenen Pfade reviewen, alle bestaetigten
   P0/P1 gebuendelt fixen, fokussiert verifizieren, committen und pushen. Erst
   danach beginnt der naechste Task.
 - Refactoring, nicht genehmigte Architekturumbauten, Scope-Erweiterungen und
-  neue Tasks aus Reviews sind bis zum Sonic-Produktlauf verboten.
+  weitere neue Tasks aus Reviews sind bis zum Sonic-Produktlauf verboten.
+  Die im Root-0-Detailplan exakt beschriebenen und jeweils gegateten Umbauten
+  bilden den vom Nutzer angeforderten P0-Folgeplan und kein allgemeines
+  Refactoringmandat. Jeder
+  Task benoetigt vor seiner Umsetzung eine neue ausdrueckliche Anweisung.
 - KR-4982 und KR-4983 sind vorerst gestrichen und werden nur nach neuer
-  ausdruecklicher Nutzerfreigabe reaktiviert. KR-4984 bleibt der eigene
-  abschliessende P0/P1-Gesamtreview-Task; bei belegter Soundness folgt Sonic.
+  ausdruecklicher Nutzerfreigabe reaktiviert. KR-4984 bleibt der historische
+  Sourcegate-Abschluss vor v56; KR-4993 ist der neue abschliessende Root-0-
+  P0/P1-Gesamtreview-Task. Erst bei belegter Soundness folgt KR-4981.
 
 ## Getrennte Evidenzstaende
 
@@ -43,25 +52,24 @@ Diese drei Staende duerfen nicht als derselbe Fortschritt berichtet werden:
    NativeDisc-Stand bleibt die letzte ausgefuehrte Produktevidenz. Seine
    Details und sichtbaren Screens stehen in `STATUS.md`; er ist kein Nachweis
    fuer den aktuellen Source.
-2. **Aktueller KR-4984-Stand:** verwendet Runtime-ABI 87,
-   Block-ABI 5, Analyzer-ABI 27, PlatformServices-ABI 13,
-   Backend-Interface-ABI 12, Portprojektvertrag 75, Native-AOT-Profil 13 und
-   Partitionsschema 5. Er enthaelt umfangreiche Analyse-, Cache-,
-   Fortschritts-, Runtime-CPU- und D3D11-Umbauten sowie den persistenten
-   Schichtcache. Die P0/P1-Gesamtpruefung ist quellseitig gruen; der reale
-   Produktproof steht unmittelbar bevor.
-3. **Letzter Exportversuch:** Der lokale NativeDisc-v24-Iterationslauf wurde
-   nach etwa `3 h 27 min` mitten in der dritten vollstaendigen
-   Function-Value-Neuberechnung beendet. Er erzeugte kein Portartefakt,
-   keinen Sonic-Lauf und keinen Screenshot.
+2. **Aktueller Source-Stand:** `a521999`, Runtime-ABI 87, Block-ABI 5,
+   Analyzer-ABI 31, PlatformServices-ABI 13, Backend-Interface-ABI 12,
+   Portprojektvertrag 75, Native-AOT-Profil 13 und Partitionsschema 5. Die
+   erneute Root-0-Pruefung bestaetigt keinen neuen P0/P1-Soundnessfehler;
+   Cache-Key-Schema 10 bindet die globale Fallback-Summary korrekt.
+3. **Aktueller Diagnosebefund:** Der unvollstaendige v56-Zwischenstand meldet
+   nach `401 s` bei weiterhin `0/1191` insgesamt `9.135` eindeutige Contexts,
+   `11.279` physische Auswertungen, null Eviction-Recomputes und nur `1,073`
+   mittlere effektive Kerne. Die `401 s` sind keine abgeschlossene Root-0-
+   Walltime. Es existiert kein fertiger Port, Produktlauf oder Screenshot;
+   der P0 bleibt offen.
 
-Der naechste kritische Pfad ist der freigegebene KR-4981-Produktlauf. Nach den
-Sonic-kritischen Performanceumbauten und der unabhaengigen Gesamtpruefung folgt
-genau ein frischer
-NativeDisc-Port mit realer Discinstallation, Produktlauf und neuem echten
-Fensterscreenshot. DirectBoot wird spaeter mit einem an den dann aktuellen
-Runtime-ABI gebundenen CompletePlatform-Handoff geprueft; NativeDisc
-benoetigt keinen Handoff.
+Der naechste kritische Pfad ist der gegatete Kern KR-4985 bis KR-4991 und
+danach KR-4993. Danach folgt der erste KR-4981-NativeDisc-Port mit realer
+Discinstallation, Produktlauf und neuem echten Fensterscreenshot. KR-4992
+wird nur nach einem verfehlten Zeitgate als eigener Folgezweig geprueft.
+DirectBoot wird spaeter mit einem an den dann aktuellen Runtime-ABI gebundenen
+CompletePlatform-Handoff geprueft; NativeDisc benoetigt keinen Handoff.
 
 ## Aktueller Produktstand
 
@@ -284,23 +292,34 @@ Emulationsfallback bleibt verboten.
 ## Verbindliche Reihenfolge
 
 ```text
-Source-Checkpoint 18f8537 [kein P0-Abschluss, kein Produktartefakt]
-  +--> KR-4974 reproduzierbare Phasen- und Miss-Telemetrie
-  +--> KR-4975 semantische FunctionEvaluation-Keys
-  +--> KR-4976 persistente FunctionValue-/SCC-Session
-  +--> KR-4977 gemeinsamer Multi-Root-Inventory-Fixpunkt
-  +--> KR-4978 inkrementeller CFG-/Seed-/Candidate-Fixpunkt
-  +--> KR-4979 priorisierter globaler Executor und Speicherbudget
-  +--> KR-4980 schichtweiser persistenter NativeDisc-Buildcache
-  +--> KR-4982 GPU-Entscheidungsgate
-  +--> KR-4983 nur bei positivem Gate: capability-gated GPU-Pfad
-  +--> KR-4984 unabhaengige Gesamtpruefung und P0/P1-Schliessung
-         |
-         +--> genau ein ABI-passender 24-Thread-NativeDisc-Sonic-Port
-                +--> KR-4981 einmalige Produktzeitmessung
-                +--> Originaldisc installieren
-                +--> realen Lauf und frische Fenster-Screenshots auswerten
-                +--> erst danach naechsten realen Blocker bestimmen
+Source-Checkpoint a521999 / v56 [P0 Performance offen, kein Produktartefakt]
+  +--> D1/KR-4985 Root-0-Phasen- und Kardinalitaetstelemetrie / G1
+         +--> KR-4986 semantische Context-Lanes / Provenienzabonnenten
+                +--> KR-4987 Read-Lens-Context-Key nur bei positivem G1
+                +--> KR-4988 Interning nur bei positivem Kostengate
+                +--> KR-4989 Binding-Index nur bei positivem Kostengate
+                +--> KR-4990 Views nur bei positivem Kosten-/Reusegate
+                       +--> D2 zu Beginn KR-4991 / G2
+                              +--> KR-4991 Worklist nur bei positivem G2
+                                     +--> KR-4993 nach allen aktivierten Tasks
+                                                   +--> genau ein ABI-passender
+                                                        24-Thread-NativeDisc-
+                                                        Sonic-Port
+                                                          +--> KR-4981
+                                                               Zeitmessung
+                                                          +--> Originaldisc
+                                                               installieren
+                                                           +--> realen Lauf und
+                                                                Screenshots
+                                                                auswerten
+                                                           +--> bei verfehltem
+                                                                Acht-Minuten-
+                                                                Gate und positivem
+                                                                Restkosten-/RAM-
+                                                                Gate: KR-4992,
+                                                                KR-4993 erneut,
+                                                                separat
+                                                                autorisierter Retry
 
 DirectBoot und KR-4962:
 erst nach NativeDisc-Abnahme mit frisch ABI-passendem Handoff
@@ -315,7 +334,7 @@ Prioritaet: P0
 Status: Baseline umgesetzt. Der Folgefehler der absoluten statt relativen
 Schedulergrenze und der fehlenden Pflichtmeilensteinwertung ist in
 `KR-4966` quellseitig geschlossen; die ABI-passende Produktabnahme nach
-KR-4974 bis KR-4984 bleibt offen.
+KR-4993 bleibt offen.
 
 ### Bereits umgesetzt
 
@@ -662,9 +681,10 @@ Status: Handoff-, Save- und Post-Entry-Vertraege sind quellseitig vorhanden,
 Produktabnahme offen. Der alte gemeinsame End-PC `0x8C666D42` ist durch
 v26/v28 ueberholt. Fuer die danach beobachteten AOT-Luecken existiert ein
 allgemeiner Guarded-Entry-/Exportvertrag. Der aktuelle dokumentierte
-Source-Checkpoint ist `18f8537`; der danach abgebrochene v24-Iterationslauf
-lieferte kein Portartefakt. Zuerst sind KR-4974 bis KR-4984 abzuschliessen,
-danach folgt genau ein ABI-passender NativeDisc-Lauf ohne Handoff.
+Source-Checkpoint ist `a521999`; der v56-Root-0-Befund
+lieferte kein Portartefakt. Zuerst sind der gegatete Kernpfad bis KR-4991 und
+KR-4993 abzuschliessen, danach folgt der erste ABI-passende NativeDisc-Lauf
+ohne Handoff.
 DirectBoot-Paritaet, normativer Digestvergleich und sichtbarer Spielframe
 folgen spaeter mit neu erfasstem ABI-passenden CompletePlatform-Handoff.
 
@@ -930,9 +950,9 @@ fuer das Ziel und reproduziert die v28-Grenze exakt.
 
 Der historische v30-Lauf erfuellt die erneute Discinstallation und
 Sichtpruefung, aber nicht die erste Abnahmebedingung. Der aktuelle
-Source-Checkpoint ist durch den abgebrochenen v24-Iterationslauf nicht
+Source-Checkpoint ist durch den v56-Root-0-Befund nicht produktseitig
 abgenommen; KR-4972 bleibt bis zu einem erfolgreichen Export und realen,
-nach KR-4974 bis KR-4984 zulaessigen Produktlauf offen.
+nach KR-4993 zulaessigen Produktlauf offen.
 
 ---
 
@@ -1015,7 +1035,7 @@ nur nach vollstaendigem Budget und erreichtem Pflichtmeilenstein. Der
 ABI-73-v33-Wrapper verlor auf dem typisierten Fehler noch den Child-Exitcode;
 `199328b` ersetzt diesen Prozessstartvertrag. Eine kleine ausfuehrende
 Erweiterung des vorhandenen CLI-Porttests und der reale ABI-passende
-Gatenachweis nach KR-4974 bis KR-4984 stehen noch aus.
+Gatenachweis nach KR-4993 stehen noch aus.
 
 ### Produktbefund
 
@@ -1194,11 +1214,13 @@ Produktpfad abgenommen werden.
 ## P0 NativeDisc-Kaltbuild-Architektur
 
 Der vollstaendige Befund, die Messbasis, gemeinsamen Korrektheitsinvarianten,
-GPU-Schwellen, RAM-/Zeitgates sowie Migrations- und Rollbackregeln stehen in
+RAM-/Zeitgates sowie Migrations- und Rollbackregeln stehen in
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-Die folgenden Tasks werden nicht durch einen weiteren langen Sonic-Export
-unterbrochen. Nach dem Performancegate folgt KR-4984; erst danach wird genau
-ein neuer realer NativeDisc-Port gebaut.
+KR-4984 ist das historische Sourcegate vor v56. Der aktuelle Kernpfad folgt
+dem neuen Root-0-Detailplan: D1/KR-4985, KR-4986, nur positiv gegatete
+KR-4987 bis KR-4990, D2/KR-4991, KR-4993 und erst dann KR-4981. D1 und D2 sind
+begrenzt und jeweils neu freizugeben; kein weiterer langer Sonic- oder
+Produktlauf unterbricht diesen Pfad.
 
 ## [x] KR-4974 - Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger
 
@@ -1239,7 +1261,7 @@ besitzt einen privaten MSPDB-Endpunkt mit einsekuendiger natuerlicher
 Shutdownfrist; die Job-Leere bleibt weiterhin der Quieszenzbeweis. Eine
 erneute breite Matrix wurde gemaess der verbindlichen Produkt-vor-Test-Regel
 nicht gestartet. KR-4981 erzeugt ebenfalls keine Vorabmatrix, sondern misst
-genau den einzelnen finalen 24-Thread-Sonic-Export nach KR-4984.
+genau den einzelnen finalen 24-Thread-Sonic-Export nach KR-4993.
 
 ### Umfang
 
@@ -1382,9 +1404,12 @@ Prioritaet: P0
 
 Abhaengigkeiten: KR-4974, KR-4977, KR-4978
 
-Status: Implementiert und nach gebuendelter P0/P1-Schliessung dreifach
-re-reviewed. Die vom Nutzer bestimmte Produktabnahme ist der unmittelbar
-folgende Sonic-Build/-Lauf; erst dessen reale Evidenz schliesst den Taskstatus.
+Status: Quellseitig implementiert und nach gebuendelter P0/P1-Schliessung
+dreifach re-reviewed. Der v56-Root-0-Befund widerlegt jedoch die
+Produktakzeptanz fuer den kritischen Candidate-Resolution-Pfad: im Mittel
+werden nur `1,073` Kerne genutzt. Der gegatete Kern KR-4985 bis KR-4991 und
+KR-4993 bildet den geplanten Schliessungspfad; erst KR-4981 kann den Task
+produktseitig abnehmen.
 
 ### Umfang
 
@@ -1407,8 +1432,8 @@ Prioritaet: P0
 Abhaengigkeiten: KR-4975, KR-4976, KR-4978
 
 Status: Quellseitig implementiert und P0/P1-re-reviewed in `3c018be`;
-Produktwirkung und Gesamtzeit werden ausschliesslich im folgenden Sonic-Lauf
-gemessen.
+Produktwirkung und Gesamtzeit werden ausschliesslich im KR-4981-Lauf nach
+KR-4993 gemessen.
 
 ### Umfang
 
@@ -1429,15 +1454,17 @@ gemessen.
 
 Prioritaet: P0 Performance-Gate
 
-Abhaengigkeiten: KR-4984
+Abhaengigkeiten: KR-4993
 
-Status: Geplant als finale Produktmessung. Der Task erzeugt keinen separaten
+Status: P0 offen. v56 erreichte keinen vollstaendigen Port und belegt einen
+fast seriellen Root-0-Span. Die erste Produktmessung wartet auf alle
+aktivierten Tasks bis KR-4991 und KR-4993; der Task erzeugt keinen separaten
 Vorabbuild und keine Threadklassenmatrix.
 
 ### Akzeptanz
 
 - genau der ohnehin vorgeschriebene eine frische private NativeDisc-Sonic-
-  Export nach KR-4984 ist die Messung; kein zweiter Produktbuild nur fuer
+  Export nach KR-4993 ist die Messung; kein zweiter Produktbuild nur fuer
   Timing und keine 8-/12-Thread-Wiederholung
 - Export nutzt die aktuelle Maschine mit ihrem normalen 24-Thread-Budget;
   CPU/SMT/RAM/SSD/OS/Compiler/Buildprofil und Kaltzustand werden dokumentiert
@@ -1447,6 +1474,10 @@ Vorabbuild und keine Threadklassenmatrix.
 - keine reduzierte Funktions-, Block-, Resolution- oder AOT-Abdeckung
 - Skalierung und Optimierung fuer schwaechere Rechner beginnen erst nach
   einem nachweislich weiter bootenden Sonic-Port
+- verfehlt dieser Lauf das Acht-Minuten-Ziel bei akzeptabler Root-0-Zeit und
+  belegt spaetere Roots als Restpfad, darf KR-4992 nur nach positivem
+  Restkosten-/RAM-Gate folgen; ein Retry benoetigt erneut KR-4993 und eine
+  separate Nutzerfreigabe
 
 ---
 
@@ -1516,9 +1547,13 @@ Prioritaet: P0, letzter Gate-Vorbereitungstask
 Abhaengigkeiten: KR-4974 bis KR-4980; KR-4982/KR-4983 sind auf
 Nutzeranweisung vorerst gestrichen
 
-Status: Quellseitige Gesamtreview und gebuendelte P0/P1-Schliessung sind
-dreifach re-reviewed und gruen. Der reale NativeDisc-Lauf ist freigegeben;
-Produktevidenz und Zeitmessung stehen noch aus.
+Status: Historisches Sourcegate vor dem v56-Performancebefund. Die damalige
+Gesamtreview und gebuendelte P0/P1-Schliessung sind dreifach re-reviewed und
+ohne offenen damaligen Befund. v56 belegt danach einen neuen engeren
+P0-Performancepfad; der volle NativeDisc-Lauf ist nicht mehr freigegeben.
+Nach KR-4985, KR-4986 und allen tatsaechlich aktivierten Tasks bis KR-4991
+uebernimmt KR-4993 die neue Abschlusspruefung. KR-4992 liegt nur auf einem
+spaeteren Fehlgate-Zweig nach KR-4981.
 
 ### Geschlossenes Finding-Ledger
 
@@ -1577,6 +1612,355 @@ Produktevidenz und Zeitmessung stehen noch aus.
 
 ---
 
+## [ ] KR-4985 - Root-0-Phasen- und Kardinalitaetstelemetrie
+
+Prioritaet: P0 Performance-Diagnose
+
+Abhaengigkeiten: KR-4974, Source-Checkpoint `a521999`
+
+Status: Geplant. Keine Implementierung, kein Build und kein Lauf in diesem
+Planungscommit.
+
+### Ziel
+
+Die spaeten Root-0-Kosten eindeutig Snapshot, Cache-Key, physischer
+Auswertung, `apply_call()`, Merge, Evidence und Commit zuordnen und die
+Full-State-/Read-Lens-/Provenienz-Contextzahlen messen.
+
+### Umfang
+
+- `wave_index`, `pending_before`, `stale_entries_removed`, `selected_width`,
+  `new_lanes`, `widened_lanes` und `requeued_lanes`
+- `snapshot_prepare_ns`, `cache_key_build_ns`, `physical_evaluation_ns`,
+  `merge_ns`, `evidence_publish_ns` und `lane_commit_ns`, mit getrennter
+  Wellenwall- und aufsummierter Workerzeit bei Ueberlappung
+- `outgoing_edges`, `edge_lanes`, `called_dependencies`,
+  `contextual_bindings`, `global_bindings`, `state_memory_values`,
+  `state_stack_values`, `state_alias_entries` und `cache_key_bytes`
+- `calls`, `bindings_scanned`, `exact_state_hits`,
+  `exact_hit_average_index`, `merge_attempts`, `merge_changes`,
+  `full_binding_misses`, `state_equality_ns`, `state_copy_ns` und
+  `state_merge_ns`
+- Anzahlen unterschiedlicher Full-State-, Projected-Lens- und
+  Provenienz-Digests samt FullState-Fallbacks
+- bestehender begrenzter Progress-/JSONL-Pfad; keine rohen per-Lane-Daten
+
+### Akzeptanz
+
+- Telemetrie an/aus aendert keine kanonische Semantik
+- vorhandene Progress- und Function-Value-Vertraege decken
+  Zaehlerinvarianten und Drop-/Completenessfelder ab
+- der separat freigegebene Diagnoseexport D1, hoechstens bis Root 0 oder den
+  allgemeinen 15-Minuten-/Stallgrenzen laufend, ordnet die ungefaehr
+  150-ms-Grenzkosten eindeutig zu
+- Messgate G1 ist nach den Schwellen im Root-0-Detailplan entschieden
+
+---
+
+## [ ] KR-4986 - Semantische Context-Lanes und exakte Provenienzabonnenten
+
+Prioritaet: P0 Korrektheits-Enabler
+
+Abhaengigkeit: KR-4985
+
+Status: Geplant. Keine Implementierung in diesem Planungscommit.
+
+### Ziel
+
+Physische Fixpunktarbeit und exakte Contribution-/Callsite-/Callee-/Evidence-
+Provenienz zunaechst mit unveraenderter Full-State-Identitaet trennen.
+
+### Umfang
+
+- semantische Lane plus kanonische Provenienzabonnenten
+- Full-State-Key als erstes paritaetisches Backend
+- stabile Lane-Identitaet getrennt von Summary-/Dependency-Revisionen
+- exaktes Replay isolierter, forwarded und rootkorrelierter Evidence
+
+### Akzeptanz
+
+- alter und neuer Full-State-Pfad liefern identische normalisierte
+  Summaries, Resolutions, Guarded Inventory, Evidence und Budgetflags
+- Accounting trennt semantic unique, Reuse und Provenienzlinks
+- ein und 24 Worker sowie Wiederholungen bleiben deterministisch
+- keine Read-Lens-Projektion vor belegter Full-State-Paritaet
+
+---
+
+## [ ] KR-4987 - Read-Lens-projizierte Context-Identitaet
+
+Prioritaet: P0 Performance
+
+Abhaengigkeiten: KR-4985 mit positivem Messgate G1, KR-4986
+
+Status: Bedingt geplant. Bei negativem G1 bleibt FullState autoritativ und
+der negative Befund wird ohne Umbau dokumentiert.
+
+### Ziel
+
+Contexts zusammenlegen, die fuer den konkreten Callee denselben vollstaendig
+bewiesenen semantischen Eingang besitzen und nur in ungelesenem State oder
+Provenienz variieren.
+
+### Umfang
+
+- SemanticContextKey aus Funktion, Lens, Contract-Fingerprint und
+  projiziertem Ingress
+- vollstaendige Register-, Stack-, Memory-, Alias-, Output-, Inventory- und
+  Fallback-Watcher
+- zwingender FullState-Fallback bei jeder Vertragsluecke
+- Rebucketing und Reevaluation bei spaet erweitertem Read-Vertrag
+- stabile Content-Digests plus strukturelle Kollisionspruefung
+
+### Akzeptanz
+
+- ungelesene Unterschiede teilen, gelesene Unterschiede trennen Lanes
+- inkomplette oder erweiterte Vertraege fallen sicher zurueck/rekeyen
+- exakte Provenienz, Completeness und Truncation bleiben erhalten
+- fokussierter Ergebnisdigest bleibt gleich; D2 weist Contextzahl und reale
+  Gesamtwirkung gemeinsam mit den weiteren aktivierten Kostenpfaden aus
+
+---
+
+## [ ] KR-4988 - Internierte AbstractStates und Function-Value-Summaries
+
+Prioritaet: P1 Performance
+
+Abhaengigkeiten: KR-4985 mit positivem KR-4988-Gate, KR-4986
+
+Status: Bedingt geplant. Aktivierung nur, wenn der Zielpfad mindestens zehn
+Prozent der gemessenen Root-0-Arbeit ausmacht oder ein zeitgewichtetes Modell
+mindestens zehn Prozent Root-0-Walltimegewinn belegt. Keine Implementierung in
+diesem Planungscommit.
+
+### Ziel
+
+Tiefe Equality-, Copy- und Keyarbeit an unveraenderlichen Evaluationgrenzen durch
+kanonische State-/Summary-Identitaeten und strukturelle Wiederverwendung
+senken.
+
+### Umfang
+
+- StateId/SummaryId nur fuer unveraenderliche Snapshots; keine in-place-
+  Internierung mutabler Fixpunktzustande
+- Content-Hash plus strukturelle Kollisionspruefung
+- prozesslokale O(1)-Identitaet getrennt von persistentem Content-Digest
+- gebundene Lebenszeit, RAM-Haushalt und Dedup-/Retentiontelemetrie
+
+### Akzeptanz
+
+- Interning an/aus liefert dieselbe normalisierte Semantik
+- Kollisionen und nichtkanonische Werte werden strukturell geprueft
+- keine ungebundene Retention oder relevante Working-Set-Regression
+- Equality-/Copyzeit oder Cache-Key-Bytes sinken fokussiert; D2 weist die
+  reale Gesamtwirkung aus
+
+---
+
+## [ ] KR-4989 - Indexierte exakte Context-Bindings
+
+Prioritaet: P1 Performance
+
+Abhaengigkeiten: KR-4985 mit positivem KR-4989-Gate, KR-4986; KR-4988 nur bei
+dessen positivem Gate
+
+Status: Bedingt geplant. Aktivierung nur, wenn Binding-Scan samt Equality-
+oder Mergearbeit die Zehn-Prozent-Schwelle erreicht und wachsende
+Binding-p95-Werte oder spaete Exact-Hit-Indizes vorliegen. Bei uebersprungenem
+KR-4988 ist ein stabiler, kollisionsgepruefter Fingerprint zulaessig. Keine
+Implementierung in diesem Planungscommit.
+
+### Ziel
+
+Exakte Binding-Treffer in grossen Familien direkt finden, ohne den
+konservativen Join-/Subsumption-Fallback zu veraendern.
+
+### Umfang
+
+- StateId/Fingerprint auf kanonische Binding-Indizes je Familie
+- vollstaendige Equality-Pruefung nach Indexlookup
+- atomare Indexpflege bei Insert, Widening und Generationwechsel
+- linearer Fallback bei Miss; telemetriebegruendete Schwelle fuer kleine
+  Familien
+
+### Akzeptanz
+
+- Treffer an jeder Position, Kollision, Widening, Invalidation und Full-Miss
+  bleiben korrekt
+- Merge-/Subsumptionssemantik ist unveraendert
+- Bindings scanned, Exact-Hit-Index und Equality-/Mergezeit sinken fuer die
+  in KR-4985 belegten grossen Familien; D2 weist die reale Gesamtwirkung aus
+
+---
+
+## [ ] KR-4990 - Inkrementelle Contextual-Dependency-Views
+
+Prioritaet: P1 Performance
+
+Abhaengigkeiten: KR-4985 mit positivem KR-4990-Gate, KR-4986; KR-4988 und
+KR-4989 nur bei ihren positiven Gates
+
+Status: Bedingt geplant. Aktivierung nur bei erreichter Zehn-Prozent-
+Kostenschwelle und im Median mindestens 50 Prozent unveraenderten View-
+Eintraegen zwischen Reevaluations. Andernfalls bleibt der Full-Rebuild.
+Keine Implementierung in diesem Planungscommit.
+
+### Ziel
+
+Unveraenderte Context-Adjazenz, Bindings, Summary-Versionen und Evidence-
+Layouts nicht bei jeder Reevaluation vollstaendig neu aufbauen und
+serialisieren.
+
+### Umfang
+
+- unveraenderliche generationierte Views nach Funktion/Lane, Edge, Binding und
+  Summary-Aggregat
+- inkrementell ersetzte Edge-/Binding-Shards und kanonischer Digest
+- Evidence-Layout nur bei struktureller Aenderung
+- Full-Rebuild bei unbekannter Invalidierung oder hoher Aenderungsrate
+- Referenzen nur in der schreibfreien Phase; owning Materialisierung vor
+  Besitzuebergang
+
+### Akzeptanz
+
+- inkrementeller und voll aufgebauter Oracle-View stimmen fuer Bindings,
+  Versionen, Digest und Evidence-Layout ueberein
+- Add/Widen, Summary-only, stale Entfernung und Zyklen invalidieren exakt
+- globale und alle contextual Fallbacks bleiben gebunden
+- Snapshot-/Key-Zeit und Key-Bytes sinken fokussiert ohne falschen Cachehit;
+  D2 weist die reale Gesamtwirkung aus
+
+---
+
+## [ ] KR-4991 - Versionierte monotone Context-Worklist
+
+Prioritaet: P0 Performance/Scheduling
+
+Abhaengigkeiten: KR-4986, alle durch G1 aktivierten Tasks KR-4987 bis KR-4990,
+separat freigegebener D2-Diagnoseexport und positives Messgate G2
+
+Status: Bedingt geplant. KR-4991 beginnt mit D2. Bei negativem oder
+unzureichendem G2 beziehungsweise einer belegten echten Breite-1-Kausalkette
+bleibt Jacobi autoritativ und der Skip wird dokumentiert.
+
+### Ziel
+
+Neu freigesetzte unabhaengige Contextarbeit ohne globale Wellenbarriere
+sofort starten und trotzdem nur versionierte, kanonische Deltas publizieren.
+
+### Umfang
+
+- unveraenderlicher Worker-Snapshot plus Dependency-Versionen
+- private semantische Deltas und versionierter kanonischer Commit
+- sofortiges Enqueue neu aktivierter Lanes
+- stale Summary/Evidence verwerfen und gezielt neu planen
+- stale physische Versuche zaehlen nur gegen ein separates begrenztes Retry-
+  und Ressourcenbudget; semantische Budgets zaehlen deterministisch nur
+  akzeptierte logische beziehungsweise kanonische Arbeit
+- bei Retrybudget-Ende auf Jacobi/seriell zurueckstellen, ohne semantische
+  Truncation-/Completenessflags zu setzen; Cancellation, RAM-Leases und
+  Fehlerreihenfolge bleiben erhalten
+- Jacobi bis KR-4993 als Referenz-/Rollbackpfad
+
+### Akzeptanz
+
+- Widening, SCC-Zyklus, verzoegerter Worker, Stale, Cancellation und Budgetende
+  stimmen mit Jacobi ueberein
+- stale Summary/Evidence kann nie committed werden
+- ein, zwei und 24 Worker sowie Wiederholungen bleiben deterministisch
+- fokussierte deterministische Scheduling-Traces senken Barrier-Walltime und
+  idle-with-ready-work, ohne aus echter Breite 1 falsche Parallelitaet
+  abzuleiten; reale Produktwirkung misst erst KR-4981
+- Retrybudget-Ende liefert ueber Jacobi/seriell dieselbe Semantik und dieselben
+  semantischen Budgetflags wie der Referenzpfad
+
+---
+
+## [ ] KR-4992 - Begrenzte Spekulation spaeterer Resolution-Roots
+
+Prioritaet: bedingtes P1
+
+Abhaengigkeiten: verfehlter erster KR-4981-Lauf nach KR-4993, akzeptable
+Root-0-Zeit und positives Restkosten-/RAM-Gate
+
+Status: Optionaler Folgezweig und kein Root-0-Fix. KR-4992 blockiert weder den
+ersten KR-4993-Abschluss noch den ersten KR-4981-Lauf. Ohne positiven Nachweis
+nach einem verfehlten Produktzeitgate wird der Task nicht aktiviert.
+
+### Ziel
+
+Erst nach einem stabilen Root-0-Pfad einen kleinen isolierten Anteil sonst
+ungenutzter Kerne fuer verwerfbare spaetere Rootarbeit einsetzen.
+
+### Umfang
+
+- harte Root-0-Worker-, RAM- und Cache-Reserve
+- kleine konfigurierbare Spekulationsquote
+- keine kanonische Publikation vor Root 0
+- versionierte verwerfbare Resultate und getrennte Throwaway-/Eviction-
+  Telemetrie
+
+### Akzeptanz
+
+- Root-0-Walltime hoechstens drei Prozent schlechter
+- Gesamtzeit sinkt, Speichergrenzen halten und Eviction-Recomputes bleiben null
+- Rootreihenfolge und kanonischer Output bleiben identisch
+- Verlangsamung, Cacheverdraengung oder hoher Throwaway-Anteil deaktiviert den
+  Pfad
+- nach jeder Aktivierung folgt erneut KR-4993; ein KR-4981-Retry braucht eine
+  separate Nutzerfreigabe
+
+---
+
+## [ ] KR-4993 - Unabhaengige Root-0-P0/P1-Abschlusspruefung
+
+Prioritaet: P0, letzter Gate-Vorbereitungstask
+
+Abhaengigkeiten: KR-4985, KR-4986 und alle durch G1/G2 tatsaechlich
+aktivierten Tasks bis KR-4991; negative Gates blockieren nicht
+
+Status: Geplant. Keine Review-, Build- oder Laufarbeit in diesem
+Planungscommit.
+
+### Ziel
+
+Alle aktivierten Context-, Read-Lens-, Interning-, Binding-, Dependency-,
+Cache-, Evidence- und Schedulingpfade unabhaengig reviewen, bestaetigte P0/P1
+schliessen und erst danach KR-4981 freigeben.
+
+### Umfang
+
+- End-to-End-Soundnessreview der semantischen Identitaet und exakten
+  Provenienz
+- Review von FullState-Fallback, Digests/Kollisionen, Cache-Key-Schema 10,
+  globaler Fallback-Summary und Referenzlebenszeiten
+- Review von Invalidierung, Delta-Monotonie, Stale, Evidence-Publikation,
+  Cancellation, Budgets, Progress und RAM
+- Vergleich gegen Full-State-/Full-View-/Jacobi-Referenz und Re-Review jedes
+  Finding-Fixes
+- D1-/D2-Befunde zusammenfassen; kein weiterer privater Sonic- oder
+  Produktlauf in KR-4993
+
+### Akzeptanz
+
+- alle bestaetigten P0/P1 geschlossen und erneut reviewt
+- fokussierte deterministische Differentialvertraege fuer Referenz/neuen
+  Pfad, ein/24 Worker und kalten/warmen Cachezustand liefern identische
+  normalisierte Semantik, Evidence und Fehlerflags; dies ist keine private
+  Sonic- oder Produktlaufmatrix
+- keine reduzierte Analyse-, Resolution-, Guarded-AOT- oder
+  Completenessabdeckung
+- D1/D2 dokumentieren Contextzahl, Kosten, Walltime, effektive Kerne, RAM und
+  stale/throwaway Work ehrlich, auch wenn die allgemeinen Grenzen vor einer
+  Root-0-Completion greifen
+- erst danach der erste KR-4981-Produktlauf
+
+Der vollstaendige Mess-, Stop/Go-, Rollback- und Korrektheitsvertrag fuer den
+Kernpfad und den optionalen KR-4992-Folgezweig steht in
+`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`.
+
+---
+
 ## Geplante Produktlaeufe
 
 ### Lauf A - nach KR-4965 [ausgefuehrt]
@@ -1605,12 +1989,13 @@ Produktevidenz und Zeitmessung stehen noch aus.
   Zentraldispatches
 - 15 reale Fensteraufnahmen schwarz
 
-### Lauf A4 - naechster P0-Produktlauf [hinter KR-4974 bis KR-4984 gegatet]
+### Lauf A4 - naechster P0-Produktlauf [hinter KR-4993 gegatet]
 
-- KR-4974 bis KR-4983 implementieren, jeweils pruefen, committen und pushen
-- in KR-4984 alle betroffenen Analyse-, Inventar-, Cache-, Executor-,
-  Fortschritts-, Hostbuild- und Runtimepfade unabhaengig pruefen und alle
-  P0/P1-Befunde schliessen
+- KR-4985 bis KR-4991 in der dokumentierten Reihenfolge umsetzen; KR-4987 bis
+  KR-4991 nur bei ihren jeweils positiven Messgates aktivieren
+- in KR-4993 alle betroffenen Context-, Read-Lens-, Interning-, Binding-,
+  Dependency-, Cache-, Evidence-, Executor- und Fortschrittspfade
+  unabhaengig pruefen und alle P0/P1-Befunde schliessen
 - genau einen frischen ABI-passenden NativeDisc-Port aus diesem Stand
   erzeugen
 - Originaldisc real installieren
@@ -1621,6 +2006,9 @@ Produktevidenz und Zeitmessung stehen noch aus.
   passieren oder einen engeren typisierten Blocker belegen
 - Zentraldispatches, Hostzeit, Gast-MHz, PVR/Hostframes und hoechsten
   sichtbaren Screen gegen v32 dokumentieren
+- KR-4992 nur nach einem verfehlten Acht-Minuten-Ziel, akzeptabler Root-0-Zeit
+  und positivem Restkosten-/RAM-Gate aktivieren; danach vor einem separat
+  freigegebenen Retry erneut KR-4993 schliessen
 
 ### Lauf B - DirectBoot nach NativeDisc-Abnahme
 

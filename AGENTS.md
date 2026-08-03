@@ -65,23 +65,46 @@ Nutzeranweisung hat diese Vorrang.
 ## Verbindlicher Abschlussvertrag fuer den aktuellen Bring-up
 
 - Die bestehende Roadmap wird ohne Scope-Erweiterung in ihrer festgelegten
-  Reihenfolge abgearbeitet. Nicht genehmigte Nebenarbeiten, neue Tasks und
-  Architekturumbauten sind verboten.
+  Reihenfolge abgearbeitet. Der vom Nutzer am 3. August 2026 ausschliesslich
+  als Planung angeforderte Root-0-Kernpfad KR-4985 bis KR-4991 und KR-4993 ist
+  die einzige vorgesehene neue Arbeit auf dem aktuellen P0-Pfad; KR-4992 ist
+  nur der bedingte Folgezweig nach einem verfehlten KR-4981. Dieser
+  Planungsauftrag
+  genehmigt noch keine Implementierung, keinen Build und keinen Lauf; jeder
+  Task benoetigt eine neue ausdrueckliche Nutzeranweisung. Weitere nicht
+  genehmigte Nebenarbeiten, Tasks und Architekturumbauten sind verboten.
 - Fuer jeden Roadmap-Task gilt genau diese Reihenfolge:
   **implementieren -> ausschliesslich P0/P1 der betroffenen Pfade reviewen ->
   alle bestaetigten P0/P1 gebuendelt fixen -> fokussiert verifizieren ->
   committen und pushen -> naechster Task**.
 - Refactoring ist im gesamten Repository verboten, solange der Nutzer es nicht
-  fuer einen konkret benannten Umbau ausdruecklich freigibt. Ein Review darf
-  sonstige Befunde fuer spaeter notieren, aber daraus weder Arbeit noch neue
-  Tasks ableiten.
+  fuer einen konkret benannten Umbau ausdruecklich freigibt. Die in KR-4985
+  bis KR-4993 exakt beschriebenen Context-, Interning-, Dependency- und
+  Worklist-Umbauten werden erst mit einer neuen taskbezogenen Nutzeranweisung
+  zu freigegebenem Scope; der Plan ist kein allgemeines Refactoringmandat. Ein
+  Review darf sonstige Befunde fuer spaeter notieren, aber daraus weder
+  Arbeit noch neue Tasks ableiten.
 - KR-4982 und KR-4983 (die beiden GPU-Analyseaufgaben) sind vorerst gestrichen
   und gehoeren nicht zum aktuellen Bring-up-Pfad. Sie duerfen nur durch eine
   neue ausdrueckliche Nutzeranweisung reaktiviert werden.
-- KR-4984 bleibt ein eigener abschliessender Gesamtreview-Task. Er prueft und
-  schliesst ausschliesslich P0/P1-Bugs; Refactoring, neue Features und neue
-  Folgetasks sind auch dort verboten.
-- Sobald die Soundness nach KR-4984 belegt ist, folgt ohne weitere
-  Zwischenumbauten genau der vorgesehene Sonic-Produktbuild und -lauf.
-- Aktuelle ausdrueckliche Reihenfolge: Nach Abschluss und Push von KR-4979
-  folgt sofort ein Sonic-Produktbuild und -lauf; KR-4980 wartet bis danach.
+- KR-4984 bleibt der historische Sourcegate-Abschluss vor dem fehlgeschlagenen
+  v56-Performancebeleg. Nach den nun geplanten Umbauten uebernimmt KR-4993 die
+  neue abschliessende Root-0-P0/P1-Gesamtpruefung. Refactoring, neue Features
+  und neue Folgetasks ausserhalb des dokumentierten Plans sind auch dort
+  verboten.
+- Vor KR-4993 sind nur D1 in KR-4985 und D2 zu Beginn von KR-4991 als jeweils
+  separat vom Nutzer freizugebende und auf Root 0 beziehungsweise die
+  allgemeinen Zeit-/Stallgrenzen beschraenkte Diagnoseexporte zulaessig. Sie
+  sind keine Produktnachweise.
+- Sobald die Soundness nach KR-4993 belegt ist, folgt ohne weitere
+  Zwischenumbauten der erste vorgesehene KR-4981-Sonic-Produktbuild und -lauf.
+  KR-4992 darf nur nach dessen verfehltem Acht-Minuten-Gate und positivem
+  Restkosten-/RAM-Gate aktiviert werden; danach sind KR-4993 und ein separat
+  autorisierter KR-4981-Wiederholungslauf erneut Pflicht.
+- Vorgesehene Reihenfolge nach jeweils neuer ausdruecklicher
+  Implementierungsfreigabe: D1/KR-4985, KR-4986, nur positiv gegatete
+  KR-4987 bis KR-4990, D2/KR-4991 und nur bei positivem G2 dessen
+  Schedulerumbau, danach KR-4993 und der erste KR-4981-Produktlauf. KR-4992
+  folgt nur ueber den oben beschriebenen Fehlgate-Zweig. Die Einzelheiten und
+  negativen Stop/Go-Gates stehen in
+  `docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`.

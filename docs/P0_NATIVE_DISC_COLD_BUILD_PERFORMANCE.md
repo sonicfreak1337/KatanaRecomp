@@ -1,8 +1,9 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Aufgabenplan
 
-Status: KR-4974 bis KR-4980 quellseitig implementiert; KR-4984-Gesamtpruefung
-ohne offenen P0/P1, KR-4982/KR-4983 vorerst gestrichen; KR-4981-Sonic-
-Produktmessung offen
+Status: KR-4974 bis KR-4980 quellseitig implementiert; KR-4984 war das
+historische Sourcegate vor dem v56-Root-0-Befund. KR-4982/KR-4983 bleiben
+gestrichen. KR-4981 ist bis zum gegateten KR-4985-bis-KR-4991-Kernpfad und
+KR-4993 gesperrt; KR-4992 ist nur ein Folgezweig nach einem verfehlten Gate.
 
 Analysebasis: P0-Planstand `ffd45ae`, Source-Checkpoint `18f8537` vom
 31. Juli 2026 und der abgebrochene private v24-Export. Der Source-Checkpoint
@@ -10,6 +11,14 @@ enthaelt die bis dahin vorliegenden Analyse-, Cache-, Executor-,
 Fortschritts- und Runtimeumbauten, schliesst KR-4974 bis KR-4984 aber nicht
 ab. Alle Aussagen ueber den Source muessen vor dem Produktlauf gegen den dann
 aktuellen Head neu geprueft werden.
+
+Der aktuelle Root-0-Befund auf `a521999`, die neuen Taskgrenzen und ihre
+Mess-/Stop/Go-Vertraege stehen in
+[`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
+Dieses Dokument bleibt der uebergeordnete Kaltbuild-, Cache-, RAM- und
+Produktgatevertrag; widersprechende alte Reihenfolgen werden durch den
+ausdruecklich angeforderten Root-0-Plan ersetzt. Seine Umsetzung benoetigt
+je Task eine neue Nutzeranweisung.
 
 ## Ziel
 
@@ -56,9 +65,10 @@ Windows-MSPDB-Nachlauf nach beendetem CMake-Configure ist durch einen privaten
 Endpoint und eine einsekuendige Helper-Shutdownfrist geschlossen; der
 Supervisor wartet weiterhin fail-closed auf Job-Leere. KR-4981 erzeugt keine
 separate Threadklassenmatrix, sondern misst genau den ohnehin vorgeschriebenen
-finalen 24-Thread-Sonic-Export. GPU-Offload bleibt ein eigenes
-beweispflichtiges Entscheidungsgate in KR-4982. Die Abschluss-Gesamtpruefung
-KR-4984 bleibt unveraendert Pflicht.
+finalen 24-Thread-Sonic-Export. GPU-Offload bleibt mit KR-4982/KR-4983
+gestrichen und ist kein Teil des Root-0-Folgeplans. Die Abschluss-Gesamtpruefung
+KR-4993 ist nach dem v56-Root-0-Folgeblock Pflicht; KR-4984 bleibt dessen
+historischer Vorgaenger.
 
 ## Gemessene Ausgangslage
 
@@ -883,10 +893,10 @@ Akzeptanz:
 
 Typ: finale P0-Produktmessung
 
-Abhaengigkeiten: KR-4984
+Abhaengigkeiten: KR-4993
 
 Ziel: Der ohnehin vorgeschriebene einzelne frische NativeDisc-Sonic-Export
-nach der unabhaengigen Schlussreview ist gleichzeitig die einzige reale
+nach der neuen unabhaengigen KR-4993-Schlussreview ist gleichzeitig die einzige reale
 Buildzeitmessung. KR-4981 startet keinen separaten Vollbuild und keine
 8-/12-/24-Thread-Matrix.
 
@@ -971,9 +981,11 @@ Ziel: Ein unabhaengiger Reviewer verfolgt alle geaenderten Daten- und
 Fehlerpfade end-to-end. Der reale NativeDisc-Lauf bleibt gesperrt, bis jeder
 P0/P1 geschlossen und nachgeprueft ist.
 
-Status: Quellseitig dreifach re-reviewed und ohne offenen P0/P1. Der einmalige
-sichtbare NativeDisc-Produktlauf ist freigegeben; Zeit- und Screenshotbeweis
-stehen noch aus.
+Status: Historisches Sourcegate vor dem v56-Performancebefund, quellseitig
+dreifach re-reviewed und ohne offenen damaligen P0/P1. Der einmalige
+NativeDisc-Produktlauf ist wegen des danach belegten Root-0-P0 wieder
+gesperrt; KR-4993 uebernimmt nach KR-4985, KR-4986 und allen tatsaechlich
+aktivierten Tasks bis KR-4991 die neue Schlussreview.
 
 Pflichtumfang:
 
@@ -1038,13 +1050,17 @@ KR-4974 Telemetrie
   |                           +--> KR-4979 Executor/RAM-Haushalt
   |                           +--> KR-4980 persistenter Schichtcache
   |
-  +--> KR-4982 GPU-Entscheidungsgate
-           +--> KR-4983 nur bei positivem Gate
+  +--> KR-4982/KR-4983 [gestrichen, kein aktueller Pfad]
 
-KR-4974 bis KR-4980 + GPU-Entscheidung
-  -> KR-4984 unabhaengige Gesamtpruefung und P0/P1-Schliessung
-  -> genau ein frischer realer 24-Thread-NativeDisc-Sonic-Lauf
-     -> zugleich einzige KR-4981-Produktzeitmessung
+KR-4974 bis KR-4980
+  -> KR-4984 historisches Sourcegate
+  -> v56 Root-0-P0
+  -> KR-4985 bis KR-4991 gemaess Root-0-Folgeplan und Stop/Go-Gates
+  -> KR-4993 neue unabhaengige P0/P1-Schliessung
+  -> erster frischer realer 24-Thread-NativeDisc-Sonic-Lauf
+     -> KR-4981-Produktzeitmessung dieses Sourcekandidaten
+     -> nur bei verfehltem Acht-Minuten-Ziel und positivem Restkosten-/RAM-Gate:
+        KR-4992 -> KR-4993 erneut -> separat autorisierter KR-4981-Retry
 ```
 
 KR-4975 bis KR-4980 sind keine voneinander isolierten Mikrooptimierungen.
@@ -1059,7 +1075,7 @@ persistente Shards denselben kanonischen Vertrag verwenden.
 - CPU-Vollanalyse, inkrementelle Session, Multi-Root-Fixpunkt und optionaler
   GPU-Pfad besitzen waehrend der Einfuehrung getrennte Featuregates.
 - Der Referenzpfad bleibt fuer fokussierte Differenztests und Shadow-Runs
-  verfuegbar, bis KR-4984 geschlossen ist.
+  verfuegbar, bis KR-4993 geschlossen ist.
 - Eine neue Analyse-Epoch wird nur atomar publiziert. Mismatch, Exception
   oder Fehlerdiagnose verwirft sie vollstaendig.
 - Jeder Aufgabencommit ist einzeln rueckrollbar und veraendert weder private
@@ -1084,14 +1100,17 @@ persistente Shards denselben kanonischen Vertrag verwenden.
 Dieser P0-Block ist erst abgeschlossen, wenn:
 
 1. KR-4974 bis KR-4980 implementiert sind;
-2. KR-4982 eine belastbare GPU-Entscheidung liefert und KR-4983 nur bei
-   positivem Ergebnis vollstaendig integriert ist;
+2. KR-4985, KR-4986 und alle positiv gegateten Tasks bis KR-4991 abgeschlossen
+   oder mit negativem Gate begruendet beim konservativen Pfad geblieben sind;
 3. alle kanonischen Ergebnisse und fail-closed Diagnosen gegen den
    Referenzpfad identisch sind;
-4. KR-4984 alle betroffenen Pfade unabhaengig reviewed und alle P0/P1
+4. KR-4993 alle betroffenen Pfade unabhaengig reviewed und alle P0/P1
    geschlossen hat;
-5. erst danach genau ein frischer echter 24-Thread-NativeDisc-Sonic-Lauf
-   gebaut, als einzige KR-4981-Zeitmessung erfasst und mit echten Screenshots
-   ausgewertet wurde;
-6. Buildzeit, Phasezeiten, Ressourcen, Cachewirkung und sichtbares Ergebnis
+5. erst danach der fuer diesen Sourcekandidaten einmalige frische echte
+   24-Thread-NativeDisc-Sonic-Lauf gebaut, als KR-4981-Zeitmessung erfasst und
+   mit echten Screenshots ausgewertet wurde;
+6. bei einem verfehlten Acht-Minuten-Ziel KR-4992 nur nach positivem
+   Restkosten-/RAM-Gate folgt und vor einem separat autorisierten Retry erneut
+   KR-4993 geschlossen wird;
+7. Buildzeit, Phasezeiten, Ressourcen, Cachewirkung und sichtbares Ergebnis
    ehrlich berichtet und der abgeschlossene Stand auf `main` gepusht wurde.

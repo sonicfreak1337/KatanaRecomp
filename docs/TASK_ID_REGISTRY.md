@@ -59,22 +59,27 @@
 Der historische Quellstatus fuer KR-4951 bis KR-4973 in dieser Tabelle
 bezieht sich auf `b01586a` mit Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6,
 PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 62,
-Native-AOT-Profil 11 und Partitionsschema 5. KR-4974 bis KR-4984 sind neue,
-noch nicht implementierte P0-Planung auf Basis der Kaltbuildanalyse vom
-31. Juli 2026. `quellseitig implementiert, Produktabnahme offen` ist
-ausdruecklich kein Produkt-Erfolg: Der frische Sonic-PAL-NativeDisc-Lauf ueber
-600 Millionen Post-Entry-Zyklen und der Sichtnachweis stehen noch aus.
+Native-AOT-Profil 11 und Partitionsschema 5. KR-4974 bis KR-4984 bilden den
+ersten Kaltbuild-P0-Block vom 31. Juli 2026. `quellseitig implementiert,
+Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
+Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
+Sichtnachweis stehen noch aus.
 
-Der aktuelle Source-Checkpoint ist `18f8537` mit Runtime-ABI 85,
-Analyzer-ABI 23 und Portprojektvertrag 75. Der abgebrochene
-NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und keinen
-Produktnachweis. Vor dem naechsten privaten Sonic-Port sind KR-4974 bis
-KR-4984 verbindlich abzuschliessen.
+Der aktuelle Source-Checkpoint ist `a521999` mit Runtime-ABI 87,
+Analyzer-ABI 31 und Portprojektvertrag 75. Der v56-Diagnosebefund erzeugte
+kein Portartefakt und belegt mit nur `1,073` effektiven Kernen einen offenen
+Root-0-P0. Der gegatete Kernpfad KR-4985 bis KR-4991 und KR-4993 ist der am
+3. August 2026 ausschliesslich als Planung angeforderte Folgeblock; KR-4992
+ist nur ein optionaler Fehlgate-Zweig nach KR-4981. Der Planungscommit
+genehmigt keine Implementierung; jeder Task sowie D1 und D2 benoetigen eine
+neue ausdrueckliche Nutzeranweisung. Vor dem naechsten vollstaendigen privaten
+Sonic-Port sind die dann freigegebenen Kerntasks gemaess ihren Stop/Go-Gates
+abzuschliessen.
 
 | ID | Titel | Status |
 |---|---|---|
 | KR-4951 | Produktgate nach Gastzyklen und getrennte visuelle Meilensteine | abgeschlossen, Folgearbeit KR-4966 |
-| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | quellseitig implementiert, Produktabnahme offen; atomarer CompletePlatform-Commit, Product-vs-Diagnostic-Evidenzbaseline und Save-Autoritaet vorhanden, frischer ABI-passender Handoff und normative Paritaet nach KR-4974 bis KR-4984 offen |
+| KR-4952 | Post-IP.BIN-Spielhandoff fuer DirectBootExecutable | quellseitig implementiert, Produktabnahme offen; atomarer CompletePlatform-Commit, Product-vs-Diagnostic-Evidenzbaseline und Save-Autoritaet vorhanden, frischer ABI-passender Handoff und normative Paritaet nach KR-4993 offen |
 | KR-4953 | Privates Game-Entry-Handoff-Artefakt aus Original-GDI | quellseitig implementiert, Produktabnahme offen; 22-Geraete-/5-Event-Vertrag vorhanden, DirectBoot benoetigt fuer den spaeteren Lauf einen frischen ABI-passenden Capture |
 | KR-4954 | Deklaratives externes Spielprojekt und CLI-Scaffold | aktiv P1; binaeres `GameProjectArtifact` Format 4 fuer Spielprojektvertrag 5 mit SHA-256, kombinierte `--game-project`-/Handoff-CLI und privater externer CMake-Generator belegt, Textdescriptor und wiederverwendbares Scaffold offen |
 | KR-4955 | Explizite Funktionsgrenzen und Tabellenhinweise End-to-End | quellseitig implementiert, Produktabnahme offen; Guarded-AOT-Einstiege, Carrier-/Inventar-/Codepointer-Provenienz und Exportvollstaendigkeit reichen bis CFG/IR/AOT |
@@ -84,7 +89,7 @@ KR-4984 verbindlich abzuschliessen.
 | KR-4959 | Ereignisgetriebene Scheduler-/IRQ-Safepoints | quellseitig implementiert, Produktabnahme offen; architektonische Grenzepochs, IRQ-Guards und regionsweise Cycle-/State-Commits vorhanden |
 | KR-4960 | 200-MHz-Produkt-Hotpath | geplant P0 Performance-Gate |
 | KR-4961 | Externes SonicAdventureRecomp-Bring-up-Projekt | aktiv P1; privates CMake-Projekt baut gegen das installierte Runtimepaket und erzeugt das hashgebundene v28-Artefakt, wiederverwendbares Scaffold und normaler Hook-/Port-Buildworkflow offen |
-| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | quellseitige P0-Vertraege implementiert, Produktabnahme offen; zuerst KR-4974 bis KR-4984, danach genau ein ABI-passender NativeDisc-Lauf, DirectBoot spaeter mit neuem ABI-passenden Handoff |
+| KR-4962 | NativeDiscBoot-/DirectBoot-Paritaet am Game-Entry | quellseitige P0-Vertraege implementiert, Produktabnahme offen; zuerst gegateter Kernpfad bis KR-4991 und KR-4993, danach erster ABI-passender NativeDisc-Lauf, DirectBoot spaeter mit neuem ABI-passenden Handoff |
 | KR-4963 | Inkrementeller Runtime-/Spielbuild und Compiler-A/B | aktiv P1; v28 warmer MSVC-Gateexport 4,209083 s, unveraenderter Hostbuild 0,219272 s, Runtime-/Hook-Schleifen und aktuelles Compiler-A/B offen |
 | KR-4964 | v0.49 Produktabnahme bis sichtbarem Spielbild | Gate |
 | KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | abgeschlossen ueber Alternativabnahme; allgemeine G2-Ursache repariert, alter Poll verlassen und engerer Blocker belegt |
@@ -101,12 +106,21 @@ KR-4984 verbindlich abzuschliessen.
 | KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | abgeschlossen; immutable Graphshards, persistente SCC-/ABI-/Summary-Epoch und gerichtete Invalidierung produktiv verdrahtet |
 | KR-4977 | Gemeinsamer Multi-Root-Guarded-Inventory-Fixpunkt | abgeschlossen in `4d17526` |
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
-| KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; Sonic-Produktabnahme offen |
+| KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Root-0-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | geplant P0 als finale Produktmessung nach KR-4984; keine Vorab-Buildmatrix |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 offen als erster voller Produktmesspunkt nach KR-4993; je reviewtem Sourcekandidaten hoechstens ein Lauf, keine Vorab-Buildmatrix |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
-| KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | quellseitig dreifach re-reviewed und ohne offenen P0/P1; Sonic-Produktevidenz offen |
+| KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Root-0-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
+| KR-4985 | Root-0-Phasen- und Kardinalitaetstelemetrie | geplant P0; keine Semantik- oder Schedulingaenderung |
+| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | geplant P0; Full-State-paritaetische Semantik-/Provenienztrennung |
+| KR-4987 | Read-Lens-projizierte Context-Identitaet | bedingt geplant P0; nur bei positivem Messgate G1, sonst FullState |
+| KR-4988 | Internierte AbstractStates und Function-Value-Summaries | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kostengate, sonst gemessener Skip |
+| KR-4989 | Indexierte exakte Context-Bindings | bedingt geplant P1; nur bei positivem Zehn-Prozent-Bindinggate, Indexlookup mit unveraendertem Join-Fallback |
+| KR-4990 | Inkrementelle Contextual-Dependency-Views | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kosten- und 50-Prozent-Reusegate, sonst Full-Rebuild |
+| KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 zu Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
+| KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach KR-4993 vor Retry |
+| KR-4993 | Unabhaengige Root-0-P0/P1-Abschlusspruefung | geplant P0 als letzter Gate-Vorbereitungstask vor KR-4981 |
 
 ## Aktuelle Meilensteinzuordnung
 
@@ -114,8 +128,8 @@ KR-4984 verbindlich abzuschliessen.
 - `KR-4971` ist durch den v28-Produktlauf abgeschlossen.
 - `KR-4972` ist quellseitig implementiert; Guarded-AOT-Einstieg und
   Exportvollstaendigkeit sind vorhanden. Ob der historische Missing-AOT-
-  Grenzpunkt dadurch real passiert wird, entscheidet erst der nach KR-4974
-  bis KR-4984 zulaessige ABI-passende Sonic-Lauf.
+  Grenzpunkt dadurch real passiert wird, entscheidet erst der nach KR-4993
+  zulaessige ABI-passende Sonic-Lauf.
 - `KR-4973` ist durch den sichtbaren v32-NativeDisc-Produktlauf abgeschlossen;
   seine ABI-64-Messwerte bleiben historische Evidenz. DirectBoot benoetigt
   fuer einen spaeteren aktuellen ABI-Pfad einen frischen

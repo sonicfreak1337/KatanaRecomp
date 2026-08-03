@@ -44,16 +44,24 @@ einen bereits im Sonic-Lauf konkret beobachteten Fehler schneller isoliert
 oder eine deutlich teurere Retailiteration ersetzt. Der anschliessende normale
 Sonic-Lauf bleibt trotzdem der entscheidende Test.
 
-Aktuelle P0-Ausnahme: Der abgebrochene NativeDisc-v24-Export hat gezeigt,
-dass der obige Zyklus mit dem derzeitigen Kaltbuild nicht produktiv nutzbar
-ist. Bis die Tasks KR-4974 bis KR-4984 abgeschlossen sind, wird **kein** weiterer
-privater Sonic-Port gebaut. Die Tasks werden strangweise und allgemein
-implementiert, fokussiert verifiziert, einzeln committed und gepusht.
-Danach prueft ein unabhaengiger Gesamt-Review alle betroffenen Analyse-,
-Cache-, Executor-, Build-, Runtime-CPU- und GPU-Ausgabepfade. Jeder P0/P1-
-Fund wird im gesamten betroffenen Strang geschlossen und erneut reviewt.
-Erst dann folgt genau ein neuer NativeDisc-Sonic-Lauf. Der normative Plan
-steht in `docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`.
+Aktuelle P0-Ausnahme: Der v56-Root-0-Lauf auf `a521999` hat gezeigt, dass der
+Kaltbuild trotz der abgeschlossenen KR-4974-bis-KR-4984-Sourcearbeit weiterhin
+nicht produktiv nutzbar ist. Root 0 nutzt im Mittel nur etwa `1,073` Kerne;
+`9.135` eindeutige Contexts und wachsende Kosten je Auswertung halten den
+kanonischen Fortschritt bei `0/1191`. Deshalb sind ausschliesslich der
+gegatete Root-0-Kernpfad KR-4985 bis KR-4991 und KR-4993 als naechster
+P0-Pfad vorgesehen; KR-4992 ist nur ein Folgezweig nach einem verfehlten
+KR-4981.
+Dieser Planungsauftrag genehmigt noch keine Umsetzung; jeder Task benoetigt
+eine neue ausdrueckliche Nutzeranweisung und wird dann strangweise und
+allgemein bearbeitet, fokussiert verifiziert, einzeln committed und gepusht.
+Vor dem abschliessenden KR-4993-Review sind nur D1 in KR-4985 und D2 zu Beginn
+von KR-4991 als jeweils separat freizugebende und begrenzte reale
+Diagnoseexporte zulaessig. Erst danach folgt der erste KR-4981-NativeDisc-
+Sonic-Lauf. Der normative
+Folgeplan steht in `docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`; der
+uebergeordnete Kaltbuildvertrag bleibt in
+`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`.
 Als sichtbarer Fortschrittsnachweis zaehlt ausschliesslich ein in genau
 diesem neuen Lauf frisch aufgenommener echter Fensterscreenshot jenseits der
 bekannten Sega-/Leergrenze. Alte Captures, technische Direct-Frames,
@@ -456,52 +464,51 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-4974 bis KR-4984 - NativeDisc-Kaltbuild allgemein auf das verbindliche
-8-/11-/15-Minuten-Gate fuer 24/12/8 Threads bringen, GPU-Offload nur nach
-positivem Entscheidungsgate integrieren, danach unabhaengige Gesamtpruefung
-und P0/P1-Schliessung; erst dann genau ein privater NativeDisc-Sonic-Lauf
+D1/KR-4985, KR-4986 und nur positiv gegatete KR-4987 bis KR-4990 - Root-0-
+Kosten messen, semantische Context-Lanes von Provenienz trennen und nur
+belegte Per-Context-Kosten senken; D2 zu Beginn von KR-4991 entscheidet die
+versionierte Worklist. Danach KR-4993 und der erste KR-4981-NativeDisc-Sonic-
+Lauf; KR-4992 nur nach dessen verfehltem Zeitgate
 ```
 
 ### Aktueller P0-Quell-Handoff
 
-Der funktionale Source-Checkpoint ist `18f8537`; der vorausgehende Commit
-`ffd45ae` dokumentiert den P0-Fahrplan. Keiner der beiden Commits behauptet
-einen abgeschlossenen P0 oder Produktproof. Der Source-Checkpoint traegt:
+Der aktuelle Source-Checkpoint ist
+`a52199996898e2191cdf2f1a5808a7da2b355873`. Er enthaelt die beschriebenen
+Dependency-Views, Cache-Key-Schema 10, stabile Evidence-Referenzen,
+State-Wiederverwendung und Merge-Fastpaths. Die unabhaengige Root-0-Pruefung
+fand darin keinen neuen bestaetigten P0/P1-Soundnessfehler; insbesondere bindet
+Schema 10 die globale Fallback-Summary korrekt.
+
+Die v56-Telemetrie belegt trotzdem einen offenen P0-Performanceblocker:
 
 ```text
-Runtime-ABI:                    85
-Block-ABI:                       5
-Analyzer-ABI:                   23
-PlatformServices-ABI:           13
-Backend-Interface-ABI:          12
-Portprojektvertrag:             75
-Native-AOT-Emissionsprofil:     13
-AOT-Partitionsschema:            5
+verstrichene Walltime am
+unvollstaendigen 0/1191-Stand: 401 s
+physische Auswertungszeit:      430,1 s
+eindeutige Contexts:            9.135
+physische Auswertungen:         11.279
+Eviction-Recomputes:            0
+mittlere effektive Kerne:       1,073
+Auswertungen je Context:        1,235
 ```
 
-Der Source-Checkpoint implementiert unter anderem Fortschrittsereignisse,
-komponentenbezogene Cacheidentitaeten, Boot-/Latent-AOT-Caches,
-ExactOnly-Discovery, Multi-Extent-Bindings, ein staerkeres
-FirstVisibleGameFrame-Gate, einen gemeinsamen Runtime-Executor,
-aggregierte CPU-Lastbegrenzung und bevorzugte D3D11-Flip-Ausgabe. Der
-fokussierte Function-Value-Test und der Release-CLI-Build sind gruen;
-Teilreviews einzelner Analyse- und Runtimepfade fanden keine bestaetigten
-P0/P1. Eine abschliessende Gesamtpruefung ist damit nicht ersetzt.
+Die `401 s` sind keine abgeschlossene Root-0-Walltime, sondern ein
+unvollstaendiger Zwischenstand bei weiterhin `0/1191`.
 
-Der private v24-Export wurde am 31. Juli 2026 nach etwa `3 h 27 min`
-abgebrochen. Pass 15 (`1.192` Roots, `89,72 min`) und Pass 22 (`1.416`
-Roots, `110,71 min`) waren abgeschlossen; Pass 24 begann mit `1.426` Roots
-die dritte volle Function-Value-Neuberechnung und stand bei `7` Roots.
-Es gibt kein Portartefakt, keine `game.exe`, keinen Sonic-Prozess und keinen
-neuen Screenshot. Die exakten Scope-, Cache- und Seedwerte stehen in
-`docs/STATUS.md`; Architektur und naechste Tasks stehen im P0-Detailplan.
-Der lokale Iterationsname v24 ist nicht der historische
-CompletePlatform-v24-Produktport.
+Der kritische Span ist algorithmisch fast seriell: Spaetere Roots sind bis
+zum Root-0-Commit gesperrt, und Jacobi-Wellen veroeffentlichen Folgearbeit erst
+nach einer globalen Merge-/Evidence-/Commitbarriere. Gleichzeitig skalieren
+Snapshot, Cache-Key, `apply_call()`, Equality/Copy/Merge und
+Provenienzauswahl weiter mit dem Contextual-Graphen. Die starke, noch in
+KR-4985 zu messende Hypothese ist eine zu feine Full-State-/Provenienz-
+Contextidentitaet. Weitere Cachekapazitaet oder Threads sind nicht der
+naechste Fix.
 
-Diese Aussagen betreffen Source- und Diagnoseevidenz. Sie behaupten weder
-einen schnellen Kaltbuild noch messbar niedrigere Runtime-CPU-Last,
-GPU-beschleunigte Analyse, einen aktuellen Sonic-Boot oder sichtbaren
-Fortschritt.
+Der verbindliche Einstieg, die Stop/Go-Gates, Korrektheitsinvarianten und
+exakten Taskgrenzen stehen im neuen Root-0-Detailplan. Diese Aussagen sind
+Diagnose- und Planungsevidenz; sie behaupten weder einen schnellen Kaltbuild
+noch einen aktuellen Produktproof.
 
 ### Historische v24-/v28-/v30-/v32-Produktevidenz
 
@@ -553,8 +560,10 @@ Installationsdaten und Produktcaptures blieben unangetastet.
 Der allgemeine `KR-4972`-Source-Vertrag ist inzwischen implementiert.
 DirectBoot-v30 bleibt wegen Runtime-ABI 63 historische Schwarzbildevidenz und
 darf weder als Ergebnis des ABI-73-Source-Stands noch als aktueller
-Scanoutnachweis ausgegeben werden. Der naechste reale Produktlauf bleibt bis
-KR-4984 gesperrt.
+Scanoutnachweis ausgegeben werden. Der naechste vollstaendige reale
+Produktlauf bleibt bis KR-4993 gesperrt; die begrenzten Diagnoseexporte D1 in
+KR-4985 und D2 zu Beginn von KR-4991 benoetigen jeweils eine eigene
+ausdrueckliche Freigabe.
 
 ## Historischer v0.48-Kontext
 

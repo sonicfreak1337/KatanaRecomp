@@ -6,19 +6,46 @@ Aktuelle interne Version: `v0.49.0`
 
 ```text
 letzte reale Produktevidenz: historischer ABI-77/78-NativeDisc-Stand
-Source-Checkpoint:           KR-4984-Sourcegate
-verbindlicher P0-Plan:       KR-4974 bis KR-4984 quellseitig umgesetzt
-aktueller Source:            Runtime-ABI 87 / Analyzer-ABI 27 /
+funktionaler Source-Checkpoint:
+                            a521999 / Runtime-ABI 87 / Analyzer-ABI 31 /
                              Application 8 / Portprojektvertrag 75
-letzter Exportversuch:       v40/v41 ohne neues Portartefakt beendet
+aktueller Diagnosebefund:    v56 unvollstaendig bei 0/1191; 401 s verstrichen,
+                             9.135 Contexts, 11.279 physische Auswertungen,
+                             1,073 effektive Kerne
+verbindlicher P0-Plan:       D1/KR-4985, KR-4986, positiv gegatete
+                             KR-4987..KR-4991, KR-4993, dann KR-4981
 aktuelles Portartefakt:      keines
 aktueller Sonic-Lauf:        keiner
 aktueller Screenshot:        keiner
-offene Produktabnahme:       genau ein sichtbarer 24-Thread-NativeDisc-Sonic-
-                             Lauf mit Zeit- und Screenshotbeweis
+offene Produktabnahme:       erster sichtbarer 24-Thread-NativeDisc-Sonic-
+                             Lauf nach KR-4993 mit Zeit- und Screenshotbeweis
 ```
 
-## Aktueller P0-Stand vom 2. August 2026
+## Aktueller P0-Stand vom 3. August 2026
+
+Die erneute unabhaengige Root-0-Pruefung von `a521999` fand keinen neuen
+bestaetigten P0/P1-Soundnessfehler. Cache-Key-Schema 10 bindet die globale
+Fallback-Summary korrekt. Der offene P0 ist Performance: Der unvollstaendige
+v56-Zwischenstand steht nach `401 s` weiter bei `0/1191`, obwohl `430,1 s`
+physische Auswertungsarbeit angefallen sind. `9.135` eindeutige Contexts,
+`11.279` physische Auswertungen, null Eviction-Recomputes und `1,073`
+effektive Kerne belegen einen fast seriellen Root-0-Span und steigende Kosten
+je Context. Die `401 s` sind keine abgeschlossene Root-0-Walltime.
+
+Der verbindliche, ausschliesslich geplante Folgepfad steht in
+[`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md):
+D1/KR-4985, KR-4986, nur positiv gegatete KR-4987 bis KR-4990, D2 zu Beginn
+von KR-4991, ein Worklist-Umbau nur bei positivem G2 und danach KR-4993.
+KR-4992 ist kein Vorabtask, sondern nur ein Folgezweig nach einem verfehlten
+KR-4981 und positivem Restkosten-/RAM-Gate. Dieser Planungsstand genehmigt
+keine Implementierung, keinen Build, keinen Test und keinen Lauf; jeder Task
+sowie D1 und D2 benoetigen eine neue ausdrueckliche Nutzeranweisung.
+
+### Historischer KR-4984-Sourcegate-Stand
+
+Die folgenden Abschlussbeschreibungen halten den damaligen Stand fest. Ihre
+damaligen offenen Folgeschritte sind durch den oben beschriebenen Root-0-Plan
+ersetzt und steuern nicht mehr die aktuelle Reihenfolge.
 
 Der KR-4984-Sourcegate-Stand enthaelt die Performanceumbauten und die
 vollstaendige P0/P1-Gesamtpruefung. Quellseitig vorhanden sind:
@@ -44,10 +71,10 @@ unabhaengige Regressionreviews melden keinen offenen P0/P1. Kaltbuildzeit,
 Runtimeverhalten und sichtbarer Spielfortschritt sind noch nicht durch den
 neuen realen Produktlauf belegt.
 
-Der verbindliche Umsetzungs-, Mess- und Abschlussvertrag steht in
+Der uebergeordnete Umsetzungs-, Mess- und Abschlussvertrag steht in
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
-KR-4974 bis KR-4980 sind quellseitig umgesetzt; KR-4984 ist quellseitig gruen
-und wartet nur auf die Produktevidenz. KR-4982/KR-4983 bleiben gestrichen.
+KR-4974 bis KR-4980 sind quellseitig umgesetzt; KR-4984 bleibt der historische
+Sourcegate-Abschluss vor v56. KR-4982/KR-4983 bleiben gestrichen.
 
 ### KR-4976-Abschlussstand
 
@@ -961,31 +988,29 @@ Offen bleiben:
 ## Aktiver kritischer Pfad
 
 ```text
-KR-4974 Telemetrie und Miss-Reason-Ledger
-  -> KR-4975 semantische Cachelinsen
-  -> KR-4976 persistente Programm-/SCC-Session [abgeschlossen]
-  -> KR-4977 gemeinsamer Multi-Root-Inventory-Fixpunkt
-  -> KR-4978 inkrementeller CFG-/Seed-Fixpunkt
-  -> KR-4979 priorisierter Executor und RAM-Grenzen
-  -> KR-4980 persistente Buildshards
-  -> KR-4982 GPU-Entscheidungsgate
-     -> KR-4983 nur bei positivem GPU-Beweis
-  -> KR-4984 unabhaengige Gesamtpruefung, P0/P1-Schliessung und Re-Review
-  -> genau ein frischer privater 24-Thread-NativeDisc-Sonic-Lauf
-     -> zugleich einzige KR-4981-Produktzeitmessung
+D1/KR-4985 Telemetrie und G1
+  -> KR-4986 semantische Context-Lanes / Provenienzabonnenten
+  -> KR-4987 bis KR-4990 nur bei ihren positiven Messgates
+  -> D2 zu Beginn KR-4991 und G2
+  -> KR-4991 Worklist nur bei positivem G2
+  -> KR-4993 unabhaengige P0/P1-Schliessung
+  -> erster KR-4981-Produktlauf
+     -> bei Erfolg: Gate geschlossen
+     -> bei verfehltem Acht-Minuten-Ziel und positivem Restkosten-/RAM-Gate:
+        KR-4992 -> KR-4993 erneut -> separat autorisierter KR-4981-Retry
 ```
 
-Vor KR-4984 wird kein weiterer privater Sonic-Port gebaut. Jeder P0-Task
-wird allgemein ueber den gesamten betroffenen Strang umgesetzt, fokussiert
-verifiziert, einzeln committed und gepusht. Die alten KR-496x-Aufgaben
-bleiben als nachgelagerte Produktarchitekturarbeit erhalten, steuern aber
-nicht den naechsten Lauf.
+Vor KR-4993 sind nur D1 und D2 als jeweils separat freizugebende, begrenzte
+Root-0-Diagnoseexporte zulaessig. Jeder P0-Task wird allgemein ueber den
+betroffenen Strang umgesetzt, fokussiert verifiziert, einzeln committed und
+gepusht. Die alten KR-496x-Aufgaben bleiben als nachgelagerte
+Produktarchitekturarbeit erhalten, steuern aber nicht den naechsten Lauf.
 
 ## Historische und gesperrte reale Produktlaeufe
 
-Die Laeufe A bis A4 sind historische Evidenz. Der naechste reale Lauf ist
-bis zum Abschluss von KR-4984 gesperrt und ersetzt keinen der P0-
-Performance- oder Reviewnachweise.
+Die Laeufe A bis A4 sind historische Evidenz. Der naechste vollstaendige reale
+Produktlauf ist bis zum Abschluss von KR-4993 gesperrt; D1 und D2 sind nur
+begrenzte Diagnoseexporte und ersetzen keinen Produktnachweis.
 
 ### Lauf A - nach KR-4965 [ausgefuehrt]
 
