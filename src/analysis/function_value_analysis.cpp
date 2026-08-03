@@ -13215,6 +13215,52 @@ void encode_function_call_effect(
         returned->evidence_callees);
 }
 
+[[nodiscard]] bool same_function_call_effect(
+    const FunctionValueSummary& left,
+    const FunctionValueSummary& right) noexcept {
+    if (left.function_address != right.function_address ||
+        left.memory_complete != right.memory_complete ||
+        left.memory_values != right.memory_values ||
+        left.inventory_unresolved_saved_stack_alias_sources !=
+            right.inventory_unresolved_saved_stack_alias_sources ||
+        left.inventory_unresolved_saved_stack_alias_tracks_current_epoch !=
+            right.inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+        left.inventory_unresolved_stack_callback_loss !=
+            right.inventory_unresolved_stack_callback_loss ||
+        left.inventory_stack_callback_loss_identity_truncated !=
+            right.inventory_stack_callback_loss_identity_truncated)
+        return false;
+    const auto* const left_return = register_summary(left, 0u);
+    const auto* const right_return = register_summary(right, 0u);
+    if ((left_return == nullptr) != (right_return == nullptr))
+        return false;
+    if (left_return == nullptr) return true;
+    return left_return->complete == right_return->complete &&
+           left_return->guarded == right_return->guarded &&
+           left_return->may_alias_stack == right_return->may_alias_stack &&
+           left_return->inventory_code_pointer_values ==
+               right_return->inventory_code_pointer_values &&
+           left_return->inventory_pc_relative_code_literal_values ==
+               right_return->inventory_pc_relative_code_literal_values &&
+           left_return->inventory_code_pointer_values_truncated ==
+               right_return->inventory_code_pointer_values_truncated &&
+           left_return->inventory_pc_relative_code_literal_values_truncated ==
+               right_return
+                   ->inventory_pc_relative_code_literal_values_truncated &&
+           left_return->contextual_candidate_dependency ==
+               right_return->contextual_candidate_dependency &&
+           left_return->inventory_stack_callback_loss_unresolved ==
+               right_return->inventory_stack_callback_loss_unresolved &&
+           left_return->inventory_saved_stack_alias_latent ==
+               right_return->inventory_saved_stack_alias_latent &&
+           left_return->inventory_saved_stack_alias_tracks_current_epoch ==
+               right_return
+                   ->inventory_saved_stack_alias_tracks_current_epoch &&
+           left_return->values == right_return->values &&
+           left_return->evidence_callees ==
+               right_return->evidence_callees;
+}
+
 void encode(EvaluationKeyEncoder& key,
             const IndirectCalleeCandidates& candidates) {
     key.append_interned_u32_range(
@@ -30011,6 +30057,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::map<ContextualEntryFamilyKey,
                      std::vector<ContextualLaneId>>
                 contextual_entry_families;
+            std::map<
+                ContextualLaneId,
+                std::map<ContextualCallSiteKey,
+                         std::map<ContextualLaneId, AbstractState>>>
+                contextual_callees;
             std::map<ContextualLaneId,
                      std::set<ContextualLaneId>>
                 contextual_callers;
@@ -30026,27 +30077,26 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                 };
             const auto contextual_bindings_for =
-                [&](const std::uint32_t caller_entry) {
+                [&](const ContextualLaneId caller_lane) {
                     ContextualSummaryBindings bindings;
-                    for (const auto& [family, lane_ids] :
-                         contextual_entry_families) {
-                        if (family.caller_entry != caller_entry)
-                            continue;
-                        auto& bound = bindings[
-                            {family.call_site,
-                             family.callee_entry}];
-                        for (const auto lane_id : lane_ids) {
+                    const auto callees =
+                        contextual_callees.find(caller_lane);
+                    if (callees == contextual_callees.end())
+                        return bindings;
+                    for (const auto& [call, lane_edges] :
+                         callees->second) {
+                        auto& bound = bindings[call];
+                        for (const auto& [lane_id, match_input] :
+                             lane_edges) {
                             const auto& lane =
                                 contextual_lanes.at(lane_id);
                             if (!lane.summary.has_value())
                                 continue;
                             bound.push_back(
-                                {lane.match_input, *lane.summary});
+                                {match_input, *lane.summary});
                         }
                         if (bound.empty())
-                            bindings.erase(
-                                {family.call_site,
-                                 family.callee_entry});
+                            bindings.erase(call);
                     }
                     return bindings;
                 };
@@ -30120,7 +30170,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 bool candidate_context = false;
                 struct DependencyVersion final {
                     ContextualLaneId lane_id = 0u;
-                    std::uint64_t input_version = 0u;
                     std::uint64_t summary_version = 0u;
                 };
                 std::vector<DependencyVersion> dependencies;
@@ -30142,19 +30191,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     item.input_version = lane.input_version;
                     item.candidate_context = lane.candidate_context;
                     item.bindings =
-                        contextual_bindings_for(item.address);
+                        contextual_bindings_for(lane_id);
                     item.dependencies.clear();
-                    for (const auto& [family, lane_ids] :
-                         contextual_entry_families) {
-                        if (family.caller_entry != item.address)
-                            continue;
-                        for (const auto dependency : lane_ids) {
-                            const auto& dependency_lane =
-                                contextual_lanes.at(dependency);
-                            item.dependencies.push_back(
-                                {dependency,
-                                 dependency_lane.input_version,
-                                 dependency_lane.summary_version});
+                    const auto callees =
+                        contextual_callees.find(lane_id);
+                    if (callees != contextual_callees.end()) {
+                        for (const auto& call : callees->second) {
+                            for (const auto& dependency :
+                                 call.second) {
+                                const auto& dependency_lane =
+                                    contextual_lanes.at(
+                                        dependency.first);
+                                item.dependencies.push_back(
+                                    {dependency.first,
+                                     dependency_lane.summary_version});
+                            }
                         }
                     }
                     item.diagnostics = {};
@@ -30300,8 +30351,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 dependency.lane_id);
                         stale =
                             stale ||
-                            current.input_version !=
-                                dependency.input_version ||
                             current.summary_version !=
                                 dependency.summary_version;
                     }
@@ -30336,8 +30385,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         contextual_lanes.at(item.lane_id);
                     const bool summary_changed =
                         !current_lane.summary.has_value() ||
-                        *current_lane.summary !=
-                            context_evaluation.summary;
+                        !same_function_call_effect(
+                            *current_lane.summary,
+                            context_evaluation.summary);
                     current_lane.summary =
                         std::move(context_evaluation.summary);
                     if (summary_changed) {
@@ -30398,6 +30448,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             contextual_entry_families[family];
                         std::optional<ContextualLaneId>
                             selected_lane;
+                        bool selected_lane_created = false;
                         std::optional<AbstractState>
                             joined_match_input;
                         std::optional<AbstractState> joined_input;
@@ -30489,6 +30540,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                  0u});
                             family_lanes.push_back(lane_id);
                             selected_lane = lane_id;
+                            selected_lane_created = true;
                             enqueue_context(lane_id);
                         } else {
                             auto& lane = contextual_lanes.at(
@@ -30519,25 +30571,43 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     std::move(*joined_input);
                                 ++lane.input_version;
                                 enqueue_context(*selected_lane);
-                                // The current caller observed this wider child
-                                // input before its reverse edge was published.
-                                // Re-evaluate it even when the recomputed child
-                                // summary is byte-identical: the widened match
-                                // binding can replace a prior global fallback.
-                                enqueue_context(item.lane_id);
-                                const auto callers =
-                                    contextual_callers.find(
-                                        *selected_lane);
-                                if (callers !=
-                                    contextual_callers.end()) {
-                                    for (const auto caller :
-                                         callers->second)
-                                        enqueue_context(caller);
-                                }
                             }
+                        }
+                        auto& forward_edges =
+                            contextual_callees[item.lane_id]
+                                [{observation.call_site,
+                                  observation.callee}];
+                        const auto& observed_match_input =
+                            contextual_lanes.at(*selected_lane)
+                                        .match_input;
+                        const auto [forward, forward_inserted] =
+                            forward_edges.try_emplace(
+                                *selected_lane,
+                                selected_lane_created
+                                    ? observed_match_input
+                                    : callee_match_input);
+                        bool forward_match_changed = false;
+                        if (!forward_inserted) {
+                            auto joined = forward->second;
+                            forward_match_changed = merge_state(
+                                joined, callee_match_input, true);
+                            if (forward_match_changed)
+                                forward->second = std::move(joined);
                         }
                         contextual_callers[*selected_lane].insert(
                             item.lane_id);
+                        // The edge-local matcher is the only binding input
+                        // visible to this caller. Foreign widening of the
+                        // shared child lane therefore cannot change an old
+                        // caller's first-compatible selection. A new or wider
+                        // edge to an already stable child still needs one
+                        // caller replay; a child without a summary wakes every
+                        // linked caller on its first summary publication.
+                        if ((forward_inserted ||
+                             forward_match_changed) &&
+                            contextual_lanes.at(*selected_lane)
+                                .summary.has_value())
+                            enqueue_context(item.lane_id);
                     }
                     if (contextual_context_budget_exhausted)
                         break;
@@ -30596,7 +30666,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             .local_fixpoint_iteration_budget =
                             maximum_local_fixpoint_iterations;
                         stable.bindings =
-                            contextual_bindings_for(address);
+                            contextual_bindings_for(lane_id);
                         stable.evidence_lens =
                             make_multi_root_provenance_lens(
                                 address,
