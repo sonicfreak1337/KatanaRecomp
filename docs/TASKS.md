@@ -47,7 +47,7 @@ Daher gilt projektweit:
 - keine neuen Unit-Tests, Regressionstests, Testmatrizen, synthetischen
   Fixtures, Stresslaeufe, Testprojekte, Ersatzgates oder
   Konformitaetssuiten;
-- das Fehlen neuer Tests ist kein Reviewfinding;
+- das Fehlen neuer Tests ist kein Review-Befund;
 - Reviews verlangen keine neue Testabdeckung als Abschlussbedingung;
 - vorhandene Tests duerfen auf gebrochene Erwartungen, falsche Testzahlen
   oder widerspruechliche Semantik geprueft und bei Bedarf repariert werden,
@@ -185,8 +185,7 @@ erschoepfen.
 
 ---
 
-## [ ] KR-4985 - Candidate-Resolution-Phasen- und
-## Kardinalitaetstelemetrie
+## [ ] KR-4985 - Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie
 
 Prioritaet: P0 Performance-Diagnose
 
@@ -225,8 +224,7 @@ Evidence und Commit getrennt sichtbar machen.
 
 ---
 
-## [ ] KR-4986 - Semantische Context-Lanes und exakte
-## Provenienzabonnenten
+## [ ] KR-4986 - Semantische Context-Lanes und exakte Provenienzabonnenten
 
 Prioritaet: P0 Korrektheits-Enabler
 
