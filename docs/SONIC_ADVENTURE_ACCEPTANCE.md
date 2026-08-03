@@ -1,22 +1,53 @@
-# Sonic Adventure als private Retail-Testbench
+# Sonic Adventure als private Produkt- und Integrationstestbench
 
 Dieses Dokument begrenzt die lokale Sonic-Adventure-Nutzung innerhalb der
 KatanaRecomp-Entwicklung. KatanaRecomp ist ein allgemeines Dreamcast-
 Recompiler-Framework, eine Dreamcast-Runtime und ein Runtime-SDK. Es ist weder
 ein Sonic-Adventure-Port noch dessen Installer oder Enhancement-Projekt.
 
+Die repositoryweiten Arbeitsregeln in `../AGENTS.md` sind verbindlich. Sonic
+ist der massgebliche Produkt- und Integrationstest; neue synthetische Tests,
+Fixtures, Regressionen oder Testmatrizen werden aus Retailbefunden nicht mehr
+abgeleitet.
+
 ## Grundregel
 
-- Sonic Adventure darf privat und read-only als End-to-End-Testbench fuer
-  Analyse, Codegen, Hostbuild, Runtime und Dreamcast-Plattformdienste dienen.
-- Prozessstarts erfolgen ausschliesslich in ausdruecklich freigegebenen,
-  budgetierten `runtime-probe`- oder spaeteren Gate-Laufarten. Der erste
-  solcher Lauf wurde am 23.07.2026 kontrolliert ausgefuehrt.
+- Sonic Adventure dient privat und read-only als autoritativer End-to-End-
+  Produkt- und Integrationstest fuer Analyse, Codegen, Hostbuild, Runtime und
+  Dreamcast-Plattformdienste.
+- Der projektweite Taskablauf bleibt:
+
+  ```text
+  Task implementieren
+    -> alle betroffenen Pfade reviewen und bestaetigte Fehler schliessen
+    -> den reviewten Task direkt auf main committen und pushen
+  ```
+
+- Gefixt wird anhand der Quellpfadreviews. Getestet wird an den geplanten
+  Produktgates mit dem real erzeugten Sonic-Port und seinem normalen Lauf.
+- Ein einzelner Task benoetigt keinen eigenen Sonic-Lauf. Zusammenhaengende,
+  reviewte Tasks duerfen vor dem naechsten ausdruecklich vorgesehenen
+  Produktgate auf `main` landen.
 - Private Sonic-Ergebnisse koennen ein internes Alpha-Akzeptanzziel stuetzen,
   sind aber kein oeffentlicher Katana-Produktvertrag und keine verteilbare
   Gateevidenz.
 - Ein spaeterer Sonic-Port, Installer und alle titelbezogenen Erweiterungen
   gehoeren in ein eigenstaendiges Repository.
+
+## Keine neue Testinfrastruktur aus Retailbefunden
+
+- Ein Sonic-Befund wird in eine allgemeine Fehlerklasse uebersetzt und in den
+  betroffenen generischen Pfaden behoben.
+- Daraus werden keine neuen Unit-Tests, Regressionstests, synthetischen
+  Reproduktionen, Fixtures, Stresslaeufe, Testprojekte oder Testmatrizen
+  erzeugt.
+- Reviews duerfen fehlende neue Tests nicht beanstanden und keine neue
+  Testabdeckung als Abschlussbedingung verlangen.
+- Vorhandene Tests duerfen auf gebrochene Erwartungen, falsche Zahlen oder
+  widerspruechliche Semantik geprueft und bei Bedarf repariert werden. Ihr
+  Bestand wird fuer einen neuen Retailbefund jedoch nicht erweitert.
+- Der anschliessende reale Sonic-Lauf an einem geplanten Produktgate bleibt
+  der einzige neue Integrations- und Produktnachweis.
 
 ## Datenschutz und Implementierungsgrenze
 
@@ -24,7 +55,10 @@ ein Sonic-Adventure-Port noch dessen Installer oder Enhancement-Projekt.
 - GDI, Tracks, extrahierte Dateien, generierte Retail-Quellen, Programme,
   Rohlogs, Screenshots, Audio, Hashes und lokale Pfade bleiben ausserhalb des
   Repositorys und aller Pakete.
-- Oeffentliche CI verwendet nur synthetische und frei lizenzierte Eingaben.
+- Oeffentliche CI darf proprietaere Eingaben nie voraussetzen. Bestehende
+  generische Checks koennen weiterlaufen, sind aber kein Ersatz fuer Review
+  oder Sonic-Produktnachweis und werden nicht um neue Retailregressionen
+  erweitert.
 - Fest codierte Sonic-Adressen, Symbole, Dateinamen, Bytes, Profile, Remaps,
   Shader, Assets, Patches und titelbezogene Runtimeausnahmen sind unzulaessig.
 - Sonic-spezifische Auswahl-, Installer- und Enhancementlogik ist kein Teil von
@@ -63,40 +97,43 @@ Sonic-Adressen, Funktionsnamen, Symbole oder titelbezogenen Kontrollflussziele.
 
 ## Retail-getriebener Debugzyklus
 
-Jeder private Lauf besitzt Hostzeit- und Gastzyklusbudgets. Fuer jeden Blocker:
+Jeder private Lauf besitzt Hostzeit- und Gastzyklusbudgets. Fuer jeden Blocker
+gilt:
 
 1. letzten stabilen generischen Checkpoint und Fehlerklasse redigiert erfassen
 2. allgemeine Ursache ohne Titelsonderfall bestimmen
-3. synthetische oder frei lizenzierte Reproduktion erstellen
-4. allgemeine Implementierung korrigieren
-5. Regression ins Repository aufnehmen
-6. privaten Lauf wiederholen
+3. betroffene Analyse-, IR-, Codegen-, Runtime- und Produktpfade reviewen
+4. bestaetigte Ursache im generischen Pfad korrigieren
+5. den reviewten Task direkt auf `main` pushen
+6. den privaten Sonic-Lauf erst am naechsten vorgesehenen Produktgate
+   wiederholen
 
-Der private Lauf ist eine Testbench fuer Frameworkfehler, kein oeffentlicher
-Testbestand. Ein erfolgreicher Sonic-Lauf darf nicht durch Sonic-spezifische
-Implementierungslogik erkauft werden.
+Der private Lauf ist die Produkt- und Integrationstestbench fuer
+Frameworkfehler, kein oeffentlicher Testbestand. Ein erfolgreicher Sonic-Lauf
+darf nicht durch Sonic-spezifische Implementierungslogik erkauft werden.
 
 ## Deterministischer A/B-Nachweis
 
-Der generische KR-4842-Nachweis verwendet zwei frische Runtimewurzeln,
-dieselbe native AOT-EXE, denselben lokal aus der Originaldisc installierten
-Pack und dasselbe positive Gastzyklusbudget. Zwischen den Laeufen unterscheidet
-sich nur `KATANA_PORT_DIAGNOSTICS=0` beziehungsweise `1`; konkurrierende
-Rohtrace- oder Diagnosevariablen sind verboten.
+Der historische generische KR-4842-Nachweis verwendete zwei frische
+Runtimewurzeln, dieselbe native AOT-EXE, denselben lokal aus der Originaldisc
+installierten Pack und dasselbe positive Gastzyklusbudget. Zwischen den
+Laeufen unterschied sich nur `KATANA_PORT_DIAGNOSTICS=0` beziehungsweise `1`;
+konkurrierende Rohtrace- oder Diagnosevariablen waren verboten.
 
 Am 23.07.2026 endeten beide Laeufe bei exakt 100.000 Gastzyklen
 `complete`/`budget-reached`. Systemreplay v3 war vollstaendig und versiegelt,
 alle normativen Felder waren gleich, EXE und Pack unveraendert und beide
 Wait-Loop-Tracezaehler null. Dokumentiert wird nur diese aggregierte Aussage,
-nicht die privaten Pfade, Rohlogs, Hashes oder Gastwerte.
+nicht die privaten Pfade, Rohlogs, Hashes oder Gastwerte. Dieser historische
+Nachweis begruendet keine neue Matrixpflicht.
 
 ## Framework-Alpha
 
-Das Katana-Alpha-Gate bewertet versionierte Frameworkvertraege, reproduzierbare
-Builds, synthetische oder frei lizenzierte Regressionen, redigierte Diagnosen
-und die Abwesenheit proprietaerer Daten. Private Sonic-Probes duerfen
-zusaetzliche interne Evidenz liefern, bestimmen aber weder den oeffentlichen
-Releasevertrag noch das Layout eines spaeteren Sonic-Portprodukts.
+Das Katana-Alpha-Gate bewertet versionierte Frameworkvertraege,
+reproduzierbare Builds, redigierte Diagnosen, die Abwesenheit proprietaerer
+Daten und vor allem den realen Sonic-Produktpfad. Neue synthetische oder frei
+lizenzierte Regressionen sind keine Voraussetzung und werden nicht als
+Ersatzabnahme aufgebaut.
 
 ## Vertagter Direct-Scanout-Befund vom 27.07.2026
 
@@ -107,12 +144,10 @@ aggregierten Direct-Scanout-Zaehler, praesentieren im Clientbereich jedoch
 schwarz. Es liegt daher kein belegter Verlust der Gast-Bootdistanz vor; offen
 ist eine Bildinhalt- oder Scanout-Zeitregression.
 
-Isolierte Produkt-A/Bs schlossen Instruktionsaccounting, indirekten
-Inline-Cache, lokales AOT-Chaining und den globalen MSVC-Inliner jeweils als
-alleinige heutige Ursache aus. Das erste historische Regressionsfenster
-enthaelt eine Erweiterung eines Composite-Wait-Fastpaths, deren alleinige
-Ruecknahme den heutigen Zustand jedoch nicht mehr restauriert. Der Nutzer hat
-die weitere Ursachenanalyse ausdruecklich vertagt.
+Isolierte historische Produkt-A/Bs schlossen Instruktionsaccounting,
+indirekten Inline-Cache, lokales AOT-Chaining und den globalen MSVC-Inliner
+jeweils als alleinige damalige Ursache aus. Diese historischen Laeufe erzeugen
+keine allgemeine Verpflichtung zu neuen A/B-Matrizen.
 
 Der Wiedereinstieg muss den exakten damaligen Dirty-Tree-Quellstand
 rekonstruieren und am ersten VBlank nur begrenzte, titelunabhaengige
@@ -133,5 +168,6 @@ MSVC benoetigte 14,8563 Sekunden Produktzeit (40,3869 MHz), clang-cl 14,1289
 Sekunden (42,4662 MHz). Beide Varianten zaehlten 52.329.316 zentrale
 Dispatches. Es wurde kein klassifizierbarer Frame praesentiert; der hoechste
 sichtbare Meilenstein bleibt daher `none`. Das Ergebnis belegt einen stabilen
-DirectBoot-Ausfuehrungspfad und einen echten Compilervergleich, aber weder
-Bootkorrektheit bis zum SEGA-Bild noch das 200-MHz-Ziel.
+DirectBoot-Ausfuehrungspfad und einen historischen Compilervergleich, aber
+weder Bootkorrektheit bis zum SEGA-Bild noch das 200-MHz-Ziel. Auch dieser
+historische Vergleich begruendet keine neue projektweite Testmatrix.
