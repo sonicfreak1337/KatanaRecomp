@@ -47,6 +47,16 @@ in diesem Repository. Sie sind keine Empfehlung.
   Gegenprobe als Konvergenz- beziehungsweise Requeue-Fehler abzubrechen. Das
   gilt auch bei einer ausdruecklich aufgehobenen Zeitgrenze; eine
   Timeoutfreigabe erlaubt keinen nachweislich divergierenden Lauf.
+- Fuer Phasen mit `planned > 0` und `canonical == 0` ist die First-Publish-Zeit
+  des letzten gesunden Produktlaufs die verbindliche Vergleichsbasis. Ist sie
+  erreicht und bleiben danach drei aufeinanderfolgende 10-Sekunden-Samples
+  trotz fertiger/ready Arbeit, steigendem internem Churn und unbewegtem
+  Head-of-Line weiterhin bei null, ist der Lauf als Nichtkonvergenzfehler zu
+  beenden. Ein Zustand wie `0/1191` nach 146 Minuten darf niemals als bloss
+  langsame Arbeit weiterlaufen; er haette lange vorher abgebrochen werden
+  muessen. Fehlt eine gesunde Vergleichsbasis, ist spaetestens nach drei
+  Minuten ohne erste kanonische Publikation eine explizite Fehlerentscheidung
+  anhand dieser Signale Pflicht.
 
 Die ausfuehrlichen Projektvertraege in `docs/CODEX_HANDOFF.md` und
 `docs/TASKS.md` gelten zusaetzlich. Bei einer ausdruecklichen aktuellen

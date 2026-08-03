@@ -93,6 +93,14 @@ Head-of-Line-Fortschritt stehen, waehrend interne Arbeit wiederholt neu
 erzeugt, invalidiert oder verdraengt wird, gilt der Lauf nach kurzer
 Gegenprobe als fehlerhaft und wird beendet. Diese Konvergenzregel bleibt auch
 bei einer fuer einen benannten Lauf aufgehobenen Zeitgrenze verbindlich.
+Bei `planned > 0` und `canonical == 0` gilt die First-Publish-Zeit des letzten
+gesunden Produktlaufs als Vergleichsbasis. Danach reichen drei weitere
+10-Sekunden-Samples mit ready/fertiger Arbeit, internem Churn und unbewegtem
+Head-of-Line fuer die verbindliche Einstufung als Nichtkonvergenz. `0/1191`
+nach 146 Minuten ist ausdruecklich ein laengst ueberfaelliger Fehlerabbruch,
+kein langsamer Lauf. Ohne gesunde Vergleichsbasis muss spaetestens nach drei
+Minuten ohne erste kanonische Publikation anhand derselben Signale eine
+explizite Fehlerentscheidung fallen.
 
 Fokussierte Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
 Entwicklungsrechner mit 24 logischen CPUs gilt `--parallel 24`. Der
