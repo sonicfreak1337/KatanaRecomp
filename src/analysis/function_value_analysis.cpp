@@ -1310,6 +1310,33 @@ using ContextualSummaryBindings =
     std::map<ContextualCallSiteKey,
              std::vector<ContextualBoundSummary>>;
 
+struct ContextualBoundSummaryView final {
+    const AbstractState* input = nullptr;
+    const FunctionValueSummary* summary = nullptr;
+};
+
+using ContextualSummaryBindingViews =
+    std::map<ContextualCallSiteKey,
+             std::vector<ContextualBoundSummaryView>>;
+
+[[nodiscard]] ContextualSummaryBindings
+materialize_contextual_summary_bindings(
+    const ContextualSummaryBindingViews& views) {
+    ContextualSummaryBindings bindings;
+    for (const auto& [key, source] : views) {
+        auto& destination = bindings[key];
+        destination.reserve(source.size());
+        for (const auto& view : source) {
+            if (view.input == nullptr || view.summary == nullptr)
+                throw std::logic_error(
+                    "Contextual-Summary-View verlor ihren Besitzer.");
+            destination.push_back({*view.input, *view.summary});
+        }
+        if (destination.empty()) bindings.erase(key);
+    }
+    return bindings;
+}
+
 class EvidenceProvenanceLens final {
   public:
     EvidenceProvenanceLens(
@@ -7764,6 +7791,8 @@ void promote_tail_code_literal_arguments(
 
 using ObservedCalleeInputs =
     std::map<std::uint32_t, AbstractState>;
+using ObservedCalleeInputIndices =
+    std::map<std::uint32_t, std::size_t>;
 
 void observe_callee_arguments(
     const katana::io::ExecutableImage& image,
@@ -7774,13 +7803,15 @@ void observe_callee_arguments(
     const bool candidate_callees_guarded,
     std::vector<FunctionEvaluation::CallArguments>* const call_arguments,
     ObservedCalleeInputs* const observed_inputs,
+    ObservedCalleeInputIndices* const observed_input_indices,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
     const ForwardedRegisterReadMap* const forwarded_register_reads,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads,
     const std::map<std::uint32_t, FunctionValueSummary>* const
         memory_read_summaries = nullptr,
     const bool memory_read_contracts_authoritative = false) {
-    if ((call_arguments == nullptr && observed_inputs == nullptr) ||
+    if ((call_arguments == nullptr && observed_inputs == nullptr &&
+         observed_input_indices == nullptr) ||
         candidate_callees.empty())
         return;
     for (const auto candidate : candidate_callees) {
@@ -7843,11 +7874,17 @@ void observe_callee_arguments(
                 value.guarded = true;
             }
         }
-        if (observed_inputs != nullptr)
-            observed_inputs->insert_or_assign(candidate, observation);
-        if (call_arguments != nullptr)
+        if (call_arguments != nullptr) {
+            const auto observation_index = call_arguments->size();
             call_arguments->push_back(
                 {call_site, candidate, std::move(observation)});
+            if (observed_input_indices != nullptr)
+                observed_input_indices->insert_or_assign(
+                    candidate, observation_index);
+        } else if (observed_inputs != nullptr) {
+            observed_inputs->insert_or_assign(
+                candidate, std::move(observation));
+        }
     }
 }
 // Contextual candidate summaries are only needed along ABI values that really
@@ -8027,6 +8064,7 @@ void apply_call(AbstractState& state,
                 MemoryReadObservation* const
                     memory_read_observation = nullptr) {
     ObservedCalleeInputs observed_inputs;
+    ObservedCalleeInputIndices observed_input_indices;
     observe_callee_arguments(
         image,
         state,
@@ -8035,7 +8073,12 @@ void apply_call(AbstractState& state,
         candidate_callees,
         candidate_callees_guarded,
         call_arguments,
-        contextual_summaries == nullptr ? nullptr : &observed_inputs,
+        contextual_summaries == nullptr || call_arguments != nullptr
+            ? nullptr
+            : &observed_inputs,
+        contextual_summaries != nullptr && call_arguments != nullptr
+            ? &observed_input_indices
+            : nullptr,
         walk_diagnostics,
         forwarded_register_reads,
         abi_stack_argument_reads,
@@ -8164,13 +8207,30 @@ void apply_call(AbstractState& state,
         if (contextual_summaries != nullptr) {
             const auto contextual = contextual_summaries->find(
                 {call_site, candidate});
-            const auto observed = observed_inputs.find(candidate);
+            const AbstractState* observed = nullptr;
+            if (call_arguments != nullptr) {
+                const auto observed_index =
+                    observed_input_indices.find(candidate);
+                if (observed_index != observed_input_indices.end() &&
+                    observed_index->second < call_arguments->size())
+                    observed = &call_arguments->at(
+                        observed_index->second).state;
+            } else {
+                const auto owned_observed =
+                    observed_inputs.find(candidate);
+                if (owned_observed != observed_inputs.end())
+                    observed = &owned_observed->second;
+            }
             if (contextual != contextual_summaries->end() &&
-                observed != observed_inputs.end()) {
+                observed != nullptr) {
                 for (const auto& binding : contextual->second) {
+                    if (binding.input == *observed) {
+                        summary = &binding.summary;
+                        break;
+                    }
                     auto joined = binding.input;
                     if (!merge_state(joined,
-                                     observed->second,
+                                     *observed,
                                      true)) {
                         summary = &binding.summary;
                         break;
@@ -14280,7 +14340,7 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{9u});
+    key.append(std::uint32_t{10u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -14422,26 +14482,6 @@ make_function_evaluation_cache_key(
     key.append_range(
         summary_dependencies,
         [&](const auto dependency) {
-            if (contextual_summaries != nullptr) {
-                const auto contextual =
-                    contextual_summaries->find(dependency);
-                key.select_component(
-                    EvaluationKeyComponent::ContextualSummary);
-                key.append(dependency.call_site);
-                key.append(dependency.callee);
-                key.append(contextual !=
-                           contextual_summaries->end());
-                if (contextual != contextual_summaries->end() &&
-                    !contextual->second.empty()) {
-                    key.append_size(contextual->second.size());
-                    for (const auto& binding : contextual->second) {
-                        encode(key, binding.input);
-                        encode_function_call_effect(
-                            key, binding.summary);
-                    }
-                    return;
-                }
-            }
             key.select_component(
                 EvaluationKeyComponent::SummaryDependency);
             key.append(dependency.call_site);
@@ -14450,6 +14490,29 @@ make_function_evaluation_cache_key(
             key.append(global != summaries.end());
             if (global != summaries.end())
                 encode_function_call_effect(key, global->second);
+
+            key.select_component(
+                EvaluationKeyComponent::ContextualSummary);
+            key.append(dependency.call_site);
+            key.append(dependency.callee);
+            if (contextual_summaries != nullptr) {
+                const auto contextual =
+                    contextual_summaries->find(dependency);
+                const bool contextual_present =
+                    contextual != contextual_summaries->end() &&
+                    !contextual->second.empty();
+                key.append(contextual_present);
+                if (contextual_present) {
+                    key.append_size(contextual->second.size());
+                    for (const auto& binding : contextual->second) {
+                        encode(key, binding.input);
+                        encode_function_call_effect(
+                            key, binding.summary);
+                    }
+                }
+            } else {
+                key.append(false);
+            }
         });
     key.select_component(
         EvaluationKeyComponent::AbiContract);
@@ -29936,8 +29999,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              const EvaluationLens requested_lens,
              const std::set<std::uint32_t>* const isolated_call_sites,
              const std::span<const std::uint32_t> available_tokens,
-             const ContextualSummaryBindings* const
-                 contextual_summaries,
+             const ContextualSummaryBindingViews* const
+                 contextual_summary_views,
               const TailIngressMap* const local_tail_ingresses,
               const EvidenceTokenAssignments* const
                   prior_call_site_assignments,
@@ -29965,17 +30028,29 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             }
             std::optional<ContextualSummaryBindings>
                 evaluation_contextual_summaries;
-            if (contextual_summaries != nullptr) {
+            if (contextual_summary_views != nullptr) {
                 evaluation_contextual_summaries.emplace();
                 for (const auto& [key, bindings] :
-                     *contextual_summaries) {
+                     *contextual_summary_views) {
                     if (!std::binary_search(
                             dependencies->second.begin(),
                             dependencies->second.end(),
                             key.callee))
                         continue;
-                    evaluation_contextual_summaries->emplace(
-                        key, bindings);
+                    auto& materialized =
+                        (*evaluation_contextual_summaries)[key];
+                    materialized.reserve(bindings.size());
+                    for (const auto& binding : bindings) {
+                        if (binding.input == nullptr ||
+                            binding.summary == nullptr)
+                            throw std::logic_error(
+                                "Provenienz-Linse verlor eine "
+                                "Contextual-Summary-View.");
+                        materialized.push_back(
+                            {*binding.input, *binding.summary});
+                    }
+                    if (materialized.empty())
+                        evaluation_contextual_summaries->erase(key);
                 }
             }
             const auto projection =
@@ -31197,31 +31272,53 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::map<ContextualLaneId,
                      std::set<ContextualLaneId>>
                 contextual_callers;
-            const auto contextual_evidence_layout_for =
-                [&](const ContextualLaneId caller_lane) {
-                    ContextualEvidenceLayout layout;
-                    layout.ingress = capture_evidence_field_layout(
-                        contextual_lanes.at(caller_lane).input);
+            struct ContextualDependencyVersion final {
+                ContextualLaneId lane_id = 0u;
+                std::uint64_t input_version = 0u;
+                std::uint64_t summary_version = 0u;
+            };
+            const auto capture_contextual_snapshot =
+                [&](const ContextualLaneId caller_lane,
+                    ContextualSummaryBindingViews& binding_views,
+                    ContextualEvidenceLayout* const evidence_layout,
+                    std::vector<ContextualDependencyVersion>* const
+                        dependencies) {
+                    binding_views.clear();
+                    if (evidence_layout != nullptr) {
+                        *evidence_layout = {};
+                        evidence_layout->ingress =
+                            capture_evidence_field_layout(
+                                contextual_lanes.at(caller_lane).input);
+                    }
+                    if (dependencies != nullptr) dependencies->clear();
                     const auto callees =
                         contextual_callees.find(caller_lane);
-                    if (callees == contextual_callees.end())
-                        return layout;
+                    if (callees == contextual_callees.end()) return;
                     for (const auto& [call, lane_edges] :
                          callees->second) {
                         for (const auto& [lane_id, match_input] :
                              lane_edges) {
                             const auto& lane =
                                 contextual_lanes.at(lane_id);
+                            if (dependencies != nullptr) {
+                                dependencies->push_back(
+                                    {lane_id,
+                                     lane.input_version,
+                                     lane.summary_version});
+                            }
                             if (!lane.summary.has_value()) continue;
-                            layout.bindings.push_back(
-                                {call,
-                                 lane_id,
-                                 capture_evidence_field_layout(
-                                     match_input),
-                                 lane.summary->registers.size()});
+                            binding_views[call].push_back(
+                                {&match_input, &*lane.summary});
+                            if (evidence_layout != nullptr) {
+                                evidence_layout->bindings.push_back(
+                                    {call,
+                                     lane_id,
+                                     capture_evidence_field_layout(
+                                         match_input),
+                                     lane.summary->registers.size()});
+                            }
                         }
                     }
-                    return layout;
                 };
             std::deque<ContextualLaneId> pending_contexts;
             std::vector<std::uint8_t> queued_contexts;
@@ -31233,30 +31330,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         queued_contexts[lane] = 1u;
                         pending_contexts.push_back(lane);
                     }
-                };
-            const auto contextual_bindings_for =
-                [&](const ContextualLaneId caller_lane) {
-                    ContextualSummaryBindings bindings;
-                    const auto callees =
-                        contextual_callees.find(caller_lane);
-                    if (callees == contextual_callees.end())
-                        return bindings;
-                    for (const auto& [call, lane_edges] :
-                         callees->second) {
-                        auto& bound = bindings[call];
-                        for (const auto& [lane_id, match_input] :
-                             lane_edges) {
-                            const auto& lane =
-                                contextual_lanes.at(lane_id);
-                            if (!lane.summary.has_value())
-                                continue;
-                            bound.push_back(
-                                {match_input, *lane.summary});
-                        }
-                        if (bound.empty())
-                            bindings.erase(call);
-                    }
-                    return bindings;
                 };
             // Exact contribution partitions are correlation boundaries, not
             // independent physical fixpoints. Seed every contribution as its
@@ -31333,15 +31406,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 AbstractState input;
                 std::uint64_t input_version = 0u;
                 bool candidate_context = false;
-                struct DependencyVersion final {
-                    ContextualLaneId lane_id = 0u;
-                    std::uint64_t input_version = 0u;
-                    std::uint64_t summary_version = 0u;
-                };
-                std::vector<DependencyVersion> dependencies;
-                ContextualSummaryBindings bindings;
+                std::vector<ContextualDependencyVersion> dependencies;
+                ContextualSummaryBindingViews binding_views;
+                std::optional<ContextualSummaryBindings>
+                    fallback_bindings;
                 std::optional<EvidenceProvenanceLens> evidence_lens;
                 ContextualEvidenceLayout evidence_layout;
+                const EvidenceTokenAssignments*
+                    prior_call_site_tokens = nullptr;
+                const EvidenceTokenAssignments*
+                    prior_callee_tokens = nullptr;
                 EvidenceTokenAssignments call_site_tokens;
                 EvidenceTokenAssignments callee_tokens;
                 bool evidence_tokens_valid = false;
@@ -31361,40 +31435,28 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     item.input = lane.input;
                     item.input_version = lane.input_version;
                     item.candidate_context = lane.candidate_context;
-                    item.bindings =
-                        contextual_bindings_for(lane_id);
-                    item.evidence_layout =
-                        contextual_evidence_layout_for(lane_id);
-                    item.dependencies.clear();
-                    const auto callees =
-                        contextual_callees.find(lane_id);
-                    if (callees != contextual_callees.end()) {
-                        for (const auto& call : callees->second) {
-                            for (const auto& dependency :
-                                 call.second) {
-                                const auto& dependency_lane =
-                                    contextual_lanes.at(
-                                        dependency.first);
-                                item.dependencies.push_back(
-                                    {dependency.first,
-                                     dependency_lane.input_version,
-                                     dependency_lane.summary_version});
-                            }
-                        }
-                    }
+                    capture_contextual_snapshot(
+                        lane_id,
+                        item.binding_views,
+                        &item.evidence_layout,
+                        &item.dependencies);
+                    item.fallback_bindings.reset();
                     item.diagnostics = {};
                     item.diagnostics.local_fixpoint_iteration_budget =
                         maximum_local_fixpoint_iterations;
                     item.evidence_lens.reset();
+                    item.call_site_tokens.clear();
+                    item.callee_tokens.clear();
                     if (lane.evidence_token_layout.has_value() &&
                         *lane.evidence_token_layout ==
                             item.evidence_layout) {
-                        item.call_site_tokens =
-                            lane.call_site_tokens;
-                        item.callee_tokens = lane.callee_tokens;
+                        item.prior_call_site_tokens =
+                            &lane.call_site_tokens;
+                        item.prior_callee_tokens =
+                            &lane.callee_tokens;
                     } else {
-                        item.call_site_tokens.clear();
-                        item.callee_tokens.clear();
+                        item.prior_call_site_tokens = nullptr;
+                        item.prior_callee_tokens = nullptr;
                     }
                     item.evidence_tokens_valid = false;
                     item.dependency_graph_changed = false;
@@ -31476,11 +31538,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     EvaluationLens::ContextualReturn,
                                     nullptr,
                                     forwarded_evidence_tokens,
-                                     &item.bindings,
+                                     &item.binding_views,
                                      nullptr,
-                                     &item.call_site_tokens,
-                                     &item.callee_tokens,
+                                     item.prior_call_site_tokens,
+                                     item.prior_callee_tokens,
                                      allow_memory_projection);
+                            if (!item.evidence_lens.has_value()) {
+                                item.fallback_bindings.emplace(
+                                    materialize_contextual_summary_bindings(
+                                        item.binding_views));
+                            }
                             const auto& evaluation_input =
                                 item.evidence_lens.has_value()
                                     ? item.evidence_lens->ingress()
@@ -31495,7 +31562,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     item.evidence_lens.has_value()
                                         ? item.evidence_lens
                                               ->contextual_summaries()
-                                        : &item.bindings;
+                                        : &*item.fallback_bindings;
                             auto cached = cached_evaluate_function(
                                     *fixpoint_functions[
                                         item.function_index],
@@ -31566,6 +31633,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         });
                 }
                 contextual_evaluations += batch.size();
+                // All evaluator/cache consumers own their materialized maps at
+                // this point. Drop graph views before the serial commit may
+                // append lanes or widen edge payloads.
+                for (auto& item : batch) {
+                    item.binding_views.clear();
+                    item.fallback_bindings.reset();
+                    item.prior_call_site_tokens = nullptr;
+                    item.prior_callee_tokens = nullptr;
+                }
                 for (auto& item : batch) {
                     throw_if_resolution_cancelled(cancel_requested);
                     if (item.error)
@@ -31636,33 +31712,25 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         for (const auto lane_id : family_lanes) {
                             const auto& lane =
                                 contextual_lanes.at(lane_id);
-                            auto joined_match = lane.match_input;
-                            if (merge_state(
-                                    joined_match,
-                                    callee_match_input,
-                                    true))
-                                continue;
-                            auto joined = lane.input;
-                            static_cast<void>(merge_state(
-                                joined,
-                                callee_context_input,
-                                true));
-                            if (inventory_join_creates_loss(
-                                    lane.input,
-                                    callee_context_input,
-                                    joined))
-                                continue;
-                            selected_lane = lane_id;
-                            joined_match_input =
-                                std::move(joined_match);
-                            joined_input = std::move(joined);
-                            break;
-                        }
-                        if (!selected_lane.has_value()) {
-                            for (const auto lane_id :
-                                 family_lanes) {
-                                const auto& lane =
-                                    contextual_lanes.at(lane_id);
+                            if (lane.match_input !=
+                                callee_match_input) {
+                                auto joined_match = lane.match_input;
+                                if (merge_state(
+                                        joined_match,
+                                        callee_match_input,
+                                        true))
+                                    continue;
+                                if (joined_match != lane.match_input)
+                                    joined_match_input =
+                                        std::move(joined_match);
+                            }
+                            if (lane.input == callee_context_input) {
+                                if (inventory_join_creates_loss(
+                                        lane.input,
+                                        callee_context_input,
+                                        lane.input))
+                                    continue;
+                            } else {
                                 auto joined = lane.input;
                                 static_cast<void>(merge_state(
                                     joined,
@@ -31673,17 +31741,51 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         callee_context_input,
                                         joined))
                                     continue;
+                                if (joined != lane.input)
+                                    joined_input = std::move(joined);
+                            }
+                            selected_lane = lane_id;
+                            break;
+                        }
+                        if (!selected_lane.has_value()) {
+                            for (const auto lane_id :
+                                 family_lanes) {
+                                const auto& lane =
+                                    contextual_lanes.at(lane_id);
+                                if (lane.input == callee_context_input) {
+                                    if (inventory_join_creates_loss(
+                                            lane.input,
+                                            callee_context_input,
+                                            lane.input))
+                                        continue;
+                                } else {
+                                    auto joined = lane.input;
+                                    static_cast<void>(merge_state(
+                                        joined,
+                                        callee_context_input,
+                                        true));
+                                    if (inventory_join_creates_loss(
+                                            lane.input,
+                                            callee_context_input,
+                                            joined))
+                                        continue;
+                                    if (joined != lane.input)
+                                        joined_input =
+                                            std::move(joined);
+                                }
                                 selected_lane = lane_id;
-                                joined_input =
-                                    std::move(joined);
-                                auto joined_match =
-                                    lane.match_input;
-                                static_cast<void>(merge_state(
-                                    joined_match,
-                                    callee_match_input,
-                                    true));
-                                joined_match_input =
-                                    std::move(joined_match);
+                                if (lane.match_input !=
+                                    callee_match_input) {
+                                    auto joined_match =
+                                        lane.match_input;
+                                    static_cast<void>(merge_state(
+                                        joined_match,
+                                        callee_match_input,
+                                        true));
+                                    if (joined_match != lane.match_input)
+                                        joined_match_input =
+                                            std::move(joined_match);
+                                }
                                 break;
                             }
                         }
@@ -31727,30 +31829,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         } else {
                             auto& lane = contextual_lanes.at(
                                 *selected_lane);
-                            if (!joined_match_input.has_value()) {
-                                auto joined = lane.match_input;
-                                static_cast<void>(merge_state(
-                                    joined,
-                                    callee_match_input,
-                                    true));
-                                joined_match_input =
-                                    std::move(joined);
-                            }
-                            if (!joined_input.has_value()) {
-                                auto joined = lane.input;
-                                static_cast<void>(merge_state(
-                                    joined,
-                                    callee_context_input,
-                                    true));
-                                joined_input = std::move(joined);
-                            }
-                            if (lane.match_input !=
-                                    *joined_match_input ||
-                                lane.input != *joined_input) {
+                            bool lane_changed = false;
+                            if (joined_match_input.has_value() &&
+                                lane.match_input !=
+                                    *joined_match_input) {
                                 lane.match_input =
                                     std::move(*joined_match_input);
+                                lane_changed = true;
+                            }
+                            if (joined_input.has_value() &&
+                                lane.input != *joined_input) {
                                 lane.input =
                                     std::move(*joined_input);
+                                lane_changed = true;
+                            }
+                            if (lane_changed) {
                                 selected_lane_changed = true;
                                 ++lane.input_version;
                                 enqueue_context(*selected_lane);
@@ -31770,7 +31863,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                      ? observed_match_input
                                      : callee_match_input);
                         bool forward_match_changed = false;
-                        if (!forward_inserted) {
+                        if (!forward_inserted &&
+                            forward->second != callee_match_input) {
                             auto joined = forward->second;
                             forward_match_changed = merge_state(
                                 joined, callee_match_input, true);
@@ -31928,7 +32022,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 FunctionEvaluation evaluation;
                 GuardedCodeInventoryCollector inventory{true};
                 GuardedCodeInventoryWalkDiagnostics diagnostics;
-                ContextualSummaryBindings bindings;
+                ContextualSummaryBindingViews binding_views;
+                std::optional<ContextualSummaryBindings>
+                    fallback_bindings;
                 std::optional<EvidenceProvenanceLens> evidence_lens;
                 std::exception_ptr error;
             };
@@ -31951,8 +32047,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         stable.diagnostics
                             .local_fixpoint_iteration_budget =
                             maximum_local_fixpoint_iterations;
-                        stable.bindings =
-                            contextual_bindings_for(lane_id);
+                        capture_contextual_snapshot(
+                            lane_id,
+                            stable.binding_views,
+                            nullptr,
+                            nullptr);
                         stable.evidence_lens =
                             make_multi_root_provenance_lens(
                                 address,
@@ -31961,11 +32060,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 EvaluationLens::GuardedInventory,
                                 nullptr,
                                 forwarded_evidence_tokens,
-                             &stable.bindings,
+                             &stable.binding_views,
                              nullptr,
                              &lane.call_site_tokens,
                              &lane.callee_tokens,
                              allow_memory_projection);
+                        if (!stable.evidence_lens.has_value()) {
+                            stable.fallback_bindings.emplace(
+                                materialize_contextual_summary_bindings(
+                                    stable.binding_views));
+                        }
                         const auto& evaluation_input =
                             stable.evidence_lens.has_value()
                                 ? stable.evidence_lens->ingress()
@@ -31980,7 +32084,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 stable.evidence_lens.has_value()
                                     ? stable.evidence_lens
                                           ->contextual_summaries()
-                                    : &stable.bindings;
+                                    : &*stable.fallback_bindings;
                         auto cached = cached_evaluate_function(
                             *final_function_by_address.at(address),
                             inventory_indirect_callees,
@@ -32018,6 +32122,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 *stable.evidence_lens);
                             stable.evidence_lens.reset();
                         }
+                        stable.binding_views.clear();
+                        stable.fallback_bindings.reset();
                     } catch (...) {
                         stable.error = std::current_exception();
                     }
