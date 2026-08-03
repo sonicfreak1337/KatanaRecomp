@@ -1,969 +1,336 @@
 # Codex Handoff
 
-Dieses Dokument definiert, wie Codex oder ein anderer automatisierter Bearbeiter an KatanaRecomp arbeiten soll.
-
-Die repositoryweiten Kurzregeln in `../AGENTS.md` sind verbindlich. Besonders
-der dort festgelegte Vorrang des echten Endprodukts vor Testinfrastruktur darf
-nicht durch eine breite synthetische Abnahme, Testmatrix oder wiederholte
-Vorsichtsläufe umgangen werden.
+Dieses Dokument definiert, wie Codex oder ein anderer automatisierter
+Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
+`../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
+aelteren Prozessbeschreibungen.
 
 ## Pflichtlekture vor jeder Aenderung
 
-1. `README.md`
+1. `AGENTS.md`
 2. `ROADMAP.md`
 3. `docs/STATUS.md`
 4. `docs/TASKS.md`
 5. `CHANGELOG.md`
-6. ab Phase 6 `docs/SONIC_ADVENTURE_ACCEPTANCE.md`
-7. relevante Header, Implementierungen und Tests des ausgewaehlten Tasks
+6. `docs/SONIC_ADVENTURE_ACCEPTANCE.md`
+7. der fuer den Task relevante Detailplan
+8. betroffene Header, Implementierungen und vorhandene Tests, sofern deren
+   bestehender Vertrag durch den Task beruehrt wird
 
-## Arbeitsmodell
+## Projektweiter Taskablauf
 
-Codex bearbeitet immer genau eine Task-ID aus `docs/TASKS.md`.
-
-Beispiel:
-
-```text
-KR-1101 - SUB, NEG und NOT
-```
-
-Keine benachbarten Roadmap-Punkte werden nebenbei implementiert, ausser sie sind fuer den Task zwingend notwendig und im Ergebnis klar dokumentiert.
-
-Projektweit hat die Lauffaehigkeit des privaten Sonic-Adventure-PAL-
-Produktports Vorrang vor synthetischer Testabdeckung. Der regulaere
-Nachweiszyklus lautet:
+Codex bearbeitet immer genau einen freigegebenen Task aus `docs/TASKS.md`.
+Fuer jeden Task gilt exakt:
 
 ```text
-frischer Produktport -> normaler Sonic-Lauf -> naechsten Blocker beheben
--> sichtbaren Bootfortschritt dokumentieren
+Task implementieren
+  -> alle durch den Task betroffenen Pfade reviewen
+     und bestaetigte Fehler innerhalb dieses Reviews schliessen
+  -> den reviewten Task direkt auf main committen und pushen
+  -> naechster Task
 ```
 
-Keine breite Suite und keine vorsorgliche Funktionsmatrix darf diesen Zyklus
-verzoegern. Ein enger synthetischer Test ist nur dann gerechtfertigt, wenn er
-einen bereits im Sonic-Lauf konkret beobachteten Fehler schneller isoliert
-oder eine deutlich teurere Retailiteration ersetzt. Der anschliessende normale
-Sonic-Lauf bleibt trotzdem der entscheidende Test.
+Die Reviewstufe ist keine Kommentarrunde, sondern die Fehlerfindungs- und
+Fixstufe. Sie umfasst mindestens:
 
-Aktuelle P0-Ausnahme: Der v56-Root-0-Lauf auf `a521999` hat gezeigt, dass der
-Kaltbuild trotz der abgeschlossenen KR-4974-bis-KR-4984-Sourcearbeit weiterhin
-nicht produktiv nutzbar ist. Root 0 nutzt im Mittel nur etwa `1,073` Kerne;
-`9.135` eindeutige Contexts und wachsende Kosten je Auswertung halten den
-kanonischen Fortschritt bei `0/1191`. Deshalb sind ausschliesslich der
-gegatete Root-0-Kernpfad KR-4985 bis KR-4991 und KR-4993 als naechster
-P0-Pfad vorgesehen; KR-4992 ist nur ein Folgezweig nach einem verfehlten
-KR-4981.
-Dieser Planungsauftrag genehmigt noch keine Umsetzung; jeder Task benoetigt
-eine neue ausdrueckliche Nutzeranweisung und wird dann strangweise und
-allgemein bearbeitet, fokussiert verifiziert, einzeln committed und gepusht.
-Vor dem abschliessenden KR-4993-Review sind nur D1 in KR-4985 und D2 zu Beginn
-von KR-4991 als jeweils separat freizugebende und begrenzte reale
-Diagnoseexporte zulaessig. Erst danach folgt der erste KR-4981-NativeDisc-
-Sonic-Lauf. Der normative
-Folgeplan steht in `docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`; der
-uebergeordnete Kaltbuildvertrag bleibt in
-`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`.
-Als sichtbarer Fortschrittsnachweis zaehlt ausschliesslich ein in genau
-diesem neuen Lauf frisch aufgenommener echter Fensterscreenshot jenseits der
-bekannten Sega-/Leergrenze. Alte Captures, technische Direct-Frames,
-Framezaehler oder Telemetrie sind kein Ersatz.
+- die geaenderte Implementierung;
+- direkte und transitive Aufrufer und Verbraucher;
+- Datenfluss, Kontrollfluss, Ownership und Lebenszeiten;
+- Fehler-, Abbruch-, Rollback- und Teilmutationspfade;
+- Decoder, Analyse, IR, Codegenerator und Runtime, soweit betroffen;
+- ABI-, Cache-, Schema-, Versions- und Artefaktvertraege;
+- AOT-Vollstaendigkeit, statische Bindung und Runtimeautoritaet;
+- Dokumentation und Taskstatus;
+- vorhandene Tests nur dann, wenn sie selbst gebrochen, widerspruechlich oder
+  zahlenmaessig falsch sind.
+
+Bestaetigte Fehler im Taskscope werden vor dem Push geschlossen. Eine
+separate standardmaessige Fix-, Verifikations-, Test- oder
+Integrationsphase wird nicht angelegt.
+
+Keine benachbarten Roadmap-Punkte werden nebenbei implementiert, ausser sie
+sind fuer den Task zwingend notwendig. Ein Review darf ausserhalb des
+Taskscopes liegende Beobachtungen knapp notieren, daraus aber weder neue
+Tasks noch eine Scope-Erweiterung ableiten.
+
+## Direkte Arbeit auf main
+
+- Regulaere Tasks werden direkt auf `main` bearbeitet, committed und
+  gepusht.
+- Keine neuen Taskbranches, Pull Requests oder parallelen
+  Integrationszweige ohne ausdrueckliche Nutzeranweisung.
+- Vor jeder Aenderung aktuellen `main`-Head und Dateistand erfassen.
+- Vor jedem Schreibvorgang pruefen, dass keine fremden oder neueren
+  Aenderungen ueberschrieben werden.
+- Erst der Push des reviewten Tasks gibt den naechsten Task frei.
+- Ein Commit beschreibt genau den abgeschlossenen Task oder, bei einer
+  reinen Dokumentationsaenderung, genau den geaenderten Projektvertrag.
+
+## Sonic ist der Test
+
+Der private Sonic-Adventure-PAL-Port ist projektweit der massgebliche
+Produkt- und Integrationstest:
+
+```text
+realer Portexport
+  -> Installation aus der lokalen Originaldisc
+  -> normaler Produktlauf
+  -> sichtbarer Boot-/Spielfortschritt
+```
+
+Daraus folgt:
+
+- keine neuen Unit-Tests, Regressionstests, Testmatrizen, synthetischen
+  Fixtures, Stresslaeufe, Testprojekte, Ersatzgates oder
+  Konformitaetssuiten;
+- fehlende neue Tests sind kein Finding;
+- Reviews verlangen keine neue Testabdeckung;
+- vorhandene Tests duerfen auf gebrochene Erwartungen, falsche Testzahlen
+  oder widerspruechliche Semantik geprueft und bei Bedarf repariert werden,
+  ihr Bestand wird aber nicht erweitert;
+- ein Implementierungstask startet keinen eigenen Testbuild und keine Matrix
+  als Pushgate;
+- Sonic-Laeufe erfolgen an den in Roadmap und Tasks festgelegten
+  Produktgates oder auf ausdrueckliche Nutzeranweisung, nicht nach jedem
+  Task;
+- mehrere zusammenhaengende, reviewte Tasks duerfen vor dem naechsten
+  Sonic-Lauf auf `main` landen;
+- vorhandene CI oder bestehende Checks koennen beobachtet werden, ersetzen
+  aber weder den Quellpfadreview noch den Sonic-Produktnachweis;
+- ein technischer Frame, ein Counter oder eine gruene synthetische
+  Auswertung ist kein sichtbarer Spielboot.
+
+Die genauen Retail-, Datenschutz- und Inhaltsgrenzen stehen in
+`docs/SONIC_ADVENTURE_ACCEPTANCE.md`.
 
 ## Startprozedur
 
-1. nach jedem neuen Lauf und nach jeder Kontextkomprimierung die gebuendelten
-   Workspace-Runtimes neu laden sowie vor Windows-Builds die MSVC-x64-
-   Entwicklungsumgebung neu initialisieren
-2. sauberen Git-Status pruefen
-3. aktuellen Branch und Version erfassen
-4. Tasktyp bestimmen: Implementierung, Gate-Vorbereitung, interne
-   Meilenstein-Freigabe oder Release-Gate
-5. Abhaengigkeiten, aktuellen Status und vorhandene Gate-Berichte erfassen
-6. erst danach Dateien aendern
+1. freigegebenen Task und seine Abhaengigkeiten bestimmen;
+2. aktuellen `main`-Head erfassen;
+3. `git`-/Repositoryzustand und beruehrte Dateien pruefen;
+4. aktuellen Source-, Diagnose- und Produktevidenzstand getrennt erfassen;
+5. relevante Architektur- und Detaildokumente lesen;
+6. den vollstaendigen betroffenen Pfad bestimmen;
+7. erst danach implementieren.
 
-Jeder gestartete Prozess und jede einzelne Phase besitzt eine harte
-Laufzeitgrenze von hoechstens 15 Minuten und wird danach mitsamt seinem
-Prozessbaum beendet. Nur eine ausdrueckliche, auf genau den benannten Lauf
-begrenzte Nutzerfreigabe darf diese Grenze voruebergehend aufheben; sie gilt
-weder fuer Nachfolger noch dauerhaft. Jeder potentiell lange Prozess
-veroeffentlicht spaetestens alle zehn Sekunden maschinenlesbaren Fortschritt
-oder Heartbeats mit Scope, Phase, geplant, queued, aktiv, fertig,
-kanonisch publiziert sowie relevanten Cache-/Arbeitszaehlern. Ein fehlender
-Fortschrittsindikator ist fuer einen langen P0-Pfad selbst ein Blocker.
-Die Ausgabe muss waehrend des Laufs live sichtbar sein. Ein Heartbeat ohne
-Aenderung von Phase oder Arbeitszaehlern belegt nur Liveness; nach 60 Sekunden
-ohne echte Arbeitsbewegung gilt der Prozess als festgefahren und sein
-Prozessbaum wird sofort quiesziert. Die 15-Minuten-Grenze ist eine absolute
-Obergrenze und keine Mindestwartezeit.
+Regulaere Implementierungstasks konfigurieren oder bauen beim Start nicht und
+starten keine Tests. Ein realer Export oder Produktlauf wird nur ausgefuehrt,
+wenn der Task selbst ein dokumentiertes Sonic-Diagnose- oder Produktgate ist
+und der Nutzer diesen Lauf freigegeben hat.
 
-CPU-Auslastung und wachsende Evaluation-, Cache-, Miss-, Requeue- oder
-Kontextzaehler belegen ebenfalls keinen Produktfortschritt. Bleiben
-abgeschlossene beziehungsweise kanonisch publizierte Arbeit und der
-Head-of-Line-Fortschritt stehen, waehrend interne Arbeit wiederholt neu
-erzeugt, invalidiert oder verdraengt wird, gilt der Lauf nach kurzer
-Gegenprobe als fehlerhaft und wird beendet. Diese Konvergenzregel bleibt auch
-bei einer fuer einen benannten Lauf aufgehobenen Zeitgrenze verbindlich.
-Bei `planned > 0` und `canonical == 0` gilt die First-Publish-Zeit des letzten
-gesunden Produktlaufs als Vergleichsbasis. Danach reichen drei weitere
-10-Sekunden-Samples mit ready/fertiger Arbeit, internem Churn und unbewegtem
-Head-of-Line fuer die verbindliche Einstufung als Nichtkonvergenz. `0/1191`
-nach 146 Minuten ist ausdruecklich ein laengst ueberfaelliger Fehlerabbruch,
-kein langsamer Lauf. Ohne gesunde Vergleichsbasis muss spaetestens nach drei
-Minuten ohne erste kanonische Publikation anhand derselben Signale eine
-explizite Fehlerentscheidung fallen.
+## Laufzeit und Ressourcen
 
-Fokussierte Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
-Entwicklungsrechner mit 24 logischen CPUs gilt `--parallel 24`. Der
-CLI-Portbuild verwendet dafuer
-`KATANA_HOST_BUILD_JOBS`; ohne expliziten Wert gilt direkt die gemeldete
-CPU-Threadzahl. `KATANA_PORT_CODEGEN_JOBS` steuert getrennt die parallele
-Port-Codegenerierung und faellt ebenfalls direkt auf die CPU-Threadzahl
-zurueck. Unter
-Windows kann `KATANA_HOST_BUILD_GENERATOR=Ninja` zusammen mit
-`KATANA_HOST_BUILD_MAKE_PROGRAM` einen getrennten `build-ninja`-Hostbuild
-waehlen. Der gemeinsame Analyse-Executor nutzt standardmaessig bis zu 64 der
-gemeldeten CPU-Threads und kann bei reproduzierbaren Diagnose- oder
-Vergleichslaeufen mit `KATANA_ANALYSIS_JOBS=1..64` enger gebunden werden.
-
-Windows-Basisbefehle:
-
-```powershell
-git status
-git branch --show-current
-```
-
-Regulaere Implementierungs-Tasks konfigurieren oder bauen beim Start nicht und
-fuehren keine Tests aus. Diese Arbeit wird im letzten Gate-Vorbereitungstask
-gebuendelt.
-
-## Branch-Namen
-
-Empfohlen:
-
-```text
-codex/KR-1101-sub-neg-not
-```
-
-Schema:
-
-```text
-codex/<TASK-ID>-<kurzer-name>
-```
+- Kein Prozess und keine einzelne Phase laeuft laenger als 15 Minuten, ausser
+  der Nutzer hebt die Grenze fuer genau einen benannten Lauf auf.
+- Jeder potenziell lange Prozess meldet spaetestens alle zehn Sekunden
+  belastbaren Fortschritt oder einen Heartbeat.
+- Ausgabe muss waehrend des Laufs sichtbar sein; ein erst am Ende
+  ausgegebener Pufferlog reicht nicht.
+- Heartbeats ohne Aenderung von Phase, geplant, queued, aktiv, fertig oder
+  kanonisch publiziert belegen nur Liveness.
+- Bleibt ein Prozess 60 Sekunden ohne nachweisliche Arbeitsbewegung, wird er
+  als Stall beendet und sein Prozessbaum quiesziert.
+- CPU-Last, steigende Cache-, Evaluation-, Requeue- oder Contextzaehler sind
+  allein kein Fortschritt.
+- Bei `planned > 0` und `canonical == 0` gilt der First-Publish-Vertrag aus
+  `AGENTS.md`.
+- Produktive Arbeit nutzt die verfuegbaren Hostressourcen parallel;
+  Ein-Kern-Ausfuehrung ist kein akzeptabler Default.
+- Ein abgebrochener Prozess wird mit seinem gesamten Prozessbaum beendet,
+  bevor ein Nachfolger startet.
 
 ## Schichtentrennung
-
-Der normale Pfad einer neuen Instruktion lautet:
-
-```text
-InstructionKind
-    -> Decoder
-    -> DecodedInstruction
-    -> Disassembly
-    -> Katana-IR
-    -> C++-Emitter
-    -> generierter End-to-End-Test
-```
-
-Nicht jede Aenderung betrifft jede Schicht. Codex muss aber ausdruecklich pruefen, welche Schichten betroffen sind.
 
 ### Decoder
 
 Zustaendig fuer:
 
-- Opcode-Maske
-- Operanden
-- Immediate- und Displacement-Dekodierung
-- Instruktionsmetadaten
-- lesbare Disassembly
+- Opcode-Maske;
+- Operanden;
+- Immediate- und Displacement-Dekodierung;
+- Instruktionsmetadaten;
+- lesbare Disassembly.
 
-Nicht zustaendig fuer:
-
-- Runtime-Speicher
-- Kontrollflussgraph-Strategie
-- C++-Codeausgabe
+Nicht zustaendig fuer Runtime-Speicher, Kontrollflussstrategie oder
+C++-Emission.
 
 ### Analyse
 
 Zustaendig fuer:
 
-- Sprungziele
-- Delay Slots
-- Basic Blocks
-- Funktionen
-- indirekten Kontrollfluss
-- Code-Daten-Trennung
+- Sprungziele und Delay Slots;
+- Basic Blocks und Funktionen;
+- indirekten Kontrollfluss;
+- Code-Daten-Trennung;
+- Guarded-AOT-Inventar und Vollstaendigkeit;
+- Context-, Summary-, Candidate- und Dependency-Vertraege.
 
 ### IR
 
 Zustaendig fuer:
 
-- semantische, backendunabhaengige Operationen
-- Operandbreiten
-- Status- und Speichereffekte
-- Verifikation
+- semantische, backendunabhaengige Operationen;
+- Operandbreiten;
+- Status- und Speichereffekte;
+- Architekturgrenzen und Verifikation.
 
 ### Codegenerator
 
 Zustaendig fuer:
 
-- Uebersetzung gueltiger IR
-- Runtime-ABI-Nutzung
-- keine erneute SH-4-Dekodierung
-- keine versteckte Analyse
+- Uebersetzung gueltiger IR;
+- Runtime-ABI-Nutzung;
+- statische native AOT-Ausgabe;
+- keine erneute SH-4-Dekodierung;
+- keine versteckte Analyse und keinen Runtime-Fallback.
 
 ### Runtime
 
 Zustaendig fuer:
 
-- CPU-Zustand
-- Speicherbus
-- MMIO
-- Ausnahmen
-- Plattformkomponenten
+- CPU-Zustand;
+- Speicherbus und MMIO;
+- Ausnahmen und Interrupts;
+- Scheduler und Geraete;
+- Hostpresentation, Eingabe und Plattformdienste;
+- keine erfundenen Hardwareerfolge.
 
-## Testpflichten
+Nicht jede Aenderung betrifft jede Schicht. Das Review muss aber
+systematisch pruefen, welche Schichten und Vertraege tatsaechlich betroffen
+sind.
 
-Jeder Semantik-Task dokumentiert normalerweise folgende spaeter umzusetzende
-Testanforderungen:
+## Reviewregeln
 
-1. Decoder-Test
-2. IR-Lowering-Test
-3. Codegenerator-Test
-4. generierten End-to-End-Test
-5. Grenz- oder Fehlerfall
+Ein guter Taskreview beantwortet mindestens:
 
-Tests muessen deterministisch sein. Regulaere Implementierungs-Tasks sammeln
-diese Anforderungen, erstellen und starten die Tests aber noch nicht. Erst der
-letzte Gate-Vorbereitungstask einer Phase setzt alle gesammelten Anforderungen
-um, erstellt genau einen frischen Build in `build-current/` und fuehrt die
-vollstaendige Regression aus.
+1. Ist die Implementierung vollstaendig verdrahtet?
+2. Bleiben alle Eingangs-, Ausgangs- und Fehlerpfade korrekt?
+3. Gibt es stille Datenverluste, Teilmutationen oder fail-open Verhalten?
+4. Sind Register-, Speicher-, Vorzeichen-, Carry-/Borrow- und
+   Reihenfolgevertraege korrekt, soweit der Task sie beruehrt?
+5. Bleiben identische Register- und Aliasfaelle korrekt?
+6. Sind Cache-Keys, Invalidierung und Versionierung vollstaendig?
+7. Kann eine Analysegrenze oder ein Budget unbemerkt Produktcode auslassen?
+8. Bleibt der normale Produktpfad strikt AOT-only?
+9. Wurden breite Stringersetzungen, doppelte `case`-Labels oder ungenaue
+   Texttransformationen eingefuehrt?
+10. Gelangen Retaildateien, geschuetzte Bytes oder daraus unzulaessig
+    erzeugte verteilbare Inhalte in Repository oder Paket?
+11. Sind vorhandene Testzahlen oder bestehende Tests konkret falsch oder
+    gebrochen?
 
-### Sonic Adventure als private Retail-Testbench
+Nicht gefragt wird:
 
-Es gilt die verbindliche Strategie in
-`docs/SONIC_ADVENTURE_ACCEPTANCE.md`:
+- Welche neuen Tests koennten noch gebaut werden?
+- Welche neue Matrix waere vorsichtshalber nett?
+- Welche synthetische Reproduktion koennte Sonic ersetzen?
 
-- Ab Phase 11 sind lokale, budgetierte Sonic-Adventure-Debuglaeufe ausdruecklich
-  erlaubt. Verteilbare Gates verwenden weiterhin ausschliesslich synthetische
-  Fixtures und frei lizenzierte Homebrew-Programme.
-- Jeder Retail-Befund muss in eine allgemeine Fehlerklasse und eine
-  synthetische oder frei verteilbare Regression ueberfuehrt werden.
-- Private Probes duerfen den generischen Pfad GDI -> externes Portprojekt ->
-  Hostprogramm -> `KR_CONTROLLED_RETAIL_SCENE` pruefen. Sie definieren keinen
-  titelbezogenen oeffentlichen Produktvertrag.
-- Oeffentliche Gates verwenden ausschliesslich generische Checkpoints und
-  synthetische oder frei lizenzierte Evidenz.
-- Assetextraktion fuer eine spaetere Installation ohne GDI gehoert in das
-  titelbezogene Folgeprojekt, nicht in KatanaRecomp.
-- Keine Spieldaten, Captures, Audioinhalte, Dump-Hashes oder lokalen Pfade
-  committen oder in Release-Artefakte aufnehmen.
-- Keine fest codierten Sonic-Adventure-Adressen, Remaps, Patches oder
-  titelbezogenen Runtime-Sonderfaelle implementieren.
-- Oeffentliche CI und verteilbare Tests duerfen proprietaere Eingaben nie
-  voraussetzen.
+Das Fehlen neuer Tests wird nie als Finding ausgegeben.
 
-Bei Runtime- oder Speicheraenderungen zusaetzlich:
+## Rechtliche und inhaltliche Grenzen
 
-- Little-Endian-Faelle
-- Wraparound
-- Vorzeichenerweiterung
-- ungueltige Adressen
-- Seiteneffektreihenfolge
+Nicht committen oder verteilen:
 
-## Fixtures
+- kommerzielle Executables;
+- BIOS-Dateien;
+- Disc-Images oder Tracks;
+- extrahierte Assets;
+- private Captures, Rohlogs, Hashes oder lokale Pfade;
+- aus Referenzprojekten kopierten oder mechanisch uebersetzten Code;
+- aus kommerziellem Gastcode erzeugte spielgebundene Artefakte, sofern deren
+  Veroeffentlichung nicht ausdruecklich rechtlich geklaert ist.
 
-Erlaubt:
+Titelgebundene Generierung und Installation erfolgen lokal im externen
+Spielprojekt. Der generische Katana-Kern enthaelt keine Sonic-Adressen oder
+Sonderpfade.
 
-- handgeschriebene synthetische Opcodefolgen
-- selbst entwickelte Testprogramme
-- frei lizenzierte Homebrew-Testprogramme mit dokumentierter Lizenz
+## Referenzprojekte und Dokumentation
 
-Nicht erlaubt:
+Referenzen duerfen verwendet werden, um:
 
-- kommerzielle Executables
-- BIOS-Dateien
-- Disc-Images
-- extrahierte Assets
-- kopierter Code aus Referenzprojekten
+- Architektur und beobachtbares Verhalten zu verstehen;
+- offizielle SH-4- und Dreamcast-Vertraege zu vergleichen;
+- Dateiformate und Semantik zu recherchieren;
+- eine unabhaengige generische Implementierung zu begruenden.
 
-## Referenzprojekte
+Nicht erlaubt sind:
 
-Die Ordner unter `reference` sind nur zum Verstaendnis allgemeiner Architekturen und Workflows gedacht.
+- Codekopie;
+- mechanische Uebersetzung;
+- ungepruefte Uebernahme von Kommentaren oder Tabellen;
+- Aenderungen an Referenzdateien;
+- Ableitung neuer Testpflichten aus einer Referenz.
 
-Codex darf:
+## Dokumentationspflicht
 
-- Konzepte vergleichen
-- Dateiformate und beobachtbares Verhalten recherchieren
-- unabhaengige Tests ableiten
+Jeder Task aktualisiert die Dokumente, deren aktueller Vertrag oder Status
+durch die Aenderung betroffen ist. Historische Evidenz bleibt als historisch
+markiert. Source-, Diagnose- und Produktevidenz duerfen nicht vermischt
+werden.
 
-Codex darf nicht:
+Die Abschlussmeldung eines Tasks enthaelt:
 
-- Code kopieren
-- Funktionen mechanisch uebersetzen
-- Kommentare oder Tabellen ohne Lizenzpruefung uebernehmen
-- Referenzdateien veraendern
+- Task-ID;
+- geaenderte Schichten und Dateien;
+- implementierte Semantik;
+- reviewte Pfade;
+- gefundene und geschlossene Findings;
+- verbleibende bekannte Grenzen im Taskscope;
+- Commit auf `main`;
+- naechsten nicht blockierten Task.
 
-## Scope-Regeln
+Sie enthaelt keine Liste fehlender Tests und keine Empfehlung fuer eine neue
+Testmatrix.
 
-Codex stoppt und dokumentiert den Grund, wenn:
+## Aktueller P0-Handoff
 
-- eine benoetigte Architekturentscheidung nicht in der Roadmap steht
-- zwei bestehende Tests widerspruechliche Semantik verlangen
-- eine Referenz nur durch Codekopie nutzbar waere
-- der Task eine grosse API-Aenderung ausserhalb seines Scopes erfordert
-- eine unbekannte SH-4-Sonderregel nicht sicher belegt werden kann
+Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-
+Pfad ist `a521999` mit Runtime-ABI 87, Analyzer-ABI 31 und
+Portprojektvertrag 75.
 
-In diesem Fall wird kein plausibel klingender Unsinn eingebaut. Der Markt ist bereits ausreichend versorgt.
-
-## Dateiregeln
-
-Nicht committen:
-
-- `build/`
-- lokale Backup-Ordner
-- temporaere generierte Testdateien
-- persoenliche Binaerdateien
-- kommerzielle Inhalte
-
-Generierte Quellen werden nur committed, wenn die Roadmap dies fuer ein reproduzierbares Beispiel ausdruecklich verlangt. Normalerweise werden sie waehrend des Builds erzeugt.
-
-## Backup-Regel
-
-- Im Arbeitsbereich darf immer genau ein lokales KatanaRecomp-Quellbackup
-  existieren: ein Snapshot des neuesten committed Stands.
-- Vor dem Erzeugen eines neuen Backups werden alle aelteren KatanaRecomp-Backups
-  im festgelegten Backup-Verzeichnis entfernt. Zielpfad und Dateiliste muessen
-  vorher geprueft werden.
-- Der Dateiname nennt mindestens Projektversion und Commit-ID. Das Backup wird
-  aus `HEAD` erzeugt, damit keine uncommitteten Aenderungen oder lokalen Daten
-  hineingeraten.
-- Backups liegen ausserhalb des Repository-Arbeitsbaums oder in einem ignorierten
-  `backups/`-Verzeichnis. `.katana_backup_*`-Verzeichnisse und andere
-  Sicherungskopien werden niemals versioniert.
-- Ein Quellbackup enthaelt weder `.git`, Build- und Generatorausgaben,
-  Toolchains, Referenz-Repositories noch private BIOS-, Flash-, Disc-, Capture-
-  oder Trace-Daten.
-- Git bleibt die Versionshistorie. Eine Bereinigung des aktuellen Baums darf
-  alte Backup-Dateien entfernen; ein destruktives Umschreiben bereits
-  veroeffentlichter Historie erfordert einen ausdruecklichen separaten Auftrag.
-
-## Build-Verzeichnis-Regel
-
-- Auf der lokalen Festplatte darf fuer KatanaRecomp immer genau ein aktuelles
-  Build-Verzeichnis existieren: `build-current/` im Repository-Arbeitsbaum.
-- Nur der letzte Gate-Vorbereitungstask einer Phase darf `build-current/`
-  anlegen, neu konfigurieren oder bauen. Regulaere Implementierungs- und reine
-  Freigabe-Tasks erzeugen keine Buildartefakte.
-- Pre-Alpha-Gate-Vorbereitungen erzeugen den jeweils dokumentierten frischen
-  Build. Erst KR-4999 ergaenzt regulaere Debug-/Release-Konfigurationen und die
-  verpflichtende Windows-/Linux-CI.
-- Separate Verzeichnisse pro Task, Version oder Konfiguration sind nicht erlaubt.
-- Vor oder unmittelbar nach dem Anlegen von `build-current/` werden alle alten
-  `build/`-, `build-*`- und `cmake-build-*`-Verzeichnisse nach gepruefter
-  absoluter Pfadauflosung entfernt.
-- Buildartefakte bleiben ignoriert und werden weder in Git noch in das einzelne
-  Quellbackup aufgenommen.
-
-## Stil
-
-- C++20
-- bestehende Namensraeume und Verzeichnisstruktur beibehalten
-- Warnungen als Fehlerquelle ernst nehmen
-- kleine Funktionen
-- keine globalen versteckten Zustaende
-- `std::uint32_t` und andere feste Breiten fuer CPU-Semantik
-- signed und unsigned explizit behandeln
-- keine Host-UB als CPU-Wraparound missbrauchen
-- Kommentare erklaeren SH-4-Sonderregeln, nicht offensichtliche Syntax
-
-## Erwarteter Task-Ablauf
-
-Regulaerer Implementierungs-Task:
-
-1. Task-ID, Abhaengigkeiten und betroffene Schichten erfassen
-2. den vollstaendigen betroffenen Fehler- und Datenflussstrang implementieren;
-   keine titel- oder fixturegebundene Teilloesung
-3. Erfolgs-, Grenz- und Fehlerfaelle als Testanforderungen dokumentieren
-4. Dokumentation und CHANGELOG aktualisieren
-5. fokussierte, fuer den Task notwendige Verifikation innerhalb des
-   15-Minuten-Vertrags ausfuehren
-6. Taskstatus aktualisieren, Commit mit Task-ID erstellen und pushen
-
-Letzter Gate-Vorbereitungstask:
-
-1. alle seit dem letzten Gate gesammelten Testanforderungen umsetzen
-2. `build-current/` frisch konfigurieren und genau einen Gate-Build erstellen
-3. vollstaendige Regression und vorgesehene Audits/Gateprofile ausfuehren
-4. Gate-Berichte, Dokumentation, CHANGELOG und Status aktualisieren
-5. anschliessend zwingend fuer das Nutzerreview stoppen
-
-Meilensteinspezifische Ausnahme fuer v0.48: Bis alle v0.48-
-Implementierungsaufgaben abgeschlossen sind, laufen ausschliesslich
-fokussierte Builds und Regressionen. Das danach ausgefuehrte vollstaendige
-Freigabegate besitzt seit 23.07.2026 eine Standing Approval. Ist der
-unveraenderte finale Gatebericht vollstaendig gruen, gilt das Nutzerreview
-automatisch als bestanden und v0.48 als erreicht sowie release-ready; ein
-weiterer Review-Stopp oder eine erneute Freigabefrage entfaellt.
-
-Interne Meilenstein- oder Release-Freigabe:
-
-1. ausdrueckliche Nutzerfreigabe des unveraenderten Gate-Berichts pruefen;
-   fuer v0.48 gilt stattdessen die dokumentierte Standing Approval
-2. keine neue Semantik, Tests oder Builds hinzufuegen
-3. bis einschliesslich v0.49.0 nur den naechsten internen Meilenstein
-   freigeben; keine Versionierung, kein Release-Commit, kein Tag und keine
-   Veroeffentlichung ausfuehren
-4. erst bei v0.50.0 und spaeteren oeffentlichen Release-Gates die vorgesehenen
-   Release-Aktionen ausfuehren
-
-Verlangt das Review Aenderungen, endet der Gate-Task und die
-Gate-Vorbereitung wird nach den Korrekturen vollstaendig wiederholt. Private
-Sonic-Adventure-Debuglaeufe duerfen ab Phase 11 als lokale Testbench
-stattfinden; sie sind keine verteilbare Alpha-Gateevidenz.
-
-Commit-Beispiel:
+Der terminale Sonic-v56-Diagnoselauf ergab:
 
 ```text
-KR-1101 SUB NEG und NOT implementieren
+Laufzeit:                                      1:28:24
+Exitcode:                                      5
+committed Roots:                               1 / 1.191
+Contextual-Return-Evaluationsbudget:           65.536, ausgeschoepft
+Context-Limit:                                 nicht erreicht
+eindeutige Contexts:                           25.728
+physische Auswertungen:                        27.872
+Eviction-Recomputes:                           0
+Retention:                                     incomplete-root
+Portartefakt / game.exe / Screenshot:          keines / keine / keiner
 ```
 
-## Erwartete Abschlussmeldung
+Cache-Churn und Deep-Copy-Verstaerkung sind nicht mehr die Hauptursache. Der
+P0 ist eine echte Contextual-State-Explosion mit erheblicher logischer
+Wiederzulassungsarbeit auf einem ueberwiegend seriellen kritischen Pfad.
 
-Die Abschlussmeldung enthaelt:
-
-- Task-ID
-- geaenderte Schichten
-- neue Semantik
-- bei Implementierungs-Tasks: gesammelte, noch nicht ausgefuehrte
-  Testanforderungen
-- bei Gate-Vorbereitungen: neue Tests, Build- und Testergebnis sowie Pfad zum
-  Gate-Bericht
-- bekannte Einschraenkungen
-- naechsten nicht blockierten Task
-- bei Gate-Vorbereitungen: ausdruecklicher Hinweis auf den Review-Stopp oder
-  die fuer den Meilenstein dokumentierte Standing Approval
-
-## Pull-Request-Checkliste
+Der verbindliche Einstieg lautet:
 
 ```text
-Task: KR-XXXX
-Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
-
-- [ ] Scope eingehalten
-- [ ] Testanforderungen dokumentiert
-- [ ] Gate-Vorbereitung: gesammelte Tests umgesetzt
-- [ ] Gate-Vorbereitung: frischer Build und vollstaendige Regression bestanden
-- [ ] Freigabe: unveraenderter Gate-Bericht freigegeben oder dokumentierte
-      Standing Approval durch vollstaendig gruenes Gate erfuellt
-- [ ] vor v0.50.0: keine Release-Aktionen ausgefuehrt
-- [ ] Dokumentation aktualisiert
-- [ ] CHANGELOG aktualisiert
-- [ ] keine Referenzimplementierung kopiert
-- [ ] keine geschuetzten Binaerdaten hinzugefuegt
-- [ ] keine Buildartefakte committed
+KR-4985 -> KR-4986 -> positiv gegatete KR-4987..KR-4990
+  -> KR-4991 nur bei positivem G2 -> KR-4993 -> KR-4981
 ```
 
-## Aktuell empfohlener Einstieg
+D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
+Testmatrix. Jeder Implementierungstask folgt dem repositoryweiten
+Dreischritt und wird direkt auf `main` gepusht. KR-4993 ist ein
+Abschlussreview ohne neue Tests oder Produktlauf. Erst KR-4981 erzeugt den
+naechsten vollstaendigen Sonic-Port.
+
+## Abschlusscheck vor dem Push
 
 ```text
-D1/KR-4985, KR-4986 und nur positiv gegatete KR-4987 bis KR-4990 - Root-0-
-Kosten messen, semantische Context-Lanes von Provenienz trennen und nur
-belegte Per-Context-Kosten senken; D2 zu Beginn von KR-4991 entscheidet die
-versionierte Worklist. Danach KR-4993 und der erste KR-4981-NativeDisc-Sonic-
-Lauf; KR-4992 nur nach dessen verfehltem Zeitgate
+- [ ] Taskscope vollstaendig implementiert
+- [ ] alle betroffenen Pfade reviewt
+- [ ] bestaetigte Findings geschlossen
+- [ ] AOT-/Runtime-/Fehlervertraege fail-closed
+- [ ] keine Sonic-Sonderfaelle oder Retaildaten
+- [ ] keine neue Test-, Fixture- oder Matrixinfrastruktur
+- [ ] vorhandene falsche Testzahlen oder gebrochene Tests, falls betroffen,
+      korrigiert
+- [ ] relevante Dokumentation aktualisiert
+- [ ] direkt auf main committed und gepusht
 ```
-
-### Aktueller P0-Quell-Handoff
-
-Der aktuelle Source-Checkpoint ist
-`a52199996898e2191cdf2f1a5808a7da2b355873`. Er enthaelt die beschriebenen
-Dependency-Views, Cache-Key-Schema 10, stabile Evidence-Referenzen,
-State-Wiederverwendung und Merge-Fastpaths. Die unabhaengige Root-0-Pruefung
-fand darin keinen neuen bestaetigten P0/P1-Soundnessfehler; insbesondere bindet
-Schema 10 die globale Fallback-Summary korrekt.
-
-Die v56-Telemetrie belegt trotzdem einen offenen P0-Performanceblocker:
-
-```text
-verstrichene Walltime am
-unvollstaendigen 0/1191-Stand: 401 s
-physische Auswertungszeit:      430,1 s
-eindeutige Contexts:            9.135
-physische Auswertungen:         11.279
-Eviction-Recomputes:            0
-mittlere effektive Kerne:       1,073
-Auswertungen je Context:        1,235
-```
-
-Die `401 s` sind keine abgeschlossene Root-0-Walltime, sondern ein
-unvollstaendiger Zwischenstand bei weiterhin `0/1191`.
-
-Der kritische Span ist algorithmisch fast seriell: Spaetere Roots sind bis
-zum Root-0-Commit gesperrt, und Jacobi-Wellen veroeffentlichen Folgearbeit erst
-nach einer globalen Merge-/Evidence-/Commitbarriere. Gleichzeitig skalieren
-Snapshot, Cache-Key, `apply_call()`, Equality/Copy/Merge und
-Provenienzauswahl weiter mit dem Contextual-Graphen. Die starke, noch in
-KR-4985 zu messende Hypothese ist eine zu feine Full-State-/Provenienz-
-Contextidentitaet. Weitere Cachekapazitaet oder Threads sind nicht der
-naechste Fix.
-
-Der verbindliche Einstieg, die Stop/Go-Gates, Korrektheitsinvarianten und
-exakten Taskgrenzen stehen im neuen Root-0-Detailplan. Diese Aussagen sind
-Diagnose- und Planungsevidenz; sie behaupten weder einen schnellen Kaltbuild
-noch einen aktuellen Produktproof.
-
-### Historische v24-/v28-/v30-/v32-Produktevidenz
-
-v24, v28, v30 und v32 sind explizit historische Vergleichsports mit aelteren
-ABIs. Sie durften schon nicht als damaliger Produktnachweis fuer `b01586a`
-und duerfen erst recht nicht als aktueller Produktnachweis fuer den
-ABI-85-/Analyzer-ABI-23-Source-Checkpoint
-ausgegeben werden. v24 belegt den damaligen CompletePlatform-Apply, v28 und
-v30 die DirectBoot-Grenze, und v32 bleibt die kanonische sichtbare
-NativeDisc-Baseline.
-
-Der damalige finale NativeDisc-Produktport
-`Sonic Adventure PAL native-disc-v32` wurde mit demselben externen
-Spielprojekt wie DirectBoot erzeugt, installiert und real ausgefuehrt. Seine
-ausfuehrbare Datei ist 53.677.056 Byte gross und besitzt SHA-256
-`888028348CC6CAA5510C2CF4DFA5CE5055D63FA8E8927B86C3815F5A75F520BF`.
-Der warme reine Produkttarget-Build dauerte 0,2515584 Sekunden.
-
-Der Produktlauf erreichte:
-
-- 553.990.562 Gastzyklen;
-- 11.080.283 zentrale Dispatches;
-- 127 praesentierte Hostframes;
-- 6,701 Sekunden Produktlaufzeit und vorlaeufig 82,67 effektive Gast-MHz;
-- einen sichtbar belegten Sega-Screen bei 2,032 Sekunden;
-- danach die einheitliche PVR-Borderfarbe bei 4,024 und 6,019 Sekunden;
-- als erstes Problem den typisierten Missing-AOT
-  `0x8C11088C -> 0x8C64784E`.
-
-NativeDisc-v32 erreicht damit exakt dieselbe Gastzyklusgrenze und denselben
-Callsite-/Target-Blocker wie DirectBoot-v30. Das ist dieselbe naechste
-statische AOT-Luecke, aber nicht derselbe Boot- oder Bildpfad: NativeDisc
-rekompiliert `IP.BIN`, zeigt den Sega-Screen und endet anschliessend in der
-uniformen Borderfarbe. DirectBoot ueberspringt `IP.BIN`; sein alter
-Runtime-ABI-63-Port blieb schwarz und ist deshalb kein aktueller
-ABI-73-Bildvergleich. Die Klassifikation muss diese unterschiedlichen
-Bootpfade und sichtbaren Ergebnisse getrennt ausweisen.
-
-Die damals fokussierten Hostvideo- und Portexporttests waren gruen. Der fokussierte
-PVR-Render-Test trifft weiterhin einen unabhaengig auf sauberem `194a179`
-reproduzierten, bereits vorhandenen Baselinefehler; `KR-4973` hat ihn nicht
-eingefuehrt. Eine breite Testsuite lief bewusst nicht.
-
-Die lokale Bereinigung entfernte 14.912.142.577 Byte alte Export-, Port-,
-Scratch- und Worktree-Artefakte. Als relevante Vergleichsports bleiben nur
-DirectBoot-v30 und NativeDisc-v32 erhalten. Original-GDI, aktuelle
-Installationsdaten und Produktcaptures blieben unangetastet.
-
-Der allgemeine `KR-4972`-Source-Vertrag ist inzwischen implementiert.
-DirectBoot-v30 bleibt wegen Runtime-ABI 63 historische Schwarzbildevidenz und
-darf weder als Ergebnis des ABI-73-Source-Stands noch als aktueller
-Scanoutnachweis ausgegeben werden. Der naechste vollstaendige reale
-Produktlauf bleibt bis KR-4993 gesperrt; die begrenzten Diagnoseexporte D1 in
-KR-4985 und D2 zu Beginn von KR-4991 benoetigen jeweils eine eigene
-ausdrueckliche Freigabe.
-
-## Historischer v0.48-Kontext
-
-Die folgenden Abschnitte bleiben als historische v0.48-Evidenz erhalten. Ihre
-damaligen ABI-Staende, Taskempfehlungen und Produktgrenzen beschreiben nicht
-den aktuellen ABI-85-/Analyzer-ABI-23-Source-Checkpoint. `b01586a` war der
-damals aktuelle v0.49-Zwischenstand.
-
-Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
-`KR-4911`, `KR-4912`, `KR-4913`, `KR-4915`, `KR-4850` und `KR-4814`. Der
-damals aktuelle Runtimevertrag stand auf Runtime-ABI 52, Block-ABI 5,
-Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11, BIOS-ABI 9,
-Portprojektvertrag 37, Systemreplay-Schema 8, Runtime-Probe-Schema 5,
-Device-Schema 5 und Host-Video-Vertrag 2.
-Das verbindliche
-XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
-statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
-titelunabhaengige Plattformgrenzen; das Freigabegate verbietet Interpreter/
-JIT, Discplayer und Titelhacks. Der normale Produktport emittiert oder linkt
-keinen SH-4-Interpreter mehr; ein fehlendes AOT-Ziel endet typisiert. Nur
-`diagnostic_partial` enthaelt den begrenzten Diagnoseinterpreter und weist ihn
-im Manifest aus. `KR-4848` ist mit strukturierten Disc-Ladetransaktionen und
-der vorab erzeugten Registry latenter nativer Module abgeschlossen.
-
-Der mit ABI 38 eingefuehrte Block bindet G1-DMA-Faults mit Phase, Adresse, exakt
-committed Praefix und Residue an den GD-ROM-CHECK-/Sense- und Requestzustand.
-G1 wird vor jeder Benachrichtigung angehalten; interne Backend-/Schedulerfehler
-duerfen kein ASIC-Hardwareereignis vortaeuschen. Store-Queue-`PREF` verwendet
-bei `MMUCR.AT=0` QACR und bei `AT=1` die UTLB. Ausrichtung, `SQMD`, ASID/SV,
-Schreibschutz, Dirty-Bit, Miss und Multiple-Hit werden atomar vor TA- oder
-Speicherwirkung geprueft. `PREF` muss im C++-Emitter trotz leerem,
-adressabhaengigem IR-Speichereffekt innerhalb der `MemoryAccessError`-Grenze
-bleiben; die Regression prueft den SH-4-Exceptioneintritt explizit.
-
-Nachfolgerlose generierte C++-Bloecke schreiben nun in jedem Backendmodus den
-architektonischen Fallthrough-PC. Die kompilierte Regression deckt
-Einzelblock, lokales Chaining und normalen Backendpfad ab. Die
-Produktinvariante berechnet den erwarteten PC aus der tatsaechlichen
-Terminatorquelle (`source + 2`) statt aus dem Wrapper-Eintritt; den frueheren
-Fehlalarm einer gueltigen lokalen Blockkette nicht wieder einfuehren.
-
-Der Relative16-Audit weist 87 Eintraege, 76 eindeutige Kandidaten und 73 im
-vorherigen Port fehlende Ziele aus. Sie sind native Blockleader, waehrend der
-live geladene `MOV.W`-/`BRAF`-Dispatch `RuntimeOnly` bleibt und keine erfundene
-CFG-Kante erhaelt. Snapshotcache und P2-Aliasaufloesung sind imagegebunden;
-lokale AOT-Blockketten melden die exakte letzte Terminatorquelle, Callsite,
-Transferart und Siteklasse.
-
-Der vorangegangene optimierte ABI-38-PAL-Export ist abgeschlossen: 140,9
-Sekunden mit zwoelf Jobs, 1.856 Funktionen, 37 Codepartitionen und Vertrag 23.
-Der inkrementelle Reexport dauerte 29,2 Sekunden. Das Portpaket enthaelt null
-Retailsektoren; die lokale Discinstallation war erfolgreich und die
-unveraenderte Original-GDI blieb erhalten.
-
-Ein historischer Produktlauf erreichte 345.609.251 Gastzyklen und einen echten
-Runtimehandler am architektonischen SH-4-Interruptvektor `VBR + 0x600`.
-Frames, TA-Transfers und Gast-PVR-Frames bleiben null. Eine getrennte begrenzte
-Diagnose beweist ueber Gastwriteprovenienz ein 56-Byte-Copy-plus-Patch-
-Codetemplate und fuehrt daraus 19 bytebewiesene Runtimeinstruktionen aus. Sie
-stoppt danach am naechsten noch nicht statisch gebundenen AOT-Einstieg. Keine
-privaten Bytes oder Adressen als Produkthardcode uebernehmen. Dieser Absatz
-beschreibt den damaligen Zwischenstand; die allgemeine native Bindung und
-`KR-4848` wurden spaeter geschlossen.
-
-Der Projektschreiber shardet Dispatchregistries nach jeweils maximal 512
-Bloecken, emittiert pro Owner und Shard genau einen Wrapper und routet
-balanciert. Beim PAL-Port misst die zentrale `runtime-dispatch.cpp` dadurch
-34.879 Byte/607 Zeilen statt 36.703.886 Byte/525.996 Zeilen; der groesste der
-43 Shards misst 393.454 Byte. Die 513-Block-Regression prueft zwei Shards und
-stale Cleanup; das vollstaendige synthetische Ninja-/MSVC-Projekt linkt in 15
-Sekunden. Die fokussierte Suite besteht 6/6. Diesen Toolingfortschritt bei
-weiteren grossen Ports beibehalten.
-
-Command 28/37 besitzt gastzeitgebundene PIO-/G1-DMA-Teiltransfers; Selector 5
-ist ein DMA-IRQ-Handoff, Selector 11 die persistente PIO-
-Callbackregistrierung. Das Taskfile trennt phasenweises PIO-DataIn/DataOut von
-`CD_READ`-`DmaIn`: DMA besitzt kein PIO-DRQ und keinen Zwischen-IRQ, sondern
-genau einen finalen Status-IRQ nach dem letzten Byte. SPI 11 bis 14, der
-32-Byte-Modepuffer, der 10-Byte-`REQ_STAT`, persistenter Sense/CHECK,
-gemeinsamer Laufwerksbesitz sowie
-kontrollierte SET-FEATURES-Fehler liegen im aktuellen Block. Ausfuehrbare
-Module halten kanonische aktive Extents und einen 4-KiB-Fast-Reject-Index.
-Ein vorvalidierter Ersatz derselben Modul-ID ist atomar; seine
-Negativregression erhaelt bei Ablehnung Katalog, Bloecke, Tracker, Provenienz
-und Metriken. Ein Load-Write-Tracker bindet BIOS-/GD-Reloads an deren reale
-Copy-/DMA-Writes: identische Bootbytes erhalten vorhandenes natives AOT;
-geaenderte Bytes invalidieren exakt einmal.
-Asynchrone BIOS-Completions umgehen das quittierbare Taskfile-IRQ-Latch;
-persistenter Sense und ATA-`ERR` des aktuellen Kommandos sind getrennt. Der
-GD-ROM-Fokustest ist nach diesem Integrationsfix 1/1 gruen. Read- und
-TOC-Gastziele werden MMU-bewusst ueber ihre gesamte Laenge vorvalidiert;
-ungueltige, ueberlaufende oder MMIO-Ziele enden ohne Teilwrite und Host-
-Exception als `InvalidField`.
-Eine am Ende des 64-Bit-Gastzeitraums nicht mehr planbare PACKET-Completion
-endet jetzt kontrolliert mit `READY|ERR`, ABRT-Sense, finalem Command-IRQ und
-freigegebenem Laufwerksbesitz. Dieselbe Admission-Grenze liefert fuer
-BIOS-Read und -Streaming einen einmaligen `Aborted`-Vierwortstatus mit null
-Bytes; ein Folgerequest bleibt zulaessig. Das ist noch nicht der vollstaendige
-laufende G1-Timeout-/Overrun-Vertrag.
-
-Freie Speicherprobes sind MMU-bewusst und strukturell auf echte lineare
-Haupt-RAM-, VRAM- und AICA-RAM-Backings begrenzt. `Memory::peek_u32` weist
-auch ein versehentlich erlaubtes `MmioMemoryDevice` vor dessen Handler ab.
-Flash wird ohne einen eigenen expliziten Side-Effect-Free-Peek-Vertrag nicht
-mehr angeboten. Peek-Aufloesung veraendert weder CPU-/Exceptionzustand noch
-MMIO-Handler, Observer, Watchpoints oder Speicherzaehler. Das Last-MMIO-
-Tracking ist im Gast-Hotpath ein allokationsfreier POD; erst der terminale
-Bericht materialisiert den Regionsstring. PVR- und Systembus-Snapshots bewegen
-auch pending Render-/Channel-2-Zustaende nicht.
-
-Runtime-ABI 42 bindet einen POD-Zugriffssink fuer bereits ausgefuehrte
-Gastzugriffe. AOT und begrenzter Diagnoseinterpreter tragen Quell- und
-Laufzeit-PC; PlatformServices-ABI 10 reicht die `PREF`-Herkunft bis zur Store
-Queue. PVR-Render und PVR-YUV bleiben getrennte Writer-Urspruenge, VRAM32 wird
-auf das gemeinsame lineare Backing projiziert. Der Sink darf beobachtete
-Readwerte oder MMIO-Handler nicht erneut abfragen. Nur fuer die
-No-op-Klassifikation eines Wrapperwrites darf der aktive Trace vor dem Write
-das seiteneffektfreie lineare Backing vergleichen. Produktobserver und
-Scanout-Evidenz muessen dabei konservativ und bei Trace aus/an identisch
-bleiben.
-
-`RuntimeWaitLoopTrace` v1 verdichtet Wertlaeufe und Writer begrenzt. Der
-Portexport erzeugt aus genau einem Hardwareaudit generische, deterministisch
-deduplizierte Guard- und Kandidatendeskriptoren; reine Counterloops werden
-ausgelassen. Ein vorab sortierter Read-Site-Index verhindert lineare
-Deskriptorscans, und auch MMIO-Werte stammen nur aus dem bereits ausgefuehrten
-Zugriff. Lineare bytegenaue Writerlinks muessen
-`exact-backing-bytes`, nichtlineare physische MMIO-Ueberschneidungen dagegen
-`physical-range-candidate` melden. Backing-indizierte Locations muessen
-unbeteiligte lineare Writes ohne Vollscan verwerfen. Der aktive Trace muss
-skalare und Range-Wrapperaenderungen bytegenau bestimmen und No-op-Writer
-verwerfen, ohne den konservativen Produktvertrag umzuschreiben.
-Ausschliesslich
-`KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den
-Rohwerttrace, unabhaengig von `KATANA_PORT_DIAGNOSTICS`. Bei leerer
-Deskriptorliste werden weder Recorder noch Sink erzeugt. Sonst muss der Port
-einmalig auf `stderr` vor nur lokaler Nutzung, rohen Gastwerten und
-ungeprueftem Teilen warnen. Das JSON muss
-`contains_raw_guest_values:true`, `writer_scope:"since-previous-sample"` und
-ungueltige skalare Range-Werte als `scalar_value_valid:false` mit `value:null`
-ausweisen. Strukturell ungueltige Access-Events muessen
-`invalid_access_events` erhoehen und `complete:false` erzwingen; sie duerfen
-nicht als bloss irrelevante gueltige Events gelten. Der RAII-Besitzer entfernt
-den Sink vor der terminalen JSON-Ausgabe. Ohne Trace-Opt-in muss der Fastpath
-ohne Recorderallokation und Zugriffsprojektion bleiben.
-Keine Titeladressen, privaten Pfade oder Retaildaten in Deskriptoren,
-Regressionen oder Dokumentation uebernehmen.
-
-Die Registervarianten von `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B` sind
-auch im begrenzten Interpreter geschlossen; doppelte `FMOV`-Speicherzugriffe
-laufen low nach high. Der normale Produktport bleibt davon unberuehrt und
-AOT-only.
-
-Hardware-Audit-Schema 4 erkennt Natural Loops ueber skalierbare
-Dominatorberechnung, klassifiziert Counter-, RAM-Poll-, MMIO-Poll-, Mixed- und
-Unknown-Loops und liefert Access-/Guard-Evidenz. Der Auditor deckt GBR-MOVs,
-`TST.B` als Read, `AND.B`/`XOR.B`/`OR.B` und `TAS.B` als RMW, FMOV,
-PC-relative `MOV.W`/`MOV.L`, `STC.L`/`LDC.L` und `MAC.W`/`MAC.L` ab; die
-unbekannte FPSCR.SZ-Lage wird fuer FMOV konservativ als Adressunion ausgegeben.
-Teilweise bekannte MAC-Basen bleiben einzeln sichtbar; Predecrement wrappt auf
-32 Bit. OCRAM ist kein linearer RAM-Poll. Guard-Provenienz folgt T-neutralen
-Instruktionen und eindeutigen Vorgaengern und stoppt an echten T-Schreibern
-oder Merges. Unaufgeloeste Reads und konservative Kandidaten einer
-unvollstaendigen Condition-Domaene bleiben sichtbar. FMOV-/FCMP-Faelle ohne
-vollstaendigen FPU-Modus-/Bankbeweis bleiben `unknown` und erhalten kein
-`guards_loop`. `--strict` lehnt partielle Hardwareadressen und diese
-unresolved Poll-/Guard-Loops ab, `--fail-on-gap` bleibt unveraendert.
-Einzelbilder tragen `scope=executable_image`, Disc-Audits
-`scope=native_disc_aot_boot_graph`. Area-3-Haupt-RAM-Spiegel werden
-kanonisiert; Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
-4.096-Block-Graph besitzen Regressionen.
-
-Der aktuelle private CLI-Disc-Audit ist unter Schema 4 und
-`native_disc_aot_boot_graph` im normalen Modus gruen. Er berichtet 142.380
-Instruktionen, 1.542 Funktionen, null unbekannte Instruktionen, null bekannte
-Luecken, zwei partielle Adressen, 1.095 Loops und 492
-`unresolved_poll_guard_loops`. `--strict` bleibt damit erwartungsgemaess rot.
-Der vorangegangene fokussierte Zwischenblock bestand 22/22 in 1,57 Sekunden;
-der Port-CLI-Nachweis bestand 1/1 in 151,12 Sekunden.
-
-Runtime-ABI 43 und Portprojektvertrag 27 binden
-`katana.runtime-probe` Version 1 mit Device-Schema 1, 35 produktiven
-Geraeteinstanzen, 867 kanonischen Feldern und `fnv1a64-le-v1`. Der private
-Diagnose=0/1-A/B-Runner bestand zwei Laeufe mit 100.000 Gastzyklen und 120
-Sekunden Hosttimeout. Die normativen Felder waren gleich, Executable und
-Disc-Pack blieben unveraendert, Systemreplay v3 war vollstaendig und
-versiegelt, und beide Laeufe erzeugten null Wait-Loop-Tracezeilen. Damit ist
-`KR-4842` abgeschlossen; `KR-4911` war an diesem Zwischenstand freigegeben,
-aber noch offen.
-Es lief keine Vollsuite und kein `KR-4852`.
-
-Der damalige Systemreplay-Zwischenstand unter Schema 3 besitzt eine feste,
-konfigurierbare Kapazitaet von
-standardmaessig 4.096 und hoechstens 65.536 Ereignissen; portable
-Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter Recordversuch
-zaehlt exakt einen Drop. Jeder Drop verbietet Versiegelung und Replay, waehrend
-ein bereits versiegelter Log unveraenderlich bleibt. Codes, Adressen, Werte,
-numerische Payloads und Hashes bleiben intern fuer Ereignishash und
-Replayvergleich exakt. Das Standard-JSON redigiert `code`, `address`, `value`,
-`detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; nur ein
-ausdrueckliches lokales Opt-in serialisiert sie.
-
-Runtime-ABI 44 und Portprojektvertrag 28 schliessen darauf aufbauend
-`KR-4911`. Systemreplay-Schema 4 erweitert `deterministic-v1` auf zwoelf
-Pflichtklassen und bindet Blockdispatch, Gastexception, kontrollierten Fallback
-und Gastcheckpoint an die bisherigen acht Klassen. Die zentrale
-Observation-Session schreibt diese Ereignisse gegen Gastzyklus und Resetepoche;
-GD-ROM-, DMA-, PVR- und AICA-Schedulercallbacks besitzen stabile Codes.
-Checkpoints laufen strikt monoton von `runtime-started` ueber
-`guest-program-entered`, `first-guest-frame` und `guest-input-interactive` bis
-`controlled-retail-scene`.
-
-Die typisierten Endklassen umfassen `budget-reached`, `hang`,
-`guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
-stabiler Checkpoint sichern intern vollstaendige CPU-Snapshots und frieren nach
-dem ersten Fehler ein; das Fault-v1-JSON gibt nur allowlist-redigierte Klassen-
-und Checkpointfelder aus. Der private A/B-Runner validiert die parsebaren
-Fault- und Checkpointzeilen strikt und schreibt private Fehlerpakete ausserhalb
-des Repositorys atomar und write-once.
-
-Das fokussierte Gate bestand 8/8 in 6,60 Sekunden,
-`katana-port-cli-tests` 1/1 in 155,67 Sekunden. Der frische private PAL-A/B-
-Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
-normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
-Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
-versiegelt und die Tracezaehler null/null. Es lief keine Vollsuite und kein
-`KR-4852`. `KR-4912` ist freigegeben.
-
-Runtime-ABI 45 und Portprojektvertrag 29 schliessen `KR-4912`. Load,
-Relocation, Replace und Unload erzeugen monotone Modulinkarnationen;
-byteidentische Multi-Extent-Loads sowie byteidentische CPU-, FPU-,
-Store-Queue-, Copy- und DMA-Writes erhalten bestehende Bloecke und Provenienz.
-Ein bewiesener Runtime-Write-Snapshot darf kontrolliert um einen
-zusammenhaengenden Tail samt Delay Slot wachsen. MMU-sichere P0-/P1-/P2-Aliase
-teilen dieselbe physische Blockherkunft.
-
-Replace und Unload gleichen Materializer-Origins, Runtime-Blocktabellen und
-Code-Tracker gemeinsam ab, ohne fremde Owner in Multi-Extent-Luecken zu
-invalidieren. Ein ueberlaufender Relocation-Generation-Zaehler wird vor jeder
-Mutation atomar abgelehnt. Identische Validierungssnapshots werden geteilt,
-gegen das Speicherbudget gerechnet und nach der letzten Origin freigegeben;
-retained, peak und reclaimed Bytes bleiben sichtbar. Eine tatsaechliche
-Materialisierung erzeugt ihr Replay-Ereignis unabhaengig vom
-Diagnose-Sampling. Oeffentliche Probe-, Fault- und
-Materialisierungsberichte redigieren Identitaeten und Gastbytes. Der normale
-Produktport bleibt interpreterfrei und beendet unbekannten Code typisiert.
-
-Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
-interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Fuer `KR-4912`
-lief weder ein privater Retaillauf noch eine Vollsuite oder `KR-4852`.
-An diesem damaligen Zwischenstand blieb `KR-4848` fuer strukturierte Disc-
-Ladetransaktionen und die Registry vorab erzeugter latenter AOT-Module offen;
-der Task ist inzwischen abgeschlossen.
-
-Runtime-ABI 47 und Portprojektvertrag 31 schliessen `KR-4913`.
-Systemreplay-Schema 5 trennt `ExactEvents` von `DigestStream`; der
-Produktprobe behaelt 4.096 Praefixzeugen, bindet aber jedes Ereignis an
-Zeitvalidierung, Coverage, Klassenzaehler und den geordneten FNV-Digest.
-Runtime-Probe-Schema 2 weist Gesamt-, behaltene und zusammengefasste
-Ereignisse sowie `exact_event_stream` aus. Der ungekeyte Digest ist
-deterministische Evidenz, keine Authentisierung. Der vorbereitete
-Gastprogrammbereich prueft den MMU-bewussten BootExecutable-Eintritt ohne
-wiederholte Kanonisierung direkter P1-/P2-Pfade.
-
-Zwei frische Diagnose-aus/an-Probes mit je 356.000.000 Gastzyklen banden je
-137.057.656 Ereignisse ohne Drop und waren zusammen nach 175,3 Sekunden
-vollstaendig und versiegelt. Normative Felder und letzter Checkpoint waren
-identisch; die Artefakte blieben unveraendert. Ein direkter
-Bestaetigungslauf emittierte `runtime-started` und
-`guest-program-entered` und endete nach 83,9 Sekunden kontrolliert. Kein
-Fallback, Trap oder stiller Fehler galt als Erfolg. Der frische Port umfasst
-1.873 Funktionen, 37 Partitionen und null Retailsektoren; die lokale
-Installation umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
-unveraendert. Die anschliessende genaue Spur des Stillstands nach dem
-Sega-Logo belegte einen Level-/Edge-Fehler: Ein bereits aktiver
-Exceptionhandler wurde als neue Delay-Slot-Exception gewertet. Runtime-ABI 48
-und Portprojektvertrag 32 fuehren eine monotone Exceptiongeneration fuer
-Emitter, Portwrapper und Diagnosegrenze ein; 11/11 fokussierte Regressionen
-sind gruen.
-
-Der historische, damals genau einmal exportierte und gebaute v7-Port umfasst
-1.873 Funktionen, 37 Partitionen und drei latente Module. Export und Hostbuild
-dauerten 187,8 Sekunden, die lokale Installation 16,8 Sekunden. Der
-deterministische Probe-Lauf dauerte 73,5 Sekunden, der Detail-Lauf
-49,2 Sekunden. `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` werden
-am sichtbaren Sega-Bild erreicht, und die alte Zwei-Instruktions-JSR-Schleife
-ist verschwunden. Der naechste typisierte Missing-AOT ist
-`0x8C65E96A -> 0x8C652150`; 7.422.352 Dispatch-Hits/1 Miss und 2.609.376
-`RuntimeOnly`-Hits/1 Miss/0 Fallbacks machen die Grenze eindeutig. Der
-allgemeine Quellefix katalogisiert endliche, mit bewiesener
-Aufrufargument-Provenienz ueber nicht-Stack-bezogene 32-Bit-Stores
-weitergereichte Codepointer als bewachte AOT-Inventarseeds, ohne die live
-geladene Dispatchkante fest einzufrieren. Die fokussierten
-Regressionen waren gruen. Diese Evidenz beschreibt v7 und bleibt historisch.
-
-Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
-fokussierte Tests. Der anschliessend genau einmal frisch exportierte Port
-umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger normaler sichtbarer
-Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor jedem Gastframe:
-Der Counted-Loop-Fastpath hat die Gastzeit bereits angenommen, als der
-vorbereitete U32-Sequenzcommit abgelehnt wird. Der Produktlauf endet typisiert
-und belegt damit eine Regression gegenueber v7. Kein zweiter Lauf, keine
-Vollsuite und kein `KR-4852` wurden ausgefuehrt. `KR-4851` bleibt offen.
-
-Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
-Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
-festes Ziel, Burstmodus und `DMAOR.DME+DDT`. Eine Runtime-End-to-End-Regression
-fuehrt Haupt-RAM bis TA-Object-List/EOL; falsche Richtung und Cycle-Steal werden
-sichtbar abgelehnt. Direct-Texture-Ziele `0x11`/`0x13` benoetigen fuer
-mehrteilige Transfers noch eine fortschreitende Zieladresse und bleiben P1.
-
-Der PVR-Nachweis laeuft am echten Scheduler-VBlank-In und friert erst nach
-Wertrevalidierung einen exakten Frame ein. PAL/Interlace verwendet das aktive
-SPG-Feld mit `FB_R_SOF1/2`; `SCALER_CTL` Bit 17/18 waehlt `FB_W_SOF1/2` fuer
-den Render. Die Evidenz ist auf 256 Generationen, 64 MiB und 2.097.152
-Pixelpruefungen pro VBlank begrenzt und besitzt einen Range-Fast-Reject. Der
-Hintergrund-Overscan-Quad bildet HScale, D-Attribute und texturierte X/U-
-Erweiterung ab. Der gemeinsame Proof-Pump trennt Gastbeweis und Host-Present;
-Read- und Write-Framebuffer teilen die logische 32-Bit-VRAM-Abbildung.
-Backing-Byte-adressierte Dirty-Evidenz plus das vorherige Scanout-Abbild
-verhindern sichtbare False-Proofs durch Offscreen-Writes, unveraenderte
-Bilddaten oder Blanking.
-
-Der vorgezogene historische Sonic-Adventure-PAL-AOT-Lauf erreicht aus dem
-recompilierten `IP.BIN`-Direct-Framebuffer innerhalb eines
-50-Millionen-Gastzyklusbudgets in 5,3 Sekunden `KR_FIRST_GUEST_FRAME` und
-`KR_FIRST_PRESENTED_FRAME`; TA bleibt null. Der anschliessende Budget-Exit ist
-erwartet. In diesem Lauf blieben BootExecutable, Spielboot, `KR-4848` und der
-produktive TA-Pfad offen; `KR-4848` wurde spaeter abgeschlossen.
-
-Das vorangegangene fokussierte Kern-Gate bestand 11/11. Der x64-Kern-/Runtime-Build
-der Desktop-GUI-off-Konfiguration ist mit zwoelf parallelen Jobs gruen; deren
-vollstaendiges CTest-Zwischengate auf Quellstand `924ea89` besteht 183/183
-Eintraege in 312,97 Sekunden, darunter 181 regulaere Passes und zwei erwartete
-Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind
-nicht Teil dieser 183; der Runner-Selbsttest ist separat gruen. Ein einmaliger
-Vorlauf ohne korrekt
-geladene x64-`VsDevCmd`-Umgebung scheiterte bereits am
-Standardbibliotheksinclude `cstdint`; der identische Lauf in der korrekt
-geladenen Toolchain ist vollstaendig gruen. Dies war ein Umgebungsfehler und
-kein Quellcodefehler. Das Zwischengate ist keine Erledigung von `KR-4852`,
-`KR-4853` oder `KR-4854`.
-
-Der private Retail-Runner bezieht Runtime-ABI und Portprojektvertrag strikt und
-jeweils genau einmal aus der kanonischen `cmake/KatanaVersions.cmake`.
-Fehlende, doppelte, ungueltige oder nullwertige Definitionen sowie JSON-Strings
-und Gleitkommazahlen anstelle ganzzahliger Vertragswerte werden ohne
-Typkoerzierung abgelehnt. Ein mit Sanitizern gebautes statisches Runtime-SDK
-exportiert seine erforderlichen Compiler- und Linkoptionen als
-`KatanaRecomp::runtime`-Usage-Requirements; der installierte Out-of-Tree-
-Verbraucher erbt damit dasselbe ASan-ABI-Profil. Das ist ein Teilstand von
-`KR-4801`, nicht dessen Abschluss.
-
-Historische ABI-39-Portevidenz: Nach dem damaligen 178/178-Zwischengate wurde
-der Vertrag-24-Port unter Runtime-ABI 39 und Block-ABI 3 frisch neu exportiert
-und gebaut: 1.860 Funktionen, 37
-Codepartitionen und null Retailsektoren. Die lokale read-only Installation der
-Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
-50-Millionen-Lauf reproduziert beide Framemarker mit `frames=2`,
-`pvr_guest_frames=2`, `pvr_direct_frames=2` und 302.287 geaenderten
-Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
-Budget-Exit ist erwartet.
-
-Weiter offen:
-
-```text
-KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
-KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
-KR-4851: Counted-Loop-Bootregression schliessen und PAL-Auswahl nachweisen
-```
-
-`KR-4842`, `KR-4848`, `KR-4911` und `KR-4912` sind als Vorbedingungen
-erfuellt. Die offene Bootfront beginnt mit der aktuellen
-Counted-Loop-Commitregression in `KR-4851`; `KR-4849` schliesst den
-produktiven TA/PVR-Vertrag. `KR-4915` und `KR-4850` sind durch den legitimen
-vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` ist
-abgeschlossen: Der Produktport pollt XInput/WinMM an Gast-Safepoints, fuehrt
-nativen Controller, Keyboard und Fokus durch eine gastzyklusgestempelte
-Timeline und bindet Maple direkt daran. Deterministische Probes bleiben vor
-diesem Livepfad auf Replay- beziehungsweise neutralem Input. `KR-4914` bleibt
-als verbindliche Post-Frame-Arbeit offen und muss vor `KR-4852` abgeschlossen
-sein. Der fokussierte Abschluss bestand 6/6 Controller-, Maple-, Runtime-,
-Homebrew- und Portexporttests sowie den getrennten Produktpfad
-`katana-port-cli-tests` 1/1. Hostvideo, Scheduler-Safepoint und
-PlatformServices bestanden ergaenzend 3/3, der installierte
-SDK-/Packagevertrag 1/1, insgesamt damit 11/11 fokussierte Tests. Ein
-Voll-CTest und eine interaktive Sitzung liefen nicht.
-
-Ein erster Gastframe und sein Host-Present sind nachgewiesen; BootExecutable
-und Spielboot sind es noch nicht. Moderne Xbox-, DualSense- und vergleichbare
-Hostcontroller sind im automatisierten Produktvertrag `KR-4814` abgedeckt.
-Mangels Spielboot ist die praktische interaktive Sitzung aus `KR-4914` noch
-nicht nachweisbar; Spielboot bleibt dabei P0, der interaktive Nachweis P1. In
-der Kernrunde nur fokussierte Targets ausfuehren. Das einzige finale Vollgate
-laeuft nach allen v0.48-
-Implementierungen in `KR-4852`; `KR-4853` uebernimmt dessen unveraenderten
-Bericht und fuehrt weder Build noch Test erneut aus. Der bereits ausgefuehrte
-vorgezogene Lauf ist Diagnoseevidenz, kein Ersatz fuer Spielboot oder
-Freigabe. Jeder Prozess endet
-spaetestens nach 15 Minuten. Original-GDI und Tracks sind immer read-only und
-werden nie geloescht; veraltete erzeugte Portordner duerfen nach eindeutiger
-Pfadpruefung ersetzt werden. Keine Tags vor der Alpha.
