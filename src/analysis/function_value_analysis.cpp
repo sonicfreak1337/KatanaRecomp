@@ -31149,6 +31149,22 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 auto operator<=>(
                     const ContextualEntryFamilyKey&) const = default;
             };
+            struct ContextualEvidenceBindingLayout final {
+                ContextualCallSiteKey call;
+                ContextualLaneId lane_id = 0u;
+                EvidenceFieldLayout input;
+                std::size_t summary_register_count = 0u;
+
+                bool operator==(
+                    const ContextualEvidenceBindingLayout&) const = default;
+            };
+            struct ContextualEvidenceLayout final {
+                EvidenceFieldLayout ingress;
+                std::vector<ContextualEvidenceBindingLayout> bindings;
+
+                bool operator==(
+                    const ContextualEvidenceLayout&) const = default;
+            };
             struct ContextualLane final {
                 std::uint32_t function_entry = 0u;
                 AbstractState match_input;
@@ -31157,6 +31173,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 bool candidate_context = false;
                 std::uint64_t input_version = 0u;
                 std::uint64_t summary_version = 0u;
+                // Evidence tokens are lane-local names. Keeping their
+                // assignments across widening steps makes a provenance-only
+                // change replay the same physical evaluation instead of
+                // alpha-renaming every summary dependency into a new key.
+                EvidenceTokenAssignments call_site_tokens;
+                EvidenceTokenAssignments callee_tokens;
+                std::optional<ContextualEvidenceLayout>
+                    evidence_token_layout;
             };
             std::vector<ContextualLane> contextual_lanes;
             contextual_lanes.reserve(
@@ -31173,6 +31197,32 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::map<ContextualLaneId,
                      std::set<ContextualLaneId>>
                 contextual_callers;
+            const auto contextual_evidence_layout_for =
+                [&](const ContextualLaneId caller_lane) {
+                    ContextualEvidenceLayout layout;
+                    layout.ingress = capture_evidence_field_layout(
+                        contextual_lanes.at(caller_lane).input);
+                    const auto callees =
+                        contextual_callees.find(caller_lane);
+                    if (callees == contextual_callees.end())
+                        return layout;
+                    for (const auto& [call, lane_edges] :
+                         callees->second) {
+                        for (const auto& [lane_id, match_input] :
+                             lane_edges) {
+                            const auto& lane =
+                                contextual_lanes.at(lane_id);
+                            if (!lane.summary.has_value()) continue;
+                            layout.bindings.push_back(
+                                {call,
+                                 lane_id,
+                                 capture_evidence_field_layout(
+                                     match_input),
+                                 lane.summary->registers.size()});
+                        }
+                    }
+                    return layout;
+                };
             std::deque<ContextualLaneId> pending_contexts;
             std::vector<std::uint8_t> queued_contexts;
             const auto enqueue_context =
@@ -31276,6 +31326,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                ? nullptr
                                : &found->second;
                 };
+            std::uint64_t contextual_topology_epoch = 0u;
             struct ContextualBatchItem {
                 ContextualLaneId lane_id = 0u;
                 std::uint32_t address = 0u;
@@ -31285,11 +31336,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 bool candidate_context = false;
                 struct DependencyVersion final {
                     ContextualLaneId lane_id = 0u;
+                    std::uint64_t input_version = 0u;
                     std::uint64_t summary_version = 0u;
                 };
                 std::vector<DependencyVersion> dependencies;
                 ContextualSummaryBindings bindings;
                 std::optional<EvidenceProvenanceLens> evidence_lens;
+                ContextualEvidenceLayout evidence_layout;
+                EvidenceTokenAssignments call_site_tokens;
+                EvidenceTokenAssignments callee_tokens;
+                bool evidence_tokens_valid = false;
+                bool dependency_graph_changed = false;
                 std::optional<FunctionEvaluation> evaluation;
                 GuardedCodeInventoryWalkDiagnostics diagnostics;
                 std::exception_ptr error;
@@ -31307,6 +31364,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     item.candidate_context = lane.candidate_context;
                     item.bindings =
                         contextual_bindings_for(lane_id);
+                    item.evidence_layout =
+                        contextual_evidence_layout_for(lane_id);
                     item.dependencies.clear();
                     const auto callees =
                         contextual_callees.find(lane_id);
@@ -31319,6 +31378,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         dependency.first);
                                 item.dependencies.push_back(
                                     {dependency.first,
+                                     dependency_lane.input_version,
                                      dependency_lane.summary_version});
                             }
                         }
@@ -31327,8 +31387,284 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     item.diagnostics.local_fixpoint_iteration_budget =
                         maximum_local_fixpoint_iterations;
                     item.evidence_lens.reset();
+                    if (lane.evidence_token_layout.has_value() &&
+                        *lane.evidence_token_layout ==
+                            item.evidence_layout) {
+                        item.call_site_tokens =
+                            lane.call_site_tokens;
+                        item.callee_tokens = lane.callee_tokens;
+                    } else {
+                        item.call_site_tokens.clear();
+                        item.callee_tokens.clear();
+                    }
+                    item.evidence_tokens_valid = false;
+                    item.dependency_graph_changed = false;
                     item.evaluation.reset();
                     item.error = {};
+                };
+            struct ContextualScheduledLane final {
+                ContextualLaneId lane_id = 0u;
+            };
+            struct ContextualSccCache final {
+                std::uint64_t topology_epoch =
+                    std::numeric_limits<std::uint64_t>::max();
+                std::size_t lane_count = 0u;
+                std::vector<std::size_t> component_by_lane;
+                std::vector<std::vector<ContextualLaneId>> components;
+                std::vector<std::uint8_t> cyclic_components;
+                std::vector<std::vector<std::size_t>>
+                    component_dependencies;
+            } contextual_scc_cache;
+            const auto for_each_contextual_dependency =
+                [&](const ContextualLaneId lane_id,
+                    const auto& callback) {
+                    const auto callees =
+                        contextual_callees.find(lane_id);
+                    if (callees == contextual_callees.end()) return;
+                    for (const auto& call : callees->second) {
+                        for (const auto& dependency : call.second)
+                            callback(dependency.first);
+                    }
+                };
+            const auto rebuild_contextual_scc_cache = [&] {
+                if (contextual_scc_cache.topology_epoch ==
+                        contextual_topology_epoch &&
+                    contextual_scc_cache.lane_count ==
+                        contextual_lanes.size())
+                    return;
+                const auto absent =
+                    std::numeric_limits<std::size_t>::max();
+                std::vector<std::vector<ContextualLaneId>> adjacency(
+                    contextual_lanes.size());
+                std::vector<std::vector<ContextualLaneId>> reverse(
+                    contextual_lanes.size());
+                for (ContextualLaneId lane_id = 0u;
+                     lane_id < contextual_lanes.size();
+                     ++lane_id) {
+                    if ((lane_id & 0xffu) == 0u)
+                        throw_if_resolution_cancelled(cancel_requested);
+                    auto& targets = adjacency[lane_id];
+                    for_each_contextual_dependency(
+                        lane_id,
+                        [&](const ContextualLaneId dependency) {
+                            targets.push_back(dependency);
+                        });
+                    std::sort(targets.begin(), targets.end());
+                    targets.erase(
+                        std::unique(targets.begin(), targets.end()),
+                        targets.end());
+                    for (const auto target : targets)
+                        reverse.at(target).push_back(lane_id);
+                }
+
+                struct DfsFrame final {
+                    ContextualLaneId lane_id = 0u;
+                    std::size_t next_dependency = 0u;
+                };
+                std::vector<std::uint8_t> visited(
+                    contextual_lanes.size(), 0u);
+                std::vector<ContextualLaneId> finish_order;
+                finish_order.reserve(contextual_lanes.size());
+                std::vector<DfsFrame> frames;
+                std::size_t traversal_steps = 0u;
+                for (ContextualLaneId start = 0u;
+                     start < contextual_lanes.size();
+                     ++start) {
+                    if (visited[start] != 0u) continue;
+                    visited[start] = 1u;
+                    frames.push_back({start, 0u});
+                    while (!frames.empty()) {
+                        if ((++traversal_steps & 0xffu) == 0u)
+                            throw_if_resolution_cancelled(
+                                cancel_requested);
+                        auto& frame = frames.back();
+                        const auto& targets =
+                            adjacency[frame.lane_id];
+                        if (frame.next_dependency < targets.size()) {
+                            const auto dependency =
+                                targets[frame.next_dependency++];
+                            if (visited[dependency] == 0u) {
+                                visited[dependency] = 1u;
+                                frames.push_back({dependency, 0u});
+                            }
+                            continue;
+                        }
+                        finish_order.push_back(frame.lane_id);
+                        frames.pop_back();
+                    }
+                }
+
+                contextual_scc_cache.component_by_lane.assign(
+                    contextual_lanes.size(), absent);
+                contextual_scc_cache.components.clear();
+                std::vector<ContextualLaneId> component_stack;
+                std::size_t reverse_traversal_steps = 0u;
+                for (auto position = finish_order.size();
+                     position > 0u;
+                     --position) {
+                    const auto start = finish_order[position - 1u];
+                    if (contextual_scc_cache
+                            .component_by_lane[start] != absent)
+                        continue;
+                    const auto component =
+                        contextual_scc_cache.components.size();
+                    contextual_scc_cache.components.emplace_back();
+                    contextual_scc_cache
+                        .component_by_lane[start] = component;
+                    component_stack.push_back(start);
+                    while (!component_stack.empty()) {
+                        if ((++reverse_traversal_steps & 0xffu) == 0u)
+                            throw_if_resolution_cancelled(
+                                cancel_requested);
+                        const auto lane_id = component_stack.back();
+                        component_stack.pop_back();
+                        contextual_scc_cache.components[component]
+                            .push_back(lane_id);
+                        for (const auto predecessor : reverse[lane_id]) {
+                            if (contextual_scc_cache
+                                    .component_by_lane[predecessor] !=
+                                absent)
+                                continue;
+                            contextual_scc_cache
+                                .component_by_lane[predecessor] =
+                                component;
+                            component_stack.push_back(predecessor);
+                        }
+                    }
+                }
+                contextual_scc_cache.cyclic_components.assign(
+                    contextual_scc_cache.components.size(), 0u);
+                contextual_scc_cache.component_dependencies.assign(
+                    contextual_scc_cache.components.size(), {});
+                for (std::size_t component = 0u;
+                     component < contextual_scc_cache.components.size();
+                     ++component) {
+                    if (contextual_scc_cache.components[component].size() >
+                        1u) {
+                        contextual_scc_cache
+                            .cyclic_components[component] = 1u;
+                    }
+                    auto& component_dependencies =
+                        contextual_scc_cache
+                            .component_dependencies[component];
+                    for (const auto lane_id :
+                         contextual_scc_cache.components[component]) {
+                        for (const auto dependency : adjacency[lane_id]) {
+                            const auto target_component =
+                                contextual_scc_cache
+                                    .component_by_lane[dependency];
+                            if (target_component == component) {
+                                if (dependency == lane_id)
+                                    contextual_scc_cache
+                                        .cyclic_components[component] = 1u;
+                                continue;
+                            }
+                            component_dependencies.push_back(
+                                target_component);
+                        }
+                    }
+                    std::sort(component_dependencies.begin(),
+                              component_dependencies.end());
+                    component_dependencies.erase(
+                        std::unique(component_dependencies.begin(),
+                                    component_dependencies.end()),
+                        component_dependencies.end());
+                }
+                contextual_scc_cache.topology_epoch =
+                    contextual_topology_epoch;
+                contextual_scc_cache.lane_count =
+                    contextual_lanes.size();
+            };
+            const auto select_contextual_batch =
+                [&](const std::size_t maximum_batch_size) {
+                    std::vector<ContextualScheduledLane> selected;
+                    if (maximum_batch_size == 0u ||
+                        pending_contexts.empty())
+                        return selected;
+
+                    rebuild_contextual_scc_cache();
+                    const auto absent =
+                        std::numeric_limits<std::size_t>::max();
+                    std::vector<std::size_t> pending_position(
+                        contextual_lanes.size(), absent);
+                    for (std::size_t position = 0u;
+                         position < pending_contexts.size();
+                         ++position) {
+                        pending_position.at(
+                            pending_contexts[position]) = position;
+                    }
+                    std::vector<std::uint8_t> active_component(
+                        contextual_scc_cache.components.size(), 0u);
+                    for (const auto lane_id : pending_contexts) {
+                        active_component[contextual_scc_cache
+                                             .component_by_lane.at(
+                                                 lane_id)] = 1u;
+                    }
+                    std::vector<std::uint8_t> sink_component(
+                        contextual_scc_cache.components.size(), 1u);
+                    for (std::size_t component = 0u;
+                         component < active_component.size();
+                         ++component) {
+                        if (active_component[component] == 0u) continue;
+                        for (const auto dependency :
+                             contextual_scc_cache
+                                 .component_dependencies[component]) {
+                            if (active_component[dependency] != 0u) {
+                                sink_component[component] = 0u;
+                                break;
+                            }
+                        }
+                    }
+
+                    std::vector<std::uint8_t> component_selected(
+                        contextual_scc_cache.components.size(), 0u);
+                    std::vector<std::uint8_t> lane_selected(
+                        contextual_lanes.size(), 0u);
+                    for (const auto lane_id : pending_contexts) {
+                        const auto component =
+                            contextual_scc_cache.component_by_lane.at(
+                                lane_id);
+                        if (sink_component.at(component) == 0u ||
+                            component_selected.at(component) != 0u)
+                            continue;
+                        component_selected[component] = 1u;
+                        std::vector<ContextualLaneId> members;
+                        for (const auto member :
+                             contextual_scc_cache.components[component]) {
+                            if (member < queued_contexts.size() &&
+                                queued_contexts[member] != 0u)
+                                members.push_back(member);
+                        }
+                        std::sort(
+                            members.begin(), members.end(),
+                            [&](const auto left, const auto right) {
+                                return pending_position.at(left) <
+                                       pending_position.at(right);
+                            });
+                        for (const auto member : members) {
+                            if (selected.size() >= maximum_batch_size)
+                                break;
+                            selected.push_back({member});
+                            lane_selected[member] = 1u;
+                        }
+                        if (selected.size() >= maximum_batch_size)
+                            break;
+                    }
+                    if (selected.empty())
+                        throw std::logic_error(
+                            "Contextual-SCC-Scheduler fand keine "
+                            "callee-first Komponente.");
+                    pending_contexts.erase(
+                        std::remove_if(
+                            pending_contexts.begin(),
+                            pending_contexts.end(),
+                            [&](const auto lane_id) {
+                                return lane_selected.at(lane_id) != 0u;
+                            }),
+                        pending_contexts.end());
+                    for (const auto& item : selected)
+                        queued_contexts.at(item.lane_id) = 0u;
+                    return selected;
                 };
             auto& contextual_executor = global_analysis_executor();
             while (!pending_contexts.empty() &&
@@ -31340,11 +31676,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const auto remaining_budget =
                     maximum_contextual_return_evaluations -
                     contextual_evaluations;
-                const auto batch_size =
-                    std::min(
-                        {pending_contexts.size(),
-                         contextual_executor.maximum_jobs(),
-                         remaining_budget});
+                auto scheduled = select_contextual_batch(
+                    std::min(contextual_executor.maximum_jobs(),
+                             remaining_budget));
+                const auto batch_size = scheduled.size();
                 if (!logical_budget.reserve_contextual_evaluations(
                         batch_size)) {
                     function_result.walk_diagnostics
@@ -31353,12 +31688,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     return;
                 }
                 std::vector<ContextualBatchItem> batch(batch_size);
-                auto pending_lane = pending_contexts.begin();
                 for (std::size_t index = 0u;
-                     index < batch.size();
-                     ++index, ++pending_lane) {
+                     index < batch.size(); ++index) {
                     prepare_contextual_item(
-                        batch[index], *pending_lane);
+                        batch[index], scheduled[index].lane_id);
                 }
                 const auto evaluate_contextual_item =
                     [&](ContextualBatchItem& item) noexcept {
@@ -31374,11 +31707,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     EvaluationLens::ContextualReturn,
                                     nullptr,
                                     forwarded_evidence_tokens,
-                                    &item.bindings,
-                                    nullptr,
-                                    nullptr,
-                                    nullptr,
-                                    allow_memory_projection);
+                                     &item.bindings,
+                                     nullptr,
+                                     &item.call_site_tokens,
+                                     &item.callee_tokens,
+                                     allow_memory_projection);
                             const auto& evaluation_input =
                                 item.evidence_lens.has_value()
                                     ? item.evidence_lens->ingress()
@@ -31420,6 +31753,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             item.evaluation.emplace(
                                 cached.first->evaluation);
                             if (item.evidence_lens.has_value()) {
+                                item.call_site_tokens =
+                                    item.evidence_lens
+                                        ->call_site_token_assignments();
+                                item.callee_tokens =
+                                    item.evidence_lens
+                                        ->callee_token_assignments();
+                                item.evidence_tokens_valid = true;
                                 multi_root_provenance_links.fetch_add(
                                     item.evidence_lens->link_count(),
                                     std::memory_order_relaxed);
@@ -31456,47 +31796,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             evaluate_contextual_item(batch[index]);
                         });
                 }
+                contextual_evaluations += batch.size();
+                bool batch_topology_changed = false;
                 for (auto& item : batch) {
                     throw_if_resolution_cancelled(cancel_requested);
-                    bool stale =
-                        contextual_lanes.at(item.lane_id)
-                                .input_version !=
-                            item.input_version;
-                    for (const auto& dependency :
-                         item.dependencies) {
-                        const auto& current =
-                            contextual_lanes.at(
-                                dependency.lane_id);
-                        stale =
-                            stale ||
-                            current.summary_version !=
-                                dependency.summary_version;
-                    }
-                    if (pending_contexts.empty() ||
-                        pending_contexts.front() != item.lane_id)
-                        throw std::logic_error(
-                            "Paralleler Contextual-Return-Fixpunkt "
-                            "verlor die FIFO-Reihenfolge.");
-                    pending_contexts.pop_front();
-                    queued_contexts.at(item.lane_id) = 0u;
-                    ++contextual_evaluations;
-                    if (stale) {
-                        // A later item from this parallel snapshot may have
-                        // become stale while an earlier item was committed.
-                        // Do not recompute it synchronously on the commit
-                        // thread: that work bypasses the reserved batch
-                        // budget and can itself be invalidated again by a
-                        // later commit from the same snapshot.  Discard the
-                        // stale result and let the normal queue coalesce all
-                        // current invalidations before the next parallel
-                        // batch captures a fresh snapshot.
-                        enqueue_context(item.lane_id);
-                        continue;
-                    }
                     if (item.error)
                         std::rethrow_exception(item.error);
-                    auto context_evaluation =
-                        std::move(*item.evaluation);
+                    if (!item.evaluation.has_value())
+                        throw std::logic_error(
+                            "Contextual-Return-Auswertung fehlt.");
+                    auto& context_evaluation = *item.evaluation;
                     merge_fixpoint_diagnostics(
                         function_result.walk_diagnostics,
                         item.diagnostics);
@@ -31504,31 +31813,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             .local_fixpoint_budget_exhausted) {
                         record_local_fixpoint_limit();
                         return;
-                    }
-                    auto& current_lane =
-                        contextual_lanes.at(item.lane_id);
-                    if (current_lane.summary.has_value())
-                        widen_function_memory_read_contract(
-                            context_evaluation.summary,
-                            *current_lane.summary);
-                    const bool summary_changed =
-                        !current_lane.summary.has_value() ||
-                        !same_function_call_effect(
-                            *current_lane.summary,
-                            context_evaluation.summary);
-                    current_lane.summary =
-                        std::move(context_evaluation.summary);
-                    if (summary_changed) {
-                        ++current_lane.summary_version;
-                        const auto callers =
-                            contextual_callers.find(
-                                item.lane_id);
-                        if (callers !=
-                            contextual_callers.end()) {
-                            for (const auto caller :
-                                 callers->second)
-                                enqueue_context(caller);
-                        }
                     }
                     for (auto& observation :
                          context_evaluation.call_arguments) {
@@ -31577,6 +31861,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         std::optional<ContextualLaneId>
                             selected_lane;
                         bool selected_lane_created = false;
+                        bool selected_lane_changed = false;
                         std::optional<AbstractState>
                             joined_match_input;
                         std::optional<AbstractState> joined_input;
@@ -31669,6 +31954,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             family_lanes.push_back(lane_id);
                             selected_lane = lane_id;
                             selected_lane_created = true;
+                            selected_lane_changed = true;
                             enqueue_context(lane_id);
                         } else {
                             auto& lane = contextual_lanes.at(
@@ -31697,6 +31983,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     std::move(*joined_match_input);
                                 lane.input =
                                     std::move(*joined_input);
+                                selected_lane_changed = true;
                                 ++lane.input_version;
                                 enqueue_context(*selected_lane);
                             }
@@ -31712,8 +31999,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             forward_edges.try_emplace(
                                 *selected_lane,
                                 selected_lane_created
-                                    ? observed_match_input
-                                    : callee_match_input);
+                                     ? observed_match_input
+                                     : callee_match_input);
+                        batch_topology_changed =
+                            batch_topology_changed || forward_inserted;
                         bool forward_match_changed = false;
                         if (!forward_inserted) {
                             auto joined = forward->second;
@@ -31722,6 +32011,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             if (forward_match_changed)
                                 forward->second = std::move(joined);
                         }
+                        item.dependency_graph_changed =
+                            item.dependency_graph_changed ||
+                            selected_lane_changed ||
+                            forward_inserted ||
+                            forward_match_changed;
                         contextual_callers[*selected_lane].insert(
                             item.lane_id);
                         // The edge-local matcher is the only binding input
@@ -31731,14 +32025,133 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         // edge to an already stable child still needs one
                         // caller replay; a child without a summary wakes every
                         // linked caller on its first summary publication.
-                        if ((forward_inserted ||
-                             forward_match_changed) &&
-                            contextual_lanes.at(*selected_lane)
-                                .summary.has_value())
-                            enqueue_context(item.lane_id);
                     }
                     if (contextual_context_budget_exhausted)
                         break;
+                }
+                if (contextual_context_budget_exhausted) break;
+                if (batch_topology_changed)
+                    ++contextual_topology_epoch;
+
+                // Freeze validity for the complete Jacobi snapshot before any
+                // Summary version is advanced. Otherwise the first member of
+                // a cyclic parallel batch would invalidate every later member
+                // even though all were evaluated from the same valid state.
+                std::vector<std::uint8_t> summary_publishable(
+                    batch.size(), 1u);
+                for (std::size_t index = 0u;
+                     index < batch.size();
+                     ++index) {
+                    throw_if_resolution_cancelled(cancel_requested);
+                    const auto& item = batch[index];
+                    bool stale =
+                        contextual_lanes.at(item.lane_id)
+                                .input_version !=
+                            item.input_version;
+                    for (const auto& dependency : item.dependencies) {
+                        const auto& current =
+                            contextual_lanes.at(dependency.lane_id);
+                        stale = stale ||
+                                current.input_version !=
+                                    dependency.input_version ||
+                                current.summary_version !=
+                                    dependency.summary_version;
+                    }
+                    // Every monotone edge/input observation from this snapshot
+                    // was committed in the first pass above. A stale or locally
+                    // graph-changing evaluation contributes that discovery but
+                    // must recompute its parent effect from the final batch
+                    // graph before publishing a Summary.
+                    if (stale || item.dependency_graph_changed) {
+                        summary_publishable[index] = 0u;
+                        enqueue_context(item.lane_id);
+                    }
+                }
+
+                std::vector<std::optional<FunctionValueSummary>>
+                    candidate_summaries(batch.size());
+                std::vector<std::uint8_t> summary_changed(
+                    batch.size(), 0u);
+                for (std::size_t index = 0u;
+                     index < batch.size();
+                     ++index) {
+                    if (summary_publishable[index] == 0u) continue;
+                    auto& item = batch[index];
+                    auto& current_lane =
+                        contextual_lanes.at(item.lane_id);
+                    auto candidate_summary =
+                        std::move(item.evaluation->summary);
+                    if (current_lane.summary.has_value()) {
+                        widen_function_memory_read_contract(
+                            candidate_summary, *current_lane.summary);
+                    }
+                    summary_changed[index] =
+                        !current_lane.summary.has_value() ||
+                                !same_function_call_effect(
+                                    *current_lane.summary,
+                                    candidate_summary)
+                            ? 1u
+                            : 0u;
+                    candidate_summaries[index] =
+                        std::move(candidate_summary);
+                }
+
+                std::vector<ContextualLaneId> summary_changed_lanes;
+                summary_changed_lanes.reserve(batch.size());
+                for (std::size_t index = 0u;
+                     index < batch.size();
+                     ++index) {
+                    if (summary_publishable[index] == 0u) continue;
+                    auto& item = batch[index];
+                    auto& current_lane =
+                        contextual_lanes.at(item.lane_id);
+                    if (item.evidence_tokens_valid) {
+                        current_lane.call_site_tokens =
+                            std::move(item.call_site_tokens);
+                        current_lane.callee_tokens =
+                            std::move(item.callee_tokens);
+                        current_lane.evidence_token_layout =
+                            std::move(item.evidence_layout);
+                    } else if (!current_lane.evidence_token_layout.has_value() ||
+                               *current_lane.evidence_token_layout !=
+                                   item.evidence_layout) {
+                        current_lane.call_site_tokens.clear();
+                        current_lane.callee_tokens.clear();
+                        current_lane.evidence_token_layout.reset();
+                    }
+                    current_lane.summary =
+                        std::move(*candidate_summaries[index]);
+                    if (summary_changed[index] != 0u) {
+                        ++current_lane.summary_version;
+                        summary_changed_lanes.push_back(item.lane_id);
+                    }
+                }
+                // Only fully published Jacobi rounds wake their dependants.
+                for (const auto lane_id : summary_changed_lanes) {
+                    const auto callers =
+                        contextual_callers.find(lane_id);
+                    if (callers != contextual_callers.end()) {
+                        for (const auto caller : callers->second)
+                            enqueue_context(caller);
+                    }
+                }
+                if (!summary_changed_lanes.empty()) {
+                    rebuild_contextual_scc_cache();
+                    std::vector<std::uint8_t> component_requeued(
+                        contextual_scc_cache.components.size(), 0u);
+                    for (const auto lane_id : summary_changed_lanes) {
+                        const auto component = contextual_scc_cache
+                                                   .component_by_lane
+                                                   .at(lane_id);
+                        if (contextual_scc_cache
+                                    .cyclic_components[component] == 0u ||
+                            component_requeued[component] != 0u)
+                            continue;
+                        component_requeued[component] = 1u;
+                        for (const auto member :
+                             contextual_scc_cache.components[component])
+                            enqueue_context(member);
+                    }
                 }
             }
             if (contextual_context_budget_exhausted)
@@ -31803,11 +32216,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 EvaluationLens::GuardedInventory,
                                 nullptr,
                                 forwarded_evidence_tokens,
-                                &stable.bindings,
-                                nullptr,
-                                nullptr,
-                                nullptr,
-                                allow_memory_projection);
+                             &stable.bindings,
+                             nullptr,
+                             &lane.call_site_tokens,
+                             &lane.callee_tokens,
+                             allow_memory_projection);
                         const auto& evaluation_input =
                             stable.evidence_lens.has_value()
                                 ? stable.evidence_lens->ingress()
@@ -32996,6 +33409,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         const auto maximum_active_initial_roots = std::min(
             maximum_parallel_resolution_jobs,
             resolution_executor.maximum_jobs());
+        std::atomic_bool canonical_root_committed = false;
+        const auto initial_root_admission_available_locked = [&] {
+            if (!canonical_root_committed.load(
+                    std::memory_order_acquire)) {
+                // Root zero owns the canonical head of line. Give its nested
+                // contextual/SCC work the complete executor and cache budget;
+                // admitting later outer roots here only creates retained work
+                // which cannot commit and previously evicted Root-0 contexts.
+                return dispatch->next_root_to_submit == 0u &&
+                       dispatch->active_initial_roots == 0u;
+            }
+            return dispatch->active_initial_roots <
+                   maximum_active_initial_roots;
+        };
         const auto global_memory_capacity =
             resolution_executor.memory_budget().capacity();
         const auto evaluation_cache_limit =
@@ -33201,9 +33628,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                            std::memory_order_acquire) ||
                                        dispatch->next_root_to_submit >=
                                            resolution_functions.size() ||
-                                        (dispatch->active_initial_roots <
-                                             maximum_active_initial_roots &&
-                                        dispatch->recompute_required_slots ==
+                                        (initial_root_admission_available_locked() &&
+                                         dispatch->recompute_required_slots ==
                                             0u &&
                                         (dispatch
                                                      ->maximum_ready_retained_bytes ==
@@ -33527,6 +33953,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     break;
                 }
                 commit_resolution_result(std::move(*resolved));
+                if (index == 0u)
+                    canonical_root_committed.store(
+                        true, std::memory_order_release);
                 result_lease.reset();
                 {
                     const std::lock_guard lock(dispatch->mutex);
