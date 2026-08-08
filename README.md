@@ -2,9 +2,10 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller funktionaler Source-Checkpoint: `594f0191b321bd2f470d0aa07100e82f3eea956f`
-plus KR-4987-Sourceaenderung in diesem Task, Runtime-ABI 87, Analyzer-ABI 32,
-Application-Contract 8 und Portprojektvertrag 75. Der terminale v56-Stand
+Aktuelle funktionale Sourcebasis: `dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa`
+plus der reviewte KR-4994-Source-Delta, Runtime-ABI 87, Analyzer-ABI 33,
+Function-Analysis-Epoch-Schema 15, Application-Contract 8 und
+Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
 `1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
 `65.536`, `25.728` laufweit gemeldeten Contexts und `27.872` laufweit
@@ -16,12 +17,13 @@ Messwerten verrechnet. Ein neues Portartefakt, eine
 KR-4985, KR-4986, KR-4993 und KR-4987 sind source-seitig abgeschlossen. Der
 D9-Lauf ist nach `20,331 s` fail-closed beendet: Root 0 konvergierte bis Wave
 `184` und Frontier `0` (maximal `216`), ohne Portartefakt oder Produkterfolg.
-KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv.
+KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. Der folgende
+Folgetask-Hinweis beschreibt den Stand vor dem aktuellen Source-Delta.
 KR-4994 ist als offener P0-Folgetask fuer den nächsten Stack-/Storage-
-Identitaetsengpass und naechste Implementierungstask angelegt. KR-4981 bleibt
-das globale Produktgate und darf erst nach KR-4994 plus Sol-Review genau einmal
-erneut laufen. KR-4992 kommt nur nach einem verfehlten KR-4981 und positivem
-Restkosten-/RAM-Gate infrage. Der
+Identitaetsengpass und naechste Implementierungstask angelegt. Der Source-Fix
+ist inzwischen abgeschlossen; der aktuelle D-Lauf zeigt jedoch weiterhin den
+semantischen Lane-Treiber als offenen Produktblocker. KR-4981 bleibt das
+globale Produktgate und ist nicht bestanden. Der
 verbindliche Folgeplan steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
 der uebergeordnete Kaltbuildvertrag in
@@ -155,8 +157,9 @@ Portprojektvertrag 75. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
-Produktport belegt. Ein neuer privater NativeDisc-Lauf ist erst nach KR-4994
-und Sol-Review im Rahmen des einmaligen KR-4981-Retrys zulaessig.
+Produktport belegt. Der aktuelle D-Lauf war der freigegebene KR-4981-
+Produktversuch und bestand das globale Produktgate nicht; ein weiterer Lauf
+ist nicht automatisch freigegeben.
 
 `GameProjectArtifact` Format 4 transportiert fuer Spielprojektvertrag 5 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte

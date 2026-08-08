@@ -84,9 +84,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  594f0191b321bd2f470d0aa07100e82f3eea956f
-  plus KR-4987-Sourceaenderung in diesem Task
-  Analyzer-ABI 32 in diesem Abschlusscommit
+  dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa
+  plus reviewtes KR-4994-Source-Delta in diesem Task
+  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -111,8 +111,8 @@ Messwert abgeleitet werden.
 ## Verbindliche Reihenfolge
 
 ```text
-KR-4985, KR-4986, KR-4993 und KR-4987: source-seitig abgeschlossen
-  -> D9 beendet fail-closed; Root 0 konvergiert, kein Portartefakt und kein Erfolg
+KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994: source-seitig abgeschlossen
+  -> D-Lauf beendet nach belegter Nichtverbesserung; Candidate-Resolution offen
 ```
 
 Jeder Task in dieser Kette folgt einzeln:
@@ -125,10 +125,9 @@ D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix. Der
 einzige freigegebene D1-Lauf war nichtterminal; D1/G1 bleibt fail-closed und
 unentschieden. D2/G2 wurde nicht ausgefuehrt. D9 ist beendet und Root 0
 konvergierte fail-closed ohne Portartefakt oder Produkterfolg. KR-4987 bis
-KR-4991 bleiben inaktiv; KR-4994 ist der naechste Implementierungstask nach
-Sol-Review. KR-4981 bleibt das globale Produktgate und darf erst nach KR-4994
-plus Sol-Review genau einmal erneut laufen. KR-4982 und KR-4983 bleiben
-gestrichen.
+KR-4991 bleiben inaktiv; KR-4994 ist source-seitig abgeschlossen. KR-4981
+bleibt das globale Produktgate und ist nicht bestanden. KR-4982 und KR-4983
+bleiben gestrichen.
 
 ---
 
@@ -303,6 +302,20 @@ discards, `939` semantic und `2.377` provenance-only widenings. Der Lauf
 endete fail-closed am unvollstaendigen Root; kein Portartefakt und kein
 Produkt-, G1- oder Limit-Erfolg wird behauptet.
 
+Aktueller D-Lauf: `460,6 s` gesamt, Candidate Resolution ca. `325,8 s`,
+manuelles Beenden des identifizierten Kindprozesses nach belegter
+Nichtverbesserung, `0/1194` committed Roots, HOL `0`, Wave `103`, `272`
+Contexts, `1.044` Semantic-Lanes, `1.029` contextual physical evaluations,
+`2.430` contextual logical requests, `1.359` Input-Widening-, `29` Summary-
+und `733` stale-Dependency-Requeues, `1.359` stale snapshot discards,
+`518.425.788 B` Cache-Payload, `3.964` physische Auswertungen gesamt und
+`0/0` publizierte/verwarfene Epochen. Context-/Evaluation-/Composite-Budgets
+blieben unverbraucht; kein Portartefakt oder `game.exe`.
+Attempts `1024`, `2048` und `4096` hatten bitgenau gleiche relevante
+Admission-/Stack-Diagnostik wie der vorherige Fehlerlauf; der neue Durchsatz
+verbessert Kosten je Churn-Schritt, beseitigt den semantischen Lane-Treiber
+aber nicht. KR-4981 bleibt offen.
+
 ### Ziel
 
 Contexts vor der Lane-Erzeugung zusammenlegen, wenn der konkrete Callee
@@ -334,13 +347,16 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 
 ---
 
-## [ ] KR-4994 - Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier
+## [x] KR-4994 - Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier
 
 Prioritaet: P0 Candidate-Resolution-Korrektheit
 
-Status: Offen. Der D9-Lauf belegt als naechsten echten Engpass den Verlust von
-Stack-/Storage-Identitaet; der boolsche State-Carrier blockiert weiterhin
-korrekt fail-closed.
+Status: Source-seitig abgeschlossen am reviewten Delta auf Basis
+`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa`. Der begrenzte Pending-Carrier
+bewahrt identitaetsgebundene Payloads ueber Merge, Key/Cache, Lifetime,
+ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute und
+contextual/forwarded/stable Harvest sowie Export-Gate. Der D-Lauf belegt
+weiterhin den semantischen Lane-Treiber als offenen Produktblocker.
 
 Vertrag:
 
@@ -351,7 +367,8 @@ Vertrag:
   Harvest und Export-Gate integrieren;
 - keinen Scheduler- oder Budgetumbau, keinen Fallback, keine Coverage-
   Reduktion und keinen Sonic-spezifischen Hack einfuehren;
-- erst nach Sol-Review genau einen neuen Produktlauf freigeben.
+- ein neuer Produktlauf bleibt bis zur naechsten ausdruecklichen Freigabe
+  nach diesem Review gesperrt.
 
 ---
 
@@ -490,7 +507,7 @@ Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
 Der vollstaendige Sol-Endreview
 des unmittelbar vorherigen Explosionsbug-Diffs wurde wiederverwendet; alle
 bestaetigten Findings sind geschlossen; das bisher offene Analyzer-ABI-
-Finding wird in diesem Commit durch ABI 32 geschlossen. Nicht aktivierte
+Finding wurde im vorherigen Fixcommit durch ABI 32 geschlossen. Nicht aktivierte
 KR-4988 bis KR-4991 wurden nicht als geaendert oder reviewpflichtig behauptet.
 
 ### Ziel
@@ -499,7 +516,7 @@ Der vollstaendige Endreview der aktivierten/geaenderten Context-, Cache-,
 Evidence- und Budgetpfade sowie die Pruefung der unveraendert konservativen
 FullState-, Binding-, Dependency- und Scheduling-Fallbackgrenzen ist
 abgeschlossen; alle vorher bestaetigten Findings wurden vor `0ae993f`
-geschlossen; das Analyzer-ABI-Finding wird in diesem Commit mit ABI 32
+geschlossen; das Analyzer-ABI-Finding wurde im vorherigen Fixcommit mit ABI 32
 geschlossen.
 
 ### Umfang

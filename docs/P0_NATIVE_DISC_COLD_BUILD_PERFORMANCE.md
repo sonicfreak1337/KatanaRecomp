@@ -1,8 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
-Status: Aktiver uebergeordneter Performancevertrag. Der funktionale
-Source-Checkpoint ist `594f0191b321bd2f470d0aa07100e82f3eea956f` plus
-KR-4987-Sourceaenderung in diesem Task; Analyzer-ABI 32; der Produktgate
+Status: Aktiver uebergeordneter Performancevertrag. Die Sourcebasis ist
+`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa` plus das reviewte KR-4994-Delta;
+Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
@@ -30,6 +30,18 @@ kein Produkterfolg. `2.724` admitted evaluations/Semantic-Lanes, `4.349`
 logical requests, `3.739` physical evaluations, `2.497` input-widening,
 `932` stale-dependency requeues, `1.740` stale discards, `939` semantic und
 `2.377` provenance-only widenings gehoeren zum beendeten D9-Lauf.
+
+Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
+`325,8 s`; der identifizierte Kindprozess wurde nach belegter
+Nichtverbesserung manuell beendet. Es gab `0/1194` committed Roots, HOL `0`,
+Wave `103`, `272` Contexts, `1.044` Semantic-Lanes, `1.029` contextual
+physical evaluations, `2.430` contextual logical requests, `1.359` Input-
+Widening-, `29` Summary- und `733` stale-Dependency-Requeues, `1.359` stale
+snapshot discards, `518.425.788 B` Cache-Payload, `3.964` physische
+Auswertungen gesamt und `0/0` publizierte/verwarfene Epochen. Kein
+Portartefakt. Die relevante Admission-/Stack-Diagnostik war bei Attempts
+`1024`, `2048` und `4096` bitgenau unveraendert; der Durchsatz stieg, der
+semantische Lane-Treiber bleibt offen.
 
 ## Repositoryweiter Arbeitsvertrag
 
@@ -236,9 +248,8 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 ## Aktiver Taskpfad
 
 ```text
-KR-4985/KR-4986/KR-4993/KR-4987 source-seitig abgeschlossen
-  -> D9 beendet fail-closed; Root 0 konvergiert, kein Portartefakt und kein Erfolg
-  -> KR-4994 naechster Implementierungstask nach Sol-Review
+KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
+  -> D-Lauf beendet nach belegter Nichtverbesserung; Candidate-Resolution offen
 ```
 
 Fuer jeden Implementierungstask gilt:
@@ -251,14 +262,16 @@ D1 und D2 sind reale Sonic-Diagnoseexporte. KR-4981 ist der reale
 Produkt- und Integrationstest. Die vorliegende D1-/D9-Evidenz ist nichtterminal;
 D1/G1 bleibt historisch unentschieden, D2/G2 wurde nicht ausgefuehrt. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist der offene P0-Folgetask nach Sol-Review.
-KR-4981 bleibt das globale Produktgate; ein Retry ist erst nach KR-4994 plus
-Sol-Review genau einmal zulaessig.
+KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der
+semantische Lane-Treiber bleibt als Produktblocker offen. KR-4981 bleibt das
+globale Produktgate und ist nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.
 
 ## Produktmessvertrag KR-4981
 
-Der genau einmalige KR-4981-Retry nach KR-4994 und Sol-Review verwendet:
+Der aktuelle D-Lauf war der freigegebene KR-4981-Produktversuch. Er bestand
+das globale Produktgate nicht; ein weiterer Lauf ist nicht automatisch
+freigegeben.
 
 - denselben dokumentierten Host;
 - normale 24-Thread-Konfiguration;

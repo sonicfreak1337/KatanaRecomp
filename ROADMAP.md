@@ -109,21 +109,21 @@ Die folgenden Staende bleiben getrennt:
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-funktionaler Source-Checkpoint:
-  594f0191b321bd2f470d0aa07100e82f3eea956f
-  plus KR-4987-Sourceaenderung in diesem Task
-  Analyzer-ABI 32
+funktionale Sourcebasis:
+  dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa
+  plus der reviewte KR-4994-Source-Delta dieses Tasks
+  Analyzer-ABI 33
+  Function-Analysis-Epoch-Schema 15
 
 aktueller realer Diagnosebefund:
-  Sonic-v56, terminal nach 1:28:24 mit Exitcode 5
-  1/1191 Resolution-Roots committed
-  65.536 Contextual-Return-Evaluationen einer Funktion ausgeschoepft
-  Context-Limit nicht erreicht
-  25.728 eindeutige Contexts
-  27.872 physische Auswertungen
-  0 Cache-Eviction-Recomputes
-  Resolution-Epoche wegen incomplete-root verworfen
-  kein Portartefakt, keine game.exe, kein Screenshot
+  D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s
+  manuelles Beenden des identifizierten Kindprozesses nach belegter Nichtverbesserung
+  0/1194 Resolution-Roots committed, HOL 0, Wave 103
+  272 Contexts, 1.044 Semantic-Lanes, 1.029 contextual physical evaluations
+  2.430 contextual logical requests, 1.359 Input-Widening-, 29 Summary- und
+  733 stale-Dependency-Requeues, 1.359 stale snapshot discards
+  518.425.788 B Cache-Payload, 3.964 physische Auswertungen gesamt
+  0/0 publizierte/verwarfene Epochen, kein Portartefakt, keine game.exe
 ```
 
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
@@ -167,9 +167,14 @@ Contexts dividiert werden. Diese Werte bleiben historische Evidenz und
 werden nicht als gemeinsamer Root behauptet.
 
 Eine blosse Erhoehung des 65.536er-Budgets, mehr Cache oder mehr Threads ist
-kein Fix. Der einmalige D1-Lauf zeigte Root-0-Fortschritt und transportierte
-die neuen gleich scoped Zaehler, erreichte aber weder Root 1 noch einen
-vollstaendigen schweren Root. D1/G1 bleibt deshalb unentschieden.
+kein Fix. Der aktuelle D-Lauf zeigt gegenueber dem vorherigen Fehlerlauf bei
+gleicher Gesamtzeit (~459,6 s) hoeheren Durchsatz (`wave 103` statt `67`,
+`1.044` statt `722` Lanes, `1.029` statt `713` contextual physical
+evaluations, `733` statt `839` stale requeues und `518.425.788` statt
+`444.266.838` B Cache-Payload), entfernt den semantischen Lane-Treiber aber
+nicht. Bei Attempts `1024`, `2048` und `4096` waren die relevanten
+Admission-/Stack-Diagnosezaehler bitgenau identisch. Candidate-Resolution
+bleibt deshalb offen; KR-4981 ist nicht bestanden.
 
 Der Detailvertrag steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
@@ -187,27 +192,26 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding wird in diesem Commit mit ABI 32 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; genau ein Retry erst nach KR-4994 und Sol-Review; vollstaendiger 24-Thread-Kaltport und realer Lauf |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding wurde im vorherigen Fixcommit mit ABI 32 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; der aktuelle D-Lauf bestand es nicht; kein weiterer Lauf ohne ausdrueckliche Freigabe; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | offen P0; naechster echter Stack-/Storage-Identitaetsengpass, erst nach Sol-Review und genau einem neuen Produktlauf |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier ueber Merge/Key/Cache/Lifetime/ABI-/Summary-Propagation und Harvest; der semantische Lane-Treiber bleibt im Produktgate offen |
 
 Die Reihenfolge ist normativ:
 
 ```text
-KR-4985/KR-4986/KR-4993/KR-4987 source-seitig abgeschlossen
-  -> D9 beendet fail-closed; Root 0 konvergiert, kein Portartefakt und kein Erfolg
-  -> KR-4994 naechster Implementierungstask nach Sol-Review
+KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
+  -> D-Lauf beendet durch manuelles Beenden nach belegter Nichtverbesserung
+  -> Candidate-Resolution bleibt offen; KR-4981 ist nicht bestanden
 ```
 
 D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue Testmatrix.
 D1/G1 bleibt historisch unentschieden; D2/G2 wurde nicht ausgefuehrt. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Portartefakt oder
-Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist als offener
-P0-Implementierungstask angelegt und darf nach Sol-Review genau einen neuen
-Produktlauf vorbereiten. KR-4981 bleibt das globale Produktgate; ein Retry
-ist erst nach KR-4994 plus Sol-Review genau einmal zulaessig. KR-4982 und
-KR-4983 bleiben gestrichen.
+Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig
+abgeschlossen; der semantische Lane-Treiber bleibt offen. KR-4981 bleibt das
+globale Produktgate und ist nicht bestanden. KR-4982 und KR-4983 bleiben
+gestrichen.
 
 ## Weiterer v0.49-Kritischer Pfad
 

@@ -287,9 +287,9 @@ Testmatrix.
 
 ## Aktueller P0-Handoff
 
-Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-
-Pfad ist `594f0191b321bd2f470d0aa07100e82f3eea956f` plus
-KR-4987-Sourceaenderung in diesem Task; Analyzer-ABI 32.
+Die Sourcebasis fuer den aktuellen Candidate-Resolution-Pfad ist
+`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa` plus das reviewte KR-4994-Delta;
+Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -352,15 +352,27 @@ Diagnosen verteilten sich auf 189 forwarded-call, 158 candidate-store, 113
 fixpoint-call und 2 forwarded-tail; tail-store-identity-loss `0`. Kein
 Portartefakt und kein Produkterfolg.
 
+Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
+`325,8 s`; der identifizierte Kindprozess wurde nach belegter
+Nichtverbesserung manuell beendet. Es gab `0/1194` committed Roots, HOL `0`,
+Wave `103`, `272` Contexts, `1.044` Semantic-Lanes, `1.029` contextual
+physical evaluations, `2.430` contextual logical requests, `1.359` Input-
+Widening-, `29` Summary- und `733` stale-Dependency-Requeues, `1.359` stale
+snapshot discards, `518.425.788 B` Cache-Payload, `3.964` physische
+Auswertungen gesamt und `0/0` publizierte/verwarfene Epochen. Context-/
+Evaluation-/Composite-Budgets blieben unverbraucht; kein Portartefakt. Bei
+Attempts `1024`, `2048` und `4096` blieb die relevante
+Admission-/Stack-Diagnostik bitgenau gleich; der Durchsatz stieg, der
+semantische Lane-Treiber bleibt offen. KR-4981 ist nicht bestanden.
+
 Der verbindliche aktuelle Pfad lautet:
 
 ```text
 D9 beendet fail-closed; kein Portartefakt und kein Produkterfolg
 ```
 
-KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist als offener P0-Folgetask
-und naechster Implementierungstask angelegt; nach Sol-Review darf genau ein
-neuer Produktlauf vorbereitet werden.
+KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen;
+der semantische Lane-Treiber bleibt der offene P0-Produktblocker.
 Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
 sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
@@ -371,8 +383,9 @@ nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
 Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; das
-Analyzer-ABI-Finding wird in diesem Commit durch ABI 32 geschlossen. Es gibt
-kein bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.
+Analyzer-ABI-Finding wurde mit ABI 32 geschlossen. KR-4994 ist source-seitig
+abgeschlossen, aber der semantische Lane-Treiber bleibt offen. Es gibt kein
+bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.
 
 ## Abschlusscheck vor dem Push
 

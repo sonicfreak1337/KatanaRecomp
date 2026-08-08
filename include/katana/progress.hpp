@@ -140,8 +140,8 @@ struct ProgressCounterSnapshot final {
     // replay the exact inventory payload. This is deliberately independent
     // from the hit/miss accounting identity.
     std::optional<std::uint64_t> cache_replay_fallback_recomputes;
-    // Physical evaluations intentionally bypassing the cache for opt-in
-    // analyzer diagnostics. Product performance runs require this to be zero.
+    // Reserved explicit-cache-bypass compatibility counter. Stack diagnostics
+    // retain the ordinary cache path and leave this at zero.
     std::optional<std::uint64_t> cache_diagnostic_bypass_evaluations;
     std::optional<std::uint64_t> multi_root_context_requests;
     std::optional<std::uint64_t> multi_root_unique_contexts;

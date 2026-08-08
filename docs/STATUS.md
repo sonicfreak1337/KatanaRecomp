@@ -31,9 +31,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  594f0191b321bd2f470d0aa07100e82f3eea956f
-  plus KR-4987-Sourceaenderung in diesem Task
-  Analyzer-ABI 32 in diesem Abschlusscommit
+  dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa
+  plus reviewtes KR-4994-Source-Delta in diesem Task
+  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15
 
 aktueller realer Diagnosebefund:
   Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
@@ -47,7 +47,7 @@ aktueller realer Diagnosebefund:
   kein Portartefakt, keine game.exe, kein Screenshot
 
 aktueller Dokumentationsstand:
-  Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987 abgeschlossen; ABI-Finding geschlossen; Produktgate offen
+  Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 abgeschlossen; Produktgate offen
 ```
 
 Source-, Diagnose- und Produktevidenz duerfen nicht als derselbe Fortschritt
@@ -152,11 +152,38 @@ endgueltig gescheitert belegt. Bis Rootindex, Rootadresse und limitierte
 Funktion terminal ausgegeben werden, gilt der Befund allgemein fuer die
 ersten schweren Candidate-Resolution-Roots.
 
+### Aktueller D-Lauf
+
+Der einmalige D-Lauf dauerte `460,6 s`; Candidate Resolution lief von
+`00:37:17` bis `00:42:43` (ca. `325,8 s`). Summary `product-exit` bedeutet hier
+nur, dass der exakt identifizierte Kindprozess nach belegter Nichtverbesserung
+manuell beendet wurde. Es gab keine kanonische Publikation, `0/1194`
+committed Roots, HOL `0`, Wave `103`, `272` zugelassene Contexts, `1.044`
+Semantic-Lanes, `1.029` contextual physical evaluations und `2.430`
+contextual logical requests.
+
+Context-/Evaluation-/Composite-Budgets blieben unverbraucht.
+
+Weitere D-Laufwerte: `1.359` Input-Widening-, `29` Summary- und `733`
+stale-Dependency-Requeues, `1.359` stale snapshot discards,
+`518.425.788 B` Cache-Payload, `3.964` physische Auswertungen gesamt sowie
+`0/0` publizierte/verwarfene Analyseepochen. Ein Portartefakt oder `game.exe`
+entstand nicht.
+
+Bei Attempts `1024`, `2048` und `4096` waren die relevanten Admission-/Stack-
+Diagnosezaehler bitgenau identisch zum vorherigen Fehlerlauf. Bei vergleichbarer
+Gesamtzeit (~`459,6 s`) erreichte der neue Lauf jedoch Wave `103` statt `67`,
+`1.044` statt `722` Semantic-Lanes, `1.029` statt `713` contextual physical
+evaluations, `733` statt `839` stale requeues und `518.425.788` statt
+`444.266.838 B` Cache-Payload. Der Pending-Carrier verbessert damit offenbar
+Kosten je Churn-Schritt bzw. den Durchsatz, entfernt den semantischen
+Lane-Treiber aber nicht. Candidate-Resolution und KR-4981 bleiben offen.
+
 ## Aktueller kritischer Pfad
 
 ```text
-KR-4985/KR-4986/KR-4993/KR-4987 source-seitig abgeschlossen
-  -> D9 beendet fail-closed; KR-4994 ist der naechste Implementierungstask
+KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
+  -> D-Lauf beendet nach belegter Nichtverbesserung; Candidate-Resolution offen
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und
@@ -166,9 +193,9 @@ D1 und D2 sind reale Sonic-Diagnoseexporte, keine Testmatrix. D1/G1 bleibt
 wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
 wurde nicht ausgefuehrt. D9 ist beendet und Root 0 konvergierte fail-closed,
 ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
-KR-4994 ist als offener P0-Folgetask und naechster Implementierungstask
-angelegt. KR-4981 bleibt das globale Produktgate; ein Retry ist erst nach
-KR-4994 plus Sol-Review genau einmal zulaessig.
+KR-4994 ist source-seitig abgeschlossen; der semantische Lane-Treiber bleibt
+als P0-Produktblocker offen. KR-4981 bleibt das globale Produktgate und ist
+nicht bestanden.
 
 ## Quellseitig vorhandene Hauptvertraege
 
@@ -224,9 +251,9 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 
 ```text
 D9 ist beendet und fail-closed; Root 0 konvergierte ohne Portartefakt und
-Produkterfolg. KR-4994 ist der naechste Implementierungstask; KR-4981 bleibt
-das globale Produktgate und darf erst nach KR-4994 plus Sol-Review genau einmal
-erneut laufen.
+Produkterfolg. KR-4994 ist source-seitig abgeschlossen; der semantische
+Lane-Treiber bleibt offen. KR-4981 bleibt das globale Produktgate und ist
+nicht bestanden.
 ```
 
 Ein zweiter D1-Lauf, D2/G2 und eine Aktivierung von KR-4987 bis KR-4991 gehoeren

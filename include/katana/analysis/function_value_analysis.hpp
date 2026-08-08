@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -32,7 +33,7 @@ enum class EvaluationLens : std::uint8_t {
     Count,
 };
 
-inline constexpr std::uint32_t evaluation_lens_schema_version = 3u;
+inline constexpr std::uint32_t evaluation_lens_schema_version = 4u;
 inline constexpr std::size_t evaluation_lens_count =
     static_cast<std::size_t>(EvaluationLens::Count);
 
@@ -154,6 +155,60 @@ struct EvaluationLensTelemetry {
     std::size_t key_interned_references = 0u;
 };
 
+// A bounded, inventory-only carrier for a finite callback payload whose exact
+// stack or memory cell identity has been widened away.  It is deliberately
+// distinct from a value's ordinary scalar domain: materialization makes it a
+// guarded, incomplete candidate only at an observing load or ABI boundary.
+// The vectors are canonical sorted sets and are limited by the analysis-wide
+// guarded inventory bound.  Truncation is genuine Top; a finite carrier is not.
+struct InventoryCandidateCarrier {
+    std::vector<std::uint32_t> inventory_code_pointer_values;
+    std::vector<std::uint32_t> inventory_pc_relative_code_literal_values;
+    // A finite ordinary stack scalar whose exact slot was folded away before
+    // a later, independently proven ABI boundary could validate/promote it.
+    // It is intentionally not a code-pointer domain by itself.
+    std::vector<std::uint32_t> pending_abi_scalar_values;
+    bool inventory_code_pointer_values_truncated = false;
+    bool inventory_pc_relative_code_literal_values_truncated = false;
+    bool pending_abi_scalar_values_truncated = false;
+    bool contextual_candidate_dependency = false;
+    std::set<std::uint32_t> call_sites;
+    std::set<std::uint32_t> callees;
+
+    bool operator==(const InventoryCandidateCarrier&) const = default;
+};
+
+struct InventorySavedStackEpochSummary;
+
+// The nested vector is intentionally value-semantic.  A saved-SP pointer in
+// a saved stack slot remains a pointer to another epoch; it is never folded
+// into the outer slot's direct callback carrier.
+struct InventorySavedStackSlotSummary {
+    std::int32_t relative_slot = 0;
+    InventoryCandidateCarrier carrier;
+    std::vector<InventorySavedStackEpochSummary> nested_epochs;
+
+    bool operator==(const InventorySavedStackSlotSummary&) const = default;
+};
+
+struct InventorySavedStackEpochSummary {
+    bool present = false;
+    bool unresolved = false;
+    bool tracks_current_epoch = false;
+    bool candidate_payload_lost = false;
+    // Depth-capped nested saved-SP lineage with no candidate payload. This is
+    // an alias fact, deliberately distinct from candidate_payload_lost.
+    bool nested_saved_stack_alias_latent = false;
+    bool nested_saved_stack_alias_tracks_current_epoch = false;
+    std::vector<InventorySavedStackSlotSummary> slots;
+    InventoryCandidateCarrier unresolved_candidate_carrier;
+    // Outer coordinate loss must not turn an inner saved-SP into a direct
+    // callback.  Keep the bounded nested epoch alternatives separately.
+    std::vector<InventorySavedStackEpochSummary> unresolved_nested_epochs;
+
+    bool operator==(const InventorySavedStackEpochSummary&) const = default;
+};
+
 struct FunctionRegisterValueSummary {
     std::uint8_t register_index = 0u;
     bool complete = false;
@@ -181,6 +236,7 @@ struct FunctionRegisterValueSummary {
     // relevant callback candidate.
     bool inventory_saved_stack_alias_latent = false;
     bool inventory_saved_stack_alias_tracks_current_epoch = false;
+    InventorySavedStackEpochSummary inventory_saved_stack_epoch;
     std::vector<std::uint32_t> values;
     std::vector<std::uint32_t> return_sites;
     std::vector<std::uint32_t> evidence_callees;
@@ -198,6 +254,11 @@ struct FunctionMemoryValueSummary {
     bool inventory_stack_callback_loss_unresolved = false;
     bool inventory_saved_stack_alias_latent = false;
     bool inventory_saved_stack_alias_tracks_current_epoch = false;
+    // Address-scoped unknown values can still carry a finite guarded
+    // inventory payload. Keep that payload through a function summary instead
+    // of dropping it merely because `values` is empty.
+    InventoryCandidateCarrier inventory_candidate_carrier;
+    InventorySavedStackEpochSummary inventory_saved_stack_epoch;
     std::vector<std::uint32_t> values;
 
     bool operator==(const FunctionMemoryValueSummary&) const = default;
@@ -227,12 +288,33 @@ struct FunctionValueSummary {
     bool memory_read_unknown = false;
     std::vector<FunctionMemoryWriteRange> memory_read_ranges;
     std::vector<FunctionMemoryValueSummary> memory_values;
+    // Domain-scoped may-carriers. They survive an imprecise stack or memory
+    // address and are observed only by compatible reads; complete-empty read
+    // contracts may intentionally remove the corresponding domain.
+    InventoryCandidateCarrier inventory_unresolved_stack_carrier;
+    InventoryCandidateCarrier inventory_unresolved_memory_carrier;
+    InventorySavedStackEpochSummary inventory_unresolved_stack_epoch;
+    InventorySavedStackEpochSummary inventory_unresolved_memory_epoch;
+    // Evaluation-local effect on aliases that still track the caller's
+    // current stack epoch.  This is deliberately separate from the returned
+    // unresolved stack domain: the latter is a may-read result state, while
+    // this bounded delta is replayed only into caller aliases at apply_call.
+    InventoryCandidateCarrier current_stack_epoch_mutation_carrier;
+    InventorySavedStackEpochSummary current_stack_epoch_mutation_epoch;
+    bool current_stack_epoch_mutation_callback_loss = false;
     // Bounded top for payload-free aliases whose exact storage identity was
     // widened away inside this function (stack=1, memory=2).
     std::uint8_t inventory_unresolved_saved_stack_alias_sources = 0u;
-    bool inventory_unresolved_saved_stack_alias_tracks_current_epoch = false;
+    // Current-epoch tracking is scoped to the same lost storage domain as
+    // `inventory_unresolved_saved_stack_alias_sources` (stack=1, memory=2).
+    // A single shared bool would let a stack-only mutation poison a retained
+    // memory alias (and vice versa).
+    std::uint8_t inventory_unresolved_saved_stack_alias_tracks_current_sources = 0u;
     bool inventory_unresolved_stack_callback_loss = false;
-    bool inventory_stack_callback_loss_identity_truncated = false;
+    bool inventory_unresolved_memory_callback_loss = false;
+    // Bounded storage-identity loss is scoped to the domain that lost the
+    // exact key (stack=1, memory=2).  A stack switch discards only stack.
+    std::uint8_t inventory_callback_loss_identity_truncated_sources = 0u;
 
     bool operator==(const FunctionValueSummary&) const = default;
 };
@@ -667,10 +749,9 @@ struct FunctionValueAnalysisProgress {
     // bounded inventory artifact could not retain an exact replay stream.
     // This is independent of the primary cache hit/miss partition.
     std::size_t cache_replay_fallback_recomputes = 0u;
-    // Physical interpreter executions intentionally performed outside the
-    // session cache while the opt-in stack diagnostic is active. Keeping
-    // this separate preserves the exact physical-work identity:
-    // misses + replay fallbacks + diagnostic bypasses.
+    // Reserved explicit-cache-bypass compatibility counter. Stack diagnostics
+    // retain the normal session-cache path and leave this at zero; physical
+    // work remains misses plus replay fallbacks.
     std::size_t cache_diagnostic_bypass_evaluations = 0u;
     // Run-local physical-work fanout. In-flight subscribers always share one
     // producer. Completed aliases are byte-bounded and may re-enter the
