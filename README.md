@@ -2,24 +2,26 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller funktionaler Source-Checkpoint: `a521999`, Runtime-ABI 87,
-Analyzer-ABI 31,
+Aktueller funktionaler Source-Checkpoint: `594f0191b321bd2f470d0aa07100e82f3eea956f`
+plus KR-4987-Sourceaenderung in diesem Task, Runtime-ABI 87, Analyzer-ABI 32,
 Application-Contract 8 und Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
 `1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
 `65.536`, `25.728` laufweit gemeldeten Contexts und `27.872` laufweit
-gemeldeten physischen Auswertungen. Diese Zaehldomaenen sind noch nicht
-gemeinsam scoped und duerfen bis KR-4985 nicht zu Requeue- oder
-Per-Context-Messwerten verrechnet werden. Ein neues Portartefakt, eine
+gemeldeten physischen Auswertungen. Diese historischen Zaehldomaenen sind
+nicht gemeinsam scoped und werden nicht zu Requeue- oder Per-Context-
+Messwerten verrechnet. Ein neues Portartefakt, eine
 `game.exe` und ein neuer Screenshot existieren aus diesem Stand nicht.
 
-Als naechstes sind ausschliesslich der gegatete Kernpfad KR-4985 bis KR-4991
-und danach KR-4993 vorgesehen. Jeder reviewte Task wird direkt auf `main`
-gepusht; dieser Push gibt den naechsten ungegateten Task ohne weitere
-Nutzeranweisung frei. Nur D1 und D2 benoetigen eine ausdrueckliche
-Lauf-Freigabe, bedingte Tasks ihr positives G1-/G2-Messgate. Nach KR-4993
-folgt KR-4981 als voller Produktnachweis. KR-4992 kommt nur nach einem
-verfehlten KR-4981 und positivem Restkosten-/RAM-Gate infrage. Der
+KR-4985, KR-4986, KR-4993 und KR-4987 sind source-seitig abgeschlossen. Der
+D9-Lauf ist nach `20,331 s` fail-closed beendet: Root 0 konvergierte bis Wave
+`184` und Frontier `0` (maximal `216`), ohne Portartefakt oder Produkterfolg.
+KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv.
+KR-4994 ist als offener P0-Folgetask fuer den nächsten Stack-/Storage-
+Identitaetsengpass und naechste Implementierungstask angelegt. KR-4981 bleibt
+das globale Produktgate und darf erst nach KR-4994 plus Sol-Review genau einmal
+erneut laufen. KR-4992 kommt nur nach einem verfehlten KR-4981 und positivem
+Restkosten-/RAM-Gate infrage. Der
 verbindliche Folgeplan steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
 der uebergeordnete Kaltbuildvertrag in
@@ -28,7 +30,7 @@ der uebergeordnete Kaltbuildvertrag in
 ```text
 Runtime-ABI:                    87
 Block-ABI:                       5
-Analyzer-ABI:                   31
+Analyzer-ABI:                   32
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             75
@@ -153,8 +155,8 @@ Portprojektvertrag 75. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
-Produktport belegt. Der naechste vollstaendige private NativeDisc-Lauf ist
-erst nach KR-4993 und der dort verlangten Gesamtpruefung zulaessig.
+Produktport belegt. Ein neuer privater NativeDisc-Lauf ist erst nach KR-4994
+und Sol-Review im Rahmen des einmaligen KR-4981-Retrys zulaessig.
 
 `GameProjectArtifact` Format 4 transportiert fuer Spielprojektvertrag 5 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
@@ -249,8 +251,8 @@ Framemarker und das erste neue AOT-, Runtime- oder Geraeteproblem; ein
 sichtbarer Bildschirm wird separat anhand einer realen Ausgabeaufnahme
 klassifiziert. Dieser Vertrag ist im Source-Checkpoint `18f8537`
 implementiert, aber noch nicht mit einem aktuellen Sonic-Port abgenommen.
-Vor dem naechsten vollstaendigen privaten Produktlauf stehen der gegatete
-Kernpfad KR-4985 bis KR-4991 und KR-4993.
+Vor dem naechsten vollstaendigen privaten Produktlauf stehen KR-4994 und
+Sol-Review; danach darf KR-4981 genau einmal als globales Produktgate laufen.
 
 Die **historische v24-`CompletePlatform`-Vergleichsbasis** endete in beiden Pfaden bei
 Schedulerzyklus 600.000.000 ohne erstes neues AOT-, Runtime- oder
@@ -287,8 +289,8 @@ Callback jetzt ueber begrenzte Tail-Jump- und Runtime-Frame-Pfade, erkennt
 `0x8C64784E` als Funktion und erreicht `0x8C6478C2` als gemeinsamen Body.
 Der aktuelle Quellstand transportiert solche bewachten AOT-Einstiege durch
 CFG, Source-Map und AOT und erzwingt ihre Exportvollstaendigkeit. Der
-aktuelle Produktnachweis steht weiterhin aus und darf erst nach dem
-KR-4993-Gate erfolgen.
+aktuelle Produktnachweis steht weiterhin aus und darf erst nach KR-4994
+und Sol-Review im genau einmaligen KR-4981-Gate erfolgen.
 Die terminale Diagnose unterscheidet diesen Fall jetzt korrekt als
 `aot-template-mismatch` von echten Byteidentitaetsfehlern.
 

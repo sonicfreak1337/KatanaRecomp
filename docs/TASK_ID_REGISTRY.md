@@ -66,13 +66,16 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der funktionale Source-Checkpoint fuer den aktuellen Source-Stand ist
-`0ae993f8f59db1fc866ce5e77874015b610a8bd5`. Historisch erzeugte v56 kein Portartefakt und
+`594f0191b321bd2f470d0aa07100e82f3eea956f` plus KR-4987-Sourceaenderung in
+diesem Task; Analyzer-ABI 32. Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
-keinen erreichten Root 1; D1/G1 bleibt unentschieden. Nach diesem
-KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene
-Produktgate; D2/G2 wurde nicht ausgefuehrt und KR-4987 bis KR-4991 bleiben
-inaktiv.
+keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
+abgeschlossen; D9 ist beendet und Root 0 konvergierte fail-closed ohne
+Portartefakt oder Produkterfolg. D2/G2 wurde nicht ausgefuehrt und KR-4988 bis
+KR-4991 bleiben inaktiv. KR-4994 ist der naechste Implementierungstask nach
+Sol-Review. KR-4981 bleibt das globale Produktgate und darf erst nach KR-4994
+plus Sol-Review genau einmal erneut laufen.
 
 | ID | Titel | Status |
 |---|---|---|
@@ -106,19 +109,20 @@ inaktiv.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 naechster freigegebener Produktmesspunkt nach dem KR-4993-Dokumentationspush; je reviewtem Sourcekandidaten hoechstens ein Lauf, keine Vorab-Buildmatrix |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; genau ein Retry erst nach KR-4994 und Sol-Review; je reviewtem Sourcekandidaten hoechstens ein Lauf, keine Vorab-Buildmatrix |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | [x] source-seitig abgeschlossen; D1-Telemetrie explizit opt-in, Produktgate unentschieden |
 | KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | [x] source-seitig abgeschlossen; Full-State-paritaetische Semantik-/Provenienztrennung |
-| KR-4987 | Read-Lens-projizierte Context-Identitaet | bedingt geplant P0; nur bei positivem Messgate G1, sonst FullState |
+| KR-4987 | Read-Lens-projizierte Context-Identitaet | [x] source-seitig abgeschlossen; vollstaendige Key-Bytes, strikter FullState-Fallback sowie exakte Provenienz/Restore; D9 beendet fail-closed, kein Erfolg behauptet |
 | KR-4988 | Internierte AbstractStates und Function-Value-Summaries | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kostengate, sonst gemessener Skip |
 | KR-4989 | Indexierte exakte Context-Bindings | bedingt geplant P1; nur bei positivem Zehn-Prozent-Bindinggate, Indexlookup mit unveraendertem Join-Fallback |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kosten- und 50-Prozent-Reusegate, sonst Full-Rebuild |
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
-| KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach KR-4993 vor Retry |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, keine offenen Source-Findings; globale Produktabnahme bleibt KR-4981 |
+| KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding in diesem Commit mit ABI 32 geschlossen; globale Produktabnahme bleibt KR-4981 |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | offen P0; strikt begrenzter monotoner Identitaetscarrier fuer Stack-/Storage-Verlust, erst nach Sol-Review und genau einem neuen Produktlauf |
 
 ## Aktuelle Meilensteinzuordnung
 
@@ -126,8 +130,8 @@ inaktiv.
 - `KR-4971` ist durch den v28-Produktlauf abgeschlossen.
 - `KR-4972` ist quellseitig implementiert; Guarded-AOT-Einstieg und
   Exportvollstaendigkeit sind vorhanden. Ob der historische Missing-AOT-
-  Grenzpunkt dadurch real passiert wird, entscheidet erst der nach KR-4993
-  zulaessige ABI-passende Sonic-Lauf.
+  Grenzpunkt dadurch real passiert wird, entscheidet erst der nach KR-4994
+  und Sol-Review zulaessige ABI-passende Sonic-Lauf.
 - `KR-4973` ist durch den sichtbaren v32-NativeDisc-Produktlauf abgeschlossen;
   seine ABI-64-Messwerte bleiben historische Evidenz. DirectBoot benoetigt
   fuer einen spaeteren aktuellen ABI-Pfad einen frischen

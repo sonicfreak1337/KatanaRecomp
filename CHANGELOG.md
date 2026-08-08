@@ -13,7 +13,12 @@
   Detailtelemetrie opt-in aktiv und beeinflusst weder Analyse noch Cache oder
   kanonische Publikation.
 - KR-4993 schliesst den vollstaendigen Candidate-Resolution-Source-Endreview
-  ohne offene Source-Findings ab; KR-4981 bleibt das naechste Produktgate.
+  ab; das bis dahin offene Analyzer-ABI-Finding wird in diesem Commit mit
+  ABI 32 geschlossen. Das Produktgate KR-4981 bleibt offen.
+- KR-4987 ist source-seitig abgeschlossen: bewiesene Read-Lens-Projektion,
+  vollstaendige Key-Bytes und konservativer FullState-Fallback erhalten
+  exakte Provenienz. Der D9-Produktlauf endete fail-closed ohne Portartefakt
+  und ist kein Erfolg.
 - KR-4984 schliesst die vollstaendige P0/P1-Gesamtpruefung quellseitig ohne
   offenen Befund. Der Function-Evaluation-Cache bindet forwarded Register-
   Live-ins; optionale Whole-Export-Cachepublikation ist fail-open; lange

@@ -31,7 +31,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  0ae993f8f59db1fc866ce5e77874015b610a8bd5
+  594f0191b321bd2f470d0aa07100e82f3eea956f
+  plus KR-4987-Sourceaenderung in diesem Task
+  Analyzer-ABI 32 in diesem Abschlusscommit
 
 aktueller realer Diagnosebefund:
   Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
@@ -45,7 +47,7 @@ aktueller realer Diagnosebefund:
   kein Portartefakt, keine game.exe, kein Screenshot
 
 aktueller Dokumentationsstand:
-  Source-Tasks KR-4985/KR-4986/KR-4993 abgeschlossen; Produkt-D1 unentschieden
+  Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987 abgeschlossen; ABI-Finding geschlossen; Produktgate offen
 ```
 
 Source-, Diagnose- und Produktevidenz duerfen nicht als derselbe Fortschritt
@@ -65,7 +67,11 @@ Das `65.536`-Limit ist ein Per-Function-Budget; `25.728` Contexts und
 `27.872` physische Auswertungen sind historische laufweite Aggregate und
 werden nicht miteinander verrechnet.
 
-Der Source-Fix ist fuer KR-4985/KR-4986 abgeschlossen. Nach dem Prozessende
+Der Source-Fix ist fuer KR-4985/KR-4986 abgeschlossen. KR-4987 ist
+source-seitig abgeschlossen: Die Read-Lens-projizierte Contextual-
+SemanticLane-Identitaet verwendet vollstaendige Key-Bytes, bleibt bei
+Vertragsluecke/Truncation/Fallback strikt FullState und erhaelt exakte
+Provenienz/Restore sowie Discovery -> Freeze -> Publish. Nach dem Prozessende
 war die temporaere JSONL bis Sequence `2266` bei `185,586 s` lesbar/gespuelt
 (`2.267` Records, `10,8 MB`), aber ohne terminalen Datensatz und ohne atomare
 Publikation; daraus folgt kein terminaler Produktabschluss. Es gab `348`
@@ -103,6 +109,40 @@ und der nicht erreichte historische Root 1 erlauben keine Entscheidung ueber
 Candidate-Resolution-Gesamtzeit, Limitfreiheit, terminale
 IncompleteRoot-/Retentionwerte, Coverage oder G1.
 
+### D9-Produktbeobachtung
+
+Der einmalige ueberwachte Sonic-Lauf dauerte `20,331 s` und endete beim ersten
+fail-closed Telemetrie-/Publikationssignal. Root 0 erreichte Wave `184` und
+Frontier `0` bei maximal `216`; der Prozessbaum ist sauber beendet, es gibt
+kein Portartefakt und keinen Produkterfolg. Context-/Evaluation-/Composite-
+Budgets blieben unverbraucht.
+
+```text
+contexts admitted:                         288
+evaluations admitted / Semantic-Lanes:     2.724 / 2.724
+logical requests / physical evaluations:   4.349 / 3.739
+input-widening / stale-dependency requeues: 2.497 / 932
+stale snapshot discards:                   1.740
+semantic / provenance-only widenings:      939 / 2.377
+final / maximum frontier:                  0 / 216
+analysis epochs published / discarded:     0 / 1
+retention:                                 incomplete-root
+```
+
+Der Root blieb fail-closed unvollstaendig: `local_fixpoint=0`,
+`pending_regions=0`, alle Context-/Evaluation-/Budgetlimits `0`,
+`candidate_values_truncated=1`, `abi_stack_base_unresolved=1`; alle anderen
+Candidate-/Stack-/Table-Truncationflags blieben `0`. Der generische
+telemetry-degraded-/Exit-34-Befund war die erwartete Folge des verworfenen
+unvollstaendigen Roots, kein Haenger und kein separater Publikationsfehler.
+64 Candidate-Truncation-Diagnosen waren ausschliesslich
+`carrier=state`, `coordinate/domain=identity`, `values=0`; das terminale
+Kandidatenbit stammt aus `inventory_stack_callback_loss_identity_truncated`.
+6 Contextual-Value-Overflows erreichten jeweils `merged_values=9`. 462 Stack-Loss-
+Diagnosen verteilten sich auf 189 forwarded-call, 158 candidate-store,
+113 fixpoint-call und 2 forwarded-tail; tail-store-identity-loss blieb `0`.
+Der naechste echte Engpass ist damit Stack-/Storage-Identitaetsverlust.
+
 Eine Erhoehung des 65.536er-Budgets, mehr Cache oder mehr Threads ist kein
 Fix. Die Arbeit muss semantisch reduziert und kausal korrekt eingeplant
 werden, ohne Analyse-, Evidence- oder AOT-Abdeckung zu verlieren.
@@ -115,17 +155,20 @@ ersten schweren Candidate-Resolution-Roots.
 ## Aktueller kritischer Pfad
 
 ```text
-KR-4985/KR-4986/KR-4993 source-seitig abgeschlossen
-  -> nach diesem KR-4993-Dokumentationspush: KR-4981
+KR-4985/KR-4986/KR-4993/KR-4987 source-seitig abgeschlossen
+  -> D9 beendet fail-closed; KR-4994 ist der naechste Implementierungstask
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und
 positivem Restkosten-/RAM-Gate. KR-4982 und KR-4983 bleiben gestrichen.
 
 D1 und D2 sind reale Sonic-Diagnoseexporte, keine Testmatrix. D1/G1 bleibt
-wegen der nichtterminalen Root-0-Evidenz unentschieden; D2/G2 wurde nicht
-ausgefuehrt. KR-4987 bis KR-4991 bleiben inaktiv. KR-4981 ist der naechste
-freigegebene Produktgate nach diesem Dokumentationspush.
+wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
+wurde nicht ausgefuehrt. D9 ist beendet und Root 0 konvergierte fail-closed,
+ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
+KR-4994 ist als offener P0-Folgetask und naechster Implementierungstask
+angelegt. KR-4981 bleibt das globale Produktgate; ein Retry ist erst nach
+KR-4994 plus Sol-Review genau einmal zulaessig.
 
 ## Quellseitig vorhandene Hauptvertraege
 
@@ -180,8 +223,10 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 ## Naechster Schritt
 
 ```text
-Nach diesem KR-4993-Dokumentationspush KR-4981 als einzigen naechsten
-Produktgate ausfuehren; die Produkt-P0-Abnahme bleibt bis dahin offen.
+D9 ist beendet und fail-closed; Root 0 konvergierte ohne Portartefakt und
+Produkterfolg. KR-4994 ist der naechste Implementierungstask; KR-4981 bleibt
+das globale Produktgate und darf erst nach KR-4994 plus Sol-Review genau einmal
+erneut laufen.
 ```
 
 Ein zweiter D1-Lauf, D2/G2 und eine Aktivierung von KR-4987 bis KR-4991 gehoeren

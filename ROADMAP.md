@@ -110,7 +110,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionaler Source-Checkpoint:
-  0ae993f8f59db1fc866ce5e77874015b610a8bd5
+  594f0191b321bd2f470d0aa07100e82f3eea956f
+  plus KR-4987-Sourceaenderung in diesem Task
+  Analyzer-ABI 32
 
 aktueller realer Diagnosebefund:
   Sonic-v56, terminal nach 1:28:24 mit Exitcode 5
@@ -180,27 +182,32 @@ der uebergeordnete Kaltbuildvertrag in
 |---|---|---|
 | KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | [x] source-seitig abgeschlossen; produktive D1-Telemetrie explizit opt-in, Produktgate wegen unvollstaendigem Lauf unentschieden |
 | KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | [x] source-seitig abgeschlossen; Full-State-Semantik und exakte Contribution-/Evidence-Provenienz getrennt |
-| KR-4987 | Read-Lens-projizierte Context-Identitaet | nur vollstaendig bewiesene relevante Eingaenge erzeugen eigene Lanes; jede Luecke verwendet FullState |
+| KR-4987 | Read-Lens-projizierte Context-Identitaet | [x] source-seitig abgeschlossen; vollstaendige Key-Bytes, konservativer FullState-Fallback und exakte Provenienz/Restore; D9 beendet fail-closed, kein Erfolg behauptet |
 | KR-4988 | Internierte AbstractStates und Summaries | nur bei positivem Kostengate werden unveraenderliche States/Summaries kanonisch wiederverwendet |
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; keine offenen Source-Findings, Produktlimits bleiben KR-4981 vorbehalten |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | naechster freigegebener Task nach dem KR-4993-Dokumentationspush; vollstaendiger 24-Thread-Kaltport und realer Lauf |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding wird in diesem Commit mit ABI 32 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; genau ein Retry erst nach KR-4994 und Sol-Review; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | offen P0; naechster echter Stack-/Storage-Identitaetsengpass, erst nach Sol-Review und genau einem neuen Produktlauf |
 
 Die Reihenfolge ist normativ:
 
 ```text
-KR-4985/KR-4986 und KR-4993 source-seitig abgeschlossen
-  -> nach diesem KR-4993-Dokumentationspush: KR-4981
+KR-4985/KR-4986/KR-4993/KR-4987 source-seitig abgeschlossen
+  -> D9 beendet fail-closed; Root 0 konvergiert, kein Portartefakt und kein Erfolg
+  -> KR-4994 naechster Implementierungstask nach Sol-Review
 ```
 
 D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue Testmatrix.
-D1/G1 bleibt wegen der nichtterminalen Root-0-Evidenz unentschieden; D2/G2
-wurde nicht ausgefuehrt. KR-4987 bis KR-4991 bleiben inaktiv. Nach diesem
-KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene Produktgate;
-KR-4982 und KR-4983 bleiben gestrichen.
+D1/G1 bleibt historisch unentschieden; D2/G2 wurde nicht ausgefuehrt. D9 ist
+beendet und Root 0 konvergierte fail-closed ohne Portartefakt oder
+Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist als offener
+P0-Implementierungstask angelegt und darf nach Sol-Review genau einen neuen
+Produktlauf vorbereiten. KR-4981 bleibt das globale Produktgate; ein Retry
+ist erst nach KR-4994 plus Sol-Review genau einmal zulaessig. KR-4982 und
+KR-4983 bleiben gestrichen.
 
 ## Weiterer v0.49-Kritischer Pfad
 

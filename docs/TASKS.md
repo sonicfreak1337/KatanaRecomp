@@ -84,7 +84,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  0ae993f8f59db1fc866ce5e77874015b610a8bd5
+  594f0191b321bd2f470d0aa07100e82f3eea956f
+  plus KR-4987-Sourceaenderung in diesem Task
+  Analyzer-ABI 32 in diesem Abschlusscommit
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -109,9 +111,8 @@ Messwert abgeleitet werden.
 ## Verbindliche Reihenfolge
 
 ```text
-KR-4985, KR-4986 und KR-4993: source-seitig abgeschlossen
-  -> nach diesem KR-4993-Dokumentationspush: KR-4981
-  -> D1/G1 bleibt wegen des unvollstaendigen Laufs unentschieden
+KR-4985, KR-4986, KR-4993 und KR-4987: source-seitig abgeschlossen
+  -> D9 beendet fail-closed; Root 0 konvergiert, kein Portartefakt und kein Erfolg
 ```
 
 Jeder Task in dieser Kette folgt einzeln:
@@ -122,9 +123,12 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 
 D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix. Der
 einzige freigegebene D1-Lauf war nichtterminal; D1/G1 bleibt fail-closed und
-unentschieden. D2/G2 wurde nicht ausgefuehrt. KR-4987 bis KR-4991 bleiben
-inaktiv; nach diesem KR-4993-Dokumentationspush ist KR-4981 der naechste
-freigegebene Produktgate. KR-4982 und KR-4983 bleiben gestrichen.
+unentschieden. D2/G2 wurde nicht ausgefuehrt. D9 ist beendet und Root 0
+konvergierte fail-closed ohne Portartefakt oder Produkterfolg. KR-4987 bis
+KR-4991 bleiben inaktiv; KR-4994 ist der naechste Implementierungstask nach
+Sol-Review. KR-4981 bleibt das globale Produktgate und darf erst nach KR-4994
+plus Sol-Review genau einmal erneut laufen. KR-4982 und KR-4983 bleiben
+gestrichen.
 
 ---
 
@@ -278,13 +282,26 @@ Evidence-Tokens trennen, zunaechst mit unveraenderter Full-State-Identitaet.
 
 ---
 
-## [ ] KR-4987 - Read-Lens-projizierte Context-Identitaet
+## [x] KR-4987 - Read-Lens-projizierte Context-Identitaet
 
 Prioritaet: P0 Performance
 
-Abhaengigkeiten: positives G1, KR-4986
+Abhaengigkeit: KR-4986; source-seitige Aktivierung durch den freigegebenen
+KR-4987-Fixpass
 
-Status: Nur bei positivem Messgate aktiv. Sonst bleibt FullState autoritativ.
+Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
+`594f0191b321bd2f470d0aa07100e82f3eea956f` plus dieser KR-4987-Aenderung.
+Der gezielte `katana-recomp`-Build war laut Sol-Review in `42,4 s` erfolgreich.
+D9 ist beendet und wird nur als fail-closed, nicht erfolgreicher Lauf
+dokumentiert; kein Produkt- oder G1-Erfolg wird behauptet.
+
+D9-Beobachtung: `20,331 s`, Root 0 bis Wave `184`, Frontier `0` (maximal
+`216`), `288` admitted contexts, `2.724` admitted evaluations/Semantic-Lanes,
+`4.349` logical requests, `3.739` physical evaluations, `2.497` input-
+widening und `932` stale-dependency requeues, `1.740` stale snapshot
+discards, `939` semantic und `2.377` provenance-only widenings. Der Lauf
+endete fail-closed am unvollstaendigen Root; kein Portartefakt und kein
+Produkt-, G1- oder Limit-Erfolg wird behauptet.
 
 ### Ziel
 
@@ -296,9 +313,11 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 
 - SemanticContextKey aus Funktion, Lens, Contract-Fingerprint und
   projiziertem Ingress;
+- vollstaendige Key-Bytes fuer kollisionssichere SemanticLane-Identitaet;
 - vollstaendige Register-, Stack-, Memory-, Alias-, Output-, Inventory- und
   Fallback-Watcher;
 - zwingender FullState-Fallback bei jeder Vertragsluecke;
+- FullState bei Truncation und Read-Lens-Fallback;
 - Rebucketing bei spaet erweitertem Read-Vertrag;
 - stabile Content-Digests plus strukturelle Kollisionspruefung;
 - Provenienz bleibt ausserhalb der semantischen Lane-Identitaet.
@@ -309,8 +328,30 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 - Completeness, Truncation und exakte Evidence bleiben erhalten;
 - die Reduktion erfolgt vor Lane-Erzeugung und nicht erst durch einen
   spaeten Cachetreffer;
-- die reale Wirkung wird mit D2 und spaeter Sonic bewertet, nicht mit einer
-  neuen synthetischen Matrix.
+- exakte Provenienz und Restore sowie Discovery -> Freeze -> Publish bleiben
+  unveraendert;
+- D9 ist beendet und ersetzt keine Produktabnahme, D2/G2 oder KR-4981.
+
+---
+
+## [ ] KR-4994 - Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier
+
+Prioritaet: P0 Candidate-Resolution-Korrektheit
+
+Status: Offen. Der D9-Lauf belegt als naechsten echten Engpass den Verlust von
+Stack-/Storage-Identitaet; der boolsche State-Carrier blockiert weiterhin
+korrekt fail-closed.
+
+Vertrag:
+
+- einen strikt begrenzten, monotonen und identitaetsgebundenen unresolved
+  Stack-/Context-Candidate-Carrier einfuehren;
+- ihn vollstaendig in Merge, Key/Cache, Lifetime, ABI-/Summary-Propagation,
+  Stack-may-load, Candidate-Recompute sowie contextual/forwarded/stable
+  Harvest und Export-Gate integrieren;
+- keinen Scheduler- oder Budgetumbau, keinen Fallback, keine Coverage-
+  Reduktion und keinen Sonic-spezifischen Hack einfuehren;
+- erst nach Sol-Review genau einen neuen Produktlauf freigeben.
 
 ---
 
@@ -445,18 +486,21 @@ Abhaengigkeiten: KR-4985, KR-4986 und alle durch G1/G2 aktivierten Tasks bis
 KR-4991
 
 Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
-`0ae993f8f59db1fc866ce5e77874015b610a8bd5`. Der vollstaendige Sol-Endreview
+`594f0191b321bd2f470d0aa07100e82f3eea956f` mit diesem Abschlusscommit.
+Der vollstaendige Sol-Endreview
 des unmittelbar vorherigen Explosionsbug-Diffs wurde wiederverwendet; alle
-bestaetigten Findings sind geschlossen und es gibt keine offenen Source-
-Findings. Nicht aktivierte KR-4987 bis KR-4991 wurden nicht als geaendert oder
-reviewpflichtig behauptet.
+bestaetigten Findings sind geschlossen; das bisher offene Analyzer-ABI-
+Finding wird in diesem Commit durch ABI 32 geschlossen. Nicht aktivierte
+KR-4988 bis KR-4991 wurden nicht als geaendert oder reviewpflichtig behauptet.
 
 ### Ziel
 
 Der vollstaendige Endreview der aktivierten/geaenderten Context-, Cache-,
 Evidence- und Budgetpfade sowie die Pruefung der unveraendert konservativen
 FullState-, Binding-, Dependency- und Scheduling-Fallbackgrenzen ist
-abgeschlossen; jedes bestaetigte Finding wurde vor `0ae993f` geschlossen.
+abgeschlossen; alle vorher bestaetigten Findings wurden vor `0ae993f`
+geschlossen; das Analyzer-ABI-Finding wird in diesem Commit mit ABI 32
+geschlossen.
 
 ### Umfang
 
@@ -483,7 +527,7 @@ abgeschlossen; jedes bestaetigte Finding wurde vor `0ae993f` geschlossen.
   publizieren noch aktuelle Arbeit durch einen veralteten Fehler beenden;
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
-- nach diesem KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene
+- KR-4981 bleibt nach KR-4994 und Sol-Review ein genau einmaliges globales
   Produktgate.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
@@ -500,7 +544,8 @@ vollstaendigen Produktport abgenommen.
 
 Prioritaet: P0 Produkt- und Performancegate
 
-Abhaengigkeit: KR-4993
+Abhaengigkeit: KR-4994 plus Sol-Review; KR-4981 bleibt das globale Produktgate
+und darf danach genau einmal erneut laufen.
 
 ### Umfang
 
@@ -542,7 +587,7 @@ sonst ungenutzter Kerne fuer verwerfbare spaetere Rootarbeit einsetzen.
 - versionierte verwerfbare Resultate;
 - keine relevante Verlangsamung des Head-of-Line-Roots;
 - bei Cacheverdraengung oder hohem Throwaway-Anteil Pfad deaktivieren;
-- danach KR-4993 erneut und ein Retry nur auf ausdrueckliche Freigabe.
+- danach ein Retry nur auf ausdrueckliche Freigabe.
 
 ---
 

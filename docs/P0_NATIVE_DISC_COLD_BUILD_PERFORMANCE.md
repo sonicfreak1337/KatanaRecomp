@@ -1,7 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Der funktionale
-Source-Checkpoint ist `0ae993f8f59db1fc866ce5e77874015b610a8bd5`; der Produktgate
+Source-Checkpoint ist `594f0191b321bd2f470d0aa07100e82f3eea956f` plus
+KR-4987-Sourceaenderung in diesem Task; Analyzer-ABI 32; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
@@ -9,9 +10,11 @@ Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
 exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4993 ist
-source-seitig abgeschlossen; KR-4981 ist der naechste freigegebene
-Produktgate. KR-4992 bleibt ein bedingter Folgezweig nach einem
-verfehlten Produktzeitgate.
+source-seitig abgeschlossen; der D9-Lauf ist beendet und fail-closed. KR-4994
+ist der naechste Implementierungstask nach Sol-Review. KR-4981 bleibt das
+globale Produktgate und darf erst nach KR-4994 plus Sol-Review genau einmal
+erneut laufen. KR-4992 bleibt ein bedingter Folgezweig nach einem verfehlten
+Produktzeitgate.
 
 Der gemeinsame Candidate-Resolution-Explosionsfix erfuellt KR-4985 und
 KR-4986 source-seitig. Der einzige freigegebene D1-Lauf erreichte realen
@@ -19,7 +22,14 @@ Fortschritt auf zero-based Root 0, aber weder den historischen Root 1 noch
 einen vollstaendigen schweren Root. Nach einem Supervisor-I/O-Fehler war die
 temporaere JSONL bis `185,586 s` lesbar/gespuelt, aber ohne terminalen
 Datensatz und ohne atomare Publikation;
-D1/G1 ist daher fail-closed und unentschieden.
+D1/G1 ist daher fail-closed und unentschieden. Der anschliessende D9-Lauf
+endete nach `20,331 s` beim ersten fail-closed Signal: Root 0 erreichte Wave
+`184`, Frontier `0` (maximal `216`), Budgets blieben unverbraucht, Epochs
+published/discarded `0/1`, Retention `incomplete-root`; kein Portartefakt und
+kein Produkterfolg. `2.724` admitted evaluations/Semantic-Lanes, `4.349`
+logical requests, `3.739` physical evaluations, `2.497` input-widening,
+`932` stale-dependency requeues, `1.740` stale discards, `939` semantic und
+`2.377` provenance-only widenings gehoeren zum beendeten D9-Lauf.
 
 ## Repositoryweiter Arbeitsvertrag
 
@@ -226,8 +236,9 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 ## Aktiver Taskpfad
 
 ```text
-KR-4985/KR-4986/KR-4993 source-seitig abgeschlossen
-  -> nach diesem KR-4993-Dokumentationspush: KR-4981
+KR-4985/KR-4986/KR-4993/KR-4987 source-seitig abgeschlossen
+  -> D9 beendet fail-closed; Root 0 konvergiert, kein Portartefakt und kein Erfolg
+  -> KR-4994 naechster Implementierungstask nach Sol-Review
 ```
 
 Fuer jeden Implementierungstask gilt:
@@ -237,15 +248,17 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
 D1 und D2 sind reale Sonic-Diagnoseexporte. KR-4981 ist der reale
-Produkt- und Integrationstest. Die vorliegende D1-Evidenz ist nichtterminal;
-D1/G1 bleibt unentschieden, D2/G2 wurde nicht ausgefuehrt, und KR-4987 bis
-KR-4991 bleiben inaktiv. Nach diesem KR-4993-Dokumentationspush ist KR-4981
-der naechste freigegebene Produktgate. Es gibt keine begleitende neue
-Testmatrix.
+Produkt- und Integrationstest. Die vorliegende D1-/D9-Evidenz ist nichtterminal;
+D1/G1 bleibt historisch unentschieden, D2/G2 wurde nicht ausgefuehrt. D9 ist
+beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
+KR-4991 bleiben inaktiv. KR-4994 ist der offene P0-Folgetask nach Sol-Review.
+KR-4981 bleibt das globale Produktgate; ein Retry ist erst nach KR-4994 plus
+Sol-Review genau einmal zulaessig.
+Es gibt keine begleitende neue Testmatrix.
 
 ## Produktmessvertrag KR-4981
 
-Der erste volle Kaltport nach KR-4993 verwendet:
+Der genau einmalige KR-4981-Retry nach KR-4994 und Sol-Review verwendet:
 
 - denselben dokumentierten Host;
 - normale 24-Thread-Konfiguration;
@@ -313,7 +326,8 @@ Der NativeDisc-Kaltbuild-P0 ist erst geschlossen, wenn:
 4. Executor und Speicherhaushalt den real vorhandenen Parallelismus nutzen;
 5. Cacheinvalidierung nur semantisch betroffene Ebenen trifft;
 6. kein Performancepfad Analyse- oder AOT-Abdeckung reduziert;
-7. KR-4993 alle bestaetigten Source-Findings geschlossen und Limit-, Stale-,
-   Cancellation- sowie `IncompleteRoot`-Pfade fail-closed gehalten hat; und
+7. KR-4993 alle bestaetigten Source-Findings geschlossen, das Analyzer-ABI-
+   Finding mit ABI 32 behoben und Limit-, Stale-, Cancellation- sowie
+   `IncompleteRoot`-Pfade fail-closed gehalten hat; und
 8. KR-4981 einen vollstaendigen Sonic-Kaltport in hoechstens acht Minuten
    erzeugt oder einen engeren typisierten Produktblocker belegt.

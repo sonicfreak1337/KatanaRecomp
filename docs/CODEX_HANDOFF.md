@@ -288,7 +288,8 @@ Testmatrix.
 ## Aktueller P0-Handoff
 
 Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-
-Pfad ist `0ae993f8f59db1fc866ce5e77874015b610a8bd5`.
+Pfad ist `594f0191b321bd2f470d0aa07100e82f3eea956f` plus
+KR-4987-Sourceaenderung in diesem Task; Analyzer-ABI 32.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -313,8 +314,17 @@ Auswertungen besitzen noch keinen belegten gemeinsamen Root-/Funktionsscope.
 Die historische v56-Ausgabe besass noch keinen gemeinsamen Root-, Funktions-
 und Zaehlscope; ihre Rohwerte bleiben getrennte historische Aggregate.
 
-Der gemeinsame Source-Fix ist fuer KR-4985 und KR-4986 abgeschlossen. Er
-behebt die historische Budgetfehlbelastung vor semantischer Deduplizierung
+Der gemeinsame Source-Fix ist fuer KR-4985 und KR-4986 abgeschlossen. KR-4987
+ist source-seitig abgeschlossen: Die Read-Lens-projizierte Contextual-
+SemanticLane-Identitaet verwendet vollstaendige Key-Bytes; Vertragsluecken,
+Truncation und Fallback bleiben strikt FullState. Exakte Provenienz/Restore
+und Discovery -> Freeze -> Publish bleiben unveraendert. Der gezielte
+`katana-recomp`-Build war laut Review in `42,4 s` erfolgreich. Der D9-Lauf ist
+beendet und fail-closed; Root 0 konvergierte ohne Portartefakt oder
+Produkterfolg.
+
+diese Source-Fixes beheben die historische Budgetfehlbelastung vor
+semantischer Deduplizierung
 durch kollisionssichere Full-State-Semantic-Lanes und private exakte
 Provenienz-Replays. Die D1-Telemetrie ist explizit opt-in.
 
@@ -329,23 +339,40 @@ Die temporaere JSONL war nach dem Supervisor-I/O-Fehler bis `185,586 s`
 lesbar/gespuelt, aber ohne terminalen Datensatz und ohne atomare Publikation.
 Root 1 wurde nicht erreicht; D1/G1 ist deshalb fail-closed und unentschieden.
 
-Der verbindliche naechste Schritt nach diesem KR-4993-Dokumentationspush lautet:
+Der D9-Lauf dauerte `20,331 s` und endete beim ersten fail-closed
+Telemetrie-/Publikationssignal. Root 0 erreichte Wave `184`, Frontier `0`
+(maximal `216`), `288` admitted contexts, `2.724` admitted evaluations/
+Semantic-Lanes, `4.349` logical requests, `3.739` physical evaluations,
+`2.497` input-widening und `932` stale-dependency requeues, `1.740` stale
+snapshot discards sowie `939` semantic und `2.377` provenance-only widenings.
+Budgets blieben unverbraucht; Epochs published/discarded `0/1`, Retention
+`incomplete-root`. 64 Truncations waren state/identity mit `values=0`, 6
+Value-Overflows hatten jeweils `merged_values=9`, und 462 Stack-Loss-
+Diagnosen verteilten sich auf 189 forwarded-call, 158 candidate-store, 113
+fixpoint-call und 2 forwarded-tail; tail-store-identity-loss `0`. Kein
+Portartefakt und kein Produkterfolg.
+
+Der verbindliche aktuelle Pfad lautet:
 
 ```text
-KR-4981 als naechsten freigegebenen Produktgate ausfuehren
+D9 beendet fail-closed; kein Portartefakt und kein Produkterfolg
 ```
 
-KR-4987 bis KR-4991 bleiben inaktiv. Candidate-Resolution-Gesamtzeit,
+KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist als offener P0-Folgetask
+und naechster Implementierungstask angelegt; nach Sol-Review darf genau ein
+neuer Produktlauf vorbereitet werden.
+Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
 sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
-entscheidbar. D2/G2 wurde nicht ausgefuehrt. Ein zweiter D1-Lauf gehoert
+entscheidbar. D2/G2 wurde nicht ausgefuehrt. KR-4981 bleibt das globale
+Produktgate; ein Retry ist erst nach KR-4994 plus Sol-Review genau einmal
+zulaessig. Ein zweiter D1-Lauf gehoert
 nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
-Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; es
-gibt keine offenen Source-Findings. Nach diesem KR-4993-Dokumentationspush ist
-KR-4981 der naechste freigegebene Produktgate. Die Produkt-P0-Abnahme bleibt
-bis zu dessen Ergebnis offen.
+Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; das
+Analyzer-ABI-Finding wird in diesem Commit durch ABI 32 geschlossen. Es gibt
+kein bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.
 
 ## Abschlusscheck vor dem Push
 

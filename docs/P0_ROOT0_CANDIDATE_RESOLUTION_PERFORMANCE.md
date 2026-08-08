@@ -1,8 +1,9 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
-Status: Source-seitiger KR-4985/KR-4986-Fix abgeschlossen; Produkt-D1 bleibt
+Status: Source-seitiger KR-4985/KR-4986/KR-4987-Fix abgeschlossen; Produkt-D1 bleibt
 unentschieden. Die Arbeitsbasis ist
-`0ae993f8f59db1fc866ce5e77874015b610a8bd5`. Der terminale Sonic-v56-Diagnoselauf belegt eine
+`594f0191b321bd2f470d0aa07100e82f3eea956f` plus KR-4987-Sourceaenderung in
+diesem Task; Analyzer-ABI 32. Der terminale Sonic-v56-Diagnoselauf belegt eine
 echte Contextual-State-Explosion und keine fertige Produktartefakterzeugung.
 
 Dieses Dokument ergaenzt
@@ -80,6 +81,23 @@ committed Resolution-Roots. Nach einem privaten Supervisor-I/O-Fehler wurde
 die temporaere JSONL bis `185,586 s` lesbar/gespuelt, aber ohne terminalen
 Datensatz und ohne atomare Publikation; Root 1 wurde nicht erreicht. D1/G1 ist deshalb
 fail-closed und unentschieden.
+
+Der D9-Lauf dauerte `20,331 s` und endete am ersten fail-closed
+Telemetrie-/Publikationssignal. Root 0 erreichte Wave `184`, Frontier `0`
+(maximal `216`), bei `288` admitted contexts, `2.724` admitted evaluations/
+Semantic-Lanes, `4.349` logical requests und `3.739` physical evaluations.
+Input-widening/stale-dependency requeues: `2.497`/`932`; stale snapshot
+discards `1.740`; semantic/provenance-only widenings `939`/`2.377`.
+Budgets blieben unverbraucht; `local_fixpoint=0`, `pending_regions=0`,
+`candidate_values_truncated=1`, `abi_stack_base_unresolved=1`, die übrigen
+Candidate-/Stack-/Table-Loss-Flags `0`. Epochs: published `0`, discarded `1`,
+Retention `incomplete-root`. 64 Candidate-Truncations waren ausschließlich
+state/identity mit `values=0`; das terminale Kandidatenbit stammt aus
+`inventory_stack_callback_loss_identity_truncated`. 6 Contextual-Value-
+Overflows hatten jeweils `merged_values=9`. 462 Stack-Loss-Diagnosen: 189
+candidate-store, 113 fixpoint-call, 2 forwarded-tail, 0 tail-store-identity-loss.
+Das ist kein Haenger und kein Produkterfolg; der nächste Engpass ist
+Stack-/Storage-Identitaetsverlust.
 
 Die historischen Rohwerte besitzen keine belegte gemeinsame Zaehldomaene:
 `65.536` ist ein Per-Function-Budget, `25.728` Contexts und `27.872`
@@ -283,9 +301,14 @@ Abschluss:
 - keine Read-Lens-Aktivierung vor abgeschlossener Full-State-Pruefung;
 - direkt auf `main`, ohne neue Tests oder Matrix.
 
-### KR-4987 - Read-Lens-Context-Identitaet
+### KR-4987 - Read-Lens-Context-Identitaet [x]
 
-Nur bei positivem G1.
+Source-seitig abgeschlossen. Die Read-Lens-projizierte Contextual-
+SemanticLane-Identitaet verwendet vollstaendige Key-Bytes fuer
+Kollisionssicherheit; jede Vertragsluecke, Truncation oder Fallbackbedingung
+bleibt strikt FullState. Exakte Provenienz/Restore und Discovery -> Freeze ->
+Publish bleiben unveraendert. Der D9-Lauf ist beendet und fail-closed; Root 0
+konvergierte ohne Portartefakt und ohne Produkterfolg.
 
 Ziel:
 
@@ -302,8 +325,20 @@ Reviewschwerpunkte:
 - exakte Provenienzabonnenten;
 - Completeness und Truncation.
 
-Die Wirkung wird in D2 und spaeter im Sonic-Produktgate gemessen, nicht in
-einer neuen synthetischen Matrix.
+Die Produktwirkung bleibt nach dem beendeten fail-closed D9-Lauf und der
+globalen Produktabnahme offen; D9 erzeugte kein Portartefakt und keinen
+Produk­terfolg. KR-4994 ist der naechste Implementierungstask nach Sol-Review.
+
+### KR-4994 - Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier
+
+Offener P0-Folgetask. Der D9-Lauf belegt Stack-/Storage-Identitaetsverlust als
+naechsten Engpass; der boolsche State-Carrier blockiert korrekt fail-closed.
+Der Carrier muss strikt begrenzt, monoton und identitaetsgebunden sein und in
+Merge, Key/Cache, Lifetime, ABI-/Summary-Propagation, Stack-may-load,
+Candidate-Recompute, contextual/forwarded/stable Harvest und Export-Gate
+integriert werden. Kein Scheduler-/Budgetumbau, kein Fallback, keine
+Coverage-Reduktion und kein Sonic-Hack. Erst nach Sol-Review genau ein neuer
+Produktlauf.
 
 ### KR-4988 - State-/Summary-Interning
 
@@ -390,8 +425,9 @@ D2 und Sonic bewerten die Wirkung. Keine Worker- oder Threadmatrix.
 KR-4993 implementiert keine neue Testinfrastruktur und startet keinen
 Produktlauf. Der vollstaendige Sol-Endreview des unmittelbar vorherigen
 Explosionsbug-Diffs wurde wiederverwendet; alle bestaetigten Source-Findings
-sind geschlossen. Nicht aktivierte KR-4987 bis KR-4991 wurden nicht als
-geaendert oder reviewpflichtig behauptet.
+sind geschlossen; das bisher offene Analyzer-ABI-Finding wird in diesem
+Commit mit ABI 32 geschlossen. Nicht aktivierte KR-4988 bis KR-4991 wurden
+nicht als geaendert oder reviewpflichtig behauptet.
 
 Pflichtumfang:
 
@@ -415,16 +451,18 @@ Quellseitige Freigabebedingungen:
 - kein stale oder gecanceltes Resultat kann publizieren oder einen aktuellen
   Root ueber einen veralteten Fehler beenden;
 - jeder schwere Root terminal identifizierbar;
-- Nach diesem KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene
+- KR-4981 bleibt nach KR-4994 und Sol-Review ein genau einmaliges globales
   Produktgate.
 
 Die globale Abwesenheit der Limitmetriken und von `IncompleteRoot` ist erst
 im vollstaendigen KR-4981-Port beweisbar. D1 und D2 sind begrenzte
-Diagnoseexporte und ersetzen diesen Produktnachweis nicht.
+Diagnoseexporte und ersetzen diesen Produktnachweis nicht. KR-4981 darf erst
+nach KR-4994 und Sol-Review genau einmal erneut laufen.
 
 ### KR-4981 - Sonic-Produktgate
 
-Nach KR-4993 wird genau ein frischer 24-Thread-NativeDisc-Sonic-Port gebaut,
+Nach KR-4994 und Sol-Review wird fuer KR-4981 genau ein frischer
+24-Thread-NativeDisc-Sonic-Port gebaut,
 installiert und normal ausgefuehrt.
 
 Ziele:
@@ -442,26 +480,30 @@ Nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate.
 
 Der Pfad erhaelt eine harte Reserve fuer den kanonischen Root, publiziert
 nichts vor der kanonischen Reihenfolge und wird bei Verlangsamung,
-Cacheverdraengung oder hohem Throwaway-Anteil deaktiviert. Danach folgen
-erneut KR-4993 und ein separat freigegebener KR-4981-Retry.
+Cacheverdraengung oder hohem Throwaway-Anteil deaktiviert. Ein KR-4981-Retry
+folgt erst nach KR-4994 und Sol-Review und wird genau einmal freigegeben.
 
 ## Abhaengigkeitskette
 
 ```text
-KR-4985/KR-4986/KR-4993 source-seitig abgeschlossen
-  -> nach diesem KR-4993-Dokumentationspush: KR-4981
+KR-4985/KR-4986/KR-4993/KR-4987 source-seitig abgeschlossen
+  -> D9 beendet fail-closed; Root 0 konvergiert, kein Portartefakt und kein Erfolg
+  -> KR-4994 naechster Implementierungstask nach Sol-Review
 ```
 
 Die einzige D1-Evidenz ist ein unvollstaendiger, nichtterminaler Root-0-Lauf;
-D1/G1 bleibt unentschieden. D2/G2 wurde nicht ausgefuehrt. KR-4987 bis
-KR-4991 bleiben inaktiv; nach diesem Dokumentationspush ist KR-4981 der
-naechste freigegebene Produktgate.
+D1/G1 bleibt historisch unentschieden. D2/G2 wurde nicht ausgefuehrt. D9 ist
+beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
+KR-4991 bleiben inaktiv. KR-4994 ist ein offener P0-Folgetask und naechster
+Implementierungstask nach Sol-Review. KR-4981 bleibt das globale Produktgate;
+ein Retry ist erst nach KR-4994 plus Sol-Review genau einmal zulaessig.
 Keine neue Testmatrix ersetzt reale Produktgates.
 
 ## Abschlussdefinition
 
-Die Source-Aufgaben KR-4985 und KR-4986 sind durch den gemeinsamen
-Explosionsfix abgeschlossen. Der Candidate-Resolution-P0 als Produktgate ist
+Die Source-Aufgaben KR-4985, KR-4986, KR-4993 und KR-4987 sind durch den
+gemeinsamen Explosionsfix bzw. den abgeschlossenen Endreview abgeschlossen.
+Der Candidate-Resolution-P0 als Produktgate ist
 wegen des fehlenden vollstaendigen Roots, des nicht erreichten historischen
 Root 1 und der ausstehenden terminalen Produktevidenz noch nicht geschlossen.
 
@@ -475,6 +517,7 @@ Der Candidate-Resolution-P0 ist erst geschlossen, wenn:
 5. keine unveraenderte semantische Version unbegruendet erneut Budget
    verbraucht;
 6. keine stale oder nichtkanonische Publikation moeglich ist;
-7. KR-4993 ist ohne offenes Source-Finding abgeschlossen; und
+7. KR-4993 ist mit dem in diesem Commit geschlossenen Analyzer-ABI-Finding
+   source-seitig abgeschlossen; und
 8. KR-4981 einen vollstaendigen Sonic-Port erzeugt oder einen engeren
    typisierten Produktblocker belegt.

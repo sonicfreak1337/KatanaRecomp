@@ -182,6 +182,12 @@ void emit_incomplete_resolution_root(
 }
 
 constexpr std::size_t maximum_detailed_analyzer_diagnostics = 64u;
+constexpr std::uint8_t
+    detailed_analyzer_diagnostic_kind_candidate_truncation = 4u;
+constexpr std::uint8_t
+    detailed_analyzer_diagnostic_kind_tail_store_identity_loss = 5u;
+constexpr std::uint8_t
+    detailed_analyzer_diagnostic_kind_contextual_value_overflow = 6u;
 
 using DetailedAnalyzerDiagnosticKey =
     std::tuple<std::uint8_t,
@@ -294,6 +300,8 @@ constexpr std::size_t maximum_abi_stack_argument_slots =
 constexpr std::size_t maximum_abi_persistent_flow_stack_slots = 256u;
 static_assert(maximum_abi_persistent_flow_stack_slots <
               maximum_abi_stack_argument_slots);
+constexpr std::int32_t contextual_incomplete_stack_prefix_bytes = 64;
+static_assert((contextual_incomplete_stack_prefix_bytes & 3) == 0);
 constexpr std::size_t maximum_forwarded_store_contexts =
     maximum_guarded_code_inventory;
 // Semantic contexts, their distinct isolated roots and re-evaluations are
@@ -631,6 +639,18 @@ struct AbstractValue {
     bool operator==(const AbstractValue&) const = default;
 };
 
+// A canonical, upward-closed summary for stack cells that can no longer be
+// represented one-by-one.  `present` is semantically meaningful even when
+// the payload is empty: it prevents a later widening from resurrecting an
+// unbounded sequence of explicit keys above `lower_bound`.
+struct StackTailSummary final {
+    bool present = false;
+    std::int32_t lower_bound = 0;
+    AbstractValue payload;
+
+    bool operator==(const StackTailSummary&) const = default;
+};
+
 constexpr std::uint8_t unresolved_saved_stack_alias_source_stack = 1u;
 constexpr std::uint8_t unresolved_saved_stack_alias_source_memory = 2u;
 
@@ -671,6 +691,7 @@ struct AbstractState {
     // PC-relative callback-literal stores as guarded inventory candidates.
     std::array<bool, 16u> inventory_fixed_storage_reference{};
     std::map<std::int32_t, AbstractValue> stack_values;
+    StackTailSummary stack_tail;
     std::map<std::uint32_t, AbstractValue> memory_values;
     // Evaluation-local relative write effect. This metadata is reset at every
     // callee ABI boundary and is never part of an ingress cache identity.
@@ -1038,6 +1059,8 @@ struct EvidenceFieldLayout {
         register_saved_stack_slots;
     std::map<std::int32_t, std::vector<std::int32_t>>
         stack_saved_stack_slots;
+    bool stack_tail_present = false;
+    std::vector<std::int32_t> stack_tail_saved_stack_slots;
     std::map<std::uint32_t, std::vector<std::int32_t>>
         memory_saved_stack_slots;
 
@@ -1060,6 +1083,10 @@ struct EvidenceFieldLayout {
     for (const auto& [slot, value] : state.stack_values)
         layout.stack_saved_stack_slots.emplace(
             slot, capture_saved_slots(value));
+    layout.stack_tail_present = state.stack_tail.present;
+    if (state.stack_tail.present)
+        layout.stack_tail_saved_stack_slots =
+            capture_saved_slots(state.stack_tail.payload);
     for (const auto& [address, value] : state.memory_values)
         layout.memory_saved_stack_slots.emplace(
             address, capture_saved_slots(value));
@@ -1084,6 +1111,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
         static_cast<void>(slot);
         for_each_evidence_set(value, callback);
     }
+    if (state.stack_tail.present)
+        for_each_evidence_set(state.stack_tail.payload, callback);
     for (auto& [address, value] : state.memory_values) {
         static_cast<void>(address);
         for_each_evidence_set(value, callback);
@@ -1180,6 +1209,12 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
                 left.registers[index], right.registers[index]))
             return false;
     }
+    if (left.stack_tail.present != right.stack_tail.present ||
+        (left.stack_tail.present &&
+         (left.stack_tail.lower_bound != right.stack_tail.lower_bound ||
+          !same_abstract_value_without_evidence(
+              left.stack_tail.payload, right.stack_tail.payload))))
+        return false;
     if (left.stack_values.size() != right.stack_values.size() ||
         left.memory_values.size() != right.memory_values.size())
         return false;
@@ -1886,6 +1921,11 @@ bool merge_inventory_saved_stack_epoch(
             right.inventory_unresolved_stack_callback_loss ||
         left.inventory_stack_callback_loss_identity_truncated !=
             right.inventory_stack_callback_loss_identity_truncated ||
+        left.stack_tail.present != right.stack_tail.present ||
+        (left.stack_tail.present &&
+         (left.stack_tail.lower_bound != right.stack_tail.lower_bound ||
+          !same_forwarded_value_shape(left.stack_tail.payload,
+                                      right.stack_tail.payload))) ||
         left.stack_values.size() != right.stack_values.size() ||
         left.memory_values.size() != right.memory_values.size())
         return false;
@@ -2225,6 +2265,9 @@ bool merge_forwarded_inventory_payload(AbstractState& destination,
         merge_value_payload(destination.registers[index], source.registers[index]);
     for (auto& [slot, value] : destination.stack_values)
         merge_value_payload(value, source.stack_values.at(slot));
+    if (destination.stack_tail.present)
+        merge_value_payload(destination.stack_tail.payload,
+                            source.stack_tail.payload);
     for (auto& [address, value] : destination.memory_values)
         merge_value_payload(value, source.memory_values.at(address));
     return changed;
@@ -2797,6 +2840,9 @@ void synchronize_inventory_provenance(AbstractValue& value) {
         static_cast<void>(slot);
         if (inventory_candidate_values_truncated(value)) return true;
     }
+    if (state.stack_tail.present &&
+        inventory_candidate_values_truncated(state.stack_tail.payload))
+        return true;
     for (const auto& [address, value] : state.memory_values) {
         static_cast<void>(address);
         if (inventory_candidate_values_truncated(value)) return true;
@@ -2828,6 +2874,7 @@ struct InventoryStateLoss final {
         static_cast<void>(slot);
         observe(value);
     }
+    if (state.stack_tail.present) observe(state.stack_tail.payload);
     for (const auto& [address, value] : state.memory_values) {
         static_cast<void>(address);
         observe(value);
@@ -2865,6 +2912,14 @@ canonical_abstract_state_key(const AbstractState& state);
            !inventory_candidate_values_truncated(value);
 }
 
+// Contextual candidate dependency is a value-bound helper-slice taint, not a
+// code-pointer proof. Its unknown form remains transportable until a genuine
+// guarded-inventory sink consumes it or the storage identity is lost.
+[[nodiscard]] bool contextual_candidate_top(const AbstractValue& value) {
+    return value.contextual_candidate_dependency &&
+           (!value.known || value.values.empty());
+}
+
 [[nodiscard]] bool has_forwarded_inventory_payload(
     const AbstractState& state) {
     if (state.inventory_unresolved_saved_stack_alias_sources != 0u ||
@@ -2887,6 +2942,8 @@ canonical_abstract_state_key(const AbstractState& state);
             state.stack_values.begin(),
             state.stack_values.end(),
             [&](const auto& slot) { return relevant(slot.second); }))
+        return true;
+    if (state.stack_tail.present && relevant(state.stack_tail.payload))
         return true;
     return std::any_of(
         state.memory_values.begin(),
@@ -4064,8 +4121,55 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     values.insert(values.end(), source.values.begin(), source.values.end());
     normalize(values);
     if (values.size() > maximum_summary_values) {
-        if (contextual_candidate_dependency)
-            destination.inventory_code_pointer_values_truncated = true;
+        if (contextual_candidate_dependency) {
+            if (analyzer_stack_diagnostics_enabled()) {
+                const auto call_site_first = destination.call_sites.empty()
+                                                 ? 0u
+                                                 : *destination.call_sites.begin();
+                const auto call_site_last = destination.call_sites.empty()
+                                                ? 0u
+                                                : *destination.call_sites.rbegin();
+                const auto callee_first = destination.callees.empty()
+                                              ? 0u
+                                              : *destination.callees.begin();
+                const auto callee_last = destination.callees.empty()
+                                             ? 0u
+                                             : *destination.callees.rbegin();
+                emit_bounded_analyzer_diagnostic(
+                    detailed_analyzer_diagnostic_kind_contextual_value_overflow,
+                    call_site_first,
+                    call_site_last,
+                    callee_first,
+                    static_cast<std::uint8_t>(
+                        std::min<std::size_t>(
+                            destination.call_sites.size(),
+                            std::numeric_limits<std::uint8_t>::max())),
+                    [&] {
+                        std::fprintf(
+                            stderr,
+                            "KATANA_ANALYZER_CONTEXTUAL_VALUE_OVERFLOW "
+                            "destination_values=%zu source_values=%zu "
+                            "merged_values=%zu code_candidates=%zu "
+                            "pc_candidates=%zu call_sites_count=%zu "
+                            "call_site_first=0x%08X call_site_last=0x%08X "
+                            "callees_count=%zu callee_first=0x%08X "
+                            "callee_last=0x%08X\n",
+                            destination.values.size(),
+                            source.values.size(),
+                            values.size(),
+                            destination.inventory_code_pointer_values.size(),
+                            destination
+                                .inventory_pc_relative_code_literal_values
+                                .size(),
+                            destination.call_sites.size(),
+                            static_cast<unsigned int>(call_site_first),
+                            static_cast<unsigned int>(call_site_last),
+                            destination.callees.size(),
+                            static_cast<unsigned int>(callee_first),
+                            static_cast<unsigned int>(callee_last));
+                    });
+            }
+        }
         make_unknown_preserving_provenance(destination);
         return true;
     }
@@ -4082,6 +4186,177 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
               destination.inventory_pc_relative_code_literal !=
                   inventory_pc_relative_code_literal;
     return changed;
+}
+
+void normalize_stack_tail_payload(AbstractValue& payload) {
+    // A tail is never an ordinary scalar fact. Retain only bounded inventory
+    // provenance and evidence; this must run before merging a new cell so a
+    // concrete spill can never become a tail-wide constant.
+    make_unknown_preserving_provenance(payload);
+    payload.guarded = true;
+    payload.complete = false;
+}
+
+void fold_stack_value_into_tail(AbstractState& state,
+                                const std::int32_t key,
+                                const AbstractValue& source) {
+    auto folded = source;
+    if (has_latent_saved_stack_alias(folded)) {
+        static_cast<void>(add_unresolved_saved_stack_alias(
+            state,
+            unresolved_saved_stack_alias_source_stack,
+            folded.inventory_saved_stack_epoch.tracks_current_epoch));
+        folded.inventory_saved_stack_epoch = {};
+    } else if (has_saved_stack_epoch(folded)) {
+        // A tail has no stable identity for a suspended stack snapshot. Keep
+        // direct candidates/evidence, but make the snapshot fail closed.
+        mark_inventory_saved_stack_epoch_unresolved(
+            folded.inventory_saved_stack_epoch, true);
+        folded.inventory_saved_stack_epoch.slots.clear();
+    }
+    normalize_stack_tail_payload(folded);
+    if (!state.stack_tail.present) {
+        state.stack_tail.present = true;
+        state.stack_tail.lower_bound = key;
+        state.stack_tail.payload = std::move(folded);
+        return;
+    }
+    state.stack_tail.lower_bound = std::min(
+        state.stack_tail.lower_bound, key);
+    static_cast<void>(merge_value(state.stack_tail.payload, folded));
+    normalize_stack_tail_payload(state.stack_tail.payload);
+}
+
+void normalize_stack_tail_summary(
+    AbstractState& state,
+    const bool allow_first_tail_smash = true) {
+    if (state.stack_tail.present) {
+        normalize_stack_tail_payload(state.stack_tail.payload);
+        for (auto value = state.stack_values.lower_bound(
+                 state.stack_tail.lower_bound);
+             value != state.stack_values.end();) {
+            const auto key = value->first;
+            auto payload = std::move(value->second);
+            value = state.stack_values.erase(value);
+            fold_stack_value_into_tail(state, key, payload);
+        }
+    }
+    if (state.stack_values.size() <=
+        maximum_abi_persistent_flow_stack_slots)
+        return;
+    if (!state.stack_tail.present && !allow_first_tail_smash)
+        return;
+    auto first_tail = state.stack_values.begin();
+    std::advance(
+        first_tail,
+        static_cast<std::ptrdiff_t>(
+            maximum_abi_persistent_flow_stack_slots));
+    while (first_tail != state.stack_values.end()) {
+        const auto key = first_tail->first;
+        auto payload = std::move(first_tail->second);
+        first_tail = state.stack_values.erase(first_tail);
+        fold_stack_value_into_tail(state, key, payload);
+    }
+}
+
+void merge_stack_tail_summary(AbstractState& destination,
+                              const StackTailSummary& source) {
+    if (!source.present) return;
+    // Treat the incoming summary exactly like a folded cell at its lower
+    // bound.  Besides keeping the monotone bound this applies the saved-epoch
+    // fail-closed rule to an already summarized source tail as well.
+    fold_stack_value_into_tail(
+        destination, source.lower_bound, source.payload);
+}
+
+[[nodiscard]] const AbstractValue* stack_tail_value_at(
+    const AbstractState& state,
+    const std::int32_t key) {
+    return state.stack_tail.present && key >= state.stack_tail.lower_bound
+               ? &state.stack_tail.payload
+               : nullptr;
+}
+
+[[nodiscard]] std::uint64_t stack_value_telemetry_size(
+    const AbstractState& state) {
+    return static_cast<std::uint64_t>(state.stack_values.size()) +
+           static_cast<std::uint64_t>(state.stack_tail.present);
+}
+
+void materialize_stack_tail_read_slots(
+    AbstractState& state,
+    const std::span<const std::int32_t> slots) {
+    if (!state.stack_tail.present) return;
+    const auto tail = state.stack_tail;
+    for (const auto slot : slots) {
+        if (slot < tail.lower_bound || state.stack_values.contains(slot))
+            continue;
+        auto value = tail.payload;
+        normalize_stack_tail_payload(value);
+        state.stack_values.emplace(slot, std::move(value));
+    }
+    if (has_saved_stack_epoch(tail.payload) &&
+        tail.payload.inventory_saved_stack_epoch.tracks_current_epoch)
+        state.inventory_current_stack_epoch_alias_watcher = true;
+    state.stack_tail = {};
+    normalize_stack_tail_summary(state);
+}
+
+[[nodiscard]] bool stack_is_canonicalizable_to_incomplete_abi_prefix(
+    const AbstractState& state) {
+    if (state.stack_tail.present && state.stack_tail.lower_bound < 0)
+        return false;
+    return std::all_of(
+        state.stack_values.begin(),
+        state.stack_values.end(),
+        [](const auto& value) {
+            return value.first >= 0 && (value.first & 3) == 0;
+        });
+}
+
+[[nodiscard]] bool canonicalize_stack_to_incomplete_abi_prefix(
+    AbstractState& state) {
+    if (!stack_is_canonicalizable_to_incomplete_abi_prefix(state))
+        return false;
+    constexpr auto prefix_slot_count = static_cast<std::size_t>(
+        contextual_incomplete_stack_prefix_bytes / 4);
+    std::array<std::int32_t, prefix_slot_count> prefix_slots{};
+    for (std::size_t index = 0u; index < prefix_slots.size(); ++index)
+        prefix_slots[index] = static_cast<std::int32_t>(index * 4u);
+
+    const auto previous_tail = state.stack_tail;
+    if (previous_tail.present &&
+        previous_tail.lower_bound <
+            contextual_incomplete_stack_prefix_bytes) {
+        // This clears the old tail after materializing every covered low ABI
+        // slot without overwriting an already exact cell.
+        materialize_stack_tail_read_slots(state, prefix_slots);
+    } else {
+        state.stack_tail = {};
+    }
+    if (previous_tail.present)
+        fold_stack_value_into_tail(
+            state,
+            contextual_incomplete_stack_prefix_bytes,
+            previous_tail.payload);
+    for (auto value = state.stack_values.lower_bound(
+             contextual_incomplete_stack_prefix_bytes);
+         value != state.stack_values.end();) {
+        const auto key = value->first;
+        auto payload = std::move(value->second);
+        value = state.stack_values.erase(value);
+        fold_stack_value_into_tail(state, key, payload);
+    }
+    for (auto& [offset, value] : state.stack_values) {
+        if (offset >= contextual_incomplete_stack_prefix_bytes) continue;
+        make_unknown_preserving_provenance(value);
+    }
+    if (!state.stack_tail.present)
+        state.stack_tail.present = true;
+    state.stack_tail.lower_bound =
+        contextual_incomplete_stack_prefix_bytes;
+    normalize_stack_tail_payload(state.stack_tail.payload);
+    return true;
 }
 
 bool merge_state(AbstractState& destination,
@@ -4234,7 +4509,11 @@ bool merge_state(AbstractState& destination,
     }
     for (auto slot = destination.stack_values.begin(); slot != destination.stack_values.end();) {
         const auto source_slot = source.stack_values.find(slot->first);
-        if (source_slot == source.stack_values.end()) {
+        const auto* const source_value =
+            source_slot != source.stack_values.end()
+                ? &source_slot->second
+                : stack_tail_value_at(source, slot->first);
+        if (source_value == nullptr) {
             if (has_latent_saved_stack_alias(slot->second)) {
                 add_unresolved_saved_stack_alias(
                     destination,
@@ -4250,7 +4529,8 @@ bool merge_state(AbstractState& destination,
             }
             if (may_merge_stack_values ||
                 has_saved_stack_epoch(slot->second) ||
-                carries_unresolved_stack_callback(slot->second)) {
+                carries_unresolved_stack_callback(slot->second) ||
+                slot->second.contextual_candidate_dependency) {
                 const auto original = slot->second;
                 if (has_saved_stack_epoch(slot->second))
                     mark_inventory_saved_stack_epoch_unresolved(
@@ -4268,7 +4548,7 @@ bool merge_state(AbstractState& destination,
         }
         const auto original = slot->second;
         static_cast<void>(
-            merge_value(slot->second, source_slot->second));
+            merge_value(slot->second, *source_value));
         if (has_saved_stack_epoch(slot->second) ||
             carries_unresolved_stack_callback(slot->second)) {
             slot->second.guarded = true;
@@ -4280,6 +4560,11 @@ bool merge_state(AbstractState& destination,
     if (may_merge_stack_values) {
         for (const auto& [offset, value] : source.stack_values) {
             if (destination.stack_values.contains(offset)) continue;
+            if (stack_tail_value_at(destination, offset) != nullptr) {
+                fold_stack_value_into_tail(destination, offset, value);
+                changed = true;
+                continue;
+            }
             auto candidate = value;
             if (has_latent_saved_stack_alias(candidate)) {
                 changed =
@@ -4300,9 +4585,16 @@ bool merge_state(AbstractState& destination,
         }
     } else {
         for (const auto& [offset, value] : source.stack_values) {
-        if (destination.stack_values.contains(offset) ||
-            (!has_saved_stack_epoch(value) &&
-                 !carries_unresolved_stack_callback(value)))
+        if (destination.stack_values.contains(offset))
+            continue;
+        if (stack_tail_value_at(destination, offset) != nullptr) {
+            fold_stack_value_into_tail(destination, offset, value);
+            changed = true;
+            continue;
+        }
+        if (!has_saved_stack_epoch(value) &&
+            !carries_unresolved_stack_callback(value) &&
+            !value.contextual_candidate_dependency)
             continue;
         auto candidate = value;
         if (has_latent_saved_stack_alias(candidate)) {
@@ -4319,16 +4611,17 @@ bool merge_state(AbstractState& destination,
         }
         if (destination.stack_values.size() >=
             maximum_abi_stack_argument_slots) {
-            if (carries_stack_callback_payload(candidate) &&
-                !destination
-                     .inventory_stack_callback_loss_identity_truncated) {
+            if (carries_stack_callback_payload(candidate) ||
+                candidate.contextual_candidate_dependency) {
+                const auto already_lost =
+                    destination.inventory_unresolved_stack_callback_loss &&
                     destination
-                        .inventory_unresolved_stack_callback_loss = true;
-                    destination
-                        .inventory_stack_callback_loss_identity_truncated =
-                        true;
-                    changed = true;
-                }
+                        .inventory_stack_callback_loss_identity_truncated;
+                destination.inventory_unresolved_stack_callback_loss = true;
+                destination.inventory_stack_callback_loss_identity_truncated =
+                    true;
+                changed = !already_lost || changed;
+            }
                 continue;
             }
             if (has_saved_stack_epoch(candidate))
@@ -4341,6 +4634,16 @@ bool merge_state(AbstractState& destination,
             changed = true;
         }
     }
+    const auto stack_values_before_tail_normalization =
+        destination.stack_values;
+    const auto stack_tail_before_normalization = destination.stack_tail;
+    merge_stack_tail_summary(destination, source.stack_tail);
+    normalize_stack_tail_summary(
+        destination, may_merge_stack_values || destination.stack_tail.present);
+    changed = changed ||
+              destination.stack_values !=
+                  stack_values_before_tail_normalization ||
+              destination.stack_tail != stack_tail_before_normalization;
     for (auto value = destination.memory_values.begin();
          value != destination.memory_values.end();) {
         const auto source_value = source.memory_values.find(value->first);
@@ -4359,7 +4662,8 @@ bool merge_state(AbstractState& destination,
                 }
             }
             if (has_saved_stack_epoch(value->second) ||
-                carries_unresolved_stack_callback(value->second)) {
+                carries_unresolved_stack_callback(value->second) ||
+                value->second.contextual_candidate_dependency) {
                 const auto original = value->second;
                 if (has_saved_stack_epoch(value->second))
                     mark_inventory_saved_stack_epoch_unresolved(
@@ -4389,7 +4693,8 @@ bool merge_state(AbstractState& destination,
     for (const auto& [address, value] : source.memory_values) {
         if (destination.memory_values.contains(address) ||
             (!has_saved_stack_epoch(value) &&
-             !carries_unresolved_stack_callback(value)))
+             !carries_unresolved_stack_callback(value) &&
+             !value.contextual_candidate_dependency))
             continue;
         auto candidate = value;
         if (has_latent_saved_stack_alias(candidate)) {
@@ -4406,15 +4711,16 @@ bool merge_state(AbstractState& destination,
         }
         if (destination.memory_values.size() >=
             maximum_memory_values) {
-            if (carries_stack_callback_payload(candidate) &&
-                !destination
-                     .inventory_stack_callback_loss_identity_truncated) {
-                destination
-                    .inventory_unresolved_stack_callback_loss = true;
-                destination
-                    .inventory_stack_callback_loss_identity_truncated =
+            if (carries_stack_callback_payload(candidate) ||
+                candidate.contextual_candidate_dependency) {
+                const auto already_lost =
+                    destination.inventory_unresolved_stack_callback_loss &&
+                    destination
+                        .inventory_stack_callback_loss_identity_truncated;
+                destination.inventory_unresolved_stack_callback_loss = true;
+                destination.inventory_stack_callback_loss_identity_truncated =
                     true;
-                changed = true;
+                changed = !already_lost || changed;
             }
             continue;
         }
@@ -4867,13 +5173,34 @@ void load_memory_values(AbstractValue& destination,
                            stored->second);
             });
     }();
+    const auto may_load_contextual_candidate_payload = [&] {
+        if (width != 4u) return false;
+        if (!address_domain_complete) {
+            return std::any_of(
+                state.memory_values.begin(),
+                state.memory_values.end(),
+                [](const auto& stored) {
+                    return stored.second.contextual_candidate_dependency;
+                });
+        }
+        return std::any_of(
+            addresses.begin(),
+            addresses.end(),
+            [&](const auto address) {
+                const auto stored = state.memory_values.find(address);
+                return stored != state.memory_values.end() &&
+                       stored->second.contextual_candidate_dependency;
+            });
+    }();
     const bool incomplete_address_stack_callback_loss =
         address_stack_callback_loss_unresolved ||
         (!address_domain_complete &&
          may_load_stack_callback_payload);
     if (addresses.empty()) {
         make_unknown(destination);
-        destination.contextual_candidate_dependency = address_contextual_dependency;
+        destination.contextual_candidate_dependency =
+            address_contextual_dependency ||
+            may_load_contextual_candidate_payload;
         destination.inventory_stack_callback_loss_unresolved =
             address_stack_callback_loss_unresolved ||
             may_load_stack_callback_payload;
@@ -4897,7 +5224,9 @@ void load_memory_values(AbstractValue& destination,
             const auto image_value = read_image_value(image, address, width);
             if (!image_value.has_value()) {
                 make_unknown(destination);
-                destination.contextual_candidate_dependency = address_contextual_dependency;
+                destination.contextual_candidate_dependency =
+                    address_contextual_dependency ||
+                    may_load_contextual_candidate_payload;
                 destination.inventory_stack_callback_loss_unresolved =
                     address_stack_callback_loss_unresolved ||
                     may_load_stack_callback_payload;
@@ -4927,10 +5256,11 @@ void load_memory_values(AbstractValue& destination,
         // The loss bit below is likewise not address provenance: it records
         // that this dereference can consume stack-callback payload whose exact
         // stack or memory identity was already lost.
-        loaded.contextual_candidate_dependency =
-            loaded.contextual_candidate_dependency ||
-            address_contextual_dependency;
     }
+    loaded.contextual_candidate_dependency =
+        loaded.contextual_candidate_dependency ||
+        address_contextual_dependency ||
+        may_load_contextual_candidate_payload;
     loaded.inventory_stack_callback_loss_unresolved =
         loaded.inventory_stack_callback_loss_unresolved ||
         incomplete_address_stack_callback_loss;
@@ -4954,7 +5284,10 @@ void note_imprecise_memory_stack_callback_store(
     const std::size_t width,
     const AbstractValue& value) {
     if (width != 4u) return;
-    if (carries_stack_callback_payload(value)) {
+    if (value.contextual_candidate_dependency) {
+        state.inventory_unresolved_stack_callback_loss = true;
+        state.inventory_stack_callback_loss_identity_truncated = true;
+    } else if (carries_stack_callback_payload(value)) {
         state.inventory_unresolved_stack_callback_loss = true;
     } else if (has_latent_saved_stack_alias(value)) {
         add_unresolved_saved_stack_alias(
@@ -5044,7 +5377,9 @@ void store_memory_values(AbstractState& state,
                         state.memory_values.end(),
                         [](const auto& stored) {
                             return carries_stack_callback_payload(
-                                stored.second);
+                                       stored.second) ||
+                                   stored.second
+                                       .contextual_candidate_dependency;
                         })) {
                     state.inventory_unresolved_stack_callback_loss =
                         true;
@@ -5068,7 +5403,8 @@ void store_memory_values(AbstractState& state,
         }
     }
     if (width != 4u ||
-        (!value.known && !has_saved_stack_epoch(value) &&
+        (!value.known && !value.contextual_candidate_dependency &&
+         !has_saved_stack_epoch(value) &&
          !carries_unresolved_stack_callback(value)))
         return;
     auto stored = value;
@@ -5097,8 +5433,8 @@ void store_memory_values(AbstractState& state,
                     state.memory_values.begin(),
                 state.memory_values.end(),
                 [](const auto& stored) {
-                    return carries_stack_callback_payload(
-                        stored.second);
+                    return carries_stack_callback_payload(stored.second) ||
+                           stored.second.contextual_candidate_dependency;
                 })) {
                 state.inventory_unresolved_stack_callback_loss = true;
                 state
@@ -5339,6 +5675,23 @@ void collapse_payload_free_stack_aliases(AbstractState& state) {
             value = state.stack_values.erase(value);
         }
     }
+    if (state.stack_tail.present) {
+        auto& payload = state.stack_tail.payload;
+        if (has_latent_saved_stack_alias(payload)) {
+            static_cast<void>(add_unresolved_saved_stack_alias(
+                state,
+                unresolved_saved_stack_alias_source_stack,
+                payload.inventory_saved_stack_epoch.tracks_current_epoch));
+            payload.inventory_saved_stack_epoch = {};
+        }
+        if (carries_unresolved_stack_callback(payload)) {
+            state.inventory_unresolved_stack_callback_loss = true;
+            payload.inventory_stack_callback_loss_unresolved = false;
+            if (payload.inventory_saved_stack_epoch.slots.empty())
+                payload.inventory_saved_stack_epoch = {};
+        }
+        normalize_stack_tail_payload(payload);
+    }
 }
 
 template <std::size_t RegisterCount>
@@ -5377,7 +5730,12 @@ template <std::size_t RegisterCount>
 
 [[nodiscard]] bool has_active_inventory_stack_payload(
     const AbstractState& state) {
-    return std::any_of(
+    return (state.stack_tail.present &&
+            (has_inventory_candidate_values(state.stack_tail.payload) ||
+             inventory_candidate_values_truncated(state.stack_tail.payload) ||
+             state.stack_tail.payload.contextual_candidate_dependency ||
+             carries_stack_callback_payload(state.stack_tail.payload))) ||
+           std::any_of(
         state.stack_values.begin(),
         state.stack_values.end(),
         [](const auto& stored) {
@@ -5475,6 +5833,15 @@ template <std::size_t RegisterCount>
                 break;
         }
     }
+    if (!captured.unresolved && state.stack_tail.present) {
+        const auto& tail = state.stack_tail.payload;
+        if (has_inventory_candidate_values(tail) ||
+            inventory_candidate_values_truncated(tail) ||
+            tail.contextual_candidate_dependency ||
+            has_saved_stack_epoch(tail) ||
+            carries_stack_callback_payload(tail))
+            mark_inventory_saved_stack_epoch_unresolved(captured, true);
+    }
     stored.inventory_saved_stack_epoch = std::move(captured);
     return stored;
 }
@@ -5507,7 +5874,8 @@ void merge_saved_stack_epoch_memory_forward(
 void invalidate_memory_values_conservatively(AbstractState& state) {
     for (auto value = state.memory_values.begin();
          value != state.memory_values.end();) {
-        if (!has_saved_stack_epoch(value->second) &&
+        if (!value->second.contextual_candidate_dependency &&
+            !has_saved_stack_epoch(value->second) &&
             !carries_unresolved_stack_callback(value->second)) {
             value = state.memory_values.erase(value);
             continue;
@@ -5533,7 +5901,8 @@ void invalidate_memory_write_ranges_conservatively(
             ++value;
             continue;
         }
-        if (!has_saved_stack_epoch(value->second) &&
+        if (!value->second.contextual_candidate_dependency &&
+            !has_saved_stack_epoch(value->second) &&
             !carries_unresolved_stack_callback(value->second)) {
             value = state.memory_values.erase(value);
             continue;
@@ -5561,6 +5930,11 @@ void invalidate_stack_values_conservatively(AbstractState& state) {
         value->second.complete = false;
         ++value;
     }
+    if (state.stack_tail.present) {
+        make_unknown_preserving_provenance(state.stack_tail.payload);
+        state.stack_tail.payload.guarded = true;
+        state.stack_tail.payload.complete = false;
+    }
 }
 
 void mark_current_epoch_saved_snapshots_unresolved(
@@ -5581,6 +5955,7 @@ void mark_current_epoch_saved_snapshots_unresolved(
         static_cast<void>(slot);
         mark(value);
     }
+    if (state.stack_tail.present) mark(state.stack_tail.payload);
     for (auto& [address, value] : state.memory_values) {
         static_cast<void>(address);
         mark(value);
@@ -5603,28 +5978,34 @@ void load_inventory_stack_values(
     }
     for (const auto slot : slots) {
         const auto stored = state.stack_values.find(slot);
-        if (stored == state.stack_values.end()) continue;
-        const auto& value = stored->second;
+        const auto* const value =
+            stored != state.stack_values.end()
+                ? &stored->second
+                : stack_tail_value_at(state, slot);
+        if (value == nullptr) continue;
         static_cast<void>(merge_inventory_candidate_values(
             destination.inventory_code_pointer_values,
             destination.inventory_code_pointer_values_truncated,
-            value.inventory_code_pointer_values,
-            value.inventory_code_pointer_values_truncated));
+            value->inventory_code_pointer_values,
+            value->inventory_code_pointer_values_truncated));
         static_cast<void>(merge_inventory_candidate_values(
             destination.inventory_pc_relative_code_literal_values,
             destination.inventory_pc_relative_code_literal_values_truncated,
-            value.inventory_pc_relative_code_literal_values,
-            value.inventory_pc_relative_code_literal_values_truncated));
-        destination.call_sites.insert(value.call_sites.begin(),
-                                      value.call_sites.end());
-        destination.callees.insert(value.callees.begin(),
-                                   value.callees.end());
+            value->inventory_pc_relative_code_literal_values,
+            value->inventory_pc_relative_code_literal_values_truncated));
+        destination.call_sites.insert(value->call_sites.begin(),
+                                      value->call_sites.end());
+        destination.callees.insert(value->callees.begin(),
+                                   value->callees.end());
         destination.inventory_stack_callback_loss_unresolved =
             destination.inventory_stack_callback_loss_unresolved ||
-            value.inventory_stack_callback_loss_unresolved;
+            value->inventory_stack_callback_loss_unresolved;
+        destination.contextual_candidate_dependency =
+            destination.contextual_candidate_dependency ||
+            value->contextual_candidate_dependency;
         static_cast<void>(merge_inventory_saved_stack_epoch(
             destination.inventory_saved_stack_epoch,
-            value.inventory_saved_stack_epoch,
+            value->inventory_saved_stack_epoch,
             false));
     }
     materialize_unresolved_saved_stack_alias(
@@ -5711,6 +6092,9 @@ void invalidate_stack_range(AbstractState& state,
         else
             ++slot;
     }
+    if (state.stack_tail.present &&
+        static_cast<std::int64_t>(state.stack_tail.lower_bound) < end)
+        normalize_stack_tail_payload(state.stack_tail.payload);
 }
 
 void invalidate_stack_write_alternatives(
@@ -5725,6 +6109,11 @@ void invalidate_stack_write_alternatives(
             make_unknown_preserving_provenance(stored);
             stored.guarded = true;
             stored.complete = false;
+        }
+        if (state.stack_tail.present) {
+            make_unknown_preserving_provenance(state.stack_tail.payload);
+            state.stack_tail.payload.guarded = true;
+            state.stack_tail.payload.complete = false;
         }
         return;
     }
@@ -5758,6 +6147,8 @@ void invalidate_stack_write_alternatives(
         }
         ++stored;
     }
+    if (state.stack_tail.present)
+        normalize_stack_tail_payload(state.stack_tail.payload);
 }
 
 void store_stack_value(AbstractState& state,
@@ -5776,7 +6167,10 @@ void store_stack_value(AbstractState& state,
         (offset.has_value() || may_alias_stack))
         mark_current_epoch_saved_snapshots_unresolved(state);
     if (width == 4u && !offset.has_value() && may_alias_stack) {
-        if (carries_stack_callback_payload(value)) {
+        if (value.contextual_candidate_dependency) {
+            state.inventory_unresolved_stack_callback_loss = true;
+            state.inventory_stack_callback_loss_identity_truncated = true;
+        } else if (carries_stack_callback_payload(value)) {
             state.inventory_unresolved_stack_callback_loss = true;
         } else if (has_latent_saved_stack_alias(value)) {
             add_unresolved_saved_stack_alias(
@@ -5789,7 +6183,36 @@ void store_stack_value(AbstractState& state,
     invalidate_stack_range(
         state, offset, may_alias_stack, preserve_guarded_inventory, width);
     if (offset.has_value() && width == 4u &&
+        stack_tail_value_at(state, *offset) != nullptr) {
+        if (value.known && !has_finite_inventory_candidate_values(value) &&
+            !value.contextual_candidate_dependency) {
+            // This cell has no explicit identity left to await a later ABI
+            // promotion. The pre-existing tail makes the loss real, so keep
+            // the established fail-closed gate rather than dropping it.
+            state.inventory_unresolved_stack_callback_loss = true;
+            state.inventory_stack_callback_loss_identity_truncated = true;
+            emit_bounded_analyzer_diagnostic(
+                detailed_analyzer_diagnostic_kind_tail_store_identity_loss,
+                0u,
+                static_cast<std::uint32_t>(*offset),
+                0u,
+                0u,
+                [&] {
+                    std::fprintf(
+                        stderr,
+                        "KATANA_ANALYZER_TAIL_STORE_IDENTITY_LOSS "
+                        "offset=%lld value_count=%zu\n",
+                        static_cast<long long>(*offset),
+                        value.values.size());
+                });
+        }
+        fold_stack_value_into_tail(state, *offset, value);
+        normalize_stack_tail_summary(state, false);
+        return;
+    }
+    if (offset.has_value() && width == 4u &&
         (value.known || has_inventory_candidate_values(value) ||
+         value.contextual_candidate_dependency ||
          carries_stack_callback_payload(value) ||
          has_saved_stack_epoch(value))) {
         if (!state.stack_values.contains(*offset) &&
@@ -5797,6 +6220,7 @@ void store_stack_value(AbstractState& state,
                 maximum_abi_stack_argument_slots &&
             (has_inventory_candidate_values(value) ||
              inventory_candidate_values_truncated(value) ||
+             value.contextual_candidate_dependency ||
              carries_stack_callback_payload(value))) {
             state.inventory_unresolved_stack_callback_loss = true;
             state.inventory_stack_callback_loss_identity_truncated =
@@ -5815,6 +6239,8 @@ void store_stack_value(AbstractState& state,
             return;
         }
         state.stack_values[*offset] = value;
+        normalize_stack_tail_summary(
+            state, state.stack_tail.present);
     }
 }
 
@@ -5841,6 +6267,7 @@ void store_inventory_stack_value(
         state, write_alternatives, true);
     if (width != 4u ||
         (!has_finite_inventory_candidate_values(value) &&
+         !value.contextual_candidate_dependency &&
          !carries_stack_callback_payload(value) &&
          !has_saved_stack_epoch(value)))
         return;
@@ -5855,7 +6282,8 @@ void store_inventory_stack_value(
         if (!state.stack_values.contains(inventory_offset) &&
             state.stack_values.size() >=
                 maximum_abi_stack_argument_slots) {
-            if (carries_stack_callback_payload(inventory_value)) {
+            if (inventory_value.contextual_candidate_dependency ||
+                carries_stack_callback_payload(inventory_value)) {
                 state.inventory_unresolved_stack_callback_loss = true;
                 state.inventory_stack_callback_loss_identity_truncated =
                     true;
@@ -5879,6 +6307,7 @@ void store_inventory_stack_value(
             stored->second.complete = false;
         }
     }
+    normalize_stack_tail_summary(state, state.stack_tail.present);
 }
 
 void load_stack_value(AbstractValue& destination,
@@ -5896,6 +6325,15 @@ void load_stack_value(AbstractValue& destination,
     }
     const auto value = state.stack_values.find(*offset);
     if (value == state.stack_values.end()) {
+        if (const auto* const tail = stack_tail_value_at(state, *offset);
+            tail != nullptr) {
+            destination = *tail;
+            materialize_unresolved_saved_stack_alias(
+                destination,
+                state,
+                unresolved_saved_stack_alias_source_stack);
+            return;
+        }
         make_unknown(destination);
         materialize_unresolved_saved_stack_alias(
             destination,
@@ -6074,7 +6512,9 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
             state.stack_values.end(),
             [](const auto& stored) {
                 return has_latent_saved_stack_alias(stored.second);
-            });
+            }) ||
+        (state.stack_tail.present &&
+         has_latent_saved_stack_alias(state.stack_tail.payload));
     state.inventory_current_stack_epoch_alias_watcher = false;
     stack_pointer.inventory_saved_stack_epoch = {};
     const auto detach_saved_epoch = [](AbstractValue& value) {
@@ -6086,6 +6526,8 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
         static_cast<void>(slot);
         detach_saved_epoch(value);
     }
+    if (state.stack_tail.present)
+        detach_saved_epoch(state.stack_tail.payload);
     for (auto& [address, value] : state.memory_values) {
         static_cast<void>(address);
         detach_saved_epoch(value);
@@ -6102,7 +6544,9 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
             state.memory_values.end(),
             [](const auto& stored) {
                 return has_saved_stack_epoch(stored.second);
-            });
+            }) ||
+        (state.stack_tail.present &&
+         has_saved_stack_epoch(state.stack_tail.payload));
     if (restored_saved_epoch &&
         (state.inventory_detached_stack_epoch_alias_watcher ||
          surviving_saved_epoch_alias))
@@ -6140,6 +6584,7 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
     if (old_stack_has_inventory_payload && old_stack_alias_survives)
         state.inventory_unresolved_stack_callback_loss = true;
     state.stack_values.clear();
+    state.stack_tail = {};
     state.inventory_unresolved_saved_stack_alias_sources =
         static_cast<std::uint8_t>(
             state.inventory_unresolved_saved_stack_alias_sources &
@@ -6211,6 +6656,9 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
             stored->second.complete = false;
         }
     }
+    // Restored snapshots contain only retained provenance.  Canonicalize the
+    // recovered frame before it can become a lane/cache identity.
+    normalize_stack_tail_summary(state);
 }
 
 std::vector<std::uint32_t> displaced_addresses(const AbstractValue& base,
@@ -6439,15 +6887,40 @@ void apply_transfer(AbstractState& state,
                                 adjusted)) {
                             adjusted_inventory_stack_coordinates.clear();
                             adjusted_coordinates_valid = false;
+                            const auto has_contextual_stack_payload =
+                                std::any_of(
+                                    state.stack_values.begin(),
+                                    state.stack_values.end(),
+                                    [](const auto& stored) {
+                                        return stored.second
+                                            .contextual_candidate_dependency;
+                                    }) ||
+                                (state.stack_tail.present &&
+                                 state.stack_tail.payload
+                                     .contextual_candidate_dependency);
                             if (std::any_of(
                                     state.stack_values.begin(),
                                     state.stack_values.end(),
                                     [](const auto& stored) {
                                         return has_finite_inventory_candidate_values(
-                                            stored.second);
-                                    }))
+                                                   stored.second) ||
+                                               carries_stack_callback_payload(
+                                                   stored.second);
+                                    }) ||
+                                (state.stack_tail.present &&
+                                 (has_finite_inventory_candidate_values(
+                                      state.stack_tail.payload) ||
+                                  carries_stack_callback_payload(
+                                      state.stack_tail.payload))))
                                 state.inventory_unresolved_stack_callback_loss =
                                     true;
+                            if (has_contextual_stack_payload) {
+                                state.inventory_unresolved_stack_callback_loss =
+                                    true;
+                                state
+                                    .inventory_stack_callback_loss_identity_truncated =
+                                    true;
+                            }
                             return;
                         }
                     }
@@ -7327,6 +7800,21 @@ void apply_transfer(AbstractState& state,
                 state[instruction.source_register],
                 instruction.source_register == 0u);
         if (inventory_coordinate_enumeration_failed) {
+            const auto lost_contextual_payload =
+                std::any_of(
+                    state.stack_values.begin(),
+                    state.stack_values.end(),
+                    [](const auto& stored) {
+                        return stored.second
+                            .contextual_candidate_dependency;
+                    }) ||
+                (state.stack_tail.present &&
+                 state.stack_tail.payload.contextual_candidate_dependency);
+            if (lost_contextual_payload) {
+                state.inventory_unresolved_stack_callback_loss = true;
+                state.inventory_stack_callback_loss_identity_truncated =
+                    true;
+            }
             const auto lost_candidate = std::find_if(
                 state.stack_values.begin(),
                 state.stack_values.end(),
@@ -7336,20 +7824,28 @@ void apply_transfer(AbstractState& state,
                            carries_stack_callback_payload(
                                stored.second);
                 });
-            if (lost_candidate != state.stack_values.end()) {
-                if (carries_stack_callback_payload(
-                        lost_candidate->second))
-                    state.inventory_unresolved_stack_callback_loss =
-                        true;
-                else
-                    record_unresolved_stack_candidate(
-                        state,
-                        width,
-                        line.address,
-                        lost_candidate->second,
-                        instruction.source_register,
-                        "candidate-r0-indexed-load");
-            }
+            const auto record_lost_candidate =
+                [&](const AbstractValue& candidate) {
+                    if (carries_stack_callback_payload(candidate))
+                        state.inventory_unresolved_stack_callback_loss =
+                            true;
+                    else
+                        record_unresolved_stack_candidate(
+                            state,
+                            width,
+                            line.address,
+                            candidate,
+                            instruction.source_register,
+                            "candidate-r0-indexed-load");
+                };
+            if (lost_candidate != state.stack_values.end())
+                record_lost_candidate(lost_candidate->second);
+            if (state.stack_tail.present &&
+                (has_finite_inventory_candidate_values(
+                     state.stack_tail.payload) ||
+                 carries_stack_callback_payload(
+                     state.stack_tail.payload)))
+                record_lost_candidate(state.stack_tail.payload);
             may_read_unresolved_stack_callback =
                 may_read_unresolved_stack_callback ||
                 memory_address_may_reference_unresolved_stack_callback(
@@ -7629,14 +8125,29 @@ AbstractState make_callee_abi_input(
         caller_sp.has_value())
         caller_inventory_sp_coordinates = {*caller_sp};
     const bool caller_has_stack_inventory_candidates =
+        (caller.stack_tail.present &&
+         (has_finite_inventory_candidate_values(
+              caller.stack_tail.payload) ||
+          caller.stack_tail.payload.contextual_candidate_dependency ||
+          carries_stack_callback_payload(caller.stack_tail.payload))) ||
         std::any_of(
             caller.stack_values.begin(),
             caller.stack_values.end(),
             [](const auto& stored) {
                 return has_finite_inventory_candidate_values(
                            stored.second) ||
+                       stored.second.contextual_candidate_dependency ||
                        carries_stack_callback_payload(
                            stored.second);
+            });
+    const bool caller_has_stack_contextual_payload =
+        (caller.stack_tail.present &&
+         caller.stack_tail.payload.contextual_candidate_dependency) ||
+        std::any_of(
+            caller.stack_values.begin(),
+            caller.stack_values.end(),
+            [](const auto& stored) {
+                return stored.second.contextual_candidate_dependency;
             });
     const bool complete_stack_readset =
         required_stack_reads != nullptr &&
@@ -7650,6 +8161,11 @@ AbstractState make_callee_abi_input(
                 input.inventory_current_stack_epoch_alias_watcher =
                     true;
         }
+        if (caller.stack_tail.present &&
+            has_saved_stack_epoch(caller.stack_tail.payload) &&
+            caller.stack_tail.payload.inventory_saved_stack_epoch
+                .tracks_current_epoch)
+            input.inventory_current_stack_epoch_alias_watcher = true;
     };
     if (complete_stack_readset)
         retain_current_saved_alias_watcher();
@@ -7712,6 +8228,8 @@ AbstractState make_callee_abi_input(
             !required_stack_reads->slots.empty();
         if (may_read_stack && caller_has_stack_inventory_candidates)
             input.inventory_unresolved_stack_callback_loss = true;
+        if (may_read_stack && caller_has_stack_contextual_payload)
+            input.inventory_stack_callback_loss_identity_truncated = true;
         if (may_read_stack) {
             for (const auto& [slot, value] : caller.stack_values) {
                 static_cast<void>(slot);
@@ -7721,6 +8239,18 @@ AbstractState make_callee_abi_input(
                     unresolved_saved_stack_alias_source_stack,
                     value.inventory_saved_stack_epoch
                         .tracks_current_epoch);
+            }
+            if (caller.stack_tail.present) {
+                const auto& tail = caller.stack_tail.payload;
+                if (has_latent_saved_stack_alias(tail))
+                    static_cast<void>(add_unresolved_saved_stack_alias(
+                        input,
+                        unresolved_saved_stack_alias_source_stack,
+                        tail.inventory_saved_stack_epoch
+                            .tracks_current_epoch));
+                input.stack_tail = caller.stack_tail;
+                input.stack_tail.lower_bound = 0;
+                normalize_stack_tail_payload(input.stack_tail.payload);
             }
         }
         return input;
@@ -7739,6 +8269,12 @@ AbstractState make_callee_abi_input(
                 projection_truncated = true;
                 if (!first_rejected_relative_slot.has_value())
                     first_rejected_relative_slot = relative_slot;
+                if (source.contextual_candidate_dependency &&
+                    relative_slot >= 0 && (relative_slot & 3) == 0) {
+                    input.inventory_unresolved_stack_callback_loss = true;
+                    input.inventory_stack_callback_loss_identity_truncated =
+                        true;
+                }
                 return;
             }
             auto value = source;
@@ -7790,8 +8326,13 @@ AbstractState make_callee_abi_input(
                     continue;
                 const auto source = caller.stack_values.find(
                     static_cast<std::int32_t>(source_slot));
-                if (source == caller.stack_values.end()) continue;
-                project_value(relative_slot, source->second);
+                const auto* const source_value =
+                    source != caller.stack_values.end()
+                        ? &source->second
+                        : stack_tail_value_at(
+                            caller, static_cast<std::int32_t>(source_slot));
+                if (source_value == nullptr) continue;
+                project_value(relative_slot, *source_value);
                 if (projection_truncated) break;
             }
             if (projection_truncated) break;
@@ -7826,6 +8367,7 @@ AbstractState make_callee_abi_input(
             continue;
         if (!caller_sp.has_value() &&
             !has_finite_inventory_candidate_values(projected_source) &&
+            !projected_source.contextual_candidate_dependency &&
             !carries_stack_callback_payload(projected_source))
             continue;
         for (const auto projection_base :
@@ -7845,6 +8387,34 @@ AbstractState make_callee_abi_input(
             if (projection_truncated) break;
         }
         if (projection_truncated) break;
+    }
+    if (caller.stack_tail.present) {
+        auto rebased_tail = caller.stack_tail;
+        rebased_tail.payload.call_sites.insert(call_site);
+        std::optional<std::int32_t> rebased_lower_bound;
+        for (const auto projection_base : caller_inventory_sp_coordinates) {
+            const auto relative =
+                static_cast<std::int64_t>(caller.stack_tail.lower_bound) -
+                static_cast<std::int64_t>(projection_base);
+            const auto lower_bound = std::max<std::int64_t>(0, relative);
+            if (lower_bound > maximum_stack_distance) continue;
+            const auto bounded = static_cast<std::int32_t>(lower_bound);
+            rebased_lower_bound = rebased_lower_bound.has_value()
+                                      ? std::min(*rebased_lower_bound, bounded)
+                                      : bounded;
+        }
+        if (!rebased_lower_bound.has_value()) {
+            // An unknown/overflowing base cannot discard finite tail
+            // candidates. Keep a fail-closed outgoing tail from slot zero.
+            rebased_lower_bound = 0;
+            if (caller_has_stack_inventory_candidates)
+                input.inventory_unresolved_stack_callback_loss = true;
+        }
+        rebased_tail.lower_bound = *rebased_lower_bound;
+        if (!caller_sp.has_value() ||
+            caller_inventory_sp_coordinates.size() > 1u)
+            normalize_stack_tail_payload(rebased_tail.payload);
+        merge_stack_tail_summary(input, rebased_tail);
     }
     report_projection_truncation();
     return input;
@@ -7877,6 +8447,8 @@ void mark_observed_code_pointer_arguments(
         static_cast<void>(slot);
         mark_argument(value);
     }
+    if (observation.stack_tail.present)
+        mark_argument(observation.stack_tail.payload);
 }
 
 void promote_tail_code_literal_arguments(
@@ -7903,6 +8475,8 @@ void promote_tail_code_literal_arguments(
         static_cast<void>(slot);
         promote_argument(value);
     }
+    if (observation.stack_tail.present)
+        promote_argument(observation.stack_tail.payload);
 }
 
 using ObservedCalleeInputs =
@@ -7954,6 +8528,7 @@ void observe_callee_arguments(
             required_stack_reads,
             memory_read_summary);
         mark_observed_code_pointer_arguments(image, observation);
+        normalize_stack_tail_summary(observation);
         auto register_mask =
             std::numeric_limits<std::uint16_t>::max();
         if (forwarded_register_reads != nullptr) {
@@ -7985,6 +8560,8 @@ void observe_callee_arguments(
                 static_cast<void>(slot);
                 value.guarded = true;
             }
+            if (observation.stack_tail.present)
+                observation.stack_tail.payload.guarded = true;
             for (auto& [address, value] : observation.memory_values) {
                 static_cast<void>(address);
                 value.guarded = true;
@@ -8021,6 +8598,14 @@ void mark_contextual_candidate_abi_arguments(
                                slot))
             value.contextual_candidate_dependency = true;
     }
+    if (state.stack_tail.present &&
+        (entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+         std::any_of(entry_stack_reads->slots.begin(),
+                     entry_stack_reads->slots.end(),
+                     [&](const auto slot) {
+                         return slot >= state.stack_tail.lower_bound;
+                     })))
+        state.stack_tail.payload.contextual_candidate_dependency = true;
 }
 
 [[nodiscard]] bool has_contextual_candidate_abi_argument(
@@ -8056,6 +8641,17 @@ void mark_contextual_candidate_abi_arguments(
              has_latent_saved_stack_alias(value)))
             return true;
     }
+    if (state.stack_tail.present &&
+        (entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+         std::any_of(entry_stack_reads->slots.begin(),
+                     entry_stack_reads->slots.end(),
+                     [&](const auto slot) {
+                         return slot >= state.stack_tail.lower_bound;
+                     })) &&
+        (state.stack_tail.payload.contextual_candidate_dependency ||
+         carries_stack_callback_payload(state.stack_tail.payload) ||
+         has_latent_saved_stack_alias(state.stack_tail.payload)))
+        return true;
     return false;
 }
 
@@ -8105,6 +8701,7 @@ void observe_inventory_transfers(
         if (observes_abi_arguments)
             promote_tail_code_literal_arguments(
                 image, transfer_site, observation);
+        normalize_stack_tail_summary(observation);
         bool found_code_pointer = false;
         bool found_unresolved_stack_callback =
             observation.inventory_unresolved_stack_callback_loss;
@@ -8125,6 +8722,8 @@ void observe_inventory_transfers(
             static_cast<void>(offset);
             observe_code_pointer(value);
         }
+        if (observation.stack_tail.present)
+            observe_code_pointer(observation.stack_tail.payload);
         for (auto& [address, value] : observation.memory_values) {
             static_cast<void>(address);
             observe_code_pointer(value);
@@ -8142,6 +8741,10 @@ void observe_inventory_transfers(
                 static_cast<void>(offset);
                 value.guarded = true;
                 value.complete = value.complete && complete;
+            }
+            if (observation.stack_tail.present) {
+                observation.stack_tail.payload.guarded = true;
+                observation.stack_tail.payload.complete = false;
             }
             for (auto& [address, value] : observation.memory_values) {
                 static_cast<void>(address);
@@ -8247,7 +8850,10 @@ void apply_call(AbstractState& state,
     const auto discard_stack_values = [&] {
         for (const auto& [slot, value] : state.stack_values) {
             static_cast<void>(slot);
-            if (carries_stack_callback_payload(value)) {
+            if (value.contextual_candidate_dependency) {
+                state.inventory_unresolved_stack_callback_loss = true;
+                state.inventory_stack_callback_loss_identity_truncated = true;
+            } else if (carries_stack_callback_payload(value)) {
                 state.inventory_unresolved_stack_callback_loss =
                     true;
             } else if (has_latent_saved_stack_alias(value)) {
@@ -8258,7 +8864,23 @@ void apply_call(AbstractState& state,
                         .tracks_current_epoch);
             }
         }
+        if (state.stack_tail.present) {
+            const auto& value = state.stack_tail.payload;
+            if (value.contextual_candidate_dependency) {
+                state.inventory_unresolved_stack_callback_loss = true;
+                state.inventory_stack_callback_loss_identity_truncated = true;
+            } else if (carries_stack_callback_payload(value)) {
+                state.inventory_unresolved_stack_callback_loss = true;
+            } else if (has_latent_saved_stack_alias(value)) {
+                static_cast<void>(add_unresolved_saved_stack_alias(
+                    state,
+                    unresolved_saved_stack_alias_source_stack,
+                    value.inventory_saved_stack_epoch
+                        .tracks_current_epoch));
+            }
+        }
         state.stack_values.clear();
+        state.stack_tail = {};
     };
     if (image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC) {
         mark_unknown_memory_read(memory_read_observation);
@@ -8289,6 +8911,10 @@ void apply_call(AbstractState& state,
                 static_cast<void>(offset);
                 value.guarded = true;
                 value.complete = false;
+            }
+            if (state.stack_tail.present) {
+                state.stack_tail.payload.guarded = true;
+                state.stack_tail.payload.complete = false;
             }
         } else {
             discard_stack_values();
@@ -8634,7 +9260,9 @@ void apply_call(AbstractState& state,
                             } else if (has_saved_stack_epoch(
                                            caller_value->second) ||
                                        carries_unresolved_stack_callback(
-                                           caller_value->second)) {
+                                           caller_value->second) ||
+                                       caller_value->second
+                                           .contextual_candidate_dependency) {
                                     auto candidate_value =
                                         caller_value->second;
                                     make_unknown_preserving_provenance(
@@ -8653,6 +9281,7 @@ void apply_call(AbstractState& state,
                         continue;
                     }
                     if (!value->second.known &&
+                        !value->second.contextual_candidate_dependency &&
                         !has_saved_stack_epoch(value->second) &&
                         !carries_unresolved_stack_callback(
                             value->second))
@@ -8693,6 +9322,9 @@ void apply_call(AbstractState& state,
         returned_inventory_pc_relative_code_literal_values_truncated =
             returned_inventory_pc_relative_code_literal_values_truncated ||
             returned->inventory_pc_relative_code_literal_values_truncated;
+        returned_contextual_candidate_dependency =
+            returned_contextual_candidate_dependency ||
+            returned->contextual_candidate_dependency;
         if (returned->values.empty()) {
             returned_complete = false;
             returned_may_alias_stack = true;
@@ -8709,8 +9341,6 @@ void apply_call(AbstractState& state,
             returned_may_alias_stack || returned->may_alias_stack;
         returned_inventory_may_alias_stack =
             returned_inventory_may_alias_stack || returned->may_alias_stack;
-        returned_contextual_candidate_dependency =
-            returned_contextual_candidate_dependency || returned->contextual_candidate_dependency;
         evidence_callees.insert(candidate);
         evidence_callees.insert(returned->evidence_callees.begin(),
                                 returned->evidence_callees.end());
@@ -8792,7 +9422,8 @@ void apply_call(AbstractState& state,
         !returned_inventory_code_pointer_values_truncated &&
         !returned_inventory_pc_relative_code_literal_values_truncated &&
         !returned_stack_callback_loss_unresolved &&
-        !returned_saved_stack_alias_latent)
+        !returned_saved_stack_alias_latent &&
+        !returned_contextual_candidate_dependency)
         return;
     if (finite_return) {
         state[0u].known = true;
@@ -9181,7 +9812,8 @@ void observe_stored_code_addresses(
     if (walk_diagnostics != nullptr) {
         walk_diagnostics->inventory_candidate_values_truncated =
             walk_diagnostics->inventory_candidate_values_truncated ||
-            inventory_candidate_values_truncated(value);
+            inventory_candidate_values_truncated(value) ||
+            contextual_candidate_top(value);
         walk_diagnostics->abi_stack_base_unresolved =
             walk_diagnostics->abi_stack_base_unresolved ||
             carries_unresolved_stack_callback(value);
@@ -9272,7 +9904,8 @@ void observe_returned_code_address_tables(
     const katana::io::ExecutableImage& image,
     const katana::sh4::DisassemblyLine& line,
     const AbstractState& state,
-    std::vector<ReturnedCodeAddressTableCandidate>& candidates) {
+    std::vector<ReturnedCodeAddressTableCandidate>& candidates,
+    GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics) {
     using K = katana::sh4::InstructionKind;
     const auto static_image_pointer = [&](const AbstractValue& pointer) {
         return pointer.known && !pointer.values.empty() &&
@@ -9313,6 +9946,9 @@ void observe_returned_code_address_tables(
         effective_address.known = index.known && base.known;
         effective_address.guarded = index.guarded || base.guarded;
         effective_address.complete = index.complete && base.complete;
+        effective_address.contextual_candidate_dependency =
+            index.contextual_candidate_dependency ||
+            base.contextual_candidate_dependency;
         effective_address.call_sites = index.call_sites;
         effective_address.call_sites.insert(base.call_sites.begin(),
                                             base.call_sites.end());
@@ -9330,10 +9966,17 @@ void observe_returned_code_address_tables(
         return;
     }
 
-    if (!effective_address.known || effective_address.values.empty() ||
-        effective_address.values.size() > maximum_summary_values ||
-        effective_address.call_sites.empty() ||
-        effective_address.callees.empty())
+    const bool finite_effective_address =
+        effective_address.known && !effective_address.values.empty() &&
+        effective_address.values.size() <= maximum_summary_values;
+    const bool observer_provenance_relevant =
+        !effective_address.call_sites.empty() &&
+        !effective_address.callees.empty();
+    if (walk_diagnostics != nullptr && observer_provenance_relevant &&
+        !finite_effective_address &&
+        contextual_candidate_top(effective_address))
+        walk_diagnostics->inventory_candidate_values_truncated = true;
+    if (!finite_effective_address || !observer_provenance_relevant)
         return;
 
     constexpr detail::SnapshotPointerCandidateScanPolicy scan_policy{
@@ -9620,11 +10263,15 @@ FunctionEvaluation evaluate_function(
             if (resolution_mode != ResolutionCollectionMode::None && indirect) {
                 const auto& value = state[line.instruction.branch_register];
                 if (walk_diagnostics != nullptr) {
-                    walk_diagnostics
-                        ->inventory_candidate_values_truncated =
+                        walk_diagnostics
+                            ->inventory_candidate_values_truncated =
                         walk_diagnostics
                             ->inventory_candidate_values_truncated ||
-                        inventory_candidate_values_truncated(value);
+                        inventory_candidate_values_truncated(value) ||
+                        (resolution_mode ==
+                             ResolutionCollectionMode::GuardedInventory &&
+                         contextual_summaries != nullptr &&
+                         contextual_candidate_top(value));
                     walk_diagnostics->abi_stack_base_unresolved =
                         walk_diagnostics->abi_stack_base_unresolved ||
                         carries_unresolved_stack_callback(value);
@@ -9756,7 +10403,11 @@ FunctionEvaluation evaluate_function(
                     std::vector<ReturnedCodeAddressTableCandidate>
                         returned_tables;
                     observe_returned_code_address_tables(
-                        image, line, state, returned_tables);
+                        image,
+                        line,
+                        state,
+                        returned_tables,
+                        walk_diagnostics);
                     guarded_inventory_collector->collect(
                         std::move(returned_tables));
                 }
@@ -10378,13 +11029,16 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
             for (std::uint8_t index = 0u; index < 15u; ++index) {
                 const auto& source = state[index];
                 if (!has_saved_stack_epoch(source) &&
-                    !carries_unresolved_stack_callback(source))
+                    !carries_unresolved_stack_callback(source) &&
+                    !source.contextual_candidate_dependency)
                     continue;
                 AbstractValue provenance;
                 provenance.guarded = true;
                 provenance.complete = false;
                 provenance.inventory_stack_callback_loss_unresolved =
                     source.inventory_stack_callback_loss_unresolved;
+                provenance.contextual_candidate_dependency =
+                    source.contextual_candidate_dependency;
                 provenance.inventory_saved_stack_epoch =
                     source.inventory_saved_stack_epoch;
                 if (!retained_register_provenance[index]) {
@@ -10425,6 +11079,8 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
                 provenance.complete = false;
                 provenance.inventory_stack_callback_loss_unresolved =
                     source.inventory_stack_callback_loss_unresolved;
+                provenance.contextual_candidate_dependency =
+                    source.contextual_candidate_dependency;
                 provenance.inventory_saved_stack_epoch =
                     source.inventory_saved_stack_epoch;
                 const auto [stored_value, inserted_value] =
@@ -10435,7 +11091,8 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
             };
             for (const auto& [slot, value] : state.stack_values) {
                 if (has_saved_stack_epoch(value) ||
-                    carries_unresolved_stack_callback(value))
+                    carries_unresolved_stack_callback(value) ||
+                    value.contextual_candidate_dependency)
                     retain_provenance(
                         merged.stack_values,
                         slot,
@@ -10443,9 +11100,12 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
                         unresolved_saved_stack_alias_source_stack,
                         value);
             }
+            if (state.stack_tail.present)
+                merge_stack_tail_summary(merged, state.stack_tail);
             for (const auto& [address, value] : state.memory_values) {
                 if (has_saved_stack_epoch(value) ||
-                    carries_unresolved_stack_callback(value))
+                    carries_unresolved_stack_callback(value) ||
+                    value.contextual_candidate_dependency)
                     retain_provenance(
                         merged.memory_values,
                         address,
@@ -10454,6 +11114,7 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
                         value);
             }
         }
+        normalize_stack_tail_summary(merged);
         const bool changed = destination.state != merged;
         destination.state = std::move(merged);
         destination.recompute_candidate_values_truncated =
@@ -10479,6 +11140,7 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
         std::set<std::uint32_t> inventory_pc_relative_code_literal_values;
         bool inventory_code_pointer_values_truncated = false;
         bool inventory_pc_relative_code_literal_values_truncated = false;
+        bool contextual_candidate_dependency = false;
         bool inventory_stack_callback_loss_unresolved = false;
         InventorySavedStackEpoch inventory_saved_stack_epoch;
         bool inventory_saved_stack_epoch_initialized = false;
@@ -10508,6 +11170,9 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
             inventory_pc_relative_code_literal_values_truncated =
                 inventory_pc_relative_code_literal_values_truncated ||
                 source.inventory_pc_relative_code_literal_values_truncated;
+            contextual_candidate_dependency =
+                contextual_candidate_dependency ||
+                source.contextual_candidate_dependency;
             inventory_stack_callback_loss_unresolved =
                 inventory_stack_callback_loss_unresolved ||
                 carries_unresolved_stack_callback(source);
@@ -10585,6 +11250,8 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
             inventory_code_pointer_values_truncated;
         target.inventory_pc_relative_code_literal_values_truncated =
             inventory_pc_relative_code_literal_values_truncated;
+        target.contextual_candidate_dependency =
+            contextual_candidate_dependency;
         target.inventory_stack_callback_loss_unresolved =
             inventory_stack_callback_loss_unresolved;
         target.inventory_saved_stack_epoch =
@@ -10619,11 +11286,66 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
         memory_saved_stack_epochs;
     std::map<std::int32_t, InventorySavedStackEpoch>
         stack_saved_stack_epochs;
+    std::map<std::uint32_t, AbstractValue>
+        memory_contextual_provenance;
+    std::map<std::int32_t, AbstractValue>
+        stack_contextual_provenance;
+    const auto mark_contextual_identity_loss = [&] {
+        destination.recompute_candidate_values_truncated = true;
+        merged.inventory_unresolved_stack_callback_loss = true;
+        merged.inventory_stack_callback_loss_identity_truncated = true;
+    };
+    const auto contextual_provenance = [](const AbstractValue&) {
+        AbstractValue provenance;
+        provenance.guarded = true;
+        provenance.complete = false;
+        provenance.contextual_candidate_dependency = true;
+        return provenance;
+    };
+    const auto collect_contextual_provenance =
+        [&](auto& values,
+            const auto key,
+            const std::size_t limit,
+            const AbstractValue& source) {
+            if (!source.contextual_candidate_dependency) return;
+            if (!values.contains(key) && values.size() >= limit) {
+                mark_contextual_identity_loss();
+                return;
+            }
+            const auto [stored, inserted] =
+                values.try_emplace(key, contextual_provenance(source));
+            if (!inserted)
+                static_cast<void>(
+                    merge_value(
+                        stored->second,
+                        contextual_provenance(source)));
+        };
+    const auto apply_contextual_provenance =
+        [&](auto& destination_values, const auto& values,
+            const std::size_t limit) {
+            for (const auto& [key, provenance] : values) {
+                if (!destination_values.contains(key) &&
+                    destination_values.size() >= limit) {
+                    mark_contextual_identity_loss();
+                    continue;
+                }
+                const auto [stored, inserted] =
+                    destination_values.try_emplace(key, provenance);
+                if (!inserted)
+                    static_cast<void>(
+                        merge_value(stored->second, provenance));
+            }
+        };
     for (const auto call_site : destination.expected_call_sites) {
         const auto& call_state =
             destination.observations.at(call_site);
         for (const auto& [address, value] :
              call_state.memory_values) {
+            collect_contextual_provenance(
+                memory_contextual_provenance,
+                address,
+                maximum_memory_values,
+                value);
             if (carries_unresolved_stack_callback(value)) {
                 if (!memory_stack_callback_loss_unresolved
                          .contains(address) &&
@@ -10675,6 +11397,11 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
         }
         for (const auto& [slot, value] :
              call_state.stack_values) {
+            collect_contextual_provenance(
+                stack_contextual_provenance,
+                slot,
+                maximum_abi_stack_argument_slots,
+                value);
             if (carries_unresolved_stack_callback(value)) {
                 if (!stack_callback_loss_unresolved.contains(slot) &&
                     stack_callback_loss_unresolved.size() >=
@@ -10737,6 +11464,7 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
             merge_value(value->second, source->second);
             if (!value->second.known &&
                 !has_inventory_candidate_values(value->second) &&
+                !value->second.contextual_candidate_dependency &&
                 !has_saved_stack_epoch(value->second) &&
                 !carries_unresolved_stack_callback(
                     value->second)) {
@@ -10804,20 +11532,33 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
             static_cast<void>(
                 merge_value(stored_value->second, provenance));
     }
+    apply_contextual_provenance(
+        merged.memory_values,
+        memory_contextual_provenance,
+        maximum_memory_values);
     merged.stack_values = destination.observations.at(first_call_site).stack_values;
+    merged.stack_tail =
+        destination.observations.at(first_call_site).stack_tail;
     for (auto value = merged.stack_values.begin(); value != merged.stack_values.end();) {
         bool retained = true;
         for (const auto call_site : destination.expected_call_sites) {
             if (call_site == first_call_site) continue;
             const auto& source_values = destination.observations.at(call_site).stack_values;
             const auto source = source_values.find(value->first);
-            if (source == source_values.end()) {
+            const auto* const source_value =
+                source != source_values.end()
+                    ? &source->second
+                    : stack_tail_value_at(
+                        destination.observations.at(call_site),
+                        value->first);
+            if (source_value == nullptr) {
                 retained = false;
                 break;
             }
-            merge_value(value->second, source->second);
+            merge_value(value->second, *source_value);
             if (!value->second.known &&
                 !has_inventory_candidate_values(value->second) &&
+                !value->second.contextual_candidate_dependency &&
                 !has_saved_stack_epoch(value->second) &&
                 !carries_unresolved_stack_callback(
                     value->second)) {
@@ -10887,6 +11628,16 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
             static_cast<void>(
                 merge_value(stored_value->second, provenance));
     }
+    apply_contextual_provenance(
+        merged.stack_values,
+        stack_contextual_provenance,
+        maximum_abi_stack_argument_slots);
+    for (const auto call_site : destination.expected_call_sites) {
+        if (call_site == first_call_site) continue;
+        merge_stack_tail_summary(
+            merged, destination.observations.at(call_site).stack_tail);
+    }
+    normalize_stack_tail_summary(merged);
     const bool changed = destination.state != merged;
     destination.state = std::move(merged);
     destination.recompute_candidate_values_truncated =
@@ -10999,16 +11750,34 @@ bool requires_isolated_store_harvest(
     for (const auto& [slot, observed] : observation.stack_values) {
         if (!observed.known || observed.values.empty()) continue;
         const auto merged = input_state.stack_values.find(slot);
-        if (merged == input_state.stack_values.end() || !merged->second.known ||
+        const auto* const merged_value =
+            merged != input_state.stack_values.end()
+                ? &merged->second
+                : stack_tail_value_at(input_state, slot);
+        if (merged_value == nullptr || !merged_value->known ||
             std::any_of(observed.values.begin(),
                         observed.values.end(),
                         [&](const auto value) {
-                            return std::find(merged->second.values.begin(),
-                                             merged->second.values.end(),
-                                             value) == merged->second.values.end();
+                            return std::find(merged_value->values.begin(),
+                                             merged_value->values.end(),
+                                             value) == merged_value->values.end();
                         }))
             return true;
     }
+    if (observation.stack_tail.present != input_state.stack_tail.present ||
+        (observation.stack_tail.present &&
+         (observation.stack_tail.lower_bound !=
+              input_state.stack_tail.lower_bound ||
+          !same_stack_callback_provenance(
+              observation.stack_tail.payload,
+              input_state.stack_tail.payload) ||
+          observation.stack_tail.payload.inventory_code_pointer_values !=
+              input_state.stack_tail.payload.inventory_code_pointer_values ||
+          observation.stack_tail.payload
+                  .inventory_code_pointer_values_truncated !=
+              input_state.stack_tail.payload
+                  .inventory_code_pointer_values_truncated)))
+        return true;
     const auto unresolved_map_differs =
         [](const auto& observed_values,
            const auto& merged_values) {
@@ -13137,13 +13906,22 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
                     input.inventory_current_stack_epoch_alias_watcher =
                         true;
             }
+            if (observation.stack_tail.present &&
+                has_saved_stack_epoch(observation.stack_tail.payload) &&
+                observation.stack_tail.payload.inventory_saved_stack_epoch
+                    .tracks_current_epoch)
+                input.inventory_current_stack_epoch_alias_watcher = true;
             for (const auto slot : required_stack_reads->slots) {
                 const auto value = observation.stack_values.find(slot);
                 if (value != observation.stack_values.end())
                     input.stack_values.emplace(slot, value->second);
             }
+            input.stack_tail = observation.stack_tail;
+            materialize_stack_tail_read_slots(
+                input, required_stack_reads->slots);
         } else {
             input.stack_values = observation.stack_values;
+            input.stack_tail = observation.stack_tail;
             collapse_payload_free_stack_aliases(input);
         }
         for (auto& [slot, value] : input.stack_values) {
@@ -13154,6 +13932,10 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
             if (has_inventory_candidate_values(value) ||
                 value.values.size() > maximum_summary_values)
                 make_unknown_preserving_provenance(value);
+        }
+        if (input.stack_tail.present) {
+            normalize_stack_tail_payload(input.stack_tail.payload);
+            input.stack_tail.payload.call_sites.insert(call_site);
         }
     }
     // Scalar persistent-memory facts normally come from the global summary.
@@ -13229,12 +14011,19 @@ AbstractState tail_store_input(
                 input.inventory_current_stack_epoch_alias_watcher =
                     true;
         }
+        if (input.stack_tail.present &&
+            has_saved_stack_epoch(input.stack_tail.payload) &&
+            input.stack_tail.payload.inventory_saved_stack_epoch
+                .tracks_current_epoch)
+            input.inventory_current_stack_epoch_alias_watcher = true;
         std::erase_if(input.stack_values, [&](const auto& stored) {
             return !std::binary_search(
                 required_stack_reads->slots.begin(),
                 required_stack_reads->slots.end(),
                 stored.first);
         });
+        materialize_stack_tail_read_slots(
+            input, required_stack_reads->slots);
     } else {
         collapse_payload_free_stack_aliases(input);
     }
@@ -13296,10 +14085,32 @@ bool requires_forwarded_isolated_store_harvest(const katana::io::ExecutableImage
         if (observed.inventory_code_pointer_values.empty())
             continue;
         const auto merged = merged_input.stack_values.find(slot);
+        const auto* const merged_value =
+            merged != merged_input.stack_values.end()
+                ? &merged->second
+                : stack_tail_value_at(merged_input, slot);
         for (const auto value : observed.inventory_code_pointer_values) {
             if (!validate_decode_candidate(image, value).valid()) continue;
-            if (merged == merged_input.stack_values.end() ||
-                !has_inventory_code_pointer_value(merged->second, value))
+            if (merged_value == nullptr ||
+                !has_inventory_code_pointer_value(*merged_value, value))
+                return true;
+        }
+    }
+    if (observation.stack_tail.present !=
+            merged_input.stack_tail.present ||
+        (observation.stack_tail.present &&
+         (observation.stack_tail.lower_bound !=
+              merged_input.stack_tail.lower_bound ||
+          !same_stack_callback_provenance(
+              observation.stack_tail.payload,
+              merged_input.stack_tail.payload))))
+        return true;
+    if (observation.stack_tail.present) {
+        for (const auto value :
+             observation.stack_tail.payload.inventory_code_pointer_values) {
+            if (validate_decode_candidate(image, value).valid() &&
+                !has_inventory_code_pointer_value(
+                    merged_input.stack_tail.payload, value))
                 return true;
         }
     }
@@ -13570,6 +14381,8 @@ project_evaluation_ingress(
                     true;
             stored = projected.stack_values.erase(stored);
         }
+        materialize_stack_tail_read_slots(
+            projected, stack_reads.slots);
     }
     if (project_memory) {
         std::erase_if(projected.memory_values, [&](const auto& stored) {
@@ -13579,6 +14392,7 @@ project_evaluation_ingress(
                        stored.first, memory_read_ranges);
         });
     }
+    normalize_stack_tail_summary(projected);
     return projected;
 }
 
@@ -13647,6 +14461,7 @@ project_evaluation_ingress(
                 state.inventory_current_stack_epoch_alias_watcher = true;
             stored = state.stack_values.erase(stored);
         }
+        materialize_stack_tail_read_slots(state, stack_reads.slots);
     }
     if (project_memory) {
         std::erase_if(state.memory_values, [&](const auto& stored) {
@@ -13656,6 +14471,7 @@ project_evaluation_ingress(
                        stored.first, memory_read_ranges);
         });
     }
+    normalize_stack_tail_summary(state);
     return true;
 }
 
@@ -13734,6 +14550,28 @@ inventory_loss_in_evaluation_projection(
             loss.abi_stack_base_unresolved =
                 loss.abi_stack_base_unresolved ||
                 carries_unresolved_stack_callback(value);
+    }
+    if (state.stack_tail.present) {
+        const auto tail_is_observable =
+            !project_stack ||
+            std::any_of(
+                stack_reads.slots.begin(),
+                stack_reads.slots.end(),
+                [&](const auto slot) {
+                    return slot >= state.stack_tail.lower_bound &&
+                           !state.stack_values.contains(slot);
+                });
+        if (tail_is_observable) {
+            loss.candidate_values_truncated =
+                loss.candidate_values_truncated ||
+                inventory_candidate_values_truncated(
+                    state.stack_tail.payload);
+            if ((inventory_sink_sources & abi_stack_argument_taint) != 0u)
+                loss.abi_stack_base_unresolved =
+                    loss.abi_stack_base_unresolved ||
+                    carries_unresolved_stack_callback(
+                        state.stack_tail.payload);
+        }
     }
     loss.candidate_values_truncated =
         loss.candidate_values_truncated ||
@@ -14184,6 +15022,11 @@ void encode(EvaluationKeyEncoder& key,
             key.append(stored.first);
             encode(key, stored.second);
         });
+    key.append(state.stack_tail.present);
+    if (state.stack_tail.present) {
+        key.append(state.stack_tail.lower_bound);
+        encode(key, state.stack_tail.payload);
+    }
     key.append_range(
         state.memory_values,
         [&](const auto& stored) {
@@ -14816,6 +15659,9 @@ make_function_evaluation_cache_key(
                  sizeof(std::pair<const std::int32_t, AbstractValue>) +
                  retained_heap_bytes(value);
     }
+    if (state.stack_tail.present)
+        bytes += sizeof(StackTailSummary) +
+                 retained_heap_bytes(state.stack_tail.payload);
     for (const auto& [address, value] : state.memory_values) {
         static_cast<void>(address);
         bytes += 3u * sizeof(void*) +
@@ -16909,7 +17755,7 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 10u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 11u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -31703,17 +32549,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     evidence_token_layout;
             };
             using SemanticLaneId = std::size_t;
-            struct FullStateSemanticKey final {
+            struct ContextualReadSemanticKey final {
                 std::uint64_t hash = 0u;
                 std::vector<std::uint8_t> bytes;
 
                 [[nodiscard]] bool same_as(
-                    const FullStateSemanticKey& other) const noexcept {
+                    const ContextualReadSemanticKey& other) const noexcept {
                     return bytes == other.bytes;
                 }
             };
             struct SemanticLane final {
-                FullStateSemanticKey key;
+                ContextualReadSemanticKey key;
                 // A key consumes logical Contextual evaluation budget at most
                 // once for this root. The weak artifact never forces a large
                 // exact result to remain alive after its subscribers moved on.
@@ -31731,6 +32577,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     function_index, function->entry_address);
             const bool collect_contextual_return_product_telemetry =
                 contextual_return_product_slot != nullptr;
+            const bool collect_contextual_stack_widening_diagnostics =
+                collect_contextual_return_product_telemetry &&
+                analyzer_stack_diagnostics_enabled();
             update_contextual_return_product_telemetry(
                 contextual_return_product_slot,
                 [&](auto& telemetry) {
@@ -32207,43 +33056,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             });
                     }
                 };
-            const auto make_contextual_full_state_semantic_key =
+            const auto make_contextual_read_semantic_key =
                 [&](const ContextualBatchItem& item,
-                    const AbstractState& canonical_full_input,
+                    FunctionEvaluationProjection projection,
                     const std::map<std::uint32_t, FunctionValueSummary>&
                         canonical_summaries,
                     const ContextualSummaryBindings* const
                         canonical_contextual_summaries) {
                     const auto& semantic_function =
                         *fixpoint_functions.at(item.function_index);
-                    const bool effective_memory_projection =
-                        memory_read_contracts_authoritative &&
-                        allow_memory_projection;
-                    auto full_state_projection =
-                        make_function_evaluation_projection(
-                            canonical_full_input,
-                            EvaluationLens::ContextualReturn,
-                            item.address,
-                            TailIngressTargetKind::Function,
-                            forwarded_register_reads,
-                            abi_stack_argument_reads,
-                            summaries,
-                            effective_memory_projection,
-                            !effective_memory_projection ||
-                                memory_projection_covers_tail_ingresses(
-                                    semantic_function,
-                                    block_index,
-                                    tail_ingresses,
-                                    nullptr),
-                            !result.budget_exhausted);
-                    // This is deliberately stricter than the physical cache
-                    // request below: scheduler sharing requires the complete
-                    // canonical FullState while cached_evaluate_function()
-                    // retains its established read-lens projection.
-                    full_state_projection.ingress = canonical_full_input;
-                    full_state_projection.effective_lens =
-                        EvaluationLens::FullState;
-                    full_state_projection.full_state_fallback = true;
                     auto cache_key = make_function_evaluation_cache_key(
                         image,
                         semantic_function,
@@ -32251,7 +33072,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         inventory_indirect_callees,
                         tail_ingresses,
                         canonical_summaries,
-                        full_state_projection,
+                        projection,
                         ResolutionCollectionMode::None,
                         true,
                         false,
@@ -32263,11 +33084,1245 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         &abi_stack_argument_reads,
                         0u,
                         false);
-                    return FullStateSemanticKey{
+                    return ContextualReadSemanticKey{
                         cache_key.hash, std::move(cache_key.bytes)};
                 };
+            enum class ContextualReadAdmissionFailure : std::uint8_t {
+                FullStateFallback,
+                RequestedLens,
+                EffectiveLens,
+                TargetKind,
+                AbiNotAuthoritative,
+                RegisterContractMissing,
+                RegisterMaskTop,
+                StackContractMissing,
+                StackContractInvalid,
+                MemoryContractMissing,
+                MemoryContractInvalid,
+                MemoryProjectionDisabled,
+                TailUncovered,
+                MemorySummaryMissing,
+                CandidateValuesTruncated,
+                AbiStackBaseUnresolved,
+                UnresolvedSavedStackAliasSources,
+                SavedStackTracksCurrentEpoch,
+                CurrentAliasWatcher,
+                DetachedAliasWatcher,
+                UnresolvedStackCallbackLoss,
+                CallbackLossIdentityTruncated,
+                Count,
+            };
+            constexpr auto contextual_read_admission_failure_count =
+                static_cast<std::size_t>(
+                    ContextualReadAdmissionFailure::Count);
+            using ContextualReadAdmissionFailureMask = std::uint32_t;
+            enum class ContextualStackWideningKind : std::uint8_t {
+                PureKeyExpansion,
+                UniformKeyTranslation,
+                InventoryOrEvidenceOnly,
+                OrdinaryPayload,
+                Count,
+            };
+            constexpr auto contextual_stack_widening_kind_count =
+                static_cast<std::size_t>(
+                    ContextualStackWideningKind::Count);
+            enum class ContextualTailPayloadDomain : std::uint8_t {
+                InventoryCodePointers,
+                PcRelativeCodeLiterals,
+                ContextualCandidateDependency,
+                CallbackLoss,
+                SavedEpochShape,
+                Rest,
+                Count,
+            };
+            constexpr auto contextual_tail_payload_domain_count =
+                static_cast<std::size_t>(
+                    ContextualTailPayloadDomain::Count);
+            constexpr auto abi_stack_read_top_reason_count =
+                static_cast<std::size_t>(
+                    AbiStackReadTopReason::FixpointSlotBudget) +
+                1u;
+            struct ContextualStackWideningHotCallee final {
+                std::uint32_t function_entry = 0u;
+                std::uint64_t count = 0u;
+                std::uint64_t maximum_stack_values = 0u;
+                std::uint64_t current_stack_values = 0u;
+            };
+            struct ContextualReadAdmissionDiagnostics final {
+                std::uint64_t attempts = 0u;
+                std::uint64_t admission_success = 0u;
+                std::uint64_t projected_context_changed = 0u;
+                std::uint64_t projected_match_changed = 0u;
+                std::uint64_t projected_match_missing = 0u;
+                std::uint64_t source_memory_cells = 0u;
+                std::uint64_t projected_memory_cells = 0u;
+                std::uint64_t contract_memory_cells = 0u;
+                std::uint64_t retention_only_memory_cells = 0u;
+                std::uint64_t maximum_source_memory_cells = 0u;
+                std::uint64_t maximum_projected_memory_cells = 0u;
+                std::uint64_t maximum_contract_memory_cells = 0u;
+                std::uint64_t maximum_retention_only_memory_cells = 0u;
+                std::uint64_t sample_source_state_bytes = 0u;
+                std::uint64_t sample_projected_state_bytes = 0u;
+                std::array<std::uint64_t,
+                           contextual_read_admission_failure_count>
+                    context_failures{};
+                std::array<std::uint64_t,
+                           contextual_read_admission_failure_count>
+                    match_failures{};
+                std::uint64_t widening_register_values = 0u;
+                std::uint64_t widening_register_metadata = 0u;
+                std::uint64_t widening_stack_values = 0u;
+                std::uint64_t widening_memory_values = 0u;
+                std::uint64_t widening_statewide_inventory_flags = 0u;
+                std::array<
+                    std::array<std::uint64_t, 2u>,
+                    contextual_stack_widening_kind_count>
+                    stack_widening_kinds{};
+                std::array<std::array<std::uint64_t, 2u>, 8u>
+                    stack_semantic_patterns{};
+                std::array<
+                    std::array<std::uint64_t, 2u>,
+                    contextual_tail_payload_domain_count>
+                    stack_tail_payload_domains{};
+                std::array<std::uint64_t,
+                           abi_stack_read_top_reason_count>
+                    stack_top_reasons{};
+                std::uint64_t stack_top_chain_truncated = 0u;
+                std::map<std::uint32_t,
+                         ContextualStackWideningHotCallee>
+                    stack_hot_callees;
+            } contextual_read_admission_diagnostics;
+            const auto saturating_increment = [](std::uint64_t& value) {
+                if (value != std::numeric_limits<std::uint64_t>::max())
+                    ++value;
+            };
+            const auto contextual_read_admission_failure_bit =
+                [](const ContextualReadAdmissionFailure failure) {
+                    return ContextualReadAdmissionFailureMask{1u}
+                           << static_cast<std::uint8_t>(failure);
+                };
+            const auto emit_contextual_candidate_truncation_carriers =
+                [&](const std::uint32_t function_entry,
+                    const AbstractState& exact_source_state,
+                    const FunctionEvaluationProjection& projection) {
+                    if (!analyzer_stack_diagnostics_enabled()) return;
+                    enum class Carrier : std::uint8_t {
+                        Register,
+                        Stack,
+                        Tail,
+                        Memory,
+                        State,
+                    };
+                    enum class Domain : std::uint8_t {
+                        Code,
+                        Pc,
+                        SavedCode,
+                        SavedPc,
+                        Identity,
+                    };
+                    const auto emit_value =
+                        [&](const AbstractValue& value,
+                            const char* const carrier,
+                            const Carrier carrier_id,
+                            const std::int64_t coordinate,
+                            const std::uint32_t coordinate_key) {
+                            const auto saved_slots =
+                                value.inventory_saved_stack_epoch.slots.size();
+                            const auto call_site_first =
+                                value.call_sites.empty()
+                                    ? 0u
+                                    : *value.call_sites.begin();
+                            const auto call_site_last =
+                                value.call_sites.empty()
+                                    ? 0u
+                                    : *value.call_sites.rbegin();
+                            const auto callee_first = value.callees.empty()
+                                                          ? 0u
+                                                          : *value.callees.begin();
+                            const auto callee_last = value.callees.empty()
+                                                         ? 0u
+                                                         : *value.callees.rbegin();
+                            const auto emit =
+                                [&](const char* const domain,
+                                    const Domain domain_id,
+                                    const std::size_t values,
+                                    const std::uint32_t saved_slot_dedupe_index,
+                                    const std::int64_t saved_slot_index,
+                                    const std::int64_t saved_relative_slot) {
+                                    const auto target =
+                                        (static_cast<std::uint32_t>(carrier_id)
+                                         << 16u) |
+                                        saved_slot_dedupe_index;
+                                    emit_bounded_analyzer_diagnostic(
+                                        detailed_analyzer_diagnostic_kind_candidate_truncation,
+                                        function_entry,
+                                        coordinate_key,
+                                        target,
+                                        static_cast<std::uint8_t>(domain_id),
+                                        [&] {
+                                            std::fprintf(
+                                                stderr,
+                                                "KATANA_ANALYZER_CANDIDATE_TRUNCATION "
+                                                "owner=0x%08X carrier=%s "
+                                                "coordinate=%lld domain=%s "
+                                                "values=%zu saved_slots=%zu "
+                                                "saved_slot_index=%lld "
+                                                "saved_relative_slot=%lld "
+                                                "known=%u guarded=%u complete=%u "
+                                                "contextual_candidate_dependency=%u "
+                                                "call_sites_count=%zu "
+                                                "call_site_first=0x%08X "
+                                                "call_site_last=0x%08X "
+                                                "callees_count=%zu "
+                                                "callee_first=0x%08X "
+                                                "callee_last=0x%08X\n",
+                                                static_cast<unsigned int>(
+                                                    function_entry),
+                                                carrier,
+                                                static_cast<long long>(coordinate),
+                                                domain,
+                                                values,
+                                                saved_slots,
+                                                static_cast<long long>(
+                                                    saved_slot_index),
+                                                static_cast<long long>(
+                                                    saved_relative_slot),
+                                                static_cast<unsigned int>(
+                                                    value.known),
+                                                static_cast<unsigned int>(
+                                                    value.guarded),
+                                                static_cast<unsigned int>(
+                                                    value.complete),
+                                                static_cast<unsigned int>(
+                                                    value
+                                                        .contextual_candidate_dependency),
+                                                value.call_sites.size(),
+                                                static_cast<unsigned int>(
+                                                    call_site_first),
+                                                static_cast<unsigned int>(
+                                                    call_site_last),
+                                                value.callees.size(),
+                                                static_cast<unsigned int>(
+                                                    callee_first),
+                                                static_cast<unsigned int>(
+                                                    callee_last));
+                                        });
+                                };
+                            if (value.inventory_code_pointer_values_truncated)
+                                emit("code",
+                                     Domain::Code,
+                                     value.inventory_code_pointer_values.size(),
+                                     0u,
+                                     -1,
+                                     -1);
+                            if (value
+                                    .inventory_pc_relative_code_literal_values_truncated)
+                                emit("pc",
+                                     Domain::Pc,
+                                     value
+                                         .inventory_pc_relative_code_literal_values
+                                         .size(),
+                                     0u,
+                                     -1,
+                                     -1);
+                            for (std::size_t index = 0u;
+                                 index < saved_slots;
+                                 ++index) {
+                                const auto& slot = value
+                                                       .inventory_saved_stack_epoch
+                                                       .slots[index];
+                                const auto saved_slot_dedupe_index =
+                                    static_cast<std::uint32_t>(index + 1u);
+                                if (slot
+                                        .inventory_code_pointer_values_truncated)
+                                    emit("saved-code",
+                                         Domain::SavedCode,
+                                         slot.inventory_code_pointer_values
+                                             .size(),
+                                         saved_slot_dedupe_index,
+                                         static_cast<std::int64_t>(index),
+                                         static_cast<std::int64_t>(
+                                             slot.relative_slot));
+                                if (slot
+                                        .inventory_pc_relative_code_literal_values_truncated)
+                                    emit("saved-pc",
+                                         Domain::SavedPc,
+                                         slot
+                                             .inventory_pc_relative_code_literal_values
+                                             .size(),
+                                         saved_slot_dedupe_index,
+                                         static_cast<std::int64_t>(index),
+                                         static_cast<std::int64_t>(
+                                             slot.relative_slot));
+                            }
+                        };
+                    if (exact_source_state
+                            .inventory_stack_callback_loss_identity_truncated) {
+                        emit_bounded_analyzer_diagnostic(
+                            detailed_analyzer_diagnostic_kind_candidate_truncation,
+                            function_entry,
+                            0u,
+                            static_cast<std::uint32_t>(Carrier::State) << 16u,
+                            static_cast<std::uint8_t>(Domain::Identity),
+                            [&] {
+                                std::fprintf(
+                                    stderr,
+                                    "KATANA_ANALYZER_CANDIDATE_TRUNCATION "
+                                    "owner=0x%08X carrier=state "
+                                    "coordinate=identity domain=identity "
+                                    "values=0 saved_slots=0 "
+                                    "saved_slot_index=-1 "
+                                    "saved_relative_slot=-1\n",
+                                    static_cast<unsigned int>(function_entry));
+                            });
+                    }
+                    const bool project_registers =
+                        projection.register_read_mask !=
+                        std::numeric_limits<std::uint16_t>::max();
+                    const bool project_stack =
+                        valid_complete_stack_read_contract(
+                            projection.stack_reads);
+                    const bool project_memory =
+                        valid_exact_memory_read_contract(
+                            projection.memory_read_complete,
+                            projection.memory_read_unknown,
+                            projection.memory_read_ranges);
+                    constexpr auto stack_pointer_bit =
+                        static_cast<std::uint16_t>(1u << 15u);
+                    const auto effective_register_read_mask =
+                        project_registers &&
+                                (!project_stack ||
+                                 !projection.stack_reads.slots.empty())
+                            ? static_cast<std::uint16_t>(
+                                  projection.register_read_mask |
+                                  stack_pointer_bit)
+                            : projection.register_read_mask;
+                    for (std::size_t index = 0u;
+                         index < exact_source_state.registers.size();
+                         ++index) {
+                        const auto bit =
+                            static_cast<std::uint16_t>(1u << index);
+                        if (project_registers &&
+                            (effective_register_read_mask & bit) == 0u)
+                            continue;
+                        emit_value(exact_source_state.registers[index],
+                                   "register",
+                                   Carrier::Register,
+                                   static_cast<std::int64_t>(index),
+                                   static_cast<std::uint32_t>(index));
+                    }
+                    for (const auto& [slot, value] :
+                         exact_source_state.stack_values) {
+                        if (project_stack &&
+                            !std::binary_search(
+                                projection.stack_reads.slots.begin(),
+                                projection.stack_reads.slots.end(),
+                                slot))
+                            continue;
+                        emit_value(value,
+                                   "stack",
+                                   Carrier::Stack,
+                                   static_cast<std::int64_t>(slot),
+                                   static_cast<std::uint32_t>(slot));
+                    }
+                    if (exact_source_state.stack_tail.present) {
+                        const auto tail_is_observable =
+                            !project_stack ||
+                            std::any_of(
+                                projection.stack_reads.slots.begin(),
+                                projection.stack_reads.slots.end(),
+                                [&](const auto slot) {
+                                    return slot >= exact_source_state.stack_tail
+                                                       .lower_bound &&
+                                           !exact_source_state.stack_values
+                                                .contains(slot);
+                                });
+                        if (tail_is_observable)
+                            emit_value(
+                                exact_source_state.stack_tail.payload,
+                                "tail",
+                                Carrier::Tail,
+                                static_cast<std::int64_t>(
+                                    exact_source_state.stack_tail.lower_bound),
+                                static_cast<std::uint32_t>(
+                                    exact_source_state.stack_tail.lower_bound));
+                    }
+                    for (const auto& [address, value] :
+                         exact_source_state.memory_values) {
+                        if (project_memory &&
+                            !memory_value_requires_projection_retention(value) &&
+                            !memory_cell_required_by_contract(
+                                address,
+                                projection.memory_read_ranges))
+                            continue;
+                        emit_value(value,
+                                   "memory",
+                                   Carrier::Memory,
+                                   static_cast<std::int64_t>(address),
+                                   address);
+                    }
+                };
+            const auto contextual_read_identity_failure_mask =
+                [&](const std::uint32_t function_entry,
+                    const AbstractState& exact_source_state,
+                    const FunctionEvaluationProjection& projection) {
+                    auto failures = ContextualReadAdmissionFailureMask{0u};
+                    const auto set_failure =
+                        [&](const ContextualReadAdmissionFailure failure) {
+                            failures |= contextual_read_admission_failure_bit(
+                                failure);
+                        };
+                    if (projection.full_state_fallback)
+                        set_failure(
+                            ContextualReadAdmissionFailure::FullStateFallback);
+                    if (projection.requested_lens !=
+                        EvaluationLens::ContextualReturn)
+                        set_failure(
+                            ContextualReadAdmissionFailure::RequestedLens);
+                    if (projection.effective_lens !=
+                        EvaluationLens::ContextualReturn)
+                        set_failure(
+                            ContextualReadAdmissionFailure::EffectiveLens);
+                    if (projection.target_kind !=
+                        TailIngressTargetKind::Function)
+                        set_failure(
+                            ContextualReadAdmissionFailure::TargetKind);
+                    if (!projection.abi_contract_authoritative)
+                        set_failure(
+                            ContextualReadAdmissionFailure::AbiNotAuthoritative);
+                    if (!projection.register_contract_present) {
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                RegisterContractMissing);
+                    } else if (projection.register_read_mask ==
+                               std::numeric_limits<std::uint16_t>::max()) {
+                        set_failure(
+                            ContextualReadAdmissionFailure::RegisterMaskTop);
+                    }
+                    if (!projection.stack_contract_present) {
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                StackContractMissing);
+                    } else if (!valid_complete_stack_read_contract(
+                                   projection.stack_reads)) {
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                StackContractInvalid);
+                    }
+                    if (!projection.memory_contract_present) {
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                MemoryContractMissing);
+                    } else if (!valid_exact_memory_read_contract(
+                                   projection.memory_read_complete,
+                                   projection.memory_read_unknown,
+                                   projection.memory_read_ranges)) {
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                MemoryContractInvalid);
+                    }
+                    const auto inventory_loss =
+                        inventory_loss_in_evaluation_projection(
+                            exact_source_state,
+                            projection.register_read_mask,
+                            projection.stack_reads,
+                            target_abi_inventory_sink_sources(
+                                function_entry),
+                            projection.memory_read_complete,
+                            projection.memory_read_unknown,
+                            projection.memory_read_ranges);
+                    if (inventory_loss.candidate_values_truncated) {
+                        emit_contextual_candidate_truncation_carriers(
+                            function_entry,
+                            exact_source_state,
+                            projection);
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                CandidateValuesTruncated);
+                    }
+                    if (inventory_loss.abi_stack_base_unresolved)
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                AbiStackBaseUnresolved);
+                    if (exact_source_state
+                            .inventory_unresolved_saved_stack_alias_sources !=
+                        0u)
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                UnresolvedSavedStackAliasSources);
+                    if (exact_source_state
+                            .inventory_unresolved_saved_stack_alias_tracks_current_epoch)
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                SavedStackTracksCurrentEpoch);
+                    if (exact_source_state
+                            .inventory_current_stack_epoch_alias_watcher)
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                CurrentAliasWatcher);
+                    if (exact_source_state
+                            .inventory_detached_stack_epoch_alias_watcher)
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                DetachedAliasWatcher);
+                    if (exact_source_state
+                            .inventory_unresolved_stack_callback_loss)
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                UnresolvedStackCallbackLoss);
+                    if (exact_source_state
+                            .inventory_stack_callback_loss_identity_truncated)
+                        set_failure(
+                            ContextualReadAdmissionFailure::
+                                CallbackLossIdentityTruncated);
+                    return failures;
+                };
+            const auto contextual_read_identity_is_complete =
+                [&](const std::uint32_t function_entry,
+                    const AbstractState& exact_source_state,
+                    const FunctionEvaluationProjection& projection) {
+                    return contextual_read_identity_failure_mask(
+                               function_entry,
+                               exact_source_state,
+                               projection) == 0u;
+                };
+            const auto saturating_add =
+                [](std::uint64_t& destination,
+                    const std::uint64_t amount) {
+                    if (std::numeric_limits<std::uint64_t>::max() -
+                            destination <
+                        amount)
+                        destination =
+                            std::numeric_limits<std::uint64_t>::max();
+                    else
+                        destination += amount;
+                };
+            const auto record_contextual_read_failure_mask =
+                [&](std::array<std::uint64_t,
+                               contextual_read_admission_failure_count>&
+                        counters,
+                    const ContextualReadAdmissionFailureMask failures) {
+                    for (std::size_t index = 0u;
+                         index < contextual_read_admission_failure_count;
+                         ++index) {
+                        if ((failures &
+                             (ContextualReadAdmissionFailureMask{1u} <<
+                              index)) != 0u)
+                            saturating_increment(counters[index]);
+                    }
+                };
+            enum class ContextualWideningDomain : std::uint8_t {
+                RegisterValues = 1u << 0u,
+                RegisterMetadata = 1u << 1u,
+                StackValues = 1u << 2u,
+                MemoryValues = 1u << 3u,
+                StatewideInventoryFlags = 1u << 4u,
+            };
+            const auto contextual_widening_domains =
+                [](const AbstractState& before,
+                    const AbstractState& after) {
+                    auto domains = std::uint8_t{0u};
+                    for (std::size_t index = 0u;
+                         index < before.registers.size(); ++index) {
+                        if (!same_abstract_value_without_evidence(
+                                before.registers[index],
+                                after.registers[index])) {
+                            domains |= static_cast<std::uint8_t>(
+                                ContextualWideningDomain::RegisterValues);
+                            break;
+                        }
+                    }
+                    if (before.stack_offsets != after.stack_offsets ||
+                        before.inventory_stack_offsets !=
+                            after.inventory_stack_offsets ||
+                        before.inventory_stack_offset_candidates !=
+                            after.inventory_stack_offset_candidates ||
+                        before.stack_may_alias != after.stack_may_alias ||
+                        before.inventory_stack_may_alias !=
+                            after.inventory_stack_may_alias ||
+                        before.inventory_vbr_relative !=
+                            after.inventory_vbr_relative ||
+                        before.inventory_fixed_storage_reference !=
+                            after.inventory_fixed_storage_reference)
+                        domains |= static_cast<std::uint8_t>(
+                            ContextualWideningDomain::RegisterMetadata);
+                    const auto values_differ = [](const auto& left,
+                                                   const auto& right) {
+                        if (left.size() != right.size()) return true;
+                        auto left_value = left.begin();
+                        auto right_value = right.begin();
+                        while (left_value != left.end()) {
+                            if (left_value->first != right_value->first ||
+                                !same_abstract_value_without_evidence(
+                                    left_value->second,
+                                    right_value->second))
+                                return true;
+                            ++left_value;
+                            ++right_value;
+                        }
+                        return false;
+                    };
+                    if (values_differ(before.stack_values,
+                                      after.stack_values) ||
+                        before.stack_tail.present != after.stack_tail.present ||
+                        (before.stack_tail.present &&
+                         (before.stack_tail.lower_bound !=
+                              after.stack_tail.lower_bound ||
+                          !same_abstract_value_without_evidence(
+                              before.stack_tail.payload,
+                              after.stack_tail.payload))))
+                        domains |= static_cast<std::uint8_t>(
+                            ContextualWideningDomain::StackValues);
+                    if (values_differ(before.memory_values,
+                                      after.memory_values))
+                        domains |= static_cast<std::uint8_t>(
+                            ContextualWideningDomain::MemoryValues);
+                    if (before.inventory_unresolved_saved_stack_alias_sources !=
+                            after.inventory_unresolved_saved_stack_alias_sources ||
+                        before.inventory_unresolved_saved_stack_alias_tracks_current_epoch !=
+                            after.inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+                        before.inventory_current_stack_epoch_alias_watcher !=
+                            after.inventory_current_stack_epoch_alias_watcher ||
+                        before.inventory_detached_stack_epoch_alias_watcher !=
+                            after.inventory_detached_stack_epoch_alias_watcher ||
+                        before.inventory_unresolved_stack_callback_loss !=
+                            after.inventory_unresolved_stack_callback_loss ||
+                        before.inventory_stack_callback_loss_identity_truncated !=
+                            after.inventory_stack_callback_loss_identity_truncated)
+                        domains |= static_cast<std::uint8_t>(
+                            ContextualWideningDomain::StatewideInventoryFlags);
+                    return domains;
+                };
+            const auto same_ordinary_abstract_value =
+                [](const AbstractValue& left,
+                    const AbstractValue& right) {
+                    return left.known == right.known &&
+                           left.guarded == right.guarded &&
+                           left.complete == right.complete &&
+                           left.values == right.values;
+                };
+            const auto classify_contextual_stack_widening =
+                [&](const std::map<std::int32_t, AbstractValue>& before,
+                    const std::map<std::int32_t, AbstractValue>& after)
+                    -> std::optional<ContextualStackWideningKind> {
+                    if (before == after) return std::nullopt;
+                    const auto has_uniform_whole_map_translation = [&] {
+                        if (before.empty() ||
+                            before.size() != after.size())
+                            return false;
+                        std::optional<std::int64_t> translation;
+                        auto left = before.begin();
+                        auto right = after.begin();
+                        while (left != before.end()) {
+                            if (!same_abstract_value_without_evidence(
+                                    left->second, right->second))
+                                return false;
+                            const auto delta =
+                                static_cast<std::int64_t>(right->first) -
+                                static_cast<std::int64_t>(left->first);
+                            if (delta == 0) return false;
+                            if (!translation.has_value())
+                                translation = delta;
+                            else if (*translation != delta)
+                                return false;
+                            ++left;
+                            ++right;
+                        }
+                        return translation.has_value();
+                    };
+                    const auto has_uniform_added_payload_block = [&] {
+                        if (after.size() <= before.size()) return false;
+                        for (const auto& [key, value] : before) {
+                            const auto current = after.find(key);
+                            if (current == after.end() ||
+                                !same_abstract_value_without_evidence(
+                                    value, current->second))
+                                return false;
+                        }
+                        std::optional<std::pair<
+                            std::int32_t, const AbstractValue*>> first_added;
+                        std::size_t added = 0u;
+                        for (const auto& [key, value] : after) {
+                            if (before.contains(key)) continue;
+                            ++added;
+                            if (!first_added.has_value())
+                                first_added.emplace(key, &value);
+                        }
+                        if (added < 2u || !first_added.has_value())
+                            return false;
+                        // Bound the candidate scan so this temporary
+                        // diagnostic remains O(n log n), even for maps with
+                        // many equal payloads. Each retained candidate is
+                        // still checked against every newly added key.
+                        constexpr std::size_t
+                            maximum_translation_candidates = 8u;
+                        std::size_t candidates_examined = 0u;
+                        for (const auto& [source_key, source_value] : before) {
+                            if (!same_abstract_value_without_evidence(
+                                    source_value,
+                                    *first_added->second))
+                                continue;
+                            const auto translation =
+                                static_cast<std::int64_t>(
+                                    first_added->first) -
+                                static_cast<std::int64_t>(source_key);
+                            if (translation == 0) continue;
+                            bool all_added_values_match = true;
+                            for (const auto& [key, value] : after) {
+                                if (before.contains(key)) continue;
+                                const auto original_key =
+                                    static_cast<std::int64_t>(key) -
+                                    translation;
+                                if (original_key <
+                                        std::numeric_limits<std::int32_t>::min() ||
+                                    original_key >
+                                        std::numeric_limits<std::int32_t>::max()) {
+                                    all_added_values_match = false;
+                                    break;
+                                }
+                                const auto original = before.find(
+                                    static_cast<std::int32_t>(original_key));
+                                if (original == before.end() ||
+                                    !same_abstract_value_without_evidence(
+                                        original->second, value)) {
+                                    all_added_values_match = false;
+                                    break;
+                                }
+                            }
+                            if (all_added_values_match) return true;
+                            ++candidates_examined;
+                            if (candidates_examined >=
+                                maximum_translation_candidates)
+                                break;
+                        }
+                        return false;
+                    };
+                    if (has_uniform_whole_map_translation() ||
+                        has_uniform_added_payload_block())
+                        return ContextualStackWideningKind::
+                            UniformKeyTranslation;
+                    const auto ordinary_payloads_equal_including_absent = [&] {
+                        const AbstractValue absent_value;
+                        auto left = before.begin();
+                        auto right = after.begin();
+                        while (left != before.end() || right != after.end()) {
+                            if (left == before.end()) {
+                                if (!same_ordinary_abstract_value(
+                                        absent_value, right->second))
+                                    return false;
+                                ++right;
+                                continue;
+                            }
+                            if (right == after.end()) {
+                                if (!same_ordinary_abstract_value(
+                                        left->second, absent_value))
+                                    return false;
+                                ++left;
+                                continue;
+                            }
+                            if (left->first < right->first) {
+                                if (!same_ordinary_abstract_value(
+                                        left->second, absent_value))
+                                    return false;
+                                ++left;
+                                continue;
+                            }
+                            if (right->first < left->first) {
+                                if (!same_ordinary_abstract_value(
+                                        absent_value, right->second))
+                                    return false;
+                                ++right;
+                                continue;
+                            }
+                            if (!same_ordinary_abstract_value(
+                                    left->second, right->second))
+                                return false;
+                            ++left;
+                            ++right;
+                        }
+                        return true;
+                    };
+                    if (ordinary_payloads_equal_including_absent())
+                        return ContextualStackWideningKind::
+                            InventoryOrEvidenceOnly;
+                    bool has_added_key = false;
+                    for (const auto& [key, value] : after) {
+                        static_cast<void>(value);
+                        has_added_key = has_added_key ||
+                                        !before.contains(key);
+                    }
+                    bool existing_keys_payload_identical = true;
+                    for (const auto& [key, value] : before) {
+                        const auto current = after.find(key);
+                        if (current == after.end() ||
+                            !same_abstract_value_without_evidence(
+                                current->second, value)) {
+                            existing_keys_payload_identical = false;
+                            break;
+                        }
+                    }
+                    if (has_added_key && existing_keys_payload_identical)
+                        return ContextualStackWideningKind::
+                            PureKeyExpansion;
+                    return ContextualStackWideningKind::OrdinaryPayload;
+                };
+            const auto stack_values_differ_without_evidence =
+                [](const std::map<std::int32_t, AbstractValue>& before,
+                   const std::map<std::int32_t, AbstractValue>& after) {
+                    if (before.size() != after.size()) return true;
+                    auto before_value = before.begin();
+                    auto after_value = after.begin();
+                    while (before_value != before.end()) {
+                        if (before_value->first != after_value->first ||
+                            !same_abstract_value_without_evidence(
+                                before_value->second,
+                                after_value->second))
+                            return true;
+                        ++before_value;
+                        ++after_value;
+                    }
+                    return false;
+                };
+            const auto tail_payload_domains_without_evidence =
+                [](const AbstractValue& before,
+                   const AbstractValue& after) {
+                    const auto domain_bit =
+                        [](const ContextualTailPayloadDomain domain) {
+                            return std::uint8_t{1u}
+                                   << static_cast<std::uint8_t>(domain);
+                        };
+                    auto domains = std::uint8_t{0u};
+                    const auto& before_epoch =
+                        before.inventory_saved_stack_epoch;
+                    const auto& after_epoch =
+                        after.inventory_saved_stack_epoch;
+                    const auto maximum_slots = std::max(
+                        before_epoch.slots.size(), after_epoch.slots.size());
+                    const InventorySavedStackSlot empty_slot;
+                    bool code_pointers_differ =
+                        before.inventory_code_pointer !=
+                            after.inventory_code_pointer ||
+                        before.inventory_code_pointer_values !=
+                            after.inventory_code_pointer_values ||
+                        before.inventory_code_pointer_values_truncated !=
+                            after.inventory_code_pointer_values_truncated;
+                    bool pc_relative_differ =
+                        before.inventory_pc_relative_code_literal !=
+                            after.inventory_pc_relative_code_literal ||
+                        before.inventory_pc_relative_code_literal_values !=
+                            after.inventory_pc_relative_code_literal_values ||
+                        before.inventory_pc_relative_code_literal_values_truncated !=
+                            after.inventory_pc_relative_code_literal_values_truncated;
+                    bool contextual_candidate_differ =
+                        before.contextual_candidate_dependency !=
+                        after.contextual_candidate_dependency;
+                    bool saved_epoch_shape_differ =
+                        before_epoch.present != after_epoch.present ||
+                        before_epoch.unresolved != after_epoch.unresolved ||
+                        before_epoch.tracks_current_epoch !=
+                            after_epoch.tracks_current_epoch ||
+                        before_epoch.candidate_payload_lost !=
+                            after_epoch.candidate_payload_lost ||
+                        before_epoch.slots.size() != after_epoch.slots.size();
+                    for (std::size_t index = 0u;
+                         index < maximum_slots;
+                         ++index) {
+                        const auto& before_slot =
+                            index < before_epoch.slots.size()
+                                ? before_epoch.slots[index]
+                                : empty_slot;
+                        const auto& after_slot =
+                            index < after_epoch.slots.size()
+                                ? after_epoch.slots[index]
+                                : empty_slot;
+                        code_pointers_differ =
+                            code_pointers_differ ||
+                            before_slot.inventory_code_pointer_values !=
+                                after_slot.inventory_code_pointer_values ||
+                            before_slot.inventory_code_pointer_values_truncated !=
+                                after_slot
+                                    .inventory_code_pointer_values_truncated;
+                        pc_relative_differ =
+                            pc_relative_differ ||
+                            before_slot
+                                    .inventory_pc_relative_code_literal_values !=
+                                after_slot
+                                    .inventory_pc_relative_code_literal_values ||
+                            before_slot
+                                    .inventory_pc_relative_code_literal_values_truncated !=
+                                after_slot
+                                    .inventory_pc_relative_code_literal_values_truncated;
+                        contextual_candidate_differ =
+                            contextual_candidate_differ ||
+                            before_slot.contextual_candidate_dependency !=
+                                after_slot.contextual_candidate_dependency;
+                        saved_epoch_shape_differ =
+                            saved_epoch_shape_differ ||
+                            before_slot.relative_slot != after_slot.relative_slot;
+                    }
+                    if (code_pointers_differ)
+                        domains |= domain_bit(
+                            ContextualTailPayloadDomain::
+                                InventoryCodePointers);
+                    if (pc_relative_differ)
+                        domains |= domain_bit(
+                            ContextualTailPayloadDomain::
+                                PcRelativeCodeLiterals);
+                    if (contextual_candidate_differ)
+                        domains |= domain_bit(
+                            ContextualTailPayloadDomain::
+                                ContextualCandidateDependency);
+                    if (before.inventory_stack_callback_loss_unresolved !=
+                        after.inventory_stack_callback_loss_unresolved)
+                        domains |= domain_bit(
+                            ContextualTailPayloadDomain::CallbackLoss);
+                    if (saved_epoch_shape_differ)
+                        domains |= domain_bit(
+                            ContextualTailPayloadDomain::SavedEpochShape);
+                    if (before.known != after.known ||
+                        before.guarded != after.guarded ||
+                        before.complete != after.complete ||
+                        before.inventory_stack_derived !=
+                            after.inventory_stack_derived ||
+                        before.values != after.values)
+                        domains |= domain_bit(
+                            ContextualTailPayloadDomain::Rest);
+                    return domains;
+                };
+            const auto record_contextual_stack_top_reasons =
+                [&](const AbiStackArgumentReadSet& reads) {
+                    if (reads.complete) return;
+                    bool recorded_reason = false;
+                    for (const auto& frame : reads.top_chain) {
+                        const auto index = static_cast<std::size_t>(
+                            frame.reason);
+                        if (index < abi_stack_read_top_reason_count) {
+                            saturating_increment(
+                                contextual_read_admission_diagnostics
+                                    .stack_top_reasons[index]);
+                            recorded_reason = true;
+                        }
+                    }
+                    if (!recorded_reason)
+                        saturating_increment(
+                            contextual_read_admission_diagnostics
+                                .stack_top_reasons[static_cast<std::size_t>(
+                                    AbiStackReadTopReason::None)]);
+                    if (reads.top_chain_truncated)
+                        saturating_increment(
+                            contextual_read_admission_diagnostics
+                                .stack_top_chain_truncated);
+                };
+            const auto record_contextual_stack_hot_callee =
+                [&](const std::uint32_t callee,
+                    const std::uint64_t current_stack_values) {
+                    auto [found, inserted] =
+                        contextual_read_admission_diagnostics
+                            .stack_hot_callees.try_emplace(callee);
+                    auto& hot = found->second;
+                    if (inserted) hot.function_entry = callee;
+                    saturating_increment(hot.count);
+                    hot.current_stack_values = current_stack_values;
+                    hot.maximum_stack_values = std::max(
+                        hot.maximum_stack_values,
+                        current_stack_values);
+                };
+            const auto emit_contextual_read_admission_diagnostic = [&] {
+                const auto failure_count =
+                    [&](const std::array<
+                            std::uint64_t,
+                            contextual_read_admission_failure_count>& counts,
+                        const ContextualReadAdmissionFailure failure) {
+                        return static_cast<unsigned long long>(
+                            counts[static_cast<std::size_t>(failure)]);
+                    };
+                const auto& diagnostics =
+                    contextual_read_admission_diagnostics;
+                static_cast<void>(std::fprintf(
+                    stderr,
+                    "KATANA_ANALYZER_CONTEXTUAL_READ_ADMISSION_DIAGNOSTIC "
+                    "attempts=%llu admission_success=%llu "
+                    "projected_context_changed=%llu "
+                    "projected_match_changed=%llu "
+                    "projected_match_missing=%llu "
+                    "source_memory_cells_sum=%llu "
+                    "projected_memory_cells_sum=%llu "
+                    "contract_memory_cells_sum=%llu "
+                    "retention_only_memory_cells_sum=%llu "
+                    "source_memory_cells_max=%llu "
+                    "projected_memory_cells_max=%llu "
+                    "contract_memory_cells_max=%llu "
+                    "retention_only_memory_cells_max=%llu "
+                    "sample_source_state_bytes=%llu "
+                    "sample_projected_state_bytes=%llu "
+                    "widening_register_values=%llu "
+                    "widening_register_metadata=%llu "
+                    "widening_stack_values=%llu "
+                    "widening_memory_values=%llu "
+                    "widening_statewide_inventory_flags=%llu "
+                    "ctx_full_state_fallback=%llu "
+                    "ctx_requested_lens=%llu ctx_effective_lens=%llu "
+                    "ctx_target_kind=%llu ctx_abi_not_authoritative=%llu "
+                    "ctx_register_contract_missing=%llu "
+                    "ctx_register_mask_top=%llu "
+                    "ctx_stack_contract_missing=%llu "
+                    "ctx_stack_contract_invalid=%llu "
+                    "ctx_memory_contract_missing=%llu "
+                    "ctx_memory_contract_invalid=%llu "
+                    "ctx_memory_projection_disabled=%llu "
+                    "ctx_tail_uncovered=%llu "
+                    "ctx_memory_summary_missing=%llu "
+                    "ctx_candidate_values_truncated=%llu "
+                    "ctx_abi_stack_base_unresolved=%llu "
+                    "ctx_unresolved_saved_stack_alias_sources=%llu "
+                    "ctx_saved_stack_tracks_current_epoch=%llu "
+                    "ctx_current_alias_watcher=%llu "
+                    "ctx_detached_alias_watcher=%llu "
+                    "ctx_unresolved_stack_callback_loss=%llu "
+                    "ctx_callback_loss_identity_truncated=%llu "
+                    "match_full_state_fallback=%llu "
+                    "match_requested_lens=%llu match_effective_lens=%llu "
+                    "match_target_kind=%llu match_abi_not_authoritative=%llu "
+                    "match_register_contract_missing=%llu "
+                    "match_register_mask_top=%llu "
+                    "match_stack_contract_missing=%llu "
+                    "match_stack_contract_invalid=%llu "
+                    "match_memory_contract_missing=%llu "
+                    "match_memory_contract_invalid=%llu "
+                    "match_memory_projection_disabled=%llu "
+                    "match_tail_uncovered=%llu "
+                    "match_memory_summary_missing=%llu "
+                    "match_candidate_values_truncated=%llu "
+                    "match_abi_stack_base_unresolved=%llu "
+                    "match_unresolved_saved_stack_alias_sources=%llu "
+                    "match_saved_stack_tracks_current_epoch=%llu "
+                    "match_current_alias_watcher=%llu "
+                    "match_detached_alias_watcher=%llu "
+                    "match_unresolved_stack_callback_loss=%llu "
+                    "match_callback_loss_identity_truncated=%llu",
+                    static_cast<unsigned long long>(diagnostics.attempts),
+                    static_cast<unsigned long long>(
+                        diagnostics.admission_success),
+                    static_cast<unsigned long long>(
+                        diagnostics.projected_context_changed),
+                    static_cast<unsigned long long>(
+                        diagnostics.projected_match_changed),
+                    static_cast<unsigned long long>(
+                        diagnostics.projected_match_missing),
+                    static_cast<unsigned long long>(
+                        diagnostics.source_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.projected_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.contract_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.retention_only_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.maximum_source_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.maximum_projected_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.maximum_contract_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.maximum_retention_only_memory_cells),
+                    static_cast<unsigned long long>(
+                        diagnostics.sample_source_state_bytes),
+                    static_cast<unsigned long long>(
+                        diagnostics.sample_projected_state_bytes),
+                    static_cast<unsigned long long>(
+                        diagnostics.widening_register_values),
+                    static_cast<unsigned long long>(
+                        diagnostics.widening_register_metadata),
+                    static_cast<unsigned long long>(
+                        diagnostics.widening_stack_values),
+                    static_cast<unsigned long long>(
+                        diagnostics.widening_memory_values),
+                    static_cast<unsigned long long>(
+                        diagnostics.widening_statewide_inventory_flags),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::FullStateFallback),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::RequestedLens),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::EffectiveLens),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::TargetKind),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::AbiNotAuthoritative),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::RegisterContractMissing),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::RegisterMaskTop),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::StackContractMissing),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::StackContractInvalid),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::MemoryContractMissing),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::MemoryContractInvalid),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::MemoryProjectionDisabled),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::TailUncovered),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::MemorySummaryMissing),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::CandidateValuesTruncated),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::AbiStackBaseUnresolved),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::UnresolvedSavedStackAliasSources),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::SavedStackTracksCurrentEpoch),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::CurrentAliasWatcher),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::DetachedAliasWatcher),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::UnresolvedStackCallbackLoss),
+                    failure_count(diagnostics.context_failures, ContextualReadAdmissionFailure::CallbackLossIdentityTruncated),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::FullStateFallback),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::RequestedLens),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::EffectiveLens),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::TargetKind),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::AbiNotAuthoritative),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::RegisterContractMissing),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::RegisterMaskTop),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::StackContractMissing),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::StackContractInvalid),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::MemoryContractMissing),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::MemoryContractInvalid),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::MemoryProjectionDisabled),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::TailUncovered),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::MemorySummaryMissing),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::CandidateValuesTruncated),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::AbiStackBaseUnresolved),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::UnresolvedSavedStackAliasSources),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::SavedStackTracksCurrentEpoch),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::CurrentAliasWatcher),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::DetachedAliasWatcher),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::UnresolvedStackCallbackLoss),
+                    failure_count(diagnostics.match_failures, ContextualReadAdmissionFailure::CallbackLossIdentityTruncated)));
+                const auto stack_widening_count =
+                    [&](const ContextualStackWideningKind kind,
+                        const std::size_t contract) {
+                        return static_cast<unsigned long long>(
+                            diagnostics.stack_widening_kinds
+                                [static_cast<std::size_t>(kind)][contract]);
+                    };
+                static_cast<void>(std::fprintf(
+                    stderr,
+                    " stack_pure_key_expansion_complete=%llu "
+                    "stack_pure_key_expansion_top=%llu "
+                    "stack_uniform_key_translation_complete=%llu "
+                    "stack_uniform_key_translation_top=%llu "
+                    "stack_inventory_or_evidence_only_complete=%llu "
+                    "stack_inventory_or_evidence_only_top=%llu "
+                    "stack_ordinary_payload_complete=%llu "
+                    "stack_ordinary_payload_top=%llu "
+                    "stack_top_chain_truncated=%llu",
+                    stack_widening_count(
+                        ContextualStackWideningKind::PureKeyExpansion, 0u),
+                    stack_widening_count(
+                        ContextualStackWideningKind::PureKeyExpansion, 1u),
+                    stack_widening_count(
+                        ContextualStackWideningKind::UniformKeyTranslation,
+                        0u),
+                    stack_widening_count(
+                        ContextualStackWideningKind::UniformKeyTranslation,
+                        1u),
+                    stack_widening_count(
+                        ContextualStackWideningKind::InventoryOrEvidenceOnly,
+                        0u),
+                    stack_widening_count(
+                        ContextualStackWideningKind::InventoryOrEvidenceOnly,
+                        1u),
+                    stack_widening_count(
+                        ContextualStackWideningKind::OrdinaryPayload, 0u),
+                    stack_widening_count(
+                        ContextualStackWideningKind::OrdinaryPayload, 1u),
+                    static_cast<unsigned long long>(
+                        diagnostics.stack_top_chain_truncated)));
+                for (std::size_t index = 0u;
+                     index < abi_stack_read_top_reason_count;
+                     ++index) {
+                    const auto reason = static_cast<AbiStackReadTopReason>(
+                        index);
+                    const auto name = abi_stack_read_top_reason_name(reason);
+                    static_cast<void>(std::fprintf(
+                        stderr,
+                        " stack_top_reason_%s=%llu",
+                        name,
+                        static_cast<unsigned long long>(
+                            diagnostics.stack_top_reasons[index])));
+                }
+                std::array<ContextualStackWideningHotCallee, 8u>
+                    hottest_callees{};
+                for (const auto& [function_entry, hot] :
+                     diagnostics.stack_hot_callees) {
+                    std::size_t position = 0u;
+                    while (position < hottest_callees.size() &&
+                           (hottest_callees[position].count > hot.count ||
+                            (hottest_callees[position].count == hot.count &&
+                             hottest_callees[position].function_entry <=
+                                 function_entry)))
+                        ++position;
+                    if (position == hottest_callees.size()) continue;
+                    for (std::size_t shift = hottest_callees.size() - 1u;
+                         shift > position;
+                         --shift)
+                        hottest_callees[shift] = hottest_callees[shift - 1u];
+                    hottest_callees[position] = hot;
+                }
+                for (std::size_t index = 0u;
+                     index < hottest_callees.size();
+                     ++index) {
+                    const auto& hot = hottest_callees[index];
+                    if (hot.count == 0u) break;
+                    static_cast<void>(std::fprintf(
+                        stderr,
+                        " stack_hot_%zu_entry=0x%08X "
+                        "stack_hot_%zu_count=%llu "
+                        "stack_hot_%zu_max_stack_values=%llu "
+                        "stack_hot_%zu_current_stack_values=%llu",
+                        index,
+                        hot.function_entry,
+                        index,
+                        static_cast<unsigned long long>(hot.count),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.maximum_stack_values),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.current_stack_values)));
+                }
+                for (std::size_t pattern = 1u;
+                     pattern < diagnostics.stack_semantic_patterns.size();
+                     ++pattern) {
+                    static_cast<void>(std::fprintf(
+                        stderr,
+                        " stack_semantic_pattern_%zu_complete=%llu "
+                        "stack_semantic_pattern_%zu_top=%llu",
+                        pattern,
+                        static_cast<unsigned long long>(
+                            diagnostics.stack_semantic_patterns[pattern]
+                                [0u]),
+                        pattern,
+                        static_cast<unsigned long long>(
+                            diagnostics.stack_semantic_patterns[pattern]
+                                [1u])));
+                }
+                static constexpr std::array<
+                    const char*,
+                    contextual_tail_payload_domain_count>
+                    tail_payload_domain_names{
+                        "inventory_codepointers",
+                        "pc_relative_code_literals",
+                        "contextual_candidate_dependency",
+                        "callback_loss",
+                        "saved_epoch_shape",
+                        "rest"};
+                for (std::size_t index = 0u;
+                     index < contextual_tail_payload_domain_count;
+                     ++index) {
+                    static_cast<void>(std::fprintf(
+                        stderr,
+                        " stack_tail_payload_%s_complete=%llu "
+                        "stack_tail_payload_%s_top=%llu",
+                        tail_payload_domain_names[index],
+                        static_cast<unsigned long long>(
+                            diagnostics.stack_tail_payload_domains[index]
+                                [0u]),
+                        tail_payload_domain_names[index],
+                        static_cast<unsigned long long>(
+                            diagnostics.stack_tail_payload_domains[index]
+                                [1u])));
+                }
+                static_cast<void>(std::fputc('\n', stderr));
+            };
             const auto find_or_create_semantic_lane =
-                [&](FullStateSemanticKey key) -> SemanticLaneId {
+                [&](ContextualReadSemanticKey key) -> SemanticLaneId {
                     const auto bucket = semantic_lane_buckets.find(key.hash);
                     if (bucket != semantic_lane_buckets.end()) {
                         for (const auto lane_id : bucket->second) {
@@ -32331,7 +34386,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 // An exhausted shared admission budget does not stop this
                 // exact FIFO wave. Existing immutable semantic lanes remain
                 // valid replay work and must be allowed to converge; only a
-                // later attempt to admit a new FullStateSemanticKey may fail
+                // later attempt to admit a new ContextualReadSemanticKey may fail
                 // the root below.
                 const auto contextual_batch_width =
                     contextual_jacobi_fault_hook->maximum_batch_size == 0u
@@ -32401,10 +34456,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     auto& item = batch[index];
                     if (item.error) continue;
                     try {
-                        // FullState alpha canonicalization is only the
-                        // immutable SemanticLane identity. It includes every
-                        // ingress and contextual-summary evidence field, even
-                        // those a physical read lens would later discard.
+                        // Keep a full capsule available for the fail-closed
+                        // identity path. The projected path below is enabled
+                        // only after every ingress and inventory contract has
+                        // proved the corresponding read lens complete.
                         auto semantic_evidence_lens =
                             make_multi_root_provenance_lens(
                                 item.address,
@@ -32419,10 +34474,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 nullptr,
                                 allow_memory_projection,
                                 true);
-                        // The physical request is separately canonicalized
-                        // from the projected ingress. This preserves the
-                        // established cache contract: evidence in discarded
-                        // fields cannot renumber tokens that remain visible.
+                        // The projected capsule is both the physical cache
+                        // contract and, when complete, the Contextual
+                        // SemanticLane identity. Its per-item lens remains
+                        // private so exact provenance is restored before
+                        // discovery and publication.
                         item.physical_evidence_lens =
                             make_multi_root_provenance_lens(
                                 item.address,
@@ -32450,33 +34506,83 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 materialize_contextual_summary_bindings(
                                     item.binding_views));
                         }
-                        const auto& semantic_input =
+                        const auto& full_state_input =
                             !exact_full_state_key
                                 ? semantic_evidence_lens->ingress()
                                 : item.input;
-                        const auto& semantic_summaries =
+                        const auto& full_state_summaries =
                             !exact_full_state_key
                                 ? *semantic_evidence_lens->summaries()
                                 : summaries;
-                        const auto* const semantic_contextual_summaries =
+                        const auto* const full_state_contextual_summaries =
                             !exact_full_state_key
                                 ? semantic_evidence_lens
                                       ->contextual_summaries()
                                 : &*exact_full_state_bindings;
+                        const bool effective_memory_projection =
+                            memory_read_contracts_authoritative &&
+                            allow_memory_projection;
+                        auto identity_projection =
+                            make_function_evaluation_projection(
+                                item.input,
+                                EvaluationLens::ContextualReturn,
+                                item.address,
+                                TailIngressTargetKind::Function,
+                                forwarded_register_reads,
+                                abi_stack_argument_reads,
+                                summaries,
+                                effective_memory_projection,
+                                !effective_memory_projection ||
+                                    memory_projection_covers_tail_ingresses(
+                                        *fixpoint_functions.at(
+                                            item.function_index),
+                                        block_index,
+                                        tail_ingresses,
+                                        nullptr),
+                                !result.budget_exhausted);
+                        const bool use_projected_context_identity =
+                            !exact_full_state_key &&
+                            contextual_read_identity_is_complete(
+                                item.address,
+                                item.input,
+                                identity_projection);
+                        const auto* identity_summaries =
+                            &full_state_summaries;
+                        const auto* identity_contextual_summaries =
+                            full_state_contextual_summaries;
+                        if (use_projected_context_identity) {
+                            identity_projection.ingress =
+                                item.physical_evidence_lens->ingress();
+                            identity_summaries =
+                                item.physical_evidence_lens->summaries();
+                            identity_contextual_summaries =
+                                item.physical_evidence_lens
+                                    ->contextual_summaries();
+                        } else {
+                            // A partial/expanded/ambiguous contract is never
+                            // allowed to merge contextual semantics. Preserve
+                            // the canonical full ingress and tag this key as
+                            // a FullState fallback independently of the
+                            // physical cache's narrower request.
+                            identity_projection.ingress = full_state_input;
+                            identity_projection.effective_lens =
+                                EvaluationLens::FullState;
+                            identity_projection.full_state_fallback = true;
+                        }
                         std::chrono::steady_clock::time_point key_started{};
                         if (collect_contextual_return_product_telemetry)
                             key_started = std::chrono::steady_clock::now();
-                        auto full_state_key =
-                            make_contextual_full_state_semantic_key(
+                        auto contextual_semantic_key =
+                            make_contextual_read_semantic_key(
                                 item,
-                                semantic_input,
-                                semantic_summaries,
-                                semantic_contextual_summaries);
-                        const auto full_state_key_bytes =
-                            full_state_key.bytes.size();
+                                std::move(identity_projection),
+                                *identity_summaries,
+                                identity_contextual_summaries);
+                        const auto contextual_semantic_key_bytes =
+                            contextual_semantic_key.bytes.size();
                         item.semantic_lane_id =
                             find_or_create_semantic_lane(
-                                std::move(full_state_key));
+                                std::move(contextual_semantic_key));
                         if (collect_contextual_return_product_telemetry) {
                             const auto key_nanoseconds = static_cast<
                                 std::uint64_t>(std::max(
@@ -32492,11 +34598,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     ++telemetry.key_count;
                                     telemetry.key_nanoseconds +=
                                         key_nanoseconds;
-                                    telemetry.maximum_full_state_key_bytes =
-                                        std::max(
-                                            telemetry
-                                                .maximum_full_state_key_bytes,
-                                            full_state_key_bytes);
+                                    if (!use_projected_context_identity)
+                                        telemetry
+                                            .maximum_full_state_key_bytes =
+                                            std::max(
+                                                telemetry
+                                                    .maximum_full_state_key_bytes,
+                                                contextual_semantic_key_bytes);
                                 });
                         }
                         if (!item.physical_evidence_lens.has_value()) {
@@ -32992,6 +35100,220 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 contextual_entry_stack_reads(
                                     observation.callee));
                         }
+                        const bool effective_memory_projection =
+                            memory_read_contracts_authoritative &&
+                            allow_memory_projection;
+                        const bool callee_tail_coverage =
+                            memory_projection_covers_tail_ingresses(
+                                *final_function_by_address.at(
+                                    observation.callee),
+                                block_index,
+                                tail_ingresses,
+                                nullptr);
+                        const bool callee_memory_summary_missing =
+                            !summaries.contains(observation.callee);
+                        auto callee_read_projection =
+                            make_function_evaluation_projection(
+                                callee_context_input,
+                                EvaluationLens::ContextualReturn,
+                                observation.callee,
+                                TailIngressTargetKind::Function,
+                                forwarded_register_reads,
+                                abi_stack_argument_reads,
+                                summaries,
+                                effective_memory_projection,
+                                !effective_memory_projection ||
+                                    callee_tail_coverage,
+                                !result.budget_exhausted);
+                        const auto context_gate_failures =
+                            contextual_read_identity_failure_mask(
+                                observation.callee,
+                                callee_context_input,
+                                callee_read_projection);
+                        const auto match_gate_failures =
+                            contextual_read_identity_failure_mask(
+                                observation.callee,
+                                callee_match_input,
+                                callee_read_projection);
+                        auto call_site_memory_failures =
+                            ContextualReadAdmissionFailureMask{0u};
+                        if (!effective_memory_projection)
+                            call_site_memory_failures |=
+                                contextual_read_admission_failure_bit(
+                                    ContextualReadAdmissionFailure::
+                                        MemoryProjectionDisabled);
+                        if (!callee_tail_coverage)
+                            call_site_memory_failures |=
+                                contextual_read_admission_failure_bit(
+                                    ContextualReadAdmissionFailure::
+                                        TailUncovered);
+                        if (callee_memory_summary_missing)
+                            call_site_memory_failures |=
+                                contextual_read_admission_failure_bit(
+                                    ContextualReadAdmissionFailure::
+                                        MemorySummaryMissing);
+                        bool emit_contextual_read_diagnostic = false;
+                        if (collect_contextual_return_product_telemetry) {
+                            saturating_increment(
+                                contextual_read_admission_diagnostics
+                                    .attempts);
+                            record_contextual_read_failure_mask(
+                                contextual_read_admission_diagnostics
+                                    .context_failures,
+                                context_gate_failures |
+                                    call_site_memory_failures);
+                            record_contextual_read_failure_mask(
+                                contextual_read_admission_diagnostics
+                                    .match_failures,
+                                match_gate_failures |
+                                    call_site_memory_failures);
+                            const auto attempts =
+                                contextual_read_admission_diagnostics
+                                    .attempts;
+                            emit_contextual_read_diagnostic =
+                                attempts >= 1024u &&
+                                (attempts & (attempts - 1u)) == 0u;
+                        }
+                        if (context_gate_failures == 0u &&
+                            match_gate_failures == 0u) {
+                            auto projected_match_input =
+                                project_evaluation_ingress(
+                                    callee_match_input,
+                                    callee_read_projection.register_read_mask,
+                                    callee_read_projection.stack_reads,
+                                    callee_read_projection
+                                        .memory_read_complete,
+                                    callee_read_projection
+                                        .memory_read_unknown,
+                                    callee_read_projection
+                                        .memory_read_ranges);
+                            if (projected_match_input.has_value()) {
+                                if (collect_contextual_return_product_telemetry) {
+                                    const auto source_memory_cells =
+                                        static_cast<std::uint64_t>(
+                                            callee_context_input.memory_values
+                                                .size());
+                                    const auto projected_memory_cells =
+                                        static_cast<std::uint64_t>(
+                                            callee_read_projection.ingress
+                                                .memory_values.size());
+                                    auto contract_memory_cells =
+                                        std::uint64_t{0u};
+                                    auto retention_only_memory_cells =
+                                        std::uint64_t{0u};
+                                    for (const auto& [address, value] :
+                                         callee_read_projection.ingress
+                                             .memory_values) {
+                                        if (memory_cell_required_by_contract(
+                                                address,
+                                                callee_read_projection
+                                                    .memory_read_ranges)) {
+                                            saturating_increment(
+                                                contract_memory_cells);
+                                        } else if (
+                                            memory_value_requires_projection_retention(
+                                                value)) {
+                                            saturating_increment(
+                                                retention_only_memory_cells);
+                                        }
+                                    }
+                                    const auto record_memory_count =
+                                        [&](std::uint64_t& sum,
+                                            std::uint64_t& maximum,
+                                            const std::uint64_t value) {
+                                            saturating_add(sum, value);
+                                            maximum = std::max(maximum, value);
+                                        };
+                                    saturating_increment(
+                                        contextual_read_admission_diagnostics
+                                            .admission_success);
+                                    if (callee_context_input !=
+                                        callee_read_projection.ingress)
+                                        saturating_increment(
+                                            contextual_read_admission_diagnostics
+                                                .projected_context_changed);
+                                    if (callee_match_input !=
+                                        *projected_match_input)
+                                        saturating_increment(
+                                            contextual_read_admission_diagnostics
+                                                .projected_match_changed);
+                                    record_memory_count(
+                                        contextual_read_admission_diagnostics
+                                            .source_memory_cells,
+                                        contextual_read_admission_diagnostics
+                                            .maximum_source_memory_cells,
+                                        source_memory_cells);
+                                    record_memory_count(
+                                        contextual_read_admission_diagnostics
+                                            .projected_memory_cells,
+                                        contextual_read_admission_diagnostics
+                                            .maximum_projected_memory_cells,
+                                        projected_memory_cells);
+                                    record_memory_count(
+                                        contextual_read_admission_diagnostics
+                                            .contract_memory_cells,
+                                        contextual_read_admission_diagnostics
+                                            .maximum_contract_memory_cells,
+                                        contract_memory_cells);
+                                    record_memory_count(
+                                        contextual_read_admission_diagnostics
+                                            .retention_only_memory_cells,
+                                        contextual_read_admission_diagnostics
+                                            .maximum_retention_only_memory_cells,
+                                        retention_only_memory_cells);
+                                    if (emit_contextual_read_diagnostic) {
+                                        contextual_read_admission_diagnostics
+                                            .sample_source_state_bytes =
+                                            canonical_abstract_state_key(
+                                                callee_context_input).size();
+                                        contextual_read_admission_diagnostics
+                                            .sample_projected_state_bytes =
+                                            canonical_abstract_state_key(
+                                                callee_read_projection.ingress)
+                                                .size();
+                                    }
+                                }
+                                callee_match_input =
+                                    std::move(*projected_match_input);
+                                callee_context_input = std::move(
+                                    callee_read_projection.ingress);
+                            } else if (
+                                collect_contextual_return_product_telemetry) {
+                                saturating_increment(
+                                    contextual_read_admission_diagnostics
+                                        .projected_match_missing);
+                            }
+                        }
+                        // This is the exact provenance-bearing matcher for
+                        // this caller edge. It must not alias a lane-global
+                        // matcher that a different family can later widen.
+                        const auto callee_edge_match_input =
+                            callee_match_input;
+                        const bool has_authoritative_complete_stack_contract =
+                            callee_read_projection.abi_contract_authoritative &&
+                            callee_read_projection.stack_contract_present &&
+                            valid_complete_stack_read_contract(
+                                callee_read_projection.stack_reads);
+                        const bool uses_incomplete_stack_quotient =
+                            !has_authoritative_complete_stack_contract &&
+                            stack_is_canonicalizable_to_incomplete_abi_prefix(
+                                callee_match_input) &&
+                            stack_is_canonicalizable_to_incomplete_abi_prefix(
+                                callee_context_input);
+                        if (uses_incomplete_stack_quotient) {
+                            static_cast<void>(
+                                canonicalize_stack_to_incomplete_abi_prefix(
+                                    callee_match_input));
+                            static_cast<void>(
+                                canonicalize_stack_to_incomplete_abi_prefix(
+                                    callee_context_input));
+                        }
+                        const auto close_incomplete_stack_join =
+                            [&](AbstractState& joined) {
+                                return !uses_incomplete_stack_quotient ||
+                                       canonicalize_stack_to_incomplete_abi_prefix(
+                                           joined);
+                            };
                         const ContextualEntryFamilyKey family{
                             item.address,
                             observation.call_site,
@@ -33000,7 +35322,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             contextual_entry_families[family];
                         std::optional<ContextualLaneId>
                             selected_lane;
-                        bool selected_lane_created = false;
                         bool selected_lane_changed = false;
                         std::optional<AbstractState>
                             joined_match_input;
@@ -33011,14 +35332,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             if (lane.match_input !=
                                 callee_match_input) {
                                 auto joined_match = lane.match_input;
-                                if (merge_state(
-                                        joined_match,
-                                        callee_match_input,
-                                        true))
+                                static_cast<void>(merge_state(
+                                    joined_match,
+                                    callee_match_input,
+                                    true));
+                                if (!close_incomplete_stack_join(
+                                        joined_match) ||
+                                    joined_match != lane.match_input)
                                     continue;
-                                if (joined_match != lane.match_input)
-                                    joined_match_input =
-                                        std::move(joined_match);
                             }
                             if (lane.input == callee_context_input) {
                                 if (inventory_join_creates_loss(
@@ -33032,6 +35353,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     joined,
                                     callee_context_input,
                                     true));
+                                if (!close_incomplete_stack_join(joined))
+                                    continue;
                                 if (inventory_join_creates_loss(
                                         lane.input,
                                         callee_context_input,
@@ -33048,6 +35371,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                  family_lanes) {
                                 const auto& lane =
                                     contextual_lanes.at(lane_id);
+                                std::optional<AbstractState>
+                                    candidate_joined_input;
                                 if (lane.input == callee_context_input) {
                                     if (inventory_join_creates_loss(
                                             lane.input,
@@ -33060,16 +35385,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         joined,
                                         callee_context_input,
                                         true));
+                                    if (!close_incomplete_stack_join(joined))
+                                        continue;
                                     if (inventory_join_creates_loss(
-                                            lane.input,
-                                            callee_context_input,
-                                            joined))
+                                        lane.input,
+                                        callee_context_input,
+                                        joined))
                                         continue;
                                     if (joined != lane.input)
-                                        joined_input =
+                                        candidate_joined_input =
                                             std::move(joined);
                                 }
-                                selected_lane = lane_id;
                                 if (lane.match_input !=
                                     callee_match_input) {
                                     auto joined_match =
@@ -33078,10 +35404,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         joined_match,
                                         callee_match_input,
                                         true));
+                                    if (!close_incomplete_stack_join(
+                                            joined_match))
+                                        continue;
                                     if (joined_match != lane.match_input)
                                         joined_match_input =
                                             std::move(joined_match);
                                 }
+                                joined_input =
+                                    std::move(candidate_joined_input);
+                                selected_lane = lane_id;
                                 break;
                             }
                         }
@@ -33126,7 +35458,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                  0u});
                             family_lanes.push_back(lane_id);
                             selected_lane = lane_id;
-                            selected_lane_created = true;
                             selected_lane_changed = true;
                             if (collect_contextual_scheduler_diagnostics)
                                 ++contextual_scheduler_diagnostics
@@ -33151,6 +35482,162 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 (collect_contextual_scheduler_diagnostics ||
                                  collect_contextual_return_product_telemetry)) {
                                 try {
+                                    if (collect_contextual_return_product_telemetry) {
+                                        auto widening_domains =
+                                            std::uint8_t{0u};
+                                        if (match_input_changed)
+                                            widening_domains |=
+                                                contextual_widening_domains(
+                                                    lane.match_input,
+                                                    *joined_match_input);
+                                        if (input_changed)
+                                            widening_domains |=
+                                                contextual_widening_domains(
+                                                    lane.input,
+                                                    *joined_input);
+                                        if ((widening_domains &
+                                             static_cast<std::uint8_t>(
+                                                 ContextualWideningDomain::
+                                                     RegisterValues)) != 0u)
+                                            saturating_increment(
+                                                contextual_read_admission_diagnostics
+                                                    .widening_register_values);
+                                        if ((widening_domains &
+                                             static_cast<std::uint8_t>(
+                                                 ContextualWideningDomain::
+                                                     RegisterMetadata)) != 0u)
+                                            saturating_increment(
+                                                contextual_read_admission_diagnostics
+                                                    .widening_register_metadata);
+                                        if ((widening_domains &
+                                             static_cast<std::uint8_t>(
+                                                 ContextualWideningDomain::
+                                                     StackValues)) != 0u)
+                                            saturating_increment(
+                                                contextual_read_admission_diagnostics
+                                                    .widening_stack_values);
+                                        const auto contract_index =
+                                            callee_read_projection.stack_reads
+                                                    .complete
+                                                ? 0u
+                                                : 1u;
+                                        const auto record_stack_widening =
+                                            [&](const AbstractState& before,
+                                                const AbstractState& after) {
+                                                const auto kind =
+                                                    classify_contextual_stack_widening(
+                                                        before.stack_values,
+                                                        after.stack_values);
+                                                const auto effective_kind =
+                                                    kind.has_value()
+                                                        ? kind
+                                                        : (before.stack_tail !=
+                                                                   after.stack_tail
+                                                               ? std::optional{
+                                                                     ContextualStackWideningKind::
+                                                                         OrdinaryPayload}
+                                                               : std::nullopt);
+                                                if (collect_contextual_stack_widening_diagnostics) {
+                                                    auto pattern =
+                                                        std::uint8_t{0u};
+                                                    if (stack_values_differ_without_evidence(
+                                                            before.stack_values,
+                                                            after.stack_values))
+                                                        pattern |= 1u;
+                                                    const bool both_tails_present =
+                                                        before.stack_tail.present &&
+                                                        after.stack_tail.present;
+                                                    if (before.stack_tail.present !=
+                                                            after.stack_tail.present ||
+                                                        (both_tails_present &&
+                                                         before.stack_tail
+                                                                 .lower_bound !=
+                                                             after.stack_tail
+                                                                 .lower_bound))
+                                                        pattern |= 2u;
+                                                    if (both_tails_present &&
+                                                        !same_abstract_value_without_evidence(
+                                                            before.stack_tail
+                                                                .payload,
+                                                            after.stack_tail
+                                                                .payload))
+                                                        pattern |= 4u;
+                                                    if (pattern != 0u) {
+                                                        saturating_increment(
+                                                            contextual_read_admission_diagnostics
+                                                                .stack_semantic_patterns
+                                                                [pattern]
+                                                                [contract_index]);
+                                                        if ((pattern & 4u) != 0u) {
+                                                            const auto domains =
+                                                                tail_payload_domains_without_evidence(
+                                                                    before.stack_tail
+                                                                        .payload,
+                                                                    after.stack_tail
+                                                                        .payload);
+                                                            for (std::size_t index =
+                                                                     0u;
+                                                                 index <
+                                                                 contextual_tail_payload_domain_count;
+                                                                 ++index) {
+                                                                if ((domains &
+                                                                     (std::uint8_t{
+                                                                          1u}
+                                                                      << index)) ==
+                                                                    0u)
+                                                                    continue;
+                                                                saturating_increment(
+                                                                    contextual_read_admission_diagnostics
+                                                                        .stack_tail_payload_domains
+                                                                        [index]
+                                                                        [contract_index]);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if (!effective_kind.has_value())
+                                                    return;
+                                                saturating_increment(
+                                                    contextual_read_admission_diagnostics
+                                                        .stack_widening_kinds
+                                                        [static_cast<std::size_t>(
+                                                            *effective_kind)]
+                                                        [contract_index]);
+                                                const auto current_stack_values =
+                                                    stack_value_telemetry_size(
+                                                        after);
+                                                record_contextual_stack_hot_callee(
+                                                    observation.callee,
+                                                    current_stack_values);
+                                                if (contract_index != 0u)
+                                                    record_contextual_stack_top_reasons(
+                                                        callee_read_projection
+                                                            .stack_reads);
+                                            };
+                                        if (match_input_changed)
+                                            record_stack_widening(
+                                                lane.match_input,
+                                                *joined_match_input);
+                                        if (input_changed)
+                                            record_stack_widening(
+                                                lane.input,
+                                                *joined_input);
+                                        if ((widening_domains &
+                                             static_cast<std::uint8_t>(
+                                                 ContextualWideningDomain::
+                                                     MemoryValues)) != 0u)
+                                            saturating_increment(
+                                                contextual_read_admission_diagnostics
+                                                    .widening_memory_values);
+                                        if ((widening_domains &
+                                             static_cast<std::uint8_t>(
+                                                 ContextualWideningDomain::
+                                                     StatewideInventoryFlags)) !=
+                                            0u)
+                                            saturating_increment(
+                                                contextual_read_admission_diagnostics
+                                                    .widening_statewide_inventory_flags);
+                                    }
                                     const bool semantic_change =
                                         (match_input_changed &&
                                          !same_abstract_state_without_evidence(
@@ -33219,21 +35706,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             contextual_callees[item.lane_id]
                                 [{observation.call_site,
                                   observation.callee}];
-                        const auto& observed_match_input =
-                            contextual_lanes.at(*selected_lane)
-                                        .match_input;
                         const auto [forward, forward_inserted] =
                             forward_edges.try_emplace(
                                 *selected_lane,
-                                selected_lane_created
-                                     ? observed_match_input
-                                     : callee_match_input);
+                                callee_edge_match_input);
                         bool forward_match_changed = false;
                         if (!forward_inserted &&
-                            forward->second != callee_match_input) {
+                            forward->second != callee_edge_match_input) {
                             auto joined = forward->second;
                             forward_match_changed = merge_state(
-                                joined, callee_match_input, true);
+                                joined, callee_edge_match_input, true);
                             if (forward_match_changed)
                                 forward->second = std::move(joined);
                         }
@@ -33254,6 +35736,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         // edge to an already stable child still needs one
                         // caller replay; a child without a summary wakes every
                         // linked caller on its first summary publication.
+                        if (emit_contextual_read_diagnostic)
+                            emit_contextual_read_admission_diagnostic();
                     }
                     if (contextual_context_budget_exhausted)
                         break;
