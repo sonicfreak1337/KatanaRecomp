@@ -102,7 +102,10 @@ Stack-/Storage-Identitaetsverlust.
 
 ## Aktueller D-Lauf
 
-Der einmalige D-Lauf dauerte `460,6 s`; Candidate Resolution lief ca.
+Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
+war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
+Warnungen. Run-ID: `kr4981-20260809-012851-0b360903`. Der einmalige D-Lauf
+dauerte `460,6 s`; Candidate Resolution lief ca.
 `325,8 s`. Summary `product-exit` entstand nur durch das manuelle Beenden
 des exakt identifizierten Kindprozesses nach belegter Nichtverbesserung. Es
 gab keine kanonische Publikation, `0/1194` committed Roots, HOL `0`, Wave
@@ -221,14 +224,14 @@ Stale-/Cancellationpruefung vor Fehlerbehandlung und Publikation erfolgt.
 Die vorliegende D1-Evidenz ist trotzdem nichtterminal und kann G1,
 Limitfreiheit, Coverage oder terminale Retention nicht entscheiden.
 
-### D2 vor der Entscheidung ueber KR-4991
+### D2 - abgeschlossene Produktdiagnose vor KR-4991
 
-D2 folgt erst nach KR-4986 und allen durch G1 aktivierten Tasks KR-4987 bis
-KR-4990. Es misst denselben realen Sonic-Pfad und entscheidet, ob hinter der
-Jacobi-Barriere tatsaechlich dependency-gueltige Arbeit wartet.
-
-D1 und D2 sind Produktdiagnose. Sie erzeugen keine neue Testsuite, keine
-Matrix und keinen allgemeinen synthetischen Gatevertrag.
+Der aktuelle D2-Lauf ist abgeschlossen und erzeugte keine neue Testsuite,
+Matrix oder synthetischen Gatevertrag. Er zeigte bei bitgleicher relevanter
+Admission-/Stack-Diagnostik in den Vergleichsversuchen zwar hoeheren
+Durchsatz, aber weiterhin einen nicht konvergierenden semantischen
+Stack-Zyklus. D2 belegt damit keinen positiven G2-Schedulerhebel; KR-4991
+bleibt inaktiv und KR-4981 ist nicht bestanden.
 
 ## Messgate G1
 
@@ -361,8 +364,10 @@ Stack-/Storage-Identitaet in einem strikt begrenzten, monotonen und
 identitaetsgebundenen Carrier und integriert ihn in Merge, Key/Cache, Lifetime,
 ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute,
 contextual/forwarded/stable Harvest und Export-Gate, ohne Scheduler-/Budget-
-umbau, Fallback, Coverage-Reduktion oder Sonic-Hack. Der D-Lauf zeigt jedoch,
-dass der semantische Lane-Treiber als Produktblocker offen bleibt.
+umbau, Fallback, Coverage-Reduktion oder Sonic-Hack. Der Zweikanalpfad haelt
+Evidence-Stale in privaten Replaykapseln und trennt es vom logischen
+Semantic-Lane-Key. Der D-Lauf zeigt jedoch, dass der semantische Lane-Treiber
+als Produktblocker offen bleibt.
 
 ### KR-4988 - State-/Summary-Interning
 

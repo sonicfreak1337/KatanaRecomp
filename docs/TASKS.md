@@ -302,7 +302,9 @@ discards, `939` semantic und `2.377` provenance-only widenings. Der Lauf
 endete fail-closed am unvollstaendigen Root; kein Portartefakt und kein
 Produkt-, G1- oder Limit-Erfolg wird behauptet.
 
-Aktueller D-Lauf: `460,6 s` gesamt, Candidate Resolution ca. `325,8 s`,
+Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
+war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
+Warnungen. Aktueller D-Lauf: `460,6 s` gesamt, Candidate Resolution ca. `325,8 s`,
 manuelles Beenden des identifizierten Kindprozesses nach belegter
 Nichtverbesserung, `0/1194` committed Roots, HOL `0`, Wave `103`, `272`
 Contexts, `1.044` Semantic-Lanes, `1.029` contextual physical evaluations,
@@ -355,8 +357,10 @@ Status: Source-seitig abgeschlossen am reviewten Delta auf Basis
 `dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa`. Der begrenzte Pending-Carrier
 bewahrt identitaetsgebundene Payloads ueber Merge, Key/Cache, Lifetime,
 ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute und
-contextual/forwarded/stable Harvest sowie Export-Gate. Der D-Lauf belegt
-weiterhin den semantischen Lane-Treiber als offenen Produktblocker.
+contextual/forwarded/stable Harvest sowie Export-Gate. Der aktuelle
+Evidence-/Semantic-Zweikanal haelt Evidence-Stale in privaten Replaykapseln;
+der D-Lauf belegt weiterhin den semantischen Lane-Treiber als offenen
+Produktblocker.
 
 Vertrag:
 
@@ -544,8 +548,8 @@ geschlossen.
   publizieren noch aktuelle Arbeit durch einen veralteten Fehler beenden;
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
-- KR-4981 bleibt nach KR-4994 und Sol-Review ein genau einmaliges globales
-  Produktgate.
+- KR-4981 bleibt das globale Produktgate; der aktuelle D-Lauf ist abgeschlossen
+  und nicht bestanden, ein weiterer Lauf ist nicht automatisch freigegeben.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von
@@ -561,8 +565,9 @@ vollstaendigen Produktport abgenommen.
 
 Prioritaet: P0 Produkt- und Performancegate
 
-Abhaengigkeit: KR-4994 plus Sol-Review; KR-4981 bleibt das globale Produktgate
-und darf danach genau einmal erneut laufen.
+Abhaengigkeit: KR-4994 plus Sol-Review; der aktuelle D-Lauf hat das globale
+KR-4981-Produktgate nicht bestanden. Ein weiterer Lauf ist nicht automatisch
+freigegeben.
 
 ### Umfang
 

@@ -29,6 +29,16 @@
   kein Portartefakt und kein bestandenes KR-4981-Gate. Gleiche Diagnostik-
   Zaehler bei Attempts `1024`, `2048` und `4096` zeigen, dass der semantische
   Lane-Treiber weiterhin offen ist.
+- Der Zweikanal-Sourcefix wurde im korrekten VsDevCmd-Incremental-Build von
+  `katana-recomp --parallel 12` in `42,8 s` gebaut; es blieben nur bekannte
+  getenv-/Shadowing-Warnungen. Die Evidence- und Semantic-Kanaele sind dabei
+  getrennt, ohne neue oeffentliche Layoutaenderung; Analyzer-ABI 33 bleibt
+  gueltig.
+- Die logische Contextual-Lane vergleicht den oeffentlichen Call-/State-Effekt
+  ohne Evidence-Wachstum; alpha-normalisierte Evidence-Mitgliedschaft bleibt
+  in begrenzten privaten Replaykapseln fuer physische Auswertung und Restore.
+  Evidence-Stale erzeugt damit kein neues logisches Budgetereignis, waehrend
+  Cap-/Replayfehler fail-closed bleiben.
 - KR-4984 schliesst die vollstaendige P0/P1-Gesamtpruefung quellseitig ohne
   offenen Befund. Der Function-Evaluation-Cache bindet forwarded Register-
   Live-ins; optionale Whole-Export-Cachepublikation ist fail-open; lange

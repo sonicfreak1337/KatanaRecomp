@@ -11850,7 +11850,8 @@ void apply_call(AbstractState& state,
                         ++hot_path_diagnostics->bindings_examined;
                     if (hot_path_diagnostics != nullptr)
                         ++hot_path_diagnostics->binding_equality_attempts;
-                    if (binding.input == *observed) {
+                    if (same_abstract_state_without_evidence(
+                            binding.input, *observed)) {
                         if (hot_path_diagnostics != nullptr) {
                             ++hot_path_diagnostics->binding_exact_hits;
                             hot_path_diagnostics->maximum_binding_hit_position =
@@ -11868,12 +11869,15 @@ void apply_call(AbstractState& state,
                         ++hot_path_diagnostics->binding_merge_attempts;
                         merge_started = std::chrono::steady_clock::now();
                     }
-                    const bool binding_joined = !merge_state(
+                    static_cast<void>(merge_state(
                         joined,
                         *observed,
                         true,
                         StackTailFoldPendingScalarPolicy::
-                            OmitAfterAbiBoundary);
+                            OmitAfterAbiBoundary));
+                    const bool binding_joined =
+                        same_abstract_state_without_evidence(
+                            joined, binding.input);
                     if (hot_path_diagnostics != nullptr) {
                         hot_path_diagnostics->binding_merge_nanoseconds +=
                             static_cast<std::uint64_t>(std::max(
@@ -18026,8 +18030,10 @@ inline constexpr auto evaluation_key_intern_domain_count =
 class EvaluationKeyEncoder {
   public:
     explicit EvaluationKeyEncoder(
-        const bool collect_component_hashes = false) noexcept
-        : collect_component_hashes_(collect_component_hashes) {
+        const bool collect_component_hashes = false,
+        const bool omit_evidence = false) noexcept
+        : collect_component_hashes_(collect_component_hashes),
+          omit_evidence_(omit_evidence) {
         component_hashes_.fill(evaluation_key_hash_basis);
     }
 
@@ -18085,6 +18091,16 @@ class EvaluationKeyEncoder {
     void append_interned_u32_range(
         const EvaluationKeyInternDomain domain,
         const Range& values) {
+        if (omit_evidence_ && domain == EvaluationKeyInternDomain::Evidence) {
+            // The evidence-free logical Contextual lane key retains the
+            // complete field topology but gives every evidence field the
+            // deterministic empty payload without copying its ingress or
+            // summary maps.  Physical replay keys retain the real sets.
+            append(domain);
+            append(false);
+            append(std::uint64_t{0u});
+            return;
+        }
         std::vector<std::uint32_t> canonical(
             values.begin(), values.end());
         std::sort(canonical.begin(), canonical.end());
@@ -18166,6 +18182,7 @@ class EvaluationKeyEncoder {
     EvaluationKeyComponent active_component_ =
         EvaluationKeyComponent::FunctionShape;
     bool collect_component_hashes_ = false;
+    bool omit_evidence_ = false;
     std::size_t interned_sets_ = 0u;
     std::size_t interned_references_ = 0u;
 };
@@ -18574,6 +18591,280 @@ void encode_function_call_effect(
                right_return->evidence_callees;
 }
 
+// Contextual scheduling has a private provenance channel. Compare the public
+// call effect allocation-free so evidence growth cannot become a semantic
+// wake-up in the hot publish path.
+[[nodiscard]] bool same_inventory_saved_stack_epoch_summary_without_evidence(
+    const InventorySavedStackEpochSummary& left,
+    const InventorySavedStackEpochSummary& right) noexcept {
+    if (left.present != right.present || left.unresolved != right.unresolved ||
+        left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.candidate_payload_lost != right.candidate_payload_lost ||
+        left.nested_saved_stack_alias_latent !=
+            right.nested_saved_stack_alias_latent ||
+        left.nested_saved_stack_alias_tracks_current_epoch !=
+            right.nested_saved_stack_alias_tracks_current_epoch ||
+        !same_inventory_candidate_carrier_without_evidence(
+            left.unresolved_candidate_carrier,
+            right.unresolved_candidate_carrier) ||
+        left.slots.size() != right.slots.size() ||
+        left.unresolved_nested_epochs.size() !=
+            right.unresolved_nested_epochs.size())
+        return false;
+    for (std::size_t index = 0u; index < left.slots.size(); ++index) {
+        const auto& left_slot = left.slots[index];
+        const auto& right_slot = right.slots[index];
+        if (left_slot.relative_slot != right_slot.relative_slot ||
+            !same_inventory_candidate_carrier_without_evidence(
+                left_slot.carrier, right_slot.carrier) ||
+            left_slot.nested_epochs.size() != right_slot.nested_epochs.size())
+            return false;
+        for (std::size_t nested = 0u;
+             nested < left_slot.nested_epochs.size();
+             ++nested) {
+            if (!same_inventory_saved_stack_epoch_summary_without_evidence(
+                    left_slot.nested_epochs[nested],
+                    right_slot.nested_epochs[nested]))
+                return false;
+        }
+    }
+    for (std::size_t index = 0u;
+         index < left.unresolved_nested_epochs.size();
+         ++index) {
+        if (!same_inventory_saved_stack_epoch_summary_without_evidence(
+                left.unresolved_nested_epochs[index],
+                right.unresolved_nested_epochs[index]))
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_function_memory_value_summary_without_evidence(
+    const FunctionMemoryValueSummary& left,
+    const FunctionMemoryValueSummary& right) noexcept {
+    return left.address == right.address && left.complete == right.complete &&
+           left.guarded == right.guarded &&
+           left.inventory_stack_callback_loss_unresolved ==
+               right.inventory_stack_callback_loss_unresolved &&
+           left.inventory_saved_stack_alias_latent ==
+               right.inventory_saved_stack_alias_latent &&
+           left.inventory_saved_stack_alias_tracks_current_epoch ==
+               right.inventory_saved_stack_alias_tracks_current_epoch &&
+           same_inventory_candidate_carrier_without_evidence(
+               left.inventory_candidate_carrier,
+               right.inventory_candidate_carrier) &&
+           same_inventory_saved_stack_epoch_summary_without_evidence(
+               left.inventory_saved_stack_epoch,
+               right.inventory_saved_stack_epoch) &&
+           left.values == right.values;
+}
+
+[[nodiscard]] bool same_function_call_effect_without_evidence(
+    const FunctionValueSummary& left,
+    const FunctionValueSummary& right) noexcept {
+    if (left.function_address != right.function_address ||
+        left.memory_complete != right.memory_complete ||
+        left.memory_write_unknown != right.memory_write_unknown ||
+        left.memory_write_ranges != right.memory_write_ranges ||
+        left.memory_read_complete != right.memory_read_complete ||
+        left.memory_read_unknown != right.memory_read_unknown ||
+        left.memory_read_ranges != right.memory_read_ranges ||
+        left.memory_values.size() != right.memory_values.size() ||
+        !same_inventory_candidate_carrier_without_evidence(
+            left.inventory_unresolved_stack_carrier,
+            right.inventory_unresolved_stack_carrier) ||
+        !same_inventory_candidate_carrier_without_evidence(
+            left.inventory_unresolved_memory_carrier,
+            right.inventory_unresolved_memory_carrier) ||
+        !same_inventory_saved_stack_epoch_summary_without_evidence(
+            left.inventory_unresolved_stack_epoch,
+            right.inventory_unresolved_stack_epoch) ||
+        !same_inventory_saved_stack_epoch_summary_without_evidence(
+            left.inventory_unresolved_memory_epoch,
+            right.inventory_unresolved_memory_epoch) ||
+        !same_inventory_candidate_carrier_without_evidence(
+            left.current_stack_epoch_mutation_carrier,
+            right.current_stack_epoch_mutation_carrier) ||
+        !same_inventory_saved_stack_epoch_summary_without_evidence(
+            left.current_stack_epoch_mutation_epoch,
+            right.current_stack_epoch_mutation_epoch) ||
+        left.current_stack_epoch_mutation_callback_loss !=
+            right.current_stack_epoch_mutation_callback_loss ||
+        left.inventory_unresolved_saved_stack_alias_sources !=
+            right.inventory_unresolved_saved_stack_alias_sources ||
+        left.inventory_unresolved_saved_stack_alias_tracks_current_sources !=
+            right.inventory_unresolved_saved_stack_alias_tracks_current_sources ||
+        left.inventory_unresolved_stack_callback_loss !=
+            right.inventory_unresolved_stack_callback_loss ||
+        left.inventory_unresolved_memory_callback_loss !=
+            right.inventory_unresolved_memory_callback_loss ||
+        left.inventory_callback_loss_identity_truncated_sources !=
+            right.inventory_callback_loss_identity_truncated_sources)
+        return false;
+    for (std::size_t index = 0u; index < left.memory_values.size(); ++index) {
+        if (!same_function_memory_value_summary_without_evidence(
+                left.memory_values[index], right.memory_values[index]))
+            return false;
+    }
+    const auto* const left_return = register_summary(left, 0u);
+    const auto* const right_return = register_summary(right, 0u);
+    if ((left_return == nullptr) != (right_return == nullptr)) return false;
+    if (left_return == nullptr) return true;
+    return left_return->complete == right_return->complete &&
+           left_return->guarded == right_return->guarded &&
+           left_return->may_alias_stack == right_return->may_alias_stack &&
+           left_return->inventory_code_pointer_values ==
+               right_return->inventory_code_pointer_values &&
+           left_return->inventory_pc_relative_code_literal_values ==
+               right_return->inventory_pc_relative_code_literal_values &&
+           left_return->inventory_code_pointer_values_truncated ==
+               right_return->inventory_code_pointer_values_truncated &&
+           left_return->inventory_pc_relative_code_literal_values_truncated ==
+               right_return
+                   ->inventory_pc_relative_code_literal_values_truncated &&
+           left_return->contextual_candidate_dependency ==
+               right_return->contextual_candidate_dependency &&
+           left_return->inventory_stack_callback_loss_unresolved ==
+               right_return->inventory_stack_callback_loss_unresolved &&
+           left_return->inventory_saved_stack_alias_latent ==
+               right_return->inventory_saved_stack_alias_latent &&
+           left_return->inventory_saved_stack_alias_tracks_current_epoch ==
+               right_return
+                    ->inventory_saved_stack_alias_tracks_current_epoch &&
+           same_inventory_saved_stack_epoch_summary_without_evidence(
+               left_return->inventory_saved_stack_epoch,
+               right_return->inventory_saved_stack_epoch) &&
+           left_return->values == right_return->values;
+}
+
+void merge_inventory_candidate_carrier_evidence(
+    InventoryCandidateCarrier& destination,
+    const InventoryCandidateCarrier& source) {
+    if ((!has_inventory_candidate_carrier_payload(destination) &&
+         !has_pending_abi_scalar_payload(destination)) ||
+        (!has_inventory_candidate_carrier_payload(source) &&
+         !has_pending_abi_scalar_payload(source)))
+        return;
+    destination.call_sites.insert(
+        source.call_sites.begin(), source.call_sites.end());
+    destination.callees.insert(source.callees.begin(), source.callees.end());
+}
+
+void merge_inventory_saved_stack_epoch_summary_evidence(
+    InventorySavedStackEpochSummary& destination,
+    const InventorySavedStackEpochSummary& source) {
+    merge_inventory_candidate_carrier_evidence(
+        destination.unresolved_candidate_carrier,
+        source.unresolved_candidate_carrier);
+    // Summary epochs are normalized by relative_slot.  Correlate matching
+    // slots linearly: this runs in the contextual publish hot path.
+    std::size_t destination_slot_index = 0u;
+    std::size_t source_slot_index = 0u;
+    while (destination_slot_index < destination.slots.size() &&
+           source_slot_index < source.slots.size()) {
+        auto& destination_slot =
+            destination.slots[destination_slot_index];
+        const auto& source_slot = source.slots[source_slot_index];
+        if (destination_slot.relative_slot < source_slot.relative_slot) {
+            ++destination_slot_index;
+            continue;
+        }
+        if (source_slot.relative_slot < destination_slot.relative_slot) {
+            ++source_slot_index;
+            continue;
+        }
+        merge_inventory_candidate_carrier_evidence(
+            destination_slot.carrier, source_slot.carrier);
+        if (destination_slot.nested_epochs.size() == 1u &&
+            source_slot.nested_epochs.size() == 1u)
+            merge_inventory_saved_stack_epoch_summary_evidence(
+                destination_slot.nested_epochs.front(),
+                source_slot.nested_epochs.front());
+        ++destination_slot_index;
+        ++source_slot_index;
+    }
+    if (destination.unresolved_nested_epochs.size() == 1u &&
+        source.unresolved_nested_epochs.size() == 1u)
+        merge_inventory_saved_stack_epoch_summary_evidence(
+            destination.unresolved_nested_epochs.front(),
+            source.unresolved_nested_epochs.front());
+}
+
+void merge_function_call_effect_evidence(
+    FunctionValueSummary& destination,
+    const FunctionValueSummary& source) {
+    merge_inventory_candidate_carrier_evidence(
+        destination.inventory_unresolved_stack_carrier,
+        source.inventory_unresolved_stack_carrier);
+    merge_inventory_candidate_carrier_evidence(
+        destination.inventory_unresolved_memory_carrier,
+        source.inventory_unresolved_memory_carrier);
+    merge_inventory_candidate_carrier_evidence(
+        destination.current_stack_epoch_mutation_carrier,
+        source.current_stack_epoch_mutation_carrier);
+    merge_inventory_saved_stack_epoch_summary_evidence(
+        destination.inventory_unresolved_stack_epoch,
+        source.inventory_unresolved_stack_epoch);
+    merge_inventory_saved_stack_epoch_summary_evidence(
+        destination.inventory_unresolved_memory_epoch,
+        source.inventory_unresolved_memory_epoch);
+    merge_inventory_saved_stack_epoch_summary_evidence(
+        destination.current_stack_epoch_mutation_epoch,
+        source.current_stack_epoch_mutation_epoch);
+    for (auto& destination_value : destination.registers) {
+        const auto source_value = std::find_if(
+            source.registers.begin(), source.registers.end(),
+            [&](const FunctionRegisterValueSummary& value) {
+                return value.register_index == destination_value.register_index;
+            });
+        if (source_value == source.registers.end()) continue;
+        const bool has_register_payload =
+            !destination_value.values.empty() ||
+            !destination_value.inventory_code_pointer_values.empty() ||
+            !destination_value.inventory_pc_relative_code_literal_values.empty() ||
+            destination_value.inventory_code_pointer_values_truncated ||
+            destination_value.inventory_pc_relative_code_literal_values_truncated ||
+            destination_value.contextual_candidate_dependency ||
+            destination_value.inventory_stack_callback_loss_unresolved ||
+            destination_value.inventory_saved_stack_alias_latent ||
+            destination_value.inventory_saved_stack_epoch.present;
+        if (has_register_payload)
+            merge_normalized(
+                destination_value.evidence_callees,
+                source_value->evidence_callees);
+        merge_inventory_saved_stack_epoch_summary_evidence(
+            destination_value.inventory_saved_stack_epoch,
+            source_value->inventory_saved_stack_epoch);
+    }
+    // Function memory summaries are normalized by address.  Do not turn
+    // Evidence-only publication into a quadratic address correlation.
+    std::size_t destination_memory_index = 0u;
+    std::size_t source_memory_index = 0u;
+    while (destination_memory_index < destination.memory_values.size() &&
+           source_memory_index < source.memory_values.size()) {
+        auto& destination_value =
+            destination.memory_values[destination_memory_index];
+        const auto& source_value =
+            source.memory_values[source_memory_index];
+        if (destination_value.address < source_value.address) {
+            ++destination_memory_index;
+            continue;
+        }
+        if (source_value.address < destination_value.address) {
+            ++source_memory_index;
+            continue;
+        }
+        merge_inventory_candidate_carrier_evidence(
+            destination_value.inventory_candidate_carrier,
+            source_value.inventory_candidate_carrier);
+        merge_inventory_saved_stack_epoch_summary_evidence(
+            destination_value.inventory_saved_stack_epoch,
+            source_value.inventory_saved_stack_epoch);
+        ++destination_memory_index;
+        ++source_memory_index;
+    }
+}
+
 void encode(EvaluationKeyEncoder& key,
             const IndirectCalleeCandidates& candidates) {
     key.append_interned_u32_range(
@@ -18727,8 +19018,9 @@ make_function_evaluation_cache_key(
     const ForwardedRegisterReadMap& forwarded_register_reads,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads,
     const std::uint8_t inventory_sink_sources,
-    const bool collect_component_hashes) {
-    EvaluationKeyEncoder key(collect_component_hashes);
+    const bool collect_component_hashes,
+    const bool omit_evidence = false) {
+    EvaluationKeyEncoder key(collect_component_hashes, omit_evidence);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
     key.append(std::uint32_t{10u});
@@ -36348,13 +36640,24 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     return bytes == other.bytes;
                 }
             };
+            using ContextualProvenanceReplayId = std::size_t;
+            struct ContextualProvenanceReplay final {
+                // Unlike the evidence-free semantic lane key, this capsule
+                // retains the alpha-normalized evidence membership topology.
+                // Only compatible restore lenses may share its artifact.
+                ContextualReadSemanticKey key;
+                std::weak_ptr<const CachedFunctionEvaluation> ready_artifact;
+            };
             struct SemanticLane final {
                 ContextualReadSemanticKey key;
-                // A key consumes logical Contextual evaluation budget at most
-                // once for this root. The weak artifact never forces a large
-                // exact result to remain alive after its subscribers moved on.
+                // The evidence-free key consumes logical Contextual evaluation
+                // budget at most once.  Evidence topology gets private replay
+                // capsules below and must never create another semantic lane.
                 bool admitted = false;
-                std::weak_ptr<const CachedFunctionEvaluation> ready_artifact;
+                std::vector<ContextualProvenanceReplay> provenance_replays;
+                std::unordered_map<std::uint64_t,
+                                   std::vector<ContextualProvenanceReplayId>>
+                    provenance_replay_buckets;
             };
             const auto* const contextual_scheduler_diagnostics_observer =
                 &session.impl_
@@ -36503,6 +36806,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             // second product limit or retaining their full capsules.
             semantic_lanes.reserve(contextual_lanes.capacity());
             semantic_lane_buckets.reserve(contextual_lanes.capacity());
+            // A provenance capsule contains a collision-safe full key and a
+            // weak artifact.  Bound the root-local private index separately
+            // from logical semantic admission: exhausting it is fail-closed,
+            // but never increments or exhausts the semantic lane budget.
+            std::size_t contextual_provenance_replay_capsules = 0u;
+            std::size_t contextual_provenance_replay_key_bytes = 0u;
+            const auto contextual_provenance_replay_key_byte_budget =
+                session.impl_->evaluations.maximum_retained_payload_bytes();
+            bool contextual_provenance_replay_budget_exhausted = false;
             struct ContextualDependencyVersion final {
                 ContextualLaneId lane_id = 0u;
                 std::uint64_t input_version = 0u;
@@ -36561,6 +36873,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 SummaryChange,
                 ForwardEdgeInsertOrWiden,
                 StaleDependency,
+                ProvenanceReplay,
             };
             const auto add_contextual_product_counter =
                 [&](std::size_t ContextualReturnD1Telemetry::* member,
@@ -36653,6 +36966,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             add_contextual_product_counter(
                                 &ContextualReturnD1Telemetry::
                                     requeues_stale_dependency);
+                            break;
+                        case ContextualRequeueReason::ProvenanceReplay:
+                            // Private evidence replay intentionally has no
+                            // semantic requeue telemetry or budget effect.
                             break;
                         }
                     }
@@ -36782,6 +37099,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 bool alpha_normalized_request = false;
                 bool alpha_normalization_fallback = false;
                 std::optional<SemanticLaneId> semantic_lane_id;
+                std::optional<ContextualProvenanceReplayId>
+                    provenance_replay_id;
                 std::optional<FunctionEvaluation> evaluation;
                 GuardedCodeInventoryWalkDiagnostics diagnostics;
                 std::exception_ptr error;
@@ -36822,6 +37141,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     item.alpha_normalized_request = false;
                     item.alpha_normalization_fallback = false;
                     item.semantic_lane_id.reset();
+                    item.provenance_replay_id.reset();
                     item.evaluation.reset();
                     item.error = {};
                     if (collect_contextual_return_product_telemetry) {
@@ -36853,7 +37173,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     const std::map<std::uint32_t, FunctionValueSummary>&
                         canonical_summaries,
                     const ContextualSummaryBindings* const
-                        canonical_contextual_summaries) {
+                        canonical_contextual_summaries,
+                    const bool omit_evidence) {
                     const auto& semantic_function =
                         *fixpoint_functions.at(item.function_index);
                     auto cache_key = make_function_evaluation_cache_key(
@@ -36874,7 +37195,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         forwarded_register_reads,
                         &abi_stack_argument_reads,
                         0u,
-                        false);
+                        false,
+                        omit_evidence);
                     return ContextualReadSemanticKey{
                         cache_key.hash, std::move(cache_key.bytes)};
                 };
@@ -38182,10 +38504,48 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                     const auto lane_id = semantic_lanes.size();
                     semantic_lanes.push_back(
-                        {std::move(key), false, {}});
+                        {std::move(key), false, {}, {}});
                     semantic_lane_buckets[semantic_lanes.back().key.hash]
                         .push_back(lane_id);
                     return lane_id;
+                };
+            const auto find_or_create_provenance_replay =
+                [&](const SemanticLaneId lane_id,
+                    ContextualReadSemanticKey key)
+                    -> std::optional<ContextualProvenanceReplayId> {
+                    auto& lane = semantic_lanes.at(lane_id);
+                    const auto bucket = lane.provenance_replay_buckets.find(
+                        key.hash);
+                    if (bucket != lane.provenance_replay_buckets.end()) {
+                        for (const auto index : bucket->second) {
+                            if (lane.provenance_replays.at(index).key.same_as(
+                                    key))
+                                return index;
+                        }
+                    }
+                    const auto key_bytes = key.bytes.size();
+                    const bool replay_count_exhausted =
+                        contextual_provenance_replay_capsules >=
+                        maximum_contextual_return_evaluations;
+                    const bool replay_bytes_exhausted =
+                        key_bytes >
+                        contextual_provenance_replay_key_byte_budget -
+                            std::min(
+                                contextual_provenance_replay_key_bytes,
+                                contextual_provenance_replay_key_byte_budget);
+                    if (replay_count_exhausted || replay_bytes_exhausted) {
+                        contextual_provenance_replay_budget_exhausted = true;
+                        return std::nullopt;
+                    }
+                    const auto replay_id = lane.provenance_replays.size();
+                    lane.provenance_replays.push_back(
+                        {std::move(key), {}});
+                    lane.provenance_replay_buckets
+                        [lane.provenance_replays.back().key.hash]
+                            .push_back(replay_id);
+                    ++contextual_provenance_replay_capsules;
+                    contextual_provenance_replay_key_bytes += key_bytes;
+                    return replay_id;
                 };
             struct ContextualScheduledLane final {
                 ContextualLaneId lane_id = 0u;
@@ -38291,6 +38651,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
 
                 struct ContextualSemanticBatchGroup final {
                     SemanticLaneId lane_id = 0u;
+                    ContextualProvenanceReplayId replay_id = 0u;
                     std::vector<std::size_t> item_indices;
                     bool newly_admitted = false;
                                  bool materialized = false;
@@ -38300,7 +38661,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                  std::exception_ptr error;
                 };
                 std::vector<ContextualSemanticBatchGroup> semantic_groups;
-                std::map<SemanticLaneId, std::size_t> group_by_lane;
+                std::map<std::pair<SemanticLaneId,
+                                   ContextualProvenanceReplayId>,
+                         std::size_t>
+                    group_by_replay;
                 for (std::size_t index = 0u; index < batch.size(); ++index) {
                     auto& item = batch[index];
                     if (item.error) continue;
@@ -38372,6 +38736,38 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         const bool effective_memory_projection =
                             memory_read_contracts_authoritative &&
                             allow_memory_projection;
+                        // Logical admission is intentionally independent of
+                        // EvidenceProvenanceLens capacity/validity.  A token
+                        // shortage changes only the physical replay capsule,
+                        // never the read-contract quotient or logical budget.
+                        auto semantic_identity_projection =
+                            make_function_evaluation_projection(
+                                item.input,
+                                EvaluationLens::ContextualReturn,
+                                item.address,
+                                TailIngressTargetKind::Function,
+                                forwarded_register_reads,
+                                abi_stack_argument_reads,
+                                summaries,
+                                effective_memory_projection,
+                                !effective_memory_projection ||
+                                    memory_projection_covers_tail_ingresses(
+                                        *fixpoint_functions.at(
+                                            item.function_index),
+                                        block_index,
+                                        tail_ingresses,
+                                        nullptr),
+                                !result.budget_exhausted);
+                        const bool use_semantic_projected_identity =
+                            contextual_read_hybrid_projection_is_usable(
+                                semantic_identity_projection);
+                        if (!use_semantic_projected_identity) {
+                            semantic_identity_projection.ingress = item.input;
+                            semantic_identity_projection.effective_lens =
+                                EvaluationLens::FullState;
+                            semantic_identity_projection.full_state_fallback =
+                                true;
+                        }
                         auto identity_projection =
                             make_function_evaluation_projection(
                                 item.input,
@@ -38419,17 +38815,39 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         std::chrono::steady_clock::time_point key_started{};
                         if (collect_contextual_return_product_telemetry)
                             key_started = std::chrono::steady_clock::now();
-                        auto contextual_semantic_key =
+                        // The physical capsule retains the existing
+                        // alpha-normalized membership topology.  It is a
+                        // provenance replay key, never a logical lane key:
+                        // a different restore topology cannot safely reuse
+                        // another producer's tokenized artifact.
+                        auto contextual_replay_key =
                             make_contextual_read_semantic_key(
                                 item,
                                 std::move(identity_projection),
                                 *identity_summaries,
-                                identity_contextual_summaries);
+                                identity_contextual_summaries,
+                                false);
+                        // Admission, budget and version identity deliberately
+                        // omit evidence.  Exact EvidenceProvenance replay is
+                        // selected separately by `contextual_replay_key`.
+                        auto contextual_semantic_key =
+                            make_contextual_read_semantic_key(
+                                item,
+                                std::move(semantic_identity_projection),
+                                full_state_summaries,
+                                full_state_contextual_summaries,
+                                true);
                         const auto contextual_semantic_key_bytes =
                             contextual_semantic_key.bytes.size();
                         item.semantic_lane_id =
                             find_or_create_semantic_lane(
                                 std::move(contextual_semantic_key));
+                        item.provenance_replay_id =
+                            find_or_create_provenance_replay(
+                                *item.semantic_lane_id,
+                                std::move(contextual_replay_key));
+                        if (!item.provenance_replay_id.has_value())
+                            break;
                         if (collect_contextual_return_product_telemetry) {
                             const auto key_nanoseconds = static_cast<
                                 std::uint64_t>(std::max(
@@ -38445,7 +38863,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     ++telemetry.key_count;
                                     telemetry.key_nanoseconds +=
                                         key_nanoseconds;
-                                    if (!use_projected_context_identity)
+                                    if (!use_semantic_projected_identity)
                                         telemetry
                                             .maximum_full_state_key_bytes =
                                             std::max(
@@ -38463,13 +38881,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             collect_contextual_return_product_telemetry) {
                             item.alpha_normalized_request = true;
                         }
+                        const auto replay_key = std::make_pair(
+                            *item.semantic_lane_id,
+                            *item.provenance_replay_id);
                         const auto [group, inserted] =
-                            group_by_lane.try_emplace(
-                                *item.semantic_lane_id,
-                                semantic_groups.size());
+                            group_by_replay.try_emplace(
+                                replay_key, semantic_groups.size());
                         if (inserted) {
                             semantic_groups.push_back(
                                 {*item.semantic_lane_id,
+                                 *item.provenance_replay_id,
                                  {},
                                  !semantic_lanes
                                       .at(*item.semantic_lane_id)
@@ -38486,6 +38907,35 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                 }
 
+                if (contextual_provenance_replay_budget_exhausted) {
+                    function_result.walk_diagnostics
+                        .contextual_return_evaluation_limited_functions =
+                        1u;
+                    emit_contextual_return_limit_diagnostic(
+                        "provenance_replays",
+                        2u,
+                        function->entry_address,
+                        batch.empty() ? 0u : batch.front().address,
+                        0u,
+                        contextual_lanes.size(),
+                        contextual_provenance_replay_capsules,
+                        pending_contexts.size());
+                    update_contextual_return_product_telemetry(
+                        contextual_return_product_slot,
+                        [](auto& telemetry) {
+                            telemetry.incomplete_root = true;
+                        });
+                    return;
+                }
+
+                // Several physical provenance capsules can belong to one
+                // evidence-free semantic lane in this Jacobi batch.  Reserve
+                // logical budget exactly once for that lane.
+                std::set<SemanticLaneId> provisional_admissions;
+                for (auto& group : semantic_groups)
+                    group.newly_admitted =
+                        !semantic_lanes.at(group.lane_id).admitted &&
+                        provisional_admissions.insert(group.lane_id).second;
                 std::size_t newly_admitted_semantic_lanes = 0u;
                 for (const auto& group : semantic_groups) {
                     if (group.newly_admitted)
@@ -38515,7 +38965,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     auto& semantic_lane =
                         semantic_lanes.at(group.lane_id);
                     if (group.newly_admitted) semantic_lane.admitted = true;
-                    group.artifact = semantic_lane.ready_artifact.lock();
+                    group.artifact = semantic_lane
+                                         .provenance_replays
+                                         .at(group.replay_id)
+                                         .ready_artifact
+                                         .lock();
                     group.materialized = group.artifact == nullptr;
                 }
                 contextual_evaluations += newly_admitted_semantic_lanes;
@@ -39213,6 +39667,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         for (const auto lane_id : family_lanes) {
                             const auto& lane =
                                 contextual_lanes.at(lane_id);
+                            std::optional<AbstractState>
+                                candidate_joined_match;
+                            std::optional<AbstractState>
+                                candidate_joined_input;
                             if (lane.match_input !=
                                 callee_match_input) {
                                 auto joined_match = lane.match_input;
@@ -39224,8 +39682,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         OmitAfterAbiBoundary));
                                 if (!close_incomplete_stack_lane_join(
                                         joined_match) ||
-                                    joined_match != lane.match_input)
+                                    !same_abstract_state_without_evidence(
+                                        joined_match, lane.match_input))
                                     continue;
+                                if (joined_match != lane.match_input)
+                                    candidate_joined_match =
+                                        std::move(joined_match);
                             }
                             if (lane.input == callee_context_input) {
                                 if (inventory_join_creates_loss(
@@ -39249,8 +39711,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         joined))
                                     continue;
                                 if (joined != lane.input)
-                                    joined_input = std::move(joined);
+                                    candidate_joined_input =
+                                        std::move(joined);
                             }
+                            joined_match_input =
+                                std::move(candidate_joined_match);
+                            joined_input = std::move(candidate_joined_input);
                             selected_lane = lane_id;
                             break;
                         }
@@ -39261,6 +39727,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     contextual_lanes.at(lane_id);
                                 std::optional<AbstractState>
                                     candidate_joined_input;
+                                std::optional<AbstractState>
+                                    candidate_joined_match;
                                 if (lane.input == callee_context_input) {
                                     if (inventory_join_creates_loss(
                                             lane.input,
@@ -39300,9 +39768,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                             joined_match))
                                         continue;
                                     if (joined_match != lane.match_input)
-                                        joined_match_input =
+                                        candidate_joined_match =
                                             std::move(joined_match);
                                 }
+                                joined_match_input =
+                                    std::move(candidate_joined_match);
                                 joined_input =
                                     std::move(candidate_joined_input);
                                 selected_lane = lane_id;
@@ -39370,6 +39840,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 lane.input != *joined_input;
                             const bool lane_changed =
                                 match_input_changed || input_changed;
+                            const bool semantic_change =
+                                (match_input_changed &&
+                                 !same_abstract_state_without_evidence(
+                                     lane.match_input,
+                                     *joined_match_input)) ||
+                                (input_changed &&
+                                 !same_abstract_state_without_evidence(
+                                     lane.input, *joined_input));
+                            const bool provenance_only_lane_change =
+                                lane_changed && !semantic_change;
                             if (lane_changed &&
                                 (collect_contextual_scheduler_diagnostics ||
                                  collect_contextual_return_product_telemetry)) {
@@ -39530,15 +40010,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                                 contextual_read_admission_diagnostics
                                                     .widening_statewide_inventory_flags);
                                     }
-                                    const bool semantic_change =
-                                        (match_input_changed &&
-                                         !same_abstract_state_without_evidence(
-                                             lane.match_input,
-                                             *joined_match_input)) ||
-                                        (input_changed &&
-                                         !same_abstract_state_without_evidence(
-                                             lane.input,
-                                             *joined_input));
                                     if (semantic_change) {
                                         if (collect_contextual_scheduler_diagnostics)
                                         ++contextual_scheduler_diagnostics
@@ -39586,12 +40057,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 lane.input =
                                     std::move(*joined_input);
                             }
-                            if (lane_changed) {
+                            if (semantic_change) {
                                 selected_lane_changed = true;
                                 ++lane.input_version;
                                 enqueue_context(
                                     *selected_lane,
                                     ContextualRequeueReason::InputWidening);
+                            } else if (provenance_only_lane_change) {
+                                // Keep the exact subscriber monotone without
+                                // invalidating an already running semantic
+                                // snapshot.  The replay has its own physical
+                                // capsule key and consumes no logical lane.
+                                enqueue_context(
+                                    *selected_lane,
+                                    ContextualRequeueReason::ProvenanceReplay);
                             }
                         }
                         auto& forward_edges =
@@ -39603,6 +40082,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 *selected_lane,
                                 callee_edge_match_input);
                         bool forward_match_changed = false;
+                        bool forward_match_semantic_changed = false;
                         if (!forward_inserted &&
                             forward->second != callee_edge_match_input) {
                             auto joined = forward->second;
@@ -39615,17 +40095,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             static_cast<void>(
                                 close_incomplete_stack_edge_join(joined));
                             forward_match_changed = joined != forward->second;
-                            if (forward_match_changed)
+                            if (forward_match_changed) {
+                                forward_match_semantic_changed =
+                                    !same_abstract_state_without_evidence(
+                                        forward->second, joined);
                                 forward->second = std::move(joined);
+                            }
                         }
                         item.forward_edge_changed =
                             item.forward_edge_changed || forward_inserted ||
-                            forward_match_changed;
+                            forward_match_semantic_changed;
                         item.dependency_graph_changed =
                             item.dependency_graph_changed ||
                             selected_lane_changed ||
                             forward_inserted ||
-                            forward_match_changed;
+                            forward_match_semantic_changed;
                         contextual_callers[*selected_lane].insert(
                             item.lane_id);
                         // The edge-local matcher is the only binding input
@@ -39635,6 +40119,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         // edge to an already stable child still needs one
                         // caller replay; a child without a summary wakes every
                         // linked caller on its first summary publication.
+                        if (forward_match_changed &&
+                            !forward_match_semantic_changed)
+                            enqueue_context(
+                                item.lane_id,
+                                ContextualRequeueReason::ProvenanceReplay);
                         if (emit_contextual_read_diagnostic)
                             emit_contextual_read_admission_diagnostic();
                     }
@@ -39759,9 +40248,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             return current_snapshots[index] != 0u;
                         });
                     if (!has_current_subscriber) continue;
-                    auto& semantic_lane =
-                        semantic_lanes.at(group.lane_id);
-                    semantic_lane.ready_artifact = group.artifact;
+                    auto& replay = semantic_lanes
+                                       .at(group.lane_id)
+                                       .provenance_replays
+                                       .at(group.replay_id);
+                    replay.ready_artifact = group.artifact;
                 }
                 if (collect_contextual_return_product_telemetry) {
                     const auto commit_nanoseconds = static_cast<std::uint64_t>(
@@ -39801,6 +40292,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     candidate_summaries(batch.size());
                 std::vector<std::uint8_t> summary_changed(
                     batch.size(), 0u);
+                std::vector<std::uint8_t> summary_provenance_changed(
+                    batch.size(), 0u);
                 for (std::size_t index = 0u;
                      index < batch.size();
                      ++index) {
@@ -39813,20 +40306,33 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (current_lane.summary.has_value()) {
                         widen_function_memory_read_contract(
                             candidate_summary, *current_lane.summary);
+                        const bool semantic_same =
+                            same_function_call_effect_without_evidence(
+                                *current_lane.summary, candidate_summary);
+                        // A completed older snapshot may carry less private
+                        // provenance than a newer subscriber replay.  Preserve
+                        // every still-represented field before replacing it.
+                        merge_function_call_effect_evidence(
+                            candidate_summary, *current_lane.summary);
+                        summary_changed[index] = semantic_same ? 0u : 1u;
+                        summary_provenance_changed[index] =
+                            semantic_same &&
+                                    !same_function_call_effect(
+                                        *current_lane.summary,
+                                        candidate_summary)
+                                ? 1u
+                                : 0u;
+                    } else {
+                        summary_changed[index] = 1u;
                     }
-                    summary_changed[index] =
-                        !current_lane.summary.has_value() ||
-                                !same_function_call_effect(
-                                    *current_lane.summary,
-                                    candidate_summary)
-                            ? 1u
-                            : 0u;
                     candidate_summaries[index] =
                         std::move(candidate_summary);
                 }
 
                 std::vector<ContextualLaneId> summary_changed_lanes;
+                std::vector<ContextualLaneId> summary_provenance_lanes;
                 summary_changed_lanes.reserve(batch.size());
+                summary_provenance_lanes.reserve(batch.size());
                 for (std::size_t index = 0u;
                      index < batch.size();
                      ++index) {
@@ -39853,6 +40359,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (summary_changed[index] != 0u) {
                         ++current_lane.summary_version;
                         summary_changed_lanes.push_back(item.lane_id);
+                    } else if (summary_provenance_changed[index] != 0u) {
+                        summary_provenance_lanes.push_back(item.lane_id);
                     }
                 }
                 // Only fully published Jacobi rounds wake their dependants.
@@ -39865,6 +40373,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 caller,
                                 ContextualRequeueReason::SummaryChange);
                     }
+                }
+                for (const auto lane_id : summary_provenance_lanes) {
+                    const auto callers = contextual_callers.find(lane_id);
+                    if (callers == contextual_callers.end()) continue;
+                    for (const auto caller : callers->second)
+                        enqueue_context(
+                            caller,
+                            ContextualRequeueReason::ProvenanceReplay);
                 }
                 if (collect_contextual_return_product_telemetry) {
                     const auto publish_nanoseconds = static_cast<std::uint64_t>(

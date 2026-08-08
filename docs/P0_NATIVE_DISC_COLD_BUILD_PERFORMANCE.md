@@ -9,11 +9,10 @@ Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
-exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4993 ist
-source-seitig abgeschlossen; der D9-Lauf ist beendet und fail-closed. KR-4994
-ist der naechste Implementierungstask nach Sol-Review. KR-4981 bleibt das
-globale Produktgate und darf erst nach KR-4994 plus Sol-Review genau einmal
-erneut laufen. KR-4992 bleibt ein bedingter Folgezweig nach einem verfehlten
+exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4993 und
+KR-4994 sind source-seitig abgeschlossen; der aktuelle D-Lauf bestand das
+globale KR-4981-Produktgate nicht. Ein weiterer Lauf ist nicht automatisch
+freigegeben. KR-4992 bleibt ein bedingter Folgezweig nach einem verfehlten
 Produktzeitgate.
 
 Der gemeinsame Candidate-Resolution-Explosionsfix erfuellt KR-4985 und
@@ -31,7 +30,9 @@ logical requests, `3.739` physical evaluations, `2.497` input-widening,
 `932` stale-dependency requeues, `1.740` stale discards, `939` semantic und
 `2.377` provenance-only widenings gehoeren zum beendeten D9-Lauf.
 
-Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
+Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
+war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
+Warnungen. Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
 `325,8 s`; der identifizierte Kindprozess wurde nach belegter
 Nichtverbesserung manuell beendet. Es gab `0/1194` committed Roots, HOL `0`,
 Wave `103`, `272` Contexts, `1.044` Semantic-Lanes, `1.029` contextual

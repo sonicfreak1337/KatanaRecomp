@@ -63,6 +63,13 @@ semantischer Deduplizierung pro exaktem Provenienzrequest belastet wurde.
 Der Fix identifiziert Full-State-Semantic-Lanes kollisionssicher, trennt
 Provenienzabonnenten und belastet das Budget nur bei neuer semantischer Lane.
 
+Der aktuelle Zweikanal-Sourcefix vergleicht fuer die logische Contextual-
+Lane den oeffentlichen Call-/State-Effekt ohne Evidence-Wachstum; die
+alpha-normalisierte Evidence-Mitgliedschaft bleibt in begrenzten privaten
+Provenienz-Replaykapseln fuer die physische Auswertung erhalten. Evidence-
+Stale darf dadurch keine neue semantische Lane oder ein neues logisches
+Budgetereignis erzeugen; Cap-/Replayfehler bleiben fail-closed.
+
 Das `65.536`-Limit ist ein Per-Function-Budget; `25.728` Contexts und
 `27.872` physische Auswertungen sind historische laufweite Aggregate und
 werden nicht miteinander verrechnet.
@@ -154,7 +161,10 @@ ersten schweren Candidate-Resolution-Roots.
 
 ### Aktueller D-Lauf
 
-Der einmalige D-Lauf dauerte `460,6 s`; Candidate Resolution lief von
+Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
+war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
+Warnungen. Run-ID: `kr4981-20260809-012851-0b360903`. Der einmalige D-Lauf
+dauerte `460,6 s`; Candidate Resolution lief von
 `00:37:17` bis `00:42:43` (ca. `325,8 s`). Summary `product-exit` bedeutet hier
 nur, dass der exakt identifizierte Kindprozess nach belegter Nichtverbesserung
 manuell beendet wurde. Es gab keine kanonische Publikation, `0/1194`

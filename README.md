@@ -14,7 +14,8 @@ nicht gemeinsam scoped und werden nicht zu Requeue- oder Per-Context-
 Messwerten verrechnet. Ein neues Portartefakt, eine
 `game.exe` und ein neuer Screenshot existieren aus diesem Stand nicht.
 
-KR-4985, KR-4986, KR-4993 und KR-4987 sind source-seitig abgeschlossen. Der
+KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994 sind source-seitig
+abgeschlossen. Der
 D9-Lauf ist nach `20,331 s` fail-closed beendet: Root 0 konvergierte bis Wave
 `184` und Frontier `0` (maximal `216`), ohne Portartefakt oder Produkterfolg.
 KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. Der folgende
@@ -32,7 +33,7 @@ der uebergeordnete Kaltbuildvertrag in
 ```text
 Runtime-ABI:                    87
 Block-ABI:                       5
-Analyzer-ABI:                   32
+Analyzer-ABI:                   33
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             75
@@ -254,8 +255,9 @@ Framemarker und das erste neue AOT-, Runtime- oder Geraeteproblem; ein
 sichtbarer Bildschirm wird separat anhand einer realen Ausgabeaufnahme
 klassifiziert. Dieser Vertrag ist im Source-Checkpoint `18f8537`
 implementiert, aber noch nicht mit einem aktuellen Sonic-Port abgenommen.
-Vor dem naechsten vollstaendigen privaten Produktlauf stehen KR-4994 und
-Sol-Review; danach darf KR-4981 genau einmal als globales Produktgate laufen.
+Der aktuelle D-Lauf war der freigegebene KR-4981-Produktversuch; er bestand
+das globale Produktgate nicht. Ein weiterer vollstaendiger privater
+Produktlauf ist nicht automatisch freigegeben.
 
 Die **historische v24-`CompletePlatform`-Vergleichsbasis** endete in beiden Pfaden bei
 Schedulerzyklus 600.000.000 ohne erstes neues AOT-, Runtime- oder
@@ -292,8 +294,8 @@ Callback jetzt ueber begrenzte Tail-Jump- und Runtime-Frame-Pfade, erkennt
 `0x8C64784E` als Funktion und erreicht `0x8C6478C2` als gemeinsamen Body.
 Der aktuelle Quellstand transportiert solche bewachten AOT-Einstiege durch
 CFG, Source-Map und AOT und erzwingt ihre Exportvollstaendigkeit. Der
-aktuelle Produktnachweis steht weiterhin aus und darf erst nach KR-4994
-und Sol-Review im genau einmaligen KR-4981-Gate erfolgen.
+aktuelle Produktnachweis steht weiterhin aus; der aktuelle D-Lauf bestand das
+KR-4981-Gate nicht und erzeugte kein Produktartefakt.
 Die terminale Diagnose unterscheidet diesen Fall jetzt korrekt als
 `aot-template-mismatch` von echten Byteidentitaetsfehlern.
 

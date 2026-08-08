@@ -131,7 +131,7 @@ Portartefakt; KR-4981 ist nicht bestanden.
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding im vorherigen Fixcommit mit ABI 32 geschlossen; globale Produktabnahme bleibt KR-4981 |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier ueber Merge, Key/Cache, Lifetime, ABI-/Summary-Propagation und Harvest; semantischer Lane-Treiber im Produktgate offen |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus Evidence-/Semantic-Zweikanal ueber Merge, Key/Cache, Lifetime, ABI-/Summary-Propagation und Harvest; semantischer Lane-Treiber im Produktgate offen |
 
 ## Aktuelle Meilensteinzuordnung
 

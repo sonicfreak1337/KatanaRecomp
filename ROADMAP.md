@@ -195,7 +195,7 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding wurde im vorherigen Fixcommit mit ABI 32 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
 | KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; der aktuelle D-Lauf bestand es nicht; kein weiterer Lauf ohne ausdrueckliche Freigabe; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier ueber Merge/Key/Cache/Lifetime/ABI-/Summary-Propagation und Harvest; der semantische Lane-Treiber bleibt im Produktgate offen |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus Evidence-/Semantic-Zweikanal ueber Merge/Key/Cache/Lifetime/ABI-/Summary-Propagation und Harvest; der semantische Lane-Treiber bleibt im Produktgate offen |
 
 Die Reihenfolge ist normativ:
 

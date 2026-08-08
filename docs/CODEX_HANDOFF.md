@@ -328,6 +328,12 @@ semantischer Deduplizierung
 durch kollisionssichere Full-State-Semantic-Lanes und private exakte
 Provenienz-Replays. Die D1-Telemetrie ist explizit opt-in.
 
+Der aktuelle Zweikanal-Sourcefix vergleicht den oeffentlichen Call-/State-
+Effekt ohne Evidence-Wachstum fuer die logische Lane; alpha-normalisierte
+Evidence-Mitgliedschaft bleibt in begrenzten privaten Replaykapseln fuer
+physische Auswertung und Restore. Evidence-Stale erzeugt damit kein neues
+logisches Budgetereignis; Cap-/Replayfehler bleiben fail-closed.
+
 Der einzige freigegebene D1-Lauf lieferte bei `185,370 s` nichtterminale
 Root-0-Evidenz: `0/1191` Roots completed, Wave `1.019`, Frontier `0` (maximal
 `223`), `288` Contexts, `15.170` logische Requests, `6.724` Semantic-Lanes,
@@ -352,7 +358,9 @@ Diagnosen verteilten sich auf 189 forwarded-call, 158 candidate-store, 113
 fixpoint-call und 2 forwarded-tail; tail-store-identity-loss `0`. Kein
 Portartefakt und kein Produkterfolg.
 
-Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
+Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
+war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
+Warnungen. Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
 `325,8 s`; der identifizierte Kindprozess wurde nach belegter
 Nichtverbesserung manuell beendet. Es gab `0/1194` committed Roots, HOL `0`,
 Wave `103`, `272` Contexts, `1.044` Semantic-Lanes, `1.029` contextual
@@ -377,8 +385,8 @@ Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
 sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
 entscheidbar. D2/G2 wurde nicht ausgefuehrt. KR-4981 bleibt das globale
-Produktgate; ein Retry ist erst nach KR-4994 plus Sol-Review genau einmal
-zulaessig. Ein zweiter D1-Lauf gehoert
+Produktgate; der aktuelle D-Lauf ist abgeschlossen und nicht bestanden. Ein
+weiterer Lauf ist nicht automatisch freigegeben. Ein zweiter D1-Lauf gehoert
 nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
