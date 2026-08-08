@@ -128,11 +128,11 @@ aktueller realer Diagnosebefund:
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
 Diagnoseevidenz und kein Produktnachweis, weil kein Produkt entstand.
 
-## Aktueller P0: Candidate-Resolution / Contextual-State-Explosion
+## Aktueller P0: Candidate-Resolution / ungeklaerte Context- und Requeuekosten
 
-Cache-Churn, wiederholte physische Eviction-Recomputes und die fruehere
-Deep-Copy-Verstaerkung sind nicht mehr die Hauptursache. Der aktuelle
-Produktblocker besteht aus zwei gekoppelten Kostenklassen:
+Null Eviction-Recomputes liefern keinen Beleg fuer Cache-Eviction als
+Hauptursache. Fuer den aktuellen Produktblocker prueft D1 das folgende
+Kostenmodell:
 
 ```text
 echte semantische Contextmenge
@@ -142,19 +142,17 @@ Kosten je Context
 ueberwiegend serieller kritischer Scheduling-Span
 ```
 
-Die v56-Zahlen ergeben:
-
-```text
-physische Auswertungen je eindeutigem Context:    1,083
-logische Evaluationen je eindeutigem Context:     2,547
-logische Evaluationen ohne neue physische Arbeit: 37.664
-Anteil physischer Erstberechnungen:                rund 92,3 Prozent
-```
+Die v56-Zahlen wurden in unterschiedlichen Zaehldomaenen ausgegeben. Das
+Per-Function-Budget von `65.536` darf daher bis zur KR-4985-Instrumentierung
+weder von den laufweiten `27.872` physischen Auswertungen subtrahiert noch
+durch die laufweiten `25.728` Contexts dividiert werden. Aussagen ueber
+logische Requeues, Cache-Reuse und Kosten je Context sind bis D1 Hypothesen,
+keine Messwerte.
 
 Eine blosse Erhoehung des 65.536er-Budgets, mehr Cache oder mehr Threads ist
-kein Fix. Die Analyse muss weniger semantisch unnoetige Contexts erzeugen,
-kausal unbegruendete Wiederzulassungen vermeiden und vorhandene unabhaengige
-Arbeit ohne Soundnessverlust frueher freigeben.
+kein Fix. Welche semantische Context-, Wiederzulassungs-, Per-Context- oder
+Schedulingarbeit tatsaechlich reduziert werden muss, entscheidet D1 anhand
+gleich scoped Messwerte.
 
 Der Detailvertrag steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
@@ -165,14 +163,14 @@ der uebergeordnete Kaltbuildvertrag in
 
 | ID | Aufgabe | Ergebnis |
 |---|---|---|
-| KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | limitierter Root/Funktion, Requeue-Ursachen, logische/physische Arbeit und Context-Kollapsrate sind eindeutig sichtbar |
+| KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | Stale-/Fehlerreihenfolge ist vor D1 fail-closed; limitierter Root/Funktion, Requeue-Ursachen und gleich scoped logische/physische Arbeit sind eindeutig sichtbar |
 | KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | physische Semantik und exakte Contribution-/Evidence-Provenienz sind getrennt |
 | KR-4987 | Read-Lens-projizierte Context-Identitaet | nur vollstaendig bewiesene relevante Eingaenge erzeugen eigene Lanes; jede Luecke verwendet FullState |
 | KR-4988 | Internierte AbstractStates und Summaries | nur bei positivem Kostengate werden unveraenderliche States/Summaries kanonisch wiederverwendet |
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
-| KR-4993 | Abschlussreview aller betroffenen Candidate-Resolution-Pfade | alle bestaetigten Findings geschlossen, kein Evaluationslimit und kein incomplete-root |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | alle bestaetigten Source-Findings geschlossen; Limit-, Stale-, Cancellation- und `IncompleteRoot`-Pfade bleiben fail-closed und terminal sichtbar |
 | KR-4981 | Einmaliges Sonic-Produktzeitgate | vollstaendiger 24-Thread-Kaltport, Installation und realer Lauf belegen oder verfehlen das Acht-Minuten-Ziel |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 
@@ -195,7 +193,11 @@ KR-4985 implementieren -> betroffene Pfade reviewen -> main pushen
 
 D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue
 Testmatrix. Ein negatives Gate dokumentiert den konservativen Pfad und
-verhindert einen nutzlosen Umbau. KR-4982 und KR-4983 bleiben gestrichen.
+verhindert einen nutzlosen Umbau. Der Push eines Tasks gibt den naechsten
+ungegateten Task ohne weitere Nutzeranweisung frei. Nur D1 und D2 benoetigen
+in dieser Kette eine ausdrueckliche Lauf-Freigabe; bedingte Tasks benoetigen
+ihr dokumentiertes positives Messgate. KR-4982 und KR-4983 bleiben
+gestrichen.
 
 ## Weiterer v0.49-Kritischer Pfad
 

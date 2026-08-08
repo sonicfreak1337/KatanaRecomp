@@ -99,18 +99,12 @@ Retention:                                       incomplete-root
 Portartefakt / game.exe / Screenshot:            keines / keine / keiner
 ```
 
-Daraus folgt:
-
-```text
-physische Auswertungen je eindeutigem Context:    1,083
-logische Evaluationen je eindeutigem Context:     2,547
-logische Evaluationen ohne neue physische Arbeit: 37.664
-```
-
-Cache-Churn und die fruehere Deep-Copy-Verstaerkung sind nicht mehr die
-Hauptursache. Der aktuelle P0 ist eine echte Contextual-State-Explosion mit
-zusatzlicher logischer Wiederzulassungsarbeit auf einem ueberwiegend
-seriellen kritischen Pfad.
+Diese Rohwerte duerfen noch nicht arithmetisch gekoppelt werden: `65.536`
+ist ein Per-Function-Budget, `25.728` Contexts und `27.872` physische
+Auswertungen sind laufweite Aggregate. Bis KR-4985 einen gemeinsamen Root-,
+Funktions- und Zaehlscope instrumentiert, bleiben daraus abgeleitete
+Contextquoten, Cache-Reuse- und Requeuezahlen Hypothesen. Der aktuelle P0
+liegt in Candidate-Resolution; seine dominante Kostenklasse entscheidet D1.
 
 ## Aktueller Datenfluss
 
@@ -222,6 +216,7 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 
 ```text
 KR-4985 Candidate-Resolution-Telemetrie
+  und D1-sichere Stale-/Cancellation-/Fehlerreihenfolge
   -> D1 / G1 nur nach Freigabe
   -> KR-4986 semantische Lanes und Provenienzabonnenten
   -> positiv gegatete KR-4987..KR-4990
@@ -239,7 +234,10 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
 D1 und D2 sind reale Sonic-Diagnoseexporte. KR-4981 ist der reale
-Produkt- und Integrationstest. Es gibt keine begleitende neue Testmatrix.
+Produkt- und Integrationstest. Ein Taskpush gibt den naechsten ungegateten
+Task ohne weitere Nutzeranweisung frei; nur D1 und D2 benoetigen in diesem
+Pfad eine ausdrueckliche Lauf-Freigabe. Es gibt keine begleitende neue
+Testmatrix.
 
 ## Produktmessvertrag KR-4981
 
@@ -311,6 +309,7 @@ Der NativeDisc-Kaltbuild-P0 ist erst geschlossen, wenn:
 4. Executor und Speicherhaushalt den real vorhandenen Parallelismus nutzen;
 5. Cacheinvalidierung nur semantisch betroffene Ebenen trifft;
 6. kein Performancepfad Analyse- oder AOT-Abdeckung reduziert;
-7. KR-4993 alle bestaetigten Findings geschlossen hat; und
+7. KR-4993 alle bestaetigten Source-Findings geschlossen und Limit-, Stale-,
+   Cancellation- sowie `IncompleteRoot`-Pfade fail-closed gehalten hat; und
 8. KR-4981 einen vollstaendigen Sonic-Kaltport in hoechstens acht Minuten
    erzeugt oder einen engeren typisierten Produktblocker belegt.

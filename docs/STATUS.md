@@ -55,19 +55,19 @@ Recompiler-, Runtime- oder Produktsemantik.
 
 ## Aktueller P0
 
-Der terminale v56-Befund schliesst Cache-Churn und die fruehere unnoetige
-Deep-Copy-Verstaerkung als verbleibende Hauptursache weitgehend aus.
+Der terminale v56-Befund meldet null Eviction-Recomputes und liefert damit
+keinen Beleg fuer Cache-Eviction als verbleibende Hauptursache. Andere
+Kostenklassen werden erst durch KR-4985/D1 getrennt.
 
-```text
-physische Auswertungen je eindeutigem Context:    1,083
-logische Evaluationen je eindeutigem Context:     2,547
-logische Evaluationen ohne neue physische Arbeit: 37.664
-Anteil physischer Erstberechnungen:                rund 92,3 Prozent
-```
+Das `65.536`-Limit ist ein Per-Function-Budget; `25.728` Contexts und
+`27.872` physische Auswertungen sind laufweite Aggregate. Ein gemeinsamer
+Root-, Funktions- und Zaehlscope ist noch nicht belegt. Die bisher daraus
+abgeleiteten Werte `2,547` und `37.664` sind bis D1 Hypothesen und werden
+nicht als Messresultate fuer Cache-Reuse oder Requeue-Arbeit verwendet.
 
-Der offene P0 ist eine echte Candidate-Resolution-/Contextual-State-
-Explosion mit erheblicher logischer Wiederzulassungsarbeit auf einem
-ueberwiegend seriellen kritischen Pfad.
+Der offene P0 liegt in Candidate-Resolution. Ob Contextidentitaet,
+Wiederzulassung, Per-Context-Kosten oder Scheduling den Lauf dominieren,
+entscheidet erst die gleich scoped KR-4985-/D1-Telemetrie.
 
 Eine Erhoehung des 65.536er-Budgets, mehr Cache oder mehr Threads ist kein
 Fix. Die Arbeit muss semantisch reduziert und kausal korrekt eingeplant
@@ -158,6 +158,7 @@ KR-4985 - Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie
 
 Der Task wird implementiert, seine betroffenen Progress-,
 Function-Value-, Cache-Key-, Binding-, Budget-, Retention- und Terminalpfade
-werden reviewt, bestaetigte Findings werden geschlossen und der Task wird
-direkt auf `main` gepusht. Erst danach darf D1 auf ausdrueckliche Freigabe
-laufen.
+werden reviewt. Insbesondere werden Stale-/Cancellationversionen vor
+`item.error` und jeder terminalen Publikation geprueft. Bestaetigte Findings
+werden geschlossen und der Task wird direkt auf `main` gepusht. Erst danach
+darf D1 auf ausdrueckliche Freigabe laufen.

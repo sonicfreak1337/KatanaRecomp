@@ -48,17 +48,16 @@ Resolution-Epoch-Retention:                     incomplete-root
 Portartefakt / game.exe / Screenshot:           keines / keine / keiner
 ```
 
-Daraus folgen:
+Die Rohwerte besitzen noch keine belegte gemeinsame Zaehldomaene:
+`65.536` ist ein Per-Function-Budget, `25.728` Contexts und `27.872`
+physische Auswertungen sind Laufaggregate. Bis KR-4985 Root, Funktion und
+Zaehlscope gemeinsam instrumentiert, sind Quotienten und Differenzen daraus
+keine Messwerte. Insbesondere sind `2,547` logische Evaluationen je Context
+und `37.664` Evaluationen ohne neue physische Arbeit nur Hypothesen.
 
-```text
-physische Auswertungen je eindeutigem Context:    1,083
-logische Evaluationen je eindeutigem Context:     2,547
-logische Evaluationen ohne neue physische Arbeit: 37.664
-Anteil physischer Erstberechnungen:                rund 92,3 Prozent
-```
-
-Cache-Churn, Eviction-Recomputes und die fruehere unnoetige
-Deep-Copy-Verstaerkung sind nicht mehr die Hauptursache. Der offene P0 ist:
+Cache-Eviction ist mit null Recomputes nicht als Hauptursache belegt. Der
+offene P0 wird bis D1 als folgendes Kostenmodell untersucht, nicht als bereits
+bewiesene Zerlegung ausgegeben:
 
 ```text
 echte semantische Contextmenge
@@ -69,10 +68,10 @@ ueberwiegend serieller kritischer Scheduling-Span
 ```
 
 Der terminale Stand darf nicht mehr pauschal als „Root 0 scheiterte“
-bezeichnet werden. Bei `1/1191` ist Root 0 wahrscheinlich committed worden.
-Bis Rootindex, Rootadresse und limitierte Funktion terminal ausgegeben
-werden, gilt der Befund fuer die ersten schweren Candidate-Resolution-Roots
-allgemein.
+bezeichnet werden. `1/1191` identifiziert ohne terminal ausgegebenen
+Rootindex, Rootadresse und limitierte Funktion keinen konkreten Root als
+Fehlerursache. Bis KR-4985 diese Identitaet ausgibt, gilt der Befund fuer den
+Candidate-Resolution-Pfad allgemein.
 
 ## Nicht im Umfang
 
@@ -115,6 +114,9 @@ allgemein.
    wiederverwendbares Analyseartefakt werden.
 10. **AOT-only bleibt verbindlich.** Kein Interpreter, JIT, Runtime-Dekoder
     oder Emulationsfallback uebernimmt fehlende Analysearbeit.
+11. **Fehler folgen der Version.** Ein Batchresultat wird vor `item.error`,
+    Cancellationwirkung und terminaler Publikation auf Stale-Versionen
+    geprueft. Ein veralteter Fehler darf keinen aktuellen Root beenden.
 
 ## Diagnosegates
 
@@ -138,7 +140,12 @@ D1 identifiziert mindestens:
 - Snapshot-, Key-, Apply-/Merge-, Evidence- und Commitkosten;
 - Full-State-, Projected-Lens- und Provenienz-Cardinalitaet.
 
-### D2 zu Beginn von KR-4991
+D1 darf erst starten, nachdem KR-4985 alle Resultatannahmepfade so
+geschlossen hat, dass Stale-/Cancellationpruefung vor Fehlerbehandlung und
+Publikation erfolgt. Andernfalls waere der Diagnoseexport selbst nicht
+vertrauenswuerdig.
+
+### D2 vor der Entscheidung ueber KR-4991
 
 D2 folgt erst nach KR-4986 und allen durch G1 aktivierten Tasks KR-4987 bis
 KR-4990. Es misst denselben realen Sonic-Pfad und entscheidet, ob hinter der
@@ -204,6 +211,8 @@ Betroffene Pfade fuer das Review:
 - `make_function_evaluation_cache_key()`;
 - `apply_call()` und `merge_state()`;
 - Root-, Budget-, Retention- und Terminalpfade.
+- Batchresultatannahme, Dependency-/Snapshot-Versionen, `item.error`,
+  Cancellation und gezielte Stale-Neuplanung.
 
 Abschluss:
 
@@ -212,6 +221,8 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
 Danach darf D1 separat freigegeben werden. Keine neue Testinfrastruktur.
+Vor D1 muss ein stale oder gecanceltes Resultat weder publizieren noch ueber
+seinen veralteten Fehler einen aktuellen Root beenden koennen.
 
 ### KR-4986 - Semantische Lanes und Provenienzabonnenten
 
@@ -358,16 +369,21 @@ Pflichtumfang:
 - getrennte Zaehldomaenen;
 - D1-/D2-Ergebnisse.
 
-Freigabebedingungen:
+Quellseitige Freigabebedingungen:
 
 - keine bestaetigten offenen Findings;
 - keine reduzierte Analyse- oder AOT-Abdeckung;
-- keine `contextual_return_context_limited_functions`;
-- keine `contextual_return_evaluation_limited_functions`;
-- kein `resolution_root_logical_budget_exhausted`;
-- kein `IncompleteRoot`;
+- alle Context-, Evaluations- und Rootbudgetpfade bleiben fail-closed und
+  terminal typisiert;
+- `IncompleteRoot` bleibt unpublizierbar und nicht wiederverwendbar;
+- kein stale oder gecanceltes Resultat kann publizieren oder einen aktuellen
+  Root ueber einen veralteten Fehler beenden;
 - jeder schwere Root terminal identifizierbar;
 - Push auf `main`, danach KR-4981.
+
+Die globale Abwesenheit der Limitmetriken und von `IncompleteRoot` ist erst
+im vollstaendigen KR-4981-Port beweisbar. D1 und D2 sind begrenzte
+Diagnoseexporte und ersetzen diesen Produktnachweis nicht.
 
 ### KR-4981 - Sonic-Produktgate
 

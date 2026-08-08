@@ -33,6 +33,9 @@ Task implementieren
   Scope-Erweiterung ableiten.
 - Die festgelegte Taskreihenfolge bleibt verbindlich. Erst der Push des
   reviewten Tasks auf `main` gibt den naechsten Task frei.
+- Dieser Push ist zugleich die Freigabe des naechsten Tasks. Dafuer ist keine
+  weitere Nutzeranweisung erforderlich. Ausdruecklich freizugebende Laeufe
+  und bedingte Messgates bleiben davon unberuehrt.
 
 ## Sonic ist der Test
 

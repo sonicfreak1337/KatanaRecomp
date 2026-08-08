@@ -4,17 +4,21 @@ Aktuelle Pre-Alpha-Version: `0.49.0`
 
 Aktueller funktionaler Source-Checkpoint: `a521999`, Runtime-ABI 87,
 Analyzer-ABI 31,
-Application-Contract 8 und Portprojektvertrag 75. Die erneute unabhaengige
-Root-0-Pruefung fand keinen neuen bestaetigten P0/P1-Soundnessfehler, aber der
-v56-Messstand bleibt ein P0-Performanceblocker: `9.135` eindeutige Contexts,
-`11.279` physische Auswertungen und nur etwa `1,073` effektiv genutzte Kerne
-halten den kanonischen Fortschritt bei `0/1191`. Ein neues Portartefakt, ein
-Sonic-Lauf und ein neuer Screenshot existieren aus diesem Stand nicht.
+Application-Contract 8 und Portprojektvertrag 75. Der terminale v56-Stand
+bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
+`1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
+`65.536`, `25.728` laufweit gemeldeten Contexts und `27.872` laufweit
+gemeldeten physischen Auswertungen. Diese Zaehldomaenen sind noch nicht
+gemeinsam scoped und duerfen bis KR-4985 nicht zu Requeue- oder
+Per-Context-Messwerten verrechnet werden. Ein neues Portartefakt, eine
+`game.exe` und ein neuer Screenshot existieren aus diesem Stand nicht.
 
 Als naechstes sind ausschliesslich der gegatete Kernpfad KR-4985 bis KR-4991
-und danach KR-4993 vorgesehen; jeder Task und die Diagnoseexporte D1/D2
-benoetigen jeweils eine neue ausdrueckliche Nutzeranweisung. Erst danach ist
-der erste KR-4981-Produktlauf zulaessig. KR-4992 kommt nur nach einem
+und danach KR-4993 vorgesehen. Jeder reviewte Task wird direkt auf `main`
+gepusht; dieser Push gibt den naechsten ungegateten Task ohne weitere
+Nutzeranweisung frei. Nur D1 und D2 benoetigen eine ausdrueckliche
+Lauf-Freigabe, bedingte Tasks ihr positives G1-/G2-Messgate. Nach KR-4993
+folgt KR-4981 als voller Produktnachweis. KR-4992 kommt nur nach einem
 verfehlten KR-4981 und positivem Restkosten-/RAM-Gate infrage. Der
 verbindliche Folgeplan steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),

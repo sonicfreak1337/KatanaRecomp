@@ -29,6 +29,8 @@ Verbindlich ist dabei:
 - es gibt keine separate standardmaessige Test-, Verifikations-, Fix- oder
   Integrationsrunde zwischen Review und Push;
 - erst der Push des reviewten Tasks gibt den naechsten Task frei;
+- der Push ist die Freigabe; der naechste ungegatete Task benoetigt keine
+  weitere Nutzeranweisung;
 - ein Review darf ausserhalb des Taskscopes liegende Beobachtungen notieren,
   daraus aber nicht eigenmaechtig neue Tasks oder Scope ableiten.
 
@@ -98,7 +100,12 @@ aktueller Diagnosebefund:
 ```
 
 Der v56-Lauf ist Diagnoseevidenz, kein Produktnachweis. Historische Ports sind
-kein Beweis fuer den aktuellen Source.
+kein Beweis fuer den aktuellen Source. Die `65.536` Evaluationen sind ein
+Per-Function-Budget, `25.728` Contexts und `27.872` physische Auswertungen
+sind laufweite Aggregate. Bis KR-4985 dieselben Root-, Funktions- und
+Zaehlscope-Dimensionen ausgibt, duerfen daraus weder `37.664` vermeintlich
+physiklose Evaluationen noch `2,547` logische Evaluationen je Context als
+Messwert abgeleitet werden.
 
 ## Verbindliche Reihenfolge
 
@@ -121,7 +128,10 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
 D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix.
-KR-4982 und KR-4983 bleiben gestrichen.
+Der Push gibt jeweils den naechsten ungegateten Task frei. Nur D1 und D2
+benoetigen eine ausdrueckliche Lauf-Freigabe; KR-4987 bis KR-4991 werden nur
+durch ihre positiven G1-/G2-Messgates aktiviert. KR-4982 und KR-4983 bleiben
+gestrichen.
 
 ---
 
@@ -154,8 +164,9 @@ Quellpfade werden in den Tasks KR-4985 bis KR-4993 geschlossen und reviewt.
 Prioritaet: P0 Performance
 
 Status: Der gemeinsame Executor ist quellseitig implementiert. v56 belegt
-jedoch, dass der produktive Candidate-Resolution-Pfad wegen schmaler
-Frontiers und zu vieler semantischer Contexts weiterhin fast seriell ist.
+jedoch einen terminalen Candidate-Resolution-Budgetverlust. Ob
+Contextidentitaet, Wiederzulassung, Per-Context-Kosten oder kritischer Span
+dominiert, wird erst durch KR-4985/D1 getrennt.
 
 ### Abschlussbedingungen
 
@@ -172,9 +183,9 @@ Frontiers und zu vieler semantischer Contexts weiterhin fast seriell ist.
 Prioritaet: P0 Performance
 
 Status: Quellseitig implementiert. v56 belegt, dass weitere Cachekapazitaet
-den aktuellen Hauptfehler nicht loest: Eviction-Recomputes bleiben null,
-waehrend Contextmenge und logische Wiederzulassungen das Budget
-erschoepfen.
+ohne belegte Eviction-Recomputes keine begruendete Hauptloesung ist. Welche
+Zaehldomaene das Per-Function-Budget erschoepft, wird erst durch KR-4985/D1
+gleich scoped ermittelt.
 
 ### Abschlussbedingungen
 
@@ -210,11 +221,18 @@ Evidence und Commit getrennt sichtbar machen.
 - Bindingzahl, Hitposition, Equality-/Copy-/Mergearbeit und Stategroesse;
 - aggregierte Full-State-, Projected-Lens- und Provenienz-Digests;
 - keine Rohstates, Gastwerte oder per-Lane-Retaillogs.
+- D1-sichere Resultatannahme: Dependency-/Snapshot-Version wird vor
+  `item.error` und vor jeder terminalen Publikation geprueft; ein veraltetes
+  Batchresultat wird verworfen und gezielt neu eingeplant, statt den Root
+  mit seinem inzwischen gegenstandslosen Fehler zu beenden;
+- Cancellation-, Fehler- und Stale-Reihenfolge in allen Resultatpfaden.
 
 ### Review- und Abschlussvertrag
 
 - Telemetrie darf die kanonische Semantik nicht veraendern;
 - Drop-, Vollstaendigkeits- und Budgetpfade werden im Quellreview verfolgt;
+- stale oder gecancelte Resultate koennen weder Summary/Evidence publizieren
+  noch ueber `item.error` einen aktuellen Root terminal beenden;
 - D1 wird nur nach ausdruecklicher Freigabe als realer Sonic-
   Diagnoseexport ausgefuehrt;
 - D1 endet am ersten vollstaendigen schweren Root oder an den allgemeinen
@@ -297,7 +315,7 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 
 Prioritaet: bedingtes P1 Performance
 
-Abhaengigkeiten: positives KR-4988-Kostengate, KR-4986
+Abhaengigkeiten: positives, durch D1 ermitteltes G1-Kostengate, KR-4986
 
 ### Ziel
 
@@ -324,7 +342,7 @@ kanonische Identitaeten senken.
 
 Prioritaet: bedingtes P1 Performance
 
-Abhaengigkeiten: positives KR-4989-Kostengate, KR-4986
+Abhaengigkeiten: positives, durch D1 ermitteltes G1-Bindinggate, KR-4986
 
 ### Ziel
 
@@ -351,7 +369,8 @@ konservativen Join-/Subsumption-Fallback zu veraendern.
 
 Prioritaet: bedingtes P1 Performance
 
-Abhaengigkeiten: positives Kosten-/Reusegate, KR-4986
+Abhaengigkeiten: positives, durch D1 ermitteltes G1-Kosten-/Reusegate,
+KR-4986
 
 ### Ziel
 
@@ -439,19 +458,29 @@ bestaetigte Finding vor dem Push schliessen.
   Requeue und Provenienzabonnent als getrennte Zaehldomaenen;
 - D1-/D2-Befunde konsistent zusammenfassen.
 
-### Abschlussbedingungen
+### Quellseitige Freigabebedingungen
 
 - alle bestaetigten Findings geschlossen und erneut in den betroffenen
   Pfaden reviewt;
 - keine reduzierte Analyse-, Resolution-, Guarded-AOT- oder
   Completenessabdeckung;
-- keine `contextual_return_context_limited_functions`;
-- keine `contextual_return_evaluation_limited_functions`;
-- kein `resolution_root_logical_budget_exhausted`;
-- kein `IncompleteRoot` im freizugebenden Candidate-Resolution-Endstand;
+- Context-, Evaluations- und logische Rootbudgets bleiben autoritativ,
+  fail-closed und terminal typisiert;
+- `IncompleteRoot` kann weder publiziert noch als wiederverwendbare Epoche
+  behalten werden;
+- Stale-, Cancellation- und Fehlerreihenfolge kann weder alte Resultate
+  publizieren noch aktuelle Arbeit durch einen veralteten Fehler beenden;
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
 - nach dem Push auf `main` ist KR-4981 freigegeben.
+
+D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
+`1.191` Roots ab. Die globale Abwesenheit von
+`contextual_return_context_limited_functions`,
+`contextual_return_evaluation_limited_functions`,
+`resolution_root_logical_budget_exhausted` und `IncompleteRoot` ist deshalb
+keine beweisbare KR-4993-Bedingung. Sie wird erst in KR-4981 am
+vollstaendigen Produktport abgenommen.
 
 ---
 

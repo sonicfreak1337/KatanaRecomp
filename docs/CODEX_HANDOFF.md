@@ -11,10 +11,11 @@ aelteren Prozessbeschreibungen.
 2. `ROADMAP.md`
 3. `docs/STATUS.md`
 4. `docs/TASKS.md`
-5. `CHANGELOG.md`
-6. `docs/SONIC_ADVENTURE_ACCEPTANCE.md`
-7. der fuer den Task relevante Detailplan
-8. betroffene Header, Implementierungen und vorhandene Tests, sofern deren
+5. `docs/TASK_ID_REGISTRY.md`
+6. `CHANGELOG.md`
+7. `docs/SONIC_ADVENTURE_ACCEPTANCE.md`
+8. der fuer den Task relevante Detailplan
+9. betroffene Header, Implementierungen und vorhandene Tests, sofern deren
    bestehender Vertrag durch den Task beruehrt wird
 
 ## Projektweiter Taskablauf
@@ -63,6 +64,8 @@ Tasks noch eine Scope-Erweiterung ableiten.
 - Vor jedem Schreibvorgang pruefen, dass keine fremden oder neueren
   Aenderungen ueberschrieben werden.
 - Erst der Push des reviewten Tasks gibt den naechsten Task frei.
+- Der Push ist die Freigabe; fuer den naechsten ungegateten Task ist keine
+  weitere Nutzeranweisung erforderlich.
 - Ein Commit beschreibt genau den abgeschlossenen Task oder, bei einer
   reinen Dokumentationsaenderung, genau den geaenderten Projektvertrag.
 
@@ -303,20 +306,33 @@ Retention:                                     incomplete-root
 Portartefakt / game.exe / Screenshot:          keines / keine / keiner
 ```
 
-Cache-Churn und Deep-Copy-Verstaerkung sind nicht mehr die Hauptursache. Der
-P0 ist eine echte Contextual-State-Explosion mit erheblicher logischer
-Wiederzulassungsarbeit auf einem ueberwiegend seriellen kritischen Pfad.
+Null Eviction-Recomputes liefern keinen Beleg fuer Cache-Eviction als
+Hauptursache. Der P0 liegt im Candidate-Resolution-Pfad. Das
+Per-Function-Budget von `65.536`
+und die laufweiten Aggregate von `25.728` Contexts und `27.872` physischen
+Auswertungen besitzen noch keinen belegten gemeinsamen Root-/Funktionsscope.
+Logische Wiederzulassungsarbeit und Kosten je Context bleiben daher bis zur
+KR-4985-Instrumentierung Hypothesen.
 
 Der verbindliche Einstieg lautet:
 
 ```text
-KR-4985 -> KR-4986 -> positiv gegatete KR-4987..KR-4990
+KR-4985 -> D1/G1 nur nach Lauf-Freigabe -> KR-4986
+  -> positiv gegatete KR-4987..KR-4990
+  -> D2/G2 nur nach Lauf-Freigabe
   -> KR-4991 nur bei positivem G2 -> KR-4993 -> KR-4981
 ```
 
+KR-4985 schliesst vor D1 die bekannte Resultatannahmeluecke: Stale- und
+Cancellationvalidierung erfolgt vor `item.error` und vor jeder terminalen
+Publikation. KR-4993 prueft diese und alle aktivierten Sourcepfade, kann aber
+ohne vollen Produktlauf keine globale Abwesenheit von Limit- oder
+`IncompleteRoot`-Metriken behaupten. Diese Abnahme gehoert zu KR-4981.
+
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
 Testmatrix. Jeder Implementierungstask folgt dem repositoryweiten
-Dreischritt und wird direkt auf `main` gepusht. KR-4993 ist ein
+Dreischritt und wird direkt auf `main` gepusht; sein Push gibt den naechsten
+ungegateten Task frei. KR-4993 ist ein
 Abschlussreview ohne neue Tests oder Produktlauf. Erst KR-4981 erzeugt den
 naechsten vollstaendigen Sonic-Port.
 
