@@ -31,8 +31,7 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  60638dd71d8a70d70a58aaecb3dbad9ec318bf62
-  plus gemeinsamer KR-4985/KR-4986-Bugfix dieses Commits
+  0ae993f8f59db1fc866ce5e77874015b610a8bd5
 
 aktueller realer Diagnosebefund:
   Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
@@ -46,7 +45,7 @@ aktueller realer Diagnosebefund:
   kein Portartefakt, keine game.exe, kein Screenshot
 
 aktueller Dokumentationsstand:
-  Source-Tasks KR-4985/KR-4986 abgeschlossen; Produkt-D1 unentschieden
+  Source-Tasks KR-4985/KR-4986/KR-4993 abgeschlossen; Produkt-D1 unentschieden
 ```
 
 Source-, Diagnose- und Produktevidenz duerfen nicht als derselbe Fortschritt
@@ -116,18 +115,17 @@ ersten schweren Candidate-Resolution-Roots.
 ## Aktueller kritischer Pfad
 
 ```text
-KR-4985/KR-4986 source-seitig abgeschlossen
-Naechster Schritt nach diesem Bugfix-Push:
-  -> origin/main synchronisieren
-  -> Roadmap vollstaendig neu bewerten
+KR-4985/KR-4986/KR-4993 source-seitig abgeschlossen
+  -> nach diesem KR-4993-Dokumentationspush: KR-4981
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und
 positivem Restkosten-/RAM-Gate. KR-4982 und KR-4983 bleiben gestrichen.
 
-D1 und D2 sind reale Sonic-Diagnoseexporte, keine Testmatrix. KR-4987 bis
-KR-4990, KR-4991 und KR-4993 werden durch den unvollstaendigen D1-Lauf nicht
-vorweg aktiviert. KR-4981 bleibt bis zur Roadmap-Neubewertung offen.
+D1 und D2 sind reale Sonic-Diagnoseexporte, keine Testmatrix. D1/G1 bleibt
+wegen der nichtterminalen Root-0-Evidenz unentschieden; D2/G2 wurde nicht
+ausgefuehrt. KR-4987 bis KR-4991 bleiben inaktiv. KR-4981 ist der naechste
+freigegebene Produktgate nach diesem Dokumentationspush.
 
 ## Quellseitig vorhandene Hauptvertraege
 
@@ -182,9 +180,9 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 ## Naechster Schritt
 
 ```text
-Nach diesem Bugfix-Push origin/main synchronisieren und die Roadmap
-vollstaendig neu bewerten.
+Nach diesem KR-4993-Dokumentationspush KR-4981 als einzigen naechsten
+Produktgate ausfuehren; die Produkt-P0-Abnahme bleibt bis dahin offen.
 ```
 
-Ein zweiter D1-Lauf und eine Aktivierung von KR-4987 bis KR-4990 gehoeren nicht
-zu diesem Bugfix-Task.
+Ein zweiter D1-Lauf, D2/G2 und eine Aktivierung von KR-4987 bis KR-4991 gehoeren
+nicht zu diesem Dokumentationspass.

@@ -12,6 +12,8 @@
   KR-4985-D1-Telemetrie ist produktiv, aber ausschliesslich bei expliziter
   Detailtelemetrie opt-in aktiv und beeinflusst weder Analyse noch Cache oder
   kanonische Publikation.
+- KR-4993 schliesst den vollstaendigen Candidate-Resolution-Source-Endreview
+  ohne offene Source-Findings ab; KR-4981 bleibt das naechste Produktgate.
 - KR-4984 schliesst die vollstaendige P0/P1-Gesamtpruefung quellseitig ohne
   offenen Befund. Der Function-Evaluation-Cache bindet forwarded Register-
   Live-ins; optionale Whole-Export-Cachepublikation ist fail-open; lange

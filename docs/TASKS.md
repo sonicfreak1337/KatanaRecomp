@@ -84,8 +84,7 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  60638dd71d8a70d70a58aaecb3dbad9ec318bf62
-  plus gemeinsamer KR-4985/KR-4986-Bugfix dieses Commits
+  0ae993f8f59db1fc866ce5e77874015b610a8bd5
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -110,9 +109,8 @@ Messwert abgeleitet werden.
 ## Verbindliche Reihenfolge
 
 ```text
-KR-4985 und KR-4986: source-seitig abgeschlossen
-  -> nach diesem Bugfix-Push origin/main synchronisieren
-  -> Roadmap neu bewerten
+KR-4985, KR-4986 und KR-4993: source-seitig abgeschlossen
+  -> nach diesem KR-4993-Dokumentationspush: KR-4981
   -> D1/G1 bleibt wegen des unvollstaendigen Laufs unentschieden
 ```
 
@@ -123,10 +121,10 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
 D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix. Der
-einzige freigegebene D1-Lauf wurde vor dem vollstaendigen schweren Root durch
-einen privaten Supervisor-I/O-Fehler beendet; D1/G1 ist deshalb fail-closed
-und unentschieden. KR-4987 bis KR-4991 bleiben bis zu einer spaeteren
-Roadmap-Neubewertung nicht aktiviert. KR-4982 und KR-4983 bleiben gestrichen.
+einzige freigegebene D1-Lauf war nichtterminal; D1/G1 bleibt fail-closed und
+unentschieden. D2/G2 wurde nicht ausgefuehrt. KR-4987 bis KR-4991 bleiben
+inaktiv; nach diesem KR-4993-Dokumentationspush ist KR-4981 der naechste
+freigegebene Produktgate. KR-4982 und KR-4983 bleiben gestrichen.
 
 ---
 
@@ -158,10 +156,10 @@ Quellpfade werden in den Tasks KR-4985 bis KR-4993 geschlossen und reviewt.
 
 Prioritaet: P0 Performance
 
-Status: Der gemeinsame Executor ist quellseitig implementiert. v56 belegt
-jedoch einen terminalen Candidate-Resolution-Budgetverlust. Ob
-Contextidentitaet, Wiederzulassung, Per-Context-Kosten oder kritischer Span
-dominiert, wird erst durch KR-4985/D1 getrennt.
+Status: Der gemeinsame Executor ist quellseitig implementiert. Die historische
+v56-Ausgabe besass noch keinen gemeinsamen Scope fuer Contextidentitaet,
+Wiederzulassung, Per-Context-Kosten und kritischen Span; die Source-Trennung
+ist durch KR-4985/KR-4986 abgeschlossen, waehrend D1/G1 unentschieden bleibt.
 
 ### Abschlussbedingungen
 
@@ -178,9 +176,9 @@ dominiert, wird erst durch KR-4985/D1 getrennt.
 Prioritaet: P0 Performance
 
 Status: Quellseitig implementiert. v56 belegt, dass weitere Cachekapazitaet
-ohne belegte Eviction-Recomputes keine begruendete Hauptloesung ist. Welche
-Zaehldomaene das Per-Function-Budget erschoepft, wird erst durch KR-4985/D1
-gleich scoped ermittelt.
+ohne belegte Eviction-Recomputes keine begruendete Hauptloesung ist. Die
+historische v56-Ausgabe besass noch keinen gemeinsamen Scope fuer die
+Budgetzaehldomaene; KR-4985 ist abgeschlossen, D1/G1 bleibt unentschieden.
 
 ### Abschlussbedingungen
 
@@ -195,7 +193,8 @@ gleich scoped ermittelt.
 
 Prioritaet: P0 Performance-Diagnose
 
-Abhaengigkeiten: KR-4974, Arbeitsbasis `60638dd71d8a70d70a58aaecb3dbad9ec318bf62`
+Abhaengigkeiten: KR-4974, funktionaler Source-Checkpoint
+`0ae993f8f59db1fc866ce5e77874015b610a8bd5`
 
 Status: Source-seitig abgeschlossen durch den gemeinsamen Candidate-Resolution-
 Explosionsfix. D1-Telemetrie ist explizit opt-in produktiv; die begrenzte
@@ -236,7 +235,7 @@ Evidence und Commit getrennt sichtbar machen.
 - D1 wurde einmal freigegeben, erreichte aber weder den historisch
   limitierenden Root noch einen vollstaendigen schweren Root; D1/G1 bleibt
   daher unentschieden;
-- KR-4987 bis KR-4990 werden durch diesen unvollstaendigen Lauf nicht aktiviert;
+- KR-4987 bis KR-4991 werden durch diesen unvollstaendigen Lauf nicht aktiviert;
 - keine neue Telemetrie-Testmatrix oder synthetische Ersatzabnahme.
 
 ---
@@ -438,18 +437,26 @@ publizieren.
 
 ---
 
-## [ ] KR-4993 - Abschlussreview der Candidate-Resolution-Pfade
+## [x] KR-4993 - Abschlussreview der Candidate-Resolution-Pfade
 
 Prioritaet: P0, letztes Sourcegate vor KR-4981
 
 Abhaengigkeiten: KR-4985, KR-4986 und alle durch G1/G2 aktivierten Tasks bis
 KR-4991
 
+Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
+`0ae993f8f59db1fc866ce5e77874015b610a8bd5`. Der vollstaendige Sol-Endreview
+des unmittelbar vorherigen Explosionsbug-Diffs wurde wiederverwendet; alle
+bestaetigten Findings sind geschlossen und es gibt keine offenen Source-
+Findings. Nicht aktivierte KR-4987 bis KR-4991 wurden nicht als geaendert oder
+reviewpflichtig behauptet.
+
 ### Ziel
 
-Alle geaenderten Context-, Read-Lens-, Interning-, Binding-, Dependency-,
-Cache-, Evidence-, Budget- und Schedulingpfade end-to-end reviewen und jedes
-bestaetigte Finding vor dem Push schliessen.
+Der vollstaendige Endreview der aktivierten/geaenderten Context-, Cache-,
+Evidence- und Budgetpfade sowie die Pruefung der unveraendert konservativen
+FullState-, Binding-, Dependency- und Scheduling-Fallbackgrenzen ist
+abgeschlossen; jedes bestaetigte Finding wurde vor `0ae993f` geschlossen.
 
 ### Umfang
 
@@ -476,7 +483,8 @@ bestaetigte Finding vor dem Push schliessen.
   publizieren noch aktuelle Arbeit durch einen veralteten Fehler beenden;
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
-- nach dem Push auf `main` ist KR-4981 freigegeben.
+- nach diesem KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene
+  Produktgate.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von

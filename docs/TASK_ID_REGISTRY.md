@@ -65,15 +65,14 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Die Arbeitsbasis fuer den aktuellen Source-Stand ist
-`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus der gemeinsame
-KR-4985/KR-4986-Bugfix dieses Commits. Historisch erzeugte v56 kein Portartefakt und
+Der funktionale Source-Checkpoint fuer den aktuellen Source-Stand ist
+`0ae993f8f59db1fc866ce5e77874015b610a8bd5`. Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
-keinen erreichten Root 1; D1/G1 bleibt unentschieden. Der naechste Schritt ist
-Nach diesem Bugfix-Push folgen origin/main-Synchronisierung und
-Roadmap-Neubewertung. KR-4987
-bis KR-4990 bleiben bis dahin inaktiv.
+keinen erreichten Root 1; D1/G1 bleibt unentschieden. Nach diesem
+KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene
+Produktgate; D2/G2 wurde nicht ausgefuehrt und KR-4987 bis KR-4991 bleiben
+inaktiv.
 
 | ID | Titel | Status |
 |---|---|---|
@@ -107,7 +106,7 @@ bis KR-4990 bleiben bis dahin inaktiv.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 offen als erster voller Produktmesspunkt nach KR-4993; je reviewtem Sourcekandidaten hoechstens ein Lauf, keine Vorab-Buildmatrix |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 naechster freigegebener Produktmesspunkt nach dem KR-4993-Dokumentationspush; je reviewtem Sourcekandidaten hoechstens ein Lauf, keine Vorab-Buildmatrix |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
@@ -119,7 +118,7 @@ bis KR-4990 bleiben bis dahin inaktiv.
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kosten- und 50-Prozent-Reusegate, sonst Full-Rebuild |
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach KR-4993 vor Retry |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | geplant P0 als quellseitiger Gate-Vorbereitungstask vor der globalen Produktabnahme in KR-4981 |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, keine offenen Source-Findings; globale Produktabnahme bleibt KR-4981 |
 
 ## Aktuelle Meilensteinzuordnung
 

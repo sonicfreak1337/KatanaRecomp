@@ -110,8 +110,7 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionaler Source-Checkpoint:
-  Arbeitsbasis 60638dd71d8a70d70a58aaecb3dbad9ec318bf62
-  plus gemeinsamer KR-4985/KR-4986-Bugfix dieses Commits
+  0ae993f8f59db1fc866ce5e77874015b610a8bd5
 
 aktueller realer Diagnosebefund:
   Sonic-v56, terminal nach 1:28:24 mit Exitcode 5
@@ -139,7 +138,7 @@ Transport- und Fortschrittsevidenz, erreichte aber weder den historisch
 limitierenden Root 1 noch einen vollstaendigen schweren Root. Nach einem
 privaten Supervisor-I/O-Fehler war die temporaere JSONL bis `185,586 s`
 lesbar/gespuelt, aber ohne terminalen Datensatz und ohne atomare Publikation.
-D1/G1 ist daher strikt fail-closed und unentschieden; KR-4987 bis KR-4990
+D1/G1 ist daher strikt fail-closed und unentschieden; KR-4987 bis KR-4991
 bleiben inaktiv.
 
 ## Aktueller P0: Candidate-Resolution / ungeklaerte Context- und Requeuekosten
@@ -186,24 +185,22 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | alle bestaetigten Source-Findings geschlossen; Limit-, Stale-, Cancellation- und `IncompleteRoot`-Pfade bleiben fail-closed und terminal sichtbar |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | vollstaendiger 24-Thread-Kaltport, Installation und realer Lauf belegen oder verfehlen das Acht-Minuten-Ziel |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; keine offenen Source-Findings, Produktlimits bleiben KR-4981 vorbehalten |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | naechster freigegebener Task nach dem KR-4993-Dokumentationspush; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 
 Die Reihenfolge ist normativ:
 
 ```text
-KR-4985/KR-4986 source-seitig abgeschlossen
-Naechster Schritt nach diesem Bugfix-Push:
-  -> origin/main synchronisieren
-  -> Roadmap vollstaendig neu bewerten
+KR-4985/KR-4986 und KR-4993 source-seitig abgeschlossen
+  -> nach diesem KR-4993-Dokumentationspush: KR-4981
 ```
 
-D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue
-Testmatrix. Die einzige freigegebene D1-Evidenz ist nichtterminal und erlaubt
-keine G1-Entscheidung; dadurch wird kein bedingter Task aktiviert. Nach diesem
-Bugfix-Push folgen ausschliesslich origin/main-Synchronisierung und
-vollstaendige Roadmap-Neubewertung. KR-4982 und KR-4983 bleiben gestrichen.
+D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue Testmatrix.
+D1/G1 bleibt wegen der nichtterminalen Root-0-Evidenz unentschieden; D2/G2
+wurde nicht ausgefuehrt. KR-4987 bis KR-4991 bleiben inaktiv. Nach diesem
+KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene Produktgate;
+KR-4982 und KR-4983 bleiben gestrichen.
 
 ## Weiterer v0.49-Kritischer Pfad
 

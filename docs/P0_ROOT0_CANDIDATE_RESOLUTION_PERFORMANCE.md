@@ -2,8 +2,7 @@
 
 Status: Source-seitiger KR-4985/KR-4986-Fix abgeschlossen; Produkt-D1 bleibt
 unentschieden. Die Arbeitsbasis ist
-`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus den gemeinsamen
-KR-4985/KR-4986-Bugfix dieses Commits. Der terminale Sonic-v56-Diagnoselauf belegt eine
+`0ae993f8f59db1fc866ce5e77874015b610a8bd5`. Der terminale Sonic-v56-Diagnoselauf belegt eine
 echte Contextual-State-Explosion und keine fertige Produktartefakterzeugung.
 
 Dieses Dokument ergaenzt
@@ -386,11 +385,13 @@ Reviewschwerpunkte:
 
 D2 und Sonic bewerten die Wirkung. Keine Worker- oder Threadmatrix.
 
-### KR-4993 - Abschlussreview
+### KR-4993 - Abschlussreview [x]
 
 KR-4993 implementiert keine neue Testinfrastruktur und startet keinen
-Produktlauf. Es reviewt alle aktivierten Candidate-Resolution-Pfade end-to-
-end und schliesst jedes bestaetigte Finding vor dem Push auf `main`.
+Produktlauf. Der vollstaendige Sol-Endreview des unmittelbar vorherigen
+Explosionsbug-Diffs wurde wiederverwendet; alle bestaetigten Source-Findings
+sind geschlossen. Nicht aktivierte KR-4987 bis KR-4991 wurden nicht als
+geaendert oder reviewpflichtig behauptet.
 
 Pflichtumfang:
 
@@ -414,7 +415,8 @@ Quellseitige Freigabebedingungen:
 - kein stale oder gecanceltes Resultat kann publizieren oder einen aktuellen
   Root ueber einen veralteten Fehler beenden;
 - jeder schwere Root terminal identifizierbar;
-- Push auf `main`, danach KR-4981.
+- Nach diesem KR-4993-Dokumentationspush ist KR-4981 der naechste freigegebene
+  Produktgate.
 
 Die globale Abwesenheit der Limitmetriken und von `IncompleteRoot` ist erst
 im vollstaendigen KR-4981-Port beweisbar. D1 und D2 sind begrenzte
@@ -446,14 +448,14 @@ erneut KR-4993 und ein separat freigegebener KR-4981-Retry.
 ## Abhaengigkeitskette
 
 ```text
-KR-4985/KR-4986 source-seitig abgeschlossen
-  -> nach diesem Bugfix-Push origin/main synchronisieren
-  -> Roadmap vollstaendig neu bewerten
+KR-4985/KR-4986/KR-4993 source-seitig abgeschlossen
+  -> nach diesem KR-4993-Dokumentationspush: KR-4981
 ```
 
-Die einzige D1-Evidenz ist ein unvollstaendiger, nichtterminaler Root-0-Lauf.
-KR-4987 bis KR-4990 bleiben inaktiv; D2, KR-4991, KR-4993 und KR-4981 werden
-erst nach der Roadmap-Neubewertung wieder als moegliche Folgepfade bewertet.
+Die einzige D1-Evidenz ist ein unvollstaendiger, nichtterminaler Root-0-Lauf;
+D1/G1 bleibt unentschieden. D2/G2 wurde nicht ausgefuehrt. KR-4987 bis
+KR-4991 bleiben inaktiv; nach diesem Dokumentationspush ist KR-4981 der
+naechste freigegebene Produktgate.
 Keine neue Testmatrix ersetzt reale Produktgates.
 
 ## Abschlussdefinition
@@ -473,6 +475,6 @@ Der Candidate-Resolution-P0 ist erst geschlossen, wenn:
 5. keine unveraenderte semantische Version unbegruendet erneut Budget
    verbraucht;
 6. keine stale oder nichtkanonische Publikation moeglich ist;
-7. KR-4993 ohne offenes Finding endet; und
+7. KR-4993 ist ohne offenes Source-Finding abgeschlossen; und
 8. KR-4981 einen vollstaendigen Sonic-Port erzeugt oder einen engeren
    typisierten Produktblocker belegt.

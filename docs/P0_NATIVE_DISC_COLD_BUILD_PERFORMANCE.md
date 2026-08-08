@@ -1,16 +1,16 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
-Status: Aktiver uebergeordneter Performancevertrag. Die Arbeitsbasis ist
-`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus der gemeinsame
-KR-4985/KR-4986-Bugfix dieses Commits; der Produktgate
+Status: Aktiver uebergeordneter Performancevertrag. Der funktionale
+Source-Checkpoint ist `0ae993f8f59db1fc866ce5e77874015b610a8bd5`; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
-exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4981 ist
-bis KR-4993 gesperrt; KR-4992 bleibt ein bedingter Folgezweig nach einem
+exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4993 ist
+source-seitig abgeschlossen; KR-4981 ist der naechste freigegebene
+Produktgate. KR-4992 bleibt ein bedingter Folgezweig nach einem
 verfehlten Produktzeitgate.
 
 Der gemeinsame Candidate-Resolution-Explosionsfix erfuellt KR-4985 und
@@ -226,9 +226,8 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 ## Aktiver Taskpfad
 
 ```text
-KR-4985/KR-4986 source-seitig abgeschlossen
-  -> nach diesem Bugfix-Push origin/main synchronisieren
-  -> Roadmap vollstaendig neu bewerten
+KR-4985/KR-4986/KR-4993 source-seitig abgeschlossen
+  -> nach diesem KR-4993-Dokumentationspush: KR-4981
 ```
 
 Fuer jeden Implementierungstask gilt:
@@ -239,9 +238,10 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 
 D1 und D2 sind reale Sonic-Diagnoseexporte. KR-4981 ist der reale
 Produkt- und Integrationstest. Die vorliegende D1-Evidenz ist nichtterminal;
-KR-4987 bis KR-4990 bleiben inaktiv, und ein weiterer Folgepfad wird erst
-nach Bugfix-Push, origin/main-Synchronisierung und Roadmap-Neubewertung
-festgelegt. Es gibt keine begleitende neue Testmatrix.
+D1/G1 bleibt unentschieden, D2/G2 wurde nicht ausgefuehrt, und KR-4987 bis
+KR-4991 bleiben inaktiv. Nach diesem KR-4993-Dokumentationspush ist KR-4981
+der naechste freigegebene Produktgate. Es gibt keine begleitende neue
+Testmatrix.
 
 ## Produktmessvertrag KR-4981
 

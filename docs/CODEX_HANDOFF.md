@@ -287,9 +287,8 @@ Testmatrix.
 
 ## Aktueller P0-Handoff
 
-Die Arbeitsbasis fuer den aktuellen Candidate-Resolution-Pfad ist
-`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus der gemeinsame
-KR-4985/KR-4986-Bugfix dieses Commits.
+Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-
+Pfad ist `0ae993f8f59db1fc866ce5e77874015b610a8bd5`.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -311,8 +310,8 @@ Hauptursache. Der P0 liegt im Candidate-Resolution-Pfad. Das
 Per-Function-Budget von `65.536`
 und die laufweiten Aggregate von `25.728` Contexts und `27.872` physischen
 Auswertungen besitzen noch keinen belegten gemeinsamen Root-/Funktionsscope.
-Logische Wiederzulassungsarbeit und Kosten je Context bleiben daher bis zur
-KR-4985-Instrumentierung Hypothesen.
+Die historische v56-Ausgabe besass noch keinen gemeinsamen Root-, Funktions-
+und Zaehlscope; ihre Rohwerte bleiben getrennte historische Aggregate.
 
 Der gemeinsame Source-Fix ist fuer KR-4985 und KR-4986 abgeschlossen. Er
 behebt die historische Budgetfehlbelastung vor semantischer Deduplizierung
@@ -330,22 +329,23 @@ Die temporaere JSONL war nach dem Supervisor-I/O-Fehler bis `185,586 s`
 lesbar/gespuelt, aber ohne terminalen Datensatz und ohne atomare Publikation.
 Root 1 wurde nicht erreicht; D1/G1 ist deshalb fail-closed und unentschieden.
 
-Der verbindliche naechste Schritt nach diesem Bugfix-Push lautet:
+Der verbindliche naechste Schritt nach diesem KR-4993-Dokumentationspush lautet:
 
 ```text
-origin/main synchronisieren
-  -> Roadmap vollstaendig neu bewerten
+KR-4981 als naechsten freigegebenen Produktgate ausfuehren
 ```
 
-KR-4987 bis KR-4990 bleiben inaktiv. Candidate-Resolution-Gesamtzeit,
+KR-4987 bis KR-4991 bleiben inaktiv. Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
-sind ohne vollständigen schweren Root und den historischen Root 1 nicht
-entscheidbar. Ein zweiter D1-Lauf gehoert nicht zu diesem Bugfix-Task.
+sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
+entscheidbar. D2/G2 wurde nicht ausgefuehrt. Ein zweiter D1-Lauf gehoert
+nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
-Testmatrix. Nach diesem Bugfix-Push und der origin/main-Synchronisierung wird
-die Roadmap neu bewertet. KR-4993 und
-KR-4981 bleiben bis dahin offen.
+Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; es
+gibt keine offenen Source-Findings. Nach diesem KR-4993-Dokumentationspush ist
+KR-4981 der naechste freigegebene Produktgate. Die Produkt-P0-Abnahme bleibt
+bis zu dessen Ergebnis offen.
 
 ## Abschlusscheck vor dem Push
 
