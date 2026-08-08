@@ -1,6 +1,9 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
-Status: Aktiver uebergeordneter Performancevertrag. Der aktuelle enge
+Status: Aktiver uebergeordneter Performancevertrag. Die Arbeitsbasis ist
+`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus der gemeinsame
+KR-4985/KR-4986-Bugfix dieses Commits; der Produktgate
+bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
 
@@ -9,6 +12,14 @@ Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
 exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4981 ist
 bis KR-4993 gesperrt; KR-4992 bleibt ein bedingter Folgezweig nach einem
 verfehlten Produktzeitgate.
+
+Der gemeinsame Candidate-Resolution-Explosionsfix erfuellt KR-4985 und
+KR-4986 source-seitig. Der einzige freigegebene D1-Lauf erreichte realen
+Fortschritt auf zero-based Root 0, aber weder den historischen Root 1 noch
+einen vollstaendigen schweren Root. Nach einem Supervisor-I/O-Fehler war die
+temporaere JSONL bis `185,586 s` lesbar/gespuelt, aber ohne terminalen
+Datensatz und ohne atomare Publikation;
+D1/G1 ist daher fail-closed und unentschieden.
 
 ## Repositoryweiter Arbeitsvertrag
 
@@ -215,16 +226,9 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 ## Aktiver Taskpfad
 
 ```text
-KR-4985 Candidate-Resolution-Telemetrie
-  und D1-sichere Stale-/Cancellation-/Fehlerreihenfolge
-  -> D1 / G1 nur nach Freigabe
-  -> KR-4986 semantische Lanes und Provenienzabonnenten
-  -> positiv gegatete KR-4987..KR-4990
-  -> D2 / G2 nur nach Freigabe
-  -> KR-4991 nur bei positivem G2
-  -> KR-4993 Abschlussreview
-  -> KR-4981 voller Sonic-Kaltport
-  -> optional KR-4992 nach verfehltem Zeitgate
+KR-4985/KR-4986 source-seitig abgeschlossen
+  -> nach diesem Bugfix-Push origin/main synchronisieren
+  -> Roadmap vollstaendig neu bewerten
 ```
 
 Fuer jeden Implementierungstask gilt:
@@ -234,10 +238,10 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
 D1 und D2 sind reale Sonic-Diagnoseexporte. KR-4981 ist der reale
-Produkt- und Integrationstest. Ein Taskpush gibt den naechsten ungegateten
-Task ohne weitere Nutzeranweisung frei; nur D1 und D2 benoetigen in diesem
-Pfad eine ausdrueckliche Lauf-Freigabe. Es gibt keine begleitende neue
-Testmatrix.
+Produkt- und Integrationstest. Die vorliegende D1-Evidenz ist nichtterminal;
+KR-4987 bis KR-4990 bleiben inaktiv, und ein weiterer Folgepfad wird erst
+nach Bugfix-Push, origin/main-Synchronisierung und Roadmap-Neubewertung
+festgelegt. Es gibt keine begleitende neue Testmatrix.
 
 ## Produktmessvertrag KR-4981
 

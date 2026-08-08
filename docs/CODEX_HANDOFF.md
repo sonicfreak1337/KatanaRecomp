@@ -287,9 +287,9 @@ Testmatrix.
 
 ## Aktueller P0-Handoff
 
-Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-
-Pfad ist `a521999` mit Runtime-ABI 87, Analyzer-ABI 31 und
-Portprojektvertrag 75.
+Die Arbeitsbasis fuer den aktuellen Candidate-Resolution-Pfad ist
+`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus der gemeinsame
+KR-4985/KR-4986-Bugfix dieses Commits.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -314,27 +314,38 @@ Auswertungen besitzen noch keinen belegten gemeinsamen Root-/Funktionsscope.
 Logische Wiederzulassungsarbeit und Kosten je Context bleiben daher bis zur
 KR-4985-Instrumentierung Hypothesen.
 
-Der verbindliche Einstieg lautet:
+Der gemeinsame Source-Fix ist fuer KR-4985 und KR-4986 abgeschlossen. Er
+behebt die historische Budgetfehlbelastung vor semantischer Deduplizierung
+durch kollisionssichere Full-State-Semantic-Lanes und private exakte
+Provenienz-Replays. Die D1-Telemetrie ist explizit opt-in.
+
+Der einzige freigegebene D1-Lauf lieferte bei `185,370 s` nichtterminale
+Root-0-Evidenz: `0/1191` Roots completed, Wave `1.019`, Frontier `0` (maximal
+`223`), `288` Contexts, `15.170` logische Requests, `6.724` Semantic-Lanes,
+`6.725` physische Auswertungen, `5.846` Cache-Reuses, `15.157` exakte
+Subscriber und `226.886` Provenienzverknuepfungen. Requeues: `1` initial
+root, `287` neue exakte Lane, `8.248` Input-Widening, `177` Summary,
+`405` Forward-Edge und `6.052` stale Dependency; stale Discards `12.643`.
+Die temporaere JSONL war nach dem Supervisor-I/O-Fehler bis `185,586 s`
+lesbar/gespuelt, aber ohne terminalen Datensatz und ohne atomare Publikation.
+Root 1 wurde nicht erreicht; D1/G1 ist deshalb fail-closed und unentschieden.
+
+Der verbindliche naechste Schritt nach diesem Bugfix-Push lautet:
 
 ```text
-KR-4985 -> D1/G1 nur nach Lauf-Freigabe -> KR-4986
-  -> positiv gegatete KR-4987..KR-4990
-  -> D2/G2 nur nach Lauf-Freigabe
-  -> KR-4991 nur bei positivem G2 -> KR-4993 -> KR-4981
+origin/main synchronisieren
+  -> Roadmap vollstaendig neu bewerten
 ```
 
-KR-4985 schliesst vor D1 die bekannte Resultatannahmeluecke: Stale- und
-Cancellationvalidierung erfolgt vor `item.error` und vor jeder terminalen
-Publikation. KR-4993 prueft diese und alle aktivierten Sourcepfade, kann aber
-ohne vollen Produktlauf keine globale Abwesenheit von Limit- oder
-`IncompleteRoot`-Metriken behaupten. Diese Abnahme gehoert zu KR-4981.
+KR-4987 bis KR-4990 bleiben inaktiv. Candidate-Resolution-Gesamtzeit,
+Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
+sind ohne vollständigen schweren Root und den historischen Root 1 nicht
+entscheidbar. Ein zweiter D1-Lauf gehoert nicht zu diesem Bugfix-Task.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
-Testmatrix. Jeder Implementierungstask folgt dem repositoryweiten
-Dreischritt und wird direkt auf `main` gepusht; sein Push gibt den naechsten
-ungegateten Task frei. KR-4993 ist ein
-Abschlussreview ohne neue Tests oder Produktlauf. Erst KR-4981 erzeugt den
-naechsten vollstaendigen Sonic-Port.
+Testmatrix. Nach diesem Bugfix-Push und der origin/main-Synchronisierung wird
+die Roadmap neu bewertet. KR-4993 und
+KR-4981 bleiben bis dahin offen.
 
 ## Abschlusscheck vor dem Push
 

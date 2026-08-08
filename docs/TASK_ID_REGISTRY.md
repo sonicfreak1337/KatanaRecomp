@@ -65,18 +65,15 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Der aktuelle Source-Checkpoint ist `a521999` mit Runtime-ABI 87,
-Analyzer-ABI 31 und Portprojektvertrag 75. Der v56-Diagnosebefund erzeugte
-kein Portartefakt und meldete `1/1191` committed Roots; er identifiziert
-weder Root 0 noch einen anderen konkreten Root als terminale Fehlerursache.
-Das Per-Function-Budget und die laufweiten Context-/Auswertungsaggregate
-duerfen bis KR-4985 nicht arithmetisch zu einem gemeinsamen Messwert
-verbunden werden. Der gegatete Kernpfad KR-4985 bis KR-4991 und KR-4993 ist
-der aktive Folgeblock; KR-4992 ist nur ein optionaler Fehlgate-Zweig nach
-KR-4981. Jeder Task wird nach Review direkt auf `main` gepusht, und dieser
-Push gibt den naechsten ungegateten Task ohne weitere Nutzeranweisung frei.
-Nur D1 und D2 benoetigen eine ausdrueckliche Lauf-Freigabe; bedingte Tasks
-benoetigen ihr dokumentiertes positives G1-/G2-Messgate.
+Die Arbeitsbasis fuer den aktuellen Source-Stand ist
+`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus der gemeinsame
+KR-4985/KR-4986-Bugfix dieses Commits. Historisch erzeugte v56 kein Portartefakt und
+meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
+Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
+keinen erreichten Root 1; D1/G1 bleibt unentschieden. Der naechste Schritt ist
+Nach diesem Bugfix-Push folgen origin/main-Synchronisierung und
+Roadmap-Neubewertung. KR-4987
+bis KR-4990 bleiben bis dahin inaktiv.
 
 | ID | Titel | Status |
 |---|---|---|
@@ -114,8 +111,8 @@ benoetigen ihr dokumentiertes positives G1-/G2-Messgate.
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
-| KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | geplant P0; Telemetrie plus D1-sichere Stale-/Cancellation-/Fehlerreihenfolge, keine Schedulingstrategieaenderung |
-| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | geplant P0; Full-State-paritaetische Semantik-/Provenienztrennung |
+| KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | [x] source-seitig abgeschlossen; D1-Telemetrie explizit opt-in, Produktgate unentschieden |
+| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | [x] source-seitig abgeschlossen; Full-State-paritaetische Semantik-/Provenienztrennung |
 | KR-4987 | Read-Lens-projizierte Context-Identitaet | bedingt geplant P0; nur bei positivem Messgate G1, sonst FullState |
 | KR-4988 | Internierte AbstractStates und Function-Value-Summaries | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kostengate, sonst gemessener Skip |
 | KR-4989 | Indexierte exakte Context-Bindings | bedingt geplant P1; nur bei positivem Zehn-Prozent-Bindinggate, Indexlookup mit unveraendertem Join-Fallback |

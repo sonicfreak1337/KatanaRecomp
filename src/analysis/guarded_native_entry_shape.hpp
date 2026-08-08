@@ -493,6 +493,101 @@ struct ResolutionExecutionObserverForTesting final {
     std::function<void(std::size_t)> commit;
 };
 
+// Narrow, run-local snapshot of one Contextual-Return fixpoint scheduler
+// invocation. All counters here exclude the stable GuardedInventory harvest.
+// This is test-only evidence: it intentionally carries counters and stable
+// addresses, never AbstractState payloads, cache keys, artifacts, or canonical
+// result data. Product sessions leave the observer empty.
+struct ContextualReturnSchedulerDiagnosticsForTesting final {
+    std::size_t root_index = 0u;
+    std::uint32_t root_address = 0u;
+    // Zero means that this scheduler did not know which lane exhausted the
+    // shared ResolutionRoot logical budget.
+    std::uint32_t limiting_contextual_function_address = 0u;
+    std::size_t root_lane_creations = 0u;
+    std::size_t descendant_lane_creations = 0u;
+    // Newly admitted immutable Full-State semantic lanes. Exact subscriber
+    // replays of an already admitted lane do not consume this budget.
+    std::size_t fixpoint_scheduler_logical_admissions = 0u;
+    // SemanticLane groups first created by this scheduler invocation; a reuse
+    // counts every exact item beyond the first new producer for its group,
+    // including a request to an already admitted lane.
+    std::size_t semantic_lane_creations = 0u;
+    std::size_t semantic_lane_reuses = 0u;
+    // Exact items whose canonical semantic artifact was restored for their
+    // own provenance capsule. This includes a group's representative item.
+    std::size_t exact_subscriber_replays = 0u;
+    // Physical evaluate_function calls, including calls that subsequently
+    // failed. A successful request without such a call is a cache reuse.
+    std::size_t fixpoint_scheduler_physical_evaluations = 0u;
+    std::size_t fixpoint_scheduler_successful_request_reuses = 0u;
+    std::size_t fixpoint_scheduler_failed_requests_without_physical_evaluation =
+        0u;
+    // Bounded cardinality of pairs of authoritative cache-key digests for
+    // alpha-normalized requests. This is digest accounting, not collision-safe
+    // state equality; degraded accounting reports dropped/unavailable keys.
+    std::size_t alpha_normalized_request_key_digest_cardinality = 0u;
+    std::size_t alpha_normalized_request_key_digest_dropped = 0u;
+    bool alpha_normalized_request_key_digest_cardinality_degraded = false;
+    std::size_t alpha_normalization_fallbacks = 0u;
+    std::size_t semantic_lane_widenings = 0u;
+    std::size_t provenance_only_lane_widenings = 0u;
+    // A failed observer-only classification never interrupts the canonical
+    // lane commit; dropped records make that degradation explicit.
+    std::size_t lane_widening_classification_dropped = 0u;
+    bool lane_widening_classification_degraded = false;
+    std::size_t requeues_initial_root_seed = 0u;
+    std::size_t requeues_new_lane = 0u;
+    std::size_t requeues_input_widening = 0u;
+    std::size_t requeues_summary_change = 0u;
+    std::size_t requeues_forward_edge_insert_or_widen = 0u;
+    std::size_t requeues_stale_dependency = 0u;
+    // Version-stale Jacobi snapshots discarded before publication. This counts
+    // the stale decision even when its subsequent requeue is queue-deduped;
+    // a graph-only invalidation does not contribute.
+    std::size_t stale_snapshot_discards = 0u;
+    // Only actual scheduler enqueue causes are represented above. In
+    // particular, evidence-layout and cache-reuse causes are not observed.
+    bool contextual_context_budget_exhausted = false;
+    bool contextual_evaluation_budget_exhausted = false;
+    // Composite Contextual-Return logical-budget status. It may be true while
+    // neither contextual sub-budget is exhausted (for example a shared
+    // ResolutionRoot budget was exhausted by a forwarded sibling).
+    bool composite_logical_budget_exhausted = false;
+    // The RAII publisher sets this before callback delivery when the
+    // scheduler scope leaves through exception unwinding.
+    bool invocation_aborted_by_exception = false;
+};
+
+using ContextualReturnSchedulerDiagnosticsObserverForTesting =
+    std::function<void(const ContextualReturnSchedulerDiagnosticsForTesting&)>;
+
+enum class ContextualReturnJacobiFaultHookPointForTesting : std::uint8_t {
+    BeforeEvaluation,
+    BeforeStaleFreeze,
+};
+
+// Test-only Jacobi fault/observation event. Product sessions leave the
+// callback empty; an event accepted at BeforeEvaluation becomes item.error
+// and skips that worker evaluation. BeforeStaleFreeze is observation only.
+struct ContextualReturnJacobiFaultEventForTesting final {
+    ContextualReturnJacobiFaultHookPointForTesting point =
+        ContextualReturnJacobiFaultHookPointForTesting::BeforeEvaluation;
+    std::size_t root_index = 0u;
+    std::size_t batch_index = 0u;
+    std::size_t batch_size = 0u;
+    std::size_t lane_id = 0u;
+    std::uint32_t function_address = 0u;
+};
+
+struct ContextualReturnJacobiFaultHookForTesting final {
+    std::function<bool(const ContextualReturnJacobiFaultEventForTesting&)>
+        callback;
+    // Zero preserves the production scheduler width. Tests may select a
+    // deterministic Jacobi snapshot width without changing worker parallelism.
+    std::size_t maximum_batch_size = 0u;
+};
+
 enum class PersistentFunctionAnalysisEpochImportStatus : std::uint8_t {
     Imported,
     Empty,
@@ -606,6 +701,12 @@ class FunctionValueAnalysisSession {
 
     void set_resolution_execution_observer_for_testing(
         ResolutionExecutionObserverForTesting observer);
+
+    void set_contextual_return_scheduler_diagnostics_observer_for_testing(
+        ContextualReturnSchedulerDiagnosticsObserverForTesting observer);
+
+    void set_contextual_return_jacobi_fault_hook_for_testing(
+        ContextualReturnJacobiFaultHookForTesting hook);
 
     struct Impl;
 

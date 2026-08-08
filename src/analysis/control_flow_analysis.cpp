@@ -2693,6 +2693,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 function_values->final_materialized_blocks;
             progress.function_value_final_materialized_functions =
                 function_values->final_materialized_functions;
+            progress.function_value_contextual_return =
+                function_values->contextual_return;
         }
         try {
             progress_callback(progress);

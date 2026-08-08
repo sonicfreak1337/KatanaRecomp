@@ -1,8 +1,10 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
-Status: Aktiver Plan. Der funktionale Ausgangsstand ist `a521999`; der
-terminale Sonic-v56-Diagnoselauf belegt eine echte Contextual-State-
-Explosion und keine fertige Produktartefakterzeugung.
+Status: Source-seitiger KR-4985/KR-4986-Fix abgeschlossen; Produkt-D1 bleibt
+unentschieden. Die Arbeitsbasis ist
+`60638dd71d8a70d70a58aaecb3dbad9ec318bf62` plus den gemeinsamen
+KR-4985/KR-4986-Bugfix dieses Commits. Der terminale Sonic-v56-Diagnoselauf belegt eine
+echte Contextual-State-Explosion und keine fertige Produktartefakterzeugung.
 
 Dieses Dokument ergaenzt
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md)
@@ -33,7 +35,7 @@ Testmatrizen. Sie benoetigen jeweils eine ausdrueckliche Nutzerfreigabe.
 ## Terminaler v56-Ausgangspunkt
 
 ```text
-Source-Checkpoint:                              a521999
+Historischer Source-Checkpoint:                 a521999
 Laufzeit:                                       1:28:24
 Exitcode:                                       5
 5-Stunden-Hardlimit erreicht:                   nein
@@ -48,16 +50,47 @@ Resolution-Epoch-Retention:                     incomplete-root
 Portartefakt / game.exe / Screenshot:           keines / keine / keiner
 ```
 
-Die Rohwerte besitzen noch keine belegte gemeinsame Zaehldomaene:
+Der gemeinsame Fix behandelt die historische Ursache: Das Per-Function-
+Budget wurde vor MultiRoot-, Cache- und semantischer Deduplizierung pro
+exaktem Provenienzrequest belastet. Kollisionssichere Full-State-
+Semantic-Lanes tragen die semantische Arbeit, exakte Contributions und
+Evidence bleiben private Provenienzabonnenten, und das Budget wird nur bei
+erstmaliger Lane-Zulassung belastet. Die produktive D1-Telemetrie ist nur bei
+expliziter Detailtelemetrie aktiv.
+
+Der einmalige freigegebene D1-Lauf lieferte bei `185,370 s` valide,
+nichtterminale Root-0-Evidenz: Status `running`, `0/1191` abgeschlossene
+Roots, Wave `1.019`, Frontier `0` (maximal `223`), `288` zugelassene Contexts,
+`6.724` Evaluationen bzw. logische Admissions, `15.170` logische Requests,
+`6.724` Semantic-Lanes, `6.725` physische Auswertungen, `5.846` Cache-Reuses,
+`15.157` exakte Subscriber und `226.886` Provenienzverknuepfungen.
+Requeues: `1` initial root, `287` neue exakte Lane, `8.248` Input-Widening,
+`177` Summary-Aenderung, `405` Forward-Edge, `6.052` stale Dependency;
+stale Discards `12.643`. Semantic Widenings: `10.412`, provenance-only
+Widenings: `2.201`. Full-State-Lanes und Projected-Physical-Keys lagen jeweils
+bei `6.724`, Alpha-Fallbacks bei `0`; alle Budget-, IncompleteRoot-,
+Retention-, Degraded- und Drop-Flags waren false; `telemetry_complete` war im
+letzten nichtterminalen Progressdatensatz true.
+
+Die aggregierten D1-Kosten waren Snapshot `15.170 / 2,950 s`, Key `15.160 /
+5,124 s`, inklusiver Cache-Request `12.571 / 162,453 s`, inklusives Apply
+`63.742 / 17,790 s`, darin Binding-Merge `41.124 / 1,519 s`, Evidence
+`15.157 / 2,492 s`, serielle Commit-Operationen `1.018 / 0,000506 s` und
+Publish-Operationen `1.018 / 0,008050 s`. Diese Operationszaehler sind keine
+committed Resolution-Roots. Nach einem privaten Supervisor-I/O-Fehler wurde
+die temporaere JSONL bis `185,586 s` lesbar/gespuelt, aber ohne terminalen
+Datensatz und ohne atomare Publikation; Root 1 wurde nicht erreicht. D1/G1 ist deshalb
+fail-closed und unentschieden.
+
+Die historischen Rohwerte besitzen keine belegte gemeinsame Zaehldomaene:
 `65.536` ist ein Per-Function-Budget, `25.728` Contexts und `27.872`
-physische Auswertungen sind Laufaggregate. Bis KR-4985 Root, Funktion und
-Zaehlscope gemeinsam instrumentiert, sind Quotienten und Differenzen daraus
-keine Messwerte. Insbesondere sind `2,547` logische Evaluationen je Context
-und `37.664` Evaluationen ohne neue physische Arbeit nur Hypothesen.
+physische Auswertungen sind Laufaggregate. Quotienten und Differenzen daraus
+bleiben unzulaessig; die neuen Root-0-Werte sind dagegen klar als
+nichtterminale D1-Domane gekennzeichnet.
 
 Cache-Eviction ist mit null Recomputes nicht als Hauptursache belegt. Der
-offene P0 wird bis D1 als folgendes Kostenmodell untersucht, nicht als bereits
-bewiesene Zerlegung ausgegeben:
+Produktblocker bleibt bis zu einem vollstaendigen Produktgate offen; als
+Kostenmodell gilt weiterhin:
 
 ```text
 echte semantische Contextmenge
@@ -122,8 +155,8 @@ Candidate-Resolution-Pfad allgemein.
 
 ### D1 in KR-4985
 
-D1 wird nur nach ausdruecklicher Freigabe ausgefuehrt. Der reale Sonic-
-Diagnoseexport endet:
+D1 wurde einmal nach ausdruecklicher Freigabe ausgefuehrt. Ein weiterer Lauf
+ist in diesem Bugfix nicht vorgesehen. Der Diagnoseexport sollte enden:
 
 - nach dem ersten vollstaendigen schweren Candidate-Resolution-Root; oder
 - frueher an den repositoryweiten Stall-, Nichtkonvergenz- oder
@@ -135,15 +168,16 @@ D1 identifiziert mindestens:
 - limitierte Funktionsadresse;
 - Context- und Evaluationsbudgets;
 - logische und physische Auswertungen;
-- Requeue-Ursachen;
+- Requeue-Ursachen: initial root, neue exakte Lane, Input-Widening,
+  Summary-Aenderung, Forward-Edge-Insert/Widening und stale Dependency;
 - Frontierbreite;
 - Snapshot-, Key-, Apply-/Merge-, Evidence- und Commitkosten;
 - Full-State-, Projected-Lens- und Provenienz-Cardinalitaet.
 
-D1 darf erst starten, nachdem KR-4985 alle Resultatannahmepfade so
-geschlossen hat, dass Stale-/Cancellationpruefung vor Fehlerbehandlung und
-Publikation erfolgt. Andernfalls waere der Diagnoseexport selbst nicht
-vertrauenswuerdig.
+Die Resultatannahmepfade sind source-seitig so geschlossen, dass
+Stale-/Cancellationpruefung vor Fehlerbehandlung und Publikation erfolgt.
+Die vorliegende D1-Evidenz ist trotzdem nichtterminal und kann G1,
+Limitfreiheit, Coverage oder terminale Retention nicht entscheiden.
 
 ### D2 vor der Entscheidung ueber KR-4991
 
@@ -193,7 +227,7 @@ versuchen.
 
 ## Aufgaben
 
-### KR-4985 - Phasen- und Kardinalitaetstelemetrie
+### KR-4985 - Phasen- und Kardinalitaetstelemetrie [x]
 
 Ziel:
 
@@ -214,17 +248,18 @@ Betroffene Pfade fuer das Review:
 - Batchresultatannahme, Dependency-/Snapshot-Versionen, `item.error`,
   Cancellation und gezielte Stale-Neuplanung.
 
-Abschluss:
+Status und Abschluss:
 
 ```text
 implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
-Danach darf D1 separat freigegeben werden. Keine neue Testinfrastruktur.
-Vor D1 muss ein stale oder gecanceltes Resultat weder publizieren noch ueber
-seinen veralteten Fehler einen aktuellen Root beenden koennen.
+Source-seitig abgeschlossen; D1/G1 bleibt wegen des unvollstaendigen Laufs
+unentschieden. Keine neue Testinfrastruktur. Ein stale oder gecanceltes
+Resultat publiziert weder Summary/Evidence noch beendet es ueber seinen
+veralteten Fehler einen aktuellen Root.
 
-### KR-4986 - Semantische Lanes und Provenienzabonnenten
+### KR-4986 - Semantische Lanes und Provenienzabonnenten [x]
 
 Ziel:
 
@@ -411,21 +446,22 @@ erneut KR-4993 und ein separat freigegebener KR-4981-Retry.
 ## Abhaengigkeitskette
 
 ```text
-KR-4985 -> D1/G1
-  -> KR-4986
-  -> positiv gegatete KR-4987..KR-4990
-  -> D2/G2
-  -> KR-4991 nur bei positivem G2
-  -> KR-4993
-  -> KR-4981
-  -> optional KR-4992 -> KR-4993 -> freigegebener Retry
+KR-4985/KR-4986 source-seitig abgeschlossen
+  -> nach diesem Bugfix-Push origin/main synchronisieren
+  -> Roadmap vollstaendig neu bewerten
 ```
 
-Jeder Implementierungstask endet mit Review und Push auf `main`. D1, D2 und
-KR-4981 sind die einzigen in diesem Plan vorgesehenen neuen Sonic-Laeufe.
-Keine neue Testmatrix ersetzt sie.
+Die einzige D1-Evidenz ist ein unvollstaendiger, nichtterminaler Root-0-Lauf.
+KR-4987 bis KR-4990 bleiben inaktiv; D2, KR-4991, KR-4993 und KR-4981 werden
+erst nach der Roadmap-Neubewertung wieder als moegliche Folgepfade bewertet.
+Keine neue Testmatrix ersetzt reale Produktgates.
 
 ## Abschlussdefinition
+
+Die Source-Aufgaben KR-4985 und KR-4986 sind durch den gemeinsamen
+Explosionsfix abgeschlossen. Der Candidate-Resolution-P0 als Produktgate ist
+wegen des fehlenden vollstaendigen Roots, des nicht erreichten historischen
+Root 1 und der ausstehenden terminalen Produktevidenz noch nicht geschlossen.
 
 Der Candidate-Resolution-P0 ist erst geschlossen, wenn:
 

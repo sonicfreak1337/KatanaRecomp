@@ -1090,6 +1090,122 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
     }
 }
 
+[[nodiscard]] bool same_inventory_saved_stack_slot_without_evidence(
+    const InventorySavedStackSlot& left,
+    const InventorySavedStackSlot& right) {
+    return left.relative_slot == right.relative_slot &&
+           left.inventory_code_pointer_values ==
+               right.inventory_code_pointer_values &&
+           left.inventory_pc_relative_code_literal_values ==
+               right.inventory_pc_relative_code_literal_values &&
+           left.inventory_code_pointer_values_truncated ==
+               right.inventory_code_pointer_values_truncated &&
+           left.inventory_pc_relative_code_literal_values_truncated ==
+               right.inventory_pc_relative_code_literal_values_truncated &&
+           left.contextual_candidate_dependency ==
+               right.contextual_candidate_dependency;
+}
+
+[[nodiscard]] bool same_abstract_value_without_evidence(
+    const AbstractValue& left,
+    const AbstractValue& right) {
+    if (left.known != right.known || left.guarded != right.guarded ||
+        left.complete != right.complete ||
+        left.inventory_stack_derived != right.inventory_stack_derived ||
+        left.inventory_code_pointer != right.inventory_code_pointer ||
+        left.inventory_pc_relative_code_literal !=
+            right.inventory_pc_relative_code_literal ||
+        left.inventory_code_pointer_values !=
+            right.inventory_code_pointer_values ||
+        left.inventory_pc_relative_code_literal_values !=
+            right.inventory_pc_relative_code_literal_values ||
+        left.inventory_code_pointer_values_truncated !=
+            right.inventory_code_pointer_values_truncated ||
+        left.inventory_pc_relative_code_literal_values_truncated !=
+            right.inventory_pc_relative_code_literal_values_truncated ||
+        left.contextual_candidate_dependency !=
+            right.contextual_candidate_dependency ||
+        left.inventory_stack_callback_loss_unresolved !=
+            right.inventory_stack_callback_loss_unresolved ||
+        left.values != right.values)
+        return false;
+    const auto& left_epoch = left.inventory_saved_stack_epoch;
+    const auto& right_epoch = right.inventory_saved_stack_epoch;
+    if (left_epoch.present != right_epoch.present ||
+        left_epoch.unresolved != right_epoch.unresolved ||
+        left_epoch.tracks_current_epoch != right_epoch.tracks_current_epoch ||
+        left_epoch.candidate_payload_lost !=
+            right_epoch.candidate_payload_lost ||
+        left_epoch.slots.size() != right_epoch.slots.size())
+        return false;
+    for (std::size_t index = 0u; index < left_epoch.slots.size(); ++index) {
+        if (!same_inventory_saved_stack_slot_without_evidence(
+                left_epoch.slots[index], right_epoch.slots[index]))
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_abstract_state_without_evidence(
+    const AbstractState& left,
+    const AbstractState& right) {
+    if (left.stack_offsets != right.stack_offsets ||
+        left.inventory_stack_offsets != right.inventory_stack_offsets ||
+        left.inventory_stack_offset_candidates !=
+            right.inventory_stack_offset_candidates ||
+        left.stack_may_alias != right.stack_may_alias ||
+        left.inventory_stack_may_alias != right.inventory_stack_may_alias ||
+        left.inventory_vbr_relative != right.inventory_vbr_relative ||
+        left.inventory_fixed_storage_reference !=
+            right.inventory_fixed_storage_reference ||
+        left.memory_write_unknown != right.memory_write_unknown ||
+        left.memory_write_ranges != right.memory_write_ranges ||
+        left.memory_definitely_written_ranges !=
+            right.memory_definitely_written_ranges ||
+        left.inventory_unresolved_saved_stack_alias_sources !=
+            right.inventory_unresolved_saved_stack_alias_sources ||
+        left.inventory_unresolved_saved_stack_alias_tracks_current_epoch !=
+            right.inventory_unresolved_saved_stack_alias_tracks_current_epoch ||
+        left.inventory_current_stack_epoch_alias_watcher !=
+            right.inventory_current_stack_epoch_alias_watcher ||
+        left.inventory_detached_stack_epoch_alias_watcher !=
+            right.inventory_detached_stack_epoch_alias_watcher ||
+        left.inventory_unresolved_stack_callback_loss !=
+            right.inventory_unresolved_stack_callback_loss ||
+        left.inventory_stack_callback_loss_identity_truncated !=
+            right.inventory_stack_callback_loss_identity_truncated)
+        return false;
+    for (std::size_t index = 0u; index < left.registers.size(); ++index) {
+        if (!same_abstract_value_without_evidence(
+                left.registers[index], right.registers[index]))
+            return false;
+    }
+    if (left.stack_values.size() != right.stack_values.size() ||
+        left.memory_values.size() != right.memory_values.size())
+        return false;
+    auto left_stack_value = left.stack_values.begin();
+    auto right_stack_value = right.stack_values.begin();
+    while (left_stack_value != left.stack_values.end()) {
+        if (left_stack_value->first != right_stack_value->first ||
+            !same_abstract_value_without_evidence(
+                left_stack_value->second, right_stack_value->second))
+            return false;
+        ++left_stack_value;
+        ++right_stack_value;
+    }
+    auto left_memory_value = left.memory_values.begin();
+    auto right_memory_value = right.memory_values.begin();
+    while (left_memory_value != left.memory_values.end()) {
+        if (left_memory_value->first != right_memory_value->first ||
+            !same_abstract_value_without_evidence(
+                left_memory_value->second, right_memory_value->second))
+            return false;
+        ++left_memory_value;
+        ++right_memory_value;
+    }
+    return true;
+}
+
 // One domain lens alpha-renames concrete evidence atoms by their complete
 // membership signature across every bounded input that one evaluation can
 // observe: ingress state and its private global/contextual summary overlays.
@@ -8042,6 +8158,45 @@ void observe_inventory_transfers(
     }
 }
 
+struct FunctionEvaluationHotPathDiagnostics final {
+    std::size_t apply_call_count = 0u;
+    std::uint64_t apply_call_nanoseconds = 0u;
+    std::size_t binding_lookups = 0u;
+    std::size_t bindings_examined = 0u;
+    std::size_t binding_equality_attempts = 0u;
+    std::size_t binding_merge_attempts = 0u;
+    std::uint64_t binding_merge_nanoseconds = 0u;
+    std::size_t binding_exact_hits = 0u;
+    std::size_t binding_join_hits = 0u;
+    std::size_t maximum_binding_count = 0u;
+    std::size_t maximum_binding_hit_position = 0u;
+};
+
+class ApplyCallDiagnosticsScope final {
+  public:
+    explicit ApplyCallDiagnosticsScope(
+        FunctionEvaluationHotPathDiagnostics* const diagnostics) noexcept
+        : diagnostics_(diagnostics),
+          started_(diagnostics == nullptr
+                       ? std::chrono::steady_clock::time_point{}
+                       : std::chrono::steady_clock::now()) {
+        if (diagnostics_ != nullptr) ++diagnostics_->apply_call_count;
+    }
+
+    ~ApplyCallDiagnosticsScope() {
+        if (diagnostics_ == nullptr) return;
+        const auto elapsed = std::chrono::duration_cast<
+            std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started_);
+        diagnostics_->apply_call_nanoseconds += static_cast<std::uint64_t>(
+            std::max(elapsed, std::chrono::nanoseconds{1}).count());
+    }
+
+  private:
+    FunctionEvaluationHotPathDiagnostics* diagnostics_ = nullptr;
+    std::chrono::steady_clock::time_point started_{};
+};
+
 void apply_call(AbstractState& state,
                 const katana::io::ExecutableImage& image,
                 const std::uint32_t owner,
@@ -8058,11 +8213,15 @@ void apply_call(AbstractState& state,
                 GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics = nullptr,
                 const ForwardedRegisterReadMap* const
                     forwarded_register_reads = nullptr,
-                const AbiStackArgumentReadMap* const
-                    abi_stack_argument_reads = nullptr,
-                const bool memory_read_contracts_authoritative = false,
-                MemoryReadObservation* const
-                    memory_read_observation = nullptr) {
+                 const AbiStackArgumentReadMap* const
+                     abi_stack_argument_reads = nullptr,
+                 const bool memory_read_contracts_authoritative = false,
+                 MemoryReadObservation* const
+                     memory_read_observation = nullptr,
+                 FunctionEvaluationHotPathDiagnostics* const
+                     hot_path_diagnostics = nullptr) {
+    const ApplyCallDiagnosticsScope diagnostics_scope{
+        hot_path_diagnostics};
     ObservedCalleeInputs observed_inputs;
     ObservedCalleeInputIndices observed_input_indices;
     observe_callee_arguments(
@@ -8205,6 +8364,8 @@ void apply_call(AbstractState& state,
     for (const auto candidate : callees) {
         const FunctionValueSummary* summary = nullptr;
         if (contextual_summaries != nullptr) {
+            if (hot_path_diagnostics != nullptr)
+                ++hot_path_diagnostics->binding_lookups;
             const auto contextual = contextual_summaries->find(
                 {call_site, candidate});
             const AbstractState* observed = nullptr;
@@ -8223,15 +8384,57 @@ void apply_call(AbstractState& state,
             }
             if (contextual != contextual_summaries->end() &&
                 observed != nullptr) {
+                if (hot_path_diagnostics != nullptr) {
+                    hot_path_diagnostics->maximum_binding_count = std::max(
+                        hot_path_diagnostics->maximum_binding_count,
+                        contextual->second.size());
+                }
+                std::size_t binding_position = 0u;
                 for (const auto& binding : contextual->second) {
+                    ++binding_position;
+                    if (hot_path_diagnostics != nullptr)
+                        ++hot_path_diagnostics->bindings_examined;
+                    if (hot_path_diagnostics != nullptr)
+                        ++hot_path_diagnostics->binding_equality_attempts;
                     if (binding.input == *observed) {
+                        if (hot_path_diagnostics != nullptr) {
+                            ++hot_path_diagnostics->binding_exact_hits;
+                            hot_path_diagnostics->maximum_binding_hit_position =
+                                std::max(
+                                    hot_path_diagnostics
+                                        ->maximum_binding_hit_position,
+                                    binding_position);
+                        }
                         summary = &binding.summary;
                         break;
                     }
                     auto joined = binding.input;
-                    if (!merge_state(joined,
-                                     *observed,
-                                     true)) {
+                    std::chrono::steady_clock::time_point merge_started{};
+                    if (hot_path_diagnostics != nullptr) {
+                        ++hot_path_diagnostics->binding_merge_attempts;
+                        merge_started = std::chrono::steady_clock::now();
+                    }
+                    const bool binding_joined = !merge_state(
+                        joined, *observed, true);
+                    if (hot_path_diagnostics != nullptr) {
+                        hot_path_diagnostics->binding_merge_nanoseconds +=
+                            static_cast<std::uint64_t>(std::max(
+                                std::chrono::duration_cast<
+                                    std::chrono::nanoseconds>(
+                                        std::chrono::steady_clock::now() -
+                                        merge_started),
+                                std::chrono::nanoseconds{1})
+                                .count());
+                    }
+                    if (binding_joined) {
+                        if (hot_path_diagnostics != nullptr) {
+                            ++hot_path_diagnostics->binding_join_hits;
+                            hot_path_diagnostics->maximum_binding_hit_position =
+                                std::max(
+                                    hot_path_diagnostics
+                                        ->maximum_binding_hit_position,
+                                    binding_position);
+                        }
                         summary = &binding.summary;
                         break;
                     }
@@ -9292,9 +9495,11 @@ FunctionEvaluation evaluate_function(
     const AbiStackArgumentReadMap* const
         abi_stack_argument_reads = nullptr,
     const std::uint8_t inventory_sink_sources = 0u,
-    const FunctionEvaluationPlan* const prepared_plan = nullptr,
-    const bool memory_read_contracts_authoritative = false,
-    const ResolutionCancellation* const cancel_requested = nullptr) {
+     const FunctionEvaluationPlan* const prepared_plan = nullptr,
+     const bool memory_read_contracts_authoritative = false,
+     const ResolutionCancellation* const cancel_requested = nullptr,
+     FunctionEvaluationHotPathDiagnostics* const
+         hot_path_diagnostics = nullptr) {
     throw_if_resolution_cancelled(cancel_requested);
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
@@ -9583,9 +9788,10 @@ FunctionEvaluation evaluate_function(
                             contextual_summaries,
                             walk_diagnostics,
                             forwarded_register_reads,
-                            abi_stack_argument_reads,
-                            memory_read_contracts_authoritative,
-                            &evaluation_memory_reads);
+                             abi_stack_argument_reads,
+                             memory_read_contracts_authoritative,
+                             &evaluation_memory_reads,
+                             hot_path_diagnostics);
                 delayed_call.reset();
             }
             if (delayed_tail_ingress.has_value()) {
@@ -9646,7 +9852,8 @@ FunctionEvaluation evaluate_function(
                                 forwarded_register_reads,
                                 abi_stack_argument_reads,
                                 memory_read_contracts_authoritative,
-                                &evaluation_memory_reads);
+                                &evaluation_memory_reads,
+                                hot_path_diagnostics);
             }
             if (tail_ingress.has_value()) {
                 if (line.instruction.has_delay_slot) {
@@ -14780,6 +14987,39 @@ class EvaluationActivityScope final {
     EvaluationActivityMetric* metric_ = nullptr;
     std::chrono::steady_clock::time_point started_{};
 };
+
+// One mutex-protected root snapshot is enough for the progress path: parallel
+// contribution partitions may update the same root slot concurrently, while
+// report/heartbeat readers copy the complete scalar record without observing
+// mixed roots. A plain record avoids relying on large-aggregate std::atomic
+// support on MSVC.
+struct ContextualReturnProductTelemetrySlot final {
+    mutable std::mutex mutex;
+    ContextualReturnD1Telemetry value;
+    std::set<std::pair<std::uint64_t, std::uint64_t>> projected_digests;
+    std::atomic_size_t telemetry_dropped = 0u;
+    std::atomic_bool telemetry_degraded = false;
+};
+
+void mark_contextual_return_product_telemetry_failure(
+    const std::shared_ptr<ContextualReturnProductTelemetrySlot>& slot) noexcept {
+    if (slot == nullptr) return;
+    slot->telemetry_degraded.store(true, std::memory_order_relaxed);
+    slot->telemetry_dropped.fetch_add(1u, std::memory_order_relaxed);
+}
+
+template <typename Update>
+void update_contextual_return_product_telemetry(
+    const std::shared_ptr<ContextualReturnProductTelemetrySlot>& slot,
+    Update&& update) noexcept {
+    if (slot == nullptr) return;
+    try {
+        const std::lock_guard lock(slot->mutex);
+        update(slot->value);
+    } catch (...) {
+        mark_contextual_return_product_telemetry_failure(slot);
+    }
+}
 
 class FunctionEvaluationCache {
   public:
@@ -21736,6 +21976,10 @@ struct detail::FunctionValueAnalysisSession::Impl {
     AnalysisMemoryBudget* pre_reserved_resolution_ready_budget = nullptr;
     ResolutionExecutionObserverForTesting
         resolution_execution_observer_for_testing;
+    ContextualReturnSchedulerDiagnosticsObserverForTesting
+        contextual_return_scheduler_diagnostics_observer_for_testing;
+    ContextualReturnJacobiFaultHookForTesting
+        contextual_return_jacobi_fault_hook_for_testing;
     std::optional<detail::FunctionProgramDelta> pending_program_delta;
     PersistentAnalysisBypassReason pending_persistent_analysis_bypass_reason =
         PersistentAnalysisBypassReason::None;
@@ -22180,6 +22424,22 @@ set_resolution_execution_observer_for_testing(
     const std::lock_guard lock(impl_->analysis_mutex);
     impl_->resolution_execution_observer_for_testing =
         std::move(observer);
+}
+
+void detail::FunctionValueAnalysisSession::
+set_contextual_return_scheduler_diagnostics_observer_for_testing(
+    ContextualReturnSchedulerDiagnosticsObserverForTesting observer) {
+    const std::lock_guard lock(impl_->analysis_mutex);
+    impl_->contextual_return_scheduler_diagnostics_observer_for_testing =
+        std::move(observer);
+}
+
+void detail::FunctionValueAnalysisSession::
+set_contextual_return_jacobi_fault_hook_for_testing(
+    ContextualReturnJacobiFaultHookForTesting hook) {
+    const std::lock_guard lock(impl_->analysis_mutex);
+    impl_->contextual_return_jacobi_fault_hook_for_testing =
+        std::move(hook);
 }
 
 FunctionValueAnalysisResult
@@ -22650,6 +22910,39 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     std::atomic_size_t progress_resolution_head_of_line_index = 0u;
     std::atomic<std::int64_t>
         progress_resolution_head_started_nanoseconds{0};
+    std::mutex contextual_return_product_slots_mutex;
+    std::map<std::size_t,
+             std::shared_ptr<ContextualReturnProductTelemetrySlot>>
+        contextual_return_product_slots;
+    std::atomic_size_t contextual_return_product_dropped = 0u;
+    std::atomic_bool contextual_return_product_degraded = false;
+    const auto acquire_contextual_return_product_slot =
+        [&](const std::size_t root_index,
+            const std::uint32_t root_address)
+        -> std::shared_ptr<ContextualReturnProductTelemetrySlot> {
+        if (!progress_callback ||
+            !session.impl_->evaluations.detailed_telemetry_enabled())
+            return {};
+        try {
+            const std::lock_guard lock(
+                contextual_return_product_slots_mutex);
+            auto& slot = contextual_return_product_slots[root_index];
+            if (slot == nullptr) {
+                slot = std::make_shared<
+                    ContextualReturnProductTelemetrySlot>();
+                const std::lock_guard slot_lock(slot->mutex);
+                slot->value.root_index = root_index;
+                slot->value.root_address = root_address;
+            }
+            return slot;
+        } catch (...) {
+            contextual_return_product_degraded.store(
+                true, std::memory_order_relaxed);
+            contextual_return_product_dropped.fetch_add(
+                1u, std::memory_order_relaxed);
+            return {};
+        }
+    };
     const auto configured_workers =
         progress_callback
             ? global_analysis_executor().worker_count()
@@ -23119,6 +23412,71 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 result.final_materialized_blocks;
             progress.final_materialized_functions =
                 result.final_materialized_functions;
+            if (session.impl_->evaluations.detailed_telemetry_enabled()) {
+                const auto head_index =
+                    progress_resolution_head_of_line_index.load(
+                        std::memory_order_relaxed);
+                std::optional<ContextualReturnD1Telemetry> head_telemetry;
+                {
+                std::shared_ptr<ContextualReturnProductTelemetrySlot> slot;
+                try {
+                    {
+                        const std::lock_guard lock(
+                            contextual_return_product_slots_mutex);
+                        const auto found =
+                            contextual_return_product_slots.find(head_index);
+                        if (found != contextual_return_product_slots.end())
+                            slot = found->second;
+                    }
+                    if (slot != nullptr) {
+                        const std::lock_guard slot_lock(slot->mutex);
+                        if (slot->value.root_index.has_value() &&
+                            *slot->value.root_index == head_index) {
+                            head_telemetry = slot->value;
+                            head_telemetry->telemetry_dropped = std::max(
+                                head_telemetry->telemetry_dropped,
+                                slot->telemetry_dropped.load(
+                                    std::memory_order_relaxed));
+                            head_telemetry->telemetry_degraded =
+                                head_telemetry->telemetry_degraded ||
+                                slot->telemetry_degraded.load(
+                                    std::memory_order_relaxed);
+                        }
+                    }
+                } catch (...) {
+                    contextual_return_product_degraded.store(
+                        true, std::memory_order_relaxed);
+                    contextual_return_product_dropped.fetch_add(
+                        1u, std::memory_order_relaxed);
+                }
+            }
+            const bool global_telemetry_degraded =
+                contextual_return_product_degraded.load(
+                    std::memory_order_relaxed);
+            const auto global_telemetry_dropped =
+                contextual_return_product_dropped.load(
+                    std::memory_order_relaxed);
+            if (head_telemetry &&
+                (global_telemetry_degraded ||
+                 global_telemetry_dropped != 0u)) {
+                head_telemetry->telemetry_degraded =
+                    head_telemetry->telemetry_degraded ||
+                    global_telemetry_degraded;
+                head_telemetry->telemetry_dropped =
+                    std::max(
+                        head_telemetry->telemetry_dropped,
+                        global_telemetry_dropped);
+            } else if (!head_telemetry &&
+                       (global_telemetry_degraded ||
+                        global_telemetry_dropped != 0u)) {
+                head_telemetry.emplace();
+                head_telemetry->telemetry_degraded =
+                    global_telemetry_degraded;
+                head_telemetry->telemetry_dropped =
+                    global_telemetry_dropped;
+                }
+                progress.contextual_return = std::move(head_telemetry);
+            }
             progress_callback(progress);
         } catch (...) {
             // Progress is observational. A failing UI/logger callback must
@@ -27182,6 +27540,42 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 destination.resolution_root_logical_budget_exhausted ||
                 source.resolution_root_logical_budget_exhausted;
         };
+    // Optional request-local telemetry used only by the Contextual-Return
+    // fixpoint scheduler observer. It is deliberately scalar-only: recording
+    // it cannot allocate or affect cache/replay identity.
+    struct FunctionEvaluationRequestDiagnostics final {
+        bool physical_evaluation = false;
+        bool cache_key_digest_available = false;
+        std::uint64_t cache_key_hash = 0u;
+        std::uint64_t cache_key_diagnostic_fingerprint = 0u;
+        std::size_t cache_key_bytes = 0u;
+        // Inclusive end-to-end cache request time: key construction, cache
+        // wait, and any physical evaluation, including nested apply/binding
+        // work. Do not sum this with the nested timing domains below.
+        std::uint64_t cache_evaluation_nanoseconds = 0u;
+        FunctionEvaluationHotPathDiagnostics hot_path;
+    };
+    struct FunctionEvaluationRequestDiagnosticsScope final {
+        FunctionEvaluationRequestDiagnostics* diagnostics = nullptr;
+        std::chrono::steady_clock::time_point started{};
+
+        explicit FunctionEvaluationRequestDiagnosticsScope(
+            FunctionEvaluationRequestDiagnostics* const diagnostics)
+            : diagnostics(diagnostics),
+              started(diagnostics == nullptr
+                          ? std::chrono::steady_clock::time_point{}
+                          : std::chrono::steady_clock::now()) {}
+
+        ~FunctionEvaluationRequestDiagnosticsScope() {
+            if (diagnostics == nullptr) return;
+            diagnostics->cache_evaluation_nanoseconds = static_cast<
+                std::uint64_t>(std::max(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - started),
+                std::chrono::nanoseconds{1})
+                .count());
+        }
+    };
     struct PhysicalEvaluationScope {
         EvaluationActivityScope activity;
 
@@ -27195,6 +27589,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 1u, std::memory_order_relaxed);
         }
     };
+    const auto mark_request_physical_evaluation =
+        [](FunctionEvaluationRequestDiagnostics* const
+               request_diagnostics) noexcept {
+            if (request_diagnostics != nullptr)
+                request_diagnostics->physical_evaluation = true;
+        };
     bool memory_read_contracts_authoritative = false;
     const auto cached_evaluate_function =
         [&](const FunctionInfo& function,
@@ -27225,8 +27625,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             const TailIngressTargetKind evaluation_target_kind =
                 TailIngressTargetKind::Function,
             const ResolutionCancellation* const cancel_requested = nullptr,
-            const bool allow_memory_projection = true) {
-            throw_if_resolution_cancelled(cancel_requested);
+             const bool allow_memory_projection = true,
+             FunctionEvaluationRequestDiagnostics* const
+             request_diagnostics = nullptr) {
+             const FunctionEvaluationRequestDiagnosticsScope diagnostics_scope{
+                 request_diagnostics};
+             throw_if_resolution_cancelled(cancel_requested);
             const bool effective_memory_read_contracts_authoritative =
                 memory_read_contracts_authoritative &&
                 allow_memory_projection;
@@ -27312,6 +27716,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         : replay_outputs
                               ? guarded_inventory_collector
                               : &artifact->inventory;
+                mark_request_physical_evaluation(request_diagnostics);
                 artifact->evaluation = evaluate_function(
                     image,
                     function,
@@ -27334,9 +27739,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     &forwarded_register_reads,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
-                    prepared_plan,
-                    effective_memory_read_contracts_authoritative,
-                    cancel_requested);
+                     prepared_plan,
+                     effective_memory_read_contracts_authoritative,
+                     cancel_requested,
+                     request_diagnostics != nullptr
+                         ? &request_diagnostics->hot_path
+                         : nullptr);
                 if (!evaluation_memory_read_contract_holds(
                         projection, artifact->evaluation.summary))
                     throw MemoryReadContractExpanded{};
@@ -27383,6 +27791,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     inventory_sink_sources,
                     evaluation_cache
                         .detailed_telemetry_enabled());
+                if (request_diagnostics != nullptr) {
+                    request_diagnostics->cache_key_digest_available = true;
+                    request_diagnostics->cache_key_hash = key.hash;
+                    request_diagnostics
+                        ->cache_key_diagnostic_fingerprint =
+                        key.diagnostic_fingerprint;
+                    request_diagnostics->cache_key_bytes = key.bytes.size();
+                }
             }
             const auto compute_artifact = [&]() {
                         const PhysicalEvaluationScope physical{
@@ -27404,6 +27820,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         : maximum_evaluation_inventory_replay_bytes);
                         }
                         try {
+                            mark_request_physical_evaluation(
+                                request_diagnostics);
                             artifact->evaluation =
                                 evaluate_function(
                                     image,
@@ -27429,9 +27847,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     &forwarded_register_reads,
                                     evaluation_abi_stack_argument_reads,
                                     inventory_sink_sources,
-                                    prepared_plan,
-                                    effective_memory_read_contracts_authoritative,
-                                    cancel_requested);
+                                     prepared_plan,
+                                     effective_memory_read_contracts_authoritative,
+                                     cancel_requested,
+                                     request_diagnostics != nullptr
+                                         ? &request_diagnostics->hot_path
+                                         : nullptr);
                             if (!evaluation_memory_read_contract_holds(
                                     projection,
                                     artifact->evaluation.summary))
@@ -27520,6 +27941,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const PhysicalEvaluationScope physical{
                     evaluation_activity_if_observed,
                     physical_evaluations};
+                mark_request_physical_evaluation(request_diagnostics);
                 fallback->evaluation = evaluate_function(
                     image,
                     function,
@@ -27540,9 +27962,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     &forwarded_register_reads,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
-                    prepared_plan,
-                    effective_memory_read_contracts_authoritative,
-                    cancel_requested);
+                     prepared_plan,
+                     effective_memory_read_contracts_authoritative,
+                     cancel_requested,
+                     request_diagnostics != nullptr
+                         ? &request_diagnostics->hot_path
+                         : nullptr);
                 if (!evaluation_memory_read_contract_holds(
                         projection, fallback->evaluation.summary))
                     throw MemoryReadContractExpanded{};
@@ -28008,12 +28433,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::atomic_size_t& counter,
             const std::size_t count,
             const std::size_t limit,
-            std::atomic_bool& limit_reached) noexcept {
+            std::atomic_bool& limit_reached,
+            bool* const limit_reached_by_request = nullptr) noexcept {
+            if (limit_reached_by_request != nullptr)
+                *limit_reached_by_request = false;
             if (exhausted()) return false;
             auto current = counter.load(std::memory_order_relaxed);
             for (;;) {
                 if (count > limit - std::min(current, limit)) {
                     limit_reached.store(true, std::memory_order_relaxed);
+                    if (limit_reached_by_request != nullptr)
+                        *limit_reached_by_request = true;
                     return false;
                 }
                 if (counter.compare_exchange_weak(
@@ -28033,19 +28463,23 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                            forwarded_contexts_exhausted);
         }
 
-        [[nodiscard]] bool reserve_contextual_context() noexcept {
+        [[nodiscard]] bool reserve_contextual_context(
+            bool* const limit_reached_by_request = nullptr) noexcept {
             return reserve(contextual_contexts,
                            1u,
                            contextual_context_limit,
-                           contextual_contexts_exhausted);
+                           contextual_contexts_exhausted,
+                           limit_reached_by_request);
         }
 
         [[nodiscard]] bool reserve_contextual_evaluations(
-            const std::size_t count) noexcept {
+            const std::size_t count,
+            bool* const limit_reached_by_request = nullptr) noexcept {
             return reserve(contextual_evaluations,
                            count,
                            maximum_contextual_return_evaluations,
-                           contextual_evaluations_exhausted);
+                           contextual_evaluations_exhausted,
+                           limit_reached_by_request);
         }
     };
     const auto& final_candidate_inputs = std::as_const(candidate_inputs);
@@ -30006,7 +30440,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                   prior_call_site_assignments,
               const EvidenceTokenAssignments* const
                   prior_callee_assignments,
-              const bool allow_memory_projection)
+              const bool allow_memory_projection,
+              const bool use_unprojected_ingress_for_canonicalization)
              -> std::optional<EvidenceProvenanceLens> {
             if (available_tokens.empty())
                 return std::nullopt;
@@ -30071,8 +30506,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             tail_ingresses,
                             local_tail_ingresses),
                     !result.budget_exhausted);
+            // Semantic sharing requests this explicit FullState capsule.
+            // Normal evaluator requests (including ContextualReturn) must
+            // canonicalize after their ordinary read-lens projection so
+            // irrelevant evidence cannot perturb physical cache bytes.
             auto lens = EvidenceProvenanceLens(
-                projection.ingress,
+                use_unprojected_ingress_for_canonicalization
+                    ? input
+                    : projection.ingress,
                 isolated_call_sites,
                 available_tokens,
                 std::as_const(
@@ -30083,8 +30524,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     .at(function_entry),
                 std::move(evaluation_summaries),
                 std::move(evaluation_contextual_summaries),
-                prior_call_site_assignments,
-                prior_callee_assignments);
+                use_unprojected_ingress_for_canonicalization
+                    ? nullptr
+                    : prior_call_site_assignments,
+                use_unprojected_ingress_for_canonicalization
+                    ? nullptr
+                    : prior_callee_assignments);
             if (!lens.valid()) {
                 constexpr std::size_t maximum_fallback_capsules = 64u;
                 static std::atomic_size_t emitted_fallback_capsules = 0u;
@@ -30136,7 +30581,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 local_tail_ingresses,
                 &context.call_site_tokens,
                 &context.callee_tokens,
-                allow_memory_projection);
+                allow_memory_projection,
+                false);
             const auto& evaluation_input =
                 evidence_lens.has_value()
                     ? evidence_lens->ingress()
@@ -31214,7 +31660,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     function->entry_address))
                 return;
             if (contextual_root_inputs.empty()) return;
-            if (logical_budget.exhausted()) return;
             using ContextualLaneId = std::size_t;
             struct ContextualEntryFamilyKey final {
                 std::uint32_t caller_entry = 0u;
@@ -31248,15 +31693,153 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 bool candidate_context = false;
                 std::uint64_t input_version = 0u;
                 std::uint64_t summary_version = 0u;
-                // Evidence tokens are lane-local names. Keeping their
-                // assignments across widening steps makes a provenance-only
-                // change replay the same physical evaluation instead of
-                // alpha-renaming every summary dependency into a new key.
+                // Evidence tokens are exact lane-local restore names for
+                // final publication and stable inventory harvest. The
+                // Contextual semantic capsule deliberately rebuilds its
+                // names history-independently from current membership.
                 EvidenceTokenAssignments call_site_tokens;
                 EvidenceTokenAssignments callee_tokens;
                 std::optional<ContextualEvidenceLayout>
                     evidence_token_layout;
             };
+            using SemanticLaneId = std::size_t;
+            struct FullStateSemanticKey final {
+                std::uint64_t hash = 0u;
+                std::vector<std::uint8_t> bytes;
+
+                [[nodiscard]] bool same_as(
+                    const FullStateSemanticKey& other) const noexcept {
+                    return bytes == other.bytes;
+                }
+            };
+            struct SemanticLane final {
+                FullStateSemanticKey key;
+                // A key consumes logical Contextual evaluation budget at most
+                // once for this root. The weak artifact never forces a large
+                // exact result to remain alive after its subscribers moved on.
+                bool admitted = false;
+                std::weak_ptr<const CachedFunctionEvaluation> ready_artifact;
+            };
+            const auto* const contextual_scheduler_diagnostics_observer =
+                &session.impl_
+                     ->contextual_return_scheduler_diagnostics_observer_for_testing;
+            const auto* const contextual_jacobi_fault_hook =
+                &session.impl_
+                     ->contextual_return_jacobi_fault_hook_for_testing;
+            const auto contextual_return_product_slot =
+                acquire_contextual_return_product_slot(
+                    function_index, function->entry_address);
+            const bool collect_contextual_return_product_telemetry =
+                contextual_return_product_slot != nullptr;
+            update_contextual_return_product_telemetry(
+                contextual_return_product_slot,
+                [&](auto& telemetry) {
+                    telemetry.root_index = function_index;
+                    telemetry.root_address = function->entry_address;
+                    telemetry.current_function_address =
+                        function->entry_address;
+                    telemetry.context_budget =
+                        logical_budget.contextual_context_limit;
+                    telemetry.evaluation_budget =
+                        maximum_contextual_return_evaluations;
+                });
+            const bool collect_contextual_scheduler_diagnostics =
+                static_cast<bool>(
+                    *contextual_scheduler_diagnostics_observer);
+            ContextualReturnSchedulerDiagnosticsForTesting
+                contextual_scheduler_diagnostics;
+            contextual_scheduler_diagnostics.root_index = function_index;
+            contextual_scheduler_diagnostics.root_address =
+                function->entry_address;
+            struct ContextualSchedulerDiagnosticsPublisher final {
+                const ContextualReturnSchedulerDiagnosticsObserverForTesting*
+                    observer = nullptr;
+                ContextualReturnSchedulerDiagnosticsForTesting*
+                    diagnostics = nullptr;
+                int uncaught_exceptions = 0;
+
+                ~ContextualSchedulerDiagnosticsPublisher() noexcept {
+                    if (observer == nullptr || diagnostics == nullptr ||
+                        !*observer)
+                        return;
+                    diagnostics->invocation_aborted_by_exception =
+                        std::uncaught_exceptions() > uncaught_exceptions;
+                    try {
+                        (*observer)(*diagnostics);
+                    } catch (...) {
+                        // Test observation cannot perturb cancellation,
+                        // scheduling, cache identity, or publication.
+                    }
+                }
+            } contextual_scheduler_diagnostics_publisher{
+                collect_contextual_scheduler_diagnostics
+                    ? contextual_scheduler_diagnostics_observer
+                    : nullptr,
+                &contextual_scheduler_diagnostics,
+                std::uncaught_exceptions()};
+            const auto record_contextual_budget_failure =
+                [&](const bool requested_context_budget,
+                    const bool limit_reached_by_request,
+                    const std::uint32_t limiting_address) {
+                    if (!collect_contextual_scheduler_diagnostics &&
+                        !collect_contextual_return_product_telemetry)
+                        return;
+                    const bool contextual_context_exhausted =
+                        logical_budget.contextual_contexts_exhausted.load(
+                            std::memory_order_relaxed);
+                    const bool contextual_evaluation_exhausted =
+                        logical_budget.contextual_evaluations_exhausted.load(
+                            std::memory_order_relaxed);
+                    if (collect_contextual_scheduler_diagnostics) {
+                        contextual_scheduler_diagnostics
+                            .composite_logical_budget_exhausted = true;
+                        contextual_scheduler_diagnostics
+                            .contextual_context_budget_exhausted =
+                            contextual_context_exhausted;
+                        contextual_scheduler_diagnostics
+                            .contextual_evaluation_budget_exhausted =
+                            contextual_evaluation_exhausted;
+                    }
+                    update_contextual_return_product_telemetry(
+                        contextual_return_product_slot,
+                        [&](auto& telemetry) {
+                            telemetry.composite_budget_exhausted = true;
+                            telemetry.incomplete_root = true;
+                            telemetry.contexts_admitted =
+                                logical_budget.contextual_contexts.load(
+                                    std::memory_order_relaxed);
+                            telemetry.evaluations_admitted =
+                                logical_budget.contextual_evaluations.load(
+                                    std::memory_order_relaxed);
+                            telemetry.context_budget_exhausted =
+                                contextual_context_exhausted;
+                            telemetry.evaluation_budget_exhausted =
+                                contextual_evaluation_exhausted;
+                        });
+                    const bool requested_subbudget_exhausted =
+                        requested_context_budget
+                            ? contextual_context_exhausted
+                            : contextual_evaluation_exhausted;
+                    if (limit_reached_by_request &&
+                        requested_subbudget_exhausted) {
+                        update_contextual_return_product_telemetry(
+                            contextual_return_product_slot,
+                            [&](auto& telemetry) {
+                                telemetry.limiting_function_address =
+                                    limiting_address;
+                            });
+                    }
+                    if (collect_contextual_scheduler_diagnostics &&
+                        limit_reached_by_request &&
+                        requested_subbudget_exhausted)
+                        contextual_scheduler_diagnostics
+                            .limiting_contextual_function_address =
+                            limiting_address;
+                };
+            if (logical_budget.exhausted()) {
+                record_contextual_budget_failure(false, false, 0u);
+                return;
+            }
             std::vector<ContextualLane> contextual_lanes;
             contextual_lanes.reserve(
                 std::min(logical_budget.contextual_context_limit,
@@ -31272,6 +31855,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::map<ContextualLaneId,
                      std::set<ContextualLaneId>>
                 contextual_callers;
+            std::vector<SemanticLane> semantic_lanes;
+            std::unordered_map<std::uint64_t,
+                               std::vector<SemanticLaneId>>
+                semantic_lane_buckets;
+            // The existing exact-lane reservation is a useful lower-bound
+            // allocation for root-local semantic records without inventing a
+            // second product limit or retaining their full capsules.
+            semantic_lanes.reserve(contextual_lanes.capacity());
+            semantic_lane_buckets.reserve(contextual_lanes.capacity());
             struct ContextualDependencyVersion final {
                 ContextualLaneId lane_id = 0u;
                 std::uint64_t input_version = 0u;
@@ -31322,13 +31914,107 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 };
             std::deque<ContextualLaneId> pending_contexts;
             std::vector<std::uint8_t> queued_contexts;
+            enum class ContextualRequeueReason : std::uint8_t {
+                InitialRootSeed,
+                NewLane,
+                InputWidening,
+                SummaryChange,
+                ForwardEdgeInsertOrWiden,
+                StaleDependency,
+            };
+            const auto add_contextual_product_counter =
+                [&](std::size_t ContextualReturnD1Telemetry::* member,
+                    const std::size_t amount = 1u) {
+                    update_contextual_return_product_telemetry(
+                        contextual_return_product_slot,
+                        [&](auto& telemetry) {
+                            telemetry.*member += amount;
+                        });
+                };
+            const auto refresh_contextual_product_telemetry =
+                [&] {
+                    update_contextual_return_product_telemetry(
+                        contextual_return_product_slot,
+                        [&](auto& telemetry) {
+                            telemetry.contexts_admitted =
+                                logical_budget.contextual_contexts.load(
+                                    std::memory_order_relaxed);
+                            telemetry.evaluations_admitted =
+                                logical_budget.contextual_evaluations.load(
+                                    std::memory_order_relaxed);
+                            telemetry.context_budget_exhausted =
+                                logical_budget.contextual_contexts_exhausted
+                                    .load(std::memory_order_relaxed);
+                            telemetry.evaluation_budget_exhausted =
+                                logical_budget.contextual_evaluations_exhausted
+                                    .load(std::memory_order_relaxed);
+                            telemetry.composite_budget_exhausted =
+                                logical_budget.exhausted();
+                        });
+                };
             const auto enqueue_context =
-                [&](const ContextualLaneId lane) {
+                [&](const ContextualLaneId lane,
+                    const ContextualRequeueReason reason) {
                     if (lane >= queued_contexts.size())
                         queued_contexts.resize(lane + 1u, 0u);
                     if (queued_contexts[lane] == 0u) {
                         queued_contexts[lane] = 1u;
                         pending_contexts.push_back(lane);
+                        update_contextual_return_product_telemetry(
+                            contextual_return_product_slot,
+                            [](auto& telemetry) {
+                                ++telemetry.frontier;
+                                telemetry.maximum_frontier = std::max(
+                                    telemetry.maximum_frontier,
+                                    telemetry.frontier);
+                            });
+                        if (!collect_contextual_scheduler_diagnostics &&
+                            !collect_contextual_return_product_telemetry)
+                            return;
+                        switch (reason) {
+                        case ContextualRequeueReason::InitialRootSeed:
+                            ++contextual_scheduler_diagnostics
+                                  .requeues_initial_root_seed;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    requeues_initial_root_seed);
+                            break;
+                        case ContextualRequeueReason::NewLane:
+                            ++contextual_scheduler_diagnostics
+                                  .requeues_new_lane;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::requeues_new_lane);
+                            break;
+                        case ContextualRequeueReason::InputWidening:
+                            ++contextual_scheduler_diagnostics
+                                  .requeues_input_widening;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    requeues_input_widening);
+                            break;
+                        case ContextualRequeueReason::SummaryChange:
+                            ++contextual_scheduler_diagnostics
+                                  .requeues_summary_change;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    requeues_summary_change);
+                            break;
+                        case ContextualRequeueReason::
+                            ForwardEdgeInsertOrWiden:
+                            ++contextual_scheduler_diagnostics
+                                  .requeues_forward_edge_insert_or_widen;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    requeues_forward_edge_insert_or_widen);
+                            break;
+                        case ContextualRequeueReason::StaleDependency:
+                            ++contextual_scheduler_diagnostics
+                                  .requeues_stale_dependency;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    requeues_stale_dependency);
+                            break;
+                        }
                     }
                 };
             // Exact contribution partitions are correlation boundaries, not
@@ -31341,10 +32027,16 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 if (root_input == nullptr)
                     throw std::logic_error(
                         "Contextual-Root-Session erhielt keinen Eingang.");
-                if (!logical_budget.reserve_contextual_context()) {
+                bool contextual_context_limit_reached_by_request = false;
+                if (!logical_budget.reserve_contextual_context(
+                        &contextual_context_limit_reached_by_request)) {
                     function_result.walk_diagnostics
                         .resolution_root_logical_budget_exhausted =
                         true;
+                    record_contextual_budget_failure(
+                        true,
+                        contextual_context_limit_reached_by_request,
+                        function->entry_address);
                     return;
                 }
                 const auto lane_id = contextual_lanes.size();
@@ -31356,7 +32048,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      false,
                      0u,
                      0u});
-                enqueue_context(lane_id);
+                if (collect_contextual_scheduler_diagnostics)
+                    ++contextual_scheduler_diagnostics.root_lane_creations;
+                add_contextual_product_counter(
+                    &ContextualReturnD1Telemetry::root_lane_creations);
+                enqueue_context(
+                    lane_id, ContextualRequeueReason::InitialRootSeed);
             }
             std::size_t contextual_evaluations = 0u;
             struct ContextualCountPublisher final {
@@ -31364,6 +32061,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 const std::vector<ContextualLane>* contexts =
                     nullptr;
                 const std::size_t* evaluations = nullptr;
+                std::shared_ptr<ContextualReturnProductTelemetrySlot>
+                    product_slot;
+                int uncaught_exceptions = std::uncaught_exceptions();
 
                 ~ContextualCountPublisher() {
                     result->logical_contextual_return_contexts =
@@ -31373,15 +32073,31 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             contexts->size());
                     result->logical_contextual_return_evaluations =
                         std::max(
-                            result
+                    result
                                 ->logical_contextual_return_evaluations,
                             *evaluations);
+                    update_contextual_return_product_telemetry(
+                        product_slot,
+                        [&](auto& telemetry) {
+                            telemetry.incomplete_root =
+                                telemetry.incomplete_root ||
+                                result->local_fixpoint_budget_exhausted ||
+                                std::uncaught_exceptions() >
+                                    uncaught_exceptions;
+                        });
                 }
             } contextual_count_publisher{
                 &function_result,
                 &contextual_lanes,
-                &contextual_evaluations};
+                &contextual_evaluations,
+                contextual_return_product_slot};
             bool contextual_context_budget_exhausted = false;
+            using ContextualRequestKeyDigest =
+                std::pair<std::uint64_t, std::uint64_t>;
+            std::optional<std::set<ContextualRequestKeyDigest>>
+                observed_alpha_normalized_request_key_digests;
+            if (collect_contextual_scheduler_diagnostics)
+                observed_alpha_normalized_request_key_digests.emplace();
             const auto contextual_entry_register_reads =
                 [&](const std::uint32_t address) {
                     const auto found =
@@ -31401,6 +32117,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 };
             struct ContextualBatchItem {
                 ContextualLaneId lane_id = 0u;
+                std::size_t batch_index = 0u;
+                std::size_t batch_size = 0u;
                 std::uint32_t address = 0u;
                 std::size_t function_index = 0u;
                 AbstractState input;
@@ -31410,25 +32128,36 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 ContextualSummaryBindingViews binding_views;
                 std::optional<ContextualSummaryBindings>
                     fallback_bindings;
-                std::optional<EvidenceProvenanceLens> evidence_lens;
+                // This lens is deliberately built after the ordinary
+                // ContextualReturn read projection. It names the shared
+                // physical artifact and restores it into this exact lane.
+                std::optional<EvidenceProvenanceLens>
+                    physical_evidence_lens;
                 ContextualEvidenceLayout evidence_layout;
-                const EvidenceTokenAssignments*
-                    prior_call_site_tokens = nullptr;
-                const EvidenceTokenAssignments*
-                    prior_callee_tokens = nullptr;
                 EvidenceTokenAssignments call_site_tokens;
                 EvidenceTokenAssignments callee_tokens;
                 bool evidence_tokens_valid = false;
                 bool dependency_graph_changed = false;
+                bool forward_edge_changed = false;
+                bool alpha_normalized_request = false;
+                bool alpha_normalization_fallback = false;
+                std::optional<SemanticLaneId> semantic_lane_id;
                 std::optional<FunctionEvaluation> evaluation;
                 GuardedCodeInventoryWalkDiagnostics diagnostics;
                 std::exception_ptr error;
             };
             const auto prepare_contextual_item =
                 [&](ContextualBatchItem& item,
-                    const ContextualLaneId lane_id) {
+                     const ContextualLaneId lane_id,
+                     const std::size_t batch_index,
+                     const std::size_t batch_size) {
+                    std::chrono::steady_clock::time_point snapshot_started{};
+                    if (collect_contextual_return_product_telemetry)
+                        snapshot_started = std::chrono::steady_clock::now();
                     const auto& lane = contextual_lanes.at(lane_id);
                     item.lane_id = lane_id;
+                    item.batch_index = batch_index;
+                    item.batch_size = batch_size;
                     item.address = lane.function_entry;
                     item.function_index =
                         fixpoint_function_index.at(item.address);
@@ -31444,24 +32173,115 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     item.diagnostics = {};
                     item.diagnostics.local_fixpoint_iteration_budget =
                         maximum_local_fixpoint_iterations;
-                    item.evidence_lens.reset();
+                    item.physical_evidence_lens.reset();
                     item.call_site_tokens.clear();
                     item.callee_tokens.clear();
-                    if (lane.evidence_token_layout.has_value() &&
-                        *lane.evidence_token_layout ==
-                            item.evidence_layout) {
-                        item.prior_call_site_tokens =
-                            &lane.call_site_tokens;
-                        item.prior_callee_tokens =
-                            &lane.callee_tokens;
-                    } else {
-                        item.prior_call_site_tokens = nullptr;
-                        item.prior_callee_tokens = nullptr;
-                    }
                     item.evidence_tokens_valid = false;
                     item.dependency_graph_changed = false;
+                    item.forward_edge_changed = false;
+                    item.alpha_normalized_request = false;
+                    item.alpha_normalization_fallback = false;
+                    item.semantic_lane_id.reset();
                     item.evaluation.reset();
                     item.error = {};
+                    if (collect_contextual_return_product_telemetry) {
+                        const auto snapshot_nanoseconds = static_cast<
+                            std::uint64_t>(std::max(
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() -
+                                snapshot_started),
+                            std::chrono::nanoseconds{1})
+                            .count());
+                        update_contextual_return_product_telemetry(
+                            contextual_return_product_slot,
+                            [&](auto& telemetry) {
+                                ++telemetry.snapshot_count;
+                                telemetry.snapshot_nanoseconds +=
+                                    snapshot_nanoseconds;
+                                telemetry.maximum_capsule_entries = std::max(
+                                    telemetry.maximum_capsule_entries,
+                                    item.evidence_layout.bindings.size());
+                                telemetry.current_function_address =
+                                    item.address;
+                            });
+                    }
+                };
+            const auto make_contextual_full_state_semantic_key =
+                [&](const ContextualBatchItem& item,
+                    const AbstractState& canonical_full_input,
+                    const std::map<std::uint32_t, FunctionValueSummary>&
+                        canonical_summaries,
+                    const ContextualSummaryBindings* const
+                        canonical_contextual_summaries) {
+                    const auto& semantic_function =
+                        *fixpoint_functions.at(item.function_index);
+                    const bool effective_memory_projection =
+                        memory_read_contracts_authoritative &&
+                        allow_memory_projection;
+                    auto full_state_projection =
+                        make_function_evaluation_projection(
+                            canonical_full_input,
+                            EvaluationLens::ContextualReturn,
+                            item.address,
+                            TailIngressTargetKind::Function,
+                            forwarded_register_reads,
+                            abi_stack_argument_reads,
+                            summaries,
+                            effective_memory_projection,
+                            !effective_memory_projection ||
+                                memory_projection_covers_tail_ingresses(
+                                    semantic_function,
+                                    block_index,
+                                    tail_ingresses,
+                                    nullptr),
+                            !result.budget_exhausted);
+                    // This is deliberately stricter than the physical cache
+                    // request below: scheduler sharing requires the complete
+                    // canonical FullState while cached_evaluate_function()
+                    // retains its established read-lens projection.
+                    full_state_projection.ingress = canonical_full_input;
+                    full_state_projection.effective_lens =
+                        EvaluationLens::FullState;
+                    full_state_projection.full_state_fallback = true;
+                    auto cache_key = make_function_evaluation_cache_key(
+                        image,
+                        semantic_function,
+                        block_index,
+                        inventory_indirect_callees,
+                        tail_ingresses,
+                        canonical_summaries,
+                        full_state_projection,
+                        ResolutionCollectionMode::None,
+                        true,
+                        false,
+                        nullptr,
+                        canonical_contextual_summaries,
+                        nullptr,
+                        true,
+                        forwarded_register_reads,
+                        &abi_stack_argument_reads,
+                        0u,
+                        false);
+                    return FullStateSemanticKey{
+                        cache_key.hash, std::move(cache_key.bytes)};
+                };
+            const auto find_or_create_semantic_lane =
+                [&](FullStateSemanticKey key) -> SemanticLaneId {
+                    const auto bucket = semantic_lane_buckets.find(key.hash);
+                    if (bucket != semantic_lane_buckets.end()) {
+                        for (const auto lane_id : bucket->second) {
+                            if (semantic_lanes.at(lane_id).key.same_as(key)) {
+                                return lane_id;
+                            }
+                        }
+                    }
+                    const auto lane_id = semantic_lanes.size();
+                    semantic_lanes.push_back(
+                        {std::move(key), false, {}});
+                    semantic_lane_buckets[semantic_lanes.back().key.hash]
+                        .push_back(lane_id);
+                    return lane_id;
                 };
             struct ContextualScheduledLane final {
                 ContextualLaneId lane_id = 0u;
@@ -31499,125 +32319,333 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 };
             auto& contextual_executor = global_analysis_executor();
             while (!pending_contexts.empty() &&
-                   !contextual_context_budget_exhausted &&
-                   contextual_evaluations <
-                       maximum_contextual_return_evaluations) {
+                   !contextual_context_budget_exhausted) {
                 throw_if_resolution_cancelled(cancel_requested);
-                if (logical_budget.exhausted()) return;
-                const auto remaining_budget =
-                    maximum_contextual_return_evaluations -
-                    contextual_evaluations;
-                auto scheduled = select_contextual_batch(
-                    std::min(contextual_executor.maximum_jobs(),
-                             remaining_budget));
+                update_contextual_return_product_telemetry(
+                    contextual_return_product_slot,
+                    [&](auto& telemetry) {
+                        // Root-wide wave count: parallel contribution
+                        // partitions add their completed/started steps.
+                        ++telemetry.wave;
+                    });
+                // An exhausted shared admission budget does not stop this
+                // exact FIFO wave. Existing immutable semantic lanes remain
+                // valid replay work and must be allowed to converge; only a
+                // later attempt to admit a new FullStateSemanticKey may fail
+                // the root below.
+                const auto contextual_batch_width =
+                    contextual_jacobi_fault_hook->maximum_batch_size == 0u
+                        ? contextual_executor.maximum_jobs()
+                        : contextual_jacobi_fault_hook->maximum_batch_size;
+                auto scheduled =
+                    select_contextual_batch(contextual_batch_width);
                 const auto batch_size = scheduled.size();
-                if (!logical_budget.reserve_contextual_evaluations(
-                        batch_size)) {
-                    function_result.walk_diagnostics
-                        .resolution_root_logical_budget_exhausted =
-                        true;
-                    return;
-                }
+                update_contextual_return_product_telemetry(
+                    contextual_return_product_slot,
+                    [&](auto& telemetry) {
+                        telemetry.frontier = telemetry.frontier >= batch_size
+                                                  ? telemetry.frontier - batch_size
+                                                  : 0u;
+                    });
                 std::vector<ContextualBatchItem> batch(batch_size);
                 for (std::size_t index = 0u;
                      index < batch.size(); ++index) {
                     prepare_contextual_item(
-                        batch[index], scheduled[index].lane_id);
+                        batch[index],
+                        scheduled[index].lane_id,
+                        index,
+                        batch.size());
                 }
-                const auto evaluate_contextual_item =
-                    [&](ContextualBatchItem& item) noexcept {
+                update_contextual_return_product_telemetry(
+                    contextual_return_product_slot,
+                    [&](auto& telemetry) {
+                        telemetry.logical_requests += batch.size();
+                    });
+                // The fault hook is intentionally exact-item scoped. An
+                // injected H failure must not poison a sibling that shares a
+                // canonical semantic producer, and the stale gate below must
+                // still see the original exact snapshot.
+                for (auto& item : batch) {
+                    try {
+                        throw_if_resolution_cancelled(cancel_requested);
+                        if (contextual_jacobi_fault_hook->callback &&
+                            contextual_jacobi_fault_hook->callback(
+                                {ContextualReturnJacobiFaultHookPointForTesting::
+                                     BeforeEvaluation,
+                                 function_index,
+                                 item.batch_index,
+                                 item.batch_size,
+                                 item.lane_id,
+                                 item.address}))
+                            throw std::runtime_error(
+                                "Testfehler vor Contextual-Return-"
+                                "Jacobi-Auswertung.");
+                    } catch (...) {
+                        item.error = std::current_exception();
+                    }
+                }
+
+                struct ContextualSemanticBatchGroup final {
+                    SemanticLaneId lane_id = 0u;
+                    std::vector<std::size_t> item_indices;
+                    bool newly_admitted = false;
+                                 bool materialized = false;
+                                 std::shared_ptr<const CachedFunctionEvaluation> artifact;
+                                 FunctionEvaluationRequestDiagnostics request_diagnostics;
+                                 std::size_t cache_evaluation_count = 0u;
+                                 std::exception_ptr error;
+                };
+                std::vector<ContextualSemanticBatchGroup> semantic_groups;
+                std::map<SemanticLaneId, std::size_t> group_by_lane;
+                for (std::size_t index = 0u; index < batch.size(); ++index) {
+                    auto& item = batch[index];
+                    if (item.error) continue;
+                    try {
+                        // FullState alpha canonicalization is only the
+                        // immutable SemanticLane identity. It includes every
+                        // ingress and contextual-summary evidence field, even
+                        // those a physical read lens would later discard.
+                        auto semantic_evidence_lens =
+                            make_multi_root_provenance_lens(
+                                item.address,
+                                TailIngressTargetKind::Function,
+                                item.input,
+                                EvaluationLens::ContextualReturn,
+                                nullptr,
+                                forwarded_evidence_tokens,
+                                &item.binding_views,
+                                nullptr,
+                                nullptr,
+                                nullptr,
+                                allow_memory_projection,
+                                true);
+                        // The physical request is separately canonicalized
+                        // from the projected ingress. This preserves the
+                        // established cache contract: evidence in discarded
+                        // fields cannot renumber tokens that remain visible.
+                        item.physical_evidence_lens =
+                            make_multi_root_provenance_lens(
+                                item.address,
+                                TailIngressTargetKind::Function,
+                                item.input,
+                                EvaluationLens::ContextualReturn,
+                                nullptr,
+                                forwarded_evidence_tokens,
+                                &item.binding_views,
+                                nullptr,
+                                nullptr,
+                                nullptr,
+                                allow_memory_projection,
+                                false);
+                        // A missing lens cannot restore a shared artifact.
+                        // Fail closed to an exact unnormalized FullState key
+                        // whenever either side lacks enough tokens.
+                        std::optional<ContextualSummaryBindings>
+                            exact_full_state_bindings;
+                        const bool exact_full_state_key =
+                            !semantic_evidence_lens.has_value() ||
+                            !item.physical_evidence_lens.has_value();
+                        if (exact_full_state_key) {
+                            exact_full_state_bindings.emplace(
+                                materialize_contextual_summary_bindings(
+                                    item.binding_views));
+                        }
+                        const auto& semantic_input =
+                            !exact_full_state_key
+                                ? semantic_evidence_lens->ingress()
+                                : item.input;
+                        const auto& semantic_summaries =
+                            !exact_full_state_key
+                                ? *semantic_evidence_lens->summaries()
+                                : summaries;
+                        const auto* const semantic_contextual_summaries =
+                            !exact_full_state_key
+                                ? semantic_evidence_lens
+                                      ->contextual_summaries()
+                                : &*exact_full_state_bindings;
+                        std::chrono::steady_clock::time_point key_started{};
+                        if (collect_contextual_return_product_telemetry)
+                            key_started = std::chrono::steady_clock::now();
+                        auto full_state_key =
+                            make_contextual_full_state_semantic_key(
+                                item,
+                                semantic_input,
+                                semantic_summaries,
+                                semantic_contextual_summaries);
+                        const auto full_state_key_bytes =
+                            full_state_key.bytes.size();
+                        item.semantic_lane_id =
+                            find_or_create_semantic_lane(
+                                std::move(full_state_key));
+                        if (collect_contextual_return_product_telemetry) {
+                            const auto key_nanoseconds = static_cast<
+                                std::uint64_t>(std::max(
+                                std::chrono::duration_cast<
+                                    std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now() -
+                                    key_started),
+                                std::chrono::nanoseconds{1})
+                                .count());
+                            update_contextual_return_product_telemetry(
+                                contextual_return_product_slot,
+                                [&](auto& telemetry) {
+                                    ++telemetry.key_count;
+                                    telemetry.key_nanoseconds +=
+                                        key_nanoseconds;
+                                    telemetry.maximum_full_state_key_bytes =
+                                        std::max(
+                                            telemetry
+                                                .maximum_full_state_key_bytes,
+                                            full_state_key_bytes);
+                                });
+                        }
+                        if (!item.physical_evidence_lens.has_value()) {
+                            item.fallback_bindings.emplace(
+                                std::move(*exact_full_state_bindings));
+                            item.alpha_normalization_fallback = true;
+                        } else if (
+                            collect_contextual_scheduler_diagnostics ||
+                            collect_contextual_return_product_telemetry) {
+                            item.alpha_normalized_request = true;
+                        }
+                        const auto [group, inserted] =
+                            group_by_lane.try_emplace(
+                                *item.semantic_lane_id,
+                                semantic_groups.size());
+                        if (inserted) {
+                            semantic_groups.push_back(
+                                {*item.semantic_lane_id,
+                                 {},
+                                 !semantic_lanes
+                                      .at(*item.semantic_lane_id)
+                                      .admitted,
+                                 false,
+                                 {},
+                                 {},
+                                 {}});
+                        }
+                        semantic_groups[group->second].item_indices.push_back(
+                            index);
+                    } catch (...) {
+                        item.error = std::current_exception();
+                    }
+                }
+
+                std::size_t newly_admitted_semantic_lanes = 0u;
+                for (const auto& group : semantic_groups) {
+                    if (group.newly_admitted)
+                        ++newly_admitted_semantic_lanes;
+                }
+                bool contextual_evaluation_limit_reached_by_request = false;
+                if (newly_admitted_semantic_lanes != 0u &&
+                    !logical_budget.reserve_contextual_evaluations(
+                        newly_admitted_semantic_lanes,
+                        &contextual_evaluation_limit_reached_by_request)) {
+                    function_result.walk_diagnostics
+                        .resolution_root_logical_budget_exhausted = true;
+                    const auto limited = std::find_if(
+                        semantic_groups.begin(), semantic_groups.end(),
+                        [](const auto& group) {
+                            return group.newly_admitted;
+                        });
+                    record_contextual_budget_failure(
+                        false,
+                        contextual_evaluation_limit_reached_by_request,
+                        limited == semantic_groups.end()
+                            ? 0u
+                            : batch[limited->item_indices.front()].address);
+                    return;
+                }
+                for (auto& group : semantic_groups) {
+                    auto& semantic_lane =
+                        semantic_lanes.at(group.lane_id);
+                    if (group.newly_admitted) semantic_lane.admitted = true;
+                    group.artifact = semantic_lane.ready_artifact.lock();
+                    group.materialized = group.artifact == nullptr;
+                }
+                contextual_evaluations += newly_admitted_semantic_lanes;
+                update_contextual_return_product_telemetry(
+                    contextual_return_product_slot,
+                    [&](auto& telemetry) {
+                        telemetry.logical_admissions +=
+                            newly_admitted_semantic_lanes;
+                        telemetry.semantic_lane_cardinality +=
+                            newly_admitted_semantic_lanes;
+                    });
+                if (collect_contextual_scheduler_diagnostics) {
+                    contextual_scheduler_diagnostics
+                        .fixpoint_scheduler_logical_admissions +=
+                        newly_admitted_semantic_lanes;
+                    contextual_scheduler_diagnostics.semantic_lane_creations +=
+                        newly_admitted_semantic_lanes;
+                    for (const auto& group : semantic_groups) {
+                        contextual_scheduler_diagnostics.semantic_lane_reuses +=
+                            group.item_indices.size() -
+                            (group.newly_admitted ? 1u : 0u);
+                    }
+                }
+
+                const auto evaluate_semantic_group =
+                    [&](ContextualSemanticBatchGroup& group) noexcept {
+                        if (!group.materialized) return;
+                        ++group.cache_evaluation_count;
                         try {
-                            throw_if_resolution_cancelled(
-                                cancel_requested);
-                            item.evidence_lens.reset();
-                            item.evidence_lens =
-                                make_multi_root_provenance_lens(
-                                    item.address,
-                                    TailIngressTargetKind::Function,
-                                    item.input,
-                                    EvaluationLens::ContextualReturn,
-                                    nullptr,
-                                    forwarded_evidence_tokens,
-                                     &item.binding_views,
-                                     nullptr,
-                                     item.prior_call_site_tokens,
-                                     item.prior_callee_tokens,
-                                     allow_memory_projection);
-                            if (!item.evidence_lens.has_value()) {
-                                item.fallback_bindings.emplace(
-                                    materialize_contextual_summary_bindings(
-                                        item.binding_views));
-                            }
+                            throw_if_resolution_cancelled(cancel_requested);
+                            auto& item = batch[group.item_indices.front()];
                             const auto& evaluation_input =
-                                item.evidence_lens.has_value()
-                                    ? item.evidence_lens->ingress()
+                                item.physical_evidence_lens.has_value()
+                                    ? item.physical_evidence_lens->ingress()
                                     : item.input;
                             const auto& evaluation_summaries =
-                                item.evidence_lens.has_value()
-                                    ? *item.evidence_lens
-                                           ->summaries()
+                                item.physical_evidence_lens.has_value()
+                                    ? *item.physical_evidence_lens->summaries()
                                     : summaries;
                             const auto* const
                                 evaluation_contextual_summaries =
-                                    item.evidence_lens.has_value()
-                                        ? item.evidence_lens
+                                    item.physical_evidence_lens.has_value()
+                                        ? item.physical_evidence_lens
                                               ->contextual_summaries()
                                         : &*item.fallback_bindings;
                             auto cached = cached_evaluate_function(
-                                    *fixpoint_functions[
-                                        item.function_index],
-                                    inventory_indirect_callees,
-                                    tail_ingresses,
-                                    evaluation_summaries,
-                                    evaluation_input,
-                                    ResolutionCollectionMode::None,
-                                    true,
-                                    nullptr,
-                                    nullptr,
-                                    evaluation_contextual_summaries,
-                                    nullptr,
-                                    &item.diagnostics,
-                                    &abi_stack_argument_reads,
-                                    0u,
-                                    true,
-                                    true,
-                                    &multi_root_context_evaluations,
-                                    true,
-                                    TailIngressTargetKind::Function,
-                                    cancel_requested,
-                                    allow_memory_projection);
-                            item.evaluation.emplace(
-                                cached.first->evaluation);
-                            if (item.evidence_lens.has_value()) {
-                                item.call_site_tokens =
-                                    item.evidence_lens
-                                        ->call_site_token_assignments();
-                                item.callee_tokens =
-                                    item.evidence_lens
-                                        ->callee_token_assignments();
-                                item.evidence_tokens_valid = true;
-                                multi_root_provenance_links.fetch_add(
-                                    item.evidence_lens->link_count(),
-                                    std::memory_order_relaxed);
-                                restore_evaluation_evidence_provenance(
-                                    *item.evaluation,
-                                    *item.evidence_lens);
-                                item.evidence_lens.reset();
-                            }
+                                *fixpoint_functions[item.function_index],
+                                inventory_indirect_callees,
+                                tail_ingresses,
+                                evaluation_summaries,
+                                evaluation_input,
+                                ResolutionCollectionMode::None,
+                                true,
+                                nullptr,
+                                nullptr,
+                                evaluation_contextual_summaries,
+                                nullptr,
+                                &item.diagnostics,
+                                &abi_stack_argument_reads,
+                                0u,
+                                true,
+                                true,
+                                &multi_root_context_evaluations,
+                                true,
+                                TailIngressTargetKind::Function,
+                                 cancel_requested,
+                                 allow_memory_projection,
+                                 (collect_contextual_scheduler_diagnostics ||
+                                  collect_contextual_return_product_telemetry)
+                                     ? &group.request_diagnostics
+                                     : nullptr);
+                            group.artifact = std::move(cached.first);
                         } catch (...) {
-                            item.error = std::current_exception();
+                            group.error = std::current_exception();
                         }
                     };
-                if (batch.size() == 1u) {
-                    evaluate_contextual_item(batch.front());
-                } else {
+                if (semantic_groups.size() == 1u) {
+                    evaluate_semantic_group(semantic_groups.front());
+                } else if (!semantic_groups.empty()) {
                     AnalysisWorkDescriptor contextual_work;
-                    contextual_work.phase =
-                        AnalysisWorkPhase::FunctionValue;
+                    contextual_work.phase = AnalysisWorkPhase::FunctionValue;
                     contextual_work.subject_kind =
                         AnalysisWorkSubjectKind::Context;
                     contextual_work.subject = batch.front().address;
-                    contextual_work.fanout = batch.size();
+                    contextual_work.fanout = semantic_groups.size();
                     contextual_work.priority =
                         AnalysisWorkPriorityKind::CriticalPrefix;
                     contextual_work.critical_prefix = function_index;
@@ -31625,39 +32653,307 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     parallel_analysis_for(
                         contextual_executor,
                         std::move(contextual_work),
-                        batch.size(),
+                        semantic_groups.size(),
                         maximum_parallel_resolution_jobs,
                         function_value_parallel_activity_if_observed,
                         [&](const std::size_t index) {
-                            evaluate_contextual_item(batch[index]);
+                            evaluate_semantic_group(semantic_groups[index]);
                         });
                 }
-                contextual_evaluations += batch.size();
+                for (auto& group : semantic_groups) {
+                    if (group.error) {
+                        for (const auto index : group.item_indices) {
+                            if (!batch[index].error)
+                                batch[index].error = group.error;
+                        }
+                        continue;
+                    }
+                    if (group.artifact == nullptr) {
+                        const auto missing = std::make_exception_ptr(
+                            std::logic_error(
+                                "Contextual-SemanticLane besitzt kein "
+                                "Artefakt."));
+                        for (const auto index : group.item_indices) {
+                            if (!batch[index].error)
+                                batch[index].error = missing;
+                        }
+                        continue;
+                    }
+                    for (const auto index : group.item_indices) {
+                        auto& item = batch[index];
+                        if (item.error) continue;
+                        item.evaluation.emplace(group.artifact->evaluation);
+                        // A shared semantic producer has one canonical walk
+                        // diagnostic payload. Every exact subscriber replay
+                        // observes that same payload, just as separate cache
+                        // requests would have merged the cached artifact.
+                        item.diagnostics =
+                            group.artifact->walk_diagnostics;
+                        if (collect_contextual_scheduler_diagnostics)
+                            ++contextual_scheduler_diagnostics
+                                  .exact_subscriber_replays;
+                        add_contextual_product_counter(
+                            &ContextualReturnD1Telemetry::
+                                exact_subscriber_cardinality);
+                        if (!item.physical_evidence_lens.has_value())
+                            continue;
+                        item.call_site_tokens = item.physical_evidence_lens
+                                                    ->call_site_token_assignments();
+                        item.callee_tokens = item.physical_evidence_lens
+                                                 ->callee_token_assignments();
+                        item.evidence_tokens_valid = true;
+                        multi_root_provenance_links.fetch_add(
+                            item.physical_evidence_lens->link_count(),
+                            std::memory_order_relaxed);
+                        add_contextual_product_counter(
+                            &ContextualReturnD1Telemetry::provenance_cardinality,
+                            item.physical_evidence_lens->link_count());
+                        std::chrono::steady_clock::time_point restore_started{};
+                        if (collect_contextual_return_product_telemetry)
+                            restore_started = std::chrono::steady_clock::now();
+                        restore_evaluation_evidence_provenance(
+                            *item.evaluation,
+                            *item.physical_evidence_lens);
+                        if (collect_contextual_return_product_telemetry) {
+                            const auto restore_nanoseconds = static_cast<
+                                std::uint64_t>(std::max(
+                                std::chrono::duration_cast<
+                                    std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now() -
+                                    restore_started),
+                                std::chrono::nanoseconds{1})
+                                .count());
+                            update_contextual_return_product_telemetry(
+                                contextual_return_product_slot,
+                                [&](auto& telemetry) {
+                                    ++telemetry.evidence_restore_count;
+                                    telemetry.evidence_restore_nanoseconds +=
+                                        restore_nanoseconds;
+                                });
+                        }
+                        item.physical_evidence_lens.reset();
+                    }
+                }
                 // All evaluator/cache consumers own their materialized maps at
                 // this point. Drop graph views before the serial commit may
                 // append lanes or widen edge payloads.
                 for (auto& item : batch) {
                     item.binding_views.clear();
                     item.fallback_bindings.reset();
-                    item.prior_call_site_tokens = nullptr;
-                    item.prior_callee_tokens = nullptr;
+                }
+                // Observe the complete evaluated batch before the canonical
+                // serial commit rethrows its first error. All bounded-set
+                // failures are degraded test telemetry, never analysis errors.
+                if (collect_contextual_scheduler_diagnostics) {
+                    constexpr std::size_t
+                        maximum_observed_request_key_digests = 1024u;
+                    const auto saturating_increment =
+                        [](std::size_t& value) {
+                            if (value !=
+                                std::numeric_limits<std::size_t>::max())
+                                ++value;
+                        };
+                    const auto record_request_key_digest =
+                        [&](const FunctionEvaluationRequestDiagnostics&
+                                request_diagnostics) noexcept {
+                            if (!request_diagnostics
+                                     .cache_key_digest_available) {
+                                contextual_scheduler_diagnostics
+                                    .alpha_normalized_request_key_digest_cardinality_degraded =
+                                    true;
+                                saturating_increment(
+                                    contextual_scheduler_diagnostics
+                                        .alpha_normalized_request_key_digest_dropped);
+                                return;
+                            }
+                            const ContextualRequestKeyDigest digest{
+                                request_diagnostics.cache_key_hash,
+                                request_diagnostics
+                                    .cache_key_diagnostic_fingerprint};
+                            if (observed_alpha_normalized_request_key_digests
+                                    ->find(digest) !=
+                                observed_alpha_normalized_request_key_digests
+                                    ->end())
+                                return;
+                            if (contextual_scheduler_diagnostics
+                                    .alpha_normalized_request_key_digest_cardinality_degraded ||
+                                observed_alpha_normalized_request_key_digests
+                                        ->size() >=
+                                    maximum_observed_request_key_digests) {
+                                contextual_scheduler_diagnostics
+                                    .alpha_normalized_request_key_digest_cardinality_degraded =
+                                    true;
+                                saturating_increment(
+                                    contextual_scheduler_diagnostics
+                                        .alpha_normalized_request_key_digest_dropped);
+                                return;
+                            }
+                            try {
+                                observed_alpha_normalized_request_key_digests
+                                    ->emplace(digest);
+                                contextual_scheduler_diagnostics
+                                    .alpha_normalized_request_key_digest_cardinality =
+                                    observed_alpha_normalized_request_key_digests
+                                        ->size();
+                            } catch (...) {
+                                contextual_scheduler_diagnostics
+                                    .alpha_normalized_request_key_digest_cardinality_degraded =
+                                    true;
+                                saturating_increment(
+                                    contextual_scheduler_diagnostics
+                                        .alpha_normalized_request_key_digest_dropped);
+                            }
+                        };
+                    for (const auto& group : semantic_groups) {
+                        if (!group.materialized) continue;
+                        if (group.request_diagnostics.physical_evaluation) {
+                            saturating_increment(
+                                contextual_scheduler_diagnostics
+                                    .fixpoint_scheduler_physical_evaluations);
+                        } else if (!group.error &&
+                                   group.artifact != nullptr) {
+                            saturating_increment(
+                                contextual_scheduler_diagnostics
+                                    .fixpoint_scheduler_successful_request_reuses);
+                        } else {
+                            saturating_increment(
+                                contextual_scheduler_diagnostics
+                                    .fixpoint_scheduler_failed_requests_without_physical_evaluation);
+                        }
+                        const auto& item =
+                            batch[group.item_indices.front()];
+                        if (item.alpha_normalization_fallback) {
+                            saturating_increment(
+                                contextual_scheduler_diagnostics
+                                    .alpha_normalization_fallbacks);
+                        } else if (item.alpha_normalized_request) {
+                            record_request_key_digest(
+                                group.request_diagnostics);
+                        }
+                    }
+                }
+                // This cardinality covers the physical cache keys of the
+                // projected/read-lens path, including conservative FullState
+                // fallbacks.
+                const auto record_projected_digest =
+                    [&](const FunctionEvaluationRequestDiagnostics& request,
+                        const bool requested) noexcept {
+                    if (!requested ||
+                        !collect_contextual_return_product_telemetry)
+                        return;
+                    try {
+                        const std::lock_guard lock(
+                            contextual_return_product_slot->mutex);
+                        auto& telemetry =
+                            contextual_return_product_slot->value;
+                        if (!request.cache_key_digest_available) {
+                            telemetry.projected_digest_degraded = true;
+                            ++telemetry.projected_digest_dropped;
+                            return;
+                        }
+                        const std::pair<std::uint64_t, std::uint64_t> digest{
+                            request.cache_key_hash,
+                            request.cache_key_diagnostic_fingerprint};
+                        telemetry.maximum_projected_key_bytes = std::max(
+                            telemetry.maximum_projected_key_bytes,
+                            request.cache_key_bytes);
+                        if (contextual_return_product_slot->projected_digests
+                                .contains(digest))
+                            return;
+                        if (telemetry.projected_digest_degraded ||
+                            contextual_return_product_slot->projected_digests
+                                    .size() >=
+                                65'536u) {
+                            telemetry.projected_digest_degraded = true;
+                            ++telemetry.projected_digest_dropped;
+                            return;
+                        }
+                        try {
+                            contextual_return_product_slot->projected_digests
+                                .emplace(digest);
+                            telemetry.projected_digest_cardinality =
+                                contextual_return_product_slot->projected_digests
+                                    .size();
+                        } catch (...) {
+                            telemetry.projected_digest_degraded = true;
+                            ++telemetry.projected_digest_dropped;
+                        }
+                    } catch (...) {
+                        mark_contextual_return_product_telemetry_failure(
+                            contextual_return_product_slot);
+                    }
+                };
+                if (collect_contextual_return_product_telemetry) {
+                    for (const auto& group : semantic_groups) {
+                        if (!group.materialized) continue;
+                        update_contextual_return_product_telemetry(
+                            contextual_return_product_slot,
+                            [&](auto& telemetry) {
+                                ++telemetry.cache_evaluation_count;
+                                telemetry.cache_evaluation_nanoseconds +=
+                                    group.request_diagnostics
+                                        .cache_evaluation_nanoseconds;
+                                telemetry.apply_call_count +=
+                                    group.request_diagnostics.hot_path
+                                        .apply_call_count;
+                                telemetry.apply_call_nanoseconds +=
+                                    group.request_diagnostics.hot_path
+                                        .apply_call_nanoseconds;
+                                telemetry.binding_lookups +=
+                                    group.request_diagnostics.hot_path
+                                        .binding_lookups;
+                                telemetry.bindings_examined +=
+                                    group.request_diagnostics.hot_path
+                                        .bindings_examined;
+                                telemetry.binding_equality_attempts +=
+                                    group.request_diagnostics.hot_path
+                                        .binding_equality_attempts;
+                                telemetry.binding_merge_attempts +=
+                                    group.request_diagnostics.hot_path
+                                        .binding_merge_attempts;
+                                telemetry.binding_merge_nanoseconds +=
+                                    group.request_diagnostics.hot_path
+                                        .binding_merge_nanoseconds;
+                                telemetry.binding_exact_hits +=
+                                    group.request_diagnostics.hot_path
+                                        .binding_exact_hits;
+                                telemetry.binding_join_hits +=
+                                    group.request_diagnostics.hot_path
+                                        .binding_join_hits;
+                                telemetry.maximum_binding_count = std::max(
+                                    telemetry.maximum_binding_count,
+                                    group.request_diagnostics.hot_path
+                                        .maximum_binding_count);
+                                telemetry.maximum_binding_hit_position =
+                                    std::max(
+                                        telemetry.maximum_binding_hit_position,
+                                        group.request_diagnostics.hot_path
+                                            .maximum_binding_hit_position);
+                                if (group.request_diagnostics.physical_evaluation)
+                                    ++telemetry.physical_evaluations;
+                                else if (!group.error && group.artifact != nullptr)
+                                    ++telemetry.cache_reuses;
+                            });
+                        const auto& item =
+                            batch[group.item_indices.front()];
+                        record_projected_digest(
+                            group.request_diagnostics,
+                            true);
+                        if (item.alpha_normalization_fallback)
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    alpha_normalization_fallbacks);
+                    }
                 }
                 for (auto& item : batch) {
-                    throw_if_resolution_cancelled(cancel_requested);
-                    if (item.error)
-                        std::rethrow_exception(item.error);
-                    if (!item.evaluation.has_value())
-                        throw std::logic_error(
-                            "Contextual-Return-Auswertung fehlt.");
+                    // Discovery is the only monotone effect a successful
+                    // Jacobi snapshot may retain before final staleness is
+                    // known. Failed, missing, and locally limited snapshots
+                    // cannot contribute any lane, edge, token, or summary.
+                    if (item.error || !item.evaluation.has_value() ||
+                        item.evaluation->local_fixpoint_budget_exhausted)
+                        continue;
                     auto& context_evaluation = *item.evaluation;
-                    merge_fixpoint_diagnostics(
-                        function_result.walk_diagnostics,
-                        item.diagnostics);
-                    if (context_evaluation
-                            .local_fixpoint_budget_exhausted) {
-                        record_local_fixpoint_limit();
-                        return;
-                    }
                     for (auto& observation :
                          context_evaluation.call_arguments) {
                         const auto pair = candidate_call_pair_key(
@@ -31790,14 +33086,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             }
                         }
                         if (!selected_lane.has_value()) {
+                            bool contextual_context_limit_reached_by_request =
+                                false;
                             if (!logical_budget
-                                     .reserve_contextual_context()) {
+                                     .reserve_contextual_context(
+                                         &contextual_context_limit_reached_by_request)) {
                                 function_result.walk_diagnostics
                                     .contextual_return_context_limited_functions =
                                     1u;
                                 function_result.walk_diagnostics
                                     .resolution_root_logical_budget_exhausted =
                                     true;
+                                record_contextual_budget_failure(
+                                    true,
+                                    contextual_context_limit_reached_by_request,
+                                    observation.callee);
                                 emit_contextual_return_limit_diagnostic(
                                     "contexts",
                                     0u,
@@ -31825,28 +33128,91 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             selected_lane = lane_id;
                             selected_lane_created = true;
                             selected_lane_changed = true;
-                            enqueue_context(lane_id);
+                            if (collect_contextual_scheduler_diagnostics)
+                                ++contextual_scheduler_diagnostics
+                                      .descendant_lane_creations;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    descendant_lane_creations);
+                            enqueue_context(
+                                lane_id, ContextualRequeueReason::NewLane);
                         } else {
                             auto& lane = contextual_lanes.at(
                                 *selected_lane);
-                            bool lane_changed = false;
-                            if (joined_match_input.has_value() &&
-                                lane.match_input !=
-                                    *joined_match_input) {
+                            const bool match_input_changed =
+                                joined_match_input.has_value() &&
+                                lane.match_input != *joined_match_input;
+                            const bool input_changed =
+                                joined_input.has_value() &&
+                                lane.input != *joined_input;
+                            const bool lane_changed =
+                                match_input_changed || input_changed;
+                            if (lane_changed &&
+                                (collect_contextual_scheduler_diagnostics ||
+                                 collect_contextual_return_product_telemetry)) {
+                                try {
+                                    const bool semantic_change =
+                                        (match_input_changed &&
+                                         !same_abstract_state_without_evidence(
+                                             lane.match_input,
+                                             *joined_match_input)) ||
+                                        (input_changed &&
+                                         !same_abstract_state_without_evidence(
+                                             lane.input,
+                                             *joined_input));
+                                    if (semantic_change) {
+                                        if (collect_contextual_scheduler_diagnostics)
+                                        ++contextual_scheduler_diagnostics
+                                              .semantic_lane_widenings;
+                                        if (collect_contextual_return_product_telemetry)
+                                            add_contextual_product_counter(
+                                                &ContextualReturnD1Telemetry::
+                                                    semantic_lane_widenings);
+                                    } else {
+                                        if (collect_contextual_scheduler_diagnostics)
+                                        ++contextual_scheduler_diagnostics
+                                              .provenance_only_lane_widenings;
+                                        if (collect_contextual_return_product_telemetry)
+                                            add_contextual_product_counter(
+                                                &ContextualReturnD1Telemetry::
+                                                    provenance_only_lane_widenings);
+                                    }
+                                } catch (...) {
+                                    if (collect_contextual_scheduler_diagnostics) {
+                                        contextual_scheduler_diagnostics
+                                            .lane_widening_classification_degraded =
+                                            true;
+                                        if (contextual_scheduler_diagnostics
+                                                .lane_widening_classification_dropped !=
+                                            std::numeric_limits<std::size_t>::max())
+                                            ++contextual_scheduler_diagnostics
+                                                  .lane_widening_classification_dropped;
+                                    }
+                                    update_contextual_return_product_telemetry(
+                                        contextual_return_product_slot,
+                                        [](auto& telemetry) {
+                                            telemetry
+                                                .lane_widening_classification_degraded =
+                                                true;
+                                            ++telemetry
+                                                  .lane_widening_classification_dropped;
+                                        });
+                                }
+                            }
+                            if (match_input_changed) {
                                 lane.match_input =
                                     std::move(*joined_match_input);
-                                lane_changed = true;
                             }
-                            if (joined_input.has_value() &&
-                                lane.input != *joined_input) {
+                            if (input_changed) {
                                 lane.input =
                                     std::move(*joined_input);
-                                lane_changed = true;
                             }
                             if (lane_changed) {
                                 selected_lane_changed = true;
                                 ++lane.input_version;
-                                enqueue_context(*selected_lane);
+                                enqueue_context(
+                                    *selected_lane,
+                                    ContextualRequeueReason::InputWidening);
                             }
                         }
                         auto& forward_edges =
@@ -31871,6 +33237,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             if (forward_match_changed)
                                 forward->second = std::move(joined);
                         }
+                        item.forward_edge_changed =
+                            item.forward_edge_changed || forward_inserted ||
+                            forward_match_changed;
                         item.dependency_graph_changed =
                             item.dependency_graph_changed ||
                             selected_lane_changed ||
@@ -31889,17 +33258,33 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (contextual_context_budget_exhausted)
                         break;
                 }
-                if (contextual_context_budget_exhausted) break;
+                if (contextual_jacobi_fault_hook->callback) {
+                    for (const auto& item : batch) {
+                        try {
+                            static_cast<void>(
+                                contextual_jacobi_fault_hook->callback(
+                                    {ContextualReturnJacobiFaultHookPointForTesting::
+                                         BeforeStaleFreeze,
+                                     function_index,
+                                     item.batch_index,
+                                     item.batch_size,
+                                     item.lane_id,
+                                     item.address}));
+                        } catch (...) {
+                            // Test observation cannot perturb the canonical
+                            // staleness gate or publication.
+                        }
+                    }
+                }
                 // Freeze validity for the complete Jacobi snapshot before any
                 // Summary version is advanced. Otherwise the first member of
                 // a cyclic parallel batch would invalidate every later member
                 // even though all were evaluated from the same valid state.
-                std::vector<std::uint8_t> summary_publishable(
+                std::vector<std::uint8_t> current_snapshots(
                     batch.size(), 1u);
                 for (std::size_t index = 0u;
                      index < batch.size();
                      ++index) {
-                    throw_if_resolution_cancelled(cancel_requested);
                     const auto& item = batch[index];
                     bool stale =
                         contextual_lanes.at(item.lane_id)
@@ -31920,9 +33305,113 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     // must recompute its parent effect from the final batch
                     // graph before publishing a Summary.
                     if (stale || item.dependency_graph_changed) {
-                        summary_publishable[index] = 0u;
-                        enqueue_context(item.lane_id);
+                        current_snapshots[index] = 0u;
+                        if (stale) {
+                            if (collect_contextual_scheduler_diagnostics)
+                                ++contextual_scheduler_diagnostics
+                                      .stale_snapshot_discards;
+                            add_contextual_product_counter(
+                                &ContextualReturnD1Telemetry::
+                                    stale_snapshot_discards);
+                        }
+                        enqueue_context(
+                            item.lane_id,
+                            stale
+                                ? ContextualRequeueReason::StaleDependency
+                                : item.forward_edge_changed
+                                      ? ContextualRequeueReason::
+                                            ForwardEdgeInsertOrWiden
+                                      : ContextualRequeueReason::
+                                            InputWidening);
                     }
+                }
+
+                // A contextual-context budget failure is itself terminal for
+                // this root, but only after every completed snapshot received
+                // its staleness decision above.
+                if (contextual_context_budget_exhausted) {
+                    update_contextual_return_product_telemetry(
+                        contextual_return_product_slot,
+                        [](auto& telemetry) {
+                            telemetry.incomplete_root = true;
+                        });
+                    break;
+                }
+
+                // Cancellation is authoritative only after stale snapshots
+                // have been requeued and before any terminal lane output is
+                // accepted or published.
+                throw_if_resolution_cancelled(cancel_requested);
+                for (std::size_t index = 0u;
+                     index < batch.size();
+                     ++index) {
+                    if (current_snapshots[index] == 0u) continue;
+                    auto& item = batch[index];
+                    if (item.error)
+                        std::rethrow_exception(item.error);
+                    if (!item.evaluation.has_value())
+                        throw std::logic_error(
+                            "Contextual-Return-Auswertung fehlt.");
+                    if (item.evaluation
+                            ->local_fixpoint_budget_exhausted) {
+                        record_local_fixpoint_limit();
+                        return;
+                    }
+                }
+
+                // A materialized canonical artifact becomes reusable only
+                // after the exact snapshots that requested it survived the
+                // complete discovery/freeze/error gates. Cache work itself
+                // may remain speculative, but no stale-only batch publishes
+                // scheduler state.
+                std::chrono::steady_clock::time_point serial_commit_started{};
+                if (collect_contextual_return_product_telemetry)
+                    serial_commit_started = std::chrono::steady_clock::now();
+                for (const auto& group : semantic_groups) {
+                    if (group.artifact == nullptr) continue;
+                    const bool has_current_subscriber = std::any_of(
+                        group.item_indices.begin(),
+                        group.item_indices.end(),
+                        [&](const std::size_t index) {
+                            return current_snapshots[index] != 0u;
+                        });
+                    if (!has_current_subscriber) continue;
+                    auto& semantic_lane =
+                        semantic_lanes.at(group.lane_id);
+                    semantic_lane.ready_artifact = group.artifact;
+                }
+                if (collect_contextual_return_product_telemetry) {
+                    const auto commit_nanoseconds = static_cast<std::uint64_t>(
+                        std::max(
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now() -
+                                    serial_commit_started),
+                            std::chrono::nanoseconds{1})
+                            .count());
+                    update_contextual_return_product_telemetry(
+                        contextual_return_product_slot,
+                        [&](auto& telemetry) {
+                            ++telemetry.serial_commit_count;
+                            telemetry.serial_commit_nanoseconds +=
+                                commit_nanoseconds;
+                        });
+                }
+
+                // Only current, complete, non-cancelled outcomes may now
+                // publish diagnostics, evidence, tokens, or summaries.
+                std::chrono::steady_clock::time_point publish_started{};
+                if (collect_contextual_return_product_telemetry)
+                    publish_started = std::chrono::steady_clock::now();
+                std::vector<std::uint8_t> summary_publishable =
+                    std::move(current_snapshots);
+                for (std::size_t index = 0u;
+                     index < batch.size();
+                     ++index) {
+                    if (summary_publishable[index] == 0u) continue;
+                    merge_fixpoint_diagnostics(
+                        function_result.walk_diagnostics,
+                        batch[index].diagnostics);
                 }
 
                 std::vector<std::optional<FunctionValueSummary>>
@@ -31989,29 +33478,32 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         contextual_callers.find(lane_id);
                     if (callers != contextual_callers.end()) {
                         for (const auto caller : callers->second)
-                            enqueue_context(caller);
+                            enqueue_context(
+                                caller,
+                                ContextualRequeueReason::SummaryChange);
                     }
                 }
+                if (collect_contextual_return_product_telemetry) {
+                    const auto publish_nanoseconds = static_cast<std::uint64_t>(
+                        std::max(
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now() -
+                                    publish_started),
+                            std::chrono::nanoseconds{1})
+                            .count());
+                    update_contextual_return_product_telemetry(
+                        contextual_return_product_slot,
+                        [&](auto& telemetry) {
+                            ++telemetry.publish_count;
+                            telemetry.publish_nanoseconds +=
+                                publish_nanoseconds;
+                        });
+                }
+                refresh_contextual_product_telemetry();
             }
             if (contextual_context_budget_exhausted)
                 return;
-            if (!pending_contexts.empty()) {
-                function_result.walk_diagnostics.contextual_return_evaluation_limited_functions = 1u;
-                emit_contextual_return_limit_diagnostic(
-                    "evaluations",
-                    1u,
-                    function->entry_address,
-                    contextual_lanes.at(
-                        pending_contexts.front())
-                        .function_entry,
-                    contextual_lanes.at(
-                        pending_contexts.front())
-                        .function_entry,
-                    contextual_lanes.size(),
-                    contextual_evaluations,
-                    pending_contexts.size());
-                return;
-            }
             // The fixpoint above is intentionally side-effect free. Running
             // GuardedInventory while summaries are still changing would leak
             // transient targets and collector diagnostics into the final
@@ -32064,7 +33556,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                              nullptr,
                              &lane.call_site_tokens,
                              &lane.callee_tokens,
-                             allow_memory_projection);
+                             allow_memory_projection,
+                             false);
                         if (!stable.evidence_lens.has_value()) {
                             stable.fallback_bindings.emplace(
                                 materialize_contextual_summary_bindings(
@@ -32286,7 +33779,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 nullptr,
                                 nullptr,
                                 nullptr,
-                                allow_memory_projection);
+                                allow_memory_projection,
+                                false);
                         const auto& evaluation_input =
                             isolated.evidence_lens.has_value()
                                 ? isolated.evidence_lens->ingress()
@@ -33130,6 +34624,31 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 }
             }
         }
+        std::shared_ptr<ContextualReturnProductTelemetrySlot>
+            contextual_product_slot;
+        try {
+            const std::lock_guard lock(
+                contextual_return_product_slots_mutex);
+            const auto found = contextual_return_product_slots.find(
+                resolved.root_index);
+            if (found != contextual_return_product_slots.end())
+                contextual_product_slot = found->second;
+        } catch (...) {
+            contextual_return_product_degraded.store(
+                true, std::memory_order_relaxed);
+            contextual_return_product_dropped.fetch_add(
+                1u, std::memory_order_relaxed);
+        }
+        update_contextual_return_product_telemetry(
+            contextual_product_slot,
+            [&](auto& telemetry) {
+                telemetry.retention_enabled =
+                    resolution_epoch_retention_enabled;
+                telemetry.retained_bytes =
+                    progress_resolution_epoch_retained_bytes;
+                telemetry.incomplete_root =
+                    telemetry.incomplete_root || incomplete_root;
+            });
         ++resolution_functions_committed;
         if (resolution_functions_committed <= 16u ||
             resolution_functions_committed % 128u == 0u ||

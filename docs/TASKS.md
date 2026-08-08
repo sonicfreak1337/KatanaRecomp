@@ -83,9 +83,9 @@ Daher gilt projektweit:
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-funktionaler Source-Checkpoint:
-  a521999 / Runtime-ABI 87 / Block-ABI 5 / Analyzer-ABI 31 /
-  PlatformServices-ABI 13 / Backend-ABI 12 / Portprojektvertrag 75
+Sourcebasis dieses Arbeitsstands:
+  60638dd71d8a70d70a58aaecb3dbad9ec318bf62
+  plus gemeinsamer KR-4985/KR-4986-Bugfix dieses Commits
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -110,15 +110,10 @@ Messwert abgeleitet werden.
 ## Verbindliche Reihenfolge
 
 ```text
-KR-4985 -> D1 nur nach ausdruecklicher Freigabe
-  -> KR-4986
-  -> KR-4987 bis KR-4990 nur bei ihrem positiven Messgate
-  -> D2 nur nach ausdruecklicher Freigabe
-  -> KR-4991 nur bei positivem G2
-  -> KR-4993
-  -> KR-4981 genau ein voller Sonic-Produktbuild und -lauf
-     -> KR-4992 nur nach verfehltem Zeitgate und positivem Restkosten-/RAM-Gate
-        -> KR-4993 erneut -> separat freigegebener KR-4981-Retry
+KR-4985 und KR-4986: source-seitig abgeschlossen
+  -> nach diesem Bugfix-Push origin/main synchronisieren
+  -> Roadmap neu bewerten
+  -> D1/G1 bleibt wegen des unvollstaendigen Laufs unentschieden
 ```
 
 Jeder Task in dieser Kette folgt einzeln:
@@ -127,11 +122,11 @@ Jeder Task in dieser Kette folgt einzeln:
 implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 ```
 
-D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix.
-Der Push gibt jeweils den naechsten ungegateten Task frei. Nur D1 und D2
-benoetigen eine ausdrueckliche Lauf-Freigabe; KR-4987 bis KR-4991 werden nur
-durch ihre positiven G1-/G2-Messgates aktiviert. KR-4982 und KR-4983 bleiben
-gestrichen.
+D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix. Der
+einzige freigegebene D1-Lauf wurde vor dem vollstaendigen schweren Root durch
+einen privaten Supervisor-I/O-Fehler beendet; D1/G1 ist deshalb fail-closed
+und unentschieden. KR-4987 bis KR-4991 bleiben bis zu einer spaeteren
+Roadmap-Neubewertung nicht aktiviert. KR-4982 und KR-4983 bleiben gestrichen.
 
 ---
 
@@ -196,11 +191,16 @@ gleich scoped ermittelt.
 
 ---
 
-## [ ] KR-4985 - Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie
+## [x] KR-4985 - Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie
 
 Prioritaet: P0 Performance-Diagnose
 
-Abhaengigkeiten: KR-4974, Source-Checkpoint `a521999`
+Abhaengigkeiten: KR-4974, Arbeitsbasis `60638dd71d8a70d70a58aaecb3dbad9ec318bf62`
+
+Status: Source-seitig abgeschlossen durch den gemeinsamen Candidate-Resolution-
+Explosionsfix. D1-Telemetrie ist explizit opt-in produktiv; die begrenzte
+Produktevidenz blieb wegen vorzeitigem Supervisor-Abbruch unvollstaendig und
+entscheidet weder D1/G1 positiv noch negativ.
 
 ### Ziel
 
@@ -214,9 +214,9 @@ Evidence und Commit getrennt sichtbar machen.
 - logische Evaluationen, physische Auswertungen, Cache-Reuse ohne physische
   Arbeit, Context- und Evaluationsbudgets;
 - neue, verbreiterte und erneut zugelassene Lanes;
-- Requeue-Ursachen getrennt nach Input-Widening, Summary-Aenderung,
-  Forward-Edge-Insert/Widening, stale Dependency-Version,
-  Evidence-Layout-Aenderung, Cache-Reuse und neuer semantischer Lane;
+- Requeue-Ursachen getrennt nach initial root, neuer exakter Lane,
+  Input-Widening, Summary-Aenderung, Forward-Edge-Insert/Widening und stale
+  Dependency-Version;
 - Snapshot-, Key-, Auswertungs-, Merge-, Evidence- und Commitzeit;
 - Bindingzahl, Hitposition, Equality-/Copy-/Mergearbeit und Stategroesse;
 - aggregierte Full-State-, Projected-Lens- und Provenienz-Digests;
@@ -233,20 +233,24 @@ Evidence und Commit getrennt sichtbar machen.
 - Drop-, Vollstaendigkeits- und Budgetpfade werden im Quellreview verfolgt;
 - stale oder gecancelte Resultate koennen weder Summary/Evidence publizieren
   noch ueber `item.error` einen aktuellen Root terminal beenden;
-- D1 wird nur nach ausdruecklicher Freigabe als realer Sonic-
-  Diagnoseexport ausgefuehrt;
-- D1 endet am ersten vollstaendigen schweren Root oder an den allgemeinen
-  Lauf-/Stallgrenzen;
-- das Messgate G1 entscheidet die bedingten Tasks KR-4987 bis KR-4990;
+- D1 wurde einmal freigegeben, erreichte aber weder den historisch
+  limitierenden Root noch einen vollstaendigen schweren Root; D1/G1 bleibt
+  daher unentschieden;
+- KR-4987 bis KR-4990 werden durch diesen unvollstaendigen Lauf nicht aktiviert;
 - keine neue Telemetrie-Testmatrix oder synthetische Ersatzabnahme.
 
 ---
 
-## [ ] KR-4986 - Semantische Context-Lanes und exakte Provenienzabonnenten
+## [x] KR-4986 - Semantische Context-Lanes und exakte Provenienzabonnenten
 
 Prioritaet: P0 Korrektheits-Enabler
 
 Abhaengigkeit: KR-4985
+
+Status: Source-seitig abgeschlossen durch den gemeinsamen Explosionsfix. Die
+Full-State-Semantik bleibt autoritativ; exakte Provenienz wird getrennt
+replayed. Keine Read-Lens-Aktivierung und keine reduzierte Analyseabdeckung
+wurden daraus abgeleitet.
 
 ### Ziel
 

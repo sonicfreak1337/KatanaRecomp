@@ -128,6 +128,8 @@ class StructuredControlFlowProgress final {
             function_counters, progress);
         append_function_physical_work_counters(
             function_counters, progress);
+        append_contextual_return_counters(
+            function_counters, progress.function_value_contextual_return);
         function_values_->update(
             progress.function_value_logical_evaluations,
             std::move(function_counters));
@@ -198,6 +200,9 @@ class StructuredControlFlowProgress final {
                 resolution_counters, progress);
             append_function_physical_work_counters(
                 resolution_counters, progress);
+            append_contextual_return_counters(
+                resolution_counters,
+                progress.function_value_contextual_return);
             resolution_->update(
                 std::min(
                     progress
@@ -229,6 +234,95 @@ class StructuredControlFlowProgress final {
     }
 
   private:
+    static void append_contextual_return_counters(
+        katana::ProgressCounterSnapshot& counters,
+        const std::optional<katana::analysis::ContextualReturnD1Telemetry>&
+            telemetry) {
+        if (!telemetry) return;
+        if (telemetry->root_index && telemetry->root_address) {
+#define KATANA_CONTEXTUAL_RETURN_COUNTER(name) \
+    counters.contextual_return_##name = telemetry->name
+        KATANA_CONTEXTUAL_RETURN_COUNTER(root_index);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(root_address);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(current_function_address);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(limiting_function_address);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(wave);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(frontier);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(maximum_frontier);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(context_budget);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(evaluation_budget);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(contexts_admitted);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(evaluations_admitted);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(retained_bytes);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(logical_requests);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(logical_admissions);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(semantic_lane_cardinality);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(physical_evaluations);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(cache_reuses);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(exact_subscriber_cardinality);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(provenance_cardinality);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(root_lane_creations);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(descendant_lane_creations);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(requeues_initial_root_seed);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(requeues_new_lane);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(requeues_input_widening);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(requeues_summary_change);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(requeues_forward_edge_insert_or_widen);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(requeues_stale_dependency);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(stale_snapshot_discards);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(snapshot_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(snapshot_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(key_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(key_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(cache_evaluation_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(cache_evaluation_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(apply_call_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(apply_call_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(binding_lookups);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(bindings_examined);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(binding_equality_attempts);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(binding_merge_attempts);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(binding_merge_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(binding_exact_hits);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(binding_join_hits);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(maximum_binding_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(maximum_binding_hit_position);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(evidence_restore_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(evidence_restore_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(serial_commit_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(serial_commit_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(publish_count);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(publish_nanoseconds);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(maximum_full_state_key_bytes);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(maximum_projected_key_bytes);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(maximum_capsule_entries);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(projected_digest_cardinality);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(projected_digest_dropped);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(alpha_normalization_fallbacks);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(semantic_lane_widenings);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(provenance_only_lane_widenings);
+        KATANA_CONTEXTUAL_RETURN_COUNTER(lane_widening_classification_dropped);
+#undef KATANA_CONTEXTUAL_RETURN_COUNTER
+        counters.contextual_return_context_budget_exhausted =
+            telemetry->context_budget_exhausted;
+        counters.contextual_return_evaluation_budget_exhausted =
+            telemetry->evaluation_budget_exhausted;
+        counters.contextual_return_composite_budget_exhausted =
+            telemetry->composite_budget_exhausted;
+        counters.contextual_return_incomplete_root = telemetry->incomplete_root;
+        counters.contextual_return_retention_enabled =
+            telemetry->retention_enabled;
+        counters.contextual_return_projected_digest_degraded =
+            telemetry->projected_digest_degraded;
+        counters.contextual_return_lane_widening_classification_degraded =
+            telemetry->lane_widening_classification_degraded;
+        }
+        counters.contextual_return_telemetry_dropped =
+            telemetry->telemetry_dropped;
+        counters.contextual_return_telemetry_degraded =
+            telemetry->telemetry_degraded;
+    }
+
     static void append_seed_round_counters(
         katana::ProgressCounterSnapshot& counters,
         const katana::analysis::ControlFlowAnalysisProgress&

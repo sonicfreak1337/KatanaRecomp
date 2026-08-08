@@ -18,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -2781,6 +2782,344 @@ duplicate_forwarded_context_values(
             session);
     run.session_statistics = session.statistics();
     return run;
+}
+
+struct ContextualStaleErrorRun final {
+    katana::analysis::FunctionValueAnalysisResult values;
+};
+
+ContextualStaleErrorRun contextual_stale_error_values(
+    katana::analysis::detail::FunctionValueAnalysisSession*
+        session_for_testing = nullptr) {
+    std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] =
+            static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // R has four distinct guarded candidate callsites. Their descendant F
+    // lanes stay separate by the caller/callsite family key.
+    put_u16(0x00u, 0xE460u); // object 0x60 -> r4
+    put_u16(0x02u, 0x410Bu); // guarded candidate call -> F
+    put_u16(0x04u, 0x0009u);
+    put_u16(0x06u, 0xE464u); // object 0x64 -> r4
+    put_u16(0x08u, 0x410Bu); // guarded candidate call -> F
+    put_u16(0x0Au, 0x0009u);
+    put_u16(0x0Cu, 0xE468u); // object 0x68 -> r4
+    put_u16(0x0Eu, 0x410Bu); // guarded candidate call -> F
+    put_u16(0x10u, 0x0009u);
+    put_u16(0x12u, 0xE46Cu); // object 0x6c -> r4
+    put_u16(0x14u, 0x410Bu); // guarded candidate call -> F
+    put_u16(0x16u, 0x0009u);
+    put_u16(0x18u, 0x000Bu);
+    put_u16(0x1Au, 0x0009u);
+
+    // F preserves its distinct object identity in r6 while r4 follows the
+    // shared callback field. H reads r6, so its one joined lane widens.
+    put_u16(0x20u, 0x6643u); // mov r4,r6
+    put_u16(0x22u, 0x6442u); // mov.l @r4,r4
+    put_u16(0x24u, 0xB004u); // bsr H (0x30)
+    put_u16(0x26u, 0x0009u);
+    put_u16(0x28u, 0x000Bu);
+    put_u16(0x2Au, 0x0009u);
+
+    put_u16(0x30u, 0x6063u); // H: mov r6,r0
+    put_u16(0x32u, 0x2742u); // H: persistent callback store
+    put_u16(0x34u, 0x6463u); // H: mov r6,r4 (retained ABI read)
+    put_u16(0x36u, 0x2742u); // H: persistent object-identity store
+    put_u16(0x38u, 0x000Bu);
+    put_u16(0x3Au, 0x0009u);
+
+    // Different object identities, one identical decode-valid callback.
+    put_u32(0x60u, 0x90u);
+    put_u32(0x64u, 0x90u);
+    put_u32(0x68u, 0x90u);
+    put_u32(0x6Cu, 0x90u);
+    put_u16(0x90u, 0x000Bu);
+    put_u16(0x92u, 0x0009u);
+
+    katana::io::ExecutableImage image;
+    image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.set_initial_snapshot_entry(0u);
+    image.add_segment({".contextual-stale-error",
+                       0u,
+                       0u,
+                       bytes.size(),
+                       katana::io::SegmentKind::Mixed,
+                       {true, true, true},
+                       bytes});
+    image.add_entry_point(0u);
+    const auto lines = katana::sh4::disassemble(bytes, 0u);
+    constexpr std::array<katana::analysis::FunctionBoundary, 3u>
+        boundaries{{
+            {0x00u, 0x1Cu},
+            {0x20u, 0x0Cu},
+            {0x30u, 0x0Cu},
+        }};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 4u> edges{{
+        {0x02u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x08u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x0Eu,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+        {0x14u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot},
+         true},
+    }};
+    std::optional<katana::analysis::detail::FunctionValueAnalysisSession>
+        owned_session;
+    if (session_for_testing == nullptr)
+        owned_session.emplace();
+    auto& session = session_for_testing == nullptr
+                        ? *owned_session
+                        : *session_for_testing;
+    katana::analysis::detail::GuardedNativeEntryShapeCache shapes{image};
+    ContextualStaleErrorRun run;
+    run.values = katana::analysis::detail::
+        analyze_function_values_with_guarded_entry_cache(
+            image, lines, boundaries, edges, {}, shapes, session);
+    return run;
+}
+
+void verify_contextual_stale_error_regression(
+    const ContextualStaleErrorRun& reference) {
+    using ContextualSession =
+        katana::analysis::detail::FunctionValueAnalysisSession;
+    using JacobiFaultEvent =
+        katana::analysis::detail::ContextualReturnJacobiFaultEventForTesting;
+    using JacobiFaultHook = katana::analysis::detail::
+        ContextualReturnJacobiFaultHookForTesting;
+    using JacobiFaultPoint = katana::analysis::detail::
+        ContextualReturnJacobiFaultHookPointForTesting;
+    constexpr std::string_view sentinel_error =
+        "Testfehler vor Contextual-Return-Jacobi-Auswertung.";
+
+    ContextualSession stale_error_session;
+    std::atomic_size_t stale_error_injections = 0u;
+    std::atomic_size_t stale_error_stale_discards = 0u;
+    std::atomic_size_t stale_error_pre_freezes = 0u;
+    std::atomic_size_t stale_error_snapshots = 0u;
+    std::atomic_size_t stale_error_logical_admissions = 0u;
+    std::atomic_size_t stale_error_semantic_lane_creations = 0u;
+    std::atomic_size_t stale_error_semantic_lane_reuses = 0u;
+    std::atomic_size_t stale_error_exact_subscriber_replays = 0u;
+    std::atomic_bool stale_error_budget_exhausted = false;
+    std::atomic_bool stale_error_invocation_aborted = false;
+    stale_error_session
+        .set_contextual_return_scheduler_diagnostics_observer_for_testing(
+            [&stale_error_stale_discards,
+             &stale_error_snapshots,
+             &stale_error_logical_admissions,
+             &stale_error_semantic_lane_creations,
+             &stale_error_semantic_lane_reuses,
+             &stale_error_exact_subscriber_replays,
+             &stale_error_budget_exhausted,
+             &stale_error_invocation_aborted](const auto& diagnostics) {
+                stale_error_snapshots.fetch_add(
+                    1u, std::memory_order_relaxed);
+                stale_error_stale_discards.fetch_add(
+                    diagnostics.stale_snapshot_discards,
+                    std::memory_order_relaxed);
+                stale_error_logical_admissions.fetch_add(
+                    diagnostics.fixpoint_scheduler_logical_admissions,
+                    std::memory_order_relaxed);
+                stale_error_semantic_lane_creations.fetch_add(
+                    diagnostics.semantic_lane_creations,
+                    std::memory_order_relaxed);
+                stale_error_semantic_lane_reuses.fetch_add(
+                    diagnostics.semantic_lane_reuses,
+                    std::memory_order_relaxed);
+                stale_error_exact_subscriber_replays.fetch_add(
+                    diagnostics.exact_subscriber_replays,
+                    std::memory_order_relaxed);
+                if (diagnostics.contextual_context_budget_exhausted ||
+                    diagnostics.contextual_evaluation_budget_exhausted ||
+                    diagnostics.composite_logical_budget_exhausted)
+                    stale_error_budget_exhausted.store(
+                        true, std::memory_order_relaxed);
+                if (diagnostics.invocation_aborted_by_exception)
+                    stale_error_invocation_aborted.store(
+                        true, std::memory_order_relaxed);
+            });
+    JacobiFaultHook stale_error_hook;
+    stale_error_hook.maximum_batch_size = 3u;
+    stale_error_hook.callback = [&stale_error_injections,
+                                 &stale_error_pre_freezes](
+                                    const JacobiFaultEvent& event) {
+        if (event.point == JacobiFaultPoint::BeforeStaleFreeze) {
+            stale_error_pre_freezes.fetch_add(
+                1u, std::memory_order_relaxed);
+            return false;
+        }
+        if (event.point != JacobiFaultPoint::BeforeEvaluation ||
+            event.function_address != 0x30u || event.batch_size != 3u ||
+            event.batch_index != 2u)
+            return false;
+        std::size_t expected = 0u;
+        return stale_error_injections.compare_exchange_strong(
+            expected, 1u, std::memory_order_relaxed);
+    };
+    stale_error_session.set_contextual_return_jacobi_fault_hook_for_testing(
+        std::move(stale_error_hook));
+    ContextualStaleErrorRun stale_error_repaired;
+    std::string stale_error_message;
+    try {
+        stale_error_repaired =
+            contextual_stale_error_values(&stale_error_session);
+    } catch (const std::exception& error) {
+        stale_error_message = error.what();
+    }
+    const auto stale_error_candidate = std::find_if(
+        stale_error_repaired.values.guarded_code_inventory
+            .stored_code_addresses.begin(),
+        stale_error_repaired.values.guarded_code_inventory
+            .stored_code_addresses.end(),
+        [](const auto& candidate) {
+            return candidate.target_address == 0x90u;
+        });
+    require(
+        stale_error_message.empty() &&
+            stale_error_injections.load(std::memory_order_relaxed) == 1u &&
+            stale_error_stale_discards.load(std::memory_order_relaxed) !=
+                0u &&
+            stale_error_pre_freezes.load(std::memory_order_relaxed) != 0u &&
+            stale_error_snapshots.load(std::memory_order_relaxed) != 0u &&
+            stale_error_semantic_lane_creations.load(
+                std::memory_order_relaxed) ==
+                stale_error_logical_admissions.load(
+                    std::memory_order_relaxed) &&
+            stale_error_semantic_lane_creations.load(
+                std::memory_order_relaxed) != 0u &&
+            stale_error_semantic_lane_reuses.load(
+                std::memory_order_relaxed) != 0u &&
+            stale_error_exact_subscriber_replays.load(
+                std::memory_order_relaxed) >
+                stale_error_logical_admissions.load(
+                    std::memory_order_relaxed) &&
+            !stale_error_budget_exhausted.load(
+                std::memory_order_relaxed) &&
+            !stale_error_invocation_aborted.load(
+                std::memory_order_relaxed),
+        "Der KR-4985-Test erzeugte keinen gesunden stale Contextual-"
+        "Return-Jacobi-Workerfehler mit anschliessender Reparatur "
+        "(error='" + stale_error_message + "', injections=" +
+            std::to_string(
+                stale_error_injections.load(std::memory_order_relaxed)) +
+            ", stale_discards=" +
+            std::to_string(
+                stale_error_stale_discards.load(std::memory_order_relaxed)) +
+            ", prefreezes=" +
+            std::to_string(
+                stale_error_pre_freezes.load(std::memory_order_relaxed)) +
+            ", snapshots=" +
+            std::to_string(
+                stale_error_snapshots.load(std::memory_order_relaxed)) +
+            ", logical_admissions=" +
+            std::to_string(stale_error_logical_admissions.load(
+                std::memory_order_relaxed)) +
+            ", semantic_lane_creations=" +
+            std::to_string(stale_error_semantic_lane_creations.load(
+                std::memory_order_relaxed)) +
+            ", semantic_lane_reuses=" +
+            std::to_string(stale_error_semantic_lane_reuses.load(
+                std::memory_order_relaxed)) +
+            ", exact_subscriber_replays=" +
+            std::to_string(stale_error_exact_subscriber_replays.load(
+                std::memory_order_relaxed)) +
+            ", budget=" +
+            std::to_string(
+                stale_error_budget_exhausted.load(
+                    std::memory_order_relaxed)) +
+            ", aborted=" +
+            std::to_string(
+                stale_error_invocation_aborted.load(
+                    std::memory_order_relaxed)) + ").");
+    require_same_function_value_semantics(
+        reference.values, stale_error_repaired.values, false);
+    const auto stale_error_evidence = [&] {
+        if (stale_error_candidate ==
+            stale_error_repaired.values.guarded_code_inventory
+                .stored_code_addresses.end())
+            return std::string{"<kein Kandidat>"};
+        std::string text;
+        for (const auto site : stale_error_candidate->evidence_call_sites) {
+            if (!text.empty()) text += ',';
+            text += std::to_string(site);
+        }
+        return text;
+    }();
+    require(
+        stale_error_candidate !=
+                stale_error_repaired.values.guarded_code_inventory
+                    .stored_code_addresses.end() &&
+            stale_error_candidate->store_instruction_addresses ==
+                std::vector<std::uint32_t>{0x32u} &&
+            stale_error_candidate->evidence_call_sites ==
+                std::vector<std::uint32_t>{
+                    0x02u, 0x08u, 0x0Eu, 0x14u, 0x24u},
+        "Ein stale Contextual-Return-Fehler publizierte oder verlor "
+        "Summary-/Evidence-Zustand vor seiner Reparatur "
+        "(actual_call_sites=[" + stale_error_evidence + "]).");
+
+    ContextualSession current_error_session;
+    std::atomic_size_t current_error_injections = 0u;
+    JacobiFaultHook current_error_hook;
+    current_error_hook.maximum_batch_size = 1u;
+    current_error_hook.callback = [&current_error_injections](
+                                      const JacobiFaultEvent& event) {
+        if (event.point != JacobiFaultPoint::BeforeEvaluation ||
+            event.function_address != 0x30u || event.batch_size != 1u)
+            return false;
+        std::size_t expected = 0u;
+        return current_error_injections.compare_exchange_strong(
+            expected, 1u, std::memory_order_relaxed);
+    };
+    current_error_session
+        .set_contextual_return_jacobi_fault_hook_for_testing(
+            std::move(current_error_hook));
+    std::string current_error_message;
+    try {
+        static_cast<void>(
+            contextual_stale_error_values(&current_error_session));
+    } catch (const std::exception& error) {
+        current_error_message = error.what();
+    }
+    require(
+        current_error_injections.load(std::memory_order_relaxed) == 1u &&
+            current_error_message == sentinel_error,
+        "Ein current Contextual-Return-Jacobi-Workerfehler wurde nicht "
+        "mit der injizierten Sentinel-Meldung propagiert.");
 }
 
 struct DuplicateIsolatedContextRun final {
@@ -6313,9 +6652,108 @@ void verify_boundary_overlay_fallback_contracts() {
                     "Ein neuer Function-Entry mit altem Tail-Owner");
 }
 
+void verify_contextual_semantic_lane_selector() {
+    // This narrow selector deliberately reuses the existing contextual
+    // contracts. It is not a second fixture matrix: each case continues to
+    // validate the semantic output it already defines, while KR-4986 shares
+    // only its internal full-state producer work.
+    const auto duplicate = duplicate_forwarded_context_values();
+    const auto duplicate_candidate = std::find_if(
+        duplicate.values.guarded_code_inventory.stored_code_addresses
+            .begin(),
+        duplicate.values.guarded_code_inventory.stored_code_addresses
+            .end(),
+        [](const auto& candidate) {
+            return candidate.target_address == 0x70u;
+        });
+    require(
+        duplicate_candidate !=
+                duplicate.values.guarded_code_inventory
+                    .stored_code_addresses.end() &&
+            duplicate_candidate->store_instruction_addresses ==
+                std::vector<std::uint32_t>{0x20u} &&
+            duplicate_candidate->evidence_call_sites ==
+                std::vector<std::uint32_t>{0x02u, 0x12u} &&
+            !duplicate.values.guarded_code_inventory.walk_diagnostics
+                 .truncated(),
+        "Der KR-4986-Selector verlor den bestehenden Duplicate-"
+        "Forwarded-Context-Vertrag.");
+
+    const auto multi_owner = multi_owner_contextual_return_values();
+    const auto* const multi_owner_table_a =
+        returned_table_candidate(multi_owner.values, 0x90u);
+    const auto* const multi_owner_table_b =
+        returned_table_candidate(multi_owner.values, 0x98u);
+    require(
+        multi_owner_table_a != nullptr &&
+            multi_owner_table_a->target_addresses ==
+                std::vector<std::uint32_t>{0xC0u, 0xD0u} &&
+            multi_owner_table_b != nullptr &&
+            multi_owner_table_b->target_addresses ==
+                std::vector<std::uint32_t>{0xD0u} &&
+            !multi_owner.values.guarded_code_inventory.walk_diagnostics
+                 .truncated(),
+        "Der KR-4986-Selector verlor den bestehenden Multi-Owner-"
+        "Contextual-Return-Vertrag.");
+
+    const auto contextual_budget =
+        contextual_read_contract_and_fixpoint_budget_values();
+    const auto* const contextual_budget_table =
+        returned_table_candidate(contextual_budget, 0x80u);
+    const auto& contextual_budget_diagnostics =
+        contextual_budget.guarded_code_inventory.walk_diagnostics;
+    require(
+        contextual_budget_table != nullptr &&
+            contextual_budget_table->target_addresses ==
+                std::vector<std::uint32_t>{0x90u} &&
+            !contextual_budget_diagnostics
+                 .contextual_return_context_limited_functions &&
+            !contextual_budget_diagnostics
+                 .contextual_return_evaluation_limited_functions &&
+            !contextual_budget.budget_exhausted,
+        "Der KR-4986-Selector verlor den bestehenden Contextual-"
+        "Read-/Budget-Vertrag.");
+
+    const auto stale_reference = contextual_stale_error_values();
+    verify_contextual_stale_error_regression(stale_reference);
+}
+
 } // namespace
 
-int main() {
+int main(const int argc, char* argv[]) {
+    if (argc > 1) {
+        if (argc != 2) {
+            std::cerr
+                << "Unbekannter Testschalter; erwartet wird genau "
+                << "--only=contextual-stale-error oder "
+                << "--only=contextual-semantic-lanes.\n";
+            return EXIT_FAILURE;
+        }
+        try {
+            const auto selector = std::string_view{argv[1]};
+            if (selector == "--only=contextual-stale-error") {
+                const auto reference = contextual_stale_error_values();
+                verify_contextual_stale_error_regression(reference);
+                std::cout
+                    << "KR-4985 Contextual-Stale-Error erfolgreich.\n";
+            } else if (selector == "--only=contextual-semantic-lanes") {
+                verify_contextual_semantic_lane_selector();
+                std::cout
+                    << "KR-4986 Contextual-Semantic-Lanes erfolgreich.\n";
+            } else {
+                std::cerr
+                    << "Unbekannter Testschalter; erwartet wird genau "
+                    << "--only=contextual-stale-error oder "
+                    << "--only=contextual-semantic-lanes.\n";
+                return EXIT_FAILURE;
+            }
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::cerr << "Contextual-Selector-Ausnahme: "
+                      << error.what() << '\n';
+            return EXIT_FAILURE;
+        }
+    }
     verify_persistent_function_value_session();
     verify_incremental_resolution_root_reuse();
     verify_delta_staging_and_cold_replacement_contract();
@@ -7092,6 +7530,11 @@ int main() {
                         : duplicate_forwarded_candidate
                               ->evidence_callees.size()) +
                 ").");
+
+        const auto contextual_stale_error_reference =
+            contextual_stale_error_values();
+        verify_contextual_stale_error_regression(
+            contextual_stale_error_reference);
 
         const auto duplicate_isolated =
             duplicate_isolated_context_values();

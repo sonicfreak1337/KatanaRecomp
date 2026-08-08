@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- Der Candidate-Resolution-Explosionsbug ist quellseitig behoben: kanonische
+  Full-State-Semantic-Lanes deduplizieren semantische Arbeit kollisionssicher,
+  waehrend exakte Contributions und Evidence als Provenienzabonnenten privat
+  replayt werden. Das Budget belastet nur neue semantische Lanes; Stale-,
+  Cancellation-, Fehler- und Publikationsreihenfolge bleibt fail-closed.
+  KR-4985-D1-Telemetrie ist produktiv, aber ausschliesslich bei expliziter
+  Detailtelemetrie opt-in aktiv und beeinflusst weder Analyse noch Cache oder
+  kanonische Publikation.
 - KR-4984 schliesst die vollstaendige P0/P1-Gesamtpruefung quellseitig ohne
   offenen Befund. Der Function-Evaluation-Cache bindet forwarded Register-
   Live-ins; optionale Whole-Export-Cachepublikation ist fail-open; lange

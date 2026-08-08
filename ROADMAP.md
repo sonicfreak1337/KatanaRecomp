@@ -110,8 +110,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionaler Source-Checkpoint:
-  a521999 / Runtime-ABI 87 / Analyzer-ABI 31 /
-  Portprojektvertrag 75
+  Arbeitsbasis 60638dd71d8a70d70a58aaecb3dbad9ec318bf62
+  plus gemeinsamer KR-4985/KR-4986-Bugfix dieses Commits
 
 aktueller realer Diagnosebefund:
   Sonic-v56, terminal nach 1:28:24 mit Exitcode 5
@@ -128,11 +128,28 @@ aktueller realer Diagnosebefund:
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
 Diagnoseevidenz und kein Produktnachweis, weil kein Produkt entstand.
 
+Der gemeinsame Candidate-Resolution-Explosionsfix erfuellt KR-4985 und
+KR-4986 source-seitig: Full-State-Semantic-Lanes sind kollisionssicher,
+exakte Provenienzabonnenten werden privat replayt, und das Budget wird nur bei
+neuer semantischer Lane belastet. Die D1-Telemetrie ist explizit opt-in und
+bleibt ohne Detailtelemetrie vollstaendig aus dem Progress-Hotpath.
+
+Der einzige freigegebene D1-Lauf lieferte valide nichtterminale Root-0-
+Transport- und Fortschrittsevidenz, erreichte aber weder den historisch
+limitierenden Root 1 noch einen vollstaendigen schweren Root. Nach einem
+privaten Supervisor-I/O-Fehler war die temporaere JSONL bis `185,586 s`
+lesbar/gespuelt, aber ohne terminalen Datensatz und ohne atomare Publikation.
+D1/G1 ist daher strikt fail-closed und unentschieden; KR-4987 bis KR-4990
+bleiben inaktiv.
+
 ## Aktueller P0: Candidate-Resolution / ungeklaerte Context- und Requeuekosten
 
 Null Eviction-Recomputes liefern keinen Beleg fuer Cache-Eviction als
-Hauptursache. Fuer den aktuellen Produktblocker prueft D1 das folgende
-Kostenmodell:
+Hauptursache. Der gemeinsame Source-Fix schliesst die zuvor unguenstige
+Budgetdomane: Exakte Provenienzrequests teilen kollisionssichere
+Full-State-Semantic-Lanes, waehrend private Evidence-Replays die exakte
+Provenienz erhalten. Das Produktgate bleibt wegen der unvollstaendigen D1-
+Evidenz offen; als Kostenmodell gilt weiterhin:
 
 ```text
 echte semantische Contextmenge
@@ -143,16 +160,15 @@ ueberwiegend serieller kritischer Scheduling-Span
 ```
 
 Die v56-Zahlen wurden in unterschiedlichen Zaehldomaenen ausgegeben. Das
-Per-Function-Budget von `65.536` darf daher bis zur KR-4985-Instrumentierung
-weder von den laufweiten `27.872` physischen Auswertungen subtrahiert noch
-durch die laufweiten `25.728` Contexts dividiert werden. Aussagen ueber
-logische Requeues, Cache-Reuse und Kosten je Context sind bis D1 Hypothesen,
-keine Messwerte.
+Per-Function-Budget von `65.536` darf daher weder von den laufweiten `27.872`
+physischen Auswertungen subtrahiert noch durch die laufweiten `25.728`
+Contexts dividiert werden. Diese Werte bleiben historische Evidenz und
+werden nicht als gemeinsamer Root behauptet.
 
 Eine blosse Erhoehung des 65.536er-Budgets, mehr Cache oder mehr Threads ist
-kein Fix. Welche semantische Context-, Wiederzulassungs-, Per-Context- oder
-Schedulingarbeit tatsaechlich reduziert werden muss, entscheidet D1 anhand
-gleich scoped Messwerte.
+kein Fix. Der einmalige D1-Lauf zeigte Root-0-Fortschritt und transportierte
+die neuen gleich scoped Zaehler, erreichte aber weder Root 1 noch einen
+vollstaendigen schweren Root. D1/G1 bleibt deshalb unentschieden.
 
 Der Detailvertrag steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
@@ -163,8 +179,8 @@ der uebergeordnete Kaltbuildvertrag in
 
 | ID | Aufgabe | Ergebnis |
 |---|---|---|
-| KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | Stale-/Fehlerreihenfolge ist vor D1 fail-closed; limitierter Root/Funktion, Requeue-Ursachen und gleich scoped logische/physische Arbeit sind eindeutig sichtbar |
-| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | physische Semantik und exakte Contribution-/Evidence-Provenienz sind getrennt |
+| KR-4985 | Candidate-Resolution-Phasen- und Kardinalitaetstelemetrie | [x] source-seitig abgeschlossen; produktive D1-Telemetrie explizit opt-in, Produktgate wegen unvollstaendigem Lauf unentschieden |
+| KR-4986 | Semantische Context-Lanes und exakte Provenienzabonnenten | [x] source-seitig abgeschlossen; Full-State-Semantik und exakte Contribution-/Evidence-Provenienz getrennt |
 | KR-4987 | Read-Lens-projizierte Context-Identitaet | nur vollstaendig bewiesene relevante Eingaenge erzeugen eigene Lanes; jede Luecke verwendet FullState |
 | KR-4988 | Internierte AbstractStates und Summaries | nur bei positivem Kostengate werden unveraenderliche States/Summaries kanonisch wiederverwendet |
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
@@ -177,27 +193,17 @@ der uebergeordnete Kaltbuildvertrag in
 Die Reihenfolge ist normativ:
 
 ```text
-KR-4985 implementieren -> betroffene Pfade reviewen -> main pushen
-  -> D1 nur nach ausdruecklicher Freigabe
-  -> KR-4986 implementieren -> betroffene Pfade reviewen -> main pushen
-  -> KR-4987 bis KR-4990 nur bei ihren positiven Messgates,
-     jeweils implementieren -> reviewen -> main pushen
-  -> D2 nur nach ausdruecklicher Freigabe
-  -> KR-4991 nur bei positivem G2,
-     implementieren -> reviewen -> main pushen
-  -> KR-4993 Abschlussreview und Findings schliessen -> main pushen
-  -> KR-4981 genau ein voller Sonic-Kaltport und Produktlauf
-     -> bei verfehltem Zeitgate und positivem Restkosten-/RAM-Gate:
-        KR-4992 -> Review -> main -> KR-4993 erneut -> freigegebener Retry
+KR-4985/KR-4986 source-seitig abgeschlossen
+Naechster Schritt nach diesem Bugfix-Push:
+  -> origin/main synchronisieren
+  -> Roadmap vollstaendig neu bewerten
 ```
 
 D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue
-Testmatrix. Ein negatives Gate dokumentiert den konservativen Pfad und
-verhindert einen nutzlosen Umbau. Der Push eines Tasks gibt den naechsten
-ungegateten Task ohne weitere Nutzeranweisung frei. Nur D1 und D2 benoetigen
-in dieser Kette eine ausdrueckliche Lauf-Freigabe; bedingte Tasks benoetigen
-ihr dokumentiertes positives Messgate. KR-4982 und KR-4983 bleiben
-gestrichen.
+Testmatrix. Die einzige freigegebene D1-Evidenz ist nichtterminal und erlaubt
+keine G1-Entscheidung; dadurch wird kein bedingter Task aktiviert. Nach diesem
+Bugfix-Push folgen ausschliesslich origin/main-Synchronisierung und
+vollstaendige Roadmap-Neubewertung. KR-4982 und KR-4983 bleiben gestrichen.
 
 ## Weiterer v0.49-Kritischer Pfad
 

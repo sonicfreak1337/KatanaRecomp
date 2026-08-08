@@ -1101,7 +1101,7 @@ struct NamedCounterMember final {
     OptionalCounterMember member;
 };
 
-constexpr std::array<NamedCounterMember, 189u> progress_counter_members{{
+constexpr std::array<NamedCounterMember, 250u> progress_counter_members{{
     {"iteration", &ProgressCounterSnapshot::iteration},
     {"pass", &ProgressCounterSnapshot::pass},
     {"active_workers", &ProgressCounterSnapshot::active_workers},
@@ -1287,8 +1287,129 @@ constexpr std::array<NamedCounterMember, 189u> progress_counter_members{{
      &ProgressCounterSnapshot::reconstructed_results},
     {"key_interned_sets",
      &ProgressCounterSnapshot::key_interned_sets},
-    {"key_interned_references",
-     &ProgressCounterSnapshot::key_interned_references},
+     {"key_interned_references",
+      &ProgressCounterSnapshot::key_interned_references},
+    {"contextual_return_root_index",
+     &ProgressCounterSnapshot::contextual_return_root_index},
+    {"contextual_return_root_address",
+     &ProgressCounterSnapshot::contextual_return_root_address},
+    {"contextual_return_current_function_address",
+     &ProgressCounterSnapshot::contextual_return_current_function_address},
+    {"contextual_return_limiting_function_address",
+     &ProgressCounterSnapshot::contextual_return_limiting_function_address},
+    {"contextual_return_wave", &ProgressCounterSnapshot::contextual_return_wave},
+    {"contextual_return_frontier",
+     &ProgressCounterSnapshot::contextual_return_frontier},
+    {"contextual_return_maximum_frontier",
+     &ProgressCounterSnapshot::contextual_return_maximum_frontier},
+    {"contextual_return_context_budget",
+     &ProgressCounterSnapshot::contextual_return_context_budget},
+    {"contextual_return_evaluation_budget",
+     &ProgressCounterSnapshot::contextual_return_evaluation_budget},
+    {"contextual_return_contexts_admitted",
+     &ProgressCounterSnapshot::contextual_return_contexts_admitted},
+    {"contextual_return_evaluations_admitted",
+     &ProgressCounterSnapshot::contextual_return_evaluations_admitted},
+    {"contextual_return_retained_bytes",
+     &ProgressCounterSnapshot::contextual_return_retained_bytes},
+    {"contextual_return_logical_requests",
+     &ProgressCounterSnapshot::contextual_return_logical_requests},
+    {"contextual_return_logical_admissions",
+     &ProgressCounterSnapshot::contextual_return_logical_admissions},
+    {"contextual_return_semantic_lane_cardinality",
+     &ProgressCounterSnapshot::contextual_return_semantic_lane_cardinality},
+    {"contextual_return_physical_evaluations",
+     &ProgressCounterSnapshot::contextual_return_physical_evaluations},
+    {"contextual_return_cache_reuses",
+     &ProgressCounterSnapshot::contextual_return_cache_reuses},
+    {"contextual_return_exact_subscriber_cardinality",
+     &ProgressCounterSnapshot::contextual_return_exact_subscriber_cardinality},
+    {"contextual_return_provenance_cardinality",
+     &ProgressCounterSnapshot::contextual_return_provenance_cardinality},
+    {"contextual_return_root_lane_creations",
+     &ProgressCounterSnapshot::contextual_return_root_lane_creations},
+    {"contextual_return_descendant_lane_creations",
+     &ProgressCounterSnapshot::contextual_return_descendant_lane_creations},
+    {"contextual_return_requeues_initial_root_seed",
+     &ProgressCounterSnapshot::contextual_return_requeues_initial_root_seed},
+     {"contextual_return_requeues_new_lane",
+      &ProgressCounterSnapshot::contextual_return_requeues_new_lane},
+     {"contextual_return_requeues_input_widening",
+      &ProgressCounterSnapshot::contextual_return_requeues_input_widening},
+    {"contextual_return_requeues_summary_change",
+     &ProgressCounterSnapshot::contextual_return_requeues_summary_change},
+    {"contextual_return_requeues_forward_edge_insert_or_widen",
+     &ProgressCounterSnapshot::contextual_return_requeues_forward_edge_insert_or_widen},
+     {"contextual_return_requeues_stale_dependency",
+      &ProgressCounterSnapshot::contextual_return_requeues_stale_dependency},
+    {"contextual_return_stale_snapshot_discards",
+     &ProgressCounterSnapshot::contextual_return_stale_snapshot_discards},
+    {"contextual_return_snapshot_count",
+     &ProgressCounterSnapshot::contextual_return_snapshot_count},
+    {"contextual_return_snapshot_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_snapshot_nanoseconds},
+    {"contextual_return_key_count",
+     &ProgressCounterSnapshot::contextual_return_key_count},
+    {"contextual_return_key_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_key_nanoseconds},
+    {"contextual_return_cache_evaluation_count",
+     &ProgressCounterSnapshot::contextual_return_cache_evaluation_count},
+    {"contextual_return_cache_evaluation_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_cache_evaluation_nanoseconds},
+    {"contextual_return_apply_call_count",
+     &ProgressCounterSnapshot::contextual_return_apply_call_count},
+    {"contextual_return_apply_call_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_apply_call_nanoseconds},
+    {"contextual_return_binding_lookups",
+     &ProgressCounterSnapshot::contextual_return_binding_lookups},
+    {"contextual_return_bindings_examined",
+     &ProgressCounterSnapshot::contextual_return_bindings_examined},
+    {"contextual_return_binding_equality_attempts",
+     &ProgressCounterSnapshot::contextual_return_binding_equality_attempts},
+    {"contextual_return_binding_merge_attempts",
+     &ProgressCounterSnapshot::contextual_return_binding_merge_attempts},
+    {"contextual_return_binding_merge_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_binding_merge_nanoseconds},
+    {"contextual_return_binding_exact_hits",
+     &ProgressCounterSnapshot::contextual_return_binding_exact_hits},
+    {"contextual_return_binding_join_hits",
+     &ProgressCounterSnapshot::contextual_return_binding_join_hits},
+    {"contextual_return_maximum_binding_count",
+     &ProgressCounterSnapshot::contextual_return_maximum_binding_count},
+    {"contextual_return_maximum_binding_hit_position",
+     &ProgressCounterSnapshot::contextual_return_maximum_binding_hit_position},
+    {"contextual_return_evidence_restore_count",
+     &ProgressCounterSnapshot::contextual_return_evidence_restore_count},
+    {"contextual_return_evidence_restore_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_evidence_restore_nanoseconds},
+    {"contextual_return_serial_commit_count",
+     &ProgressCounterSnapshot::contextual_return_serial_commit_count},
+    {"contextual_return_serial_commit_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_serial_commit_nanoseconds},
+    {"contextual_return_publish_count",
+     &ProgressCounterSnapshot::contextual_return_publish_count},
+    {"contextual_return_publish_nanoseconds",
+     &ProgressCounterSnapshot::contextual_return_publish_nanoseconds},
+    {"contextual_return_maximum_full_state_key_bytes",
+     &ProgressCounterSnapshot::contextual_return_maximum_full_state_key_bytes},
+    {"contextual_return_maximum_projected_key_bytes",
+     &ProgressCounterSnapshot::contextual_return_maximum_projected_key_bytes},
+    {"contextual_return_maximum_capsule_entries",
+     &ProgressCounterSnapshot::contextual_return_maximum_capsule_entries},
+    {"contextual_return_projected_digest_cardinality",
+     &ProgressCounterSnapshot::contextual_return_projected_digest_cardinality},
+    {"contextual_return_projected_digest_dropped",
+     &ProgressCounterSnapshot::contextual_return_projected_digest_dropped},
+    {"contextual_return_alpha_normalization_fallbacks",
+     &ProgressCounterSnapshot::contextual_return_alpha_normalization_fallbacks},
+    {"contextual_return_semantic_lane_widenings",
+     &ProgressCounterSnapshot::contextual_return_semantic_lane_widenings},
+    {"contextual_return_provenance_only_lane_widenings",
+     &ProgressCounterSnapshot::contextual_return_provenance_only_lane_widenings},
+     {"contextual_return_lane_widening_classification_dropped",
+      &ProgressCounterSnapshot::contextual_return_lane_widening_classification_dropped},
+     {"contextual_return_telemetry_dropped",
+      &ProgressCounterSnapshot::contextual_return_telemetry_dropped},
     {"program_graph_builds",
      &ProgressCounterSnapshot::program_graph_builds},
     {"program_graph_reuses",
@@ -2006,6 +2127,39 @@ std::string format_progress_event_json(const ProgressEvent& event) {
         append_unsigned(result, *value);
         first_counter = false;
     }
+    const auto append_optional_bool = [&](const std::string_view name,
+                                          const std::optional<bool>& value) {
+        if (!value) return;
+        if (!first_counter) result.push_back(',');
+        append_json_string(result, name);
+        result.push_back(':');
+        result += *value ? "true" : "false";
+        first_counter = false;
+    };
+    append_optional_bool(
+        "contextual_return_context_budget_exhausted",
+        event.counters.contextual_return_context_budget_exhausted);
+    append_optional_bool(
+        "contextual_return_evaluation_budget_exhausted",
+        event.counters.contextual_return_evaluation_budget_exhausted);
+    append_optional_bool(
+        "contextual_return_composite_budget_exhausted",
+        event.counters.contextual_return_composite_budget_exhausted);
+    append_optional_bool(
+        "contextual_return_incomplete_root",
+        event.counters.contextual_return_incomplete_root);
+    append_optional_bool(
+        "contextual_return_retention_enabled",
+        event.counters.contextual_return_retention_enabled);
+    append_optional_bool(
+        "contextual_return_projected_digest_degraded",
+        event.counters.contextual_return_projected_digest_degraded);
+    append_optional_bool(
+        "contextual_return_lane_widening_classification_degraded",
+        event.counters.contextual_return_lane_widening_classification_degraded);
+    append_optional_bool(
+        "contextual_return_telemetry_degraded",
+        event.counters.contextual_return_telemetry_degraded);
     if (event.counters.resolution_retention_limit_reason) {
         if (!first_counter) result.push_back(',');
         append_json_string(
@@ -2080,6 +2234,38 @@ std::string format_progress_event_human(const ProgressEvent& event) {
         result.push_back('=');
         append_unsigned(result, *value);
     }
+    const auto append_human_bool = [&](const std::string_view name,
+                                       const std::optional<bool>& value) {
+        if (!value) return;
+        result.push_back(' ');
+        result += name;
+        result += '=';
+        result += *value ? "true" : "false";
+    };
+    append_human_bool(
+        "contextual_return_context_budget_exhausted",
+        event.counters.contextual_return_context_budget_exhausted);
+    append_human_bool(
+        "contextual_return_evaluation_budget_exhausted",
+        event.counters.contextual_return_evaluation_budget_exhausted);
+    append_human_bool(
+        "contextual_return_composite_budget_exhausted",
+        event.counters.contextual_return_composite_budget_exhausted);
+    append_human_bool(
+        "contextual_return_incomplete_root",
+        event.counters.contextual_return_incomplete_root);
+    append_human_bool(
+        "contextual_return_retention_enabled",
+        event.counters.contextual_return_retention_enabled);
+    append_human_bool(
+        "contextual_return_projected_digest_degraded",
+        event.counters.contextual_return_projected_digest_degraded);
+    append_human_bool(
+        "contextual_return_lane_widening_classification_degraded",
+        event.counters.contextual_return_lane_widening_classification_degraded);
+    append_human_bool(
+        "contextual_return_telemetry_degraded",
+        event.counters.contextual_return_telemetry_degraded);
     if (event.counters.resolution_retention_limit_reason) {
         result += " resolution_retention_limit_reason=";
         result +=

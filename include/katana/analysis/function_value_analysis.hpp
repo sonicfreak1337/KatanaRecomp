@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -522,6 +523,89 @@ struct FunctionValueAnalysisResult {
     std::size_t final_materialized_functions = 0u;
 };
 
+// Run-local, scalar-only D1 telemetry for one Contextual-Return root. These
+// values are observational: they never participate in semantic identities,
+// cache keys, budgets, artifacts, or persisted analysis state. Root-scoped
+// values are selected from the current head-of-line root by the progress
+// transport; no per-lane state or raw digest is exposed. A degraded/drop-only
+// record deliberately leaves the root identity absent.
+struct ContextualReturnD1Telemetry final {
+    std::optional<std::size_t> root_index;
+    std::optional<std::uint32_t> root_address;
+    std::uint32_t current_function_address = 0u;
+    std::uint32_t limiting_function_address = 0u;
+    std::size_t wave = 0u;
+    std::size_t frontier = 0u;
+    std::size_t maximum_frontier = 0u;
+    std::size_t context_budget = 0u;
+    std::size_t evaluation_budget = 0u;
+    std::size_t contexts_admitted = 0u;
+    std::size_t evaluations_admitted = 0u;
+    bool context_budget_exhausted = false;
+    bool evaluation_budget_exhausted = false;
+    bool composite_budget_exhausted = false;
+    bool incomplete_root = false;
+    bool retention_enabled = false;
+    std::size_t retained_bytes = 0u;
+    std::size_t logical_requests = 0u;
+    std::size_t logical_admissions = 0u;
+    std::size_t semantic_lane_cardinality = 0u;
+    std::size_t physical_evaluations = 0u;
+    std::size_t cache_reuses = 0u;
+    std::size_t exact_subscriber_cardinality = 0u;
+    std::size_t provenance_cardinality = 0u;
+    std::size_t root_lane_creations = 0u;
+    std::size_t descendant_lane_creations = 0u;
+    std::size_t requeues_initial_root_seed = 0u;
+    std::size_t requeues_new_lane = 0u;
+    std::size_t requeues_input_widening = 0u;
+    std::size_t requeues_summary_change = 0u;
+    std::size_t requeues_forward_edge_insert_or_widen = 0u;
+    std::size_t requeues_stale_dependency = 0u;
+    std::size_t stale_snapshot_discards = 0u;
+    std::size_t snapshot_count = 0u;
+    std::uint64_t snapshot_nanoseconds = 0u;
+    std::size_t key_count = 0u;
+    std::uint64_t key_nanoseconds = 0u;
+    std::size_t cache_evaluation_count = 0u;
+    // Inclusive end-to-end cache request time: key construction, cache wait,
+    // and any physical evaluation, including nested apply/binding work.
+    std::uint64_t cache_evaluation_nanoseconds = 0u;
+    std::size_t apply_call_count = 0u;
+    // Inclusive apply_call time; binding_merge_nanoseconds is nested in it.
+    // Snapshot, FullState-key, Evidence-restore, serial-commit, and publish
+    // timings remain separate sibling domains.
+    std::uint64_t apply_call_nanoseconds = 0u;
+    std::size_t binding_lookups = 0u;
+    std::size_t bindings_examined = 0u;
+    std::size_t binding_equality_attempts = 0u;
+    std::size_t binding_merge_attempts = 0u;
+    std::uint64_t binding_merge_nanoseconds = 0u;
+    std::size_t binding_exact_hits = 0u;
+    std::size_t binding_join_hits = 0u;
+    std::size_t maximum_binding_count = 0u;
+    std::size_t maximum_binding_hit_position = 0u;
+    std::size_t evidence_restore_count = 0u;
+    std::uint64_t evidence_restore_nanoseconds = 0u;
+    std::size_t serial_commit_count = 0u;
+    std::uint64_t serial_commit_nanoseconds = 0u;
+    std::size_t publish_count = 0u;
+    std::uint64_t publish_nanoseconds = 0u;
+    std::size_t maximum_full_state_key_bytes = 0u;
+    std::size_t maximum_projected_key_bytes = 0u;
+    std::size_t maximum_capsule_entries = 0u;
+    std::size_t projected_digest_cardinality = 0u;
+    std::size_t projected_digest_dropped = 0u;
+    bool projected_digest_degraded = false;
+    std::size_t alpha_normalization_fallbacks = 0u;
+    std::size_t semantic_lane_widenings = 0u;
+    std::size_t provenance_only_lane_widenings = 0u;
+    std::size_t lane_widening_classification_dropped = 0u;
+    bool lane_widening_classification_degraded = false;
+    std::size_t telemetry_dropped = 0u;
+    bool telemetry_degraded = false;
+};
+
 struct FunctionValueAnalysisProgress {
     // Owned because callbacks commonly enqueue or retain snapshots after the
     // synchronous producer call returns.
@@ -680,6 +764,7 @@ struct FunctionValueAnalysisProgress {
     std::size_t resolution_preparation_entries_visited = 0u;
     std::size_t final_materialized_blocks = 0u;
     std::size_t final_materialized_functions = 0u;
+    std::optional<ContextualReturnD1Telemetry> contextual_return;
 };
 
 using FunctionValueAnalysisProgressCallback =

@@ -474,6 +474,7 @@ struct ControlFlowAnalysisProgress {
         function_value_resolution_preparation_entries_visited = 0u;
     std::size_t function_value_final_materialized_blocks = 0u;
     std::size_t function_value_final_materialized_functions = 0u;
+    std::optional<ContextualReturnD1Telemetry> function_value_contextual_return;
 };
 
 using ControlFlowAnalysisProgressCallback =
