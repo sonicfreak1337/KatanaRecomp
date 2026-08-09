@@ -1,9 +1,11 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `33`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `34`. Der aktuelle
 Candidate-Resolution-Stand verwendet Runtime-ABI 87, Block-ABI 5,
 PlatformServices-ABI 13, Backend-Interface-ABI 12 und Portprojektvertrag 75.
-Version 33 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Der funktionale Source-Checkpoint dieses Vertrags ist
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`.
+Version 34 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
@@ -12,11 +14,18 @@ Owner-Uebergaenge erhalten diesen Beweis nicht. Damit invalidieren Analyse-,
 IR-, Codegen- und Whole-Export-Caches den alten Bestand, der solche direkt vor
 einem Tail-Registrar geladenen Callbacks noch verlor.
 
-Analyzer-ABI 33 bindet die typisierten Executor-/RAM-Fortschrittsfelder,
+Analyzer-ABI 34 bindet die typisierten Executor-/RAM-Fortschrittsfelder,
 das Eviction-Ledger und den ganz-oder-gar-nicht-Vertrag persistierter
 Resolution-/Presentation-Roots. Ein unvollstaendiger Root verwirft die
 optionale Epoch typisiert als `incomplete-root`; ein spaeteres TerminalFull
 muss ihn exakt neu berechnen.
+
+Der konkrete ABI-34-Grund ist die oeffentliche Erweiterung von
+`GuardedCodeInventoryWalkDiagnostics`: Provenance-Replay-Capsule-Budget und
+Keybyte-Budget sowie deren Limitzaehler sind nun getrennt vom semantischen
+Contextual-Return-Evaluation-Limit exponiert. Diese Layoutfelder duerfen nicht
+als alter Evaluation-Zaehler interpretiert werden. Die historischen ABI-33-
+Vertraege bleiben an ihre damaligen Source-/Laufstaende gebunden.
 
 Seine kanonische Quelle ist `KATANA_ANALYZER_ABI_VERSION` in
 `cmake/KatanaVersions.cmake`. CMake uebernimmt den Wert in:

@@ -2,9 +2,9 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller funktionaler Source-Checkpoint: SavedEpoch-Slot-Identity-Fix,
-Runtime-ABI 87, Block-ABI 5, Analyzer-ABI 33,
-Function-Analysis-Epoch-Schema 18, Application-Contract 8 und
+Aktueller funktionaler Source-Checkpoint: `099ae2cb2dfe7699f90338e9df0bad24a7888823`,
+Runtime-ABI 87, Block-ABI 5, Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 19, Application-Contract 8 und
 Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
 `1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
@@ -19,8 +19,8 @@ abgeschlossen. Der
 D9-Lauf ist nach `20,331 s` fail-closed beendet: Root 0 konvergierte bis Wave
 `184` und Frontier `0` (maximal `216`), ohne Portartefakt oder Produkterfolg.
 KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. KR-4994 ist
-source-seitig abgeschlossen; der aktuelle D-Lauf zeigt jedoch weiterhin den
-semantischen Lane-Treiber als offenen Produktblocker. KR-4981 bleibt das
+source-seitig abgeschlossen; sein aktueller P0-Folgepunkt ist Inventory-
+Provenance-Live-in/Spill-through. KR-4981 bleibt das
 globale Produktgate und ist nicht bestanden. Der
 verbindliche Folgeplan steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
@@ -49,17 +49,45 @@ Lifecycle-Ursache.
 Der SavedEpoch-Lifecycle-Fix konsumiert current-tracking Pending-ABI-Skalare nur
 an bewiesenen normalen Call-/Tail-ABI-Gates; detached Epochs bleiben unangetastet.
 `candidate_payload_lost` ist ein absorbierendes Epoch-Top, waehrend konkrete
-Evidence und Nested-/Current-Aliasfakten erhalten bleiben. Das Epoch-Schema ist
-`18`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
+Evidence und Nested-/Current-Aliasfakten erhalten bleiben. Der historische
+SavedEpoch-Lifecycle-Stand lief mit Epoch-Schema `17` und Analyzer-ABI `33`.
+Der Lauf
 `kr4981-20260809-031826-0616113a` endete nach `369,171 s` fail-closed wegen
 Nonconvergence bei Wave `76`, ohne Publikation oder `game.exe`. Der alte
 SavedEpoch-Pending-Blocker ist beseitigt; der gemeinsame Ordinary-/Register-
 Metadaten-/MemoryEpoch-Lifecycle bleibt offen. KR-4981 bleibt offen.
 
+Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
+erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
+fail-closed, trennt öffentliche Provenance-Replay-Capsule-/Keybyte-Limits vom
+semantischen Evaluation-Limit und belastet bei echtem Evaluation-Cap nur den
+Evaluation-Zähler. Analyzer-ABI `34` und Function-Analysis-Epoch-Schema `19`
+sind aktiv; der bestätigte Build war erfolgreich, die EXE trug den Zeitstempel
+`05:00:45`, Tests wurden nicht ausgeführt.
+
+Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
+(Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Semantic-Lanes,
+`984` physischen und `1.398` logischen Auswertungen, `248` Input-, `102` stale-
+Requeues und `347` stale Discards. Cache: ca. `501 MB`; Peak Root
+`1.606.066.176 B`, Peak Job `1.814.822.912 B`; kein Portartefakt.
+
+Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
+(Candidate `237,116 s`) wegen belegter Nichtverbesserung beendet: Wave `39`,
+`0/1194` Roots, `272` Contexts, `549` Lanes, `630` physische, `894` logische,
+`181` Input-, `10` Summary-, `76` stale-Requeues, `226` Discards,
+Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
+`42,359 s`, Peak Root `1.490.157.568 B`, Peak Job `1.672.388.608 B`; kein
+`game.exe`. Das `attempts=1024`-Gate war gegenüber `9baea88` bitgleich:
+`admission_success=999`, `projected_context_changed=0` und
+`projected_match_changed=0`. Die Gateänderung ist korrekt, aber kein
+Konvergenzhebel. Offener P0 ist Inventory-Provenance-Live-in/Spill-through
+(unter anderem r12/SavedEpoch), nicht SavedEpoch-Pending und nicht das Budget.
+
 ```text
 Runtime-ABI:                    87
 Block-ABI:                       5
-Analyzer-ABI:                   33
+Analyzer-ABI:                   34
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             75

@@ -13,7 +13,7 @@
   Detailtelemetrie opt-in aktiv und beeinflusst weder Analyse noch Cache oder
   kanonische Publikation.
 - KR-4993 schliesst den vollstaendigen Candidate-Resolution-Source-Endreview
-  ab; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 33
+  ab; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34
   geschlossen. Das Produktgate KR-4981 bleibt offen.
 - KR-4987 ist source-seitig abgeschlossen: bewiesene Read-Lens-Projektion,
   vollstaendige Key-Bytes und konservativer FullState-Fallback erhalten
@@ -22,19 +22,21 @@
 - KR-4994 ist source-seitig abgeschlossen: ein strikt begrenzter, monotoner
   Stack-/Context-Candidate-Carrier bewahrt identitaetsgebundene Pending-
   Payloads ueber Merge, Summary, Cache und Harvest, ohne Scheduler-, Budget-
-  oder Coverageumbau. Analyzer-ABI 33 und Function-Analysis-Epoch-Schema 15
-  sind aktualisiert; der gezielte Incremental-Build war in `41,7 s` erfolgreich.
+  oder Coverageumbau. Der historische SavedEpoch-Lifecycle-Stand verwendete
+  Analyzer-ABI 33 und Function-Analysis-Epoch-Schema 17; der gezielte
+  Incremental-Build war in `41,7 s` erfolgreich.
   Der fruehere D-Lauf endete nach `460,6 s` durch manuelles Beenden des nach
   belegter Nichtverbesserung identifizierten Kindprozesses: `0/1194` Roots,
   kein Portartefakt und kein bestandenes KR-4981-Gate. Gleiche Diagnostik-
-  Zaehler bei Attempts `1024`, `2048` und `4096` zeigen, dass der semantische
-  Lane-Treiber weiterhin offen ist.
-- Der Candidate-Domain-Top-Fix macht abgeschnittene, begrenzte Candidate-Domains
+  Zaehler bei Attempts `1024`, `2048` und `4096` belegen keinen
+  Konvergenzhebel; der aktuelle P0 betrifft Inventory-Provenance-Live-in/
+  Spill-through.
+- Der historische Candidate-Domain-Top-Fix machte abgeschnittene, begrenzte Candidate-Domains
   zum kanonischen absorbierenden Top mit leerem endlichem Praefix; Merge,
   Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion
-  bleiben dabei konsistent. Das interne Function-Analysis-Epoch-Schema wurde
-  auf `16` erhoeht; Analyzer-ABI `33` bleibt unveraendert, weil kein oeffentliches
-  Structlayout geaendert wurde. Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5`
+  bleiben dabei konsistent. Der historische Slot-Identity-Stand verwendete
+  Function-Analysis-Epoch-Schema `18` und Analyzer-ABI `33`; kein oeffentliches
+  Structlayout wurde geaendert. Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5`
   endete nach `343,627 s` durch manuellen Abbruch bei belegter identischer
   Nichtkonvergenz: letzte Bewegung Wave `48`, Peak Root `1.450.078.208 B`,
   Peak Job `1.618.132.992 B`, keine Publikation und kein Portartefakt.
@@ -60,8 +62,8 @@
   unangetastet. `candidate_payload_lost` ist nun ein absorbierendes Epoch-Top
   ueber Normalize, Merge, Equality, Key, Subsumption, Evidence, Restore und
   Persistenz; konkrete Evidence sowie Nested-/Current-Aliasfakten bleiben
-  erhalten, finite Payload/Slots verschwinden. Das Epoch-Schema steigt auf
-  `18`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
+  erhalten, finite Payload/Slots verschwinden. Der historische SavedEpoch-
+  Lifecycle-Stand lief mit Epoch-Schema `17` und Analyzer-ABI `33`. Der Lauf
   `kr4981-20260809-031826-0616113a` endete nach `369,171 s` fail-closed wegen
   Nonconvergence bei Wave `76`; kein Portartefakt und keine Publikation. Der
   alte SavedEpoch-Pending-Blocker ist beseitigt; der neue Engpass liegt bei
@@ -77,6 +79,17 @@
   in begrenzten privaten Replaykapseln fuer physische Auswertung und Restore.
   Evidence-Stale erzeugt damit kein neues logisches Budgetereignis, waehrend
   Cap-/Replayfehler fail-closed bleiben.
+- Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
+  aktiviert die strukturelle Contextual-Hybrid-Projektion mit retained sticky
+  loss, fail-closed SavedEpoch-Slot-Pending-Top in Truncation-/Publication-
+  Checks und öffentlich getrennten Provenance-Replay-Capsule-/Keybyte-Limits;
+  ein echter Evaluation-Cap belastet nur den Evaluation-Zähler. Der Lauf
+  `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` bei Wave `60`,
+  ohne Root-Publikation oder Portartefakt. Der Lauf
+  `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` bei Wave `39` wegen
+  belegter Nichtverbesserung, ebenfalls ohne `game.exe`. Das `attempts=1024`-
+  Gate blieb gegenüber `9baea88` bitgleich; die korrekte Gateänderung ist kein
+  Konvergenzhebel. Analyzer-ABI `34` und Epoch-Schema `19` sind aktuell.
 - KR-4984 schliesst die vollstaendige P0/P1-Gesamtpruefung quellseitig ohne
   offenen Befund. Der Function-Evaluation-Cache bindet forwarded Register-
   Live-ins; optionale Whole-Export-Cachepublikation ist fail-open; lange

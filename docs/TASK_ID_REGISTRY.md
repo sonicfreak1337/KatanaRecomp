@@ -66,16 +66,16 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der funktionale Source-Checkpoint fuer den aktuellen Source-Stand ist
-`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI 33,
-Function-Analysis-Epoch-Schema 18. Historisch erzeugte v56 kein Portartefakt und
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 19. Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
 keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
 abgeschlossen; D9 ist beendet und Root 0 konvergierte fail-closed ohne
 Portartefakt oder Produkterfolg. D2/G2 ist abgeschlossen und negativ; kein
 positiver Schedulerhebel ist belegt. KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der
-semantische Lane-Treiber bleibt der offene P0-Produktblocker. KR-4981 bleibt
+KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
+P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through. KR-4981 bleibt
 das globale Produktgate und ist nicht bestanden.
 
 Der fruehere D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
@@ -152,8 +152,8 @@ MemoryEpoch-Lifecycle-Ursache. KR-4981 bleibt fail-closed offen.
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kosten- und 50-Prozent-Reusegate, sonst Full-Rebuild |
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 33 geschlossen; globale Produktabnahme bleibt KR-4981 |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; semantischer Lane-Treiber im Produktgate offen |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; aktueller P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through |
 
 ## Aktuelle Meilensteinzuordnung
 

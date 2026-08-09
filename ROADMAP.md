@@ -110,9 +110,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionaler Source-Checkpoint:
-  SavedEpoch-Slot-Identity-Fix
-  Analyzer-ABI 33
-  Function-Analysis-Epoch-Schema 18
+  099ae2cb2dfe7699f90338e9df0bad24a7888823
+  Analyzer-ABI 34
+  Function-Analysis-Epoch-Schema 19
 
 frueherer Vergleichslauf:
   D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s
@@ -163,8 +163,8 @@ Call-/Tail-ABI-Gates konsumiert; detached Epochs bleiben unangetastet.
 Epoch-Top ueber Normalize, Merge, Equality, Key, Subsumption, Evidence,
 Restore und Persistenz. Konkrete Evidence sowie Nested-/Current-Aliasfakten
 bleiben erhalten, finite Payload/Slots verschwinden; detached Top uebernimmt
-keine fremde Tail-Evidence. Das Epoch-Schema ist `18`, Analyzer-ABI `33`
-bleibt ohne oeffentliche Layoutaenderung.
+keine fremde Tail-Evidence. Der historische SavedEpoch-Lifecycle-Stand lief
+mit Epoch-Schema `17` und Analyzer-ABI `33`.
 
 Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s`
 (`6:09`) mit Status `nonconvergence`, Exitcode `31`, nach drei zehnsekundigen
@@ -178,6 +178,30 @@ ist damit zielgenau beseitigt; der naechste Root-Analysepunkt ist die gemeinsame
 Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-
 Ursache, nicht ein weiterer SavedEpoch-Pending-Patch. KR-4981 bleibt fail-closed
 offen.
+
+Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
+behaelt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion,
+erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
+fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits vom
+semantischen Evaluation-Limit. Der echte Evaluation-Cap erhoeht nur den
+Evaluation-Zaehler; Analyzer-ABI `34` und Epoch-Schema `19` sind aktuell.
+
+Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
+(Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Lanes, `984`
+physischen und `1.398` logischen Auswertungen, `248` Input-, `102` stale-
+Requeues und `347` Discards; Peak Root `1.606.066.176 B`, Peak Job
+`1.814.822.912 B`, kein Artefakt.
+
+Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
+(Candidate `237,116 s`) wegen Nichtverbesserung beendet: Wave `39`, `0/1194`,
+`272` Contexts, `549` Lanes, `630` physische, `894` logische Auswertungen,
+`181` Input-, `10` Summary-, `76` stale-Requeues, `226` Discards,
+Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
+`42,359 s`; kein `game.exe`. Gegenüber `9baea88` blieb das `attempts=1024`-
+Gate bitgleich (`admission_success=999`, projected changed/match jeweils `0`);
+die Gateänderung ist korrekt, aber kein Konvergenzhebel. Der offene P0 ist
+Inventory-Provenance-Live-in/Spill-through (r12/SavedEpoch), nicht
+SavedEpoch-Pending und nicht Budgetarbeit. KR-4981 bleibt offen.
 
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
 Diagnoseevidenz und kein Produktnachweis, weil kein Produkt entstand.
@@ -224,8 +248,8 @@ kein Fix. Der aktuelle D-Lauf zeigt gegenueber dem vorherigen Fehlerlauf bei
 gleicher Gesamtzeit (~459,6 s) hoeheren Durchsatz (`wave 103` statt `67`,
 `1.044` statt `722` Lanes, `1.029` statt `713` contextual physical
 evaluations, `733` statt `839` stale requeues und `518.425.788` statt
-`444.266.838` B Cache-Payload), entfernt den semantischen Lane-Treiber aber
-nicht. Bei Attempts `1024`, `2048` und `4096` waren die relevanten
+`444.266.838` B Cache-Payload), ohne einen Konvergenzhebel zu belegen. Bei
+Attempts `1024`, `2048` und `4096` waren die relevanten
 Admission-/Stack-Diagnosezaehler bitgenau identisch. Candidate-Resolution
 bleibt deshalb offen; KR-4981 ist nicht bestanden.
 
@@ -245,17 +269,18 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 33 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
 | KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; der aktuelle D-Lauf bestand es nicht; kein weiterer Lauf ohne ausdrueckliche Freigabe; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der semantische Lane-Treiber bleibt im Produktgate offen |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; aktueller P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through |
 
 Die Reihenfolge ist normativ:
 
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> D-Lauf beendet durch manuelles Beenden nach belegter Nichtverbesserung
-  -> Candidate-Resolution bleibt offen; KR-4981 ist nicht bestanden
+  -> Candidate-Resolution bleibt offen; der aktuelle P0 ist Inventory-
+     Provenance-Live-in/Spill-through; KR-4981 ist nicht bestanden
 ```
 
 D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue Testmatrix.
@@ -263,7 +288,8 @@ D1/G1 bleibt historisch unentschieden; D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Portartefakt oder
 Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig
-abgeschlossen; der semantische Lane-Treiber bleibt offen. KR-4981 bleibt das
+abgeschlossen; der aktuelle P0-Folgepunkt ist Inventory-Provenance-Live-in/
+Spill-through. KR-4981 bleibt das
 globale Produktgate und ist nicht bestanden. KR-4982 und KR-4983 bleiben
 gestrichen.
 

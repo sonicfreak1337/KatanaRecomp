@@ -1,8 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Der funktionale
-Source-Checkpoint ist `SavedEpoch-Slot-Identity-Fix`;
-Analyzer-ABI 33, Function-Analysis-Epoch-Schema 18; der Produktgate
+Source-Checkpoint ist `099ae2cb2dfe7699f90338e9df0bad24a7888823`;
+Analyzer-ABI 34, Function-Analysis-Epoch-Schema 19; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
@@ -10,7 +10,8 @@ Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
 exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4993 und
-KR-4994 sind source-seitig abgeschlossen; der aktuelle D-Lauf bestand das
+KR-4994 ist source-seitig abgeschlossen; der aktuelle P0-Folgepunkt ist
+Inventory-Provenance-Live-in/Spill-through. Der aktuelle D-Lauf bestand das
 globale KR-4981-Produktgate nicht. Ein weiterer Lauf ist nicht automatisch
 freigegeben. KR-4992 bleibt ein bedingter Folgezweig nach einem verfehlten
 Produktzeitgate.
@@ -42,7 +43,7 @@ snapshot discards, `518.425.788 B` Cache-Payload, `3.964` physische
 Auswertungen gesamt und `0/0` publizierte/verwarfene Epochen. Kein
 Portartefakt. Die relevante Admission-/Stack-Diagnostik war bei Attempts
 `1024`, `2048` und `4096` bitgenau unveraendert; der Durchsatz stieg, der
-semantische Lane-Treiber bleibt offen.
+Inventory-Provenance-Live-in/Spill-through bleibt offen.
 
 ## Repositoryweiter Arbeitsvertrag
 
@@ -264,8 +265,8 @@ Produkt- und Integrationstest. Die vorliegende D1-/D9-Evidenz ist nichtterminal;
 D1/G1 bleibt historisch unentschieden, D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der
-semantische Lane-Treiber bleibt als Produktblocker offen. KR-4981 bleibt das
+KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
+P0-Folgepunkt Inventory-Provenance-Live-in/Spill-through bleibt offen. KR-4981 bleibt das
 globale Produktgate und ist nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.
 
@@ -274,9 +275,9 @@ Es gibt keine begleitende neue Testmatrix.
 Der Candidate-Domain-Top-Fix behandelt abgeschnittene begrenzte Candidate-
 Domains als kanonisches absorbierendes Top mit leerem endlichem Praefix und
 fuehrt Merge, Normalisierung, Vergleich, Keys, Persistenz, Consumer und
-ABI-Promotion konsistent fort. Der aktuelle funktionale Source-Checkpoint
-verwendet Function-Analysis-Epoch-Schema `18`; Analyzer-ABI `33` bleibt
-unveraendert, da kein oeffentliches Structlayout geaendert wurde. Der korrekte
+ABI-Promotion konsistent fort. Der historische Candidate-Domain-Top-Lauf lief
+unter Function-Analysis-Epoch-Schema `18` und Analyzer-ABI `33`. Der aktuelle
+Source-Checkpoint ist separat oben ausgewiesen. Der korrekte
 VsDevCmd-Incremental-Compile+Link war erfolgreich.
 
 Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s`
@@ -310,8 +311,9 @@ Call-/Tail-ABI-Gates konsumiert; detached Epochs bleiben unangetastet.
 `candidate_payload_lost` ist ein absorbierendes Epoch-Top ueber Normalize,
 Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz. Konkrete
 Evidence und Nested-/Current-Aliasfakten bleiben erhalten, finite Payload/Slots
-verschwinden; detached Top uebernimmt keine fremde Tail-Evidence. Epoch-Schema
-`18`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
+verschwinden; detached Top uebernimmt keine fremde Tail-Evidence. Der
+historische SavedEpoch-Lifecycle-Stand lief unter Epoch-Schema `17` und
+Analyzer-ABI `33`.
 
 Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `nonconvergence`/Exitcode `31` bei Wave `76`; `uncategorized=0` in D1024 und
@@ -319,6 +321,26 @@ D2048, keine Publikation und kein `game.exe`. Der alte SavedEpoch-Pending-
 Blocker ist beseitigt; die gemeinsame Ordinary-/Registermetadaten-/Alias- und
 MemoryEpoch-Lifecycle-Ursache bleibt der naechste Analysepunkt. KR-4981 bleibt
 fail-closed offen.
+
+Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
+ist der aktuelle ABI-passende Stand: strukturelle Contextual-Hybrid-Projektion
+mit retained sticky loss, fail-closed SavedEpoch-Slot-Pending-Top in allen
+Truncation-/Publication-Checks und öffentlich getrennte Provenance-Replay-
+Capsule-/Keybyte-Limits neben dem semantischen Evaluation-Limit. Ein echter
+Evaluation-Cap belastet nur den Evaluation-Zähler; Analyzer-ABI `34` und
+Epoch-Schema `19` sind aktiv.
+
+Der Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` bei Wave
+`60`, `0/1194` Roots, `758` Lanes, `984` physischen und `1.398` logischen
+Auswertungen, `248` Input-, `102` stale-Requeues und `347` Discards; Peak Root
+`1.606.066.176 B`, Peak Job `1.814.822.912 B`, kein Portartefakt.
+Der Lauf `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` bei Wave
+`39`, `0/1194` Roots, `272` Contexts, `549` Lanes, `630` physischen und
+`894` logischen Auswertungen; `181` Input-, `10` Summary-, `76` stale-
+Requeues, `226` Discards, Provenienz `31.713`, kein `game.exe`. Das
+`attempts=1024`-Gate blieb gegenüber `9baea88` bitgleich; die Gateänderung ist
+korrekt, aber kein Konvergenzhebel. Der offene P0 ist Inventory-Provenance-
+Live-in/Spill-through (r12/SavedEpoch), nicht SavedEpoch-Pending oder Budgetarbeit.
 
 ## Produktmessvertrag KR-4981
 
@@ -393,7 +415,7 @@ Der NativeDisc-Kaltbuild-P0 ist erst geschlossen, wenn:
 5. Cacheinvalidierung nur semantisch betroffene Ebenen trifft;
 6. kein Performancepfad Analyse- oder AOT-Abdeckung reduziert;
 7. KR-4993 alle bestaetigten Source-Findings geschlossen, das Analyzer-ABI-
-   Finding unter dem aktuellen Analyzer-ABI 33 geschlossen und Limit-, Stale-, Cancellation- sowie
+   Finding unter dem aktuellen Analyzer-ABI 34 geschlossen und Limit-, Stale-, Cancellation- sowie
    `IncompleteRoot`-Pfade fail-closed gehalten hat; und
 8. KR-4981 einen vollstaendigen Sonic-Kaltport in hoechstens acht Minuten
    erzeugt oder einen engeren typisierten Produktblocker belegt.

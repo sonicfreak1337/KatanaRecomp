@@ -84,8 +84,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Funktionaler Source-Checkpoint dieses Arbeitsstands:
-  SavedEpoch-Slot-Identity-Fix
-  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 18
+  099ae2cb2dfe7699f90338e9df0bad24a7888823
+  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 19
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -125,7 +125,8 @@ einzige freigegebene D1-Lauf war nichtterminal; D1/G1 bleibt fail-closed und
 unentschieden. D2/G2 ist abgeschlossen und negativ, ohne positiven
 Schedulerhebel. D9 ist beendet und Root 0
 konvergierte fail-closed ohne Portartefakt oder Produkterfolg. KR-4987 bis
-KR-4991 bleiben inaktiv; KR-4994 ist source-seitig abgeschlossen. KR-4981
+KR-4991 bleiben inaktiv; KR-4994 ist source-seitig abgeschlossen, mit
+Inventory-Provenance-Live-in/Spill-through als aktuellem P0-Folgepunkt. KR-4981
 bleibt das globale Produktgate und ist nicht bestanden. KR-4982 und KR-4983
 bleiben gestrichen.
 
@@ -197,7 +198,7 @@ Budgetzaehldomaene; KR-4985 ist abgeschlossen, D1/G1 bleibt unentschieden.
 Prioritaet: P0 Performance-Diagnose
 
 Abhaengigkeiten: KR-4974, funktionaler Source-Checkpoint
-`SavedEpoch-Slot-Identity-Fix`
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`
 
 Status: Source-seitig abgeschlossen durch den gemeinsamen Candidate-Resolution-
 Explosionsfix. D1-Telemetrie ist explizit opt-in produktiv; die begrenzte
@@ -289,8 +290,7 @@ Abhaengigkeit: KR-4986; source-seitige Aktivierung durch den freigegebenen
 KR-4987-Fixpass
 
 Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
-`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI `33`, Function-Analysis-
-Epoch-Schema `18`.
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
 Der gezielte `katana-recomp`-Build war laut Sol-Review in `42,4 s` erfolgreich.
 D9 ist beendet und wird nur als fail-closed, nicht erfolgreicher Lauf
 dokumentiert; kein Produkt- oder G1-Erfolg wird behauptet.
@@ -316,8 +316,9 @@ und `733` stale-Dependency-Requeues, `1.359` stale snapshot discards,
 blieben unverbraucht; kein Portartefakt oder `game.exe`.
 Attempts `1024`, `2048` und `4096` hatten bitgenau gleiche relevante
 Admission-/Stack-Diagnostik wie der vorherige Fehlerlauf; der neue Durchsatz
-verbessert Kosten je Churn-Schritt, beseitigt den semantischen Lane-Treiber
-aber nicht. KR-4981 bleibt offen.
+verbessert Kosten je Churn-Schritt, belegt aber keinen Konvergenzhebel.
+KR-4981 bleibt offen; der aktuelle P0 ist Inventory-Provenance-Live-in/
+Spill-through.
 
 ### Ziel
 
@@ -355,8 +356,7 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 Prioritaet: P0 Candidate-Resolution-Korrektheit
 
 Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
-`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI `33`, Function-Analysis-
-Epoch-Schema `18`. Der begrenzte Pending-Carrier
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`. Der begrenzte Pending-Carrier
 bewahrt identitaetsgebundene Payloads ueber Merge, Key/Cache, Lifetime,
 ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute und
 contextual/forwarded/stable Harvest sowie Export-Gate. Der aktuelle
@@ -364,7 +364,7 @@ Evidence-/Semantic-Zweikanal haelt Evidence-Stale in privaten Replaykapseln;
 abgeschnittene begrenzte Candidate-Domains sind als kanonisches absorbierendes
 Top mit leerem endlichem Praefix in Merge, Normalisierung, Vergleich, Keys,
 Persistenz, Consumern und ABI-Promotion konsistent. Der aktuelle D-Lauf belegt
-weiterhin den semantischen Lane-Treiber als offenen Produktblocker.
+weiterhin Inventory-Provenance-Live-in/Spill-through als offenen P0-Folgepunkt.
 
 Der Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` durch
 manuellen Abbruch bei identischer Nichtkonvergenz; letzte Bewegung Wave `48`,
@@ -402,8 +402,9 @@ unangetastet. `candidate_payload_lost` ist als absorbierendes Epoch-Top ueber
 Normalize, Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz
 integriert; konkrete Evidence und Nested-/Current-Aliasfakten bleiben,
 finite Payload/Slots verschwinden, detached Top erhaelt keine fremde
-Tail-Evidence. Epoch-Schema `18`, Analyzer-ABI `33`, kein oeffentliches Layout-
-Delta.
+Tail-Evidence. Der historische SavedEpoch-Lifecycle-Stand lief unter
+Epoch-Schema `17` und Analyzer-ABI `33`; kein oeffentliches Layout-Delta in
+diesem historischen Fix.
 
 Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `nonconvergence`/Exitcode `31` bei Wave `76`; `0` committed/ready/completed
@@ -412,6 +413,29 @@ und kein `game.exe`. Der alte SavedEpoch-Pending-Blocker ist beseitigt. Der
 naechste Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-/
 Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache, nicht ein weiterer
 SavedEpoch-Pending-Patch; KR-4981 bleibt offen.
+
+### Aktueller Source- und Laufstand
+
+Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
+erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
+fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich
+vom semantischen Evaluation-Limit. Ein echter Evaluation-Cap belastet nur den
+Evaluation-Zähler; Analyzer-ABI `34` und Epoch-Schema `19` sind aktiv.
+
+Der Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` (Candidate
+ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Lanes, `984` physischen und
+`1.398` logischen Auswertungen, `248` Input-, `102` stale-Requeues und `347`
+Discards; kein Portartefakt. Der aktuelle Lauf
+`kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` (Candidate
+`237,116 s`) wegen Nichtverbesserung bei Wave `39`, `0/1194` Roots,
+`272` Contexts, `549` Lanes, `630` physischen, `894` logischen Auswertungen,
+`181` Input-, `10` Summary-, `76` stale-Requeues, `226` Discards und
+Provenienz `31.713`; kein `game.exe`. Das `attempts=1024`-Gate war gegenüber
+`9baea88` bitgleich (`admission_success=999`, projected changed/match jeweils
+`0`), also korrekt, aber kein Konvergenzhebel. Der offene P0 ist
+Inventory-Provenance-Live-in/Spill-through (r12/SavedEpoch), nicht
+SavedEpoch-Pending oder Budgetarbeit.
 
 Vertrag:
 
@@ -558,12 +582,11 @@ Abhaengigkeiten: KR-4985, KR-4986 und alle durch G1/G2 aktivierten Tasks bis
 KR-4991
 
 Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
-`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI `33`, Function-Analysis-
-Epoch-Schema `18`.
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
 Der vollstaendige Sol-Endreview
 des unmittelbar vorherigen Explosionsbug-Diffs wurde wiederverwendet; alle
 bestaetigten Findings sind geschlossen; das Analyzer-ABI-Finding ist unter dem
-aktuellen Analyzer-ABI `33` geschlossen. Nicht aktivierte
+aktuellen Analyzer-ABI `34` geschlossen. Nicht aktivierte
 KR-4988 bis KR-4991 wurden nicht als geaendert oder reviewpflichtig behauptet.
 
 ### Ziel
@@ -572,7 +595,7 @@ Der vollstaendige Endreview der aktivierten/geaenderten Context-, Cache-,
 Evidence- und Budgetpfade sowie die Pruefung der unveraendert konservativen
 FullState-, Binding-, Dependency- und Scheduling-Fallbackgrenzen ist
 abgeschlossen; alle vorher bestaetigten Findings sind geschlossen; das
-Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `33` geschlossen.
+Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
 
 ### Umfang
 

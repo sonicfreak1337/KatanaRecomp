@@ -288,8 +288,8 @@ Testmatrix.
 ## Aktueller P0-Handoff
 
 Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-Pfad
-ist `SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI 33,
-Function-Analysis-Epoch-Schema 18.
+ist `099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 19.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -371,14 +371,14 @@ Auswertungen gesamt und `0/0` publizierte/verwarfene Epochen. Context-/
 Evaluation-/Composite-Budgets blieben unverbraucht; kein Portartefakt. Bei
 Attempts `1024`, `2048` und `4096` blieb die relevante
 Admission-/Stack-Diagnostik bitgenau gleich; der Durchsatz stieg, der
-semantische Lane-Treiber bleibt offen. KR-4981 ist nicht bestanden.
+Inventory-Provenance-Live-in/Spill-through bleibt offen. KR-4981 ist nicht bestanden.
 
 Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
 zum kanonischen absorbierenden Top mit leerem endlichem Praefix. Merge,
 Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion sind
-darauf abgestimmt; der aktuelle funktionale Source-Checkpoint verwendet
-Epoch-Schema `18`, Analyzer-ABI `33` bleibt ohne oeffentliche Structlayout-
-Aenderung unveraendert. Der Lauf
+darauf abgestimmt; der historische Candidate-Domain-Top-Lauf lief unter
+Epoch-Schema `18` und Analyzer-ABI `33`. Der aktuelle Source-Checkpoint ist
+separat oben ausgewiesen. Der Lauf
 `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` durch manuellen
 Abbruch bei belegter identischer Nichtkonvergenz; letzte Bewegung Wave `48`,
 Peak Root `1.450.078.208 B`, Peak Job `1.618.132.992 B`, keine Publikation und
@@ -407,8 +407,9 @@ Call-/Tail-ABI-Gates konsumiert, detached Epochs bleiben unangetastet.
 `candidate_payload_lost` ist ein absorbierendes Epoch-Top ueber Normalize,
 Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz; konkrete
 Evidence und Nested-/Current-Aliasfakten bleiben erhalten, finite Payload/Slots
-verschwinden, detached Top uebernimmt keine fremde Tail-Evidence. Epoch-Schema
-`18`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
+verschwinden, detached Top uebernimmt keine fremde Tail-Evidence. Der
+historische SavedEpoch-Lifecycle-Stand lief unter Epoch-Schema `17` und
+Analyzer-ABI `33`.
 
 Der Produktlauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `nonconvergence`/Exitcode `31` durch drei zehnsekundige
@@ -419,6 +420,26 @@ beseitigt. Der naechste Root-Analysepunkt ist die gemeinsame Ordinary-/
 Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache,
 nicht ein weiterer SavedEpoch-Pending-Patch; KR-4981 bleibt fail-closed offen.
 
+Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
+erlaubt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion,
+erkennt SavedEpoch-Slot-Pending-Top fail-closed in allen Truncation-/Publication-
+Checks und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich vom
+semantischen Evaluation-Limit. Der echte Evaluation-Cap belastet nur den
+Evaluation-Zähler; Analyzer-ABI `34` und Epoch-Schema `19` sind aktiv.
+
+Der Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` bei Wave
+`60`, `0/1194` Roots, `758` Lanes, `984` physischen und `1.398` logischen
+Auswertungen, `248` Input-, `102` stale-Requeues und `347` Discards; Peak Root
+`1.606.066.176 B`, Peak Job `1.814.822.912 B`, kein Portartefakt.
+Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s`
+(Candidate `237,116 s`) bei Wave `39`, `0/1194` Roots, `272` Contexts,
+`549` Lanes, `630` physischen, `894` logischen Auswertungen, `181` Input-,
+`10` Summary-, `76` stale-Requeues, `226` Discards und Provenienz `31.713`;
+kein `game.exe`. Das `attempts=1024`-Gate war gegenüber `9baea88` bitgleich
+(`admission_success=999`, projected changed/match jeweils `0`), also korrekt
+geändert, aber kein Konvergenzhebel. Der offene P0 ist Inventory-Provenance-
+Live-in/Spill-through (r12/SavedEpoch), nicht SavedEpoch-Pending oder Budgetarbeit.
+
 Der verbindliche aktuelle Pfad lautet:
 
 ```text
@@ -426,7 +447,7 @@ D9 beendet fail-closed; kein Portartefakt und kein Produkterfolg
 ```
 
 KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen;
-der semantische Lane-Treiber bleibt der offene P0-Produktblocker.
+der aktuelle P0-Folgepunkt Inventory-Provenance-Live-in/Spill-through bleibt offen.
 Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
 sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
@@ -438,8 +459,8 @@ nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
 Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; das
-Analyzer-ABI-Finding ist geschlossen; der aktuelle Analyzer-ABI ist `33`. KR-4994 ist source-seitig
-abgeschlossen, aber der semantische Lane-Treiber bleibt offen. Es gibt kein
+Analyzer-ABI-Finding ist geschlossen; der aktuelle Analyzer-ABI ist `34`. KR-4994 ist source-seitig
+abgeschlossen, aber Inventory-Provenance-Live-in/Spill-through bleibt offen. Es gibt kein
 bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.
 
 ## Abschlusscheck vor dem Push

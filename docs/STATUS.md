@@ -31,8 +31,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Funktionaler Source-Checkpoint dieses Arbeitsstands:
-  SavedEpoch-Slot-Identity-Fix
-  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 18
+  099ae2cb2dfe7699f90338e9df0bad24a7888823
+  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 19
 
 aktueller realer Diagnosebefund:
   Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
@@ -186,17 +186,18 @@ Gesamtzeit (~`459,6 s`) erreichte der neue Lauf jedoch Wave `103` statt `67`,
 `1.044` statt `722` Semantic-Lanes, `1.029` statt `713` contextual physical
 evaluations, `733` statt `839` stale requeues und `518.425.788` statt
 `444.266.838 B` Cache-Payload. Der Pending-Carrier verbessert damit offenbar
-Kosten je Churn-Schritt bzw. den Durchsatz, entfernt den semantischen
-Lane-Treiber aber nicht. Candidate-Resolution und KR-4981 bleiben offen.
+Kosten je Churn-Schritt bzw. den Durchsatz, belegt aber keinen
+Konvergenzhebel. Candidate-Resolution und KR-4981 bleiben offen; der aktuelle
+P0 ist Inventory-Provenance-Live-in/Spill-through.
 
 ### Lauf nach Candidate-Domain-Top-Fix
 
 Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
 zum kanonischen absorbierenden Top mit leerem endlichem Praefix und haelt Merge,
 Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion
-konsistent. Der aktuelle funktionale Source-Checkpoint verwendet das
-Function-Analysis-Epoch-Schema `18`; Analyzer-ABI `33` bleibt unveraendert,
-weil kein oeffentliches Structlayout geaendert wurde.
+konsistent. Der historische Candidate-Domain-Top-Lauf lief unter
+Function-Analysis-Epoch-Schema `18` und Analyzer-ABI `33`; der aktuelle
+Source-Checkpoint ist separat oben ausgewiesen.
 Der korrekte VsDevCmd-Incremental-Compile+Link war erfolgreich.
 
 Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5` wurde nach `343,627 s`
@@ -249,8 +250,8 @@ unangetastet. `candidate_payload_lost` ist physisch und semantisch ein
 absorbierendes Epoch-Top ueber Normalize, Merge, Equality, Key, Subsumption,
 Evidence, Restore und Persistenz. Konkrete Evidence sowie Nested-/Current-
 Aliasfakten bleiben, finite Payload/Slots verschwinden; detached Top erhaelt
-keine fremde Tail-Evidence. Das Epoch-Schema ist `18`, Analyzer-ABI `33` bleibt
-ohne oeffentliche Layoutaenderung.
+keine fremde Tail-Evidence. Der historische SavedEpoch-Lifecycle-Stand lief
+unter Epoch-Schema `17` und Analyzer-ABI `33`.
 
 Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit Status
 `nonconvergence`, Exitcode `31`, durch drei zehnsekundige
@@ -264,6 +265,37 @@ Blocker ist beseitigt; der naechste Root-Analysepunkt ist die gemeinsame
 Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-
 Ursache, nicht ein weiterer SavedEpoch-Pending-Patch. KR-4981 bleibt
 fail-closed offen.
+
+## Aktueller Source- und Laufstand
+
+Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
+erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+erkennt SavedEpoch-Slot-Pending-Top in sämtlichen Truncation-/Publication-
+Checks fail-closed und transportiert Provenance-Replay-Capsule-/Keybyte-Limits
+öffentlich getrennt vom semantischen Evaluation-Limit. Ein echter Evaluation-
+Cap belastet wieder nur den Evaluation-Zähler. Analyzer-ABI `34` und
+Function-Analysis-Epoch-Schema `19` sind aktiv; der bestätigte Build war
+erfolgreich, die EXE trug den Zeitstempel `05:00:45`, Tests wurden nicht
+ausgeführt.
+
+Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
+(Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Semantic-Lanes,
+`984` physischen und `1.398` logischen Auswertungen, `248` Input-, `102` stale-
+Requeues und `347` Discards. Cache ca. `501 MB`, Peak Root
+`1.606.066.176 B`, Peak Job `1.814.822.912 B`; kein Portartefakt.
+
+Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
+(Candidate `237,116 s`) wegen belegter Nichtverbesserung beendet: Wave `39`,
+`0/1194` Roots, `272` Contexts, `549` Lanes, `630` physische, `894` logische,
+`181` Input-, `10` Summary-, `76` stale-Requeues, `226` Discards,
+Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
+`42,359 s`, Peak Root `1.490.157.568 B`, Peak Job `1.672.388.608 B`; kein
+`game.exe`. Das `attempts=1024`-Gate war gegenüber `9baea88` bitgleich:
+`admission_success=999`, `projected_context_changed=0`,
+`projected_match_changed=0`. Die Gateänderung ist korrekt, aber kein
+Konvergenzhebel. Der offene P0 ist Inventory-Provenance-Live-in/Spill-through
+(unter anderem r12/SavedEpoch), nicht SavedEpoch-Pending und nicht Budgetarbeit.
+
 
 ## Aktueller kritischer Pfad
 
@@ -280,8 +312,8 @@ wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
 ist abgeschlossen und negativ, ohne positiven Schedulerhebel. D9 ist beendet
 und Root 0 konvergierte fail-closed,
 ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
-KR-4994 ist source-seitig abgeschlossen; der semantische Lane-Treiber bleibt
-als P0-Produktblocker offen. KR-4981 bleibt das globale Produktgate und ist
+KR-4994 ist source-seitig abgeschlossen; der aktuelle P0-Folgepunkt ist
+Inventory-Provenance-Live-in/Spill-through. KR-4981 bleibt das globale Produktgate und ist
 nicht bestanden.
 
 ## Quellseitig vorhandene Hauptvertraege
@@ -338,8 +370,9 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 
 ```text
 D9 ist beendet und fail-closed; Root 0 konvergierte ohne Portartefakt und
-Produkterfolg. KR-4994 ist source-seitig abgeschlossen; der semantische
-Lane-Treiber bleibt offen. KR-4981 bleibt das globale Produktgate und ist
+Produkterfolg. KR-4994 ist source-seitig abgeschlossen; der aktuelle
+P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through. KR-4981 bleibt
+das globale Produktgate und ist
 nicht bestanden.
 ```
 
