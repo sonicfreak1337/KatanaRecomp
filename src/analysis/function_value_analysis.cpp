@@ -24283,8 +24283,10 @@ inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
 // every runtime conservative stack-write path. Returned raw stack-derived
 // values are also materialized to SavedEpochs at the Summary boundary, so an
 // older persisted source-only contract cannot be reused as an equivalent
-// projection/root identity.
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 26u;
+// projection/root identity. Contextual MAY-joins are additionally closed
+// through the authoritative hybrid ingress projection before they become a
+// lane or edge identity.
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 27u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -44266,19 +44268,47 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     ? *hybrid_match_input
                                     : observation.state,
                                 has_authoritative_complete_stack_contract);
-                        // Family lanes admit every structurally valid hybrid
-                        // state; retained sticky loss stays inside that state.
-                        // The edge is a subscriber matcher and uses the same
-                        // projected domains plus its private provenance.
-                        const auto close_incomplete_stack_lane_join =
+                        // A Contextual MAY-join can reintroduce ordinary
+                        // guarded payload into a domain which an authoritative
+                        // hybrid ingress already quotiented.  Close every
+                        // joined lane and subscriber through that same ingress
+                        // contract before comparing, widening, or recording
+                        // loss.  The closure is enabled only after the lane
+                        // selection itself replaced both forms with the
+                        // projected match/ingress pair; a future projection
+                        // fallback must not rewrite an exact lane afterwards.
+                        const auto close_full_hybrid_join =
                             [&](AbstractState& joined) {
-                                return !uses_incomplete_stack_lane_quotient ||
-                                       canonicalize_contextual_return_stack_binding(
-                                           joined,
-                                           has_authoritative_complete_stack_contract);
+                                if (!lane_fusion_loss_safe)
+                                    return true;
+                                return canonicalize_evaluation_ingress_in_place(
+                                    joined,
+                                    callee_read_projection.register_read_mask,
+                                    callee_read_projection.stack_reads,
+                                    callee_read_projection.memory_read_complete,
+                                    callee_read_projection.memory_read_unknown,
+                                    callee_read_projection.memory_read_ranges,
+                                    callee_read_projection
+                                        .inventory_provenance_register_read_mask,
+                                    callee_read_projection
+                                        .inventory_stack_mutation_conditional_sources,
+                                    callee_read_projection
+                                        .inventory_stack_mutation_unconditional_sources,
+                                    callee_read_projection
+                                        .inventory_stack_alias_creation_contract);
                             };
-                        const auto close_incomplete_stack_edge_join =
+                        const auto close_contextual_lane_join =
                             [&](AbstractState& joined) {
+                                return close_full_hybrid_join(joined) &&
+                                       (!uses_incomplete_stack_lane_quotient ||
+                                        canonicalize_contextual_return_stack_binding(
+                                            joined,
+                                            has_authoritative_complete_stack_contract));
+                            };
+                        const auto close_contextual_edge_join =
+                            [&](AbstractState& joined) {
+                                if (!close_full_hybrid_join(joined))
+                                    return false;
                                 joined =
                                     canonicalize_contextual_return_binding_input(
                                         std::move(joined),
@@ -44313,7 +44343,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     true,
                                     StackTailFoldPendingScalarPolicy::
                                         OmitAfterAbiBoundary));
-                                if (!close_incomplete_stack_lane_join(
+                                if (!close_contextual_lane_join(
                                         joined_match) ||
                                     !same_abstract_state_without_evidence(
                                         joined_match, lane.match_input))
@@ -44336,7 +44366,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     true,
                                     StackTailFoldPendingScalarPolicy::
                                         OmitAfterAbiBoundary));
-                                if (!close_incomplete_stack_lane_join(joined))
+                                if (!close_contextual_lane_join(joined))
                                     continue;
                                 if (inventory_join_creates_loss(
                                         lane.input,
@@ -44376,7 +44406,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         true,
                                         StackTailFoldPendingScalarPolicy::
                                             OmitAfterAbiBoundary));
-                                    if (!close_incomplete_stack_lane_join(joined))
+                                    if (!close_contextual_lane_join(joined))
                                         continue;
                                     if (inventory_join_creates_loss(
                                         lane.input,
@@ -44397,7 +44427,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         true,
                                         StackTailFoldPendingScalarPolicy::
                                             OmitAfterAbiBoundary));
-                                    if (!close_incomplete_stack_lane_join(
+                                    if (!close_contextual_lane_join(
                                             joined_match))
                                         continue;
                                     if (joined_match != lane.match_input)
@@ -44734,8 +44764,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 true,
                                 StackTailFoldPendingScalarPolicy::
                                     OmitAfterAbiBoundary));
-                            static_cast<void>(
-                                close_incomplete_stack_edge_join(joined));
+                            if (!close_contextual_edge_join(joined))
+                                throw std::logic_error(
+                                    "Contextual-Forward-Edge verliess die "
+                                    "autoritative Hybridprojektion.");
                             forward_match_changed = joined != forward->second;
                             if (forward_match_changed) {
                                 forward_match_semantic_changed =
