@@ -1,9 +1,9 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `25`. Der KR-4979-
-Stand verwendet Runtime-ABI 87, Block-ABI 5,
+Der aktuelle oeffentliche Analyzervertrag ist Version `33`. Der aktuelle
+Candidate-Resolution-Stand verwendet Runtime-ABI 87, Block-ABI 5,
 PlatformServices-ABI 13, Backend-Interface-ABI 12 und Portprojektvertrag 75.
-Version 25 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Version 33 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
@@ -12,7 +12,7 @@ Owner-Uebergaenge erhalten diesen Beweis nicht. Damit invalidieren Analyse-,
 IR-, Codegen- und Whole-Export-Caches den alten Bestand, der solche direkt vor
 einem Tail-Registrar geladenen Callbacks noch verlor.
 
-Analyzer-ABI 25 bindet die typisierten Executor-/RAM-Fortschrittsfelder,
+Analyzer-ABI 33 bindet die typisierten Executor-/RAM-Fortschrittsfelder,
 das Eviction-Ledger und den ganz-oder-gar-nicht-Vertrag persistierter
 Resolution-/Presentation-Roots. Ein unvollstaendiger Root verwirft die
 optionale Epoch typisiert als `incomplete-root`; ein spaeteres TerminalFull

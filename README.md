@@ -2,9 +2,9 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktuelle funktionale Sourcebasis: `21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b`
-plus das reviewte SavedEpoch-Lifecycle-Delta, Runtime-ABI 87, Analyzer-ABI 33,
-Function-Analysis-Epoch-Schema 17, Application-Contract 8 und
+Aktueller funktionaler Source-Checkpoint: SavedEpoch-Slot-Identity-Fix,
+Runtime-ABI 87, Block-ABI 5, Analyzer-ABI 33,
+Function-Analysis-Epoch-Schema 18, Application-Contract 8 und
 Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
 `1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
@@ -18,11 +18,8 @@ KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994 sind source-seitig
 abgeschlossen. Der
 D9-Lauf ist nach `20,331 s` fail-closed beendet: Root 0 konvergierte bis Wave
 `184` und Frontier `0` (maximal `216`), ohne Portartefakt oder Produkterfolg.
-KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. Der folgende
-Folgetask-Hinweis beschreibt den Stand vor dem aktuellen Source-Delta.
-KR-4994 ist als offener P0-Folgetask fuer den nächsten Stack-/Storage-
-Identitaetsengpass und naechste Implementierungstask angelegt. Der Source-Fix
-ist inzwischen abgeschlossen; der aktuelle D-Lauf zeigt jedoch weiterhin den
+KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. KR-4994 ist
+source-seitig abgeschlossen; der aktuelle D-Lauf zeigt jedoch weiterhin den
 semantischen Lane-Treiber als offenen Produktblocker. KR-4981 bleibt das
 globale Produktgate und ist nicht bestanden. Der
 verbindliche Folgeplan steht in
@@ -44,17 +41,17 @@ Der abgeschlossene Diagnose-Unterauftrag erreichte im Lauf
 wurde nach `244,549 s` bei Wave `24` gezielt beendet. `uncategorized=0` für
 alle Top-8-Funktionen; kein Fehler, Hänger, Portartefakt oder
 KR-4981-Produktgate. Dominant war `0x8C10E44E` mit ausschließlich SavedEpoch-
-pending-ABI-Skalaren und unvollständigem Callee-Set-Stackvertrag. Der nächste
-Fixpfad ist die konsistente absorbierende Top-Semantik für
-`candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
-Subsumption, Key und Persistenz; sie ist noch nicht implementiert.
+pending-ABI-Skalaren und unvollständigem Callee-Set-Stackvertrag.
+Der SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
+gemeinsame Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-
+Lifecycle-Ursache.
 
 Der SavedEpoch-Lifecycle-Fix konsumiert current-tracking Pending-ABI-Skalare nur
 an bewiesenen normalen Call-/Tail-ABI-Gates; detached Epochs bleiben unangetastet.
 `candidate_payload_lost` ist ein absorbierendes Epoch-Top, waehrend konkrete
 Evidence und Nested-/Current-Aliasfakten erhalten bleiben. Das Epoch-Schema ist
-`17`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
-`kr4981-20260809-031826-0616113a` endete nach `369,171 ms` fail-closed wegen
+`18`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
+`kr4981-20260809-031826-0616113a` endete nach `369,171 s` fail-closed wegen
 Nonconvergence bei Wave `76`, ohne Publikation oder `game.exe`. Der alte
 SavedEpoch-Pending-Blocker ist beseitigt; der gemeinsame Ordinary-/Register-
 Metadaten-/MemoryEpoch-Lifecycle bleibt offen. KR-4981 bleibt offen.

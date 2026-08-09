@@ -65,19 +65,20 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Die Sourcebasis fuer den aktuellen Source-Stand ist
-`21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b` plus das reviewte SavedEpoch-
-Lifecycle-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17. Historisch erzeugte v56 kein Portartefakt und
+Der funktionale Source-Checkpoint fuer den aktuellen Source-Stand ist
+`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI 33,
+Function-Analysis-Epoch-Schema 18. Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
 keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
 abgeschlossen; D9 ist beendet und Root 0 konvergierte fail-closed ohne
-Portartefakt oder Produkterfolg. D2/G2 wurde nicht ausgefuehrt und KR-4988 bis
+Portartefakt oder Produkterfolg. D2/G2 ist abgeschlossen und negativ; kein
+positiver Schedulerhebel ist belegt. KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der
 semantische Lane-Treiber bleibt der offene P0-Produktblocker. KR-4981 bleibt
 das globale Produktgate und ist nicht bestanden.
 
-Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
+Der fruehere D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
 `325,8 s`; der identifizierte Kindprozess wurde nach belegter
 Nichtverbesserung manuell beendet. Ergebnis: `0/1194` committed Roots, HOL `0`,
 Wave `103`, `1.044` Semantic-Lanes, `1.029` contextual physical evaluations,
@@ -94,15 +95,14 @@ keine kanonische Publikation und kein Portartefakt; KR-4981 bleibt offen.
 
 Der abgeschlossene Hot-Callee-Diagnoseunterauftrag erreichte im Lauf
 `kr4981-20260809-024141-c4ffdf15` das vollständige `attempts=1024`-Gate und
-wurde nach `244,549 ms` bei Wave `24` gezielt beendet. `uncategorized=0` für
+wurde nach `244,549 s` bei Wave `24` gezielt beendet. `uncategorized=0` für
 alle Top-8-Funktionen. `0x8C10E44E` isolierte SavedEpoch-pending-ABI-Skalare
 als dominante semantische Änderungsdomäne; der Callee-Set-Stackvertrag war
 unvollständig. Der Unterauftrag ist abgeschlossen, KR-4981 bleibt offen; der
 SavedEpoch-Lifecycle-Unterauftrag ist abgeschlossen; der neue
-Ordinary-/Registermetadaten-/MemoryEpoch-Analysepunkt ist noch nicht
-implementiert.
+Ordinary-/Registermetadaten-/MemoryEpoch-Analysepunkt bleibt offen.
 
-Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `nonconvergence`/Exitcode `31` bei Wave `76`; D1024 und D2048 meldeten
 `uncategorized=0`. Der SavedEpoch-Pending-Blocker ist beseitigt; der naechste
 Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-/Alias- und
@@ -152,7 +152,7 @@ MemoryEpoch-Lifecycle-Ursache. KR-4981 bleibt fail-closed offen.
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kosten- und 50-Prozent-Reusegate, sonst Full-Rebuild |
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding im vorherigen Fixcommit mit ABI 32 geschlossen; globale Produktabnahme bleibt KR-4981 |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 33 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; semantischer Lane-Treiber im Produktgate offen |
 
 ## Aktuelle Meilensteinzuordnung

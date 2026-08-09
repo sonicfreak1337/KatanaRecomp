@@ -1,9 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
-Status: Aktiver uebergeordneter Performancevertrag. Die Sourcebasis ist
-`21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b` plus das reviewte SavedEpoch-
-Lifecycle-Delta;
-Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17; der Produktgate
+Status: Aktiver uebergeordneter Performancevertrag. Der funktionale
+Source-Checkpoint ist `SavedEpoch-Slot-Identity-Fix`;
+Analyzer-ABI 33, Function-Analysis-Epoch-Schema 18; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
@@ -33,7 +32,7 @@ logical requests, `3.739` physical evaluations, `2.497` input-widening,
 
 Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
 war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
-Warnungen. Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
+Warnungen. Der fruehere D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
 `325,8 s`; der identifizierte Kindprozess wurde nach belegter
 Nichtverbesserung manuell beendet. Es gab `0/1194` committed Roots, HOL `0`,
 Wave `103`, `272` Contexts, `1.044` Semantic-Lanes, `1.029` contextual
@@ -262,7 +261,8 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 
 D1 und D2 sind reale Sonic-Diagnoseexporte. KR-4981 ist der reale
 Produkt- und Integrationstest. Die vorliegende D1-/D9-Evidenz ist nichtterminal;
-D1/G1 bleibt historisch unentschieden, D2/G2 wurde nicht ausgefuehrt. D9 ist
+D1/G1 bleibt historisch unentschieden, D2/G2 ist abgeschlossen und negativ:
+kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der
 semantische Lane-Treiber bleibt als Produktblocker offen. KR-4981 bleibt das
@@ -273,10 +273,11 @@ Es gibt keine begleitende neue Testmatrix.
 
 Der Candidate-Domain-Top-Fix behandelt abgeschnittene begrenzte Candidate-
 Domains als kanonisches absorbierendes Top mit leerem endlichem Praefix und
- fuehrt Merge, Normalisierung, Vergleich, Keys, Persistenz, Consumer und
-ABI-Promotion konsistent fort. Der interne Function-Analysis-Epoch-Stand ist
-`16`; Analyzer-ABI `33` bleibt unveraendert, da kein oeffentliches Structlayout
-geaendert wurde. Der korrekte VsDevCmd-Incremental-Compile+Link war erfolgreich.
+fuehrt Merge, Normalisierung, Vergleich, Keys, Persistenz, Consumer und
+ABI-Promotion konsistent fort. Der aktuelle funktionale Source-Checkpoint
+verwendet Function-Analysis-Epoch-Schema `18`; Analyzer-ABI `33` bleibt
+unveraendert, da kein oeffentliches Structlayout geaendert wurde. Der korrekte
+VsDevCmd-Incremental-Compile+Link war erfolgreich.
 
 Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s`
 durch manuellen Abbruch bei belegter identischer Nichtkonvergenz. Die Voranalyse
@@ -290,17 +291,17 @@ Konvergenzhebel, belegt; KR-4981 bleibt offen.
 ### [x] Abgeschlossener Hot-Callee-Diagnoseunterauftrag
 
 Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das vollständige
-`attempts=1024`-Diagnosegate und wurde nach `244,549 ms` bei Wave `24` gezielt
+`attempts=1024`-Diagnosegate und wurde nach `244,549 s` bei Wave `24` gezielt
 beendet. Der erwartbare `product-exit -1`-Status entstand durch diesen Stop;
 es gab keinen Fehler, Hänger, keine Publikation und kein `game.exe`. Peak Root
 WS: `1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`. `uncategorized=0`
 galt für alle Top-8-Funktionen. `0x8C10E44E` isolierte `20` semantische
 Änderungen und `40` Stack-Widenings ausschließlich auf SavedEpoch-pending-ABI-
-Skalare; der Callee-Set-Stackvertrag war unvollständig. Der nächste Fixpfad
-bleibt die noch nicht implementierte absorbierende Top-Semantik für
-`candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
-Subsumption, Key und Persistenz, ohne Alias-/Current-Tracking oder fail-closed
-Restore zu verlieren. KR-4981 bleibt offen.
+Skalare; der Callee-Set-Stackvertrag war unvollständig. Der SavedEpoch-
+Lifecycle-Fix ist source-seitig abgeschlossen; offen bleibt die gemeinsame
+Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-Lifecycle-
+Ursache, ohne Alias-/Current-Tracking oder fail-closed Restore zu verlieren.
+KR-4981 bleibt offen.
 
 ### [x] Abgeschlossener SavedEpoch-Lifecycle-Unterauftrag
 
@@ -310,9 +311,9 @@ Call-/Tail-ABI-Gates konsumiert; detached Epochs bleiben unangetastet.
 Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz. Konkrete
 Evidence und Nested-/Current-Aliasfakten bleiben erhalten, finite Payload/Slots
 verschwinden; detached Top uebernimmt keine fremde Tail-Evidence. Epoch-Schema
-`17`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
+`18`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
 
-Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `nonconvergence`/Exitcode `31` bei Wave `76`; `uncategorized=0` in D1024 und
 D2048, keine Publikation und kein `game.exe`. Der alte SavedEpoch-Pending-
 Blocker ist beseitigt; die gemeinsame Ordinary-/Registermetadaten-/Alias- und
@@ -392,7 +393,7 @@ Der NativeDisc-Kaltbuild-P0 ist erst geschlossen, wenn:
 5. Cacheinvalidierung nur semantisch betroffene Ebenen trifft;
 6. kein Performancepfad Analyse- oder AOT-Abdeckung reduziert;
 7. KR-4993 alle bestaetigten Source-Findings geschlossen, das Analyzer-ABI-
-   Finding mit ABI 32 behoben und Limit-, Stale-, Cancellation- sowie
+   Finding unter dem aktuellen Analyzer-ABI 33 geschlossen und Limit-, Stale-, Cancellation- sowie
    `IncompleteRoot`-Pfade fail-closed gehalten hat; und
 8. KR-4981 einen vollstaendigen Sonic-Kaltport in hoechstens acht Minuten
    erzeugt oder einen engeren typisierten Produktblocker belegt.

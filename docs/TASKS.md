@@ -83,10 +83,9 @@ Daher gilt projektweit:
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-Sourcebasis dieses Arbeitsstands:
-  21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b
-  plus reviewtes SavedEpoch-Lifecycle-Delta in diesem Task
-  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17
+Funktionaler Source-Checkpoint dieses Arbeitsstands:
+  SavedEpoch-Slot-Identity-Fix
+  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 18
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -123,7 +122,8 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 
 D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix. Der
 einzige freigegebene D1-Lauf war nichtterminal; D1/G1 bleibt fail-closed und
-unentschieden. D2/G2 wurde nicht ausgefuehrt. D9 ist beendet und Root 0
+unentschieden. D2/G2 ist abgeschlossen und negativ, ohne positiven
+Schedulerhebel. D9 ist beendet und Root 0
 konvergierte fail-closed ohne Portartefakt oder Produkterfolg. KR-4987 bis
 KR-4991 bleiben inaktiv; KR-4994 ist source-seitig abgeschlossen. KR-4981
 bleibt das globale Produktgate und ist nicht bestanden. KR-4982 und KR-4983
@@ -197,7 +197,7 @@ Budgetzaehldomaene; KR-4985 ist abgeschlossen, D1/G1 bleibt unentschieden.
 Prioritaet: P0 Performance-Diagnose
 
 Abhaengigkeiten: KR-4974, funktionaler Source-Checkpoint
-`0ae993f8f59db1fc866ce5e77874015b610a8bd5`
+`SavedEpoch-Slot-Identity-Fix`
 
 Status: Source-seitig abgeschlossen durch den gemeinsamen Candidate-Resolution-
 Explosionsfix. D1-Telemetrie ist explizit opt-in produktiv; die begrenzte
@@ -289,7 +289,8 @@ Abhaengigkeit: KR-4986; source-seitige Aktivierung durch den freigegebenen
 KR-4987-Fixpass
 
 Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
-`594f0191b321bd2f470d0aa07100e82f3eea956f` plus dieser KR-4987-Aenderung.
+`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI `33`, Function-Analysis-
+Epoch-Schema `18`.
 Der gezielte `katana-recomp`-Build war laut Sol-Review in `42,4 s` erfolgreich.
 D9 ist beendet und wird nur als fail-closed, nicht erfolgreicher Lauf
 dokumentiert; kein Produkt- oder G1-Erfolg wird behauptet.
@@ -304,7 +305,7 @@ Produkt-, G1- oder Limit-Erfolg wird behauptet.
 
 Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
 war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
-Warnungen. Aktueller D-Lauf: `460,6 s` gesamt, Candidate Resolution ca. `325,8 s`,
+Warnungen. Frueherer D-Lauf: `460,6 s` gesamt, Candidate Resolution ca. `325,8 s`,
 manuelles Beenden des identifizierten Kindprozesses nach belegter
 Nichtverbesserung, `0/1194` committed Roots, HOL `0`, Wave `103`, `272`
 Contexts, `1.044` Semantic-Lanes, `1.029` contextual physical evaluations,
@@ -353,8 +354,9 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 
 Prioritaet: P0 Candidate-Resolution-Korrektheit
 
-Status: Source-seitig abgeschlossen am reviewten Delta auf Basis
-`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus dem Candidate-Domain-Top-Fix. Der begrenzte Pending-Carrier
+Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
+`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI `33`, Function-Analysis-
+Epoch-Schema `18`. Der begrenzte Pending-Carrier
 bewahrt identitaetsgebundene Payloads ueber Merge, Key/Cache, Lifetime,
 ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute und
 contextual/forwarded/stable Harvest sowie Export-Gate. Der aktuelle
@@ -376,7 +378,7 @@ Konvergenzhebel; KR-4981 bleibt offen.
 ### [x] Abgeschlossener Diagnose-Unterauftrag
 
 Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das vollständige
-`attempts=1024`-Gate und wurde nach `244,549 ms` bei Wave `24` gezielt beendet.
+`attempts=1024`-Gate und wurde nach `244,549 s` bei Wave `24` gezielt beendet.
 `uncategorized=0` für alle Top-8-Funktionen; kein Fehler, Hänger, Portartefakt
 oder Produktgate. Der Hauptbefund `0x8C10E44E` umfasst `20` semantische
 Änderungen und `40` Stack-Widenings ausschließlich SavedEpoch-pending-ABI-
@@ -386,10 +388,10 @@ unvollständigem Callee-Set-Stackvertrag. `0x8C09859C` zeigt `28` gemischte
 vollständigem Stackvertrag und `reg_epoch_pending=180`.
 
 Dieser Diagnose-Unterauftrag ist abgeschlossen; KR-4981 bleibt offen. Der
-nächste Fixpfad ist die noch nicht implementierte absorbierende Top-Semantik
-für `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge,
-Equality, Subsumption, Key und Persistenz, mit erhaltenem Alias-/Current-
-Tracking und fail-closed Restore. Die dynamischen Callee-Set-incomplete-Sites
+SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
+gemeinsame Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-
+Lifecycle-Ursache, mit erhaltenem Alias-/Current-Tracking und fail-closed
+Restore. Die dynamischen Callee-Set-incomplete-Sites
 werden danach erneut geprüft.
 
 ### [x] Abgeschlossener SavedEpoch-Lifecycle-Unterauftrag
@@ -400,10 +402,10 @@ unangetastet. `candidate_payload_lost` ist als absorbierendes Epoch-Top ueber
 Normalize, Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz
 integriert; konkrete Evidence und Nested-/Current-Aliasfakten bleiben,
 finite Payload/Slots verschwinden, detached Top erhaelt keine fremde
-Tail-Evidence. Epoch-Schema `17`, Analyzer-ABI `33`, kein oeffentliches Layout-
+Tail-Evidence. Epoch-Schema `18`, Analyzer-ABI `33`, kein oeffentliches Layout-
 Delta.
 
-Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `nonconvergence`/Exitcode `31` bei Wave `76`; `0` committed/ready/completed
 Roots, `272` Contexts, `uncategorized=0` bei D1024 und D2048, keine Publikation
 und kein `game.exe`. Der alte SavedEpoch-Pending-Blocker ist beseitigt. Der
@@ -556,11 +558,12 @@ Abhaengigkeiten: KR-4985, KR-4986 und alle durch G1/G2 aktivierten Tasks bis
 KR-4991
 
 Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
-`594f0191b321bd2f470d0aa07100e82f3eea956f` mit diesem Abschlusscommit.
+`SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI `33`, Function-Analysis-
+Epoch-Schema `18`.
 Der vollstaendige Sol-Endreview
 des unmittelbar vorherigen Explosionsbug-Diffs wurde wiederverwendet; alle
-bestaetigten Findings sind geschlossen; das bisher offene Analyzer-ABI-
-Finding wurde im vorherigen Fixcommit durch ABI 32 geschlossen. Nicht aktivierte
+bestaetigten Findings sind geschlossen; das Analyzer-ABI-Finding ist unter dem
+aktuellen Analyzer-ABI `33` geschlossen. Nicht aktivierte
 KR-4988 bis KR-4991 wurden nicht als geaendert oder reviewpflichtig behauptet.
 
 ### Ziel
@@ -568,9 +571,8 @@ KR-4988 bis KR-4991 wurden nicht als geaendert oder reviewpflichtig behauptet.
 Der vollstaendige Endreview der aktivierten/geaenderten Context-, Cache-,
 Evidence- und Budgetpfade sowie die Pruefung der unveraendert konservativen
 FullState-, Binding-, Dependency- und Scheduling-Fallbackgrenzen ist
-abgeschlossen; alle vorher bestaetigten Findings wurden vor `0ae993f`
-geschlossen; das Analyzer-ABI-Finding wurde im vorherigen Fixcommit mit ABI 32
-geschlossen.
+abgeschlossen; alle vorher bestaetigten Findings sind geschlossen; das
+Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `33` geschlossen.
 
 ### Umfang
 

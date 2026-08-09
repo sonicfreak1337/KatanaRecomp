@@ -109,13 +109,12 @@ Die folgenden Staende bleiben getrennt:
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-funktionale Sourcebasis:
-  21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b
-  plus das reviewte SavedEpoch-Lifecycle-Delta dieses Tasks
+funktionaler Source-Checkpoint:
+  SavedEpoch-Slot-Identity-Fix
   Analyzer-ABI 33
-  Function-Analysis-Epoch-Schema 17
+  Function-Analysis-Epoch-Schema 18
 
-aktueller realer Diagnosebefund:
+frueherer Vergleichslauf:
   D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s
   manuelles Beenden des identifizierten Kindprozesses nach belegter Nichtverbesserung
   0/1194 Resolution-Roots committed, HOL 0, Wave 103
@@ -152,10 +151,10 @@ SavedEpoch-pending-ABI-Skalare; der Stackvertrag war am Callee-Set unvollständi
 unvollständigem Callee-Set; `0x8C64E55E` zeigte `48` Änderungen bei vollständigem
 Stackvertrag, darunter `reg_epoch_pending=180`. Der Diagnose-Unterauftrag ist
 damit abgeschlossen, KR-4981 und das globale Sonic-Produktgate bleiben offen.
-Nächster Fixpfad ist die noch nicht implementierte absorbierende Top-Semantik
-für `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge,
-Equality, Subsumption, Key und Persistenz; Alias-/Current-Tracking und
-fail-closed Restore bleiben erhalten.
+Der SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
+gemeinsame Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-
+Lifecycle-Ursache; Alias-/Current-Tracking und fail-closed Restore bleiben
+erhalten.
 
 Der SavedEpoch-Lifecycle-Unterauftrag ist source-seitig abgeschlossen. Current-
 tracking SavedEpoch-Pending-ABI-Skalare werden nur an bewiesenen normalen
@@ -164,10 +163,10 @@ Call-/Tail-ABI-Gates konsumiert; detached Epochs bleiben unangetastet.
 Epoch-Top ueber Normalize, Merge, Equality, Key, Subsumption, Evidence,
 Restore und Persistenz. Konkrete Evidence sowie Nested-/Current-Aliasfakten
 bleiben erhalten, finite Payload/Slots verschwinden; detached Top uebernimmt
-keine fremde Tail-Evidence. Das Epoch-Schema ist `17`, Analyzer-ABI `33`
+keine fremde Tail-Evidence. Das Epoch-Schema ist `18`, Analyzer-ABI `33`
 bleibt ohne oeffentliche Layoutaenderung.
 
-Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 ms`
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s`
 (`6:09`) mit Status `nonconvergence`, Exitcode `31`, nach drei zehnsekundigen
 Null-Publikations-Amplifikationssamples. Wave `76`, `0` committed/ready/
 completed Roots, `272` Contexts; Semantic-Lanes `846 -> 863 -> 886`,
@@ -246,7 +245,7 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding wurde im vorherigen Fixcommit mit ABI 32 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 33 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
 | KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; der aktuelle D-Lauf bestand es nicht; kein weiterer Lauf ohne ausdrueckliche Freigabe; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der semantische Lane-Treiber bleibt im Produktgate offen |
@@ -260,7 +259,8 @@ KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
 ```
 
 D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue Testmatrix.
-D1/G1 bleibt historisch unentschieden; D2/G2 wurde nicht ausgefuehrt. D9 ist
+D1/G1 bleibt historisch unentschieden; D2/G2 ist abgeschlossen und negativ:
+kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Portartefakt oder
 Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig
 abgeschlossen; der semantische Lane-Treiber bleibt offen. KR-4981 bleibt das

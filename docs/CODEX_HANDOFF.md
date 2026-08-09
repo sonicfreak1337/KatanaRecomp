@@ -287,9 +287,9 @@ Testmatrix.
 
 ## Aktueller P0-Handoff
 
-Die Sourcebasis fuer den aktuellen Candidate-Resolution-Pfad ist
-`21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b` plus das reviewte SavedEpoch-
-Lifecycle-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17.
+Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-Pfad
+ist `SavedEpoch-Slot-Identity-Fix`; Analyzer-ABI 33,
+Function-Analysis-Epoch-Schema 18.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -360,7 +360,7 @@ Portartefakt und kein Produkterfolg.
 
 Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
 war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
-Warnungen. Der aktuelle D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
+Warnungen. Der fruehere D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
 `325,8 s`; der identifizierte Kindprozess wurde nach belegter
 Nichtverbesserung manuell beendet. Es gab `0/1194` committed Roots, HOL `0`,
 Wave `103`, `272` Contexts, `1.044` Semantic-Lanes, `1.029` contextual
@@ -376,8 +376,9 @@ semantische Lane-Treiber bleibt offen. KR-4981 ist nicht bestanden.
 Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
 zum kanonischen absorbierenden Top mit leerem endlichem Praefix. Merge,
 Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion sind
-darauf abgestimmt; das interne Epoch-Schema ist `16`, Analyzer-ABI `33` bleibt
-ohne oeffentliche Structlayout-Aenderung unveraendert. Der Lauf
+darauf abgestimmt; der aktuelle funktionale Source-Checkpoint verwendet
+Epoch-Schema `18`, Analyzer-ABI `33` bleibt ohne oeffentliche Structlayout-
+Aenderung unveraendert. Der Lauf
 `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` durch manuellen
 Abbruch bei belegter identischer Nichtkonvergenz; letzte Bewegung Wave `48`,
 Peak Root `1.450.078.208 B`, Peak Job `1.618.132.992 B`, keine Publikation und
@@ -387,17 +388,17 @@ Konvergenzhebel; KR-4981 bleibt offen.
 
 Der abgeschlossene Diagnose-Unterauftrag lief unter
 `kr4981-20260809-024141-c4ffdf15`, erreichte das vollständige
-`attempts=1024`-Gate und wurde nach `244,549 ms` bei Wave `24` gezielt beendet.
+`attempts=1024`-Gate und wurde nach `244,549 s` bei Wave `24` gezielt beendet.
 `uncategorized=0` für alle Top-8-Funktionen; der erwartbare
 `product-exit -1`-Status entstand durch diesen Stop. Peak Root WS:
 `1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`; keine Publikation und kein
 `game.exe`. `0x8C10E44E` ist mit `20` semantischen Änderungen und `40`
 Stack-Widenings ausschließlich SavedEpoch-pending-ABI-Skalaren sowie
-unvollständigem Callee-Set-Stackvertrag der dominante Befund. Der nächste
-Fixpfad ist noch nicht implementiert: absorbierende Top-Semantik für
-`candidate_payload_lost`/Unresolved-SavedEpoch in Normalize, Merge, Equality,
-Subsumption, Key und Persistenz, mit erhaltenem Alias-/Current-Tracking und
-fail-closed Restore. Die dynamischen Callee-Set-incomplete-Gründe werden danach
+unvollständigem Callee-Set-Stackvertrag der dominante Befund.
+Der SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
+gemeinsame Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-
+Lifecycle-Ursache; Alias-/Current-Tracking und fail-closed Restore bleiben
+erhalten. Die dynamischen Callee-Set-incomplete-Gründe werden danach
 weiter geprüft; KR-4981 bleibt offen.
 
 Der SavedEpoch-Lifecycle-Unterauftrag ist source-seitig abgeschlossen:
@@ -407,9 +408,9 @@ Call-/Tail-ABI-Gates konsumiert, detached Epochs bleiben unangetastet.
 Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz; konkrete
 Evidence und Nested-/Current-Aliasfakten bleiben erhalten, finite Payload/Slots
 verschwinden, detached Top uebernimmt keine fremde Tail-Evidence. Epoch-Schema
-`17`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
+`18`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
 
-Der Produktlauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+Der Produktlauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `nonconvergence`/Exitcode `31` durch drei zehnsekundige
 Null-Publikations-Amplifikationssamples. Wave `76`, `0` committed/ready/
 completed Roots, `272` Contexts, `uncategorized=0` in D1024 und D2048; keine
@@ -429,14 +430,15 @@ der semantische Lane-Treiber bleibt der offene P0-Produktblocker.
 Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
 sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
-entscheidbar. D2/G2 wurde nicht ausgefuehrt. KR-4981 bleibt das globale
+entscheidbar. D2/G2 ist abgeschlossen und negativ; ein positiver
+Schedulerhebel ist nicht belegt. KR-4981 bleibt das globale
 Produktgate; der aktuelle D-Lauf ist abgeschlossen und nicht bestanden. Ein
 weiterer Lauf ist nicht automatisch freigegeben. Ein zweiter D1-Lauf gehoert
 nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
 Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; das
-Analyzer-ABI-Finding wurde mit ABI 32 geschlossen. KR-4994 ist source-seitig
+Analyzer-ABI-Finding ist geschlossen; der aktuelle Analyzer-ABI ist `33`. KR-4994 ist source-seitig
 abgeschlossen, aber der semantische Lane-Treiber bleibt offen. Es gibt kein
 bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.
 

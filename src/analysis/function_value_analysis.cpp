@@ -619,14 +619,10 @@ struct InventorySavedStackEpoch;
 
 struct InventorySavedStackSlot {
     std::int32_t relative_slot = 0;
-    std::vector<std::uint32_t> inventory_code_pointer_values;
-    std::vector<std::uint32_t>
-        inventory_pc_relative_code_literal_values;
-    bool inventory_code_pointer_values_truncated = false;
-    bool inventory_pc_relative_code_literal_values_truncated = false;
-    bool contextual_candidate_dependency = false;
-    std::set<std::uint32_t> call_sites;
-    std::set<std::uint32_t> callees;
+    // The internal slot deliberately mirrors the public summary slot.  In
+    // particular, pre-ABI ordinary scalars remain relative to this exact
+    // saved-stack identity instead of being flattened into the epoch root.
+    InventoryCandidateCarrier carrier;
     std::vector<InventorySavedStackEpoch> nested_epochs;
 
     bool operator==(const InventorySavedStackSlot&) const = default;
@@ -1276,8 +1272,7 @@ template <typename Callback>
 void for_each_evidence_set(InventorySavedStackEpoch& epoch,
                            Callback&& callback) {
     for (auto& slot : epoch.slots) {
-        callback(EvidenceProvenanceDomain::CallSite, slot.call_sites);
-        callback(EvidenceProvenanceDomain::Callee, slot.callees);
+        for_each_evidence_set(slot.carrier, callback);
         for (auto& nested : slot.nested_epochs)
             for_each_evidence_set(nested, callback);
     }
@@ -1316,6 +1311,9 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
 [[nodiscard]] bool same_inventory_saved_stack_epoch_without_evidence(
     const InventorySavedStackEpoch& left,
     const InventorySavedStackEpoch& right);
+[[nodiscard]] bool same_inventory_candidate_carrier_without_evidence(
+    const InventoryCandidateCarrier& left,
+    const InventoryCandidateCarrier& right);
 
 // A truncated bounded candidate domain is semantic Top.  Its retained finite
 // prefix is intentionally non-semantic: old persisted states and partially
@@ -1333,18 +1331,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
     const InventorySavedStackSlot& left,
     const InventorySavedStackSlot& right) {
     if (left.relative_slot != right.relative_slot ||
-        !same_inventory_candidate_domain(
-            left.inventory_code_pointer_values,
-            left.inventory_code_pointer_values_truncated,
-            right.inventory_code_pointer_values,
-            right.inventory_code_pointer_values_truncated) ||
-        !same_inventory_candidate_domain(
-            left.inventory_pc_relative_code_literal_values,
-            left.inventory_pc_relative_code_literal_values_truncated,
-            right.inventory_pc_relative_code_literal_values,
-            right.inventory_pc_relative_code_literal_values_truncated) ||
-        left.contextual_candidate_dependency !=
-            right.contextual_candidate_dependency ||
+        !same_inventory_candidate_carrier_without_evidence(left.carrier,
+                                                            right.carrier) ||
         left.nested_epochs.size() != right.nested_epochs.size())
         return false;
     for (std::size_t index = 0u; index < left.nested_epochs.size(); ++index) {
@@ -1450,20 +1438,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
         const auto& left_slot = left.slots[index];
         const auto& right_slot = right.slots[index];
         if (left_slot.relative_slot != right_slot.relative_slot ||
-            !same_inventory_candidate_domain(
-                left_slot.inventory_code_pointer_values,
-                left_slot.inventory_code_pointer_values_truncated,
-                right_slot.inventory_code_pointer_values,
-                right_slot.inventory_code_pointer_values_truncated) ||
-            !same_inventory_candidate_domain(
-                left_slot.inventory_pc_relative_code_literal_values,
-                left_slot.inventory_pc_relative_code_literal_values_truncated,
-                right_slot.inventory_pc_relative_code_literal_values,
-                right_slot.inventory_pc_relative_code_literal_values_truncated) ||
-            left_slot.contextual_candidate_dependency !=
-                right_slot.contextual_candidate_dependency ||
-            left_slot.call_sites != right_slot.call_sites ||
-            left_slot.callees != right_slot.callees ||
+            !same_inventory_candidate_carrier_with_evidence(
+                left_slot.carrier, right_slot.carrier) ||
             left_slot.nested_epochs.size() !=
                 right_slot.nested_epochs.size())
             return false;
@@ -2153,6 +2129,11 @@ void materialize_unresolved_saved_stack_alias(
 [[nodiscard]] bool has_non_epoch_abstract_fact(
     const AbstractValue& value);
 void collapse_payload_free_stack_aliases(AbstractState& state);
+bool merge_inventory_candidate_carrier(
+    InventoryCandidateCarrier& destination,
+    const InventoryCandidateCarrier& source);
+[[nodiscard]] bool direct_inventory_candidate_carrier_truncated(
+    const InventoryCandidateCarrier& carrier);
 bool merge_inventory_saved_stack_epoch(
     InventorySavedStackEpoch& destination,
     const InventorySavedStackEpoch& source,
@@ -2259,25 +2240,17 @@ void normalize_inventory_candidate_carrier(
 
 [[nodiscard]] bool has_inventory_saved_stack_slot_payload(
     const InventorySavedStackSlot& slot) {
-    return !slot.inventory_code_pointer_values.empty() ||
-           !slot.inventory_pc_relative_code_literal_values.empty() ||
-           slot.inventory_code_pointer_values_truncated ||
-           slot.inventory_pc_relative_code_literal_values_truncated ||
-           slot.contextual_candidate_dependency;
+    return has_inventory_candidate_carrier_payload(slot.carrier) ||
+           has_pending_abi_scalar_payload(slot.carrier);
+}
+
+[[nodiscard]] bool has_inventory_saved_stack_slot_candidate_payload(
+    const InventorySavedStackSlot& slot) {
+    return has_inventory_candidate_carrier_payload(slot.carrier);
 }
 
 void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
-    static_cast<void>(normalize_inventory_candidate_values(
-        slot.inventory_code_pointer_values,
-        slot.inventory_code_pointer_values_truncated));
-    static_cast<void>(normalize_inventory_candidate_values(
-        slot.inventory_pc_relative_code_literal_values,
-        slot.inventory_pc_relative_code_literal_values_truncated));
-    if (!has_inventory_saved_stack_slot_payload(slot) &&
-        slot.nested_epochs.empty()) {
-        slot.call_sites.clear();
-        slot.callees.clear();
-    }
+    normalize_inventory_candidate_carrier(slot.carrier);
 }
 
 [[nodiscard]] bool has_inventory_saved_stack_epoch_payload(
@@ -2296,11 +2269,10 @@ void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
     const InventorySavedStackEpoch& epoch) {
     if (epoch.candidate_payload_lost ||
         has_inventory_candidate_carrier_payload(
-            epoch.unresolved_candidate_carrier) ||
-        has_pending_abi_scalar_payload(epoch.unresolved_candidate_carrier))
+            epoch.unresolved_candidate_carrier))
         return true;
     for (const auto& slot : epoch.slots) {
-        if (has_inventory_saved_stack_slot_payload(slot)) return true;
+        if (has_inventory_saved_stack_slot_candidate_payload(slot)) return true;
         if (std::any_of(slot.nested_epochs.begin(),
                         slot.nested_epochs.end(),
                         [](const InventorySavedStackEpoch& nested) {
@@ -2315,6 +2287,54 @@ void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
                            return inventory_saved_stack_epoch_has_candidate_payload_or_top(
                                nested);
                        });
+}
+
+[[nodiscard]] bool inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+    const InventorySavedStackEpoch& epoch) {
+    if (has_pending_abi_scalar_payload(epoch.unresolved_candidate_carrier))
+        return true;
+    for (const auto& slot : epoch.slots) {
+        if (has_pending_abi_scalar_payload(slot.carrier)) return true;
+        if (std::any_of(
+                slot.nested_epochs.begin(), slot.nested_epochs.end(),
+                [](const InventorySavedStackEpoch& nested) {
+                    return inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+                        nested);
+                }))
+            return true;
+    }
+    return std::any_of(
+        epoch.unresolved_nested_epochs.begin(),
+        epoch.unresolved_nested_epochs.end(),
+        [](const InventorySavedStackEpoch& nested) {
+            return inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+                nested);
+        });
+}
+
+[[nodiscard]] bool inventory_saved_stack_epoch_has_direct_candidate_top(
+    const InventorySavedStackEpoch& epoch) {
+    if (epoch.candidate_payload_lost ||
+        direct_inventory_candidate_carrier_truncated(
+            epoch.unresolved_candidate_carrier))
+        return true;
+    for (const auto& slot : epoch.slots) {
+        if (direct_inventory_candidate_carrier_truncated(slot.carrier))
+            return true;
+        if (std::any_of(slot.nested_epochs.begin(),
+                        slot.nested_epochs.end(),
+                        [](const InventorySavedStackEpoch& nested) {
+                            return inventory_saved_stack_epoch_has_direct_candidate_top(
+                                nested);
+                        }))
+            return true;
+    }
+    return std::any_of(
+        epoch.unresolved_nested_epochs.begin(),
+        epoch.unresolved_nested_epochs.end(),
+        [](const InventorySavedStackEpoch& nested) {
+            return inventory_saved_stack_epoch_has_direct_candidate_top(nested);
+        });
 }
 
 [[nodiscard]] bool inventory_saved_stack_epoch_tracks_current(
@@ -2376,8 +2396,10 @@ void normalize_inventory_saved_stack_epoch_candidate_top(
                 node.nested_saved_stack_alias_tracks_current_epoch;
         }
         for (const auto& slot : node.slots) {
-            call_sites.insert(slot.call_sites.begin(), slot.call_sites.end());
-            callees.insert(slot.callees.begin(), slot.callees.end());
+            call_sites.insert(slot.carrier.call_sites.begin(),
+                              slot.carrier.call_sites.end());
+            callees.insert(slot.carrier.callees.begin(),
+                           slot.carrier.callees.end());
             for (const auto& child : slot.nested_epochs)
                 self(self, child, true);
         }
@@ -2424,9 +2446,8 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
             ++nodes <= maximum_saved_stack_epoch_nodes;
         candidate_payload = candidate_payload ||
             node.candidate_payload_lost ||
-            has_inventory_candidate_carrier_payload(
-                node.unresolved_candidate_carrier) ||
-            has_pending_abi_scalar_payload(node.unresolved_candidate_carrier);
+            direct_inventory_candidate_carrier_truncated(
+                node.unresolved_candidate_carrier);
         nested_alias = nested_alias ||
             node.nested_saved_stack_alias_latent ||
             node.nested_saved_stack_alias_tracks_current_epoch ||
@@ -2443,7 +2464,7 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
             const bool within_slot_budget =
                 ++slots <= maximum_saved_stack_epoch_slots;
             candidate_payload = candidate_payload ||
-                has_inventory_saved_stack_slot_payload(slot);
+                direct_inventory_candidate_carrier_truncated(slot.carrier);
             for (const auto& child : slot.nested_epochs)
                 within_children = self(self, child, true) && within_children;
             within_children = within_slot_budget && within_children;
@@ -2454,14 +2475,37 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
                slots <= maximum_saved_stack_epoch_slots;
     };
     if (visit(visit, epoch, false)) return;
-    // The traversal order is canonical (sorted slots, then the sole nested
-    // MAY-child).  Once the root budget is crossed, no partial subtree form
-    // survives: candidate-bearing content becomes genuine Top; an otherwise
-    // latent saved-SP remains a bounded detached alias fact.
+    // Fold the exact coordinates into the root MAY carrier before discarding
+    // the tree.  Pending scalars are preserved as Pending; only a genuine
+    // direct candidate Top (including one caused by this bounded fold) makes
+    // the epoch's terminal Candidate Top.
+    const auto fold_node = [&](auto&& self,
+                               const InventorySavedStackEpoch& node) -> void {
+        static_cast<void>(merge_inventory_candidate_carrier(
+            epoch.unresolved_candidate_carrier,
+            node.unresolved_candidate_carrier));
+        for (const auto& slot : node.slots) {
+            static_cast<void>(merge_inventory_candidate_carrier(
+                epoch.unresolved_candidate_carrier, slot.carrier));
+            for (const auto& nested : slot.nested_epochs)
+                self(self, nested);
+        }
+        for (const auto& nested : node.unresolved_nested_epochs)
+            self(self, nested);
+    };
+    for (const auto& slot : epoch.slots) {
+        static_cast<void>(merge_inventory_candidate_carrier(
+            epoch.unresolved_candidate_carrier, slot.carrier));
+        for (const auto& nested : slot.nested_epochs)
+            fold_node(fold_node, nested);
+    }
+    for (const auto& nested : epoch.unresolved_nested_epochs)
+        fold_node(fold_node, nested);
     epoch.present = true;
     epoch.unresolved = true;
     epoch.candidate_payload_lost = epoch.candidate_payload_lost ||
-        candidate_payload;
+        candidate_payload || direct_inventory_candidate_carrier_truncated(
+                                 epoch.unresolved_candidate_carrier);
     epoch.nested_saved_stack_alias_latent =
         epoch.nested_saved_stack_alias_latent || nested_alias;
     epoch.nested_saved_stack_alias_tracks_current_epoch =
@@ -2510,6 +2554,31 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
         [](const InventorySavedStackEpochSummary& nested) {
             return summary_saved_stack_epoch_has_candidate_payload_or_top(
                 nested);
+        });
+}
+
+[[nodiscard]] bool summary_saved_stack_epoch_has_direct_candidate_top(
+    const InventorySavedStackEpochSummary& epoch) {
+    if (epoch.candidate_payload_lost ||
+        direct_inventory_candidate_carrier_truncated(
+            epoch.unresolved_candidate_carrier))
+        return true;
+    for (const auto& slot : epoch.slots) {
+        if (direct_inventory_candidate_carrier_truncated(slot.carrier))
+            return true;
+        if (std::any_of(
+                slot.nested_epochs.begin(), slot.nested_epochs.end(),
+                [](const InventorySavedStackEpochSummary& nested) {
+                    return summary_saved_stack_epoch_has_direct_candidate_top(
+                        nested);
+                }))
+            return true;
+    }
+    return std::any_of(
+        epoch.unresolved_nested_epochs.begin(),
+        epoch.unresolved_nested_epochs.end(),
+        [](const InventorySavedStackEpochSummary& nested) {
+            return summary_saved_stack_epoch_has_direct_candidate_top(nested);
         });
 }
 
@@ -2613,9 +2682,8 @@ void enforce_saved_stack_epoch_summary_tree_budget(
         const bool within_node_budget =
             ++nodes <= maximum_saved_stack_epoch_nodes;
         candidate_payload = candidate_payload || node.candidate_payload_lost ||
-            has_inventory_candidate_carrier_payload(
-                node.unresolved_candidate_carrier) ||
-            has_pending_abi_scalar_payload(node.unresolved_candidate_carrier);
+            direct_inventory_candidate_carrier_truncated(
+                node.unresolved_candidate_carrier);
         nested_alias = nested_alias ||
             node.nested_saved_stack_alias_latent ||
             node.nested_saved_stack_alias_tracks_current_epoch ||
@@ -2633,8 +2701,7 @@ void enforce_saved_stack_epoch_summary_tree_budget(
             const bool within_slot_budget =
                 ++slots <= maximum_saved_stack_epoch_slots;
             candidate_payload = candidate_payload ||
-                has_inventory_candidate_carrier_payload(slot.carrier) ||
-                has_pending_abi_scalar_payload(slot.carrier);
+                direct_inventory_candidate_carrier_truncated(slot.carrier);
             for (const auto& child : slot.nested_epochs)
                 within_children = self(self, child, true) && within_children;
             within_children = within_slot_budget && within_children;
@@ -2645,10 +2712,33 @@ void enforce_saved_stack_epoch_summary_tree_budget(
                slots <= maximum_saved_stack_epoch_slots;
     };
     if (visit(visit, epoch, false)) return;
+    const auto fold_node =
+        [&](auto&& self, const InventorySavedStackEpochSummary& node) -> void {
+        static_cast<void>(merge_inventory_candidate_carrier(
+            epoch.unresolved_candidate_carrier,
+            node.unresolved_candidate_carrier));
+        for (const auto& slot : node.slots) {
+            static_cast<void>(merge_inventory_candidate_carrier(
+                epoch.unresolved_candidate_carrier, slot.carrier));
+            for (const auto& nested : slot.nested_epochs)
+                self(self, nested);
+        }
+        for (const auto& nested : node.unresolved_nested_epochs)
+            self(self, nested);
+    };
+    for (const auto& slot : epoch.slots) {
+        static_cast<void>(merge_inventory_candidate_carrier(
+            epoch.unresolved_candidate_carrier, slot.carrier));
+        for (const auto& nested : slot.nested_epochs)
+            fold_node(fold_node, nested);
+    }
+    for (const auto& nested : epoch.unresolved_nested_epochs)
+        fold_node(fold_node, nested);
     epoch.present = true;
     epoch.unresolved = true;
     epoch.candidate_payload_lost = epoch.candidate_payload_lost ||
-        candidate_payload;
+        candidate_payload || direct_inventory_candidate_carrier_truncated(
+                                 epoch.unresolved_candidate_carrier);
     epoch.nested_saved_stack_alias_latent =
         epoch.nested_saved_stack_alias_latent || nested_alias;
     epoch.nested_saved_stack_alias_tracks_current_epoch =
@@ -2693,11 +2783,11 @@ void normalize_inventory_saved_stack_epoch(
     normalize_inventory_candidate_carrier(
         epoch.unresolved_candidate_carrier);
     if (depth >= maximum_saved_stack_epoch_nesting) {
-        bool nested_candidate_payload = false;
+        bool nested_candidate_top = false;
         bool nested_tracks_current = false;
         const auto classify_nested = [&](const InventorySavedStackEpoch& nested) {
-            nested_candidate_payload = nested_candidate_payload ||
-                inventory_saved_stack_epoch_has_candidate_payload_or_top(nested);
+            nested_candidate_top = nested_candidate_top ||
+                inventory_saved_stack_epoch_has_direct_candidate_top(nested);
             nested_tracks_current = nested_tracks_current ||
                 inventory_saved_stack_epoch_tracks_current(nested);
         };
@@ -2706,19 +2796,40 @@ void normalize_inventory_saved_stack_epoch(
         for (const auto& slot : epoch.slots)
             for (const auto& nested : slot.nested_epochs)
                 classify_nested(nested);
-        if (nested_candidate_payload || nested_tracks_current ||
+        if (nested_candidate_top || nested_tracks_current ||
             !epoch.unresolved_nested_epochs.empty() ||
             std::any_of(epoch.slots.begin(), epoch.slots.end(),
                         [](const InventorySavedStackSlot& slot) {
                             return !slot.nested_epochs.empty();
-                        })) {
+        })) {
             epoch.present = true;
             epoch.unresolved = true;
+            const auto fold_nested =
+                [&](auto&& self,
+                    const InventorySavedStackEpoch& nested) -> void {
+                static_cast<void>(merge_inventory_candidate_carrier(
+                    epoch.unresolved_candidate_carrier,
+                    nested.unresolved_candidate_carrier));
+                for (const auto& nested_slot : nested.slots) {
+                    static_cast<void>(merge_inventory_candidate_carrier(
+                        epoch.unresolved_candidate_carrier,
+                        nested_slot.carrier));
+                    for (const auto& child : nested_slot.nested_epochs)
+                        self(self, child);
+                }
+                for (const auto& child : nested.unresolved_nested_epochs)
+                    self(self, child);
+            };
+            for (const auto& nested : epoch.unresolved_nested_epochs)
+                fold_nested(fold_nested, nested);
+            for (const auto& slot : epoch.slots)
+                for (const auto& nested : slot.nested_epochs)
+                    fold_nested(fold_nested, nested);
             epoch.candidate_payload_lost = epoch.candidate_payload_lost ||
-                nested_candidate_payload;
-            epoch.nested_saved_stack_alias_latent =
-                epoch.nested_saved_stack_alias_latent ||
-                !nested_candidate_payload;
+                nested_candidate_top ||
+                direct_inventory_candidate_carrier_truncated(
+                    epoch.unresolved_candidate_carrier);
+            epoch.nested_saved_stack_alias_latent = true;
             epoch.nested_saved_stack_alias_tracks_current_epoch =
                 epoch.nested_saved_stack_alias_tracks_current_epoch ||
                 nested_tracks_current;
@@ -2812,12 +2923,12 @@ void normalize_inventory_saved_stack_epoch_summary(
                         })) {
             epoch.present = true;
             epoch.unresolved = true;
-            bool nested_candidate_payload = false;
+            bool nested_candidate_top = false;
             bool nested_tracks_current = false;
             const auto classify_summary =
                 [&](const InventorySavedStackEpochSummary& nested) {
-                    nested_candidate_payload = nested_candidate_payload ||
-                        summary_saved_stack_epoch_has_candidate_payload_or_top(
+                    nested_candidate_top = nested_candidate_top ||
+                        summary_saved_stack_epoch_has_direct_candidate_top(
                             nested);
                     nested_tracks_current = nested_tracks_current ||
                         summary_saved_stack_epoch_tracks_current(nested);
@@ -2827,11 +2938,33 @@ void normalize_inventory_saved_stack_epoch_summary(
             for (const auto& slot : epoch.slots)
                 for (const auto& nested : slot.nested_epochs)
                     classify_summary(nested);
+            const auto fold_nested =
+                [&](auto&& self,
+                    const InventorySavedStackEpochSummary& nested) -> void {
+                static_cast<void>(merge_inventory_candidate_carrier(
+                    epoch.unresolved_candidate_carrier,
+                    nested.unresolved_candidate_carrier));
+                for (const auto& nested_slot : nested.slots) {
+                    static_cast<void>(merge_inventory_candidate_carrier(
+                        epoch.unresolved_candidate_carrier,
+                        nested_slot.carrier));
+                    for (const auto& child : nested_slot.nested_epochs)
+                        self(self, child);
+                }
+                for (const auto& child : nested.unresolved_nested_epochs)
+                    self(self, child);
+            };
+            for (const auto& nested : epoch.unresolved_nested_epochs)
+                fold_nested(fold_nested, nested);
+            for (const auto& slot : epoch.slots)
+                for (const auto& nested : slot.nested_epochs)
+                    fold_nested(fold_nested, nested);
             epoch.candidate_payload_lost = epoch.candidate_payload_lost ||
-                nested_candidate_payload;
+                nested_candidate_top ||
+                direct_inventory_candidate_carrier_truncated(
+                    epoch.unresolved_candidate_carrier);
             epoch.nested_saved_stack_alias_latent =
-                epoch.nested_saved_stack_alias_latent ||
-                !nested_candidate_payload;
+                true;
             epoch.nested_saved_stack_alias_tracks_current_epoch =
                 epoch.nested_saved_stack_alias_tracks_current_epoch ||
                 nested_tracks_current;
@@ -2906,6 +3039,12 @@ void normalize_inventory_saved_stack_epoch_summary(
     return carrier.inventory_code_pointer_values_truncated ||
            carrier.inventory_pc_relative_code_literal_values_truncated ||
            carrier.pending_abi_scalar_values_truncated;
+}
+
+[[nodiscard]] bool direct_inventory_candidate_carrier_truncated(
+    const InventoryCandidateCarrier& carrier) {
+    return carrier.inventory_code_pointer_values_truncated ||
+           carrier.inventory_pc_relative_code_literal_values_truncated;
 }
 
 bool merge_inventory_candidate_carrier(
@@ -3000,20 +3139,7 @@ bool absorb_pending_abi_scalar(
 void absorb_inventory_saved_stack_slot(
     InventoryCandidateCarrier& carrier,
     const InventorySavedStackSlot& slot) {
-    InventoryCandidateCarrier incoming;
-    incoming.inventory_code_pointer_values =
-        slot.inventory_code_pointer_values;
-    incoming.inventory_pc_relative_code_literal_values =
-        slot.inventory_pc_relative_code_literal_values;
-    incoming.inventory_code_pointer_values_truncated =
-        slot.inventory_code_pointer_values_truncated;
-    incoming.inventory_pc_relative_code_literal_values_truncated =
-        slot.inventory_pc_relative_code_literal_values_truncated;
-    incoming.contextual_candidate_dependency =
-        slot.contextual_candidate_dependency;
-    incoming.call_sites = slot.call_sites;
-    incoming.callees = slot.callees;
-    static_cast<void>(merge_inventory_candidate_carrier(carrier, incoming));
+    static_cast<void>(merge_inventory_candidate_carrier(carrier, slot.carrier));
 }
 
 [[nodiscard]] InventoryCandidateCarrier inventory_saved_slot_carrier(
@@ -3039,7 +3165,7 @@ void absorb_inventory_saved_stack_slot(
     for (const auto& slot : epoch.slots) {
         InventorySavedStackSlotSummary summarized;
         summarized.relative_slot = slot.relative_slot;
-        summarized.carrier = inventory_saved_slot_carrier(slot);
+        summarized.carrier = slot.carrier;
         summarized.nested_epochs.reserve(slot.nested_epochs.size());
         for (const auto& nested : slot.nested_epochs)
             summarized.nested_epochs.push_back(
@@ -3072,18 +3198,7 @@ void absorb_inventory_saved_stack_slot(
     for (const auto& slot : summary.slots) {
         InventorySavedStackSlot restored;
         restored.relative_slot = slot.relative_slot;
-        restored.inventory_code_pointer_values =
-            slot.carrier.inventory_code_pointer_values;
-        restored.inventory_pc_relative_code_literal_values =
-            slot.carrier.inventory_pc_relative_code_literal_values;
-        restored.inventory_code_pointer_values_truncated =
-            slot.carrier.inventory_code_pointer_values_truncated;
-        restored.inventory_pc_relative_code_literal_values_truncated =
-            slot.carrier.inventory_pc_relative_code_literal_values_truncated;
-        restored.contextual_candidate_dependency =
-            slot.carrier.contextual_candidate_dependency;
-        restored.call_sites = slot.carrier.call_sites;
-        restored.callees = slot.carrier.callees;
+        restored.carrier = slot.carrier;
         restored.nested_epochs.reserve(slot.nested_epochs.size());
         for (const auto& nested : slot.nested_epochs)
             restored.nested_epochs.push_back(
@@ -3168,7 +3283,7 @@ void mark_inventory_saved_stack_epoch_unresolved(
             merge_unresolved_nested_saved_stack_epoch(epoch, nested);
     epoch.candidate_payload_lost = epoch.candidate_payload_lost ||
                                    candidate_payload_lost ||
-                                   inventory_candidate_carrier_truncated(
+                                   direct_inventory_candidate_carrier_truncated(
                                        epoch.unresolved_candidate_carrier);
     epoch.slots.clear();
     normalize_inventory_saved_stack_epoch(epoch);
@@ -3177,20 +3292,8 @@ void mark_inventory_saved_stack_epoch_unresolved(
 [[nodiscard]] bool same_saved_stack_slot_payload(
     const InventorySavedStackSlot& left,
     const InventorySavedStackSlot& right) {
-    return same_inventory_candidate_domain(
-               left.inventory_code_pointer_values,
-               left.inventory_code_pointer_values_truncated,
-               right.inventory_code_pointer_values,
-               right.inventory_code_pointer_values_truncated) &&
-           same_inventory_candidate_domain(
-               left.inventory_pc_relative_code_literal_values,
-               left.inventory_pc_relative_code_literal_values_truncated,
-               right.inventory_pc_relative_code_literal_values,
-               right.inventory_pc_relative_code_literal_values_truncated) &&
-           left.contextual_candidate_dependency ==
-               right.contextual_candidate_dependency &&
-           left.call_sites == right.call_sites &&
-           left.callees == right.callees;
+    return same_inventory_candidate_carrier_with_evidence(left.carrier,
+                                                           right.carrier);
 }
 
 [[nodiscard]] bool is_nonzero_uniform_saved_stack_epoch_translation(
@@ -3258,9 +3361,10 @@ void merge_inventory_saved_stack_epoch_top_metadata(
                 node.nested_saved_stack_alias_tracks_current_epoch;
         }
         for (const auto& slot : node.slots) {
-            evidence.call_sites.insert(slot.call_sites.begin(),
-                                       slot.call_sites.end());
-            evidence.callees.insert(slot.callees.begin(), slot.callees.end());
+            evidence.call_sites.insert(slot.carrier.call_sites.begin(),
+                                       slot.carrier.call_sites.end());
+            evidence.callees.insert(slot.carrier.callees.begin(),
+                                    slot.carrier.callees.end());
             for (const auto& child : slot.nested_epochs)
                 self(self, child, true);
         }
@@ -3325,7 +3429,7 @@ bool merge_inventory_saved_stack_epoch(
         mark_inventory_saved_stack_epoch_unresolved(
             destination,
             source.candidate_payload_lost ||
-                inventory_candidate_carrier_truncated(
+                direct_inventory_candidate_carrier_truncated(
                     destination.unresolved_candidate_carrier));
         normalize_inventory_saved_stack_epoch(destination);
         return destination != original;
@@ -3349,7 +3453,7 @@ bool merge_inventory_saved_stack_epoch(
                         destination, nested);
                 mark_inventory_saved_stack_epoch_unresolved(
                     destination,
-                    inventory_candidate_carrier_truncated(
+                    direct_inventory_candidate_carrier_truncated(
                         destination.unresolved_candidate_carrier));
                 normalize_inventory_saved_stack_epoch(destination);
                 return destination != original;
@@ -3358,27 +3462,8 @@ bool merge_inventory_saved_stack_epoch(
             continue;
         }
         auto& target_slot = *position;
-        static_cast<void>(merge_inventory_candidate_values(
-            target_slot.inventory_code_pointer_values,
-            target_slot.inventory_code_pointer_values_truncated,
-            source_slot.inventory_code_pointer_values,
-            source_slot.inventory_code_pointer_values_truncated));
-        static_cast<void>(merge_inventory_candidate_values(
-            target_slot.inventory_pc_relative_code_literal_values,
-            target_slot
-                .inventory_pc_relative_code_literal_values_truncated,
-            source_slot.inventory_pc_relative_code_literal_values,
-            source_slot
-                .inventory_pc_relative_code_literal_values_truncated));
-        target_slot.contextual_candidate_dependency =
-            target_slot.contextual_candidate_dependency ||
-            source_slot.contextual_candidate_dependency;
-        if (has_inventory_saved_stack_slot_payload(source_slot)) {
-            target_slot.call_sites.insert(source_slot.call_sites.begin(),
-                                          source_slot.call_sites.end());
-            target_slot.callees.insert(source_slot.callees.begin(),
-                                       source_slot.callees.end());
-        }
+        static_cast<void>(merge_inventory_candidate_carrier(
+            target_slot.carrier, source_slot.carrier));
         for (const auto& nested : source_slot.nested_epochs)
             merge_slot_nested_saved_stack_epoch(target_slot, nested);
     }
@@ -3959,7 +4044,12 @@ void clear_summary_call_sites(FunctionValueSummary& summary) {
 void bind_summary_carrier_provenance(InventoryCandidateCarrier& carrier,
                                      const std::uint32_t call_site,
                                      const std::uint32_t candidate) {
-    if (!has_inventory_candidate_carrier_payload(carrier)) return;
+    // Pending ABI scalars are an evidence-bearing semantic MAY payload too.
+    // Do not create an evidence-only carrier, but retain provenance when the
+    // only payload is a pre-boundary ordinary scalar.
+    if (!has_inventory_candidate_carrier_payload(carrier) &&
+        !has_pending_abi_scalar_payload(carrier))
+        return;
     carrier.call_sites.insert(call_site);
     carrier.callees.insert(candidate);
 }
@@ -3977,8 +4067,8 @@ void bind_summary_epoch_provenance(InventorySavedStackEpoch& epoch,
     }
     for (auto& slot : epoch.slots) {
         if (has_inventory_saved_stack_slot_payload(slot)) {
-            slot.call_sites.insert(call_site);
-            slot.callees.insert(candidate);
+            bind_summary_carrier_provenance(
+                slot.carrier, call_site, candidate);
         }
         for (auto& nested : slot.nested_epochs)
             bind_summary_epoch_provenance(nested, call_site, candidate);
@@ -4531,8 +4621,8 @@ void synchronize_inventory_provenance(AbstractValue& value) {
            std::any_of(
                epoch.slots.begin(), epoch.slots.end(),
                [](const auto& slot) {
-                   return slot.inventory_code_pointer_values_truncated ||
-                          slot
+                   return slot.carrier.inventory_code_pointer_values_truncated ||
+                          slot.carrier
                               .inventory_pc_relative_code_literal_values_truncated ||
                           std::any_of(
                               slot.nested_epochs.begin(),
@@ -7731,6 +7821,8 @@ void note_bounded_exact_memory_loss(AbstractState& state,
     const AbstractValue& value) {
     return carries_unresolved_stack_callback(value) ||
            inventory_saved_stack_epoch_has_candidate_payload_or_top(
+               value.inventory_saved_stack_epoch) ||
+           inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
                value.inventory_saved_stack_epoch);
 }
 
@@ -8014,8 +8106,10 @@ template <std::size_t RegisterCount>
                                            .callees))
                     return false;
                 for (const auto& slot : node.slots) {
-                    if (!evidence_contains(root.call_sites, slot.call_sites) ||
-                        !evidence_contains(root.callees, slot.callees))
+                    if (!evidence_contains(root.call_sites,
+                                           slot.carrier.call_sites) ||
+                        !evidence_contains(root.callees,
+                                           slot.carrier.callees))
                         return false;
                     for (const auto& child : slot.nested_epochs)
                         if (!self(self, child)) return false;
@@ -8072,6 +8166,8 @@ template <std::size_t RegisterCount>
                 // either shortcut cover a tracking requirement.
                 const bool child_has_candidate_payload =
                     inventory_saved_stack_epoch_has_candidate_payload_or_top(
+                        child) ||
+                    inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
                         child);
                 const bool child_tracks_current =
                     inventory_saved_stack_epoch_tracks_current(child);
@@ -8285,6 +8381,8 @@ template <std::size_t RegisterCount>
                state.inventory_unresolved_stack_carrier) ||
            inventory_saved_stack_epoch_has_candidate_payload_or_top(
                state.inventory_unresolved_stack_epoch) ||
+           inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+               state.inventory_unresolved_stack_epoch) ||
            (state.stack_tail.present &&
             (has_inventory_candidate_values(state.stack_tail.payload) ||
              inventory_candidate_values_truncated(state.stack_tail.payload) ||
@@ -8363,7 +8461,7 @@ template <std::size_t RegisterCount>
     if (state.inventory_unresolved_stack_callback_loss ||
         (state.inventory_callback_loss_identity_truncated_sources &
          unresolved_saved_stack_alias_source_stack) != 0u ||
-        inventory_candidate_carrier_truncated(
+        direct_inventory_candidate_carrier_truncated(
             captured.unresolved_candidate_carrier))
         mark_inventory_saved_stack_epoch_unresolved(
             captured, true);
@@ -8378,12 +8476,15 @@ template <std::size_t RegisterCount>
                 captured, true);
             break;
         }
+        // An ordinary finite scalar is an exact saved-slot payload too: it
+        // remains pending relative to this captured stack pointer until the
+        // slot is restored.  Do not flatten it into the epoch root merely
+        // because the outer capture itself is current-tracking.
         const bool relevant =
+            (value.known && !value.values.empty()) ||
             has_inventory_candidate_values(value) ||
             inventory_candidate_values_truncated(value) ||
             value.contextual_candidate_dependency;
-        static_cast<void>(absorb_pending_abi_scalar(
-            captured.unresolved_candidate_carrier, value));
         if (!relevant && !has_saved_stack_epoch(value))
             continue;
         for (const auto coordinate : coordinates) {
@@ -8394,6 +8495,8 @@ template <std::size_t RegisterCount>
                 relative > maximum_stack_distance) {
                 absorb_inventory_candidate_payload(
                     captured.unresolved_candidate_carrier, value);
+                static_cast<void>(absorb_pending_abi_scalar(
+                    captured.unresolved_candidate_carrier, value));
                 if (has_saved_stack_epoch(value))
                     merge_unresolved_nested_saved_stack_epoch(
                         captured, value.inventory_saved_stack_epoch);
@@ -8403,24 +8506,13 @@ template <std::size_t RegisterCount>
                         value
                             .inventory_pc_relative_code_literal_values_truncated ||
                         value.inventory_stack_callback_loss_unresolved);
-                break;
+                continue;
             }
             InventorySavedStackSlot slot;
             slot.relative_slot =
                 static_cast<std::int32_t>(relative);
-            slot.inventory_code_pointer_values =
-                value.inventory_code_pointer_values;
-            slot.inventory_pc_relative_code_literal_values =
-                value.inventory_pc_relative_code_literal_values;
-            slot.inventory_code_pointer_values_truncated =
-                value.inventory_code_pointer_values_truncated;
-            slot.inventory_pc_relative_code_literal_values_truncated =
-                value
-                    .inventory_pc_relative_code_literal_values_truncated;
-            slot.contextual_candidate_dependency =
-                value.contextual_candidate_dependency;
-            slot.call_sites = value.call_sites;
-            slot.callees = value.callees;
+            absorb_inventory_candidate_payload(slot.carrier, value);
+            static_cast<void>(absorb_pending_abi_scalar(slot.carrier, value));
             if (has_saved_stack_epoch(value))
                 slot.nested_epochs.push_back(
                     value.inventory_saved_stack_epoch);
@@ -8664,6 +8756,8 @@ void detach_current_epoch_aliases(
         has_inventory_candidate_carrier_payload(outgoing_carrier) ||
         has_pending_abi_scalar_payload(outgoing_carrier) ||
         inventory_saved_stack_epoch_has_candidate_payload_or_top(
+            outgoing_epoch) ||
+        inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
             outgoing_epoch) ||
         outgoing_callback_loss;
     if (epoch.tracks_current_epoch) {
@@ -9458,6 +9552,8 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
             state.inventory_unresolved_stack_carrier) ||
         inventory_saved_stack_epoch_has_candidate_payload_or_top(
             state.inventory_unresolved_stack_epoch) ||
+        inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+            state.inventory_unresolved_stack_epoch) ||
         std::any_of(
             state.stack_values.begin(),
             state.stack_values.end(),
@@ -9556,17 +9652,50 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
         restored.guarded = true;
         restored.complete = false;
         restored.inventory_code_pointer_values =
-            slot.inventory_code_pointer_values;
+            slot.carrier.inventory_code_pointer_values;
         restored.inventory_pc_relative_code_literal_values =
-            slot.inventory_pc_relative_code_literal_values;
+            slot.carrier.inventory_pc_relative_code_literal_values;
         restored.inventory_code_pointer_values_truncated =
-            slot.inventory_code_pointer_values_truncated;
+            slot.carrier.inventory_code_pointer_values_truncated;
         restored.inventory_pc_relative_code_literal_values_truncated =
-            slot.inventory_pc_relative_code_literal_values_truncated;
+            slot.carrier.inventory_pc_relative_code_literal_values_truncated;
         restored.contextual_candidate_dependency =
-            slot.contextual_candidate_dependency;
-        restored.call_sites = slot.call_sites;
-        restored.callees = slot.callees;
+            slot.carrier.contextual_candidate_dependency;
+        restored.call_sites = slot.carrier.call_sites;
+        restored.callees = slot.carrier.callees;
+        const bool direct_callback_loss =
+            restored.inventory_stack_callback_loss_unresolved;
+        const bool pending_is_incomplete =
+            slot.carrier.pending_abi_scalar_values_truncated ||
+            slot.carrier.pending_abi_scalar_values.size() >
+                maximum_summary_values;
+        if (pending_is_incomplete) {
+            // The exact restored cell is the only sound scope for an
+            // incomplete slot-pending ordinary value.  Do not reclassify it
+            // as an epoch-root payload or promote it before a later ABI gate.
+            restored.inventory_stack_callback_loss_unresolved = true;
+        } else if (!slot.carrier.pending_abi_scalar_values.empty()) {
+            // Candidate provenance is correlated with ordinary known values
+            // in AbstractValue.  Include the direct candidate MAY-values in
+            // this exact cell's ordinary MAY-set before synchronization so a
+            // complete slot-pending restore never drops proven provenance.
+            restored.values = slot.carrier.pending_abi_scalar_values;
+            restored.values.insert(
+                restored.values.end(),
+                restored.inventory_code_pointer_values.begin(),
+                restored.inventory_code_pointer_values.end());
+            restored.values.insert(
+                restored.values.end(),
+                restored.inventory_pc_relative_code_literal_values.begin(),
+                restored.inventory_pc_relative_code_literal_values.end());
+            normalize(restored.values);
+            if (restored.values.size() > maximum_summary_values) {
+                restored.values.clear();
+                restored.inventory_stack_callback_loss_unresolved = true;
+            } else {
+                restored.known = true;
+            }
+        }
         for (const auto& nested : slot.nested_epochs) {
             if (!restored.inventory_saved_stack_epoch.present)
                 restored.inventory_saved_stack_epoch = nested;
@@ -9575,7 +9704,10 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
                     restored.inventory_saved_stack_epoch, nested, true));
         }
         synchronize_inventory_provenance(restored);
-        if (has_direct_stack_callback_loss(restored))
+        // A pre-existing direct slot loss has the historical active-stack
+        // meaning.  The pending restore loss above is intentionally scoped
+        // to this exact cell and must not poison the newly restored domain.
+        if (direct_callback_loss)
             state.inventory_unresolved_stack_callback_loss = true;
         const auto [stored, inserted] =
             state.stack_values.try_emplace(
@@ -11794,7 +11926,7 @@ void mark_contextual_candidate_abi_arguments(
             mark_carrier(epoch.unresolved_candidate_carrier);
             for (auto& slot : epoch.slots) {
                 if (has_inventory_saved_stack_slot_payload(slot))
-                    slot.contextual_candidate_dependency = true;
+                    slot.carrier.contextual_candidate_dependency = true;
                 for (auto& nested : slot.nested_epochs)
                     self(self, nested);
             }
@@ -12009,9 +12141,9 @@ void observe_inventory_transfers(
                 observe_carrier(epoch.unresolved_candidate_carrier);
                 for (const auto& slot : epoch.slots) {
                     observe_candidate_payload(
-                        slot.inventory_code_pointer_values,
-                        slot.inventory_code_pointer_values_truncated,
-                        slot
+                        slot.carrier.inventory_code_pointer_values,
+                        slot.carrier.inventory_code_pointer_values_truncated,
+                        slot.carrier
                             .inventory_pc_relative_code_literal_values_truncated);
                     for (const auto& nested : slot.nested_epochs)
                         self(self, nested);
@@ -18840,21 +18972,7 @@ void encode(EvaluationKeyEncoder& key,
 void encode(EvaluationKeyEncoder& key,
             const InventorySavedStackSlot& slot) {
     key.append(slot.relative_slot);
-    encode_inventory_candidate_domain(
-        key,
-        EvaluationKeyInternDomain::InventoryCandidates,
-        slot.inventory_code_pointer_values,
-        slot.inventory_code_pointer_values_truncated);
-    encode_inventory_candidate_domain(
-        key,
-        EvaluationKeyInternDomain::InventoryCandidates,
-        slot.inventory_pc_relative_code_literal_values,
-        slot.inventory_pc_relative_code_literal_values_truncated);
-    key.append(slot.contextual_candidate_dependency);
-    key.append_interned_u32_range(
-        EvaluationKeyInternDomain::Evidence, slot.call_sites);
-    key.append_interned_u32_range(
-        EvaluationKeyInternDomain::Evidence, slot.callees);
+    encode(key, slot.carrier);
     key.append_range(slot.nested_epochs,
                      [&](const auto& nested) { encode(key, nested); });
 }
@@ -19975,12 +20093,7 @@ make_function_evaluation_cache_key(
     const InventorySavedStackEpoch& epoch) noexcept {
     std::size_t bytes = epoch.slots.capacity() * sizeof(InventorySavedStackSlot);
     for (const auto& slot : epoch.slots) {
-        bytes += slot.inventory_code_pointer_values.capacity() *
-                 sizeof(std::uint32_t);
-        bytes += slot.inventory_pc_relative_code_literal_values.capacity() *
-                 sizeof(std::uint32_t);
-        bytes += (slot.call_sites.size() + slot.callees.size()) *
-                 (sizeof(std::uint32_t) + 3u * sizeof(void*));
+        bytes += retained_heap_bytes(slot.carrier);
         // The vector object itself is inline in the slot (already counted
         // by epoch.slots.capacity()); account only for its external array.
         bytes += slot.nested_epochs.capacity() *
@@ -22175,7 +22288,7 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 17u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 18u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -38352,21 +38465,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                                        .slots[index];
                                 const auto saved_slot_dedupe_index =
                                     static_cast<std::uint32_t>(index + 1u);
-                                if (slot
+                                if (slot.carrier
                                         .inventory_code_pointer_values_truncated)
                                     emit("saved-code",
                                          Domain::SavedCode,
-                                         slot.inventory_code_pointer_values
+                                         slot.carrier.inventory_code_pointer_values
                                              .size(),
                                          saved_slot_dedupe_index,
                                          static_cast<std::int64_t>(index),
                                          static_cast<std::int64_t>(
                                              slot.relative_slot));
-                                if (slot
+                                if (slot.carrier
                                         .inventory_pc_relative_code_literal_values_truncated)
                                     emit("saved-pc",
                                          Domain::SavedPc,
-                                         slot
+                                         slot.carrier
                                              .inventory_pc_relative_code_literal_values
                                              .size(),
                                          saved_slot_dedupe_index,
@@ -39017,25 +39130,25 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         code_pointers_differ =
                             code_pointers_differ ||
                             !same_inventory_candidate_domain(
-                                before_slot.inventory_code_pointer_values,
-                                before_slot.inventory_code_pointer_values_truncated,
-                                after_slot.inventory_code_pointer_values,
-                                after_slot.inventory_code_pointer_values_truncated);
+                                before_slot.carrier.inventory_code_pointer_values,
+                                before_slot.carrier.inventory_code_pointer_values_truncated,
+                                after_slot.carrier.inventory_code_pointer_values,
+                                after_slot.carrier.inventory_code_pointer_values_truncated);
                         pc_relative_differ =
                             pc_relative_differ ||
                             !same_inventory_candidate_domain(
-                                before_slot
+                                before_slot.carrier
                                     .inventory_pc_relative_code_literal_values,
-                                before_slot
+                                before_slot.carrier
                                     .inventory_pc_relative_code_literal_values_truncated,
-                                after_slot
+                                after_slot.carrier
                                     .inventory_pc_relative_code_literal_values,
-                                after_slot
+                                after_slot.carrier
                                     .inventory_pc_relative_code_literal_values_truncated);
                         contextual_candidate_differ =
                             contextual_candidate_differ ||
-                            before_slot.contextual_candidate_dependency !=
-                                after_slot.contextual_candidate_dependency;
+                            before_slot.carrier.contextual_candidate_dependency !=
+                                after_slot.carrier.contextual_candidate_dependency;
                         saved_epoch_shape_differ =
                             saved_epoch_shape_differ ||
                             before_slot.relative_slot != after_slot.relative_slot;
@@ -39256,24 +39369,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         if (left.relative_slot != right.relative_slot)
                             note(ContextualValueDeltaDomain::
                                      SavedEpochTopology);
-                        note_candidate_domain(
-                            left.inventory_code_pointer_values,
-                            left.inventory_code_pointer_values_truncated,
-                            right.inventory_code_pointer_values,
-                            right.inventory_code_pointer_values_truncated,
-                            ContextualValueDeltaDomain::SavedEpochCode);
-                        note_candidate_domain(
-                            left.inventory_pc_relative_code_literal_values,
-                            left
-                                .inventory_pc_relative_code_literal_values_truncated,
-                            right.inventory_pc_relative_code_literal_values,
-                            right
-                                .inventory_pc_relative_code_literal_values_truncated,
-                            ContextualValueDeltaDomain::SavedEpochPc);
-                        if (left.contextual_candidate_dependency !=
-                            right.contextual_candidate_dependency)
-                            note(ContextualValueDeltaDomain::
-                                     SavedEpochContextualCandidateDependency);
+                        note_carrier(left.carrier, right.carrier);
                         const auto nested_count = std::max(
                             left.nested_epochs.size(), right.nested_epochs.size());
                         const InventorySavedStackEpoch empty_epoch;

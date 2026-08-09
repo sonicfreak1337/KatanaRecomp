@@ -30,10 +30,9 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-Sourcebasis dieses Arbeitsstands:
-  21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b
-  plus reviewtes SavedEpoch-Lifecycle-Delta in diesem Task
-  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17
+Funktionaler Source-Checkpoint dieses Arbeitsstands:
+  SavedEpoch-Slot-Identity-Fix
+  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 18
 
 aktueller realer Diagnosebefund:
   Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
@@ -159,13 +158,14 @@ endgueltig gescheitert belegt. Bis Rootindex, Rootadresse und limitierte
 Funktion terminal ausgegeben werden, gilt der Befund allgemein fuer die
 ersten schweren Candidate-Resolution-Roots.
 
-### Aktueller D-Lauf
+### Frueherer Vergleichslauf
 
 Der korrekte VsDevCmd-Incremental-Build von `katana-recomp --parallel 12`
 war in `42,8 s` erfolgreich; es blieben nur bekannte getenv-/Shadowing-
-Warnungen. Run-ID: `kr4981-20260809-012851-0b360903`. Der einmalige D-Lauf
+Warnungen. Run-ID: `kr4981-20260809-012851-0b360903`. Der fruehere Lauf
 dauerte `460,6 s`; Candidate Resolution lief von
-`00:37:17` bis `00:42:43` (ca. `325,8 s`). Summary `product-exit` bedeutet hier
+`00:37:17` bis `00:42:43` (ca. `325,8 s`). Dieser fruehere Lauf ist
+Vergleichsevidenz; Summary `product-exit` bedeutet hier
 nur, dass der exakt identifizierte Kindprozess nach belegter Nichtverbesserung
 manuell beendet wurde. Es gab keine kanonische Publikation, `0/1194`
 committed Roots, HOL `0`, Wave `103`, `272` zugelassene Contexts, `1.044`
@@ -194,8 +194,9 @@ Lane-Treiber aber nicht. Candidate-Resolution und KR-4981 bleiben offen.
 Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
 zum kanonischen absorbierenden Top mit leerem endlichem Praefix und haelt Merge,
 Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion
-konsistent. Das interne Function-Analysis-Epoch-Schema ist `16`; Analyzer-ABI
-`33` bleibt unveraendert, weil kein oeffentliches Structlayout geaendert wurde.
+konsistent. Der aktuelle funktionale Source-Checkpoint verwendet das
+Function-Analysis-Epoch-Schema `18`; Analyzer-ABI `33` bleibt unveraendert,
+weil kein oeffentliches Structlayout geaendert wurde.
 Der korrekte VsDevCmd-Incremental-Compile+Link war erfolgreich.
 
 Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5` wurde nach `343,627 s`
@@ -214,7 +215,7 @@ fix belegt, nicht als Konvergenzhebel; KR-4981 bleibt offen.
 ### [x] Abgeschlossener Hot-Callee-Diagnoseunterauftrag
 
 Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das erste vollständige
-`attempts=1024`-Diagnosegate und wurde nach `244,549 ms` bei Wave `24` gezielt
+`attempts=1024`-Diagnosegate und wurde nach `244,549 s` bei Wave `24` gezielt
 beendet. Der erwartbare Supervisorstatus `product-exit -1` entstand durch
 diesen Stop, nicht durch Fehler oder Hänger. Peak Root WS war
 `1.260.388.352 B`, Peak Job WS `1.387.151.360 B`; keine Publikation und kein
@@ -233,11 +234,11 @@ ebenfalls Callee-Set-incomplete an `0x8C0985B0`, jedoch gemischte Domänen.
 `reg_epoch_pending=180`, bei vollständigem Stackvertrag.
 
 Der Diagnose-Unterauftrag ist damit abgeschlossen; KR-4981 und das
-Sonic-Produktgate bleiben ausdrücklich offen. Der nächste Fixpfad ist die noch
-nicht implementierte konsistente absorbierende Top-Semantik für
-`candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
-Subsumption, Key und Persistenz, ohne Alias-/Current-Tracking oder fail-closed
-Restore zu verlieren. Die Callee-Set-incomplete-Ursache an den dynamischen
+Sonic-Produktgate bleiben ausdrücklich offen. Der SavedEpoch-Lifecycle-Fix ist
+source-seitig abgeschlossen. Offen bleibt die gemeinsame Ordinary-/
+Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-Lifecycle-Ursache, ohne
+Alias-/Current-Tracking oder fail-closed Restore zu verlieren. Die Callee-Set-
+incomplete-Ursache an den dynamischen
 Sites bleibt nach diesem Fix weiter zu prüfen.
 
 ### [x] Abgeschlossener SavedEpoch-Lifecycle-Unterauftrag
@@ -248,10 +249,10 @@ unangetastet. `candidate_payload_lost` ist physisch und semantisch ein
 absorbierendes Epoch-Top ueber Normalize, Merge, Equality, Key, Subsumption,
 Evidence, Restore und Persistenz. Konkrete Evidence sowie Nested-/Current-
 Aliasfakten bleiben, finite Payload/Slots verschwinden; detached Top erhaelt
-keine fremde Tail-Evidence. Das Epoch-Schema ist `17`, Analyzer-ABI `33` bleibt
+keine fremde Tail-Evidence. Das Epoch-Schema ist `18`, Analyzer-ABI `33` bleibt
 ohne oeffentliche Layoutaenderung.
 
-Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit Status
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit Status
 `nonconvergence`, Exitcode `31`, durch drei zehnsekundige
 Null-Publikations-Amplifikationssamples. Das war kein Crash oder Haenger:
 Wave `76`, `0` committed/ready/completed Roots, `272` Contexts, Semantic-Lanes
@@ -276,7 +277,8 @@ positivem Restkosten-/RAM-Gate. KR-4982 und KR-4983 bleiben gestrichen.
 
 D1 und D2 sind reale Sonic-Diagnoseexporte, keine Testmatrix. D1/G1 bleibt
 wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
-wurde nicht ausgefuehrt. D9 ist beendet und Root 0 konvergierte fail-closed,
+ist abgeschlossen und negativ, ohne positiven Schedulerhebel. D9 ist beendet
+und Root 0 konvergierte fail-closed,
 ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
 KR-4994 ist source-seitig abgeschlossen; der semantische Lane-Treiber bleibt
 als P0-Produktblocker offen. KR-4981 bleibt das globale Produktgate und ist
@@ -341,5 +343,5 @@ Lane-Treiber bleibt offen. KR-4981 bleibt das globale Produktgate und ist
 nicht bestanden.
 ```
 
-Ein zweiter D1-Lauf, D2/G2 und eine Aktivierung von KR-4987 bis KR-4991 gehoeren
-nicht zu diesem Dokumentationspass.
+Ein zweiter D1-Lauf gehoert nicht zu diesem Dokumentationspass. D2/G2 ist
+abgeschlossen und negativ; KR-4987 bis KR-4991 bleiben inaktiv.

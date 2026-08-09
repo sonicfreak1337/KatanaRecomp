@@ -13,7 +13,7 @@
   Detailtelemetrie opt-in aktiv und beeinflusst weder Analyse noch Cache oder
   kanonische Publikation.
 - KR-4993 schliesst den vollstaendigen Candidate-Resolution-Source-Endreview
-  ab; das bis dahin offene Analyzer-ABI-Finding wurde mit Analyzer-ABI 32
+  ab; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 33
   geschlossen. Das Produktgate KR-4981 bleibt offen.
 - KR-4987 ist source-seitig abgeschlossen: bewiesene Read-Lens-Projektion,
   vollstaendige Key-Bytes und konservativer FullState-Fallback erhalten
@@ -24,7 +24,7 @@
   Payloads ueber Merge, Summary, Cache und Harvest, ohne Scheduler-, Budget-
   oder Coverageumbau. Analyzer-ABI 33 und Function-Analysis-Epoch-Schema 15
   sind aktualisiert; der gezielte Incremental-Build war in `41,7 s` erfolgreich.
-  Der aktuelle D-Lauf endete nach `460,6 s` durch manuelles Beenden des nach
+  Der fruehere D-Lauf endete nach `460,6 s` durch manuelles Beenden des nach
   belegter Nichtverbesserung identifizierten Kindprozesses: `0/1194` Roots,
   kein Portartefakt und kein bestandenes KR-4981-Gate. Gleiche Diagnostik-
   Zaehler bei Attempts `1024`, `2048` und `4096` zeigen, dass der semantische
@@ -49,19 +49,20 @@
   `20` echte semantische Änderungen und `40` Stack-Widenings ausschließlich
   SavedEpoch-pending-ABI-Skalare (`reg 92`, `stack 80`, `tail 20`,
   `state_stack 20`, `state_memory 20`) mit unvollständigem Callee-Set-
-  Stackvertrag belegt. Der nächste Fixpfad behandelt
+  Stackvertrag belegt. Der SavedEpoch-Lifecycle-Fix behandelt
   `candidate_payload_lost`/Unresolved-SavedEpoch als absorbierendes Top über
-  Normalize, Merge, Equality, Subsumption, Key und Persistenz, ohne Alias-,
-  Current-Tracking oder fail-closed Restore zu verlieren; der Fix ist noch
-  nicht implementiert. KR-4981 bleibt offen.
+  Normalize, Merge, Equality, Subsumption, Key und Persistenz; der
+  SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
+  gemeinsame Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-
+  Lifecycle-Ursache. KR-4981 bleibt offen.
 - Der SavedEpoch-Lifecycle-Fix konsumiert current-tracking Pending-ABI-Skalare
   nur an bewiesenen normalen Call-/Tail-ABI-Gates; detached Epochs bleiben
   unangetastet. `candidate_payload_lost` ist nun ein absorbierendes Epoch-Top
   ueber Normalize, Merge, Equality, Key, Subsumption, Evidence, Restore und
   Persistenz; konkrete Evidence sowie Nested-/Current-Aliasfakten bleiben
   erhalten, finite Payload/Slots verschwinden. Das Epoch-Schema steigt auf
-  `17`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
-  `kr4981-20260809-031826-0616113a` endete nach `369,171 ms` fail-closed wegen
+  `18`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
+  `kr4981-20260809-031826-0616113a` endete nach `369,171 s` fail-closed wegen
   Nonconvergence bei Wave `76`; kein Portartefakt und keine Publikation. Der
   alte SavedEpoch-Pending-Blocker ist beseitigt; der neue Engpass liegt bei
   Ordinary-Register-/Metadaten-/Alias-/Watcher- und MemoryEpoch-Topologie.
