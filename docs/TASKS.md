@@ -84,9 +84,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa
-  plus reviewtes KR-4994-Source-Delta in diesem Task
-  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15
+  9d06080964e49e48338f14d45a50dc9c1a1b331c
+  plus reviewtes Candidate-Domain-Top-Delta in diesem Task
+  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -354,13 +354,24 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 Prioritaet: P0 Candidate-Resolution-Korrektheit
 
 Status: Source-seitig abgeschlossen am reviewten Delta auf Basis
-`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa`. Der begrenzte Pending-Carrier
+`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus dem Candidate-Domain-Top-Fix. Der begrenzte Pending-Carrier
 bewahrt identitaetsgebundene Payloads ueber Merge, Key/Cache, Lifetime,
 ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute und
 contextual/forwarded/stable Harvest sowie Export-Gate. Der aktuelle
 Evidence-/Semantic-Zweikanal haelt Evidence-Stale in privaten Replaykapseln;
-der D-Lauf belegt weiterhin den semantischen Lane-Treiber als offenen
-Produktblocker.
+abgeschnittene begrenzte Candidate-Domains sind als kanonisches absorbierendes
+Top mit leerem endlichem Praefix in Merge, Normalisierung, Vergleich, Keys,
+Persistenz, Consumern und ABI-Promotion konsistent. Der aktuelle D-Lauf belegt
+weiterhin den semantischen Lane-Treiber als offenen Produktblocker.
+
+Der Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` durch
+manuellen Abbruch bei identischer Nichtkonvergenz; letzte Bewegung Wave `48`,
+Peak Root `1.450.078.208 B`, Peak Job `1.618.132.992 B`, keine Publikation und
+kein Portartefakt. Bei Wave `39` waren die 16 geprueften Kernzaehler exakt wie
+im Vorlauf (u. a. Frontier `177`, Contexts `272`, Semantic-Lanes `606`,
+physisch `645`, exakte Subscriber `870`, Provenienz `21.355` und stale
+Discards `299`). Der Fix ist ein Korrektheits-/Persistenzfix, kein belegter
+Konvergenzhebel; KR-4981 bleibt offen.
 
 Vertrag:
 

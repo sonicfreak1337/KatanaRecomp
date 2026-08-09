@@ -66,8 +66,8 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Die Sourcebasis fuer den aktuellen Source-Stand ist
-`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa` plus das reviewte KR-4994-Delta;
-Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15. Historisch erzeugte v56 kein Portartefakt und
+`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
+Top-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
 keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
@@ -85,6 +85,12 @@ Wave `103`, `1.044` Semantic-Lanes, `1.029` contextual physical evaluations,
 und `733` stale-Dependency-Requeues, `1.359` stale snapshot discards,
 `518.425.788 B` Cache-Payload und `0/0` publizierte/verwarfene Epochen. Kein
 Portartefakt; KR-4981 ist nicht bestanden.
+
+Der Lauf nach dem Candidate-Domain-Top-Fix (`kr4981-20260809-020628-2bfd8af5`)
+endete nach `343,627 s` bei belegter identischer Nichtkonvergenz. Die letzte
+Bewegung war Wave `48`, Peak Root `1.450.078.208 B`, Peak Job `1.618.132.992 B`;
+bei Wave `39` waren die 16 geprueften Kernzaehler exakt wie im Vorlauf. Es gab
+keine kanonische Publikation und kein Portartefakt; KR-4981 bleibt offen.
 
 | ID | Titel | Status |
 |---|---|---|
@@ -131,7 +137,7 @@ Portartefakt; KR-4981 ist nicht bestanden.
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding im vorherigen Fixcommit mit ABI 32 geschlossen; globale Produktabnahme bleibt KR-4981 |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus Evidence-/Semantic-Zweikanal ueber Merge, Key/Cache, Lifetime, ABI-/Summary-Propagation und Harvest; semantischer Lane-Treiber im Produktgate offen |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; semantischer Lane-Treiber im Produktgate offen |
 
 ## Aktuelle Meilensteinzuordnung
 

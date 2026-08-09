@@ -2,9 +2,9 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktuelle funktionale Sourcebasis: `dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa`
-plus der reviewte KR-4994-Source-Delta, Runtime-ABI 87, Analyzer-ABI 33,
-Function-Analysis-Epoch-Schema 15, Application-Contract 8 und
+Aktuelle funktionale Sourcebasis: `9d06080964e49e48338f14d45a50dc9c1a1b331c`
+plus das reviewte Candidate-Domain-Top-Delta, Runtime-ABI 87, Analyzer-ABI 33,
+Function-Analysis-Epoch-Schema 16, Application-Contract 8 und
 Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
 `1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
@@ -29,6 +29,15 @@ verbindliche Folgeplan steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
 der uebergeordnete Kaltbuildvertrag in
 [`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
+
+Der Candidate-Domain-Top-Fix behandelt abgeschnittene begrenzte Candidate-
+Domains als kanonisches absorbierendes Top und ist ueber Merge, Normalisierung,
+Vergleich, Keys, Persistenz, Consumer und ABI-Promotion konsistent. Der
+einmalige Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` bei
+identischer Nichtkonvergenz, zuletzt Wave `48`, ohne Publikation oder
+Portartefakt. Bei Wave `39` waren die 16 geprueften Kernzaehler identisch zum
+Vorlauf; der Fix ist daher ein Korrektheits-/Persistenzfix, kein belegter
+Konvergenzhebel. KR-4981 bleibt offen.
 
 ```text
 Runtime-ABI:                    87

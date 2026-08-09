@@ -110,10 +110,10 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionale Sourcebasis:
-  dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa
-  plus der reviewte KR-4994-Source-Delta dieses Tasks
+  9d06080964e49e48338f14d45a50dc9c1a1b331c
+  plus das reviewte Candidate-Domain-Top-Delta dieses Tasks
   Analyzer-ABI 33
-  Function-Analysis-Epoch-Schema 15
+  Function-Analysis-Epoch-Schema 16
 
 aktueller realer Diagnosebefund:
   D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s
@@ -125,6 +125,19 @@ aktueller realer Diagnosebefund:
   518.425.788 B Cache-Payload, 3.964 physische Auswertungen gesamt
   0/0 publizierte/verwarfene Epochen, kein Portartefakt, keine game.exe
 ```
+
+Der aktuelle Lauf nach dem Candidate-Domain-Top-Fix (`kr4981-20260809-020628-2bfd8af5`)
+endete nach `343,627 s` durch manuellen Abbruch bei belegter identischer
+Nichtkonvergenz. Die Voranalyse bis zum Candidate-Start dauerte etwa `146 s`
+einschliesslich des Gesamtstarts; die letzte Bewegung war Wave `48`. Peak Root
+lag bei `1.450.078.208 B`, Peak Job bei `1.618.132.992 B`; es gab keine
+kanonische Publikation und kein Portartefakt. Bei Wave `39` waren die 16
+geprueften Kernzaehler exakt identisch zum Vorlauf (darunter Frontier `177`,
+Contexts `272`, Semantic-Lanes `606`, physische Auswertungen `645`, exakte
+Subscriber `870`, Provenienz `21.355`, Input-Widening `263`, Summary `10`,
+Forward `123`, stale `95`, stale Discards `299`, semantische Widenings `553`
+und provenance-only `382`). Der Top-Fix ist damit ein Korrektheits- und
+Persistenzfix, kein belegter Konvergenzhebel; KR-4981 bleibt offen.
 
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
 Diagnoseevidenz und kein Produktnachweis, weil kein Produkt entstand.
@@ -195,7 +208,7 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding wurde im vorherigen Fixcommit mit ABI 32 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
 | KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; der aktuelle D-Lauf bestand es nicht; kein weiterer Lauf ohne ausdrueckliche Freigabe; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus Evidence-/Semantic-Zweikanal ueber Merge/Key/Cache/Lifetime/ABI-/Summary-Propagation und Harvest; der semantische Lane-Treiber bleibt im Produktgate offen |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der semantische Lane-Treiber bleibt im Produktgate offen |
 
 Die Reihenfolge ist normativ:
 

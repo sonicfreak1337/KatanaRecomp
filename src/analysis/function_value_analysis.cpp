@@ -1317,18 +1317,32 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
     const InventorySavedStackEpoch& left,
     const InventorySavedStackEpoch& right);
 
+// A truncated bounded candidate domain is semantic Top.  Its retained finite
+// prefix is intentionally non-semantic: old persisted states and partially
+// normalized intermediates must not split a lane, cache key, or comparison.
+[[nodiscard]] bool same_inventory_candidate_domain(
+    const std::vector<std::uint32_t>& left_values,
+    const bool left_truncated,
+    const std::vector<std::uint32_t>& right_values,
+    const bool right_truncated) {
+    return left_truncated == right_truncated &&
+           (left_truncated || left_values == right_values);
+}
+
 [[nodiscard]] bool same_inventory_saved_stack_slot_without_evidence(
     const InventorySavedStackSlot& left,
     const InventorySavedStackSlot& right) {
     if (left.relative_slot != right.relative_slot ||
-        left.inventory_code_pointer_values !=
-            right.inventory_code_pointer_values ||
-        left.inventory_pc_relative_code_literal_values !=
-            right.inventory_pc_relative_code_literal_values ||
-        left.inventory_code_pointer_values_truncated !=
-            right.inventory_code_pointer_values_truncated ||
-        left.inventory_pc_relative_code_literal_values_truncated !=
-            right.inventory_pc_relative_code_literal_values_truncated ||
+        !same_inventory_candidate_domain(
+            left.inventory_code_pointer_values,
+            left.inventory_code_pointer_values_truncated,
+            right.inventory_code_pointer_values,
+            right.inventory_code_pointer_values_truncated) ||
+        !same_inventory_candidate_domain(
+            left.inventory_pc_relative_code_literal_values,
+            left.inventory_pc_relative_code_literal_values_truncated,
+            right.inventory_pc_relative_code_literal_values,
+            right.inventory_pc_relative_code_literal_values_truncated) ||
         left.contextual_candidate_dependency !=
             right.contextual_candidate_dependency ||
         left.nested_epochs.size() != right.nested_epochs.size())
@@ -1344,17 +1358,21 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
 [[nodiscard]] bool same_inventory_candidate_carrier_without_evidence(
     const InventoryCandidateCarrier& left,
     const InventoryCandidateCarrier& right) {
-    return left.inventory_code_pointer_values ==
-               right.inventory_code_pointer_values &&
-           left.inventory_pc_relative_code_literal_values ==
-               right.inventory_pc_relative_code_literal_values &&
-           left.pending_abi_scalar_values == right.pending_abi_scalar_values &&
-           left.inventory_code_pointer_values_truncated ==
-               right.inventory_code_pointer_values_truncated &&
-           left.inventory_pc_relative_code_literal_values_truncated ==
-               right.inventory_pc_relative_code_literal_values_truncated &&
-           left.pending_abi_scalar_values_truncated ==
-               right.pending_abi_scalar_values_truncated &&
+    return same_inventory_candidate_domain(
+               left.inventory_code_pointer_values,
+               left.inventory_code_pointer_values_truncated,
+               right.inventory_code_pointer_values,
+               right.inventory_code_pointer_values_truncated) &&
+           same_inventory_candidate_domain(
+               left.inventory_pc_relative_code_literal_values,
+               left.inventory_pc_relative_code_literal_values_truncated,
+               right.inventory_pc_relative_code_literal_values,
+               right.inventory_pc_relative_code_literal_values_truncated) &&
+           same_inventory_candidate_domain(
+               left.pending_abi_scalar_values,
+               left.pending_abi_scalar_values_truncated,
+               right.pending_abi_scalar_values,
+               right.pending_abi_scalar_values_truncated) &&
            left.contextual_candidate_dependency ==
                right.contextual_candidate_dependency;
 }
@@ -1398,17 +1416,28 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
     if (left.known != right.known || left.guarded != right.guarded ||
         left.complete != right.complete ||
         left.inventory_stack_derived != right.inventory_stack_derived ||
-        left.inventory_code_pointer != right.inventory_code_pointer ||
-        left.inventory_pc_relative_code_literal !=
-            right.inventory_pc_relative_code_literal ||
-        left.inventory_code_pointer_values !=
-            right.inventory_code_pointer_values ||
-        left.inventory_pc_relative_code_literal_values !=
-            right.inventory_pc_relative_code_literal_values ||
-        left.inventory_code_pointer_values_truncated !=
-            right.inventory_code_pointer_values_truncated ||
-        left.inventory_pc_relative_code_literal_values_truncated !=
-            right.inventory_pc_relative_code_literal_values_truncated ||
+        (left.inventory_code_pointer_values_truncated
+             ? false
+             : left.inventory_code_pointer) !=
+            (right.inventory_code_pointer_values_truncated
+                 ? false
+                 : right.inventory_code_pointer) ||
+        (left.inventory_pc_relative_code_literal_values_truncated
+             ? false
+             : left.inventory_pc_relative_code_literal) !=
+            (right.inventory_pc_relative_code_literal_values_truncated
+                 ? false
+                 : right.inventory_pc_relative_code_literal) ||
+        !same_inventory_candidate_domain(
+            left.inventory_code_pointer_values,
+            left.inventory_code_pointer_values_truncated,
+            right.inventory_code_pointer_values,
+            right.inventory_code_pointer_values_truncated) ||
+        !same_inventory_candidate_domain(
+            left.inventory_pc_relative_code_literal_values,
+            left.inventory_pc_relative_code_literal_values_truncated,
+            right.inventory_pc_relative_code_literal_values,
+            right.inventory_pc_relative_code_literal_values_truncated) ||
         left.contextual_candidate_dependency !=
             right.contextual_candidate_dependency ||
         left.inventory_stack_callback_loss_unresolved !=
@@ -1986,6 +2015,9 @@ bool merge_inventory_candidate_values(
     bool& destination_truncated,
     std::span<const std::uint32_t> source,
     bool source_truncated);
+bool normalize_inventory_candidate_values(
+    std::vector<std::uint32_t>& values,
+    bool& truncated);
 
 enum class StackTailFoldPendingScalarPolicy : std::uint8_t {
     PreserveBeforeAbiBoundary,
@@ -2128,6 +2160,15 @@ void merge_unresolved_nested_saved_stack_epoch(
 // by attaching provenance to an otherwise empty value.
 void normalize_inventory_candidate_carrier(
     InventoryCandidateCarrier& carrier) {
+    static_cast<void>(normalize_inventory_candidate_values(
+        carrier.inventory_code_pointer_values,
+        carrier.inventory_code_pointer_values_truncated));
+    static_cast<void>(normalize_inventory_candidate_values(
+        carrier.inventory_pc_relative_code_literal_values,
+        carrier.inventory_pc_relative_code_literal_values_truncated));
+    static_cast<void>(normalize_inventory_candidate_values(
+        carrier.pending_abi_scalar_values,
+        carrier.pending_abi_scalar_values_truncated));
     if (!has_inventory_candidate_carrier_payload(carrier) &&
         !has_pending_abi_scalar_payload(carrier)) {
         carrier.call_sites.clear();
@@ -2142,6 +2183,20 @@ void normalize_inventory_candidate_carrier(
            slot.inventory_code_pointer_values_truncated ||
            slot.inventory_pc_relative_code_literal_values_truncated ||
            slot.contextual_candidate_dependency;
+}
+
+void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
+    static_cast<void>(normalize_inventory_candidate_values(
+        slot.inventory_code_pointer_values,
+        slot.inventory_code_pointer_values_truncated));
+    static_cast<void>(normalize_inventory_candidate_values(
+        slot.inventory_pc_relative_code_literal_values,
+        slot.inventory_pc_relative_code_literal_values_truncated));
+    if (!has_inventory_saved_stack_slot_payload(slot) &&
+        slot.nested_epochs.empty()) {
+        slot.call_sites.clear();
+        slot.callees.clear();
+    }
 }
 
 [[nodiscard]] bool has_inventory_saved_stack_epoch_payload(
@@ -2451,6 +2506,7 @@ void normalize_inventory_saved_stack_epoch(
                               return !has_inventory_saved_stack_epoch_payload(
                                   nested);
                           });
+            normalize_inventory_saved_stack_slot(slot);
         }
         for (auto& nested : epoch.unresolved_nested_epochs)
             normalize_inventory_saved_stack_epoch(nested, depth + 1u);
@@ -2479,6 +2535,8 @@ void normalize_inventory_saved_stack_epoch(
             slot.nested_epochs = {std::move(merged)};
         }
     }
+    for (auto& slot : epoch.slots)
+        normalize_inventory_saved_stack_slot(slot);
     std::erase_if(epoch.slots, [](const InventorySavedStackSlot& slot) {
         return !has_inventory_saved_stack_slot_payload_or_nested(slot);
     });
@@ -2584,7 +2642,8 @@ void normalize_inventory_saved_stack_epoch_summary(
 [[nodiscard]] bool inventory_candidate_carrier_truncated(
     const InventoryCandidateCarrier& carrier) {
     return carrier.inventory_code_pointer_values_truncated ||
-           carrier.inventory_pc_relative_code_literal_values_truncated;
+           carrier.inventory_pc_relative_code_literal_values_truncated ||
+           carrier.pending_abi_scalar_values_truncated;
 }
 
 bool merge_inventory_candidate_carrier(
@@ -2856,14 +2915,16 @@ void mark_inventory_saved_stack_epoch_unresolved(
 [[nodiscard]] bool same_saved_stack_slot_payload(
     const InventorySavedStackSlot& left,
     const InventorySavedStackSlot& right) {
-    return left.inventory_code_pointer_values ==
-               right.inventory_code_pointer_values &&
-           left.inventory_pc_relative_code_literal_values ==
-               right.inventory_pc_relative_code_literal_values &&
-           left.inventory_code_pointer_values_truncated ==
-               right.inventory_code_pointer_values_truncated &&
-           left.inventory_pc_relative_code_literal_values_truncated ==
-               right.inventory_pc_relative_code_literal_values_truncated &&
+    return same_inventory_candidate_domain(
+               left.inventory_code_pointer_values,
+               left.inventory_code_pointer_values_truncated,
+               right.inventory_code_pointer_values,
+               right.inventory_code_pointer_values_truncated) &&
+           same_inventory_candidate_domain(
+               left.inventory_pc_relative_code_literal_values,
+               left.inventory_pc_relative_code_literal_values_truncated,
+               right.inventory_pc_relative_code_literal_values,
+               right.inventory_pc_relative_code_literal_values_truncated) &&
            left.contextual_candidate_dependency ==
                right.contextual_candidate_dependency &&
            left.call_sites == right.call_sites &&
@@ -3986,6 +4047,28 @@ void normalize(std::vector<T>& values) {
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
+// Candidate vectors are an exact finite set only while their bound has not
+// been exceeded.  Once truncated they denote Top, so retaining a prefix is
+// both unsound as a complete set and non-idempotent under later unions.
+bool normalize_inventory_candidate_values(
+    std::vector<std::uint32_t>& values,
+    bool& truncated) {
+    if (truncated) {
+        if (values.empty()) return false;
+        values.clear();
+        return true;
+    }
+    const auto already_normalized =
+        std::is_sorted(values.begin(), values.end()) &&
+        std::adjacent_find(values.begin(), values.end()) == values.end();
+    if (!already_normalized) normalize(values);
+    if (values.size() > maximum_guarded_code_inventory) {
+        values.clear();
+        truncated = true;
+    }
+    return !already_normalized || truncated;
+}
+
 void merge_normalized(std::vector<std::uint32_t>& destination,
                       std::vector<std::uint32_t> source) {
     normalize(source);
@@ -4091,6 +4174,12 @@ void clear_inventory_stack_coordinates(
 void synchronize_inventory_provenance(AbstractValue& value) {
     const auto normalize_domain = [&](std::vector<std::uint32_t>& provenance,
                                       bool& truncated) {
+        // Top has no finite prefix.  Normalize before correlating a finite
+        // provenance vector with ordinary values so stale persisted prefixes
+        // cannot survive through a known value.
+        if (normalize_inventory_candidate_values(provenance, truncated)) {
+            if (truncated) return;
+        }
         normalize(provenance);
         if (value.known) {
             std::erase_if(provenance, [&](const auto candidate) {
@@ -4098,10 +4187,8 @@ void synchronize_inventory_provenance(AbstractValue& value) {
                     value.values.begin(), value.values.end(), candidate);
             });
         }
-        if (provenance.size() > maximum_guarded_code_inventory) {
-            provenance.resize(maximum_guarded_code_inventory);
-            truncated = true;
-        }
+        static_cast<void>(normalize_inventory_candidate_values(
+            provenance, truncated));
     };
     normalize_domain(value.inventory_code_pointer_values,
                      value.inventory_code_pointer_values_truncated);
@@ -4348,91 +4435,82 @@ bool merge_inventory_candidate_values(
     bool& destination_truncated,
     const std::span<const std::uint32_t> source,
     const bool source_truncated) {
-    const auto merged_truncated = destination_truncated || source_truncated;
+    // A caller may deliberately merge a domain with a span over itself.  The
+    // alias must be recognized before canonicalization can clear a stale Top
+    // prefix and invalidate the span.
+    const bool self_source = !destination.empty() &&
+        source.data() == destination.data() &&
+        source.size() == destination.size();
+    if (self_source) {
+        bool changed = normalize_inventory_candidate_values(
+            destination, destination_truncated);
+        if (!destination_truncated && source_truncated) {
+            destination.clear();
+            destination_truncated = true;
+            changed = true;
+        }
+        return changed;
+    }
+    // A canonical Top is absorbing.  Do not keep or rotate a best-effort
+    // prefix after the candidate bound has overflowed: it is neither a
+    // complete candidate set nor a stable semantic identity.
+    bool changed = normalize_inventory_candidate_values(
+        destination, destination_truncated);
+    if (destination_truncated) return changed;
+    if (source_truncated) {
+        destination.clear();
+        destination_truncated = true;
+        return true;
+    }
     if (source.empty() ||
-        (!destination.empty() && source.data() == destination.data())) {
-        if (merged_truncated == destination_truncated) return false;
-        destination_truncated = merged_truncated;
-        return true;
-    }
+        (!destination.empty() && source.data() == destination.data()))
+        return changed;
 
-    const auto source_is_subset = [&] {
-        auto destination_index = std::size_t{};
-        for (const auto value : source) {
-            while (destination_index < destination.size() &&
-                   destination[destination_index] < value)
-                ++destination_index;
-            if (destination_index == destination.size() ||
-                destination[destination_index] != value)
-                return false;
-        }
-        return true;
-    };
-    if (source_is_subset()) {
-        if (merged_truncated == destination_truncated) return false;
-        destination_truncated = merged_truncated;
-        return true;
-    }
-
-    const auto destination_is_subset = [&] {
-        auto source_index = std::size_t{};
-        for (const auto value : destination) {
-            while (source_index < source.size() &&
-                   source[source_index] < value)
-                ++source_index;
-            if (source_index == source.size() ||
-                source[source_index] != value)
-                return false;
-        }
-        return true;
-    };
-    if (destination.empty() || destination_is_subset()) {
-        const auto retained = std::min<std::size_t>(
-            maximum_guarded_code_inventory, source.size());
-        const auto final_truncated =
-            merged_truncated || source.size() > maximum_guarded_code_inventory;
-        if (destination.size() == retained &&
-            std::equal(destination.begin(),
-                       destination.end(),
-                       source.begin()) &&
-            destination_truncated == final_truncated)
-            return false;
-        destination.assign(source.begin(),
-                           source.begin() + static_cast<std::ptrdiff_t>(retained));
-        destination_truncated = final_truncated;
-        return true;
-    }
-
-    std::vector<std::uint32_t> merged;
-    merged.reserve(std::min<std::size_t>(
-        maximum_guarded_code_inventory, destination.size() + source.size()));
     auto destination_index = std::size_t{};
     auto source_index = std::size_t{};
-    bool exceeded_bound = false;
+    std::size_t union_size = 0u;
+    bool source_adds_value = false;
     while (destination_index < destination.size() ||
            source_index < source.size()) {
-        std::uint32_t next{};
         if (source_index == source.size() ||
             (destination_index < destination.size() &&
              destination[destination_index] < source[source_index])) {
-            next = destination[destination_index++];
+            ++destination_index;
         } else if (destination_index == destination.size() ||
                    source[source_index] < destination[destination_index]) {
-            next = source[source_index++];
+            ++source_index;
+            source_adds_value = true;
         } else {
-            next = destination[destination_index++];
+            ++destination_index;
             ++source_index;
         }
-        if (merged.size() < maximum_guarded_code_inventory)
-            merged.push_back(next);
-        else
-            exceeded_bound = true;
+        if (++union_size > maximum_guarded_code_inventory) {
+            destination.clear();
+            destination_truncated = true;
+            return true;
+        }
     }
-    const auto final_truncated = merged_truncated || exceeded_bound;
-    if (destination == merged && destination_truncated == final_truncated)
-        return false;
+    if (!source_adds_value) return changed;
+
+    std::vector<std::uint32_t> merged;
+    merged.reserve(union_size);
+    destination_index = 0u;
+    source_index = 0u;
+    while (destination_index < destination.size() ||
+           source_index < source.size()) {
+        if (source_index == source.size() ||
+            (destination_index < destination.size() &&
+             destination[destination_index] < source[source_index])) {
+            merged.push_back(destination[destination_index++]);
+        } else if (destination_index == destination.size() ||
+                   source[source_index] < destination[destination_index]) {
+            merged.push_back(source[source_index++]);
+        } else {
+            merged.push_back(destination[destination_index++]);
+            ++source_index;
+        }
+    }
     destination = std::move(merged);
-    destination_truncated = final_truncated;
     return true;
 }
 
@@ -5453,6 +5531,7 @@ void make_unknown_preserving_provenance(AbstractValue& value) {
         std::move(inventory_saved_stack_epoch);
     value.call_sites = std::move(call_sites);
     value.callees = std::move(callees);
+    synchronize_inventory_provenance(value);
 }
 
 // Materializing a domain carrier is a may-read, never a proof that a concrete
@@ -5485,6 +5564,7 @@ void materialize_inventory_candidate_carrier(
     value.callees.insert(carrier.callees.begin(), carrier.callees.end());
     value.guarded = true;
     value.complete = false;
+    synchronize_inventory_provenance(value);
 }
 
 // Address-scoped summary carriers are overlays on one exact Memory cell, not
@@ -5516,6 +5596,12 @@ void overlay_inventory_candidate_carrier(
     value.call_sites.insert(
         carrier.call_sites.begin(), carrier.call_sites.end());
     value.callees.insert(carrier.callees.begin(), carrier.callees.end());
+    static_cast<void>(normalize_inventory_candidate_values(
+        value.inventory_code_pointer_values,
+        value.inventory_code_pointer_values_truncated));
+    static_cast<void>(normalize_inventory_candidate_values(
+        value.inventory_pc_relative_code_literal_values,
+        value.inventory_pc_relative_code_literal_values_truncated));
 }
 
 void absorb_unresolved_stack_storage(AbstractState& state,
@@ -7484,14 +7570,16 @@ template <std::size_t RegisterCount>
     // the old callback-loss bool.  Candidate-only and contextual values are
     // MAY payloads and must force an observation harvest when their merged
     // ingress does not retain them exactly (including private evidence).
-    return left.inventory_code_pointer_values ==
-               right.inventory_code_pointer_values &&
-           left.inventory_pc_relative_code_literal_values ==
-               right.inventory_pc_relative_code_literal_values &&
-           left.inventory_code_pointer_values_truncated ==
-               right.inventory_code_pointer_values_truncated &&
-           left.inventory_pc_relative_code_literal_values_truncated ==
-               right.inventory_pc_relative_code_literal_values_truncated &&
+    return same_inventory_candidate_domain(
+               left.inventory_code_pointer_values,
+               left.inventory_code_pointer_values_truncated,
+               right.inventory_code_pointer_values,
+               right.inventory_code_pointer_values_truncated) &&
+           same_inventory_candidate_domain(
+               left.inventory_pc_relative_code_literal_values,
+               left.inventory_pc_relative_code_literal_values_truncated,
+               right.inventory_pc_relative_code_literal_values,
+               right.inventory_pc_relative_code_literal_values_truncated) &&
            left.contextual_candidate_dependency ==
                right.contextual_candidate_dependency &&
            left.inventory_stack_callback_loss_unresolved ==
@@ -7526,6 +7614,7 @@ template <std::size_t RegisterCount>
         carrier.call_sites = value.call_sites;
         carrier.callees = value.callees;
     }
+    normalize_inventory_candidate_carrier(carrier);
     return carrier;
 }
 
@@ -11022,11 +11111,24 @@ void mark_observed_code_pointer_arguments(
         std::erase_if(candidates, [&](const auto candidate) {
             return !validate_decode_candidate(image, candidate).valid();
         });
-        if (candidates.empty()) return;
-        // An ABI boundary is evidence per concrete value. Invalid alternatives
-        // such as nullptr remain live scalar alternatives but no longer erase
-        // a valid callback from the inventory-only candidate domain.
-        mark_inventory_code_pointer_values(value, candidates);
+        if (!candidates.empty()) {
+            // An ABI boundary is evidence per concrete value. Invalid
+            // alternatives such as nullptr remain live scalar alternatives
+            // but no longer erase a valid callback from the inventory-only
+            // candidate domain.
+            mark_inventory_code_pointer_values(value, candidates);
+        }
+        // A canonical PC-relative Top has no finite literals to enumerate,
+        // but at this proven ABI boundary its omitted values could all have
+        // been valid code pointers.  Preserve that fact as code-pointer Top.
+        if (value.inventory_pc_relative_code_literal_values_truncated) {
+            value.inventory_code_pointer_values.clear();
+            value.inventory_code_pointer_values_truncated = true;
+            synchronize_inventory_provenance(value);
+        }
+        if (candidates.empty() &&
+            !value.inventory_pc_relative_code_literal_values_truncated)
+            return;
     };
     for (std::uint8_t index = 4u; index <= 7u; ++index)
         mark_argument(observation[index]);
@@ -11054,9 +11156,19 @@ void promote_tail_code_literal_arguments(
             if (validate_decode_candidate(image, candidate).valid())
                 promoted.push_back(candidate);
         }
-        if (promoted.empty()) return;
-        mark_inventory_code_pointer_values(value, promoted);
-        value.call_sites.insert(transfer_site);
+        if (!promoted.empty())
+            mark_inventory_code_pointer_values(value, promoted);
+        // A PC-relative Top reaches this proven tail ABI boundary as a
+        // code-pointer Top.  The vector is intentionally empty in canonical
+        // Top form, so the flag must not be gated on `promoted`.
+        if (value.inventory_pc_relative_code_literal_values_truncated) {
+            value.inventory_code_pointer_values.clear();
+            value.inventory_code_pointer_values_truncated = true;
+            synchronize_inventory_provenance(value);
+        }
+        if (!promoted.empty() ||
+            value.inventory_pc_relative_code_literal_values_truncated)
+            value.call_sites.insert(transfer_site);
     };
     // A retained stack-domain carrier is the only coordinate-lost payload
     // that remains a may-read ABI stack argument after projection.  Promote
@@ -11078,9 +11190,14 @@ void promote_tail_code_literal_arguments(
                 carrier.inventory_code_pointer_values_truncated,
                 promoted,
                 false));
+        if (carrier.inventory_pc_relative_code_literal_values_truncated) {
+            carrier.inventory_code_pointer_values.clear();
+            carrier.inventory_code_pointer_values_truncated = true;
+        }
         const auto promoted_pending =
             promote_pending_abi_scalars_at_abi_boundary(image, carrier);
-        if (!promoted.empty() || promoted_pending)
+        if (!promoted.empty() || promoted_pending ||
+            carrier.inventory_pc_relative_code_literal_values_truncated)
             carrier.call_sites.insert(transfer_site);
         normalize_inventory_candidate_carrier(carrier);
     };
@@ -12172,7 +12289,9 @@ void apply_call(AbstractState& state,
                                     value->second,
                                     caller_value->second);
                                 candidate_present = true;
-                            } else if (has_saved_stack_epoch(
+                            } else if (has_direct_inventory_candidate_payload(
+                                           caller_value->second) ||
+                                       has_saved_stack_epoch(
                                            caller_value->second) ||
                                        carries_unresolved_stack_callback(
                                            caller_value->second) ||
@@ -12806,16 +12925,25 @@ void observe_stored_code_addresses(
     }
     if (!supported) return;
     const auto& value = state[instruction.source_register];
+    const bool direct_candidate_top =
+        value.inventory_code_pointer_values_truncated ||
+        value.inventory_pc_relative_code_literal_values_truncated;
     const bool forwarded_code_pointer_store =
         allow_forwarded_unknown_object_store && !stack_derived &&
-        !value.inventory_code_pointer_values.empty();
+        (!value.inventory_code_pointer_values.empty() ||
+         value.inventory_code_pointer_values_truncated);
     // Fixed PC-relative storage does not prove the loaded pointer is non-stack.
     // It only allows a direct PC-relative callback literal to be inventoried as
     // GuardedPartial; no table scan or fixed CFG edge is created from this path.
     const bool fixed_storage_literal_store =
         fixed_storage_destination && !stack_derived &&
-        !value.inventory_pc_relative_code_literal_values.empty();
-    if (stack_based && !forwarded_code_pointer_store && !fixed_storage_literal_store) return;
+        (!value.inventory_pc_relative_code_literal_values.empty() ||
+         value.inventory_pc_relative_code_literal_values_truncated);
+    if (stack_based && !forwarded_code_pointer_store && !fixed_storage_literal_store) {
+        if (direct_candidate_top && walk_diagnostics != nullptr)
+            walk_diagnostics->inventory_candidate_values_truncated = true;
+        return;
+    }
 
     include_provenance(value);
     const bool finite_resolved_non_stack_destination =
@@ -12834,8 +12962,11 @@ void observe_stored_code_addresses(
                                         vbr_relative_destination ||
                                         (destination_proven_non_stack && !stack_derived);
     if (!persistent_destination && !forwarded_code_pointer_store &&
-        !fixed_storage_literal_store)
+        !fixed_storage_literal_store) {
+        if (direct_candidate_top && walk_diagnostics != nullptr)
+            walk_diagnostics->inventory_candidate_values_truncated = true;
         return;
+    }
     if (walk_diagnostics != nullptr) {
         walk_diagnostics->inventory_candidate_values_truncated =
             walk_diagnostics->inventory_candidate_values_truncated ||
@@ -13793,22 +13924,16 @@ FunctionEvaluation evaluate_function(
         summary.inventory_pc_relative_code_literal_values.assign(
             inventory_pc_relative_code_literal_values.begin(),
             inventory_pc_relative_code_literal_values.end());
-        if (summary.inventory_code_pointer_values.size() >
-            maximum_guarded_code_inventory) {
-            summary.inventory_code_pointer_values.resize(
-                maximum_guarded_code_inventory);
-            inventory_code_pointer_values_truncated = true;
-        }
-        if (summary.inventory_pc_relative_code_literal_values.size() >
-            maximum_guarded_code_inventory) {
-            summary.inventory_pc_relative_code_literal_values.resize(
-                maximum_guarded_code_inventory);
-            inventory_pc_relative_code_literal_values_truncated = true;
-        }
         summary.inventory_code_pointer_values_truncated =
             inventory_code_pointer_values_truncated;
         summary.inventory_pc_relative_code_literal_values_truncated =
             inventory_pc_relative_code_literal_values_truncated;
+        static_cast<void>(normalize_inventory_candidate_values(
+            summary.inventory_code_pointer_values,
+            summary.inventory_code_pointer_values_truncated));
+        static_cast<void>(normalize_inventory_candidate_values(
+            summary.inventory_pc_relative_code_literal_values,
+            summary.inventory_pc_relative_code_literal_values_truncated));
         summary.inventory_code_pointer = !summary.inventory_code_pointer_values.empty();
         summary.inventory_pc_relative_code_literal =
             !summary.inventory_pc_relative_code_literal_values.empty();
@@ -18187,20 +18312,39 @@ class EvaluationKeyEncoder {
     std::size_t interned_references_ = 0u;
 };
 
+void encode_inventory_candidate_domain(
+    EvaluationKeyEncoder& key,
+    const EvaluationKeyInternDomain domain,
+    const std::vector<std::uint32_t>& values,
+    const bool truncated) {
+    // Defensive key normal form for stale persisted/intermediate objects: a
+    // Top flag deliberately suppresses its non-semantic finite prefix.
+    if (truncated) {
+        key.append_interned_u32_range(
+            domain, std::span<const std::uint32_t>{});
+    } else {
+        key.append_interned_u32_range(domain, values);
+    }
+    key.append(truncated);
+}
+
 void encode(EvaluationKeyEncoder& key,
             const InventoryCandidateCarrier& carrier) {
-    key.append_interned_u32_range(
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        carrier.inventory_code_pointer_values);
-    key.append_interned_u32_range(
+        carrier.inventory_code_pointer_values,
+        carrier.inventory_code_pointer_values_truncated);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        carrier.inventory_pc_relative_code_literal_values);
-    key.append_interned_u32_range(
+        carrier.inventory_pc_relative_code_literal_values,
+        carrier.inventory_pc_relative_code_literal_values_truncated);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::SemanticCandidates,
-        carrier.pending_abi_scalar_values);
-    key.append(carrier.inventory_code_pointer_values_truncated);
-    key.append(carrier.inventory_pc_relative_code_literal_values_truncated);
-    key.append(carrier.pending_abi_scalar_values_truncated);
+        carrier.pending_abi_scalar_values,
+        carrier.pending_abi_scalar_values_truncated);
     key.append(carrier.contextual_candidate_dependency);
     key.append_interned_u32_range(
         EvaluationKeyInternDomain::Evidence, carrier.call_sites);
@@ -18239,14 +18383,15 @@ void encode(EvaluationKeyEncoder& key,
 void encode(EvaluationKeyEncoder& key,
             const InventorySavedStackSlot& slot) {
     key.append(slot.relative_slot);
-    key.append_interned_u32_range(
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        slot.inventory_code_pointer_values);
-    key.append_interned_u32_range(
+        slot.inventory_code_pointer_values,
+        slot.inventory_code_pointer_values_truncated);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        slot.inventory_pc_relative_code_literal_values);
-    key.append(slot.inventory_code_pointer_values_truncated);
-    key.append(
+        slot.inventory_pc_relative_code_literal_values,
         slot.inventory_pc_relative_code_literal_values_truncated);
     key.append(slot.contextual_candidate_dependency);
     key.append_interned_u32_range(
@@ -18278,16 +18423,21 @@ void encode(EvaluationKeyEncoder& key,
     key.append(value.guarded);
     key.append(value.complete);
     key.append(value.inventory_stack_derived);
-    key.append(value.inventory_code_pointer);
-    key.append(value.inventory_pc_relative_code_literal);
-    key.append_interned_u32_range(
+    key.append(value.inventory_code_pointer_values_truncated
+                   ? false
+                   : value.inventory_code_pointer);
+    key.append(value.inventory_pc_relative_code_literal_values_truncated
+                   ? false
+                   : value.inventory_pc_relative_code_literal);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        value.inventory_code_pointer_values);
-    key.append_interned_u32_range(
+        value.inventory_code_pointer_values,
+        value.inventory_code_pointer_values_truncated);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        value.inventory_pc_relative_code_literal_values);
-    key.append(value.inventory_code_pointer_values_truncated);
-    key.append(
+        value.inventory_pc_relative_code_literal_values,
         value.inventory_pc_relative_code_literal_values_truncated);
     key.append(value.contextual_candidate_dependency);
     key.append(value.inventory_stack_callback_loss_unresolved);
@@ -18378,16 +18528,21 @@ void encode(EvaluationKeyEncoder& key,
     key.append(summary.guarded);
     key.append(summary.abi_preserved);
     key.append(summary.may_alias_stack);
-    key.append(summary.inventory_code_pointer);
-    key.append(summary.inventory_pc_relative_code_literal);
-    key.append_interned_u32_range(
+    key.append(summary.inventory_code_pointer_values_truncated
+                   ? false
+                   : summary.inventory_code_pointer);
+    key.append(summary.inventory_pc_relative_code_literal_values_truncated
+                   ? false
+                   : summary.inventory_pc_relative_code_literal);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        summary.inventory_code_pointer_values);
-    key.append_interned_u32_range(
+        summary.inventory_code_pointer_values,
+        summary.inventory_code_pointer_values_truncated);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        summary.inventory_pc_relative_code_literal_values);
-    key.append(summary.inventory_code_pointer_values_truncated);
-    key.append(
+        summary.inventory_pc_relative_code_literal_values,
         summary.inventory_pc_relative_code_literal_values_truncated);
     key.append(summary.contextual_candidate_dependency);
     key.append(summary.inventory_stack_callback_loss_unresolved);
@@ -18499,14 +18654,15 @@ void encode_function_call_effect(
     key.append(returned->complete);
     key.append(returned->guarded);
     key.append(returned->may_alias_stack);
-    key.append_interned_u32_range(
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        returned->inventory_code_pointer_values);
-    key.append_interned_u32_range(
+        returned->inventory_code_pointer_values,
+        returned->inventory_code_pointer_values_truncated);
+    encode_inventory_candidate_domain(
+        key,
         EvaluationKeyInternDomain::InventoryCandidates,
-        returned->inventory_pc_relative_code_literal_values);
-    key.append(returned->inventory_code_pointer_values_truncated);
-    key.append(
+        returned->inventory_pc_relative_code_literal_values,
         returned->inventory_pc_relative_code_literal_values_truncated);
     key.append(returned->contextual_candidate_dependency);
     key.append(returned->inventory_stack_callback_loss_unresolved);
@@ -18522,9 +18678,79 @@ void encode_function_call_effect(
         returned->evidence_callees);
 }
 
+[[nodiscard]] bool same_inventory_candidate_carrier(
+    const InventoryCandidateCarrier& left,
+    const InventoryCandidateCarrier& right) noexcept {
+    return same_inventory_candidate_carrier_without_evidence(left, right) &&
+           left.call_sites == right.call_sites && left.callees == right.callees;
+}
+
+[[nodiscard]] bool same_inventory_saved_stack_epoch_summary(
+    const InventorySavedStackEpochSummary& left,
+    const InventorySavedStackEpochSummary& right) noexcept {
+    if (left.present != right.present || left.unresolved != right.unresolved ||
+        left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.candidate_payload_lost != right.candidate_payload_lost ||
+        left.nested_saved_stack_alias_latent !=
+            right.nested_saved_stack_alias_latent ||
+        left.nested_saved_stack_alias_tracks_current_epoch !=
+            right.nested_saved_stack_alias_tracks_current_epoch ||
+        !same_inventory_candidate_carrier(
+            left.unresolved_candidate_carrier,
+            right.unresolved_candidate_carrier) ||
+        left.slots.size() != right.slots.size() ||
+        left.unresolved_nested_epochs.size() !=
+            right.unresolved_nested_epochs.size())
+        return false;
+    for (std::size_t index = 0u; index < left.slots.size(); ++index) {
+        const auto& left_slot = left.slots[index];
+        const auto& right_slot = right.slots[index];
+        if (left_slot.relative_slot != right_slot.relative_slot ||
+            !same_inventory_candidate_carrier(left_slot.carrier,
+                                               right_slot.carrier) ||
+            left_slot.nested_epochs.size() != right_slot.nested_epochs.size())
+            return false;
+        for (std::size_t nested = 0u;
+             nested < left_slot.nested_epochs.size();
+             ++nested) {
+            if (!same_inventory_saved_stack_epoch_summary(
+                    left_slot.nested_epochs[nested],
+                    right_slot.nested_epochs[nested]))
+                return false;
+        }
+    }
+    for (std::size_t index = 0u;
+         index < left.unresolved_nested_epochs.size();
+         ++index) {
+        if (!same_inventory_saved_stack_epoch_summary(
+                left.unresolved_nested_epochs[index],
+                right.unresolved_nested_epochs[index]))
+            return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool same_function_call_effect(
     const FunctionValueSummary& left,
     const FunctionValueSummary& right) noexcept {
+    const auto same_memory_value = [&](const FunctionMemoryValueSummary& a,
+                                       const FunctionMemoryValueSummary& b) {
+        return a.address == b.address && a.complete == b.complete &&
+               a.guarded == b.guarded &&
+               a.inventory_stack_callback_loss_unresolved ==
+                   b.inventory_stack_callback_loss_unresolved &&
+               a.inventory_saved_stack_alias_latent ==
+                   b.inventory_saved_stack_alias_latent &&
+               a.inventory_saved_stack_alias_tracks_current_epoch ==
+                   b.inventory_saved_stack_alias_tracks_current_epoch &&
+               same_inventory_candidate_carrier(
+                   a.inventory_candidate_carrier,
+                   b.inventory_candidate_carrier) &&
+               same_inventory_saved_stack_epoch_summary(
+                   a.inventory_saved_stack_epoch,
+                   b.inventory_saved_stack_epoch) &&
+               a.values == b.values;
+    };
     if (left.function_address != right.function_address ||
         left.memory_complete != right.memory_complete ||
         left.memory_write_unknown != right.memory_write_unknown ||
@@ -18532,19 +18758,25 @@ void encode_function_call_effect(
         left.memory_read_complete != right.memory_read_complete ||
         left.memory_read_unknown != right.memory_read_unknown ||
         left.memory_read_ranges != right.memory_read_ranges ||
-        left.memory_values != right.memory_values ||
-        left.inventory_unresolved_stack_carrier !=
-            right.inventory_unresolved_stack_carrier ||
-        left.inventory_unresolved_memory_carrier !=
-            right.inventory_unresolved_memory_carrier ||
-        left.inventory_unresolved_stack_epoch !=
-            right.inventory_unresolved_stack_epoch ||
-        left.inventory_unresolved_memory_epoch !=
-            right.inventory_unresolved_memory_epoch ||
-        left.current_stack_epoch_mutation_carrier !=
-            right.current_stack_epoch_mutation_carrier ||
-        left.current_stack_epoch_mutation_epoch !=
-            right.current_stack_epoch_mutation_epoch ||
+        left.memory_values.size() != right.memory_values.size() ||
+        !same_inventory_candidate_carrier(
+            left.inventory_unresolved_stack_carrier,
+            right.inventory_unresolved_stack_carrier) ||
+        !same_inventory_candidate_carrier(
+            left.inventory_unresolved_memory_carrier,
+            right.inventory_unresolved_memory_carrier) ||
+        !same_inventory_saved_stack_epoch_summary(
+            left.inventory_unresolved_stack_epoch,
+            right.inventory_unresolved_stack_epoch) ||
+        !same_inventory_saved_stack_epoch_summary(
+            left.inventory_unresolved_memory_epoch,
+            right.inventory_unresolved_memory_epoch) ||
+        !same_inventory_candidate_carrier(
+            left.current_stack_epoch_mutation_carrier,
+            right.current_stack_epoch_mutation_carrier) ||
+        !same_inventory_saved_stack_epoch_summary(
+            left.current_stack_epoch_mutation_epoch,
+            right.current_stack_epoch_mutation_epoch) ||
         left.current_stack_epoch_mutation_callback_loss !=
             right.current_stack_epoch_mutation_callback_loss ||
         left.inventory_unresolved_saved_stack_alias_sources !=
@@ -18558,6 +18790,11 @@ void encode_function_call_effect(
         left.inventory_callback_loss_identity_truncated_sources !=
             right.inventory_callback_loss_identity_truncated_sources)
         return false;
+    for (std::size_t index = 0u; index < left.memory_values.size(); ++index) {
+        if (!same_memory_value(left.memory_values[index],
+                               right.memory_values[index]))
+            return false;
+    }
     const auto* const left_return = register_summary(left, 0u);
     const auto* const right_return = register_summary(right, 0u);
     if ((left_return == nullptr) != (right_return == nullptr))
@@ -18566,15 +18803,17 @@ void encode_function_call_effect(
     return left_return->complete == right_return->complete &&
            left_return->guarded == right_return->guarded &&
            left_return->may_alias_stack == right_return->may_alias_stack &&
-           left_return->inventory_code_pointer_values ==
-               right_return->inventory_code_pointer_values &&
-           left_return->inventory_pc_relative_code_literal_values ==
-               right_return->inventory_pc_relative_code_literal_values &&
-           left_return->inventory_code_pointer_values_truncated ==
-               right_return->inventory_code_pointer_values_truncated &&
-           left_return->inventory_pc_relative_code_literal_values_truncated ==
+           same_inventory_candidate_domain(
+               left_return->inventory_code_pointer_values,
+               left_return->inventory_code_pointer_values_truncated,
+               right_return->inventory_code_pointer_values,
+               right_return->inventory_code_pointer_values_truncated) &&
+           same_inventory_candidate_domain(
+               left_return->inventory_pc_relative_code_literal_values,
+               left_return->inventory_pc_relative_code_literal_values_truncated,
+               right_return->inventory_pc_relative_code_literal_values,
                right_return
-                   ->inventory_pc_relative_code_literal_values_truncated &&
+                   ->inventory_pc_relative_code_literal_values_truncated) &&
            left_return->contextual_candidate_dependency ==
                right_return->contextual_candidate_dependency &&
            left_return->inventory_stack_callback_loss_unresolved ==
@@ -18584,8 +18823,9 @@ void encode_function_call_effect(
            left_return->inventory_saved_stack_alias_tracks_current_epoch ==
                right_return
                     ->inventory_saved_stack_alias_tracks_current_epoch &&
-           left_return->inventory_saved_stack_epoch ==
-               right_return->inventory_saved_stack_epoch &&
+           same_inventory_saved_stack_epoch_summary(
+               left_return->inventory_saved_stack_epoch,
+               right_return->inventory_saved_stack_epoch) &&
            left_return->values == right_return->values &&
            left_return->evidence_callees ==
                right_return->evidence_callees;
@@ -18713,15 +18953,17 @@ void encode_function_call_effect(
     return left_return->complete == right_return->complete &&
            left_return->guarded == right_return->guarded &&
            left_return->may_alias_stack == right_return->may_alias_stack &&
-           left_return->inventory_code_pointer_values ==
-               right_return->inventory_code_pointer_values &&
-           left_return->inventory_pc_relative_code_literal_values ==
-               right_return->inventory_pc_relative_code_literal_values &&
-           left_return->inventory_code_pointer_values_truncated ==
-               right_return->inventory_code_pointer_values_truncated &&
-           left_return->inventory_pc_relative_code_literal_values_truncated ==
+           same_inventory_candidate_domain(
+               left_return->inventory_code_pointer_values,
+               left_return->inventory_code_pointer_values_truncated,
+               right_return->inventory_code_pointer_values,
+               right_return->inventory_code_pointer_values_truncated) &&
+           same_inventory_candidate_domain(
+               left_return->inventory_pc_relative_code_literal_values,
+               left_return->inventory_pc_relative_code_literal_values_truncated,
+               right_return->inventory_pc_relative_code_literal_values,
                right_return
-                   ->inventory_pc_relative_code_literal_values_truncated &&
+                   ->inventory_pc_relative_code_literal_values_truncated) &&
            left_return->contextual_candidate_dependency ==
                right_return->contextual_candidate_dependency &&
            left_return->inventory_stack_callback_loss_unresolved ==
@@ -21450,7 +21692,7 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 15u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 16u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -24696,6 +24938,21 @@ void write_u32_set(PersistentFunctionEpochWriter& writer,
                     [&](const auto value) { writer.scalar(value); });
 }
 
+void write_inventory_candidate_values(
+    PersistentFunctionEpochWriter& writer,
+    const std::vector<std::uint32_t>& values,
+    const bool truncated) {
+    // Serialize Top in the same physical normal form used by keys and
+    // in-memory merges.  This also prevents a stale prefix from escaping via
+    // a newly written epoch.
+    if (truncated) {
+        const std::vector<std::uint32_t> empty;
+        write_u32_values(writer, empty);
+        return;
+    }
+    write_u32_values(writer, values);
+}
+
 [[nodiscard]] std::vector<std::uint32_t> read_u32_values(
     PersistentFunctionEpochReader& reader,
     const std::size_t maximum =
@@ -24709,10 +24966,18 @@ void write_u32_set(PersistentFunctionEpochWriter& writer,
 void write_inventory_candidate_carrier(
     PersistentFunctionEpochWriter& writer,
     const InventoryCandidateCarrier& carrier) {
-    write_u32_values(writer, carrier.inventory_code_pointer_values);
-    write_u32_values(
-        writer, carrier.inventory_pc_relative_code_literal_values);
-    write_u32_values(writer, carrier.pending_abi_scalar_values);
+    write_inventory_candidate_values(
+        writer,
+        carrier.inventory_code_pointer_values,
+        carrier.inventory_code_pointer_values_truncated);
+    write_inventory_candidate_values(
+        writer,
+        carrier.inventory_pc_relative_code_literal_values,
+        carrier.inventory_pc_relative_code_literal_values_truncated);
+    write_inventory_candidate_values(
+        writer,
+        carrier.pending_abi_scalar_values,
+        carrier.pending_abi_scalar_values_truncated);
     writer.boolean(carrier.inventory_code_pointer_values_truncated);
     writer.boolean(carrier.inventory_pc_relative_code_literal_values_truncated);
     writer.boolean(carrier.pending_abi_scalar_values_truncated);
@@ -24750,6 +25015,9 @@ void write_inventory_candidate_carrier(
         throw PersistentFunctionEpochIncomplete{};
     carrier.call_sites.insert(call_sites.begin(), call_sites.end());
     carrier.callees.insert(callees.begin(), callees.end());
+    // Older in-memory/persisted forms could retain a sorted prefix together
+    // with Top.  Canonicalize it on input before any key/equality use.
+    normalize_inventory_candidate_carrier(carrier);
     if (!has_inventory_candidate_carrier_payload(carrier) &&
         !has_pending_abi_scalar_payload(carrier) &&
         (!carrier.call_sites.empty() || !carrier.callees.empty()))
@@ -25258,11 +25526,20 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         writer.boolean(value.guarded);
         writer.boolean(value.abi_preserved);
         writer.boolean(value.may_alias_stack);
-        writer.boolean(value.inventory_code_pointer);
-        writer.boolean(value.inventory_pc_relative_code_literal);
-        write_u32_values(writer, value.inventory_code_pointer_values);
-        write_u32_values(
-            writer, value.inventory_pc_relative_code_literal_values);
+        writer.boolean(value.inventory_code_pointer_values_truncated
+                           ? false
+                           : value.inventory_code_pointer);
+        writer.boolean(value.inventory_pc_relative_code_literal_values_truncated
+                           ? false
+                           : value.inventory_pc_relative_code_literal);
+        write_inventory_candidate_values(
+            writer,
+            value.inventory_code_pointer_values,
+            value.inventory_code_pointer_values_truncated);
+        write_inventory_candidate_values(
+            writer,
+            value.inventory_pc_relative_code_literal_values,
+            value.inventory_pc_relative_code_literal_values_truncated);
         writer.boolean(value.inventory_code_pointer_values_truncated);
         writer.boolean(
             value.inventory_pc_relative_code_literal_values_truncated);
@@ -25354,6 +25631,16 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         value.inventory_code_pointer_values_truncated = reader.boolean();
         value.inventory_pc_relative_code_literal_values_truncated =
             reader.boolean();
+        static_cast<void>(normalize_inventory_candidate_values(
+            value.inventory_code_pointer_values,
+            value.inventory_code_pointer_values_truncated));
+        static_cast<void>(normalize_inventory_candidate_values(
+            value.inventory_pc_relative_code_literal_values,
+            value.inventory_pc_relative_code_literal_values_truncated));
+        value.inventory_code_pointer =
+            !value.inventory_code_pointer_values.empty();
+        value.inventory_pc_relative_code_literal =
+            !value.inventory_pc_relative_code_literal_values.empty();
         value.contextual_candidate_dependency = reader.boolean();
         value.inventory_stack_callback_loss_unresolved = reader.boolean();
         value.inventory_saved_stack_alias_latent = reader.boolean();
@@ -36059,10 +36346,18 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 if ((source_mask & abi_stack_argument_taint) != 0u)
                     return DirectLocalPersistentStoreHarvest::NeedsExact;
                 bool has_relevant_code_pointer = false;
+                bool has_relevant_code_pointer_top = false;
                 for (std::uint8_t index = 4u; index <= 7u; ++index) {
                     if ((source_mask & abi_entry_register_bit(index)) == 0u)
                         continue;
-                    if (!forwarded.state[index].inventory_code_pointer_values.empty()) {
+                    has_relevant_code_pointer_top =
+                        has_relevant_code_pointer_top ||
+                        forwarded.state[index]
+                            .inventory_code_pointer_values_truncated;
+                    if (!forwarded.state[index]
+                             .inventory_code_pointer_values.empty() ||
+                        forwarded.state[index]
+                            .inventory_code_pointer_values_truncated) {
                         has_relevant_code_pointer = true;
                         break;
                     }
@@ -36071,6 +36366,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 // persistent store does not require an isolated store walk.
                 if (!has_relevant_code_pointer)
                     return DirectLocalPersistentStoreHarvest::Handled;
+                // Canonical candidate Top has no enumerable values.  It must
+                // use the ordinary exact path so the existing fail-closed
+                // diagnostics see the unresolved candidate range.
+                if (has_relevant_code_pointer_top)
+                    return DirectLocalPersistentStoreHarvest::NeedsExact;
 
                 std::vector<StoredCodeAddressCandidate> candidates;
                 for (const auto& site : sites->second) {
@@ -38074,17 +38374,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     bool code_pointers_differ =
                         before.inventory_code_pointer !=
                             after.inventory_code_pointer ||
-                        before.inventory_code_pointer_values !=
-                            after.inventory_code_pointer_values ||
-                        before.inventory_code_pointer_values_truncated !=
-                            after.inventory_code_pointer_values_truncated;
+                        !same_inventory_candidate_domain(
+                            before.inventory_code_pointer_values,
+                            before.inventory_code_pointer_values_truncated,
+                            after.inventory_code_pointer_values,
+                            after.inventory_code_pointer_values_truncated);
                     bool pc_relative_differ =
                         before.inventory_pc_relative_code_literal !=
                             after.inventory_pc_relative_code_literal ||
-                        before.inventory_pc_relative_code_literal_values !=
-                            after.inventory_pc_relative_code_literal_values ||
-                        before.inventory_pc_relative_code_literal_values_truncated !=
-                            after.inventory_pc_relative_code_literal_values_truncated;
+                        !same_inventory_candidate_domain(
+                            before.inventory_pc_relative_code_literal_values,
+                            before.inventory_pc_relative_code_literal_values_truncated,
+                            after.inventory_pc_relative_code_literal_values,
+                            after.inventory_pc_relative_code_literal_values_truncated);
                     bool contextual_candidate_differ =
                         before.contextual_candidate_dependency !=
                         after.contextual_candidate_dependency;
@@ -38109,21 +38411,22 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 : empty_slot;
                         code_pointers_differ =
                             code_pointers_differ ||
-                            before_slot.inventory_code_pointer_values !=
-                                after_slot.inventory_code_pointer_values ||
-                            before_slot.inventory_code_pointer_values_truncated !=
-                                after_slot
-                                    .inventory_code_pointer_values_truncated;
+                            !same_inventory_candidate_domain(
+                                before_slot.inventory_code_pointer_values,
+                                before_slot.inventory_code_pointer_values_truncated,
+                                after_slot.inventory_code_pointer_values,
+                                after_slot.inventory_code_pointer_values_truncated);
                         pc_relative_differ =
                             pc_relative_differ ||
-                            before_slot
-                                    .inventory_pc_relative_code_literal_values !=
+                            !same_inventory_candidate_domain(
+                                before_slot
+                                    .inventory_pc_relative_code_literal_values,
+                                before_slot
+                                    .inventory_pc_relative_code_literal_values_truncated,
                                 after_slot
-                                    .inventory_pc_relative_code_literal_values ||
-                            before_slot
-                                    .inventory_pc_relative_code_literal_values_truncated !=
+                                    .inventory_pc_relative_code_literal_values,
                                 after_slot
-                                    .inventory_pc_relative_code_literal_values_truncated;
+                                    .inventory_pc_relative_code_literal_values_truncated);
                         contextual_candidate_differ =
                             contextual_candidate_differ ||
                             before_slot.contextual_candidate_dependency !=

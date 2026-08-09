@@ -29,6 +29,18 @@
   kein Portartefakt und kein bestandenes KR-4981-Gate. Gleiche Diagnostik-
   Zaehler bei Attempts `1024`, `2048` und `4096` zeigen, dass der semantische
   Lane-Treiber weiterhin offen ist.
+- Der Candidate-Domain-Top-Fix macht abgeschnittene, begrenzte Candidate-Domains
+  zum kanonischen absorbierenden Top mit leerem endlichem Praefix; Merge,
+  Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion
+  bleiben dabei konsistent. Das interne Function-Analysis-Epoch-Schema wurde
+  auf `16` erhoeht; Analyzer-ABI `33` bleibt unveraendert, weil kein oeffentliches
+  Structlayout geaendert wurde. Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5`
+  endete nach `343,627 s` durch manuellen Abbruch bei belegter identischer
+  Nichtkonvergenz: letzte Bewegung Wave `48`, Peak Root `1.450.078.208 B`,
+  Peak Job `1.618.132.992 B`, keine Publikation und kein Portartefakt.
+  Bei Wave `39` waren alle 16 geprueften Kernzaehler bitgenau wie im
+  vorherigen Lauf; der Top-Fix ist damit als Korrektheits-/Persistenzfix,
+  nicht als Konvergenzhebel belegt. KR-4981 bleibt offen.
 - Der Zweikanal-Sourcefix wurde im korrekten VsDevCmd-Incremental-Build von
   `katana-recomp --parallel 12` in `42,8 s` gebaut; es blieben nur bekannte
   getenv-/Shadowing-Warnungen. Die Evidence- und Semantic-Kanaele sind dabei

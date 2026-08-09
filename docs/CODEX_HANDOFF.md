@@ -288,8 +288,8 @@ Testmatrix.
 ## Aktueller P0-Handoff
 
 Die Sourcebasis fuer den aktuellen Candidate-Resolution-Pfad ist
-`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa` plus das reviewte KR-4994-Delta;
-Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15.
+`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
+Top-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -372,6 +372,18 @@ Evaluation-/Composite-Budgets blieben unverbraucht; kein Portartefakt. Bei
 Attempts `1024`, `2048` und `4096` blieb die relevante
 Admission-/Stack-Diagnostik bitgenau gleich; der Durchsatz stieg, der
 semantische Lane-Treiber bleibt offen. KR-4981 ist nicht bestanden.
+
+Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
+zum kanonischen absorbierenden Top mit leerem endlichem Praefix. Merge,
+Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion sind
+darauf abgestimmt; das interne Epoch-Schema ist `16`, Analyzer-ABI `33` bleibt
+ohne oeffentliche Structlayout-Aenderung unveraendert. Der Lauf
+`kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` durch manuellen
+Abbruch bei belegter identischer Nichtkonvergenz; letzte Bewegung Wave `48`,
+Peak Root `1.450.078.208 B`, Peak Job `1.618.132.992 B`, keine Publikation und
+kein Portartefakt. Bei Wave `39` waren die 16 geprueften Kernzaehler exakt wie
+im Vorlauf. Der Fix ist ein Korrektheits-/Persistenzfix, kein belegter
+Konvergenzhebel; KR-4981 bleibt offen.
 
 Der verbindliche aktuelle Pfad lautet:
 

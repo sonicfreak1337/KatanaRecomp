@@ -1,8 +1,9 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Die Sourcebasis ist
-`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa` plus das reviewte KR-4994-Delta;
-Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15; der Produktgate
+`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
+Top-Delta;
+Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
@@ -267,6 +268,24 @@ KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der
 semantische Lane-Treiber bleibt als Produktblocker offen. KR-4981 bleibt das
 globale Produktgate und ist nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.
+
+### Lauf nach Candidate-Domain-Top-Fix
+
+Der Candidate-Domain-Top-Fix behandelt abgeschnittene begrenzte Candidate-
+Domains als kanonisches absorbierendes Top mit leerem endlichem Praefix und
+ fuehrt Merge, Normalisierung, Vergleich, Keys, Persistenz, Consumer und
+ABI-Promotion konsistent fort. Der interne Function-Analysis-Epoch-Stand ist
+`16`; Analyzer-ABI `33` bleibt unveraendert, da kein oeffentliches Structlayout
+geaendert wurde. Der korrekte VsDevCmd-Incremental-Compile+Link war erfolgreich.
+
+Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s`
+durch manuellen Abbruch bei belegter identischer Nichtkonvergenz. Die Voranalyse
+bis Candidate-Start dauerte etwa `146 s` einschliesslich des Gesamtstarts;
+letzte Bewegung war Wave `48`. Peak Root lag bei `1.450.078.208 B`, Peak Job
+bei `1.618.132.992 B`; es gab keine kanonische Publikation und kein
+Portartefakt. Bei Wave `39` waren die 16 geprueften Kernzaehler exakt wie im
+Vorlauf. Der Fix ist damit als Korrektheits-/Persistenzfix, nicht als
+Konvergenzhebel, belegt; KR-4981 bleibt offen.
 
 ## Produktmessvertrag KR-4981
 

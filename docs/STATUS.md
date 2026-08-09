@@ -31,9 +31,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa
-  plus reviewtes KR-4994-Source-Delta in diesem Task
-  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15
+  9d06080964e49e48338f14d45a50dc9c1a1b331c
+  plus reviewtes Candidate-Domain-Top-Delta in diesem Task
+  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16
 
 aktueller realer Diagnosebefund:
   Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
@@ -188,6 +188,28 @@ evaluations, `733` statt `839` stale requeues und `518.425.788` statt
 `444.266.838 B` Cache-Payload. Der Pending-Carrier verbessert damit offenbar
 Kosten je Churn-Schritt bzw. den Durchsatz, entfernt den semantischen
 Lane-Treiber aber nicht. Candidate-Resolution und KR-4981 bleiben offen.
+
+### Lauf nach Candidate-Domain-Top-Fix
+
+Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
+zum kanonischen absorbierenden Top mit leerem endlichem Praefix und haelt Merge,
+Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion
+konsistent. Das interne Function-Analysis-Epoch-Schema ist `16`; Analyzer-ABI
+`33` bleibt unveraendert, weil kein oeffentliches Structlayout geaendert wurde.
+Der korrekte VsDevCmd-Incremental-Compile+Link war erfolgreich.
+
+Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5` wurde nach `343,627 s`
+durch manuellen Abbruch bei belegter identischer Nichtkonvergenz beendet. Die
+Voranalyse bis Candidate-Start dauerte etwa `146 s` einschliesslich des
+Gesamtstarts; letzte Bewegung war Wave `48`. Peak Root: `1.450.078.208 B`,
+Peak Job: `1.618.132.992 B`; keine kanonische Publikation und kein
+Portartefakt. Bei Wave `39` waren alle 16 geprueften Kernzaehler exakt wie im
+Vorlauf: Frontier `177`, Contexts `272`, Semantic-Lanes `606`, physische
+Auswertungen `645`, exakte Subscriber `870`, Provenienz `21.355`,
+Input-Widening `263`, Summary `10`, Forward `123`, stale `95`, stale Discards
+`299`, semantische Widenings `553` und provenance-only `382` sowie die
+weiteren geprueften Kernzaehler. Der Fix ist damit als Korrektheits-/Persistenz-
+fix belegt, nicht als Konvergenzhebel; KR-4981 bleibt offen.
 
 ## Aktueller kritischer Pfad
 

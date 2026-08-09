@@ -2,8 +2,8 @@
 
 Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
 Produkt-D1 bleibt unentschieden. Die Sourcebasis ist
-`dd3ff7eccec5c3f0c6308ee44c315fb2f6bf55fa` plus das reviewte KR-4994-Delta;
-Analyzer-ABI 33, Function-Analysis-Epoch-Schema 15. Der terminale Sonic-v56-
+`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
+Top-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Der terminale Sonic-v56-
 Diagnoselauf belegt eine echte Contextual-State-Explosion und keine fertige
 Produktartefakterzeugung.
 
@@ -132,6 +132,28 @@ Die historischen Rohwerte besitzen keine belegte gemeinsame Zaehldomaene:
 physische Auswertungen sind Laufaggregate. Quotienten und Differenzen daraus
 bleiben unzulaessig; die neuen Root-0-Werte sind dagegen klar als
 nichtterminale D1-Domane gekennzeichnet.
+
+## Lauf nach Candidate-Domain-Top-Fix
+
+Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
+zum kanonischen absorbierenden Top mit leerem endlichem Praefix. Merge,
+Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion
+behandeln diese Top-Domains konsistent; das interne Function-Analysis-
+Epoch-Schema ist `16`, Analyzer-ABI `33` bleibt ohne oeffentliche
+Structlayout-Aenderung unveraendert.
+
+Der einmalige Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s`
+durch manuellen Abbruch bei belegter identischer Nichtkonvergenz. Die Voranalyse
+bis Candidate-Start dauerte etwa `146 s` einschliesslich des Gesamtstarts;
+letzte Bewegung war Wave `48`. Peak Root: `1.450.078.208 B`, Peak Job:
+`1.618.132.992 B`; keine kanonische Publikation und kein Portartefakt. Bei
+Wave `39` waren alle 16 geprueften Kernzaehler exakt wie im Vorlauf:
+Frontier `177`, Contexts `272`, Semantic-Lanes `606`, physische Auswertungen
+`645`, exakte Subscriber `870`, Provenienz `21.355`, Input-Widening `263`,
+Summary `10`, Forward `123`, stale `95`, stale Discards `299`, semantische
+Widenings `553` und provenance-only `382` sowie die weiteren geprueften
+Kernzaehler. Der Fix ist ein Korrektheits-/Persistenzfix, kein belegter
+Konvergenzhebel; KR-4981 bleibt offen.
 
 Cache-Eviction ist mit null Recomputes nicht als Hauptursache belegt. Der
 Produktblocker bleibt bis zu einem vollstaendigen Produktgate offen; als
