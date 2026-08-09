@@ -657,6 +657,10 @@ void write_guarded_walk(
     output.size(value.contextual_return_context_limited_functions);
     output.size(value.contextual_return_evaluation_budget);
     output.size(value.contextual_return_evaluation_limited_functions);
+    output.size(value.contextual_provenance_replay_capsule_budget);
+    output.size(value.contextual_provenance_replay_capsule_limited_functions);
+    output.size(value.contextual_provenance_replay_key_byte_budget);
+    output.size(value.contextual_provenance_replay_key_byte_limited_functions);
     output.size(value.abi_stack_argument_slot_budget);
     output.size(
         value.abi_stack_argument_projection_truncated_functions);
@@ -711,6 +715,12 @@ read_guarded_walk(Reader& input) {
     value.contextual_return_context_limited_functions = input.size();
     value.contextual_return_evaluation_budget = input.size();
     value.contextual_return_evaluation_limited_functions = input.size();
+    value.contextual_provenance_replay_capsule_budget = input.size();
+    value.contextual_provenance_replay_capsule_limited_functions =
+        input.size();
+    value.contextual_provenance_replay_key_byte_budget = input.size();
+    value.contextual_provenance_replay_key_byte_limited_functions =
+        input.size();
     value.abi_stack_argument_slot_budget = input.size();
     value.abi_stack_argument_projection_truncated_functions =
         input.size();

@@ -11844,6 +11844,14 @@ port_metadata(const PortExportOptions& options,
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
            << ",\"guarded_contextual_return_evaluation_limited_functions\":"
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
+           << ",\"guarded_contextual_provenance_replay_capsule_budget\":"
+           << analysis.guarded_code_inventory_walk.contextual_provenance_replay_capsule_budget
+           << ",\"guarded_contextual_provenance_replay_capsule_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.contextual_provenance_replay_capsule_limited_functions
+           << ",\"guarded_contextual_provenance_replay_key_byte_budget\":"
+           << analysis.guarded_code_inventory_walk.contextual_provenance_replay_key_byte_budget
+           << ",\"guarded_contextual_provenance_replay_key_byte_limited_functions\":"
+           << analysis.guarded_code_inventory_walk.contextual_provenance_replay_key_byte_limited_functions
            << ",\"guarded_abi_stack_argument_slot_budget\":"
            << analysis.guarded_code_inventory_walk.abi_stack_argument_slot_budget
            << ",\"guarded_abi_stack_argument_projection_truncated_functions\":"
@@ -12324,6 +12332,16 @@ std::string guarded_aot_inventory_failure_message(
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_limited_functions
            << " per_function_contextual_return_evaluation_budget="
            << analysis.guarded_code_inventory_walk.contextual_return_evaluation_budget
+           << " contextual_provenance_replay_capsule_limited_functions="
+           << analysis.guarded_code_inventory_walk
+                  .contextual_provenance_replay_capsule_limited_functions
+           << '/' << analysis.guarded_code_inventory_walk
+                          .contextual_provenance_replay_capsule_budget
+           << " contextual_provenance_replay_key_byte_limited_functions="
+           << analysis.guarded_code_inventory_walk
+                  .contextual_provenance_replay_key_byte_limited_functions
+           << '/' << analysis.guarded_code_inventory_walk
+                          .contextual_provenance_replay_key_byte_budget
            << " abi_stack_argument_projection_truncated="
            << analysis.guarded_code_inventory_walk
                   .abi_stack_argument_projection_truncated_functions

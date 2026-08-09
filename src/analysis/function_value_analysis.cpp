@@ -155,7 +155,10 @@ void emit_incomplete_resolution_root(
         "KATANA_ANALYZER_INCOMPLETE_ROOT stage=%s index=%zu root=0x%08X "
         "local_fixpoint=%u pending_regions=%zu region_block_limited=%zu "
         "forwarded_context_limited=%zu contextual_context_limited=%zu "
-        "contextual_evaluation_limited=%zu abi_stack_projection=%zu "
+        "contextual_evaluation_limited=%zu "
+        "contextual_provenance_replay_capsule_limited=%zu "
+        "contextual_provenance_replay_key_bytes_limited=%zu "
+        "abi_stack_projection=%zu "
         "local_fixpoint_limited=%zu local_fixpoint_max=%zu "
         "local_fixpoint_budget=%zu "
         "root_logical_budget_exhausted=%u "
@@ -172,6 +175,8 @@ void emit_incomplete_resolution_root(
         walk.forwarded_store_context_limited_functions,
         walk.contextual_return_context_limited_functions,
         walk.contextual_return_evaluation_limited_functions,
+        walk.contextual_provenance_replay_capsule_limited_functions,
+        walk.contextual_provenance_replay_key_byte_limited_functions,
         walk.abi_stack_argument_projection_truncated_functions,
         walk.local_fixpoint_limited_evaluations,
         walk.maximum_local_fixpoint_iterations,
@@ -301,7 +306,8 @@ void emit_contextual_return_limit_diagnostic(
     const std::uint32_t target,
     const std::size_t context_count,
     const std::size_t evaluation_count,
-    const std::size_t pending_count) {
+    const std::size_t pending_count,
+    const std::size_t resource_key_bytes = 0u) {
     emit_bounded_analyzer_diagnostic(
         2u,
         owner,
@@ -313,14 +319,15 @@ void emit_contextual_return_limit_diagnostic(
                 stderr,
                 "KATANA_ANALYZER_CONTEXT_LIMIT reason=%s owner=0x%08X "
                 "current=0x%08X target=0x%08X contexts=%zu "
-                "evaluations=%zu pending=%zu\n",
+                "evaluations=%zu pending=%zu replay_key_bytes=%zu\n",
                 reason,
                 static_cast<unsigned int>(owner),
                 static_cast<unsigned int>(current),
                 static_cast<unsigned int>(target),
                 context_count,
                 evaluation_count,
-                pending_count);
+                pending_count,
+                resource_key_bytes);
         });
 }
 
@@ -4616,14 +4623,10 @@ void synchronize_inventory_provenance(AbstractValue& value) {
     return epoch.candidate_payload_lost ||
            inventory_candidate_carrier_truncated(
                epoch.unresolved_candidate_carrier) ||
-           epoch.unresolved_candidate_carrier
-               .pending_abi_scalar_values_truncated ||
            std::any_of(
                epoch.slots.begin(), epoch.slots.end(),
                [](const auto& slot) {
-                   return slot.carrier.inventory_code_pointer_values_truncated ||
-                          slot.carrier
-                              .inventory_pc_relative_code_literal_values_truncated ||
+                   return inventory_candidate_carrier_truncated(slot.carrier) ||
                           std::any_of(
                               slot.nested_epochs.begin(),
                               slot.nested_epochs.end(),
@@ -4657,8 +4660,6 @@ void synchronize_inventory_provenance(AbstractValue& value) {
         return true;
     if (inventory_candidate_carrier_truncated(
             state.inventory_unresolved_stack_carrier) ||
-        state.inventory_unresolved_stack_carrier
-            .pending_abi_scalar_values_truncated ||
         inventory_candidate_carrier_truncated(
             state.inventory_unresolved_memory_carrier) ||
         inventory_saved_stack_epoch_truncated(
@@ -12127,17 +12128,14 @@ void observe_inventory_transfers(
                     carrier.inventory_code_pointer_values_truncated,
                     carrier.inventory_pc_relative_code_literal_values_truncated);
                 found_unresolved_stack_callback =
-                found_unresolved_stack_callback ||
-                    inventory_candidate_carrier_truncated(carrier) ||
-                    carrier.pending_abi_scalar_values_truncated;
+                    found_unresolved_stack_callback ||
+                    inventory_candidate_carrier_truncated(carrier);
             };
         const auto observe_epoch =
             [&](auto&& self, const InventorySavedStackEpoch& epoch) -> void {
                 found_unresolved_stack_callback =
                     found_unresolved_stack_callback ||
-                    epoch.candidate_payload_lost ||
-                    inventory_candidate_carrier_truncated(
-                        epoch.unresolved_candidate_carrier);
+                    inventory_saved_stack_epoch_truncated(epoch);
                 observe_carrier(epoch.unresolved_candidate_carrier);
                 for (const auto& slot : epoch.slots) {
                     observe_candidate_payload(
@@ -18450,8 +18448,6 @@ inventory_loss_in_evaluation_projection(
              unresolved_saved_stack_alias_source_stack) != 0u ||
             inventory_candidate_carrier_truncated(
                 state.inventory_unresolved_stack_carrier) ||
-            state.inventory_unresolved_stack_carrier
-                .pending_abi_scalar_values_truncated ||
             inventory_saved_stack_epoch_truncated(
                 state.inventory_unresolved_stack_epoch);
         if ((inventory_sink_sources & abi_stack_argument_taint) != 0u)
@@ -22288,7 +22284,12 @@ detail::function_value_progress_runtime_statistics_for_testing() noexcept {
 namespace {
 
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 18u;
+// Contextual lane admission now reuses an authoritative hybrid ingress even
+// when that ingress retains sticky Candidate/ABI loss.  The persisted walk
+// diagnostics also distinguish semantic evaluation exhaustion from the two
+// private provenance-replay resource limits. Existing epochs encode neither
+// contract, so do not reuse them.
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 19u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -26508,6 +26509,10 @@ void write_walk_diagnostics(
     size(diagnostics.contextual_return_context_limited_functions);
     size(diagnostics.contextual_return_evaluation_budget);
     size(diagnostics.contextual_return_evaluation_limited_functions);
+    size(diagnostics.contextual_provenance_replay_capsule_budget);
+    size(diagnostics.contextual_provenance_replay_capsule_limited_functions);
+    size(diagnostics.contextual_provenance_replay_key_byte_budget);
+    size(diagnostics.contextual_provenance_replay_key_byte_limited_functions);
     size(diagnostics.abi_stack_argument_slot_budget);
     size(diagnostics.abi_stack_argument_projection_truncated_functions);
     size(diagnostics.local_fixpoint_iteration_budget);
@@ -26555,6 +26560,12 @@ void write_walk_diagnostics(
     diagnostics.contextual_return_context_limited_functions = size();
     diagnostics.contextual_return_evaluation_budget = size();
     diagnostics.contextual_return_evaluation_limited_functions = size();
+    diagnostics.contextual_provenance_replay_capsule_budget = size();
+    diagnostics.contextual_provenance_replay_capsule_limited_functions =
+        size();
+    diagnostics.contextual_provenance_replay_key_byte_budget = size();
+    diagnostics.contextual_provenance_replay_key_byte_limited_functions =
+        size();
     diagnostics.abi_stack_argument_slot_budget = size();
     diagnostics.abi_stack_argument_projection_truncated_functions = size();
     diagnostics.local_fixpoint_iteration_budget = size();
@@ -27427,6 +27438,10 @@ void merge_root_walk_diagnostics(
         source.contextual_return_context_limited_functions;
     destination.contextual_return_evaluation_limited_functions +=
         source.contextual_return_evaluation_limited_functions;
+    destination.contextual_provenance_replay_capsule_limited_functions +=
+        source.contextual_provenance_replay_capsule_limited_functions;
+    destination.contextual_provenance_replay_key_byte_limited_functions +=
+        source.contextual_provenance_replay_key_byte_limited_functions;
     destination.abi_stack_argument_projection_truncated_functions +=
         source.abi_stack_argument_projection_truncated_functions;
     destination.local_fixpoint_limited_evaluations +=
@@ -30092,6 +30107,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 previous_baseline.forwarded_store_context_budget &&
             local_baseline.contextual_return_evaluation_budget ==
                 previous_baseline.contextual_return_evaluation_budget &&
+            local_baseline.contextual_provenance_replay_capsule_budget ==
+                previous_baseline
+                    .contextual_provenance_replay_capsule_budget &&
+            local_baseline.contextual_provenance_replay_key_byte_budget ==
+                previous_baseline
+                    .contextual_provenance_replay_key_byte_budget &&
             local_baseline.abi_stack_argument_slot_budget ==
                 previous_baseline.abi_stack_argument_slot_budget &&
             local_baseline.local_fixpoint_iteration_budget ==
@@ -30946,6 +30967,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         functions.size();
     inventory_walk_diagnostics.contextual_return_evaluation_budget =
         maximum_contextual_return_evaluations;
+    inventory_walk_diagnostics.contextual_provenance_replay_capsule_budget =
+        maximum_contextual_return_evaluations;
+    inventory_walk_diagnostics.contextual_provenance_replay_key_byte_budget =
+        session.impl_->evaluations.maximum_retained_payload_bytes();
     inventory_walk_diagnostics.abi_stack_argument_slot_budget =
         maximum_abi_stack_argument_slots;
     inventory_walk_diagnostics.local_fixpoint_iteration_budget =
@@ -36515,6 +36540,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             logical_budget.contextual_context_limit;
         function_result.walk_diagnostics.contextual_return_evaluation_budget =
             maximum_contextual_return_evaluations;
+        function_result.walk_diagnostics
+            .contextual_provenance_replay_capsule_budget =
+            maximum_contextual_return_evaluations;
+        function_result.walk_diagnostics
+            .contextual_provenance_replay_key_byte_budget =
+            session.impl_->evaluations.maximum_retained_payload_bytes();
         function_result.walk_diagnostics.abi_stack_argument_slot_budget =
             maximum_abi_stack_argument_slots;
         function_result.walk_diagnostics.local_fixpoint_iteration_budget =
@@ -37738,7 +37769,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::size_t contextual_provenance_replay_key_bytes = 0u;
             const auto contextual_provenance_replay_key_byte_budget =
                 session.impl_->evaluations.maximum_retained_payload_bytes();
-            bool contextual_provenance_replay_budget_exhausted = false;
+            bool contextual_provenance_replay_capsule_budget_exhausted =
+                false;
+            bool contextual_provenance_replay_key_byte_budget_exhausted =
+                false;
             struct ContextualDependencyVersion final {
                 ContextualLaneId lane_id = 0u;
                 std::uint64_t input_version = 0u;
@@ -38714,12 +38748,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 };
             const auto contextual_read_hybrid_projection_is_usable =
                 [&](const FunctionEvaluationProjection& projection) {
-                    // Keep the detailed mask above as a diagnostic contract:
-                    // it explains every domain that stayed FullState. The
-                    // physical identity decision is deliberately hybrid. A
-                    // proven register, stack, or memory lens may quotient
-                    // only that domain while every unavailable domain remains
-                    // exact in projection.ingress.
+                    // The detailed mask above is diagnostic-only: it records
+                    // both structural contract failures and sticky loss that
+                    // the ingress deliberately retains. The physical identity
+                    // decision is hybrid: a proven register, stack, or
+                    // memory lens may quotient only that domain while every
+                    // unavailable domain remains exact in projection.ingress.
                     if (projection.full_state_fallback ||
                         projection.requested_lens !=
                             EvaluationLens::ContextualReturn ||
@@ -38749,30 +38783,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     return true;
                 };
             const auto contextual_read_lane_fusion_is_loss_safe =
-                [&](const std::uint32_t function_entry,
-                    const AbstractState& exact_source_state,
-                    const FunctionEvaluationProjection& projection) {
-                    if (!contextual_read_hybrid_projection_is_usable(
-                            projection))
-                        return false;
-                    // This mirrors project_evaluation_ingress. It rejects a
-                    // family fusion only if a field that the projection would
-                    // discard carries a Candidate or ABI loss. Sticky loss
-                    // that remains in the projected ingress is deliberately
-                    // not a reason to widen a physical SemanticLane key to
-                    // FullState.
-                    const auto inventory_loss =
-                        inventory_loss_in_evaluation_projection(
-                            exact_source_state,
-                            projection.register_read_mask,
-                            projection.stack_reads,
-                            target_abi_inventory_sink_sources(
-                                function_entry),
-                            projection.memory_read_complete,
-                            projection.memory_read_unknown,
-                            projection.memory_read_ranges);
-                    return !inventory_loss.candidate_values_truncated &&
-                           !inventory_loss.abi_stack_base_unresolved;
+                [&](const FunctionEvaluationProjection& projection) {
+                    // `projection.ingress` is constructed by the same
+                    // authoritative read contract used by the eventual
+                    // ContextualReturn evaluation.  Candidate/ABI loss that
+                    // remains observable is retained in that ingress and is
+                    // still fail-closed at publication; it is not evidence
+                    // that the hybrid quotient discarded anything.  The
+                    // inventory-loss predicate intentionally remains reserved
+                    // for publication/owner checks and newly created joins.
+                    return contextual_read_hybrid_projection_is_usable(
+                        projection);
                 };
             const auto saturating_add =
                 [](std::uint64_t& destination,
@@ -40292,7 +40313,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 contextual_provenance_replay_key_bytes,
                                 contextual_provenance_replay_key_byte_budget);
                     if (replay_count_exhausted || replay_bytes_exhausted) {
-                        contextual_provenance_replay_budget_exhausted = true;
+                        contextual_provenance_replay_capsule_budget_exhausted =
+                            contextual_provenance_replay_capsule_budget_exhausted ||
+                            replay_count_exhausted;
+                        contextual_provenance_replay_key_byte_budget_exhausted =
+                            contextual_provenance_replay_key_byte_budget_exhausted ||
+                            replay_bytes_exhausted;
                         return std::nullopt;
                     }
                     const auto replay_id = lane.provenance_replays.size();
@@ -40665,19 +40691,41 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                 }
 
-                if (contextual_provenance_replay_budget_exhausted) {
-                    function_result.walk_diagnostics
-                        .contextual_return_evaluation_limited_functions =
-                        1u;
+                if (contextual_provenance_replay_capsule_budget_exhausted ||
+                    contextual_provenance_replay_key_byte_budget_exhausted) {
+                    if (contextual_provenance_replay_capsule_budget_exhausted)
+                        function_result.walk_diagnostics
+                            .contextual_provenance_replay_capsule_limited_functions =
+                            1u;
+                    if (contextual_provenance_replay_key_byte_budget_exhausted)
+                        function_result.walk_diagnostics
+                            .contextual_provenance_replay_key_byte_limited_functions =
+                            1u;
+                    const bool both_replay_limits_exhausted =
+                        contextual_provenance_replay_capsule_budget_exhausted &&
+                        contextual_provenance_replay_key_byte_budget_exhausted;
+                    const auto* const replay_limit_reason =
+                        both_replay_limits_exhausted
+                            ? "provenance_replay_capsules_and_key_bytes"
+                            : contextual_provenance_replay_capsule_budget_exhausted
+                            ? "provenance_replay_capsules"
+                            : "provenance_replay_key_bytes";
+                    const auto replay_limit_reason_id = static_cast<std::uint8_t>(
+                        both_replay_limits_exhausted
+                            ? 4u
+                            : contextual_provenance_replay_capsule_budget_exhausted
+                            ? 2u
+                            : 3u);
                     emit_contextual_return_limit_diagnostic(
-                        "provenance_replays",
-                        2u,
+                        replay_limit_reason,
+                        replay_limit_reason_id,
                         function->entry_address,
                         batch.empty() ? 0u : batch.front().address,
                         0u,
                         contextual_lanes.size(),
                         contextual_provenance_replay_capsules,
-                        pending_contexts.size());
+                        pending_contexts.size(),
+                        contextual_provenance_replay_key_bytes);
                     update_contextual_return_product_telemetry(
                         contextual_return_product_slot,
                         [](auto& telemetry) {
@@ -40711,6 +40759,27 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         [](const auto& group) {
                             return group.newly_admitted;
                         });
+                    const bool contextual_evaluation_subbudget_exhausted =
+                        contextual_evaluation_limit_reached_by_request ||
+                        logical_budget.contextual_evaluations_exhausted.load(
+                            std::memory_order_relaxed);
+                    if (contextual_evaluation_subbudget_exhausted) {
+                        function_result.walk_diagnostics
+                            .contextual_return_evaluation_limited_functions =
+                            1u;
+                        emit_contextual_return_limit_diagnostic(
+                            "evaluations",
+                            1u,
+                            function->entry_address,
+                            limited == semantic_groups.end()
+                                ? 0u
+                                : batch[limited->item_indices.front()].address,
+                            0u,
+                            contextual_lanes.size(),
+                            logical_budget.contextual_evaluations.load(
+                                std::memory_order_relaxed),
+                            pending_contexts.size());
+                    }
                     record_contextual_budget_failure(
                         false,
                         contextual_evaluation_limit_reached_by_request,
@@ -41352,12 +41421,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         const bool lane_fusion_loss_safe =
                             hybrid_match_input.has_value() &&
                             contextual_read_lane_fusion_is_loss_safe(
-                                observation.callee,
-                                callee_context_input,
-                                callee_read_projection) &&
-                            contextual_read_lane_fusion_is_loss_safe(
-                                observation.callee,
-                                callee_match_input,
                                 callee_read_projection);
                         if (lane_fusion_loss_safe) {
                             callee_match_input = *hybrid_match_input;
@@ -41391,10 +41454,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     ? *hybrid_match_input
                                     : observation.state,
                                 has_authoritative_complete_stack_contract);
-                        // Family lanes admit only loss-safe hybrid states.
-                        // The edge is a subscriber matcher instead: it keeps
-                        // every structurally projected domain even when the
-                        // family deliberately remains exact for sticky loss.
+                        // Family lanes admit every structurally valid hybrid
+                        // state; retained sticky loss stays inside that state.
+                        // The edge is a subscriber matcher and uses the same
+                        // projected domains plus its private provenance.
                         const auto close_incomplete_stack_lane_join =
                             [&](AbstractState& joined) {
                                 return !uses_incomplete_stack_lane_quotient ||
@@ -42699,6 +42762,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             logical_budget.contextual_context_limit;
         combined.walk_diagnostics.contextual_return_evaluation_budget =
             maximum_contextual_return_evaluations;
+        combined.walk_diagnostics.contextual_provenance_replay_capsule_budget =
+            maximum_contextual_return_evaluations;
+        combined.walk_diagnostics.contextual_provenance_replay_key_byte_budget =
+            session.impl_->evaluations.maximum_retained_payload_bytes();
         combined.walk_diagnostics.abi_stack_argument_slot_budget =
             maximum_abi_stack_argument_slots;
         combined.walk_diagnostics.local_fixpoint_iteration_budget =

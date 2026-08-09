@@ -423,6 +423,13 @@ struct GuardedCodeInventoryWalkDiagnostics {
     std::size_t contextual_return_context_limited_functions = 0u;
     std::size_t contextual_return_evaluation_budget = 0u;
     std::size_t contextual_return_evaluation_limited_functions = 0u;
+    // Provenance replay has its own root-local resource contracts. It can
+    // fail a root without exhausting the semantic contextual-evaluation
+    // budget, so keep both terminal causes independently observable.
+    std::size_t contextual_provenance_replay_capsule_budget = 0u;
+    std::size_t contextual_provenance_replay_capsule_limited_functions = 0u;
+    std::size_t contextual_provenance_replay_key_byte_budget = 0u;
+    std::size_t contextual_provenance_replay_key_byte_limited_functions = 0u;
     std::size_t abi_stack_argument_slot_budget = 0u;
     std::size_t abi_stack_argument_projection_truncated_functions = 0u;
     // A local CFG transfer must return control to the interprocedural budget.
@@ -452,6 +459,10 @@ struct GuardedCodeInventoryWalkDiagnostics {
                forwarded_store_context_limited_functions != 0u ||
                contextual_return_context_limited_functions != 0u ||
                contextual_return_evaluation_limited_functions != 0u ||
+               contextual_provenance_replay_capsule_limited_functions !=
+                   0u ||
+               contextual_provenance_replay_key_byte_limited_functions !=
+                   0u ||
                abi_stack_argument_projection_truncated_functions != 0u ||
                local_fixpoint_limited_evaluations != 0u ||
                resolution_root_logical_budget_exhausted ||
