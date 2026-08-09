@@ -2,8 +2,8 @@
 
 Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
 Produkt-D1 bleibt unentschieden. Die Sourcebasis ist
-`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
-Hot-Callee-Diagnose-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Der terminale Sonic-v56-
+`21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b` plus das reviewte SavedEpoch-
+Lifecycle-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17. Der terminale Sonic-v56-
 Diagnoselauf belegt eine echte Contextual-State-Explosion und keine fertige
 Produktartefakterzeugung.
 
@@ -185,6 +185,43 @@ zu verlieren. Die Callee-Set-incomplete-Gründe an den dynamischen Sites werden
 danach weiter geprüft.
 
 Cache-Eviction ist mit null Recomputes nicht als Hauptursache belegt. Der
+## [x] Abgeschlossener SavedEpoch-Lifecycle-Unterauftrag
+
+Current-tracking SavedEpoch-Pending-ABI-Skalare werden nur an bewiesenen
+normalen Call-/Tail-ABI-Gates konsumiert; detached Epochs bleiben unangetastet.
+`candidate_payload_lost` ist physisch und semantisch ein absorbierendes
+Epoch-Top ueber Normalize, Merge, Equality, Key, Subsumption, Evidence,
+Restore und Persistenz. Konkrete Evidence und Nested-/Current-Aliasfakten
+bleiben erhalten, finite Payload/Slots verschwinden; detached Top uebernimmt
+keine fremde Tail-Evidence. Epoch-Schema `17`, Analyzer-ABI `33`, keine
+oeffentliche Layoutaenderung.
+
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit Status
+`nonconvergence`/Exitcode `31` durch drei zehnsekundige
+Null-Publikations-Amplifikationssamples. Wave `76`, `0` committed/ready/
+completed Roots, `272` Contexts; Semantic-Lanes `846 -> 863 -> 886`, physische
+Auswertungen `1.135 -> 1.164 -> 1.213`, Frontier `101 -> 88 -> 131`, stale
+Discards `395 -> 396 -> 415`. Peak Root WS: `1.663.037.440 B`, Peak Job WS:
+`1.895.583.744 B`; keine Publikation und kein `game.exe`. D1024 und D2048
+hatten `uncategorized=0`. Der alte SavedEpoch-Pending-Blocker ist beseitigt;
+der naechste Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-
+/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache, nicht ein weiterer
+SavedEpoch-Pending-Patch. KR-4981 bleibt fail-closed offen.
+
+Der D2048-Top-8-Befund war: `0x8C10D19C` sem `36` mit reg ordinary `94`
+(`mask B870`), reg metadata `4` (`mask 3860`) und state-memory Epoch-Topologie
+`12`; `0x8C606E60` sem `36` mit reg ordinary `12` (`mask C010`), Alias-Flags
+`16` und state-memory Topologie `2`; `0x8C09859C` sem `34` mit `48` Stack-
+Events, incomplete Top-Chain, reg ordinary `8` (`mask 0F00`), Alias-Flags
+`10` und Stack-Key-Topologie `6`; `0x8C6648BC` sem `32` mit reg ordinary `80`
+(`mask FE31`), metadata `16` (`mask 1E00`), Alias `8` und state-memory
+Topologie `6`; `0x8C098A82` sem `28` mit reg ordinary `8` (`mask 0011`) und
+Alias `14`; `0x8C64E55E` sem `28`/Events `144` mit Alias `24`;
+`0x8C10C99C` sem `26` mit reg ordinary `40` (`mask 800F`), metadata `2`
+(`mask 0004`) und state-memory Topologie `12`; `0x8C604440` sem `22` mit reg
+ordinary `14` (`mask 0070`) und metadata `12` (`mask 0050`). Kein Eintrag
+zeigt einen Stack-/Tail-/Memory-Ordinary-Payload als neuen Haupttreiber.
+
 Produktblocker bleibt bis zu einem vollstaendigen Produktgate offen; als
 Kostenmodell gilt weiterhin:
 

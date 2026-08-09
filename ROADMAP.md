@@ -110,10 +110,10 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionale Sourcebasis:
-  603a5175330f2fc22ae9db54da4b61c8c1fd49dc
-  plus das reviewte evidence-freie Hot-Callee-Diagnose-Delta dieses Tasks
+  21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b
+  plus das reviewte SavedEpoch-Lifecycle-Delta dieses Tasks
   Analyzer-ABI 33
-  Function-Analysis-Epoch-Schema 16
+  Function-Analysis-Epoch-Schema 17
 
 aktueller realer Diagnosebefund:
   D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s
@@ -156,6 +156,29 @@ Nächster Fixpfad ist die noch nicht implementierte absorbierende Top-Semantik
 für `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge,
 Equality, Subsumption, Key und Persistenz; Alias-/Current-Tracking und
 fail-closed Restore bleiben erhalten.
+
+Der SavedEpoch-Lifecycle-Unterauftrag ist source-seitig abgeschlossen. Current-
+tracking SavedEpoch-Pending-ABI-Skalare werden nur an bewiesenen normalen
+Call-/Tail-ABI-Gates konsumiert; detached Epochs bleiben unangetastet.
+`candidate_payload_lost` ist ein physisch und semantisch absorbierendes
+Epoch-Top ueber Normalize, Merge, Equality, Key, Subsumption, Evidence,
+Restore und Persistenz. Konkrete Evidence sowie Nested-/Current-Aliasfakten
+bleiben erhalten, finite Payload/Slots verschwinden; detached Top uebernimmt
+keine fremde Tail-Evidence. Das Epoch-Schema ist `17`, Analyzer-ABI `33`
+bleibt ohne oeffentliche Layoutaenderung.
+
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 ms`
+(`6:09`) mit Status `nonconvergence`, Exitcode `31`, nach drei zehnsekundigen
+Null-Publikations-Amplifikationssamples. Wave `76`, `0` committed/ready/
+completed Roots, `272` Contexts; Semantic-Lanes `846 -> 863 -> 886`,
+physische Auswertungen `1.135 -> 1.164 -> 1.213`, Frontier `101 -> 88 -> 131`
+und stale Discards `395 -> 396 -> 415`. Peak Root lag bei `1.663.037.440 B`,
+Peak Job bei `1.895.583.744 B`; keine Publikation und kein `game.exe`.
+D1024 und D2048 hatten `uncategorized=0`. Der alte SavedEpoch-Pending-Blocker
+ist damit zielgenau beseitigt; der naechste Root-Analysepunkt ist die gemeinsame
+Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-
+Ursache, nicht ein weiterer SavedEpoch-Pending-Patch. KR-4981 bleibt fail-closed
+offen.
 
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
 Diagnoseevidenz und kein Produktnachweis, weil kein Produkt entstand.

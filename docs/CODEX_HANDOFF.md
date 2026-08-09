@@ -288,8 +288,8 @@ Testmatrix.
 ## Aktueller P0-Handoff
 
 Die Sourcebasis fuer den aktuellen Candidate-Resolution-Pfad ist
-`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
-Hot-Callee-Diagnose-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16.
+`21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b` plus das reviewte SavedEpoch-
+Lifecycle-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -399,6 +399,24 @@ Fixpfad ist noch nicht implementiert: absorbierende Top-Semantik für
 Subsumption, Key und Persistenz, mit erhaltenem Alias-/Current-Tracking und
 fail-closed Restore. Die dynamischen Callee-Set-incomplete-Gründe werden danach
 weiter geprüft; KR-4981 bleibt offen.
+
+Der SavedEpoch-Lifecycle-Unterauftrag ist source-seitig abgeschlossen:
+Current-tracking Pending-ABI-Skalare werden nur an bewiesenen normalen
+Call-/Tail-ABI-Gates konsumiert, detached Epochs bleiben unangetastet.
+`candidate_payload_lost` ist ein absorbierendes Epoch-Top ueber Normalize,
+Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz; konkrete
+Evidence und Nested-/Current-Aliasfakten bleiben erhalten, finite Payload/Slots
+verschwinden, detached Top uebernimmt keine fremde Tail-Evidence. Epoch-Schema
+`17`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
+
+Der Produktlauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+`nonconvergence`/Exitcode `31` durch drei zehnsekundige
+Null-Publikations-Amplifikationssamples. Wave `76`, `0` committed/ready/
+completed Roots, `272` Contexts, `uncategorized=0` in D1024 und D2048; keine
+Publikation und kein `game.exe`. Der alte SavedEpoch-Pending-Blocker ist
+beseitigt. Der naechste Root-Analysepunkt ist die gemeinsame Ordinary-/
+Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache,
+nicht ein weiterer SavedEpoch-Pending-Patch; KR-4981 bleibt fail-closed offen.
 
 Der verbindliche aktuelle Pfad lautet:
 

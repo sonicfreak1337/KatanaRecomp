@@ -1,9 +1,9 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Die Sourcebasis ist
-`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
-Hot-Callee-Diagnose-Delta;
-Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16; der Produktgate
+`21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b` plus das reviewte SavedEpoch-
+Lifecycle-Delta;
+Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
@@ -301,6 +301,23 @@ bleibt die noch nicht implementierte absorbierende Top-Semantik für
 `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
 Subsumption, Key und Persistenz, ohne Alias-/Current-Tracking oder fail-closed
 Restore zu verlieren. KR-4981 bleibt offen.
+
+### [x] Abgeschlossener SavedEpoch-Lifecycle-Unterauftrag
+
+Current-tracking Pending-ABI-Skalare werden nur an bewiesenen normalen
+Call-/Tail-ABI-Gates konsumiert; detached Epochs bleiben unangetastet.
+`candidate_payload_lost` ist ein absorbierendes Epoch-Top ueber Normalize,
+Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz. Konkrete
+Evidence und Nested-/Current-Aliasfakten bleiben erhalten, finite Payload/Slots
+verschwinden; detached Top uebernimmt keine fremde Tail-Evidence. Epoch-Schema
+`17`, Analyzer-ABI `33`, keine oeffentliche Layoutaenderung.
+
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+`nonconvergence`/Exitcode `31` bei Wave `76`; `uncategorized=0` in D1024 und
+D2048, keine Publikation und kein `game.exe`. Der alte SavedEpoch-Pending-
+Blocker ist beseitigt; die gemeinsame Ordinary-/Registermetadaten-/Alias- und
+MemoryEpoch-Lifecycle-Ursache bleibt der naechste Analysepunkt. KR-4981 bleibt
+fail-closed offen.
 
 ## Produktmessvertrag KR-4981
 

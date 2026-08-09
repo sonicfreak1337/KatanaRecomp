@@ -84,9 +84,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  603a5175330f2fc22ae9db54da4b61c8c1fd49dc
-  plus reviewtes evidence-freies Hot-Callee-Diagnose-Delta in diesem Task
-  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16
+  21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b
+  plus reviewtes SavedEpoch-Lifecycle-Delta in diesem Task
+  Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -391,6 +391,25 @@ für `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge,
 Equality, Subsumption, Key und Persistenz, mit erhaltenem Alias-/Current-
 Tracking und fail-closed Restore. Die dynamischen Callee-Set-incomplete-Sites
 werden danach erneut geprüft.
+
+### [x] Abgeschlossener SavedEpoch-Lifecycle-Unterauftrag
+
+Der Source-Fix konsumiert current-tracking SavedEpoch-Pending-ABI-Skalare nur
+an bewiesenen normalen Call-/Tail-ABI-Gates und laesst detached Epochs
+unangetastet. `candidate_payload_lost` ist als absorbierendes Epoch-Top ueber
+Normalize, Merge, Equality, Key, Subsumption, Evidence, Restore und Persistenz
+integriert; konkrete Evidence und Nested-/Current-Aliasfakten bleiben,
+finite Payload/Slots verschwinden, detached Top erhaelt keine fremde
+Tail-Evidence. Epoch-Schema `17`, Analyzer-ABI `33`, kein oeffentliches Layout-
+Delta.
+
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+`nonconvergence`/Exitcode `31` bei Wave `76`; `0` committed/ready/completed
+Roots, `272` Contexts, `uncategorized=0` bei D1024 und D2048, keine Publikation
+und kein `game.exe`. Der alte SavedEpoch-Pending-Blocker ist beseitigt. Der
+naechste Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-/
+Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache, nicht ein weiterer
+SavedEpoch-Pending-Patch; KR-4981 bleibt offen.
 
 Vertrag:
 

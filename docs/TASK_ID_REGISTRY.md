@@ -66,8 +66,8 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Die Sourcebasis fuer den aktuellen Source-Stand ist
-`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
-Hot-Callee-Diagnose-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Historisch erzeugte v56 kein Portartefakt und
+`21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b` plus das reviewte SavedEpoch-
+Lifecycle-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 17. Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
 keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
@@ -98,7 +98,15 @@ wurde nach `244,549 ms` bei Wave `24` gezielt beendet. `uncategorized=0` für
 alle Top-8-Funktionen. `0x8C10E44E` isolierte SavedEpoch-pending-ABI-Skalare
 als dominante semantische Änderungsdomäne; der Callee-Set-Stackvertrag war
 unvollständig. Der Unterauftrag ist abgeschlossen, KR-4981 bleibt offen; der
-SavedEpoch-Top-Fix ist noch nicht implementiert.
+SavedEpoch-Lifecycle-Unterauftrag ist abgeschlossen; der neue
+Ordinary-/Registermetadaten-/MemoryEpoch-Analysepunkt ist noch nicht
+implementiert.
+
+Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369171 ms` mit
+`nonconvergence`/Exitcode `31` bei Wave `76`; D1024 und D2048 meldeten
+`uncategorized=0`. Der SavedEpoch-Pending-Blocker ist beseitigt; der naechste
+Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-/Alias- und
+MemoryEpoch-Lifecycle-Ursache. KR-4981 bleibt fail-closed offen.
 
 | ID | Titel | Status |
 |---|---|---|

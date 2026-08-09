@@ -2,9 +2,9 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktuelle funktionale Sourcebasis: `603a5175330f2fc22ae9db54da4b61c8c1fd49dc`
-plus das reviewte evidence-freie Hot-Callee-Diagnose-Delta, Runtime-ABI 87, Analyzer-ABI 33,
-Function-Analysis-Epoch-Schema 16, Application-Contract 8 und
+Aktuelle funktionale Sourcebasis: `21c24d3c374bcf2d01e523a4c32b4e9f4b0aba3b`
+plus das reviewte SavedEpoch-Lifecycle-Delta, Runtime-ABI 87, Analyzer-ABI 33,
+Function-Analysis-Epoch-Schema 17, Application-Contract 8 und
 Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
 `1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
@@ -48,6 +48,16 @@ pending-ABI-Skalaren und unvollständigem Callee-Set-Stackvertrag. Der nächste
 Fixpfad ist die konsistente absorbierende Top-Semantik für
 `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
 Subsumption, Key und Persistenz; sie ist noch nicht implementiert.
+
+Der SavedEpoch-Lifecycle-Fix konsumiert current-tracking Pending-ABI-Skalare nur
+an bewiesenen normalen Call-/Tail-ABI-Gates; detached Epochs bleiben unangetastet.
+`candidate_payload_lost` ist ein absorbierendes Epoch-Top, waehrend konkrete
+Evidence und Nested-/Current-Aliasfakten erhalten bleiben. Das Epoch-Schema ist
+`17`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
+`kr4981-20260809-031826-0616113a` endete nach `369,171 ms` fail-closed wegen
+Nonconvergence bei Wave `76`, ohne Publikation oder `game.exe`. Der alte
+SavedEpoch-Pending-Blocker ist beseitigt; der gemeinsame Ordinary-/Register-
+Metadaten-/MemoryEpoch-Lifecycle bleibt offen. KR-4981 bleibt offen.
 
 ```text
 Runtime-ABI:                    87

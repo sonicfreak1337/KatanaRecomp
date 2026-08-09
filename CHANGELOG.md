@@ -54,6 +54,18 @@
   Normalize, Merge, Equality, Subsumption, Key und Persistenz, ohne Alias-,
   Current-Tracking oder fail-closed Restore zu verlieren; der Fix ist noch
   nicht implementiert. KR-4981 bleibt offen.
+- Der SavedEpoch-Lifecycle-Fix konsumiert current-tracking Pending-ABI-Skalare
+  nur an bewiesenen normalen Call-/Tail-ABI-Gates; detached Epochs bleiben
+  unangetastet. `candidate_payload_lost` ist nun ein absorbierendes Epoch-Top
+  ueber Normalize, Merge, Equality, Key, Subsumption, Evidence, Restore und
+  Persistenz; konkrete Evidence sowie Nested-/Current-Aliasfakten bleiben
+  erhalten, finite Payload/Slots verschwinden. Das Epoch-Schema steigt auf
+  `17`, Analyzer-ABI `33` bleibt ohne oeffentliche Layoutaenderung. Der Lauf
+  `kr4981-20260809-031826-0616113a` endete nach `369,171 ms` fail-closed wegen
+  Nonconvergence bei Wave `76`; kein Portartefakt und keine Publikation. Der
+  alte SavedEpoch-Pending-Blocker ist beseitigt; der neue Engpass liegt bei
+  Ordinary-Register-/Metadaten-/Alias-/Watcher- und MemoryEpoch-Topologie.
+  KR-4981 bleibt offen.
 - Der Zweikanal-Sourcefix wurde im korrekten VsDevCmd-Incremental-Build von
   `katana-recomp --parallel 12` in `42,8 s` gebaut; es blieben nur bekannte
   getenv-/Shadowing-Warnungen. Die Evidence- und Semantic-Kanaele sind dabei
