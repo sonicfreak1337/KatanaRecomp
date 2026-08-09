@@ -66,8 +66,8 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der funktionale Source-Checkpoint fuer den aktuellen Source-Stand ist
-`49cee39a93df1fae28a97d955a2d742132409dd1`; Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 26, lokales In-Process-Evaluation-Cache-Schema 13.
+`49b0f72a9f49d60a4eb6e0481460cd57c5625735`; Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 27, lokales In-Process-Evaluation-Cache-Schema 13.
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
@@ -76,7 +76,8 @@ abgeschlossen; D9 ist beendet und Root 0 konvergierte fail-closed ohne
 Portartefakt oder Produkterfolg. D2/G2 ist abgeschlossen und negativ; kein
 positiver Schedulerhebel ist belegt. KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
-P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through. KR-4981 bleibt
+P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
+vollstaendigen Stackvertrag/Gate. KR-4981 bleibt
 das globale Produktgate und ist nicht bestanden.
 
 Der fruehere D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
@@ -115,10 +116,22 @@ Wave `119`, `280` Contexts, `972` Semantic-Lanes, `2.011` physische,
 `2.814` logische, `203` Cache-Reuses, `2.790` Subscriber, Provenienz
 `169.824`, stale Discards `922`, Frontier `43` (max `250`) und Cache
 `610.295.241 B`; keine Publikation oder Artefakterzeugung. Admission war
-`1024/1024`, projected context/match jeweils `0`. Der Lauf zeigt höheren
-Durchsatz, aber keinen Produktfortschritt; der offene P0 liegt bei
-intra-context Ordinary-Stack und lokalen Stackkoordinaten. KR-4981 bleibt
-offen.
+`1024/1024`, projected context/match jeweils `0`. Die Rohwerte sind wegen des
+frueheren Endes bei Wave `107` statt `119` nicht direkt vergleichbar; eine
+materielle Produkt-/Performanceverbesserung ist nicht belegt. Der offene P0
+liegt bei intra-context Ordinary-Stack und lokalen Stackkoordinaten. KR-4981
+bleibt offen.
+
+Der aktuelle Lauf `kr4981-20260809-091410-2766aaa6` endete nach ca. `275 s`
+gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
+Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
+`970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
+Input-Widening `536`, Summary `22`, Forward `123`, stale Requeues `272`,
+stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
+Publikation und kein Artefakt. `0x8C641202` blieb bei `84/84` Attempts/Semantic
+Changes und `508` Ordinary-Stack-Deltas trotz vollständigem Stackvertrag.
+Der Supervisor schrieb wegen `taskkill`-Zugriffsverweigerung keine Summary;
+der Kill-on-close-Job beendete den Child trotzdem.
 
 | ID | Titel | Status |
 |---|---|---|
@@ -165,7 +178,7 @@ offen.
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; aktueller P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; aktueller P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen Stackvertrag/Gate |
 
 ## Aktuelle Meilensteinzuordnung
 

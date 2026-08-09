@@ -31,8 +31,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Funktionaler Source-Checkpoint dieses Arbeitsstands:
-  49cee39a93df1fae28a97d955a2d742132409dd1
-  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 26,
+  49b0f72a9f49d60a4eb6e0481460cd57c5625735
+  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
 
 aktueller realer Diagnosebefund:
@@ -188,8 +188,8 @@ Gesamtzeit (~`459,6 s`) erreichte der neue Lauf jedoch Wave `103` statt `67`,
 evaluations, `733` statt `839` stale requeues und `518.425.788` statt
 `444.266.838 B` Cache-Payload. Der Pending-Carrier verbessert damit offenbar
 Kosten je Churn-Schritt bzw. den Durchsatz, belegt aber keinen
-Konvergenzhebel. Candidate-Resolution und KR-4981 bleiben offen; der aktuelle
-P0 ist Inventory-Provenance-Live-in/Spill-through.
+Konvergenzhebel. Candidate-Resolution und KR-4981 bleiben offen; historisch
+wurde hier Inventory-Provenance-Live-in/Spill-through als P0 vermutet.
 
 ### Lauf nach Candidate-Domain-Top-Fix
 
@@ -269,18 +269,32 @@ fail-closed offen.
 
 ## Aktueller Source- und Laufstand
 
-Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
-Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss;
+die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
+Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top in sämtlichen Truncation-/Publication-
 Checks fail-closed und transportiert Provenance-Replay-Capsule-/Keybyte-Limits
 öffentlich getrennt vom semantischen Evaluation-Limit. Ein echter Evaluation-
 Cap belastet wieder nur den Evaluation-Zähler. Analyzer-ABI `34`,
-Function-Analysis-Epoch-Schema `26` und lokales In-Process-Evaluation-Cache-
+Function-Analysis-Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-
 Schema `13` sind aktiv; der bestätigte Build war
-Build-Exit `0` nach ca. `51 s`; `build-contextual-dirty/katana-recomp.exe`
-trug LastWriteTime `09.08.2026 08:31:59`. Tests wurden nicht ausgeführt.
+Build-Exit `0` nach ca. `48 s`; `build-contextual-dirty/katana-recomp.exe`
+trug LastWriteTime `09.08.2026 09:08:11 +02:00`. Tests wurden nicht ausgeführt.
 
-Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+`275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
+Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
+`970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
+Input-Widening `536`, Summary `22`, Forward `123`, stale Requeues `272`,
+stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
+Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
+`taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
+den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
+`0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+Ordinary-Stack-Deltas trotz vollständigem Stackvertrag.
+
+Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
 `286,387 s` (Candidate ca. `232,5 s`) nach drei zehnsekündigen
 Amplifikationssamples mit `nonconvergence`/Exit `31`, ohne Crash. `0/1274`
 Roots, Wave `119`, kein Epoch-Publish/Discard, kein Portartefakt oder
@@ -305,8 +319,11 @@ Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
 `game.exe`. Das `attempts=1024`-Gate war gegenüber `9baea88` bitgleich:
 `admission_success=999`, `projected_context_changed=0`,
 `projected_match_changed=0`. Die Gateänderung ist korrekt, aber kein
-Konvergenzhebel. Der offene P0 ist Inventory-Provenance-Live-in/Spill-through
-(unter anderem r12/SavedEpoch), nicht SavedEpoch-Pending und nicht Budgetarbeit.
+Konvergenzhebel. Der offene P0 bleibt intra-context Ordinary-Stack. Die
+vollstaendige autoritative Hybrid-Join-Closure ist beim vollstaendigen
+Stackvertrag/Gate noch nicht wirksam; LocalStackCoordinate-/unvollstaendige
+Stackvertraege bleiben sekundaer zu pruefen. Keine Budget-/Thread-Erhoehung
+und kein weiterer SavedEpoch-/Provenienzumbau.
 
 
 ## Aktueller kritischer Pfad
@@ -324,8 +341,9 @@ wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
 ist abgeschlossen und negativ, ohne positiven Schedulerhebel. D9 ist beendet
 und Root 0 konvergierte fail-closed,
 ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
-KR-4994 ist source-seitig abgeschlossen; der aktuelle P0-Folgepunkt ist
-Inventory-Provenance-Live-in/Spill-through. KR-4981 bleibt das globale Produktgate und ist
+KR-4994 ist source-seitig abgeschlossen; der aktuelle P0 ist die fehlende
+Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
+Stackvertrag/Gate. KR-4981 bleibt das globale Produktgate und ist
 nicht bestanden.
 
 ## Quellseitig vorhandene Hauptvertraege
@@ -382,11 +400,12 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 
 ```text
 D9 ist beendet und fail-closed; Root 0 konvergierte ohne Portartefakt und
-Produkterfolg. KR-4994 ist source-seitig abgeschlossen; der aktuelle
-P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through. KR-4981 bleibt
+Produkterfolg. KR-4994 ist source-seitig abgeschlossen; der aktuelle P0 ist
+die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
+vollstaendigen Stackvertrag/Gate. KR-4981 bleibt
 das globale Produktgate und ist
 nicht bestanden.
 ```
 
 Ein zweiter D1-Lauf gehoert nicht zu diesem Dokumentationspass. D2/G2 ist
-abgeschlossen und negativ; KR-4987 bis KR-4991 bleiben inaktiv.
+abgeschlossen und negativ; KR-4988 bis KR-4991 bleiben inaktiv.

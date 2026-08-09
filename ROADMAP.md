@@ -110,9 +110,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionaler Source-Checkpoint:
-  49cee39a93df1fae28a97d955a2d742132409dd1
+  49b0f72a9f49d60a4eb6e0481460cd57c5625735
   Analyzer-ABI 34
-  Function-Analysis-Epoch-Schema 26
+  Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13
 
 frueherer Vergleichslauf:
@@ -180,15 +180,29 @@ Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-
 Ursache, nicht ein weiterer SavedEpoch-Pending-Patch. KR-4981 bleibt fail-closed
 offen.
 
-Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
-Er behaelt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion,
+Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Er behaelt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion;
+die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
+Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits vom
 semantischen Evaluation-Limit. Der echte Evaluation-Cap erhoeht nur den
-Evaluation-Zaehler; Analyzer-ABI `34`, Epoch-Schema `26` und lokales
+Evaluation-Zaehler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
 In-Process-Evaluation-Cache-Schema `13` sind aktuell.
 
-Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+`275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
+Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
+`970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
+Input-Widening `536`, Summary `22`, Forward `123`, stale Requeues `272`,
+stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
+Publikation und kein Artefakt. Admission `1024/1024`, projected context/match
+jeweils `0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und
+`508` Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der Supervisor
+schrieb wegen `taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-
+Job beendete den Child trotzdem.
+
+Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
 `286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31` nach
 drei Amplifikationssamples: `0/1274` Roots, Wave `119`, keine Publikation,
 `280` Contexts, `972` Lanes, `2.011` physische, `2.814` logische, `203`
@@ -211,8 +225,9 @@ Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
 `42,359 s`; kein `game.exe`. Gegenüber `9baea88` blieb das `attempts=1024`-
 Gate bitgleich (`admission_success=999`, projected changed/match jeweils `0`);
 die Gateänderung ist korrekt, aber kein Konvergenzhebel. Der offene P0 ist
-Inventory-Provenance-Live-in/Spill-through (r12/SavedEpoch), nicht
-SavedEpoch-Pending und nicht Budgetarbeit. KR-4981 bleibt offen.
+Historisch wurde Inventory-Provenance-Live-in/Spill-through als P0 vermutet;
+der aktuelle P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-
+Closure beim vollstaendigen Stackvertrag/Gate. KR-4981 bleibt offen.
 
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
 Diagnoseevidenz und kein Produktnachweis, weil kein Produkt entstand.
@@ -228,7 +243,7 @@ Transport- und Fortschrittsevidenz, erreichte aber weder den historisch
 limitierenden Root 1 noch einen vollstaendigen schweren Root. Nach einem
 privaten Supervisor-I/O-Fehler war die temporaere JSONL bis `185,586 s`
 lesbar/gespuelt, aber ohne terminalen Datensatz und ohne atomare Publikation.
-D1/G1 ist daher strikt fail-closed und unentschieden; KR-4987 bis KR-4991
+D1/G1 ist daher strikt fail-closed und unentschieden; KR-4988 bis KR-4991
 bleiben inaktiv.
 
 ## Aktueller P0: Candidate-Resolution / ungeklaerte Context- und Requeuekosten
@@ -256,10 +271,12 @@ werden nicht als gemeinsamer Root behauptet.
 
 Eine blosse Erhoehung des 65.536er-Budgets, mehr Cache oder mehr Threads ist
 kein Fix. Der aktuelle D-Lauf zeigt gegenueber dem vorherigen Fehlerlauf bei
-gleicher Gesamtzeit (~459,6 s) hoeheren Durchsatz (`wave 103` statt `67`,
-`1.044` statt `722` Lanes, `1.029` statt `713` contextual physical
+gleicher Gesamtzeit (~459,6 s) unterschiedliche Rohwerte (`wave 103` statt
+`67`, `1.044` statt `722` Lanes, `1.029` statt `713` contextual physical
 evaluations, `733` statt `839` stale requeues und `518.425.788` statt
-`444.266.838` B Cache-Payload), ohne einen Konvergenzhebel zu belegen. Bei
+`444.266.838` B Cache-Payload); diese historische Gegenüberstellung belegt
+keine materielle Produkt-/Performanceverbesserung und keinen Konvergenzhebel.
+Bei
 Attempts `1024`, `2048` und `4096` waren die relevanten
 Admission-/Stack-Diagnosezaehler bitgenau identisch. Candidate-Resolution
 bleibt deshalb offen; KR-4981 ist nicht bestanden.
@@ -283,15 +300,16 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
 | KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; der aktuelle D-Lauf bestand es nicht; kein weiterer Lauf ohne ausdrueckliche Freigabe; vollstaendiger 24-Thread-Kaltport und realer Lauf |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; aktueller P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; aktueller P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen Stackvertrag/Gate |
 
 Die Reihenfolge ist normativ:
 
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> D-Lauf beendet durch manuelles Beenden nach belegter Nichtverbesserung
-  -> Candidate-Resolution bleibt offen; der aktuelle P0 ist Inventory-
-     Provenance-Live-in/Spill-through; KR-4981 ist nicht bestanden
+  -> Candidate-Resolution bleibt offen; der aktuelle P0 ist die fehlende
+     Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
+     Stackvertrag/Gate; KR-4981 ist nicht bestanden
 ```
 
 D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue Testmatrix.
@@ -299,8 +317,8 @@ D1/G1 bleibt historisch unentschieden; D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Portartefakt oder
 Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig
-abgeschlossen; der aktuelle P0-Folgepunkt ist Inventory-Provenance-Live-in/
-Spill-through. KR-4981 bleibt das
+abgeschlossen; der aktuelle P0 ist die fehlende Wirksamkeit der autoritativen
+Hybrid-Join-Closure beim vollstaendigen Stackvertrag/Gate. KR-4981 bleibt das
 globale Produktgate und ist nicht bestanden. KR-4982 und KR-4983 bleiben
 gestrichen.
 

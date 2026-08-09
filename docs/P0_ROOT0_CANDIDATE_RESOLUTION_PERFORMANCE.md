@@ -2,8 +2,8 @@
 
 Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
 Produkt-D1 bleibt unentschieden. Der funktionale Source-Checkpoint ist
-`49cee39a93df1fae28a97d955a2d742132409dd1`; Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 26, lokales In-Process-Evaluation-Cache-Schema 13.
+`49b0f72a9f49d60a4eb6e0481460cd57c5625735`; Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 27, lokales In-Process-Evaluation-Cache-Schema 13.
 Der terminale Sonic-v56-
 Diagnoselauf belegt eine echte Contextual-State-Explosion und keine fertige
 Produktartefakterzeugung.
@@ -123,10 +123,11 @@ Diagnostik bitgenau identisch zum vorherigen Fehlerlauf. Bei gleicher
 Gesamtzeit (~`459,6 s`) stiegen Wave von `67` auf `103`, Semantic-Lanes von
 `722` auf `1.044`, contextual physical evaluations von `713` auf `1.029` und
 Cache-Payload von `444.266.838 B` auf `518.425.788 B`; stale requeues sanken
-von `839` auf `733`. Der bounded-merge/Pending-Carrier-Fix verbessert damit
-offenbar Kosten je Churn-Schritt bzw. Durchsatz, belegt aber keinen
-Konvergenzhebel. Candidate-Resolution bleibt offen und KR-4981 ist
-nicht bestanden; der aktuelle P0 ist Inventory-Provenance-Live-in/Spill-through.
+von `839` auf `733`. Diese historische Gegenüberstellung belegt wegen der
+unterschiedlichen Rohwerte und Endpunkte keine materielle Produkt-/Performance-
+verbesserung und keinen Konvergenzhebel. Candidate-Resolution bleibt offen
+und KR-4981 ist nicht bestanden; historisch wurde hier Inventory-Provenance-
+Live-in/Spill-through als P0 vermutet.
 
 Die historischen Rohwerte besitzen keine belegte gemeinsame Zaehldomaene:
 `65.536` ist ein Per-Function-Budget, `25.728` Contexts und `27.872`
@@ -218,12 +219,12 @@ behauptet keine Loesung.
 
 ## Aktueller Source- und Laufstand
 
-Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
+Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
 Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich
 vom semantischen Evaluation-Limit. Ein echter Evaluation-Cap belastet nur den
-Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `26` und lokales
+Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
 In-Process-Evaluation-Cache-Schema `13` sind aktiv.
 
 Der erledigte Source-Unterauftrag umfasst eine begrenzte 17-Source-
@@ -240,7 +241,44 @@ detached watcher; eine blanket `stack_may_derived`-Lattice ist nicht enthalten.
 
 ## Aktueller Produktlauf
 
-Der Lauf `kr4981-20260809-083308-4a3ff9be` endete nach `286,387 s`
+Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+`275 s` gesamt (Candidate Resolution ca. `221 s`) nach drei
+Amplifikationssamples mit `nonconvergence`: `0/1274` Roots, HOL `0`, Wave
+`107`, `280` Contexts, `970` Semantic-Lanes, `1.861` physische und `2.526`
+logische Requests, Input-Widening `536`, Summary `22`, Forward `123`, stale
+Requeues `272`, stale Discards `806`, Cache-Payload `589.178.706 B`; keine
+Budgets erschöpft, keine Publikation und kein Artefakt bzw. `game.exe`.
+Der Supervisor-Abbruch meldete bei `taskkill` Zugriff verweigert und schrieb
+deshalb keine Summary-Datei; der Kill-on-close-Job beendete den Child trotzdem,
+danach lief kein `katana-recomp`-Prozess mehr. Die Evidenz stammt aus
+Supervisor-, stdout- und stderr-Logs; der Supervisorlog liegt unter
+`C:\Users\ultim\Desktop\KatanaRecomp\private\diagnostics\schema27-fullclosure-f2aa10.supervisor.log`,
+stdout/stderr tragen dasselbe Präfix.
+
+Admission war `1024/1024`, `projected_context_changed=0` und
+`projected_match_changed=0`. Der entscheidende Hotspot bleibt `0x8C641202`
+mit `84/84` Attempts/Semantic Changes und `508` Ordinary-Stack-Deltas trotz
+vollstaendigem Stackvertrag. Die neue autoritative Hybridprojektion schliesst
+Contextual-MAY-Joins und Forward-Edges erneut vollstaendig. Die vollstaendige
+Hybrid-Join-Closure ist damit ein Korrektheitsfix ohne materielle Produkt-/
+Performanceverbesserung;
+beim vollstaendigen Stackvertrag/Gate ist die Closure noch nicht wirksam. Der naechste
+Analysepunkt ist diese fehlende
+Wirksamkeit; LocalStackCoordinate-/unvollstaendige Stackvertraege bleiben
+sekundaer zu pruefen. Keine Budget-/Thread-Erhoehung und kein weiterer
+SavedEpoch-/Provenienzumbau.
+
+Der Gegenlauf auf Source-Commit `49cee39a93df1fae28a97d955a2d742132409dd1`
+(`kr4981-20260809-083308-4a3ff9be`) lief `286,387 s` gesamt (Candidate ca.
+`232,5 s`) bis Wave `119` mit `972` Lanes, `2.011` physischen, `2.814`
+logischen Requests, `606` Input- und `360` stale-Requeues, `922` stale
+Discards sowie Cache-Payload `610.295.241 B`. Diese Rohwerte sind wegen des
+frueheren Endes des neuen Laufs bei Wave `107` nicht direkt vergleichbar;
+normalisiert ist keine materielle Produkt-/Performance- oder
+Konvergenzverbesserung belegt. Physical evaluations/Wave lagen leicht hoeher,
+Cache-Payload/Wave eher hoeher, stale requeues/Wave etwas niedriger.
+
+Der vorherige Lauf `kr4981-20260809-083308-4a3ff9be` endete nach `286,387 s`
 (Candidate ca. `232,5 s`) nach drei zehnsekündigen Amplifikationssamples mit
 Status `nonconvergence` und Wrapper-Exit `31`; kein Crash. Es gab `0/1274`
 ready/completed/committed Roots, HOL Root `0`, Wave `119`, keinen Epoch-Publish
@@ -277,8 +315,9 @@ local-stack-coordinate-Sites sind `0x8C098A82@0x8C098A8E`,
 
 Gegenüber dem vorherigen Lauf (`322,632 s`, Candidate `237,116 s`, Wave `39`,
 `272` Contexts, `549` Lanes, `630` physische, `894` logische, `226` stale
-Discards, Cache ca. `455,6 MB`) ist dies ein Durchsatzgewinn, aber kein
-Produktfortschritt: weiterhin `0` Publikationen und fortgesetzte Amplifikation.
+Discards, Cache ca. `455,6 MB`) sind die Rohwerte wegen des frueheren Endes
+nicht direkt vergleichbar. Eine materielle Produkt-/Performanceverbesserung ist
+nicht belegt: weiterhin `0` Publikationen und fortgesetzte Amplifikation.
 
 Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
 (Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Lanes, `984`
@@ -295,8 +334,10 @@ Discards, Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
 `game.exe`. Das `attempts=1024`-Gate war gegenüber `9baea88` bitgleich:
 `admission_success=999`, `projected_context_changed=0`,
 `projected_match_changed=0`. Die Gateänderung ist korrekt, aber kein
-Konvergenzhebel. Der offene P0 ist Inventory-Provenance-Live-in/Spill-through
-(unter anderem r12/SavedEpoch), nicht SavedEpoch-Pending und nicht Budgetarbeit.
+Konvergenzhebel. Historisch wurde dabei Inventory-Provenance-Live-in/
+Spill-through als P0-Folgepunkt vermutet; der aktuelle P0 ist nun die fehlende
+Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollständigen
+Stackvertrag/Gate.
 
 Der D2048-Top-8-Befund war: `0x8C10D19C` sem `36` mit reg ordinary `94`
 (`mask B870`), reg metadata `4` (`mask 3860`) und state-memory Epoch-Topologie
@@ -406,8 +447,8 @@ Limitfreiheit, Coverage oder terminale Retention nicht entscheiden.
 
 Der aktuelle D2-Lauf ist abgeschlossen und erzeugte keine neue Testsuite,
 Matrix oder synthetischen Gatevertrag. Er zeigte bei bitgleicher relevanter
-Admission-/Stack-Diagnostik in den Vergleichsversuchen zwar hoeheren
-Durchsatz, aber weiterhin einen nicht konvergierenden semantischen
+Admission-/Stack-Diagnostik in den Vergleichsversuchen unterschiedliche Rohwerte,
+aber weiterhin einen nicht konvergierenden semantischen
 Stack-Zyklus. D2 belegt damit keinen positiven G2-Schedulerhebel; KR-4991
 bleibt inaktiv und KR-4981 ist nicht bestanden.
 
@@ -533,7 +574,9 @@ Reviewschwerpunkte:
 
 Die Produktwirkung bleibt nach dem beendeten fail-closed D9-Lauf und der
 globalen Produktabnahme offen; D9 erzeugte kein Portartefakt und keinen
-Produk­terfolg. KR-4994 ist source-seitig abgeschlossen; sein aktueller P0-Folgepunkt ist Inventory-Provenance-Live-in/Spill-through nach Sol-Review.
+Produk­terfolg. KR-4994 ist source-seitig abgeschlossen; der aktuelle P0 ist die
+fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollständigen
+Stackvertrag/Gate.
 
 ### KR-4994 - Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier [x]
 
@@ -702,7 +745,8 @@ D1/G1 bleibt historisch unentschieden. D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
-P0-Folgepunkt Inventory-Provenance-Live-in/Spill-through bleibt offen. KR-4981 bleibt
+Der aktuelle P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-
+Join-Closure beim vollständigen Stackvertrag/Gate. KR-4981 bleibt
 das globale Produktgate und ist nicht bestanden.
 Keine neue Testmatrix ersetzt reale Produktgates.
 

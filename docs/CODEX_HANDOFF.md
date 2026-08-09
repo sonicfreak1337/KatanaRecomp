@@ -288,8 +288,8 @@ Testmatrix.
 ## Aktueller P0-Handoff
 
 Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-Pfad
-ist `49cee39a93df1fae28a97d955a2d742132409dd1`; Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 26, lokales In-Process-Evaluation-Cache-Schema 13.
+ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`; Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 27, lokales In-Process-Evaluation-Cache-Schema 13.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -370,8 +370,10 @@ snapshot discards, `518.425.788 B` Cache-Payload, `3.964` physische
 Auswertungen gesamt und `0/0` publizierte/verwarfene Epochen. Context-/
 Evaluation-/Composite-Budgets blieben unverbraucht; kein Portartefakt. Bei
 Attempts `1024`, `2048` und `4096` blieb die relevante
-Admission-/Stack-Diagnostik bitgenau gleich; der Durchsatz stieg, der
-Inventory-Provenance-Live-in/Spill-through bleibt offen. KR-4981 ist nicht bestanden.
+Admission-/Stack-Diagnostik bitgenau gleich; die Rohwerte sind wegen der
+unterschiedlichen Endpunkte nicht direkt vergleichbar und belegen keine
+materielle Produkt-/Performanceverbesserung. Inventory-Provenance-Live-in/
+Spill-through ist ein historischer Befund; KR-4981 ist nicht bestanden.
 
 Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
 zum kanonischen absorbierenden Top mit leerem endlichem Praefix. Merge,
@@ -420,15 +422,31 @@ beseitigt. Der naechste Root-Analysepunkt ist die gemeinsame Ordinary-/
 Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache,
 nicht ein weiterer SavedEpoch-Pending-Patch; KR-4981 bleibt fail-closed offen.
 
-Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
-Er erlaubt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion,
+Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Er erlaubt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion;
+die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
+Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top fail-closed in allen Truncation-/Publication-
 Checks und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich vom
 semantischen Evaluation-Limit. Der echte Evaluation-Cap belastet nur den
-Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `26` und lokales
+Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
 In-Process-Evaluation-Cache-Schema `13` sind aktiv.
 
-Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+`275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
+Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
+`970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
+Input-Widening `536`, Summary `22`, Forward `123`, stale Requeues `272`,
+stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
+Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
+`taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
+den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
+`0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der aktuelle P0 ist
+die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
+vollstaendigen Stackvertrag/Gate.
+
+Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
 `286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31`: `0/1274`
 Roots, Wave `119`, keine Publikation, `280` Contexts, `972` Lanes, `2.011`
 physische, `2.814` logische, `203` Cache-Reuses, `2.790` Subscriber,
@@ -457,7 +475,8 @@ D9 beendet fail-closed; kein Portartefakt und kein Produkterfolg
 ```
 
 KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen;
-der aktuelle P0-Folgepunkt Inventory-Provenance-Live-in/Spill-through bleibt offen.
+der aktuelle P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-
+Closure beim vollstaendigen Stackvertrag/Gate.
 Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
 sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
@@ -470,7 +489,8 @@ nicht zu diesem Dokumentationspass.
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
 Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; das
 Analyzer-ABI-Finding ist geschlossen; der aktuelle Analyzer-ABI ist `34`. KR-4994 ist source-seitig
-abgeschlossen, aber Inventory-Provenance-Live-in/Spill-through bleibt offen. Es gibt kein
+abgeschlossen, aber die autoritative Hybrid-Join-Closure ist beim vollstaendigen
+Stackvertrag/Gate noch nicht wirksam. Es gibt kein
 bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.
 
 ## Abschlusscheck vor dem Push

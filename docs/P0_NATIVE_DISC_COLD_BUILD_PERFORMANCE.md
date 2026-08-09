@@ -1,8 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Der funktionale
-Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`;
-Analyzer-ABI 34, Function-Analysis-Epoch-Schema 26,
+Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`;
+Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
@@ -11,8 +11,9 @@ Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
 exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4993 und
-KR-4994 ist source-seitig abgeschlossen; der aktuelle P0-Folgepunkt ist
-Inventory-Provenance-Live-in/Spill-through. Der aktuelle D-Lauf bestand das
+KR-4994 ist source-seitig abgeschlossen; der aktuelle P0 ist die fehlende
+Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
+Stackvertrag/Gate. Der aktuelle D-Lauf bestand das
 globale KR-4981-Produktgate nicht. Ein weiterer Lauf ist nicht automatisch
 freigegeben. KR-4992 bleibt ein bedingter Folgezweig nach einem verfehlten
 Produktzeitgate.
@@ -43,8 +44,10 @@ Widening-, `29` Summary- und `733` stale-Dependency-Requeues, `1.359` stale
 snapshot discards, `518.425.788 B` Cache-Payload, `3.964` physische
 Auswertungen gesamt und `0/0` publizierte/verwarfene Epochen. Kein
 Portartefakt. Die relevante Admission-/Stack-Diagnostik war bei Attempts
-`1024`, `2048` und `4096` bitgenau unveraendert; der Durchsatz stieg, der
-Inventory-Provenance-Live-in/Spill-through bleibt offen.
+`1024`, `2048` und `4096` bitgenau unveraendert. Die Rohwerte sind wegen der
+unterschiedlichen Endpunkte nicht direkt vergleichbar und belegen keine
+materielle Produkt-/Performanceverbesserung. Dies ist ein historischer
+Inventory-Provenance-Live-in/Spill-through-Befund, nicht der aktuelle P0.
 
 ## Repositoryweiter Arbeitsvertrag
 
@@ -267,7 +270,8 @@ D1/G1 bleibt historisch unentschieden, D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
-P0-Folgepunkt Inventory-Provenance-Live-in/Spill-through bleibt offen. KR-4981 bleibt das
+P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
+vollstaendigen Stackvertrag/Gate. KR-4981 bleibt das
 globale Produktgate und ist nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.
 
@@ -323,15 +327,33 @@ Blocker ist beseitigt; die gemeinsame Ordinary-/Registermetadaten-/Alias- und
 MemoryEpoch-Lifecycle-Ursache bleibt der naechste Analysepunkt. KR-4981 bleibt
 fail-closed offen.
 
-Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1` und
-der aktuelle ABI-passende Stand: strukturelle Contextual-Hybrid-Projektion
+Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735` und
+der aktuelle ABI-passende Stand: strukturelle Contextual-Hybrid-Projektion;
+die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
+Edges erneut vollstaendig.
 mit retained sticky loss, fail-closed SavedEpoch-Slot-Pending-Top in allen
 Truncation-/Publication-Checks und öffentlich getrennte Provenance-Replay-
 Capsule-/Keybyte-Limits neben dem semantischen Evaluation-Limit. Ein echter
 Evaluation-Cap belastet nur den Evaluation-Zähler; Analyzer-ABI `34`,
-Epoch-Schema `26` und lokales In-Process-Evaluation-Cache-Schema `13` sind aktiv.
+Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-Schema `13` sind aktiv;
+der bestätigte Incremental-Build endete mit Exit `0` nach ca. `48 s`, die EXE
+trug LastWriteTime `09.08.2026 09:08:11 +02:00`.
 
-Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+`275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
+Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
+`970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
+Input-Widening `536`, Summary `22`, Forward `123`, stale Requeues `272`,
+stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
+Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
+`taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
+den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
+`0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der aktuelle P0 ist
+die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
+vollstaendigen Stackvertrag/Gate.
+
+Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
 `286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31`: `0/1274`
 Roots, Wave `119`, keine Publikation, `280` Contexts, `972` Lanes, `2.011`
 physische, `2.814` logische, `203` Cache-Reuses, `2.790` Subscriber,
@@ -339,7 +361,7 @@ Provenienz `169.824`, stale Discards `922`, Frontier `43` (max `250`), Cache
 `610.295.241 B`; kein `game.exe`. Admission `1024/1024`, projected context/
 match jeweils `0`; P0 sind Ordinary-Stack und lokale Stackkoordinaten.
 
-Der Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` bei Wave
+Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` bei Wave
 `60`, `0/1194` Roots, `758` Lanes, `984` physischen und `1.398` logischen
 Auswertungen, `248` Input-, `102` stale-Requeues und `347` Discards; Peak Root
 `1.606.066.176 B`, Peak Job `1.814.822.912 B`, kein Portartefakt.
@@ -348,8 +370,10 @@ Der Vergleichslauf `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` bei
 `894` logischen Auswertungen; `181` Input-, `10` Summary-, `76` stale-
 Requeues, `226` Discards, Provenienz `31.713`, kein `game.exe`. Das
 `attempts=1024`-Gate blieb gegenüber `9baea88` bitgleich; die Gateänderung ist
-korrekt, aber kein Konvergenzhebel. Der offene P0 ist Inventory-Provenance-
-Live-in/Spill-through (r12/SavedEpoch), nicht SavedEpoch-Pending oder Budgetarbeit.
+korrekt, aber kein Konvergenzhebel. Historisch wurde Inventory-Provenance-
+Live-in/Spill-through als P0-Folgepunkt vermutet; der aktuelle P0 ist die
+fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollständigen
+Stackvertrag/Gate.
 
 ## Produktmessvertrag KR-4981
 
