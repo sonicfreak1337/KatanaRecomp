@@ -37551,6 +37551,75 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             constexpr auto contextual_tail_payload_domain_count =
                 static_cast<std::size_t>(
                     ContextualTailPayloadDomain::Count);
+            // This is deliberately a local, evidence-free diagnostic mirror of
+            // same_abstract_value_without_evidence().  It must never become a
+            // second semantic representation: the only purpose is to explain
+            // a genuinely changed contextual lane without making per-change
+            // allocations or changing its admission/merge behaviour.
+            enum class ContextualValueDeltaDomain : std::uint8_t {
+                Ordinary,
+                DirectCodeFinite,
+                DirectCodeTop,
+                DirectPcFinite,
+                DirectPcTop,
+                ContextualCandidateDependency,
+                CallbackLoss,
+                SavedEpochTopology,
+                SavedEpochCode,
+                SavedEpochPc,
+                SavedEpochPendingAbiScalar,
+                SavedEpochTop,
+                SavedEpochContextualCandidateDependency,
+                Count,
+            };
+            constexpr auto contextual_value_delta_domain_count =
+                static_cast<std::size_t>(
+                    ContextualValueDeltaDomain::Count);
+            enum class ContextualCarrierDeltaDomain : std::uint8_t {
+                Code,
+                Pc,
+                PendingAbiScalar,
+                Top,
+                ContextualCandidateDependency,
+                Count,
+            };
+            constexpr auto contextual_carrier_delta_domain_count =
+                static_cast<std::size_t>(
+                    ContextualCarrierDeltaDomain::Count);
+            struct ContextualValueDeltaCounters final {
+                std::array<std::uint64_t,
+                           contextual_value_delta_domain_count>
+                    domains{};
+            };
+            struct ContextualValueDelta final {
+                std::array<bool, contextual_value_delta_domain_count>
+                    domains{};
+
+                [[nodiscard]] bool any() const noexcept {
+                    return std::any_of(
+                        domains.begin(), domains.end(),
+                        [](const bool value) { return value; });
+                }
+            };
+            struct ContextualCarrierDeltaCounters final {
+                std::array<std::uint64_t,
+                           contextual_carrier_delta_domain_count>
+                    domains{};
+            };
+            struct ContextualCarrierDelta final {
+                std::array<bool, contextual_carrier_delta_domain_count>
+                    domains{};
+
+                [[nodiscard]] bool any() const noexcept {
+                    return std::any_of(
+                        domains.begin(), domains.end(),
+                        [](const bool value) { return value; });
+                }
+            };
+            struct ContextualSavedEpochDeltaCounters final {
+                std::uint64_t topology = 0u;
+                ContextualCarrierDeltaCounters payload;
+            };
             constexpr auto abi_stack_read_top_reason_count =
                 static_cast<std::size_t>(
                     AbiStackReadTopReason::FixpointSlotBudget) +
@@ -37558,8 +37627,33 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             struct ContextualStackWideningHotCallee final {
                 std::uint32_t function_entry = 0u;
                 std::uint64_t count = 0u;
+                std::uint64_t semantic_changes = 0u;
                 std::uint64_t maximum_stack_values = 0u;
                 std::uint64_t current_stack_values = 0u;
+                ContextualValueDeltaCounters register_values;
+                std::array<std::uint16_t,
+                           contextual_value_delta_domain_count>
+                    register_masks{};
+                std::uint64_t stack_key_topology = 0u;
+                ContextualValueDeltaCounters stack_values;
+                std::uint64_t stack_tail_topology = 0u;
+                ContextualValueDeltaCounters stack_tail;
+                std::uint64_t memory_key_topology = 0u;
+                ContextualValueDeltaCounters memory_values;
+                std::uint64_t register_metadata = 0u;
+                std::uint16_t register_metadata_mask = 0u;
+                std::uint64_t memory_write_metadata = 0u;
+                std::uint64_t alias_watcher_loss_flags = 0u;
+                ContextualCarrierDeltaCounters statewide_stack_carrier;
+                ContextualCarrierDeltaCounters statewide_memory_carrier;
+                ContextualSavedEpochDeltaCounters statewide_stack_epoch;
+                ContextualSavedEpochDeltaCounters statewide_memory_epoch;
+                std::uint64_t uncategorized = 0u;
+                bool stack_read_contract_complete = true;
+                bool has_stack_read_top_chain = false;
+                AbiStackReadTopFrame first_stack_read_top{};
+                AbiStackReadTopFrame terminal_stack_read_top{};
+                bool stack_read_top_chain_truncated = false;
             };
             struct ContextualReadAdmissionDiagnostics final {
                 std::uint64_t attempts = 0u;
@@ -38488,19 +38582,560 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             contextual_read_admission_diagnostics
                                 .stack_top_chain_truncated);
                 };
-            const auto record_contextual_stack_hot_callee =
-                [&](const std::uint32_t callee,
-                    const std::uint64_t current_stack_values) {
+            const auto contextual_value_delta_index =
+                [](const ContextualValueDeltaDomain domain) {
+                    return static_cast<std::size_t>(domain);
+                };
+            const auto contextual_carrier_delta_index =
+                [](const ContextualCarrierDeltaDomain domain) {
+                    return static_cast<std::size_t>(domain);
+                };
+            const auto add_contextual_value_delta =
+                [&](ContextualValueDeltaCounters& destination,
+                    const ContextualValueDelta& delta) {
+                    for (std::size_t index = 0u;
+                         index < delta.domains.size();
+                         ++index) {
+                        if (delta.domains[index])
+                            saturating_increment(destination.domains[index]);
+                    }
+                };
+            const auto add_contextual_carrier_delta =
+                [&](ContextualCarrierDeltaCounters& destination,
+                    const ContextualCarrierDelta& delta) {
+                    for (std::size_t index = 0u;
+                         index < delta.domains.size();
+                         ++index) {
+                        if (delta.domains[index])
+                            saturating_increment(destination.domains[index]);
+                    }
+                };
+            const auto classify_contextual_carrier_delta =
+                [&](const InventoryCandidateCarrier& before,
+                    const InventoryCandidateCarrier& after) {
+                    ContextualCarrierDelta result;
+                    const auto note_candidate_domain =
+                        [&](const auto& before_values,
+                            const bool before_truncated,
+                            const auto& after_values,
+                            const bool after_truncated,
+                            const ContextualCarrierDeltaDomain finite_domain) {
+                            if (same_inventory_candidate_domain(
+                                    before_values,
+                                    before_truncated,
+                                    after_values,
+                                    after_truncated))
+                                return;
+                            result.domains[contextual_carrier_delta_index(
+                                before_truncated != after_truncated
+                                    ? ContextualCarrierDeltaDomain::Top
+                                    : finite_domain)] = true;
+                        };
+                    note_candidate_domain(
+                        before.inventory_code_pointer_values,
+                        before.inventory_code_pointer_values_truncated,
+                        after.inventory_code_pointer_values,
+                        after.inventory_code_pointer_values_truncated,
+                        ContextualCarrierDeltaDomain::Code);
+                    note_candidate_domain(
+                        before.inventory_pc_relative_code_literal_values,
+                        before.inventory_pc_relative_code_literal_values_truncated,
+                        after.inventory_pc_relative_code_literal_values,
+                        after.inventory_pc_relative_code_literal_values_truncated,
+                        ContextualCarrierDeltaDomain::Pc);
+                    note_candidate_domain(
+                        before.pending_abi_scalar_values,
+                        before.pending_abi_scalar_values_truncated,
+                        after.pending_abi_scalar_values,
+                        after.pending_abi_scalar_values_truncated,
+                        ContextualCarrierDeltaDomain::PendingAbiScalar);
+                    if (before.contextual_candidate_dependency !=
+                        after.contextual_candidate_dependency)
+                        result.domains[contextual_carrier_delta_index(
+                            ContextualCarrierDeltaDomain::
+                                ContextualCandidateDependency)] = true;
+                    return result;
+                };
+            const auto classify_contextual_saved_epoch_delta =
+                [&](const InventorySavedStackEpoch& before,
+                    const InventorySavedStackEpoch& after,
+                    ContextualValueDelta& result,
+                    auto&& self) -> void {
+                    const auto note = [&](const ContextualValueDeltaDomain domain) {
+                        result.domains[contextual_value_delta_index(domain)] =
+                            true;
+                    };
+                    if (before.present != after.present ||
+                        before.unresolved != after.unresolved ||
+                        before.tracks_current_epoch !=
+                            after.tracks_current_epoch ||
+                        before.candidate_payload_lost !=
+                            after.candidate_payload_lost ||
+                        before.nested_saved_stack_alias_latent !=
+                            after.nested_saved_stack_alias_latent ||
+                        before.nested_saved_stack_alias_tracks_current_epoch !=
+                            after
+                                .nested_saved_stack_alias_tracks_current_epoch ||
+                        before.slots.size() != after.slots.size() ||
+                        before.unresolved_nested_epochs.size() !=
+                            after.unresolved_nested_epochs.size())
+                        note(ContextualValueDeltaDomain::SavedEpochTopology);
+                    if (before.candidate_payload_lost !=
+                        after.candidate_payload_lost)
+                        note(ContextualValueDeltaDomain::SavedEpochTop);
+                    const auto note_candidate_domain =
+                        [&](const auto& before_values,
+                            const bool before_truncated,
+                            const auto& after_values,
+                            const bool after_truncated,
+                            const ContextualValueDeltaDomain finite_domain) {
+                            if (same_inventory_candidate_domain(
+                                    before_values,
+                                    before_truncated,
+                                    after_values,
+                                    after_truncated))
+                                return;
+                            note(before_truncated != after_truncated
+                                     ? ContextualValueDeltaDomain::
+                                           SavedEpochTop
+                                     : finite_domain);
+                        };
+                    const auto note_carrier =
+                        [&](const InventoryCandidateCarrier& left,
+                            const InventoryCandidateCarrier& right) {
+                            note_candidate_domain(
+                                left.inventory_code_pointer_values,
+                                left.inventory_code_pointer_values_truncated,
+                                right.inventory_code_pointer_values,
+                                right.inventory_code_pointer_values_truncated,
+                                ContextualValueDeltaDomain::SavedEpochCode);
+                            note_candidate_domain(
+                                left.inventory_pc_relative_code_literal_values,
+                                left
+                                    .inventory_pc_relative_code_literal_values_truncated,
+                                right.inventory_pc_relative_code_literal_values,
+                                right
+                                    .inventory_pc_relative_code_literal_values_truncated,
+                                ContextualValueDeltaDomain::SavedEpochPc);
+                            note_candidate_domain(
+                                left.pending_abi_scalar_values,
+                                left.pending_abi_scalar_values_truncated,
+                                right.pending_abi_scalar_values,
+                                right.pending_abi_scalar_values_truncated,
+                                ContextualValueDeltaDomain::
+                                    SavedEpochPendingAbiScalar);
+                            if (left.contextual_candidate_dependency !=
+                                right.contextual_candidate_dependency)
+                                note(ContextualValueDeltaDomain::
+                                         SavedEpochContextualCandidateDependency);
+                        };
+                    note_carrier(before.unresolved_candidate_carrier,
+                                 after.unresolved_candidate_carrier);
+                    const InventorySavedStackSlot empty_slot;
+                    const auto maximum_slots = std::max(
+                        before.slots.size(), after.slots.size());
+                    for (std::size_t index = 0u; index < maximum_slots;
+                         ++index) {
+                        const auto& left = index < before.slots.size()
+                                               ? before.slots[index]
+                                               : empty_slot;
+                        const auto& right = index < after.slots.size()
+                                                ? after.slots[index]
+                                                : empty_slot;
+                        if (left.relative_slot != right.relative_slot)
+                            note(ContextualValueDeltaDomain::
+                                     SavedEpochTopology);
+                        note_candidate_domain(
+                            left.inventory_code_pointer_values,
+                            left.inventory_code_pointer_values_truncated,
+                            right.inventory_code_pointer_values,
+                            right.inventory_code_pointer_values_truncated,
+                            ContextualValueDeltaDomain::SavedEpochCode);
+                        note_candidate_domain(
+                            left.inventory_pc_relative_code_literal_values,
+                            left
+                                .inventory_pc_relative_code_literal_values_truncated,
+                            right.inventory_pc_relative_code_literal_values,
+                            right
+                                .inventory_pc_relative_code_literal_values_truncated,
+                            ContextualValueDeltaDomain::SavedEpochPc);
+                        if (left.contextual_candidate_dependency !=
+                            right.contextual_candidate_dependency)
+                            note(ContextualValueDeltaDomain::
+                                     SavedEpochContextualCandidateDependency);
+                        const auto nested_count = std::max(
+                            left.nested_epochs.size(), right.nested_epochs.size());
+                        const InventorySavedStackEpoch empty_epoch;
+                        for (std::size_t nested = 0u; nested < nested_count;
+                             ++nested) {
+                            self(nested < left.nested_epochs.size()
+                                     ? left.nested_epochs[nested]
+                                     : empty_epoch,
+                                 nested < right.nested_epochs.size()
+                                     ? right.nested_epochs[nested]
+                                     : empty_epoch,
+                                 result,
+                                 self);
+                        }
+                    }
+                    const auto unresolved_nested_count = std::max(
+                        before.unresolved_nested_epochs.size(),
+                        after.unresolved_nested_epochs.size());
+                    const InventorySavedStackEpoch empty_epoch;
+                    for (std::size_t index = 0u;
+                         index < unresolved_nested_count;
+                         ++index) {
+                        self(index < before.unresolved_nested_epochs.size()
+                                 ? before.unresolved_nested_epochs[index]
+                                 : empty_epoch,
+                             index < after.unresolved_nested_epochs.size()
+                                 ? after.unresolved_nested_epochs[index]
+                                 : empty_epoch,
+                             result,
+                             self);
+                    }
+                };
+            const auto classify_contextual_value_delta =
+                [&](const AbstractValue& before, const AbstractValue& after) {
+                    ContextualValueDelta result;
+                    const auto note = [&](const ContextualValueDeltaDomain domain) {
+                        result.domains[contextual_value_delta_index(domain)] =
+                            true;
+                    };
+                    if (before.known != after.known ||
+                        before.guarded != after.guarded ||
+                        before.complete != after.complete ||
+                        before.inventory_stack_derived !=
+                            after.inventory_stack_derived ||
+                        before.values != after.values)
+                        note(ContextualValueDeltaDomain::Ordinary);
+                    const auto note_direct_candidate_domain =
+                        [&](const auto& before_values,
+                            const bool before_truncated,
+                            const bool before_marker,
+                            const auto& after_values,
+                            const bool after_truncated,
+                            const bool after_marker,
+                            const ContextualValueDeltaDomain finite_domain,
+                            const ContextualValueDeltaDomain top_domain) {
+                            if ((before_truncated ? false : before_marker) ==
+                                    (after_truncated ? false : after_marker) &&
+                                same_inventory_candidate_domain(
+                                    before_values,
+                                    before_truncated,
+                                    after_values,
+                                    after_truncated))
+                                return;
+                            note(before_truncated != after_truncated
+                                     ? top_domain
+                                     : finite_domain);
+                        };
+                    note_direct_candidate_domain(
+                        before.inventory_code_pointer_values,
+                        before.inventory_code_pointer_values_truncated,
+                        before.inventory_code_pointer,
+                        after.inventory_code_pointer_values,
+                        after.inventory_code_pointer_values_truncated,
+                        after.inventory_code_pointer,
+                        ContextualValueDeltaDomain::DirectCodeFinite,
+                        ContextualValueDeltaDomain::DirectCodeTop);
+                    note_direct_candidate_domain(
+                        before.inventory_pc_relative_code_literal_values,
+                        before.inventory_pc_relative_code_literal_values_truncated,
+                        before.inventory_pc_relative_code_literal,
+                        after.inventory_pc_relative_code_literal_values,
+                        after.inventory_pc_relative_code_literal_values_truncated,
+                        after.inventory_pc_relative_code_literal,
+                        ContextualValueDeltaDomain::DirectPcFinite,
+                        ContextualValueDeltaDomain::DirectPcTop);
+                    if (before.contextual_candidate_dependency !=
+                        after.contextual_candidate_dependency)
+                        note(ContextualValueDeltaDomain::
+                                 ContextualCandidateDependency);
+                    if (before.inventory_stack_callback_loss_unresolved !=
+                        after.inventory_stack_callback_loss_unresolved)
+                        note(ContextualValueDeltaDomain::CallbackLoss);
+                    classify_contextual_saved_epoch_delta(
+                        before.inventory_saved_stack_epoch,
+                        after.inventory_saved_stack_epoch,
+                        result,
+                        classify_contextual_saved_epoch_delta);
+                    return result;
+                };
+            const auto contextual_stack_hot_callee =
+                [&](const std::uint32_t callee)
+                -> ContextualStackWideningHotCallee& {
                     auto [found, inserted] =
                         contextual_read_admission_diagnostics
                             .stack_hot_callees.try_emplace(callee);
                     auto& hot = found->second;
                     if (inserted) hot.function_entry = callee;
+                    return hot;
+                };
+            const auto record_contextual_stack_hot_read_chain =
+                [&](ContextualStackWideningHotCallee& hot,
+                    const AbiStackArgumentReadSet& reads) {
+                    hot.stack_read_contract_complete = reads.complete;
+                    hot.stack_read_top_chain_truncated =
+                        hot.stack_read_top_chain_truncated ||
+                        reads.top_chain_truncated;
+                    if (reads.top_chain.empty()) return;
+                    if (!hot.has_stack_read_top_chain) {
+                        hot.has_stack_read_top_chain = true;
+                        hot.first_stack_read_top = reads.top_chain.front();
+                    }
+                    // The terminal frame is most useful for the current
+                    // chain; retaining it avoids printing an unbounded chain
+                    // while still distinguishing a local incomplete callee
+                    // set from a transitive callee Top.
+                    hot.terminal_stack_read_top = reads.top_chain.back();
+                };
+            const auto record_contextual_stack_hot_callee =
+                [&](const std::uint32_t callee,
+                    const std::uint64_t current_stack_values,
+                    const AbiStackArgumentReadSet& reads) {
+                    auto& hot = contextual_stack_hot_callee(callee);
                     saturating_increment(hot.count);
                     hot.current_stack_values = current_stack_values;
                     hot.maximum_stack_values = std::max(
                         hot.maximum_stack_values,
                         current_stack_values);
+                    record_contextual_stack_hot_read_chain(hot, reads);
+                };
+            const auto record_contextual_semantic_delta =
+                [&](const std::uint32_t callee,
+                    const AbstractState& before,
+                    const AbstractState& after,
+                    const AbiStackArgumentReadSet& reads) {
+                    if (same_abstract_state_without_evidence(before, after))
+                        return;
+                    auto& hot = contextual_stack_hot_callee(callee);
+                    saturating_increment(hot.semantic_changes);
+                    record_contextual_stack_hot_read_chain(hot, reads);
+                    bool classified = false;
+                    const auto record_value =
+                        [&](ContextualValueDeltaCounters& counters,
+                            const AbstractValue& left,
+                            const AbstractValue& right,
+                            std::uint16_t* const register_mask,
+                            const std::uint16_t register_bit) {
+                            const auto delta =
+                                classify_contextual_value_delta(left, right);
+                            if (!delta.any()) return;
+                            classified = true;
+                            add_contextual_value_delta(counters, delta);
+                            if (register_mask != nullptr) {
+                                for (std::size_t index = 0u;
+                                     index < delta.domains.size();
+                                     ++index) {
+                                    if (delta.domains[index])
+                                        register_mask[index] |= register_bit;
+                                }
+                            }
+                        };
+                    for (std::size_t index = 0u;
+                         index < before.registers.size();
+                         ++index) {
+                        record_value(
+                            hot.register_values,
+                            before.registers[index],
+                            after.registers[index],
+                            hot.register_masks.data(),
+                            static_cast<std::uint16_t>(1u << index));
+                    }
+                    auto register_metadata_mask = std::uint16_t{0u};
+                    for (std::size_t index = 0u;
+                         index < before.registers.size();
+                         ++index) {
+                        if (before.stack_offsets[index] !=
+                                after.stack_offsets[index] ||
+                            before.inventory_stack_offsets[index] !=
+                                after.inventory_stack_offsets[index] ||
+                            before.inventory_stack_offset_candidates[index] !=
+                                after.inventory_stack_offset_candidates[index] ||
+                            before.stack_may_alias[index] !=
+                                after.stack_may_alias[index] ||
+                            before.inventory_stack_may_alias[index] !=
+                                after.inventory_stack_may_alias[index] ||
+                            before.inventory_vbr_relative[index] !=
+                                after.inventory_vbr_relative[index] ||
+                            before.inventory_fixed_storage_reference[index] !=
+                                after.inventory_fixed_storage_reference[index])
+                            register_metadata_mask |=
+                                static_cast<std::uint16_t>(1u << index);
+                    }
+                    if (register_metadata_mask != 0u) {
+                        classified = true;
+                        saturating_increment(hot.register_metadata);
+                        hot.register_metadata_mask |= register_metadata_mask;
+                    }
+                    if (before.memory_write_unknown !=
+                            after.memory_write_unknown ||
+                        before.memory_write_ranges != after.memory_write_ranges ||
+                        before.memory_definitely_written_ranges !=
+                            after.memory_definitely_written_ranges) {
+                        classified = true;
+                        saturating_increment(hot.memory_write_metadata);
+                    }
+                    if (before.inventory_unresolved_saved_stack_alias_sources !=
+                            after.inventory_unresolved_saved_stack_alias_sources ||
+                        before.inventory_unresolved_saved_stack_alias_tracks_current_sources !=
+                            after.inventory_unresolved_saved_stack_alias_tracks_current_sources ||
+                        before.inventory_current_stack_epoch_alias_watcher !=
+                            after.inventory_current_stack_epoch_alias_watcher ||
+                        before.inventory_detached_stack_epoch_alias_watcher !=
+                            after.inventory_detached_stack_epoch_alias_watcher ||
+                        before.inventory_unresolved_stack_callback_loss !=
+                            after.inventory_unresolved_stack_callback_loss ||
+                        before.inventory_unresolved_memory_callback_loss !=
+                            after.inventory_unresolved_memory_callback_loss ||
+                        before.inventory_callback_loss_identity_truncated_sources !=
+                            after.inventory_callback_loss_identity_truncated_sources) {
+                        classified = true;
+                        saturating_increment(hot.alias_watcher_loss_flags);
+                    }
+                    const auto record_carrier =
+                        [&](ContextualCarrierDeltaCounters& counters,
+                            const InventoryCandidateCarrier& left,
+                            const InventoryCandidateCarrier& right) {
+                            const auto delta =
+                                classify_contextual_carrier_delta(left, right);
+                            if (!delta.any()) return;
+                            classified = true;
+                            add_contextual_carrier_delta(counters, delta);
+                        };
+                    record_carrier(hot.statewide_stack_carrier,
+                                   before.inventory_unresolved_stack_carrier,
+                                   after.inventory_unresolved_stack_carrier);
+                    record_carrier(hot.statewide_memory_carrier,
+                                   before.inventory_unresolved_memory_carrier,
+                                   after.inventory_unresolved_memory_carrier);
+                    const auto record_epoch =
+                        [&](ContextualSavedEpochDeltaCounters& counters,
+                            const InventorySavedStackEpoch& left,
+                            const InventorySavedStackEpoch& right) {
+                            ContextualValueDelta delta;
+                            classify_contextual_saved_epoch_delta(
+                                left,
+                                right,
+                                delta,
+                                classify_contextual_saved_epoch_delta);
+                            if (!delta.any()) return;
+                            classified = true;
+                            if (delta.domains[contextual_value_delta_index(
+                                    ContextualValueDeltaDomain::
+                                        SavedEpochTopology)])
+                                saturating_increment(counters.topology);
+                            const auto transfer =
+                                [&](const ContextualValueDeltaDomain source,
+                                    const ContextualCarrierDeltaDomain destination) {
+                                    if (delta.domains[
+                                            contextual_value_delta_index(source)])
+                                        saturating_increment(
+                                            counters.payload.domains[
+                                                contextual_carrier_delta_index(
+                                                    destination)]);
+                                };
+                            transfer(ContextualValueDeltaDomain::SavedEpochCode,
+                                     ContextualCarrierDeltaDomain::Code);
+                            transfer(ContextualValueDeltaDomain::SavedEpochPc,
+                                     ContextualCarrierDeltaDomain::Pc);
+                            transfer(ContextualValueDeltaDomain::
+                                         SavedEpochPendingAbiScalar,
+                                     ContextualCarrierDeltaDomain::
+                                         PendingAbiScalar);
+                            transfer(ContextualValueDeltaDomain::SavedEpochTop,
+                                     ContextualCarrierDeltaDomain::Top);
+                            transfer(ContextualValueDeltaDomain::
+                                         SavedEpochContextualCandidateDependency,
+                                     ContextualCarrierDeltaDomain::
+                                         ContextualCandidateDependency);
+                        };
+                    record_epoch(hot.statewide_stack_epoch,
+                                 before.inventory_unresolved_stack_epoch,
+                                 after.inventory_unresolved_stack_epoch);
+                    record_epoch(hot.statewide_memory_epoch,
+                                 before.inventory_unresolved_memory_epoch,
+                                 after.inventory_unresolved_memory_epoch);
+                    const auto record_map =
+                        [&](const auto& left,
+                            const auto& right,
+                            std::uint64_t& topology,
+                            ContextualValueDeltaCounters& counters) {
+                            const AbstractValue absent_value;
+                            auto left_value = left.begin();
+                            auto right_value = right.begin();
+                            bool topology_changed = false;
+                            while (left_value != left.end() ||
+                                   right_value != right.end()) {
+                                const AbstractValue* before_value =
+                                    &absent_value;
+                                const AbstractValue* after_value =
+                                    &absent_value;
+                                if (right_value == right.end() ||
+                                    (left_value != left.end() &&
+                                     left_value->first < right_value->first)) {
+                                    topology_changed = true;
+                                    before_value = &left_value->second;
+                                    ++left_value;
+                                } else if (left_value == left.end() ||
+                                           right_value->first <
+                                               left_value->first) {
+                                    topology_changed = true;
+                                    after_value = &right_value->second;
+                                    ++right_value;
+                                } else {
+                                    before_value = &left_value->second;
+                                    after_value = &right_value->second;
+                                    ++left_value;
+                                    ++right_value;
+                                }
+                                record_value(
+                                    counters,
+                                    *before_value,
+                                    *after_value,
+                                    nullptr,
+                                    0u);
+                            }
+                            if (topology_changed) {
+                                classified = true;
+                                saturating_increment(topology);
+                            }
+                        };
+                    record_map(before.stack_values,
+                               after.stack_values,
+                               hot.stack_key_topology,
+                               hot.stack_values);
+                    const auto tail_topology_changed =
+                        before.stack_tail.present != after.stack_tail.present ||
+                        (before.stack_tail.present &&
+                         before.stack_tail.lower_bound !=
+                             after.stack_tail.lower_bound);
+                    if (tail_topology_changed) {
+                        classified = true;
+                        saturating_increment(hot.stack_tail_topology);
+                    }
+                    const AbstractValue absent_value;
+                    record_value(
+                        hot.stack_tail,
+                        before.stack_tail.present
+                            ? before.stack_tail.payload
+                            : absent_value,
+                        after.stack_tail.present
+                            ? after.stack_tail.payload
+                            : absent_value,
+                        nullptr,
+                        0u);
+                    record_map(before.memory_values,
+                               after.memory_values,
+                               hot.memory_key_topology,
+                               hot.memory_values);
+                    // same_abstract_state_without_evidence() is the source of
+                    // truth.  This bounded fallback makes a future comparator
+                    // field addition immediately visible in the next opt-in
+                    // sample rather than silently misclassifying it.
+                    if (!classified)
+                        saturating_increment(hot.uncategorized);
                 };
             const auto emit_contextual_read_admission_diagnostic = [&] {
                 const auto failure_count =
@@ -38717,8 +39352,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      diagnostics.stack_hot_callees) {
                     std::size_t position = 0u;
                     while (position < hottest_callees.size() &&
-                           (hottest_callees[position].count > hot.count ||
-                            (hottest_callees[position].count == hot.count &&
+                           (hottest_callees[position].semantic_changes >
+                                hot.semantic_changes ||
+                            (hottest_callees[position].semantic_changes ==
+                                 hot.semantic_changes &&
                              hottest_callees[position].function_entry <=
                                  function_entry)))
                         ++position;
@@ -38733,23 +39370,234 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      index < hottest_callees.size();
                      ++index) {
                     const auto& hot = hottest_callees[index];
-                    if (hot.count == 0u) break;
+                    if (hot.semantic_changes == 0u) break;
                     static_cast<void>(std::fprintf(
                         stderr,
                         " stack_hot_%zu_entry=0x%08X "
                         "stack_hot_%zu_count=%llu "
+                        "stack_hot_%zu_semantic_changes=%llu "
                         "stack_hot_%zu_max_stack_values=%llu "
-                        "stack_hot_%zu_current_stack_values=%llu",
+                        "stack_hot_%zu_current_stack_values=%llu "
+                        "stack_hot_%zu_uncategorized=%llu "
+                        "stack_hot_%zu_register_metadata=%llu "
+                        "stack_hot_%zu_register_metadata_mask=0x%04X "
+                        "stack_hot_%zu_memory_write_metadata=%llu "
+                        "stack_hot_%zu_alias_watcher_loss_flags=%llu "
+                        "stack_hot_%zu_stack_key_topology=%llu "
+                        "stack_hot_%zu_tail_topology=%llu "
+                        "stack_hot_%zu_memory_key_topology=%llu",
                         index,
                         hot.function_entry,
                         index,
                         static_cast<unsigned long long>(hot.count),
                         index,
                         static_cast<unsigned long long>(
+                            hot.semantic_changes),
+                        index,
+                        static_cast<unsigned long long>(
                             hot.maximum_stack_values),
                         index,
                         static_cast<unsigned long long>(
-                            hot.current_stack_values)));
+                            hot.current_stack_values),
+                        index,
+                        static_cast<unsigned long long>(hot.uncategorized),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.register_metadata),
+                        index,
+                        static_cast<unsigned int>(hot.register_metadata_mask),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.memory_write_metadata),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.alias_watcher_loss_flags),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.stack_key_topology),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.stack_tail_topology),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.memory_key_topology)));
+                    static constexpr std::array<
+                        const char*, contextual_value_delta_domain_count>
+                        value_delta_domain_names{
+                            "ordinary",
+                            "code_finite",
+                            "code_top",
+                            "pc_finite",
+                            "pc_top",
+                            "contextual",
+                            "callback_loss",
+                            "epoch_topology",
+                            "epoch_code",
+                            "epoch_pc",
+                            "epoch_pending",
+                            "epoch_top",
+                            "epoch_contextual"};
+                    for (std::size_t domain = 0u;
+                         domain < contextual_value_delta_domain_count;
+                         ++domain) {
+                        static_cast<void>(std::fprintf(
+                            stderr,
+                            " stack_hot_%zu_reg_%s=%llu "
+                            "stack_hot_%zu_reg_mask_%s=0x%04X "
+                            "stack_hot_%zu_stack_%s=%llu "
+                            "stack_hot_%zu_tail_%s=%llu "
+                            "stack_hot_%zu_memory_%s=%llu",
+                            index,
+                            value_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.register_values.domains[domain]),
+                            index,
+                            value_delta_domain_names[domain],
+                            static_cast<unsigned int>(
+                                hot.register_masks[domain]),
+                            index,
+                            value_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.stack_values.domains[domain]),
+                            index,
+                            value_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.stack_tail.domains[domain]),
+                            index,
+                            value_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.memory_values.domains[domain])));
+                    }
+                    static constexpr std::array<
+                        const char*, contextual_carrier_delta_domain_count>
+                        carrier_delta_domain_names{
+                            "code",
+                            "pc",
+                            "pending",
+                            "top",
+                            "contextual"};
+                    for (std::size_t domain = 0u;
+                         domain < contextual_carrier_delta_domain_count;
+                         ++domain) {
+                        static_cast<void>(std::fprintf(
+                            stderr,
+                            " stack_hot_%zu_state_stack_carrier_%s=%llu "
+                            "stack_hot_%zu_state_memory_carrier_%s=%llu "
+                            "stack_hot_%zu_state_stack_epoch_%s=%llu "
+                            "stack_hot_%zu_state_memory_epoch_%s=%llu",
+                            index,
+                            carrier_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.statewide_stack_carrier.domains[domain]),
+                            index,
+                            carrier_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.statewide_memory_carrier.domains[domain]),
+                            index,
+                            carrier_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.statewide_stack_epoch.payload
+                                    .domains[domain]),
+                            index,
+                            carrier_delta_domain_names[domain],
+                            static_cast<unsigned long long>(
+                                hot.statewide_memory_epoch.payload
+                                    .domains[domain])));
+                    }
+                    static_cast<void>(std::fprintf(
+                        stderr,
+                        " stack_hot_%zu_state_stack_epoch_topology=%llu "
+                        "stack_hot_%zu_state_memory_epoch_topology=%llu "
+                        "stack_hot_%zu_stack_read_complete=%u "
+                        "stack_hot_%zu_top_chain_present=%u "
+                        "stack_hot_%zu_top_chain_truncated=%u "
+                        "stack_hot_%zu_top_first_reason=%s "
+                        "stack_hot_%zu_top_first_owner=0x%08X "
+                        "stack_hot_%zu_top_first_site=0x%08X "
+                        "stack_hot_%zu_top_first_target=0x%08X "
+                        "stack_hot_%zu_top_first_contract_present=%u "
+                        "stack_hot_%zu_top_first_contract_complete=%u "
+                        "stack_hot_%zu_top_first_ingress_present=%u "
+                        "stack_hot_%zu_top_first_ingress_guarded=%u "
+                        "stack_hot_%zu_top_first_ingress_complete=%u "
+                        "stack_hot_%zu_top_terminal_reason=%s "
+                        "stack_hot_%zu_top_terminal_owner=0x%08X "
+                        "stack_hot_%zu_top_terminal_site=0x%08X "
+                        "stack_hot_%zu_top_terminal_target=0x%08X "
+                        "stack_hot_%zu_top_terminal_contract_present=%u "
+                        "stack_hot_%zu_top_terminal_contract_complete=%u "
+                        "stack_hot_%zu_top_terminal_ingress_present=%u "
+                        "stack_hot_%zu_top_terminal_ingress_guarded=%u "
+                        "stack_hot_%zu_top_terminal_ingress_complete=%u",
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.statewide_stack_epoch.topology),
+                        index,
+                        static_cast<unsigned long long>(
+                            hot.statewide_memory_epoch.topology),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.stack_read_contract_complete),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.has_stack_read_top_chain),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.stack_read_top_chain_truncated),
+                        index,
+                        abi_stack_read_top_reason_name(
+                            hot.first_stack_read_top.reason),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.owner),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.site),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.target),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.contract_present),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.contract_complete),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.ingress_present),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.ingress_guarded),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.first_stack_read_top.ingress_complete),
+                        index,
+                        abi_stack_read_top_reason_name(
+                            hot.terminal_stack_read_top.reason),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.owner),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.site),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.target),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.contract_present),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.contract_complete),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.ingress_present),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.ingress_guarded),
+                        index,
+                        static_cast<unsigned int>(
+                            hot.terminal_stack_read_top.ingress_complete)));
                 }
                 for (std::size_t pattern = 1u;
                      pattern < diagnostics.stack_semantic_patterns.size();
@@ -40199,6 +41047,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         const auto record_stack_widening =
                                             [&](const AbstractState& before,
                                                 const AbstractState& after) {
+                                                if (collect_contextual_stack_widening_diagnostics)
+                                                    record_contextual_semantic_delta(
+                                                        observation.callee,
+                                                        before,
+                                                        after,
+                                                        callee_read_projection
+                                                            .stack_reads);
                                                 const auto kind =
                                                     classify_contextual_stack_widening(
                                                         before.stack_values,
@@ -40283,7 +41138,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                                         after);
                                                 record_contextual_stack_hot_callee(
                                                     observation.callee,
-                                                    current_stack_values);
+                                                    current_stack_values,
+                                                    callee_read_projection
+                                                        .stack_reads);
                                                 if (contract_index != 0u)
                                                     record_contextual_stack_top_reasons(
                                                         callee_read_projection

@@ -66,8 +66,8 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Die Sourcebasis fuer den aktuellen Source-Stand ist
-`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
-Top-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Historisch erzeugte v56 kein Portartefakt und
+`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
+Hot-Callee-Diagnose-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
 keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
@@ -91,6 +91,14 @@ endete nach `343,627 s` bei belegter identischer Nichtkonvergenz. Die letzte
 Bewegung war Wave `48`, Peak Root `1.450.078.208 B`, Peak Job `1.618.132.992 B`;
 bei Wave `39` waren die 16 geprueften Kernzaehler exakt wie im Vorlauf. Es gab
 keine kanonische Publikation und kein Portartefakt; KR-4981 bleibt offen.
+
+Der abgeschlossene Hot-Callee-Diagnoseunterauftrag erreichte im Lauf
+`kr4981-20260809-024141-c4ffdf15` das vollständige `attempts=1024`-Gate und
+wurde nach `244,549 ms` bei Wave `24` gezielt beendet. `uncategorized=0` für
+alle Top-8-Funktionen. `0x8C10E44E` isolierte SavedEpoch-pending-ABI-Skalare
+als dominante semantische Änderungsdomäne; der Callee-Set-Stackvertrag war
+unvollständig. Der Unterauftrag ist abgeschlossen, KR-4981 bleibt offen; der
+SavedEpoch-Top-Fix ist noch nicht implementiert.
 
 | ID | Titel | Status |
 |---|---|---|

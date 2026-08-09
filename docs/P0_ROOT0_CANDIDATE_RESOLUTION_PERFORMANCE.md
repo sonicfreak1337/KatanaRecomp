@@ -2,8 +2,8 @@
 
 Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
 Produkt-D1 bleibt unentschieden. Die Sourcebasis ist
-`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
-Top-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Der terminale Sonic-v56-
+`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
+Hot-Callee-Diagnose-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16. Der terminale Sonic-v56-
 Diagnoselauf belegt eine echte Contextual-State-Explosion und keine fertige
 Produktartefakterzeugung.
 
@@ -154,6 +154,35 @@ Summary `10`, Forward `123`, stale `95`, stale Discards `299`, semantische
 Widenings `553` und provenance-only `382` sowie die weiteren geprueften
 Kernzaehler. Der Fix ist ein Korrektheits-/Persistenzfix, kein belegter
 Konvergenzhebel; KR-4981 bleibt offen.
+
+## [x] Abgeschlossener Hot-Callee-Diagnoseunterauftrag
+
+Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das erste vollständige
+`attempts=1024`-Diagnosegate und wurde nach `244,549 ms` bei Wave `24` gezielt
+beendet. `uncategorized=0` für alle Top-8-Funktionen; kein Fehler, Hänger,
+Portartefakt oder `game.exe`, keine Veröffentlichung. Peak Root WS:
+`1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`; der erwartbare
+Supervisorstatus `product-exit -1` entstand durch den gezielten Stop.
+
+`0x8C10E44E` ist der dominante isolierte Befund: `20` echte semantische
+Änderungen und `40` Stack-Widenings, ausschließlich SavedEpoch-pending-ABI-
+Skalare (`reg_epoch_pending=92`, `stack_epoch_pending=80`,
+`tail_epoch_pending=20`, `state_stack_epoch_pending=20`,
+`state_memory_epoch_pending=20`), bei erstem und terminalem Top-Frame mit
+Callee-Set-incomplete (`owner=0x8C10E44E`, `site=0x8C10E486`, `target=0`).
+Ordinary/direct-code/direct-PC/contextual, Callback-Loss-, Topologie-,
+Top-Domain-, Map-/Tail-Topologie- und Metadatenänderungen waren dort `0`.
+`0x8C09859C` zeigte `28` Änderungen und ebenfalls Callee-Set-incomplete an
+`0x8C0985B0`, jedoch gemischte Domänen. `0x8C64E55E` zeigte `48` Änderungen,
+darunter `reg_epoch_pending=180`, bei vollständigem Stackvertrag.
+
+Der Diagnose-Unterauftrag ist abgeschlossen; KR-4981 und das globale
+Sonic-Produktgate bleiben offen. Der nächste Fixpfad ist noch nicht
+implementiert: `candidate_payload_lost`/Unresolved-SavedEpoch als konsistente
+absorbierende Top-Semantik über Normalize, Merge, Equality, Subsumption, Key
+und Persistenz behandeln, ohne Alias-/Current-Tracking oder fail-closed Restore
+zu verlieren. Die Callee-Set-incomplete-Gründe an den dynamischen Sites werden
+danach weiter geprüft.
 
 Cache-Eviction ist mit null Recomputes nicht als Hauptursache belegt. Der
 Produktblocker bleibt bis zu einem vollstaendigen Produktgate offen; als

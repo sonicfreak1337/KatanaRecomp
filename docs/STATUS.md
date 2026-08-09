@@ -31,8 +31,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  9d06080964e49e48338f14d45a50dc9c1a1b331c
-  plus reviewtes Candidate-Domain-Top-Delta in diesem Task
+  603a5175330f2fc22ae9db54da4b61c8c1fd49dc
+  plus reviewtes evidence-freies Hot-Callee-Diagnose-Delta in diesem Task
   Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16
 
 aktueller realer Diagnosebefund:
@@ -210,6 +210,35 @@ Input-Widening `263`, Summary `10`, Forward `123`, stale `95`, stale Discards
 `299`, semantische Widenings `553` und provenance-only `382` sowie die
 weiteren geprueften Kernzaehler. Der Fix ist damit als Korrektheits-/Persistenz-
 fix belegt, nicht als Konvergenzhebel; KR-4981 bleibt offen.
+
+### [x] Abgeschlossener Hot-Callee-Diagnoseunterauftrag
+
+Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das erste vollständige
+`attempts=1024`-Diagnosegate und wurde nach `244,549 ms` bei Wave `24` gezielt
+beendet. Der erwartbare Supervisorstatus `product-exit -1` entstand durch
+diesen Stop, nicht durch Fehler oder Hänger. Peak Root WS war
+`1.260.388.352 B`, Peak Job WS `1.387.151.360 B`; keine Publikation und kein
+`game.exe`. `uncategorized=0` für alle Top-8-Funktionen.
+
+Der dominante Befund ist `0x8C10E44E`: `20` echte semantische Änderungen und
+`40` Stack-Widenings, ausschließlich SavedEpoch-pending-ABI-Skalare
+(`reg_epoch_pending=92`, `stack_epoch_pending=80`, `tail_epoch_pending=20`,
+`state_stack_epoch_pending=20`, `state_memory_epoch_pending=20`), bei
+unvollständigem Callee-Set-Stackvertrag (`owner=0x8C10E44E`,
+`site=0x8C10E486`, `target=0`). Ordinary/direct-code/direct-PC/contextual,
+Callback-Loss-, Topologie-, Top-Domain-, Map-/Tail-Topologie- und
+Metadatenänderungen waren dort `0`. `0x8C09859C` zeigte `28` Änderungen,
+ebenfalls Callee-Set-incomplete an `0x8C0985B0`, jedoch gemischte Domänen.
+`0x8C64E55E` zeigte `48` Änderungen, darunter
+`reg_epoch_pending=180`, bei vollständigem Stackvertrag.
+
+Der Diagnose-Unterauftrag ist damit abgeschlossen; KR-4981 und das
+Sonic-Produktgate bleiben ausdrücklich offen. Der nächste Fixpfad ist die noch
+nicht implementierte konsistente absorbierende Top-Semantik für
+`candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
+Subsumption, Key und Persistenz, ohne Alias-/Current-Tracking oder fail-closed
+Restore zu verlieren. Die Callee-Set-incomplete-Ursache an den dynamischen
+Sites bleibt nach diesem Fix weiter zu prüfen.
 
 ## Aktueller kritischer Pfad
 

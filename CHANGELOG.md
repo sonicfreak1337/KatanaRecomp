@@ -41,6 +41,19 @@
   Bei Wave `39` waren alle 16 geprueften Kernzaehler bitgenau wie im
   vorherigen Lauf; der Top-Fix ist damit als Korrektheits-/Persistenzfix,
   nicht als Konvergenzhebel belegt. KR-4981 bleibt offen.
+- Die nur über `KATANA_ANALYZER_STACK_DIAGNOSTICS` aktivierte, evidence-freie
+  Hot-Callee-Diagnose erreichte im Lauf `kr4981-20260809-024141-c4ffdf15` das
+  vollständige `attempts=1024`-Gate und wurde nach `244,549 s` bei Wave `24`
+  gezielt beendet. `uncategorized=0` für alle Top-8-Funktionen; kein Fehler,
+  Hänger, Portartefakt oder bestandenes KR-4981-Gate. Bei `0x8C10E44E` sind
+  `20` echte semantische Änderungen und `40` Stack-Widenings ausschließlich
+  SavedEpoch-pending-ABI-Skalare (`reg 92`, `stack 80`, `tail 20`,
+  `state_stack 20`, `state_memory 20`) mit unvollständigem Callee-Set-
+  Stackvertrag belegt. Der nächste Fixpfad behandelt
+  `candidate_payload_lost`/Unresolved-SavedEpoch als absorbierendes Top über
+  Normalize, Merge, Equality, Subsumption, Key und Persistenz, ohne Alias-,
+  Current-Tracking oder fail-closed Restore zu verlieren; der Fix ist noch
+  nicht implementiert. KR-4981 bleibt offen.
 - Der Zweikanal-Sourcefix wurde im korrekten VsDevCmd-Incremental-Build von
   `katana-recomp --parallel 12` in `42,8 s` gebaut; es blieben nur bekannte
   getenv-/Shadowing-Warnungen. Die Evidence- und Semantic-Kanaele sind dabei

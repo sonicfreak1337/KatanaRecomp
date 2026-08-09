@@ -110,8 +110,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionale Sourcebasis:
-  9d06080964e49e48338f14d45a50dc9c1a1b331c
-  plus das reviewte Candidate-Domain-Top-Delta dieses Tasks
+  603a5175330f2fc22ae9db54da4b61c8c1fd49dc
+  plus das reviewte evidence-freie Hot-Callee-Diagnose-Delta dieses Tasks
   Analyzer-ABI 33
   Function-Analysis-Epoch-Schema 16
 
@@ -138,6 +138,24 @@ Subscriber `870`, Provenienz `21.355`, Input-Widening `263`, Summary `10`,
 Forward `123`, stale `95`, stale Discards `299`, semantische Widenings `553`
 und provenance-only `382`). Der Top-Fix ist damit ein Korrektheits- und
 Persistenzfix, kein belegter Konvergenzhebel; KR-4981 bleibt offen.
+
+Der abgeschlossene Diagnose-Unterauftrag im Lauf
+`kr4981-20260809-024141-c4ffdf15` erreichte das vollständige
+`attempts=1024`-Gate und wurde nach `244,549 s` bei Wave `24` gezielt beendet;
+der daraus erwartbare Supervisorstatus `product-exit -1` ist kein Fehler- oder
+Hängerbefund. Peak Root lag bei `1.260.388.352 B`, Peak Job bei
+`1.387.151.360 B`; es gab keine Publikation und kein `game.exe`.
+`uncategorized=0` galt für alle Top-8-Funktionen. Bei `0x8C10E44E` waren alle
+`20` semantischen Änderungen und `40` Stack-Widenings ausschließlich
+SavedEpoch-pending-ABI-Skalare; der Stackvertrag war am Callee-Set unvollständig.
+`0x8C09859C` zeigte `28` Änderungen mit gemischten Domänen und ebenfalls
+unvollständigem Callee-Set; `0x8C64E55E` zeigte `48` Änderungen bei vollständigem
+Stackvertrag, darunter `reg_epoch_pending=180`. Der Diagnose-Unterauftrag ist
+damit abgeschlossen, KR-4981 und das globale Sonic-Produktgate bleiben offen.
+Nächster Fixpfad ist die noch nicht implementierte absorbierende Top-Semantik
+für `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge,
+Equality, Subsumption, Key und Persistenz; Alias-/Current-Tracking und
+fail-closed Restore bleiben erhalten.
 
 Historische Ports belegen keinen aktuellen Sourcezustand. Der v56-Lauf ist
 Diagnoseevidenz und kein Produktnachweis, weil kein Produkt entstand.

@@ -84,8 +84,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Sourcebasis dieses Arbeitsstands:
-  9d06080964e49e48338f14d45a50dc9c1a1b331c
-  plus reviewtes Candidate-Domain-Top-Delta in diesem Task
+  603a5175330f2fc22ae9db54da4b61c8c1fd49dc
+  plus reviewtes evidence-freies Hot-Callee-Diagnose-Delta in diesem Task
   Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16
 
 aktueller Diagnosebefund:
@@ -372,6 +372,25 @@ im Vorlauf (u. a. Frontier `177`, Contexts `272`, Semantic-Lanes `606`,
 physisch `645`, exakte Subscriber `870`, Provenienz `21.355` und stale
 Discards `299`). Der Fix ist ein Korrektheits-/Persistenzfix, kein belegter
 Konvergenzhebel; KR-4981 bleibt offen.
+
+### [x] Abgeschlossener Diagnose-Unterauftrag
+
+Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das vollständige
+`attempts=1024`-Gate und wurde nach `244,549 ms` bei Wave `24` gezielt beendet.
+`uncategorized=0` für alle Top-8-Funktionen; kein Fehler, Hänger, Portartefakt
+oder Produktgate. Der Hauptbefund `0x8C10E44E` umfasst `20` semantische
+Änderungen und `40` Stack-Widenings ausschließlich SavedEpoch-pending-ABI-
+Skalare (`92/80/20/20/20` für reg/stack/tail/state_stack/state_memory) bei
+unvollständigem Callee-Set-Stackvertrag. `0x8C09859C` zeigt `28` gemischte
+Änderungen mit demselben Vertragsgrund, `0x8C64E55E` `48` Änderungen bei
+vollständigem Stackvertrag und `reg_epoch_pending=180`.
+
+Dieser Diagnose-Unterauftrag ist abgeschlossen; KR-4981 bleibt offen. Der
+nächste Fixpfad ist die noch nicht implementierte absorbierende Top-Semantik
+für `candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge,
+Equality, Subsumption, Key und Persistenz, mit erhaltenem Alias-/Current-
+Tracking und fail-closed Restore. Die dynamischen Callee-Set-incomplete-Sites
+werden danach erneut geprüft.
 
 Vertrag:
 

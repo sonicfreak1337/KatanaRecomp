@@ -288,8 +288,8 @@ Testmatrix.
 ## Aktueller P0-Handoff
 
 Die Sourcebasis fuer den aktuellen Candidate-Resolution-Pfad ist
-`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
-Top-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16.
+`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
+Hot-Callee-Diagnose-Delta; Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
 
@@ -384,6 +384,21 @@ Peak Root `1.450.078.208 B`, Peak Job `1.618.132.992 B`, keine Publikation und
 kein Portartefakt. Bei Wave `39` waren die 16 geprueften Kernzaehler exakt wie
 im Vorlauf. Der Fix ist ein Korrektheits-/Persistenzfix, kein belegter
 Konvergenzhebel; KR-4981 bleibt offen.
+
+Der abgeschlossene Diagnose-Unterauftrag lief unter
+`kr4981-20260809-024141-c4ffdf15`, erreichte das vollständige
+`attempts=1024`-Gate und wurde nach `244,549 ms` bei Wave `24` gezielt beendet.
+`uncategorized=0` für alle Top-8-Funktionen; der erwartbare
+`product-exit -1`-Status entstand durch diesen Stop. Peak Root WS:
+`1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`; keine Publikation und kein
+`game.exe`. `0x8C10E44E` ist mit `20` semantischen Änderungen und `40`
+Stack-Widenings ausschließlich SavedEpoch-pending-ABI-Skalaren sowie
+unvollständigem Callee-Set-Stackvertrag der dominante Befund. Der nächste
+Fixpfad ist noch nicht implementiert: absorbierende Top-Semantik für
+`candidate_payload_lost`/Unresolved-SavedEpoch in Normalize, Merge, Equality,
+Subsumption, Key und Persistenz, mit erhaltenem Alias-/Current-Tracking und
+fail-closed Restore. Die dynamischen Callee-Set-incomplete-Gründe werden danach
+weiter geprüft; KR-4981 bleibt offen.
 
 Der verbindliche aktuelle Pfad lautet:
 

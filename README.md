@@ -2,8 +2,8 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktuelle funktionale Sourcebasis: `9d06080964e49e48338f14d45a50dc9c1a1b331c`
-plus das reviewte Candidate-Domain-Top-Delta, Runtime-ABI 87, Analyzer-ABI 33,
+Aktuelle funktionale Sourcebasis: `603a5175330f2fc22ae9db54da4b61c8c1fd49dc`
+plus das reviewte evidence-freie Hot-Callee-Diagnose-Delta, Runtime-ABI 87, Analyzer-ABI 33,
 Function-Analysis-Epoch-Schema 16, Application-Contract 8 und
 Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
@@ -38,6 +38,16 @@ identischer Nichtkonvergenz, zuletzt Wave `48`, ohne Publikation oder
 Portartefakt. Bei Wave `39` waren die 16 geprueften Kernzaehler identisch zum
 Vorlauf; der Fix ist daher ein Korrektheits-/Persistenzfix, kein belegter
 Konvergenzhebel. KR-4981 bleibt offen.
+
+Der abgeschlossene Diagnose-Unterauftrag erreichte im Lauf
+`kr4981-20260809-024141-c4ffdf15` das vollständige `attempts=1024`-Gate und
+wurde nach `244,549 s` bei Wave `24` gezielt beendet. `uncategorized=0` für
+alle Top-8-Funktionen; kein Fehler, Hänger, Portartefakt oder
+KR-4981-Produktgate. Dominant war `0x8C10E44E` mit ausschließlich SavedEpoch-
+pending-ABI-Skalaren und unvollständigem Callee-Set-Stackvertrag. Der nächste
+Fixpfad ist die konsistente absorbierende Top-Semantik für
+`candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
+Subsumption, Key und Persistenz; sie ist noch nicht implementiert.
 
 ```text
 Runtime-ABI:                    87

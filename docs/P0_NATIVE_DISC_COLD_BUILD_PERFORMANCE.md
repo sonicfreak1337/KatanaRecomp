@@ -1,8 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Die Sourcebasis ist
-`9d06080964e49e48338f14d45a50dc9c1a1b331c` plus das reviewte Candidate-Domain-
-Top-Delta;
+`603a5175330f2fc22ae9db54da4b61c8c1fd49dc` plus das reviewte evidence-freie
+Hot-Callee-Diagnose-Delta;
 Analyzer-ABI 33, Function-Analysis-Epoch-Schema 16; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
@@ -286,6 +286,21 @@ bei `1.618.132.992 B`; es gab keine kanonische Publikation und kein
 Portartefakt. Bei Wave `39` waren die 16 geprueften Kernzaehler exakt wie im
 Vorlauf. Der Fix ist damit als Korrektheits-/Persistenzfix, nicht als
 Konvergenzhebel, belegt; KR-4981 bleibt offen.
+
+### [x] Abgeschlossener Hot-Callee-Diagnoseunterauftrag
+
+Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das vollständige
+`attempts=1024`-Diagnosegate und wurde nach `244,549 ms` bei Wave `24` gezielt
+beendet. Der erwartbare `product-exit -1`-Status entstand durch diesen Stop;
+es gab keinen Fehler, Hänger, keine Publikation und kein `game.exe`. Peak Root
+WS: `1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`. `uncategorized=0`
+galt für alle Top-8-Funktionen. `0x8C10E44E` isolierte `20` semantische
+Änderungen und `40` Stack-Widenings ausschließlich auf SavedEpoch-pending-ABI-
+Skalare; der Callee-Set-Stackvertrag war unvollständig. Der nächste Fixpfad
+bleibt die noch nicht implementierte absorbierende Top-Semantik für
+`candidate_payload_lost`/Unresolved-SavedEpoch über Normalize, Merge, Equality,
+Subsumption, Key und Persistenz, ohne Alias-/Current-Tracking oder fail-closed
+Restore zu verlieren. KR-4981 bleibt offen.
 
 ## Produktmessvertrag KR-4981
 
