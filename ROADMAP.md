@@ -110,9 +110,10 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionaler Source-Checkpoint:
-  099ae2cb2dfe7699f90338e9df0bad24a7888823
+  49cee39a93df1fae28a97d955a2d742132409dd1
   Analyzer-ABI 34
-  Function-Analysis-Epoch-Schema 19
+  Function-Analysis-Epoch-Schema 26
+  lokales In-Process-Evaluation-Cache-Schema 13
 
 frueherer Vergleichslauf:
   D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s
@@ -179,12 +180,22 @@ Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-
 Ursache, nicht ein weiterer SavedEpoch-Pending-Patch. KR-4981 bleibt fail-closed
 offen.
 
-Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
-behaelt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion,
+Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
+Er behaelt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion,
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits vom
 semantischen Evaluation-Limit. Der echte Evaluation-Cap erhoeht nur den
-Evaluation-Zaehler; Analyzer-ABI `34` und Epoch-Schema `19` sind aktuell.
+Evaluation-Zaehler; Analyzer-ABI `34`, Epoch-Schema `26` und lokales
+In-Process-Evaluation-Cache-Schema `13` sind aktuell.
+
+Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+`286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31` nach
+drei Amplifikationssamples: `0/1274` Roots, Wave `119`, keine Publikation,
+`280` Contexts, `972` Lanes, `2.011` physische, `2.814` logische, `203`
+Cache-Reuses, `2.790` Subscriber, Provenienz `169.824`, stale Discards `922`,
+Frontier `43` (max `250`), Cache `610.295.241 B`; kein Artefakt. Admission
+`1024/1024`, projected context/match jeweils `0`. Der P0 liegt intra-context
+bei Ordinary-Stack und lokalen Stackkoordinaten.
 
 Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
 (Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Lanes, `984`
@@ -192,7 +203,7 @@ physischen und `1.398` logischen Auswertungen, `248` Input-, `102` stale-
 Requeues und `347` Discards; Peak Root `1.606.066.176 B`, Peak Job
 `1.814.822.912 B`, kein Artefakt.
 
-Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
+Der Vergleichslauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
 (Candidate `237,116 s`) wegen Nichtverbesserung beendet: Wave `39`, `0/1194`,
 `272` Contexts, `549` Lanes, `630` physische, `894` logische Auswertungen,
 `181` Input-, `10` Summary-, `76` stale-Requeues, `226` Discards,

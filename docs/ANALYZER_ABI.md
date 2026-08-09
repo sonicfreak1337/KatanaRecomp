@@ -4,7 +4,7 @@ Der aktuelle oeffentliche Analyzervertrag ist Version `34`. Der aktuelle
 Candidate-Resolution-Stand verwendet Runtime-ABI 87, Block-ABI 5,
 PlatformServices-ABI 13, Backend-Interface-ABI 12 und Portprojektvertrag 75.
 Der funktionale Source-Checkpoint dieses Vertrags ist
-`099ae2cb2dfe7699f90338e9df0bad24a7888823`.
+`49cee39a93df1fae28a97d955a2d742132409dd1`.
 Version 34 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative

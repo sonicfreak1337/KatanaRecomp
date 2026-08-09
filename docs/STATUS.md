@@ -31,8 +31,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Funktionaler Source-Checkpoint dieses Arbeitsstands:
-  099ae2cb2dfe7699f90338e9df0bad24a7888823
-  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 19
+  49cee39a93df1fae28a97d955a2d742132409dd1
+  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 26,
+  lokales In-Process-Evaluation-Cache-Schema 13
 
 aktueller realer Diagnosebefund:
   Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
@@ -268,15 +269,26 @@ fail-closed offen.
 
 ## Aktueller Source- und Laufstand
 
-Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
-erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
+Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
 erkennt SavedEpoch-Slot-Pending-Top in sämtlichen Truncation-/Publication-
 Checks fail-closed und transportiert Provenance-Replay-Capsule-/Keybyte-Limits
 öffentlich getrennt vom semantischen Evaluation-Limit. Ein echter Evaluation-
-Cap belastet wieder nur den Evaluation-Zähler. Analyzer-ABI `34` und
-Function-Analysis-Epoch-Schema `19` sind aktiv; der bestätigte Build war
-erfolgreich, die EXE trug den Zeitstempel `05:00:45`, Tests wurden nicht
-ausgeführt.
+Cap belastet wieder nur den Evaluation-Zähler. Analyzer-ABI `34`,
+Function-Analysis-Epoch-Schema `26` und lokales In-Process-Evaluation-Cache-
+Schema `13` sind aktiv; der bestätigte Build war
+Build-Exit `0` nach ca. `51 s`; `build-contextual-dirty/katana-recomp.exe`
+trug LastWriteTime `09.08.2026 08:31:59`. Tests wurden nicht ausgeführt.
+
+Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+`286,387 s` (Candidate ca. `232,5 s`) nach drei zehnsekündigen
+Amplifikationssamples mit `nonconvergence`/Exit `31`, ohne Crash. `0/1274`
+Roots, Wave `119`, kein Epoch-Publish/Discard, kein Portartefakt oder
+`game.exe`; final `280` Contexts, `972` Lanes, `2.011` physische, `2.814`
+logische, `203` Cache-Reuses, `2.790` Subscriber, Provenienz `169.824`,
+stale Discards `922`, Frontier `43` (max `250`), Cache `610.295.241 B`.
+Admission `1024/1024`, projected context/match jeweils `0`. Der P0 liegt nun
+bei intra-context Ordinary-Stack und lokalen Stackkoordinaten.
 
 Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
 (Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Semantic-Lanes,
@@ -284,7 +296,7 @@ Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
 Requeues und `347` Discards. Cache ca. `501 MB`, Peak Root
 `1.606.066.176 B`, Peak Job `1.814.822.912 B`; kein Portartefakt.
 
-Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
+Der Vergleichslauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
 (Candidate `237,116 s`) wegen belegter Nichtverbesserung beendet: Wave `39`,
 `0/1194` Roots, `272` Contexts, `549` Lanes, `630` physische, `894` logische,
 `181` Input-, `10` Summary-, `76` stale-Requeues, `226` Discards,

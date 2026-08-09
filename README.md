@@ -2,9 +2,10 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller funktionaler Source-Checkpoint: `099ae2cb2dfe7699f90338e9df0bad24a7888823`,
+Aktueller funktionaler Source-Checkpoint: `49cee39a93df1fae28a97d955a2d742132409dd1`,
 Runtime-ABI 87, Block-ABI 5, Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 19, Application-Contract 8 und
+Function-Analysis-Epoch-Schema 26, lokales In-Process-Evaluation-Cache-Schema 13,
+Application-Contract 8 und
 Portprojektvertrag 75. Der terminale v56-Stand
 bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
 `1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
@@ -57,14 +58,39 @@ Nonconvergence bei Wave `76`, ohne Publikation oder `game.exe`. Der alte
 SavedEpoch-Pending-Blocker ist beseitigt; der gemeinsame Ordinary-/Register-
 Metadaten-/MemoryEpoch-Lifecycle bleibt offen. KR-4981 bleibt offen.
 
-Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
-erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
+Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed, trennt öffentliche Provenance-Replay-Capsule-/Keybyte-Limits vom
 semantischen Evaluation-Limit und belastet bei echtem Evaluation-Cap nur den
-Evaluation-Zähler. Analyzer-ABI `34` und Function-Analysis-Epoch-Schema `19`
-sind aktiv; der bestätigte Build war erfolgreich, die EXE trug den Zeitstempel
-`05:00:45`, Tests wurden nicht ausgeführt.
+Evaluation-Zähler. Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `26` und
+lokales In-Process-Evaluation-Cache-Schema `13` sind aktiv; der bestätigte Build
+war erfolgreich, die EXE trug den Zeitstempel
+Build-Exit `0` nach ca. `51 s`; `build-contextual-dirty/katana-recomp.exe`
+trug LastWriteTime `09.08.2026 08:31:59`. Tests wurden nicht ausgeführt.
+
+Der erledigte Source-Unterauftrag integriert eine begrenzte 17-Source-
+Provenienz-Live-in-Map für R0-R15 plus incoming stack, getrennte conditional /
+unconditional SavedEpoch-Mutation und Alias-Capture-Verträge, per-flow
+Register-/Stack-Taints und Return-Maps, duale Ordinary-/Provenance-Projektion,
+current-/detached-Alias-Watcher sowie Persistenz-, Key-, Shard-, Contextual-,
+Root- und Loss-Integration. Robuste R0-indexed-/Predecrement-Korrekturen sind
+enthalten; RTS bindet R0-Provenienz als conditional alias-capture, raw
+stack-derived Rückgaben und Storage-Loads gehen fail-closed in unresolved
+SavedEpoch, und defensives Storage-Repair löscht semantische sowie
+Inventory-R15-Koordinaten vorher. Der current mutation receiver umfasst den
+detached watcher; eine blanket `stack_may_derived`-Lattice ist nicht enthalten.
+
+Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+`286,387 s` (Candidate ca. `232,5 s`) nach drei zehnsekündigen
+Amplifikationssamples mit `nonconvergence`/Wrapper-Exit `31`, ohne Crash:
+`0/1274` Roots, HOL `0`, Wave `119`, kein Epoch-Publish/Discard und kein
+Portartefakt oder `game.exe`. Final: `280` Contexts, `972` Lanes, `2.011`
+physische, `2.814` logische, `203` Cache-Reuses, `2.790` Subscriber,
+Provenienz `169.824`, Frontier `43` (max `250`), Cache `610.295.241 B`;
+kein Budget war erschöpft. Das `attempts=1024`-Gate war `1024/1024` erfolgreich,
+aber projected context/match jeweils `0`; der P0 bleibt intra-context semantic
+widening mit Ordinary-Stack-/lokalen Stackkoordinaten.
 
 Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
 (Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Semantic-Lanes,
@@ -72,7 +98,7 @@ Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
 Requeues und `347` stale Discards. Cache: ca. `501 MB`; Peak Root
 `1.606.066.176 B`, Peak Job `1.814.822.912 B`; kein Portartefakt.
 
-Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
+Der Vergleichslauf `kr4981-20260809-050420-3f47fd65` wurde nach `322,632 s`
 (Candidate `237,116 s`) wegen belegter Nichtverbesserung beendet: Wave `39`,
 `0/1194` Roots, `272` Contexts, `549` Lanes, `630` physische, `894` logische,
 `181` Input-, `10` Summary-, `76` stale-Requeues, `226` Discards,

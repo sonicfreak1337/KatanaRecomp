@@ -84,8 +84,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Funktionaler Source-Checkpoint dieses Arbeitsstands:
-  099ae2cb2dfe7699f90338e9df0bad24a7888823
-  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 19
+  49cee39a93df1fae28a97d955a2d742132409dd1
+  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 26,
+  lokales In-Process-Evaluation-Cache-Schema 13
 
 aktueller Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -197,7 +198,7 @@ Budgetzaehldomaene; KR-4985 ist abgeschlossen, D1/G1 bleibt unentschieden.
 
 Prioritaet: P0 Performance-Diagnose
 
-Abhaengigkeiten: KR-4974, funktionaler Source-Checkpoint
+Abhaengigkeiten: KR-4974, historischer funktionaler Source-Checkpoint
 `099ae2cb2dfe7699f90338e9df0bad24a7888823`
 
 Status: Source-seitig abgeschlossen durch den gemeinsamen Candidate-Resolution-
@@ -289,7 +290,7 @@ Prioritaet: P0 Performance
 Abhaengigkeit: KR-4986; source-seitige Aktivierung durch den freigegebenen
 KR-4987-Fixpass
 
-Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
+Status: Source-seitig abgeschlossen am historischen funktionalen Source-Checkpoint
 `099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
 Der gezielte `katana-recomp`-Build war laut Sol-Review in `42,4 s` erfolgreich.
 D9 ist beendet und wird nur als fail-closed, nicht erfolgreicher Lauf
@@ -355,8 +356,11 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 
 Prioritaet: P0 Candidate-Resolution-Korrektheit
 
-Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
-`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`. Der begrenzte Pending-Carrier
+Status: Source-seitig abgeschlossen am historischen funktionalen
+Source-Checkpoint `099ae2cb2dfe7699f90338e9df0bad24a7888823`; der aktuelle
+Source-Stand ist `49cee39a93df1fae28a97d955a2d742132409dd1` mit Analyzer-ABI `34`,
+Function-Analysis-Epoch-Schema `26` und lokalem In-Process-Evaluation-Cache-
+Schema `13`. Der begrenzte Pending-Carrier
 bewahrt identitaetsgebundene Payloads ueber Merge, Key/Cache, Lifetime,
 ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute und
 contextual/forwarded/stable Harvest sowie Export-Gate. Der aktuelle
@@ -414,19 +418,28 @@ naechste Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-/
 Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache, nicht ein weiterer
 SavedEpoch-Pending-Patch; KR-4981 bleibt offen.
 
-### Aktueller Source- und Laufstand
+### [x] Abgeschlossener 17-Source-Provenienz-/RTS-Unterauftrag und aktueller Laufstand
 
-Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
-erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
+Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich
 vom semantischen Evaluation-Limit. Ein echter Evaluation-Cap belastet nur den
-Evaluation-Zähler; Analyzer-ABI `34` und Epoch-Schema `19` sind aktiv.
+Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `26` und lokales
+In-Process-Evaluation-Cache-Schema `13` sind aktiv.
 
-Der Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` (Candidate
+Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+`286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31`:
+`0/1274` Roots, Wave `119`, `280` Contexts, `972` Lanes, `2.011` physische,
+`2.814` logische, `203` Cache-Reuses, `2.790` Subscriber, Provenienz `169.824`,
+stale Discards `922`, Frontier `43` (max `250`), Cache `610.295.241 B`, kein
+Artefakt. Admission `1024/1024`, projected context/match jeweils `0`; der
+P0 liegt intra-context bei Ordinary-Stack und lokalen Stackkoordinaten.
+
+Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` (Candidate
 ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Lanes, `984` physischen und
 `1.398` logischen Auswertungen, `248` Input-, `102` stale-Requeues und `347`
-Discards; kein Portartefakt. Der aktuelle Lauf
+Discards; kein Portartefakt. Der Vergleichslauf
 `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` (Candidate
 `237,116 s`) wegen Nichtverbesserung bei Wave `39`, `0/1194` Roots,
 `272` Contexts, `549` Lanes, `630` physischen, `894` logischen Auswertungen,
@@ -581,7 +594,7 @@ Prioritaet: P0, letztes Sourcegate vor KR-4981
 Abhaengigkeiten: KR-4985, KR-4986 und alle durch G1/G2 aktivierten Tasks bis
 KR-4991
 
-Status: Source-seitig abgeschlossen am funktionalen Source-Checkpoint
+Status: Source-seitig abgeschlossen am historischen funktionalen Source-Checkpoint
 `099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
 Der vollstaendige Sol-Endreview
 des unmittelbar vorherigen Explosionsbug-Diffs wurde wiederverwendet; alle

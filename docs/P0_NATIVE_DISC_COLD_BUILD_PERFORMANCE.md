@@ -1,8 +1,9 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Der funktionale
-Source-Checkpoint ist `099ae2cb2dfe7699f90338e9df0bad24a7888823`;
-Analyzer-ABI 34, Function-Analysis-Epoch-Schema 19; der Produktgate
+Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`;
+Analyzer-ABI 34, Function-Analysis-Epoch-Schema 26,
+lokales In-Process-Evaluation-Cache-Schema 13; der Produktgate
 bleibt wegen unvollstaendiger D1-Evidenz offen. Der aktuelle enge
 Produktblocker ist Candidate-Resolution; sein Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
@@ -322,19 +323,27 @@ Blocker ist beseitigt; die gemeinsame Ordinary-/Registermetadaten-/Alias- und
 MemoryEpoch-Lifecycle-Ursache bleibt der naechste Analysepunkt. KR-4981 bleibt
 fail-closed offen.
 
-Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
-ist der aktuelle ABI-passende Stand: strukturelle Contextual-Hybrid-Projektion
+Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1` und
+der aktuelle ABI-passende Stand: strukturelle Contextual-Hybrid-Projektion
 mit retained sticky loss, fail-closed SavedEpoch-Slot-Pending-Top in allen
 Truncation-/Publication-Checks und öffentlich getrennte Provenance-Replay-
 Capsule-/Keybyte-Limits neben dem semantischen Evaluation-Limit. Ein echter
-Evaluation-Cap belastet nur den Evaluation-Zähler; Analyzer-ABI `34` und
-Epoch-Schema `19` sind aktiv.
+Evaluation-Cap belastet nur den Evaluation-Zähler; Analyzer-ABI `34`,
+Epoch-Schema `26` und lokales In-Process-Evaluation-Cache-Schema `13` sind aktiv.
+
+Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+`286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31`: `0/1274`
+Roots, Wave `119`, keine Publikation, `280` Contexts, `972` Lanes, `2.011`
+physische, `2.814` logische, `203` Cache-Reuses, `2.790` Subscriber,
+Provenienz `169.824`, stale Discards `922`, Frontier `43` (max `250`), Cache
+`610.295.241 B`; kein `game.exe`. Admission `1024/1024`, projected context/
+match jeweils `0`; P0 sind Ordinary-Stack und lokale Stackkoordinaten.
 
 Der Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s` bei Wave
 `60`, `0/1194` Roots, `758` Lanes, `984` physischen und `1.398` logischen
 Auswertungen, `248` Input-, `102` stale-Requeues und `347` Discards; Peak Root
 `1.606.066.176 B`, Peak Job `1.814.822.912 B`, kein Portartefakt.
-Der Lauf `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` bei Wave
+Der Vergleichslauf `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` bei Wave
 `39`, `0/1194` Roots, `272` Contexts, `549` Lanes, `630` physischen und
 `894` logischen Auswertungen; `181` Input-, `10` Summary-, `76` stale-
 Requeues, `226` Discards, Provenienz `31.713`, kein `game.exe`. Das

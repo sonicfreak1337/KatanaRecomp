@@ -79,8 +79,8 @@
   in begrenzten privaten Replaykapseln fuer physische Auswertung und Restore.
   Evidence-Stale erzeugt damit kein neues logisches Budgetereignis, waehrend
   Cap-/Replayfehler fail-closed bleiben.
-- Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
-  aktiviert die strukturelle Contextual-Hybrid-Projektion mit retained sticky
+- Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
+  Dieser Stand aktiviert die strukturelle Contextual-Hybrid-Projektion mit retained sticky
   loss, fail-closed SavedEpoch-Slot-Pending-Top in Truncation-/Publication-
   Checks und öffentlich getrennten Provenance-Replay-Capsule-/Keybyte-Limits;
   ein echter Evaluation-Cap belastet nur den Evaluation-Zähler. Der Lauf
@@ -89,7 +89,18 @@
   `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` bei Wave `39` wegen
   belegter Nichtverbesserung, ebenfalls ohne `game.exe`. Das `attempts=1024`-
   Gate blieb gegenüber `9baea88` bitgleich; die korrekte Gateänderung ist kein
-  Konvergenzhebel. Analyzer-ABI `34` und Epoch-Schema `19` sind aktuell.
+  Konvergenzhebel. Analyzer-ABI `34`, Epoch-Schema `26` und lokales
+  In-Process-Evaluation-Cache-Schema `13` sind aktuell.
+- Der aktuelle Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
+  `286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Wrapper-Exit `31`
+  nach drei Amplifikationssamples: `0/1274` Roots, Wave `119`, keine
+  Publikation oder Artefakterzeugung, `280` Contexts, `972` Semantic-Lanes,
+  `2.011` physische, `2.814` logische, `203` Cache-Reuses, `2.790` Subscriber,
+  Provenienz `169.824`, stale Discards `922`, Frontier `43` (max `250`) und
+  Cache `610.295.241 B`. Admission war `1024/1024`, aber projected context
+  und match blieben jeweils `0`; der offene P0 liegt bei intra-context
+  Ordinary-Stack und lokalen Stackkoordinaten. Der Lauf belegt nur höheren
+  Durchsatz, keinen Produktfortschritt; KR-4981 bleibt offen.
 - KR-4984 schliesst die vollstaendige P0/P1-Gesamtpruefung quellseitig ohne
   offenen Befund. Der Function-Evaluation-Cache bindet forwarded Register-
   Live-ins; optionale Whole-Export-Cachepublikation ist fail-open; lange

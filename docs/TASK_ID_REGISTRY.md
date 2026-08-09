@@ -66,8 +66,9 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der funktionale Source-Checkpoint fuer den aktuellen Source-Stand ist
-`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 19. Historisch erzeugte v56 kein Portartefakt und
+`49cee39a93df1fae28a97d955a2d742132409dd1`; Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 26, lokales In-Process-Evaluation-Cache-Schema 13.
+Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
 keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
@@ -107,6 +108,17 @@ Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 `uncategorized=0`. Der SavedEpoch-Pending-Blocker ist beseitigt; der naechste
 Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-/Alias- und
 MemoryEpoch-Lifecycle-Ursache. KR-4981 bleibt fail-closed offen.
+
+Der aktuelle Lauf `kr4981-20260809-083308-4a3ff9be` endete nach `286,387 s`
+(Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31`: `0/1274` Roots,
+Wave `119`, `280` Contexts, `972` Semantic-Lanes, `2.011` physische,
+`2.814` logische, `203` Cache-Reuses, `2.790` Subscriber, Provenienz
+`169.824`, stale Discards `922`, Frontier `43` (max `250`) und Cache
+`610.295.241 B`; keine Publikation oder Artefakterzeugung. Admission war
+`1024/1024`, projected context/match jeweils `0`. Der Lauf zeigt höheren
+Durchsatz, aber keinen Produktfortschritt; der offene P0 liegt bei
+intra-context Ordinary-Stack und lokalen Stackkoordinaten. KR-4981 bleibt
+offen.
 
 | ID | Titel | Status |
 |---|---|---|

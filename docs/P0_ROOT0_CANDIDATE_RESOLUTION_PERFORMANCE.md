@@ -2,8 +2,9 @@
 
 Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
 Produkt-D1 bleibt unentschieden. Der funktionale Source-Checkpoint ist
-`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 19. Der terminale Sonic-v56-
+`49cee39a93df1fae28a97d955a2d742132409dd1`; Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 26, lokales In-Process-Evaluation-Cache-Schema 13.
+Der terminale Sonic-v56-
 Diagnoselauf belegt eine echte Contextual-State-Explosion und keine fertige
 Produktartefakterzeugung.
 
@@ -217,12 +218,67 @@ behauptet keine Loesung.
 
 ## Aktueller Source- und Laufstand
 
-Der funktionale Source-Commit `099ae2cb2dfe7699f90338e9df0bad24a7888823`
-erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
+Der aktuelle Source-Checkpoint ist `49cee39a93df1fae28a97d955a2d742132409dd1`.
+Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich
 vom semantischen Evaluation-Limit. Ein echter Evaluation-Cap belastet nur den
-Evaluation-Zähler; Analyzer-ABI `34` und Epoch-Schema `19` sind aktiv.
+Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `26` und lokales
+In-Process-Evaluation-Cache-Schema `13` sind aktiv.
+
+Der erledigte Source-Unterauftrag umfasst eine begrenzte 17-Source-
+Provenienz-Live-in-Map für R0-R15 plus incoming stack, getrennte conditional /
+unconditional SavedEpoch-Mutation und Alias-Capture-Verträge, per-flow
+Register-/Stack-Taints und Return-Maps, duale Ordinary-/Provenance-Projektion,
+current-/detached-Alias-Watcher sowie Persistenz, Keys, Shards, Contextual-,
+Root- und Loss-Integration. R0-indexed-/Predecrement-Korrekturen sind
+enthalten. RTS bindet R0-Provenienz als conditional alias-capture, raw
+stack-derived Rückgaben und Storage-Loads werden fail-closed in unresolved
+SavedEpoch überführt; defensives Storage-Repair löscht semantische und
+Inventory-R15-Koordinaten vorher. Der current mutation receiver umfasst den
+detached watcher; eine blanket `stack_may_derived`-Lattice ist nicht enthalten.
+
+## Aktueller Produktlauf
+
+Der Lauf `kr4981-20260809-083308-4a3ff9be` endete nach `286,387 s`
+(Candidate ca. `232,5 s`) nach drei zehnsekündigen Amplifikationssamples mit
+Status `nonconvergence` und Wrapper-Exit `31`; kein Crash. Es gab `0/1274`
+ready/completed/committed Roots, HOL Root `0`, Wave `119`, keinen Epoch-Publish
+oder -Discard und kein Portartefakt bzw. `game.exe`. Peak Root WS:
+`1.670.086.656 B`, Peak Job WS: `1.890.910.208 B`.
+
+Final: `280` Contexts, `972` Semantic-Lanes, `2.011` physische Evaluationen,
+`2.814` logische Requests, `972` Admissions, `203` Cache-Reuses, `2.790`
+exakte Subscriber, Provenienz `169.824`; Requeues input-widening `606`,
+summary-change `17`, forward-edge `128`, stale-dependency `360`, stale
+snapshot discards `922`, semantic lane widenings `1.269`, provenance-only
+widenings `1.711`, Frontier `43` (max `250`), Cache retained
+`610.295.241 B`, globale Evaluationen/Cacheeinträge `5.157`. Kein Budget war
+erschöpft; kein Fallback/FullState wurde verwendet.
+
+Die Samples bewegten sich von Wave `93` (`280/960/1.640/678`, Cache
+`539.097.507 B`) über Wave `103` (`280/961/1.810/756`, `574.167.905 B`) und
+Wave `105` (`280/963/1.838/775`, `577.509.522 B`) zu Wave `119`.
+Admission war `1024/1024` erfolgreich, aber
+`projected_context_changed=0` und `projected_match_changed=0`: Inputs waren
+upstream bereits kanonisch; der späte Projektionspunkt reduziert nichts.
+Der Blocker ist intra-context semantic widening, nicht wachsende Contextzahl.
+
+Failure-Signale: Context-Stackvertrag invalid `629`, Memory invalid `755`,
+Candidate truncation `900`, ABI stack-base unresolved `852`, unresolved
+SavedEpoch alias sources `625`, tracks-current `625`, current watcher `291`;
+Top-Gründe local-stack-coordinate `594`, callee-top `110`, callee-set-incomplete
+`14`. `0x8C641202` ist der sauberste Ordinary-Stack-Treiber: `84/84`
+Attempts/semantic changes, vollständiger Stack-Read-Vertrag und `508`
+Stack-Ordinary-Widenings ohne Epoch-Topologie-Widening. Weitere incomplete
+local-stack-coordinate-Sites sind `0x8C098A82@0x8C098A8E`,
+`0x8C64E55E@0x8C64E5D0`, `0x8C64D9DE@0x8C64D9DE` und
+`0x8C64EEA4@0x8C64EEB0`.
+
+Gegenüber dem vorherigen Lauf (`322,632 s`, Candidate `237,116 s`, Wave `39`,
+`272` Contexts, `549` Lanes, `630` physische, `894` logische, `226` stale
+Discards, Cache ca. `455,6 MB`) ist dies ein Durchsatzgewinn, aber kein
+Produktfortschritt: weiterhin `0` Publikationen und fortgesetzte Amplifikation.
 
 Der vorherige Lauf `kr4981-20260809-041945-21b70ade` endete nach `425,924 s`
 (Candidate ca. `341 s`) bei Wave `60`, `0/1194` Roots, `758` Lanes, `984`
@@ -230,7 +286,7 @@ physischen und `1.398` logischen Auswertungen, `248` Input-, `102` stale-
 Requeues und `347` Discards. Cache ca. `501 MB`, Peak Root
 `1.606.066.176 B`, Peak Job `1.814.822.912 B`; kein Portartefakt.
 
-Der aktuelle Lauf `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s`
+Der Vergleichslauf `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s`
 (Candidate `237,116 s`) wegen belegter Nichtverbesserung: Wave `39`, `0/1194`
 Roots, `272` Contexts, `549` Lanes, `630` physische, `894` logische
 Auswertungen, `181` Input-, `10` Summary-, `76` stale-Requeues, `226`
