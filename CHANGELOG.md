@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- RuntimeOnly-NativeDisc-Bring-up ist als opt-in Pfad abgeschlossen: `port
+  --analysis-mode runtime-only` gilt nur mit `--game-project`, der Default
+  bleibt `platform`, und `GuestCallAbi::Unknown` umgeht die blockierende
+  SuperHC-FunctionValue-/Candidate-Resolution konservativ. Der vollstaendige
+  Hostbuild kompilierte 83 Translation Units und linkte `game.exe`; der
+  publizierende Sonic-PAL-Lauf dauerte `19,077 s` und erzeugte `1.631` native
+  Funktionen, `41` Partitionen, `3` latente AOT-Module, `3.967` RuntimeOnly-
+  Stellen und `0` unresolved. Kein Interpreter, Runtime-Decoder oder
+  geratener Zielpfad wird verwendet; das sichtbare Startgate bis mindestens
+  zum Memory-Card-Screen bleibt offen. Der Whole-Export-Cache ist
+  modegebunden, Windows-Argumenttransport ist CRT-konform, und Ninja-
+  `vs_link_exe` bleibt auf hoechstens zwei physische Linkpaesse begrenzt.
 - Der Candidate-Resolution-Explosionsbug ist quellseitig behoben: kanonische
   Full-State-Semantic-Lanes deduplizieren semantische Arbeit kollisionssicher,
   waehrend exakte Contributions und Evidence als Provenienzabonnenten privat
@@ -79,8 +91,8 @@
   in begrenzten privaten Replaykapseln fuer physische Auswertung und Restore.
   Evidence-Stale erzeugt damit kein neues logisches Budgetereignis, waehrend
   Cap-/Replayfehler fail-closed bleiben.
-- Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
-  Dieser Stand aktiviert die strukturelle Contextual-Hybrid-Projektion mit retained sticky
+- Der historische Candidate-Resolution-Source-Stand aktiviert die strukturelle
+  Contextual-Hybrid-Projektion mit retained sticky
   loss, fail-closed SavedEpoch-Slot-Pending-Top in Truncation-/Publication-
   Checks und öffentlich getrennten Provenance-Replay-Capsule-/Keybyte-Limits;
   ein echter Evaluation-Cap belastet nur den Evaluation-Zähler. Der Lauf
@@ -91,7 +103,7 @@
   Gate blieb gegenüber `9baea88` bitgleich; die korrekte Gateänderung ist kein
   Konvergenzhebel. Analyzer-ABI `34`, Epoch-Schema `27` und lokales
   In-Process-Evaluation-Cache-Schema `13` sind aktuell.
-- Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+- Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
   `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
   Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
   `970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,

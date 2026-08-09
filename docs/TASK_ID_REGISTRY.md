@@ -65,9 +65,17 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Der funktionale Source-Checkpoint fuer den aktuellen Source-Stand ist
-`49b0f72a9f49d60a4eb6e0481460cd57c5625735`; Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 27, lokales In-Process-Evaluation-Cache-Schema 13.
+Der aktuelle Source-Stand ist der RuntimeOnly-Bring-up-Meilenstein;
+Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
+In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
+`port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
+vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
+Der Hostbuild und der publizierende RuntimeOnly-Lauf sind erfolgreich: 83
+Translation Units, `game.exe`, `19,077 s`, `1.631` native Funktionen, `41`
+Partitionen, `3` latente AOT-Module, `3.967` RuntimeOnly-Stellen und `0`
+unresolved. Der sichtbare Start bis mindestens zum Memory-Card-Screen bleibt
+das offene KR-4981-Gate.
+
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
 Root-0-Transportevidenz bis `185,370 s`, aber keinen vollstaendigen Root und
@@ -75,10 +83,11 @@ keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
 abgeschlossen; D9 ist beendet und Root 0 konvergierte fail-closed ohne
 Portartefakt oder Produkterfolg. D2/G2 ist abgeschlossen und negativ; kein
 positiver Schedulerhebel ist belegt. KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
-P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
-vollstaendigen Stackvertrag/Gate. KR-4981 bleibt
-das globale Produktgate und ist nicht bestanden.
+KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; die fehlende
+Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
+Stackvertrag/Gate bleibt als historischer PlatformAbi-Befund dokumentiert.
+KR-4981 bleibt das globale sichtbare Produktgate und ist nach dem
+RuntimeOnly-Build-/Export-Gate noch offen.
 
 Der fruehere D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
 `325,8 s`; der identifizierte Kindprozess wurde nach belegter
@@ -110,7 +119,7 @@ Der Lauf `kr4981-20260809-031826-0616113a` endete nach `369,171 s` mit
 Root-Analysepunkt ist die gemeinsame Ordinary-/Registermetadaten-/Alias- und
 MemoryEpoch-Lifecycle-Ursache. KR-4981 bleibt fail-closed offen.
 
-Der aktuelle Lauf `kr4981-20260809-083308-4a3ff9be` endete nach `286,387 s`
+Der historische Lauf `kr4981-20260809-083308-4a3ff9be` endete nach `286,387 s`
 (Candidate ca. `232,5 s`) mit `nonconvergence`/Exit `31`: `0/1274` Roots,
 Wave `119`, `280` Contexts, `972` Semantic-Lanes, `2.011` physische,
 `2.814` logische, `203` Cache-Reuses, `2.790` Subscriber, Provenienz
@@ -165,7 +174,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; aktueller D-Lauf nicht bestanden; kein weiterer Lauf ohne ausdrueckliche Freigabe, je reviewtem Sourcekandidaten hoechstens ein Lauf, keine Vorab-Buildmatrix |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-Build-/Export-Gate bestanden, sichtbarer Start bis mindestens Memory-Card-Screen offen; kein weiterer Lauf ohne ausdrueckliche Freigabe, je reviewtem Sourcekandidaten hoechstens ein Lauf, keine Vorab-Buildmatrix |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
@@ -178,7 +187,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
-| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; aktueller P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen Stackvertrag/Gate |
+| KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 
 ## Aktuelle Meilensteinzuordnung
 

@@ -188,6 +188,7 @@ std::string port_export_cache_key(
     const std::string_view game_project_identity,
     const std::string_view game_entry_handoff_artifact_identity,
     const std::string_view latent_aot_entry_hint_identity,
+    const std::string_view analysis_mode_identity,
     const std::string_view implementation_identity,
     const katana::codegen::PartitionOptions& partition_options) {
     std::ostringstream identity;
@@ -213,6 +214,7 @@ std::string port_export_cache_key(
     append(game_project_identity);
     append(game_entry_handoff_artifact_identity);
     append(latent_aot_entry_hint_identity);
+    append(analysis_mode_identity);
     append(partition_options.maximum_functions);
     append(partition_options.maximum_instructions);
     append(implementation_identity);

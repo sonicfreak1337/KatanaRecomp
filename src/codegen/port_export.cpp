@@ -13844,10 +13844,30 @@ PortExportResult export_dreamcast_port_project(
     const katana::platform::DreamcastDiscBoot& disc,
     const std::filesystem::path& output_root,
     const PortExportOptions& options) {
+    return export_dreamcast_port_project(
+        disc, output_root, options, PortAnalysisMode::PlatformAbi);
+}
+
+PortExportResult export_dreamcast_port_project(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options,
+    const PortAnalysisMode analysis_mode) {
     if (!disc.source || disc.system_bootstrap.empty() ||
         disc.boot_file.empty())
         throw std::invalid_argument(
             "Portexport braucht eine vollstaendig geladene GDI-Quelle.");
+    switch (analysis_mode) {
+    case PortAnalysisMode::PlatformAbi:
+        break;
+    case PortAnalysisMode::ConservativeRuntimeOnly:
+        if (options.game_project == nullptr)
+            throw std::invalid_argument(
+                "ConservativeRuntimeOnly braucht ein Game-Project.");
+        break;
+    default:
+        throw std::invalid_argument("Portexport besitzt einen ungueltigen Analysemodus.");
+    }
     report_progress(options, "boot-image");
     auto boot_image_progress = options.progress.begin(
         katana::ProgressOperation::BootImage,
@@ -13874,6 +13894,11 @@ PortExportResult export_dreamcast_port_project(
         apply_game_project_symbols(image, *options.game_project);
         game_project_overrides =
             game_project_analysis_overrides(*options.game_project, image);
+    }
+    if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly) {
+        image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
+        report_progress(options,
+                        "native-disc-game-project-runtime-only-analysis");
     }
     auto prepared_analysis = prepare_boot_analysis(
         image,

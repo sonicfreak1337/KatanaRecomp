@@ -1,12 +1,25 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
 Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
-Produkt-D1 bleibt unentschieden. Der funktionale Source-Checkpoint ist
-`49b0f72a9f49d60a4eb6e0481460cd57c5625735`; Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 27, lokales In-Process-Evaluation-Cache-Schema 13.
-Der terminale Sonic-v56-
-Diagnoselauf belegt eine echte Contextual-State-Explosion und keine fertige
-Produktartefakterzeugung.
+die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
+Diagnostik. Der aktuelle RuntimeOnly-Bring-up verwendet Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 27 und lokales In-Process-Evaluation-Cache-
+Schema 13. Der opt-in Modus `port --analysis-mode runtime-only` ist nur mit
+`--game-project` fuer den vollstaendigen NativeDisc-Produktport zulaessig;
+der Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`,
+umgeht die blockierende SuperHC-FunctionValue-/Candidate-Resolution, erzeugt
+weiterhin nativen AOT-Code und nutzt RuntimeOnly-Dispatch ueber eine exakte
+statische Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv;
+kein Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad.
+
+Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
+`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf war nach `19,077 s`
+erfolgreich: `1.631` native Funktionen, `41` Partitionen, `3` latente
+AOT-Module, `3.967` RuntimeOnly-Stellen, `0` unresolved, Analyse-CFG
+`1,177 s`, IR-Optimierung `2,296 s`, statisches Runtime-Linking. Portpaket
+und `game.exe` sind publiziert; Retailsektoren sind nicht im Paket. Der
+beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt als
+globaler KR-4981-Gate offen. Der Whole-Export-Cache ist modegebunden.
 
 Dieses Dokument ergaenzt
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md)
@@ -219,7 +232,7 @@ behauptet keine Loesung.
 
 ## Aktueller Source- und Laufstand
 
-Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Der historische Candidate-Resolution-Source-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
 Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich
@@ -241,7 +254,7 @@ detached watcher; eine blanket `stack_may_derived`-Lattice ist nicht enthalten.
 
 ## Aktueller Produktlauf
 
-Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate Resolution ca. `221 s`) nach drei
 Amplifikationssamples mit `nonconvergence`: `0/1274` Roots, HOL `0`, Wave
 `107`, `280` Contexts, `970` Semantic-Lanes, `1.861` physische und `2.526`
@@ -252,7 +265,7 @@ Der Supervisor-Abbruch meldete bei `taskkill` Zugriff verweigert und schrieb
 deshalb keine Summary-Datei; der Kill-on-close-Job beendete den Child trotzdem,
 danach lief kein `katana-recomp`-Prozess mehr. Die Evidenz stammt aus
 Supervisor-, stdout- und stderr-Logs; der Supervisorlog liegt unter
-`C:\Users\ultim\Desktop\KatanaRecomp\private\diagnostics\schema27-fullclosure-f2aa10.supervisor.log`,
+der Supervisorlog im privaten Diagnosebereich,
 stdout/stderr tragen dasselbe Präfix.
 
 Admission war `1024/1024`, `projected_context_changed=0` und
@@ -337,7 +350,7 @@ Discards, Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
 Konvergenzhebel. Historisch wurde dabei Inventory-Provenance-Live-in/
 Spill-through als P0-Folgepunkt vermutet; der aktuelle P0 ist nun die fehlende
 Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollständigen
-Stackvertrag/Gate.
+Stackvertrag/Gate. Dies ist ein historischer PlatformAbi-Befund.
 
 Der D2048-Top-8-Befund war: `0x8C10D19C` sem `36` mit reg ordinary `94`
 (`mask B870`), reg metadata `4` (`mask 3860`) und state-memory Epoch-Topologie
@@ -587,7 +600,7 @@ ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute,
 contextual/forwarded/stable Harvest und Export-Gate, ohne Scheduler-/Budget-
 umbau, Fallback, Coverage-Reduktion oder Sonic-Hack. Der Zweikanalpfad haelt
 Evidence-Stale in privaten Replaykapseln und trennt es vom logischen
-Semantic-Lane-Key. Der aktuelle offene P0 ist Inventory-Provenance-Live-in/
+Semantic-Lane-Key. Der historische offene P0 ist Inventory-Provenance-Live-in/
 Spill-through.
 
 ### KR-4988 - State-/Summary-Interning
@@ -701,18 +714,20 @@ Quellseitige Freigabebedingungen:
 - kein stale oder gecanceltes Resultat kann publizieren oder einen aktuellen
   Root ueber einen veralteten Fehler beenden;
 - jeder schwere Root terminal identifizierbar;
-- KR-4981 bleibt das globale Produktgate; der aktuelle D-Lauf bestand es nicht
-  und ein weiterer Lauf ist nicht automatisch freigegeben.
+- KR-4981 bleibt das globale Produktgate; der RuntimeOnly-Build-/Export-Gate
+  ist bestanden, der beaufsichtigte Start bis mindestens Memory-Card-Screen
+  bleibt offen, und ein weiterer Lauf ist nicht automatisch freigegeben.
 
 Die globale Abwesenheit der Limitmetriken und von `IncompleteRoot` ist erst
 im vollstaendigen KR-4981-Port beweisbar. D1 und D2 sind begrenzte
-Diagnoseexporte und ersetzen diesen Produktnachweis nicht. Der aktuelle
-KR-4981-Versuch ist abgeschlossen und nicht bestanden; ein weiterer Lauf
-benoetigt eine ausdrueckliche Freigabe.
+Diagnoseexporte und ersetzen diesen Produktnachweis nicht. Der historische
+PlatformAbi-KR-4981-Versuch ist abgeschlossen und nicht bestanden; der
+RuntimeOnly-Build-/Export-Gate ist davon getrennt. Ein weiterer Lauf benoetigt
+eine ausdrueckliche Freigabe.
 
 ### KR-4981 - Sonic-Produktgate
 
-Der aktuelle D-Lauf war der freigegebene 24-Thread-NativeDisc-Sonic-Versuch;
+Der historische D-Lauf war der freigegebene 24-Thread-NativeDisc-Sonic-Versuch;
 installiert und normal ausgefuehrt.
 
 Ziele:
@@ -737,15 +752,16 @@ KR-4981-Lauf folgt nicht automatisch.
 
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
-  -> D-Lauf beendet nach belegter Nichtverbesserung; Candidate-Resolution offen
+  -> RuntimeOnly-Build-/Export-Gate bestanden
+  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen
 ```
 
 Die einzige D1-Evidenz ist ein unvollstaendiger, nichtterminaler Root-0-Lauf;
 D1/G1 bleibt historisch unentschieden. D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
-Der aktuelle P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-
+KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der historische
+P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-
 Join-Closure beim vollständigen Stackvertrag/Gate. KR-4981 bleibt
 das globale Produktgate und ist nicht bestanden.
 Keine neue Testmatrix ersetzt reale Produktgates.

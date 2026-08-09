@@ -77,18 +77,43 @@ Daher gilt projektweit:
   nicht als Performancefix erhoeht. Der aktuelle P0 muss durch weniger
   notwendige Arbeit geschlossen werden.
 
-## Getrennte Evidenzstaende
+## Aktueller RuntimeOnly-Bring-up
+
+Der opt-in Modus `port --analysis-mode runtime-only` ist nur fuer den
+vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
+Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht
+die blockierende SuperHC-FunctionValue-/Candidate-Resolution, erzeugt nativen
+AOT-Code und nutzt RuntimeOnly-Dispatch ueber eine exakte statische
+Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv; kein
+Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad. Der Whole-Export-
+Cache ist modegebunden.
+
+Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
+`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf war nach `19,077 s`
+erfolgreich: `1.631` native Funktionen, `41` Partitionen, `3` latente
+AOT-Module, `3.967` RuntimeOnly-Stellen, `0` unresolved, kein Interpreter und
+statisches Runtime-Linking. Analyse-CFG: `1,177 s`; IR-Optimierung:
+`2,296 s`. Portpaket und `game.exe` sind publiziert, Retailsektoren sind nicht
+im Paket. Der naechste Gate-Schritt ist der beaufsichtigte Start bis
+mindestens zum Memory-Card-Screen.
+
+Der aktuelle RuntimeOnly-Build-/Export-Unterauftrag ist damit abgeschlossen;
+KR-4981 bleibt als sichtbares globales Produktgate offen. Der PlatformAbi-
+Default bleibt erhalten. Ordinary-/Inventory-Stack-Alias-Capture und Lane-
+Fusion sind deferred PlatformAbi-Optimierungsbefunde und nicht implementiert.
+
+## Historische Candidate-Evidenz
 
 ```text
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-Funktionaler Source-Checkpoint dieses Arbeitsstands:
-  49b0f72a9f49d60a4eb6e0481460cd57c5625735
+Funktionaler Source-Stand:
+  RuntimeOnly-Bring-up-Meilenstein dieses Commits
   Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
 
-aktueller Diagnosebefund:
+historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
   1/1191 Roots committed
   65.536 Contextual-Return-Evaluationen einer Funktion ausgeschoepft
@@ -97,7 +122,7 @@ aktueller Diagnosebefund:
   27.872 physische Auswertungen
   0 Eviction-Recomputes
   Epoch-Retention: incomplete-root
-  kein Portartefakt, keine game.exe, kein Screenshot
+  kein Portartefakt aus diesem alten PlatformAbi-Lauf, keine game.exe
 ```
 
 Der v56-Lauf ist Diagnoseevidenz, kein Produktnachweis. Historische Ports sind
@@ -112,7 +137,8 @@ Messwert abgeleitet werden.
 
 ```text
 KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994: source-seitig abgeschlossen
-  -> D-Lauf beendet nach belegter Nichtverbesserung; Candidate-Resolution offen
+  -> RuntimeOnly-Build-/Export-Gate bestanden
+  -> sichtbarer Start bis mindestens Memory-Card-Screen offen
 ```
 
 Jeder Task in dieser Kette folgt einzeln:
@@ -124,13 +150,11 @@ implementieren -> betroffene Pfade reviewen und Findings schliessen -> main
 D1 und D2 sind begrenzte reale Sonic-Diagnoseexporte, keine Testmatrix. Der
 einzige freigegebene D1-Lauf war nichtterminal; D1/G1 bleibt fail-closed und
 unentschieden. D2/G2 ist abgeschlossen und negativ, ohne positiven
-Schedulerhebel. D9 ist beendet und Root 0
-konvergierte fail-closed ohne Portartefakt oder Produkterfolg. KR-4988 bis
-KR-4991 bleiben inaktiv; KR-4994 ist source-seitig abgeschlossen, mit
-der fehlenden Wirksamkeit der autoritativen Hybrid-Join-Closure beim
-vollstaendigen Stackvertrag/Gate als aktuellem P0-Folgepunkt. KR-4981
-bleibt das globale Produktgate und ist nicht bestanden. KR-4982 und KR-4983
-bleiben gestrichen.
+Schedulerhebel. D9 ist historisch beendet und Root 0 konvergierte fail-closed
+ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
+KR-4994 ist source-seitig abgeschlossen. Die PlatformAbi-Candidate-Resolution
+bleibt deferred und ist kein RuntimeOnly-Buildblocker. KR-4981 bleibt als
+sichtbares Produktgate offen. KR-4982 und KR-4983 bleiben gestrichen.
 
 ---
 
@@ -139,8 +163,10 @@ bleiben gestrichen.
 Prioritaet: P0 Boot
 
 Status: Der allgemeine Guarded-AOT-Entry- und
-Exportvollstaendigkeitsvertrag ist quellseitig vorhanden. Ein aktueller
-Produktnachweis fehlt, weil Candidate-Resolution vor dem Portexport endet.
+Exportvollstaendigkeitsvertrag ist quellseitig vorhanden. Fuer den historischen
+PlatformAbi-Pfad fehlt ein Produktnachweis, weil Candidate-Resolution vor dem
+Portexport endet; der aktuelle RuntimeOnly-Build-/Export-Gate ist separat
+bestanden.
 
 ### Noch offen
 
@@ -320,8 +346,9 @@ Attempts `1024`, `2048` und `4096` hatten bitgenau gleiche relevante
 Admission-/Stack-Diagnostik wie der vorherige Fehlerlauf; die Rohwerte sind
 wegen der unterschiedlichen Endpunkte nicht direkt vergleichbar und belegen
 keine materielle Produkt-/Performanceverbesserung oder einen Konvergenzhebel.
-KR-4981 bleibt offen; der aktuelle P0 ist Inventory-Provenance-Live-in/
-Spill-through.
+KR-4981 bleibt offen; der historische PlatformAbi-P0 war
+Inventory-Provenance-Live-in/Spill-through. Dieser Befund ist kein aktueller
+RuntimeOnly-Buildblocker.
 
 ### Ziel
 
@@ -359,18 +386,18 @@ Inputs nur in ungelesenem State oder Provenienz unterscheiden.
 Prioritaet: P0 Candidate-Resolution-Korrektheit
 
 Status: Source-seitig abgeschlossen am historischen funktionalen
-Source-Checkpoint `099ae2cb2dfe7699f90338e9df0bad24a7888823`; der aktuelle
-Source-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735` mit Analyzer-ABI `34`,
+Source-Checkpoint `099ae2cb2dfe7699f90338e9df0bad24a7888823`; der historische
+Candidate-Resolution-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735` mit Analyzer-ABI `34`,
 Function-Analysis-Epoch-Schema `27` und lokalem In-Process-Evaluation-Cache-
 Schema `13`. Der begrenzte Pending-Carrier
 bewahrt identitaetsgebundene Payloads ueber Merge, Key/Cache, Lifetime,
 ABI-/Summary-Propagation, Stack-may-load, Candidate-Recompute und
-contextual/forwarded/stable Harvest sowie Export-Gate. Der aktuelle
+contextual/forwarded/stable Harvest sowie Export-Gate. Der historische
 Evidence-/Semantic-Zweikanal haelt Evidence-Stale in privaten Replaykapseln;
 abgeschnittene begrenzte Candidate-Domains sind als kanonisches absorbierendes
 Top mit leerem endlichem Praefix in Merge, Normalisierung, Vergleich, Keys,
-Persistenz, Consumern und ABI-Promotion konsistent. Der aktuelle D-Lauf belegt
-als offenen P0 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure
+Persistenz, Consumern und ABI-Promotion konsistent. Der historische D-Lauf
+belegt als PlatformAbi-P0 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure
 beim vollstaendigen Stackvertrag/Gate.
 
 Der Lauf `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` durch
@@ -423,7 +450,7 @@ SavedEpoch-Pending-Patch; KR-4981 bleibt offen.
 
 ### [x] Abgeschlossener 17-Source-Provenienz-/RTS-Unterauftrag und aktueller Laufstand
 
-Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Der historische Candidate-Resolution-Source-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
 Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss;
 die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
 Edges erneut vollstaendig.
@@ -433,7 +460,7 @@ vom semantischen Evaluation-Limit. Ein echter Evaluation-Cap belastet nur den
 Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
 In-Process-Evaluation-Cache-Schema `13` sind aktiv.
 
-Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
 Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
 `970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
@@ -654,8 +681,9 @@ Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
   publizieren noch aktuelle Arbeit durch einen veralteten Fehler beenden;
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
-- KR-4981 bleibt das globale Produktgate; der aktuelle D-Lauf ist abgeschlossen
-  und nicht bestanden, ein weiterer Lauf ist nicht automatisch freigegeben.
+- KR-4981 bleibt das globale Produktgate; RuntimeOnly-Build-/Export-Gate ist
+  bestanden, der beaufsichtigte Start bis mindestens Memory-Card-Screen ist
+  offen, und ein weiterer Produktlauf ist nicht automatisch freigegeben.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von
@@ -671,9 +699,9 @@ vollstaendigen Produktport abgenommen.
 
 Prioritaet: P0 Produkt- und Performancegate
 
-Abhaengigkeit: KR-4994 plus Sol-Review; der aktuelle D-Lauf hat das globale
-KR-4981-Produktgate nicht bestanden. Ein weiterer Lauf ist nicht automatisch
-freigegeben.
+Abhaengigkeit: RuntimeOnly-Build-/Export-Gate bestanden; der beaufsichtigte
+Start bis mindestens zum Memory-Card-Screen ist noch offen. Ein weiterer
+Produktlauf ist nicht automatisch freigegeben.
 
 ### Umfang
 

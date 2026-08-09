@@ -2,29 +2,47 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller funktionaler Source-Checkpoint: `49b0f72a9f49d60a4eb6e0481460cd57c5625735`,
-Runtime-ABI 87, Block-ABI 5, Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 27, lokales In-Process-Evaluation-Cache-Schema 13,
-Application-Contract 8 und
-Portprojektvertrag 75. Der terminale v56-Stand
-bleibt ein Candidate-Resolution-P0: Der Lauf endete mit Exitcode 5 bei
-`1/1191` committed Roots, einem ausgeschoepften Per-Function-Budget von
-`65.536`, `25.728` laufweit gemeldeten Contexts und `27.872` laufweit
-gemeldeten physischen Auswertungen. Diese historischen Zaehldomaenen sind
-nicht gemeinsam scoped und werden nicht zu Requeue- oder Per-Context-
-Messwerten verrechnet. Ein neues Portartefakt, eine
-`game.exe` und ein neuer Screenshot existieren aus diesem Stand nicht.
+Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 87, Block-ABI 5,
+Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
+In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
+Portprojektvertrag 75.
+
+Der neue opt-in-Modus `port --analysis-mode runtime-only` ist nur fuer den
+vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
+Default bleibt `platform`. RuntimeOnly setzt fuer die Bootanalyse konservativ
+`GuestCallAbi::Unknown`, ueberspringt die blockierende SuperHC-
+FunctionValue-/Candidate-Resolution, erzeugt weiterhin nativen AOT-Code und
+verwendet RuntimeOnly-Dispatch mit exakter statischer Guest->Host-Tabelle.
+Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
+Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
+Analysemodus gebunden.
+
+Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
+`game.exe`. Der anschliessende publizierende Sonic-PAL-RuntimeOnly-Lauf war
+nach `19,077 s` erfolgreich: `1.631` native Funktionen, `41` Partitionen,
+`3` latente AOT-Module, `3.967` RuntimeOnly-Stellen, `0` unresolved,
+kein Interpreter und statisches Runtime-Linking. Die Analyse-CFG dauerte
+`1,177 s`, die IR-Optimierung `2,296 s`; das Portpaket und `game.exe` sind
+publiziert, Retailsektoren sind nicht im Paket.
+
+Damit ist der RuntimeOnly-Build-/Export-Gate bestanden. Das globale KR-4981-
+Produktgate bleibt offen: Der naechste Gate-Schritt ist ein beaufsichtigter
+Start bis mindestens zum Memory-Card-Screen. Der Default-PlatformAbi-Pfad
+bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
+spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
+Bring-up-Meilensteins.
+
+Der terminale v56-Stand und die folgenden Candidate-Resolution-Laeufe sind
+historische PlatformAbi-Diagnostik. Ihre Aussagen ueber fehlende Artefakte
+gelten fuer diese alten Versuche, nicht fuer den aktuellen RuntimeOnly-
+Bring-up. Die historischen Zaehldomaenen sind nicht gemeinsam scoped und
+werden nicht zu Requeue- oder Per-Context-Messwerten verrechnet.
 
 KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994 sind source-seitig
-abgeschlossen. Der
-D9-Lauf ist nach `20,331 s` fail-closed beendet: Root 0 konvergierte bis Wave
-`184` und Frontier `0` (maximal `216`), ohne Portartefakt oder Produkterfolg.
-KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. KR-4994 ist
-source-seitig abgeschlossen; der aktuelle P0 ist die fehlende Wirksamkeit der
-autoritativen Hybrid-Join-Closure beim vollstaendigen Stackvertrag/Gate.
-KR-4981 bleibt das
-globale Produktgate und ist nicht bestanden. Der
-verbindliche Folgeplan steht in
+abgeschlossen. KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. Der
+Candidate-Resolution-P0 bleibt als historischer PlatformAbi-Folgepunkt
+dokumentiert; er ist nicht der aktuelle RuntimeOnly-Buildblocker. Der
+verbindliche Performanceplan steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
 der uebergeordnete Kaltbuildvertrag in
 [`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
@@ -59,7 +77,7 @@ Nonconvergence bei Wave `76`, ohne Publikation oder `game.exe`. Der alte
 SavedEpoch-Pending-Blocker ist beseitigt; der gemeinsame Ordinary-/Register-
 Metadaten-/MemoryEpoch-Lifecycle bleibt offen. KR-4981 bleibt offen.
 
-Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Der historische Candidate-Resolution-Source-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
 Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss;
 die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
 Edges erneut vollstaendig.
@@ -84,7 +102,7 @@ SavedEpoch, und defensives Storage-Repair löscht semantische sowie
 Inventory-R15-Koordinaten vorher. Der current mutation receiver umfasst den
 detached watcher; eine blanket `stack_may_derived`-Lattice ist nicht enthalten.
 
-Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
 Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
 `970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
@@ -122,7 +140,7 @@ Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
 `game.exe`. Das `attempts=1024`-Gate war gegenüber `9baea88` bitgleich:
 `admission_success=999`, `projected_context_changed=0` und
 `projected_match_changed=0`. Die Gateänderung ist korrekt, aber kein
-Konvergenzhebel. Der aktuelle P0 bleibt intra-context Ordinary-Stack: Die
+Konvergenzhebel. Der historische PlatformAbi-P0 bleibt intra-context Ordinary-Stack: Die
 vollstaendige autoritative Hybrid-Join-Closure ist beim vollstaendigen
 Stackvertrag/Gate noch nicht wirksam. LocalStackCoordinate-/unvollstaendige
 Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
@@ -256,7 +274,7 @@ Portprojektvertrag 75. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
-Produktport belegt. Der aktuelle D-Lauf war der freigegebene KR-4981-
+Produktport belegt. Der historische PlatformAbi-D-Lauf war der freigegebene KR-4981-
 Produktversuch und bestand das globale Produktgate nicht; ein weiterer Lauf
 ist nicht automatisch freigegeben.
 
@@ -353,7 +371,7 @@ Framemarker und das erste neue AOT-, Runtime- oder Geraeteproblem; ein
 sichtbarer Bildschirm wird separat anhand einer realen Ausgabeaufnahme
 klassifiziert. Dieser Vertrag ist im Source-Checkpoint `18f8537`
 implementiert, aber noch nicht mit einem aktuellen Sonic-Port abgenommen.
-Der aktuelle D-Lauf war der freigegebene KR-4981-Produktversuch; er bestand
+Der historische PlatformAbi-D-Lauf war der freigegebene KR-4981-Produktversuch; er bestand
 das globale Produktgate nicht. Ein weiterer vollstaendiger privater
 Produktlauf ist nicht automatisch freigegeben.
 

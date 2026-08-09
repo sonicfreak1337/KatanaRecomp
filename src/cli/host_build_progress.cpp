@@ -403,19 +403,71 @@ class EventRootBinding final {
     const std::string& tool,
     const std::span<const char* const> arguments) noexcept {
     try {
-        std::vector<const char*> child_arguments;
-        child_arguments.reserve(arguments.size() + 2u);
-        child_arguments.push_back(tool.c_str());
-        child_arguments.insert(
-            child_arguments.end(), arguments.begin(), arguments.end());
-        child_arguments.push_back(nullptr);
 #ifdef _WIN32
+        const auto quote_windows_command_line_argument =
+            [](const std::string_view argument) {
+                const auto needs_quotes = argument.empty() ||
+                    std::any_of(argument.begin(), argument.end(),
+                                [](const char character) {
+                                    return std::isspace(
+                                               static_cast<unsigned char>(
+                                                   character)) != 0 ||
+                                           character == '"';
+                                });
+                if (!needs_quotes) return std::string(argument);
+
+                std::string quoted;
+                quoted.reserve(argument.size() + 2u);
+                quoted.push_back('"');
+                std::size_t backslashes = 0u;
+                for (const char character : argument) {
+                    if (character == '\\') {
+                        ++backslashes;
+                        continue;
+                    }
+                    if (character == '"') {
+                        quoted.append(backslashes * 2u + 1u, '\\');
+                        quoted.push_back('"');
+                        backslashes = 0u;
+                        continue;
+                    }
+                    quoted.append(backslashes, '\\');
+                    quoted.push_back(character);
+                    backslashes = 0u;
+                }
+                // Backslashes immediately before the closing quote must be
+                // doubled so the CRT parser retains them literally.
+                quoted.append(backslashes * 2u, '\\');
+                quoted.push_back('"');
+                return quoted;
+            };
+        std::vector<std::string> serialized_arguments;
+        serialized_arguments.reserve(arguments.size() + 1u);
+        serialized_arguments.push_back(
+            quote_windows_command_line_argument(tool));
+        for (const auto* argument : arguments) {
+            if (argument == nullptr) return 127;
+            serialized_arguments.push_back(
+                quote_windows_command_line_argument(argument));
+        }
+
+        std::vector<const char*> child_arguments;
+        child_arguments.reserve(serialized_arguments.size() + 1u);
+        for (const auto& argument : serialized_arguments)
+            child_arguments.push_back(argument.c_str());
+        child_arguments.push_back(nullptr);
         const auto result = _spawnvp(
             _P_WAIT,
             tool.c_str(),
             child_arguments.data());
         return result < 0 ? 127 : static_cast<int>(result);
 #else
+        std::vector<const char*> child_arguments;
+        child_arguments.reserve(arguments.size() + 2u);
+        child_arguments.push_back(tool.c_str());
+        child_arguments.insert(
+            child_arguments.end(), arguments.begin(), arguments.end());
+        child_arguments.push_back(nullptr);
         std::vector<char*> mutable_arguments;
         mutable_arguments.reserve(child_arguments.size());
         for (const auto* argument : child_arguments)

@@ -42,6 +42,7 @@ port_export_implementation_identities();
     std::string_view game_project_identity,
     std::string_view game_entry_handoff_artifact_identity,
     std::string_view latent_aot_entry_hint_identity,
+    std::string_view analysis_mode_identity,
     std::string_view implementation_identity,
     const katana::codegen::PartitionOptions& partition_options = {});
 

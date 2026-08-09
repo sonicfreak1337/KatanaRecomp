@@ -5,6 +5,33 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
+## Aktueller RuntimeOnly-Bring-up
+
+Der opt-in CLI-Modus `port --analysis-mode runtime-only` ist fuer den
+vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
+Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht
+die blockierende SuperHC-FunctionValue-/Candidate-Resolution, erzeugt
+weiterhin nativen AOT-Code und verwendet RuntimeOnly-Dispatch ueber eine
+exakte statische Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
+aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind nicht Teil
+des Pfads. Der Whole-Export-Cache ist modegebunden.
+
+Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
+`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf war nach `19,077 s`
+erfolgreich: `1.631` native Funktionen, `41` Partitionen, `3` latente
+AOT-Module, `3.967` RuntimeOnly-Stellen, `0` unresolved, kein Interpreter und
+statisches Runtime-Linking. Analyse-CFG dauerte `1,177 s`, IR-Optimierung
+`2,296 s`; Portpaket und `game.exe` sind publiziert, Retailsektoren sind nicht
+im Paket. Der naechste Produktgate ist ein beaufsichtigter Start bis mindestens
+zum Memory-Card-Screen.
+
+Der PlatformAbi-Default bleibt erhalten. Ordinary-/Inventory-Stack-Alias-
+Capture und Lane-Fusion sind deferred PlatformAbi-Optimierungsbefunde und
+wurden im RuntimeOnly-Bring-up nicht implementiert. Aeltere Candidate-
+Resolution-Abschnitte in diesem Handoff sind historische PlatformAbi-
+Diagnostik und keine Aussage, dass der aktuelle Bring-up kein `game.exe`
+erzeugt.
+
 ## Pflichtlekture vor jeder Aenderung
 
 1. `AGENTS.md`
@@ -285,10 +312,10 @@ Die Abschlussmeldung eines Tasks enthaelt:
 Sie enthaelt keine Liste fehlender Tests und keine Empfehlung fuer eine neue
 Testmatrix.
 
-## Aktueller P0-Handoff
+## Historischer Candidate-P0-Handoff
 
-Der funktionale Source-Checkpoint fuer den aktuellen Candidate-Resolution-Pfad
-ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`; Analyzer-ABI 34,
+Der funktionale Source-Checkpoint fuer den historischen Candidate-Resolution-
+Pfad ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`; Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27, lokales In-Process-Evaluation-Cache-Schema 13.
 
 Der terminale Sonic-v56-Diagnoselauf ergab:
@@ -379,7 +406,7 @@ Der Candidate-Domain-Top-Fix macht abgeschnittene begrenzte Candidate-Domains
 zum kanonischen absorbierenden Top mit leerem endlichem Praefix. Merge,
 Normalisierung, Vergleich, Keys, Persistenz, Consumer und ABI-Promotion sind
 darauf abgestimmt; der historische Candidate-Domain-Top-Lauf lief unter
-Epoch-Schema `18` und Analyzer-ABI `33`. Der aktuelle Source-Checkpoint ist
+Epoch-Schema `18` und Analyzer-ABI `33`. Der historische Source-Checkpoint ist
 separat oben ausgewiesen. Der Lauf
 `kr4981-20260809-020628-2bfd8af5` endete nach `343,627 s` durch manuellen
 Abbruch bei belegter identischer Nichtkonvergenz; letzte Bewegung Wave `48`,
@@ -422,7 +449,7 @@ beseitigt. Der naechste Root-Analysepunkt ist die gemeinsame Ordinary-/
 Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-Ursache,
 nicht ein weiterer SavedEpoch-Pending-Patch; KR-4981 bleibt fail-closed offen.
 
-Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Der historische Candidate-Resolution-Source-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
 Er erlaubt retained sticky loss in der strukturellen Contextual-Hybrid-Projektion;
 die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
 Edges erneut vollstaendig.
@@ -432,7 +459,7 @@ semantischen Evaluation-Limit. Der echte Evaluation-Cap belastet nur den
 Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
 In-Process-Evaluation-Cache-Schema `13` sind aktiv.
 
-Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
 Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
 `970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
@@ -442,7 +469,7 @@ Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
 `taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
 den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
 `0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
-Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der aktuelle P0 ist
+Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der historische P0 ist
 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
 vollstaendigen Stackvertrag/Gate.
 
@@ -475,7 +502,7 @@ D9 beendet fail-closed; kein Portartefakt und kein Produkterfolg
 ```
 
 KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen;
-der aktuelle P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-
+der historische P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-
 Closure beim vollstaendigen Stackvertrag/Gate.
 Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1

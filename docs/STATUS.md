@@ -24,37 +24,55 @@ Integrationstest. Reviews duerfen fehlende neue Tests nicht als Finding
 melden. Vorhandene Tests werden nur geprueft oder repariert, wenn sie selbst
 konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
-## Evidenztrennung
+## Aktueller Bring-up-Stand
+
+Der opt-in Modus `port --analysis-mode runtime-only` gilt nur fuer den
+vollstaendigen NativeDisc-Produktport mit `--game-project`; der Default bleibt
+`platform`. RuntimeOnly setzt fuer die Bootanalyse `GuestCallAbi::Unknown`,
+umgeht damit die blockierende SuperHC-FunctionValue-/Candidate-Resolution,
+erzeugt weiterhin nativen AOT-Code und nutzt RuntimeOnly-Dispatch mit einer
+exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
+aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
+Der Whole-Export-Cache ist modegebunden.
+
+Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
+`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf endete erfolgreich nach
+`19,077 s` mit `1.631` nativen Funktionen, `41` Partitionen, `3` latenten
+AOT-Modulen, `3.967` RuntimeOnly-Stellen und `0` unresolved. Es gab keinen
+Interpreterpfad; statisches Runtime-Linking war aktiv. Analyse-CFG dauerte
+`1,177 s`, IR-Optimierung `2,296 s`; Portpaket und `game.exe` sind publiziert,
+Retailsektoren sind nicht im Paket. Der naechste globale Gate-Schritt ist der
+beaufsichtigte Start bis mindestens zum Memory-Card-Screen.
+
+Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
+Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
+und sind in diesem Bring-up nicht implementiert. Die folgenden alten Candidate-
+Resolution- und v56-Werte sind historische PlatformAbi-Diagnostik; damalige
+Aussagen ueber fehlende Artefakte gelten nicht fuer den aktuellen RuntimeOnly-
+Bring-up.
 
 ```text
-letzte reale Produktevidenz:
-  historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
-
-Funktionaler Source-Checkpoint dieses Arbeitsstands:
-  49b0f72a9f49d60a4eb6e0481460cd57c5625735
-  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
-  lokales In-Process-Evaluation-Cache-Schema 13
-
-aktueller realer Diagnosebefund:
-  Sonic-v56 terminal nach 1:28:24 mit Exitcode 5
-  1/1191 Resolution-Roots committed
-  65.536 Contextual-Return-Evaluationen einer Funktion ausgeschoepft
-  Context-Limit nicht erreicht
-  25.728 eindeutige Contexts
-  27.872 physische Auswertungen
-  0 Eviction-Recomputes
-  Epoch-Retention: incomplete-root
-  kein Portartefakt, keine game.exe, kein Screenshot
+historische v56-Produktevidenz:
+  Exitcode 5, 1/1191 Resolution-Roots committed
+  65.536 Contextual-Return-Evaluationen ausgeschoepft
+  25.728 eindeutige Contexts, 27.872 physische Auswertungen
+  Epoch-Retention: incomplete-root, kein Portartefakt aus diesem alten Lauf
 
 aktueller Dokumentationsstand:
-  Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 abgeschlossen; Produktgate offen
+  Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 abgeschlossen;
+  RuntimeOnly-Build-/Export-Gate bestanden, sichtbares KR-4981-Gate offen
 ```
 
 Source-, Diagnose- und Produktevidenz duerfen nicht als derselbe Fortschritt
 ausgegeben werden. Die aktuellen Dokumentationscommits veraendern keine
 Recompiler-, Runtime- oder Produktsemantik.
 
-## Aktueller P0
+## Aktueller Bring-up; historischer Candidate-P0
+
+Der aktuelle RuntimeOnly-P0 ist kein Analyzer-Implementierungstask: Der
+Build-/Export-Gate ist bestanden, die sichtbare Runtime-Abnahme steht aus.
+Der Candidate-Resolution-P0 darunter beschreibt weiterhin den konservativen
+PlatformAbi-Pfad und bleibt fuer diesen Bring-up zurueckgestellt.
 
 Der terminale v56-Befund meldet null Eviction-Recomputes und liefert damit
 keinen Beleg fuer Cache-Eviction als verbleibende Hauptursache. Ursache der
@@ -269,7 +287,7 @@ fail-closed offen.
 
 ## Aktueller Source- und Laufstand
 
-Der aktuelle Source-Checkpoint ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
+Der historische Candidate-Resolution-Source-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
 Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss;
 die autoritative Hybridprojektion schliesst Contextual-MAY-Joins und Forward-
 Edges erneut vollstaendig.
@@ -282,7 +300,7 @@ Schema `13` sind aktiv; der bestätigte Build war
 Build-Exit `0` nach ca. `48 s`; `build-contextual-dirty/katana-recomp.exe`
 trug LastWriteTime `09.08.2026 09:08:11 +02:00`. Tests wurden nicht ausgeführt.
 
-Der aktuelle Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
+Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
 Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
 `970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
@@ -330,7 +348,8 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
-  -> D-Lauf beendet nach belegter Nichtverbesserung; Candidate-Resolution offen
+  -> RuntimeOnly-Build-/Export-Gate bestanden
+  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und
@@ -339,12 +358,10 @@ positivem Restkosten-/RAM-Gate. KR-4982 und KR-4983 bleiben gestrichen.
 D1 und D2 sind reale Sonic-Diagnoseexporte, keine Testmatrix. D1/G1 bleibt
 wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
 ist abgeschlossen und negativ, ohne positiven Schedulerhebel. D9 ist beendet
-und Root 0 konvergierte fail-closed,
-ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
-KR-4994 ist source-seitig abgeschlossen; der aktuelle P0 ist die fehlende
-Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
-Stackvertrag/Gate. KR-4981 bleibt das globale Produktgate und ist
-nicht bestanden.
+und Root 0 konvergierte fail-closed, ohne Portartefakt oder Produkterfolg.
+Dieser D9-Befund ist historische PlatformAbi-Diagnostik. KR-4988 bis KR-4991
+bleiben inaktiv; KR-4994 ist source-seitig abgeschlossen. KR-4981 bleibt als
+sichtbares Produktgate nach dem RuntimeOnly-Build-/Export-Gate offen.
 
 ## Quellseitig vorhandene Hauptvertraege
 
@@ -399,12 +416,10 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 ## Naechster Schritt
 
 ```text
-D9 ist beendet und fail-closed; Root 0 konvergierte ohne Portartefakt und
-Produkterfolg. KR-4994 ist source-seitig abgeschlossen; der aktuelle P0 ist
-die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
-vollstaendigen Stackvertrag/Gate. KR-4981 bleibt
-das globale Produktgate und ist
-nicht bestanden.
+D9 ist historisch beendet und fail-closed; Root 0 konvergierte ohne
+Portartefakt und Produkterfolg. KR-4994 ist source-seitig abgeschlossen; die
+PlatformAbi-Candidate-Resolution bleibt deferred. KR-4981 bleibt das globale
+sichtbare Produktgate und ist nach dem RuntimeOnly-Build-/Export-Gate offen.
 ```
 
 Ein zweiter D1-Lauf gehoert nicht zu diesem Dokumentationspass. D2/G2 ist

@@ -17,6 +17,21 @@ bestaetigen, scheitert Configure fail-closed. Das Gate bleibt
 `RelWithDebInfo`; mit dem Microsoft-Linker erzwingt es
 `/INCREMENTAL:NO`, `/OPT:REF` und `/OPT:ICF`.
 
+## RuntimeOnly und Windows-Hostbuild
+
+Der opt-in Portmodus `--analysis-mode runtime-only` ist nur fuer den
+vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
+Default bleibt `platform`. RuntimeOnly verwendet fuer die Bootanalyse
+`GuestCallAbi::Unknown`, erzeugt weiterhin nativen AOT-Code und bindet
+RuntimeOnly-Dispatch an eine exakte statische Guest->Host-Tabelle. Der
+Whole-Export-Cache ist an diesen Modus gebunden.
+
+Der Windows-Hostwrapper uebergibt `_spawnvp`-Argumente CRT-konform, auch bei
+Program-Paths mit Leerzeichen. Fuer Windows mit Ninja plant `vs_link_exe`
+maximal zwei physische Linkpaesse. Ein fehlender optionaler Pass wird nur
+durch vorhandenen erfolgreichen Build-, Artefakt- oder Up-to-date-Nachweis
+geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
+
 ## Compiler und Linker
 
 Unter Windows:

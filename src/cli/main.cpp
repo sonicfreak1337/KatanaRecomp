@@ -6295,6 +6295,7 @@ using RuntimeImagePayloadArgument =
 using LatentAotEntryHintArgument = katana::codegen::LatentAotEntryHint;
 using LatentAotDiscoveryModeArgument =
     katana::codegen::LatentAotDiscoveryMode;
+using PortAnalysisMode = katana::codegen::PortAnalysisMode;
 
 constexpr std::uint64_t latent_aot_entry_disc_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hint_arguments = 1024u;
@@ -6307,6 +6308,25 @@ LatentAotDiscoveryModeArgument parse_latent_aot_discovery_mode(
         return LatentAotDiscoveryModeArgument::ExactOnly;
     throw std::invalid_argument(
         "--latent-aot-mode erwartet heuristic oder exact-only.");
+}
+
+PortAnalysisMode parse_port_analysis_mode(const std::string_view text) {
+    if (text == "platform") return PortAnalysisMode::PlatformAbi;
+    if (text == "runtime-only")
+        return PortAnalysisMode::ConservativeRuntimeOnly;
+    throw std::invalid_argument(
+        "--analysis-mode erwartet platform oder runtime-only.");
+}
+
+std::string_view port_analysis_mode_identity(const PortAnalysisMode mode) {
+    switch (mode) {
+    case PortAnalysisMode::PlatformAbi:
+        return "platform-abi";
+    case PortAnalysisMode::ConservativeRuntimeOnly:
+        return "conservative-runtime-only";
+    default:
+        throw std::invalid_argument("Ungueltiger Port-Analysemodus.");
+    }
 }
 
 bool valid_latent_aot_entry_identity(const std::string_view identity) noexcept {
@@ -6563,7 +6583,9 @@ int export_port_project(const std::filesystem::path& source_path,
                                 LatentAotDiscoveryModeArgument::
                                      HintsAndHeuristics,
                         const std::optional<std::filesystem::path>&
-                            telemetry_jsonl_path = std::nullopt) {
+                            telemetry_jsonl_path = std::nullopt,
+                        const PortAnalysisMode analysis_mode =
+                            PortAnalysisMode::PlatformAbi) {
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
             "--target-name ist kein sicherer CMake-Targetname.");
@@ -6576,6 +6598,14 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--latent-aot-entry ist ausschliesslich fuer vollstaendige "
             "NativeDisc-Produktports erlaubt.");
+    const auto analysis_mode_identity =
+        port_analysis_mode_identity(analysis_mode);
+    if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly &&
+        (diagnostic_partial || boot_executable_artifact ||
+         !game_project_path.has_value()))
+        throw std::invalid_argument(
+            "--analysis-mode runtime-only braucht einen vollstaendigen "
+            "NativeDisc-Produktport mit --game-project.");
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_binding = discover_runtime_binding_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
@@ -7118,6 +7148,7 @@ int export_port_project(const std::filesystem::path& source_path,
         game_project_identity,
         handoff_artifact_identity,
         latent_aot_hint_identity,
+        analysis_mode_identity,
         implementation_identities.whole_export);
     const auto workspace_key = port_export_workspace_key(
         whole_export_source_kind,
@@ -7335,7 +7366,10 @@ int export_port_project(const std::filesystem::path& source_path,
                           export_dreamcast_port_project_from_boot_artifact(
                               source_path, workspace, export_options)
                     : katana::codegen::export_dreamcast_port_project(
-                          *verified_native_disc, workspace, export_options);
+                          *verified_native_disc,
+                          workspace,
+                          export_options,
+                          analysis_mode);
             if (whole_export_cache_key)
                 store_cached_port_export(
                     workspace,
@@ -7834,12 +7868,22 @@ int export_port_project(const std::filesystem::path& source_path,
                 katana::cli::ExitCode::BuildFailure,
                 "Vorheriges Hostartefakt konnte nicht sicher geprueft "
                 "werden.");
+        // CMake's Ninja/MSVC launcher runs vs_link_exe for the required
+        // link pass and may run FINAL-LINK once more while updating a
+        // manifest. Both are physical launcher executions for one logical
+        // executable link; zero or one omitted pass remains an up-to-date
+        // hit, while more than two remains fail-closed.
+#ifdef _WIN32
+        const auto planned_link_steps = use_ninja ? 2u : 1u;
+#else
+        constexpr auto planned_link_steps = 1u;
+#endif
         katana::cli::HostBuildProgressObserver host_build_progress(
             host_build_event_root,
             katana::cli::HostBuildProgressPlan{
                 planned_translation_units,
                 1u,
-                1u,
+                planned_link_steps,
                 host_compile_budget.effective},
             port_progress);
         auto build =
@@ -8231,6 +8275,7 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
               "[--game-project <Descriptor-Artefakt>] "
+              "[--analysis-mode <platform|runtime-only>] "
               "[--runtime-image-payload <Image-ID>=<private-Datei>] "
               "[--telemetry-jsonl <Datei>] "
               "[--latent-aot-mode <heuristic|exact-only>] "
@@ -8729,6 +8774,8 @@ int main(const int argc, char* argv[]) {
             auto latent_aot_discovery_mode =
                 LatentAotDiscoveryModeArgument::HintsAndHeuristics;
             bool latent_aot_discovery_mode_seen = false;
+            auto analysis_mode = PortAnalysisMode::PlatformAbi;
+            bool analysis_mode_seen = false;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             for (std::size_t argument = 3u; argument < static_cast<std::size_t>(argc);
@@ -8785,6 +8832,11 @@ int main(const int argc, char* argv[]) {
                         parse_latent_aot_discovery_mode(
                             argv[argument + 1u]);
                     latent_aot_discovery_mode_seen = true;
+                } else if (option == "--analysis-mode" &&
+                           port_command == "port" && !analysis_mode_seen) {
+                    analysis_mode = parse_port_analysis_mode(
+                        argv[argument + 1u]);
+                    analysis_mode_seen = true;
                 } else {
                     throw std::invalid_argument(
                         "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
@@ -8800,6 +8852,10 @@ int main(const int argc, char* argv[]) {
                 throw std::invalid_argument(
                     "port erwartet --output und --target-name jeweils genau einmal.");
             }
+            if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly &&
+                !game_project_path.has_value())
+                throw std::invalid_argument(
+                    "--analysis-mode runtime-only braucht --game-project.");
             return export_port_project(std::filesystem::path(argv[2]),
                                        *output_path,
                                        *target_name,
@@ -8811,7 +8867,8 @@ int main(const int argc, char* argv[]) {
                                        runtime_image_payload_arguments,
                                        latent_aot_entry_hints,
                                        latent_aot_discovery_mode,
-                                       telemetry_jsonl_path);
+                                       telemetry_jsonl_path,
+                                       analysis_mode);
         }
 
         if ((argc == 3 || argc == 4) &&

@@ -84,6 +84,23 @@ Der historisch gemessene v28-Gesamtexport mit unveraenderter Analyse dauerte
 den Cache. Der anschliessende unveraenderte Hostbuild dauerte 0,219272
 Sekunden.
 
+## RuntimeOnly-NativeDisc-Bring-up
+
+Der vollstaendige NativeDisc-Produktport kann opt-in mit
+`port --analysis-mode runtime-only --game-project <projekt>` betrieben werden;
+der Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`,
+umgeht die blockierende SuperHC-FunctionValue-/Candidate-Resolution und
+erzeugt weiterhin nativen AOT-Code. Indirekte Aufrufe verwenden RuntimeOnly-
+Dispatch ueber eine exakte statische Guest->Host-Tabelle; Stop-on-miss und
+typed abort bleiben aktiv. Es gibt keinen Interpreter, JIT, Runtime-Decoder
+oder geratenen Zielpfad. Der Whole-Export-Cache bindet den Modus.
+
+Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
+`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf war nach `19,077 s`
+erfolgreich mit `1.631` nativen Funktionen, `41` Partitionen, `3` latenten
+AOT-Modulen, `3.967` RuntimeOnly-Stellen und `0` unresolved. Das naechste
+Produktgate ist der beaufsichtigte Start bis mindestens zum Memory-Card-Screen.
+
 ## Zwei Produktpfade
 
 ### DirectBootExecutable

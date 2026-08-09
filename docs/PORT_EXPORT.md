@@ -52,6 +52,28 @@ Weitere Details stehen in
 [`EXECUTABLE_FIRST_DEVELOPMENT.md`](EXECUTABLE_FIRST_DEVELOPMENT.md) und
 [`PORT_BUILD_PROFILES.md`](PORT_BUILD_PROFILES.md).
 
+## RuntimeOnly-NativeDisc-Bring-up
+
+Der `port`-Aufruf akzeptiert den opt-in Modus
+`--analysis-mode runtime-only` nur zusammen mit `--game-project` fuer den
+vollstaendigen NativeDisc-Produktport. Der Default bleibt `platform`.
+RuntimeOnly setzt fuer die Bootanalyse konservativ `GuestCallAbi::Unknown` und
+umgeht damit die blockierende SuperHC-FunctionValue-/Candidate-Resolution;
+Analyse und Codegen erzeugen weiterhin nativen AOT-Code. Indirekte Aufrufe
+verwenden RuntimeOnly-Dispatch ueber eine exakte statische Guest->Host-Tabelle.
+Stop-on-miss und typed abort bleiben aktiv; Interpreter, JIT, Runtime-Decoder
+und geratenen Ziele sind ausgeschlossen.
+
+Der Whole-Export-Cache bindet den Analysemodus und verwendet keinen Eintrag
+des anderen Modus. Der erste vollstaendige Hostbuild kompilierte 83
+Translation Units und linkte `game.exe`; der publizierende Sonic-PAL-
+RuntimeOnly-Lauf war nach `19,077 s` erfolgreich mit `1.631` nativen
+Funktionen, `41` Partitionen, `3` latenten AOT-Modulen, `3.967` RuntimeOnly-
+Stellen und `0` unresolved. Das verteilbare Paket enthaelt keine
+Retailsektoren. Der Build-/Export-Gate ist bestanden; der beaufsichtigte
+Start bis mindestens zum Memory-Card-Screen bleibt das naechste
+Produktgate.
+
 ## Opt-in Portbuild-Telemetrie
 
 `port` und `port-executable` akzeptieren

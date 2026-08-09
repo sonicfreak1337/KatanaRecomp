@@ -23,6 +23,9 @@ enum class HostBuildToolKind : std::uint8_t {
 struct HostBuildProgressPlan final {
     std::optional<std::uint64_t> translation_units;
     std::uint64_t archive_steps = 1u;
+    // Maximum physical launcher passes accepted for one logical link. An
+    // up-to-date build may legitimately consume fewer passes; an excess is
+    // still rejected fail-closed by the observer.
     std::uint64_t link_steps = 1u;
     std::size_t configured_workers = 1u;
 };

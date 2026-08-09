@@ -56,6 +56,11 @@ struct GameProjectRuntimeImagePayload {
     std::span<const std::uint8_t> bytes;
 };
 
+enum class PortAnalysisMode : std::uint8_t {
+    PlatformAbi,
+    ConservativeRuntimeOnly,
+};
+
 struct PortExportOptions {
     std::string target_name;
     std::string tool_version;
@@ -164,6 +169,13 @@ export_dreamcast_port_project(
     const katana::platform::DreamcastDiscBoot& disc,
     const std::filesystem::path& output_root,
     const PortExportOptions& options);
+
+[[nodiscard]] PortExportResult
+export_dreamcast_port_project(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options,
+    PortAnalysisMode analysis_mode);
 
 // Bring-up export from an immutable private boot-executable artifact. The
 // generated distributable contains native AOT plus the hash/layout recipe, but
