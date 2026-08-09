@@ -476,6 +476,58 @@ using AbiStackArgumentReadMap =
     std::unordered_map<std::uint32_t, AbiStackArgumentReadSet>;
 using ForwardedRegisterReadMap =
     std::unordered_map<std::uint32_t, std::uint16_t>;
+// This is deliberately independent from `ForwardedRegisterReadMap`: the
+// latter is the ordinary register read-before-definition contract, whereas
+// this map records only entry sources whose inventory provenance can reach an
+// inventory/state sink.  Bit 16 is the incoming ABI stack domain.
+using InventoryProvenanceRegisterReadMap =
+    std::unordered_map<std::uint32_t, std::uint32_t>;
+using InventoryProvenanceReturnSourceMap =
+    std::unordered_map<std::uint32_t, std::uint32_t>;
+// A distinct backward contract for stores that can mutate a caller-owned
+// current SavedEpoch.  It is intentionally not folded into the general
+// Inventory sink map: its sources matter only when a concrete ingress still
+// has a receiver for the evaluation-local mutation effect.
+using InventoryStackMutationSourceMap =
+    std::unordered_map<std::uint32_t, std::uint32_t>;
+// A SavedEpoch capture has its own receiver contract.  Bits 0..16 describe
+// entry values which must actually be stack-derived before the local store
+// can create the alias; bit31 records a local/callee capture which is
+// independent of the caller's values (for example R15).
+using InventoryStackMutationAliasCreationMap =
+    std::unordered_map<std::uint32_t, std::uint32_t>;
+
+// The provenance live-in contract has one source per entry register and one
+// independent incoming-stack source.  Keep these available to the early ABI
+// projection helpers as well as the later flow analysis.
+constexpr std::uint32_t inventory_provenance_stack_source = 1u << 16u;
+constexpr std::uint32_t inventory_provenance_source_mask =
+    inventory_provenance_stack_source | 0xffffu;
+// Mutation contracts carry an explicit effect bit independently of their
+// entry-source slice.  A helper may mutate a current SavedEpoch with an
+// internally-created/constant value, for which the source slice is correctly
+// empty but the evaluation and receiver effect remain real.
+constexpr std::uint32_t inventory_stack_mutation_effect_bit =
+    std::uint32_t{1u} << 31u;
+constexpr std::uint32_t inventory_stack_alias_creation_unconditional =
+    std::uint32_t{1u} << 31u;
+
+[[nodiscard]] constexpr bool inventory_stack_mutation_effect_present(
+    const std::uint32_t contract) noexcept {
+    return (contract & inventory_stack_mutation_effect_bit) != 0u;
+}
+
+[[nodiscard]] constexpr std::uint32_t inventory_stack_mutation_sources(
+    const std::uint32_t contract) noexcept {
+    return contract & inventory_provenance_source_mask;
+}
+
+void merge_inventory_stack_mutation_effect(
+    std::uint32_t& destination,
+    const std::uint32_t sources) noexcept {
+    destination |= inventory_stack_mutation_effect_bit |
+                   (sources & inventory_provenance_source_mask);
+}
 
 void make_abi_stack_argument_reads_unknown(
     AbiStackArgumentReadSet& reads) {
@@ -2084,6 +2136,22 @@ enum class StackTailFoldPendingScalarPolicy : std::uint8_t {
     OmitAfterAbiBoundary,
 };
 
+struct EffectiveInventoryProvenanceMask final {
+    std::uint32_t mask = std::numeric_limits<std::uint32_t>::max();
+};
+
+[[nodiscard]] bool has_current_stack_epoch_mutation_receiver(
+    const AbstractState& state);
+[[nodiscard]] bool has_stack_derived_alias_creation_source(
+    const AbstractState& ingress, std::uint32_t sources);
+[[nodiscard]] EffectiveInventoryProvenanceMask
+effective_inventory_provenance_mask(
+    const AbstractState& ingress,
+    std::uint32_t inventory_provenance_register_read_mask,
+    std::uint32_t inventory_stack_mutation_conditional_sources,
+    std::uint32_t inventory_stack_mutation_unconditional_sources,
+    std::uint32_t inventory_stack_alias_creation_contract = 0u);
+
 bool merge_value(AbstractValue& destination, const AbstractValue& source);
 bool merge_state(AbstractState& destination,
                  const AbstractState& source,
@@ -2098,7 +2166,12 @@ bool merge_state(AbstractState& destination,
     bool memory_read_complete = false,
     bool memory_read_unknown = false,
     std::span<const FunctionMemoryWriteRange>
-        memory_read_ranges = {});
+        memory_read_ranges = {},
+    std::uint32_t inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max(),
+    std::uint32_t inventory_stack_mutation_conditional_sources = 0u,
+    std::uint32_t inventory_stack_mutation_unconditional_sources = 0u,
+    std::uint32_t inventory_stack_alias_creation_contract = 0u);
 [[nodiscard]] bool valid_complete_stack_read_contract(
     const AbiStackArgumentReadSet& reads) noexcept;
 [[nodiscard]] bool valid_exact_memory_read_contract(
@@ -8549,6 +8622,26 @@ template <std::size_t RegisterCount>
     return stored;
 }
 
+// Long stores normally pass through value_with_saved_stack_epoch(), so a raw
+// stack-derived value in a retained stack cell is an old/foreign-form input.
+// Keep this defensive load-side repair bounded and local. A storage value has
+// lost its own SP-relative coordinate, so deliberately clear the synthetic
+// register anchor and take value_with_saved_stack_epoch()'s unresolved-current
+// capture path rather than falsely rebasing it to the live R15 coordinate.
+[[nodiscard]] InventorySavedStackEpoch
+materialize_raw_stack_storage_saved_epoch(const AbstractState& state,
+                                          const AbstractValue& value) {
+    if (!value.inventory_stack_derived || has_saved_stack_epoch(value))
+        return value.inventory_saved_stack_epoch;
+    auto capture_state = state;
+    capture_state[15u] = value;
+    capture_state[15u].inventory_stack_derived = true;
+    capture_state.stack_offsets[15u].reset();
+    clear_inventory_stack_coordinates(capture_state, 15u);
+    return value_with_saved_stack_epoch(capture_state, 15u, 4u)
+        .inventory_saved_stack_epoch;
+}
+
 void merge_saved_stack_epoch_memory_forward(
     AbstractValue& destination,
     AbstractState& state,
@@ -8623,7 +8716,19 @@ void invalidate_memory_write_ranges_conservatively(
     }
 }
 
+void mark_current_epoch_saved_snapshots_unresolved(
+    AbstractState& state, const AbstractValue* mutation);
+
 void invalidate_stack_values_conservatively(AbstractState& state) {
+    // These fallbacks model an unknown/GBR-addressed write which invalidates
+    // the active stack namespace.  A current SavedEpoch is a caller-owned
+    // receiver, so record an epoch-scoped terminal mutation before the
+    // ordinary cells are forgotten; merely clearing stack_values would lose
+    // the returned Summary effect.
+    AbstractValue unknown_stack_mutation;
+    unknown_stack_mutation.inventory_stack_callback_loss_unresolved = true;
+    mark_current_epoch_saved_snapshots_unresolved(
+        state, &unknown_stack_mutation);
     for (auto value = state.stack_values.begin();
          value != state.stack_values.end();) {
         if (!has_inventory_candidate_values(value->second) &&
@@ -8947,9 +9052,11 @@ void load_inventory_stack_values(
         destination.contextual_candidate_dependency =
             destination.contextual_candidate_dependency ||
             value->contextual_candidate_dependency;
+        const auto saved_epoch =
+            materialize_raw_stack_storage_saved_epoch(state, *value);
         static_cast<void>(merge_inventory_saved_stack_epoch(
             destination.inventory_saved_stack_epoch,
-            value->inventory_saved_stack_epoch,
+            saved_epoch,
             true));
     }
     materialize_unresolved_saved_stack_alias(
@@ -9056,7 +9163,21 @@ void invalidate_stack_write_alternatives(
     AbstractState& state,
     const std::span<const std::pair<std::int32_t, std::size_t>>
         alternatives,
-    const bool may_alias_stack) {
+    const bool may_alias_stack,
+    const bool records_unknown_current_epoch_mutation = false) {
+    // FPU stores have no modeled AbstractValue payload, but a write which can
+    // hit the active stack is still an unknown mutation of every
+    // current-tracking SavedEpoch.  Ordinary Inventory stores supply their
+    // own precise payload through store_stack_value()/store_inventory... and
+    // therefore leave this false.
+    if (records_unknown_current_epoch_mutation &&
+        (may_alias_stack || !alternatives.empty())) {
+        AbstractValue unknown_stack_mutation;
+        unknown_stack_mutation.inventory_stack_callback_loss_unresolved =
+            true;
+        mark_current_epoch_saved_snapshots_unresolved(
+            state, &unknown_stack_mutation);
+    }
     if (alternatives.empty()) {
         if (!may_alias_stack) return;
         for (auto& [slot, stored] : state.stack_values) {
@@ -10665,7 +10786,8 @@ void apply_transfer(AbstractState& state,
             state.stack_may_alias
                     [instruction.destination_register] ||
                 state.inventory_stack_may_alias
-                    [instruction.destination_register]);
+                    [instruction.destination_register],
+            true);
         mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
@@ -10699,7 +10821,8 @@ void apply_transfer(AbstractState& state,
             state.stack_may_alias
                     [instruction.destination_register] ||
                 state.inventory_stack_may_alias
-                    [instruction.destination_register]);
+                    [instruction.destination_register],
+            true);
         static constexpr std::array<std::int32_t, 2u> decrements{-4, -8};
         branch_inventory_stack_position(
             state, instruction.destination_register, decrements);
@@ -10750,7 +10873,8 @@ void apply_transfer(AbstractState& state,
                 state.inventory_stack_may_alias[0u] ||
                 state.inventory_stack_may_alias
                     [instruction.destination_register] ||
-                inventory_coordinate_enumeration_failed);
+                inventory_coordinate_enumeration_failed,
+            true);
         mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
@@ -11143,7 +11267,27 @@ AbstractState make_callee_abi_input(
     const std::uint32_t callee,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
     const AbiStackArgumentReadSet* const required_stack_reads = nullptr,
-    const FunctionValueSummary* const memory_read_summary = nullptr) {
+    const FunctionValueSummary* const memory_read_summary = nullptr,
+    const std::uint32_t inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max(),
+    const std::uint32_t inventory_stack_mutation_conditional_sources = 0u,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources = 0u,
+    const std::uint32_t inventory_stack_alias_creation_contract = 0u) {
+    const auto effective_inventory_mask = effective_inventory_provenance_mask(
+        caller,
+        inventory_provenance_register_read_mask,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contract);
+    const auto effective_inventory_provenance_register_read_mask =
+        effective_inventory_mask.mask;
+    const bool retain_whole_stack_for_alias_capture =
+        (inventory_stack_alias_creation_contract &
+         inventory_stack_alias_creation_unconditional) != 0u ||
+        has_stack_derived_alias_creation_source(
+            caller,
+            inventory_stack_alias_creation_contract &
+                inventory_provenance_source_mask);
     // Construct the projected ABI state directly. Copying the complete caller
     // and immediately clearing stack_values used to deep-copy every stack
     // payload on every call edge. Stack coordinates and selected stack values
@@ -11256,7 +11400,13 @@ AbstractState make_callee_abi_input(
     const bool complete_stack_readset =
         required_stack_reads != nullptr &&
         required_stack_reads->complete;
-    if (!complete_stack_readset ||
+    const bool stack_inventory_provenance_live =
+        effective_inventory_provenance_register_read_mask ==
+            std::numeric_limits<std::uint32_t>::max() ||
+        (effective_inventory_provenance_register_read_mask &
+         inventory_provenance_stack_source) != 0u;
+    if (retain_whole_stack_for_alias_capture ||
+        stack_inventory_provenance_live || !complete_stack_readset ||
         (required_stack_reads != nullptr &&
          !required_stack_reads->slots.empty())) {
         input.inventory_unresolved_stack_carrier =
@@ -11265,15 +11415,15 @@ AbstractState make_callee_abi_input(
             caller.inventory_unresolved_stack_epoch;
         input.inventory_unresolved_stack_callback_loss =
             caller.inventory_unresolved_stack_callback_loss;
-    } else if (complete_stack_readset) {
+    } else if (complete_stack_readset && !stack_inventory_provenance_live) {
         // Complete-empty ABI stack contracts omit the domain exactly, but
         // still retain the current-epoch watcher for a later caller restore.
         const bool dropped_tracking =
             (caller.inventory_unresolved_saved_stack_alias_tracks_current_sources &
              unresolved_saved_stack_alias_source_stack) != 0u;
         if (inventory_saved_stack_epoch_tracks_current(
-                caller.inventory_unresolved_stack_epoch) ||
-            dropped_tracking)
+                 caller.inventory_unresolved_stack_epoch) ||
+             dropped_tracking)
             input.inventory_current_stack_epoch_alias_watcher = true;
         input.inventory_unresolved_saved_stack_alias_sources =
             static_cast<std::uint8_t>(
@@ -11316,7 +11466,7 @@ AbstractState make_callee_abi_input(
                 caller.stack_tail.payload.inventory_saved_stack_epoch))
             input.inventory_current_stack_epoch_alias_watcher = true;
     };
-    if (complete_stack_readset)
+    if (complete_stack_readset && !retain_whole_stack_for_alias_capture)
         retain_current_saved_alias_watcher();
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         const auto register_offset = caller.stack_offsets[index];
@@ -11378,7 +11528,22 @@ AbstractState make_callee_abi_input(
     static_cast<void>(set_inventory_stack_coordinates(
         input, 15u, std::vector<std::int32_t>{0}));
     if (caller_inventory_sp_coordinates.empty()) {
-        const auto may_read_stack =
+        // The ABI-relative projection cannot retain exact stack cells without
+        // an anchor. A current SavedEpoch removed here must still receive a
+        // later namespace detach, independently of whether this callee has a
+        // modeled long-stack mutation source.
+        for (const auto& [slot, value] : caller.stack_values) {
+            static_cast<void>(slot);
+            if (inventory_saved_stack_epoch_tracks_current(
+                    value.inventory_saved_stack_epoch))
+                input.inventory_current_stack_epoch_alias_watcher = true;
+        }
+        if (caller.stack_tail.present &&
+            inventory_saved_stack_epoch_tracks_current(
+                caller.stack_tail.payload.inventory_saved_stack_epoch))
+            input.inventory_current_stack_epoch_alias_watcher = true;
+        const auto may_read_stack = retain_whole_stack_for_alias_capture ||
+            stack_inventory_provenance_live ||
             required_stack_reads == nullptr ||
             !required_stack_reads->complete ||
             !required_stack_reads->slots.empty();
@@ -11476,7 +11641,9 @@ AbstractState make_callee_abi_input(
             caller_inventory_sp_coordinates,
             caller.stack_values);
     };
-    if (required_stack_reads != nullptr &&
+    if (!retain_whole_stack_for_alias_capture &&
+        !stack_inventory_provenance_live &&
+        required_stack_reads != nullptr &&
         required_stack_reads->complete) {
         for (const auto relative_slot : required_stack_reads->slots) {
             for (const auto projection_base :
@@ -11506,7 +11673,8 @@ AbstractState make_callee_abi_input(
 
     for (const auto& [slot, source] : caller.stack_values) {
         auto projected_source = source;
-        if (has_latent_saved_stack_alias(projected_source)) {
+        if (!retain_whole_stack_for_alias_capture &&
+            has_latent_saved_stack_alias(projected_source)) {
             add_unresolved_saved_stack_alias(
                 input,
                 unresolved_saved_stack_alias_source_stack,
@@ -11514,7 +11682,8 @@ AbstractState make_callee_abi_input(
                     projected_source.inventory_saved_stack_epoch));
             projected_source.inventory_saved_stack_epoch = {};
         }
-        if (has_direct_stack_callback_loss(projected_source)) {
+        if (!retain_whole_stack_for_alias_capture &&
+            has_direct_stack_callback_loss(projected_source)) {
             // With an incomplete ABI readset the callee may consume any
             // outgoing slot.  Only an already-direct loss is re-scoped to
             // the state-wide direct channel.  A nested SavedEpoch, including
@@ -11523,10 +11692,11 @@ AbstractState make_callee_abi_input(
             projected_source
                 .inventory_stack_callback_loss_unresolved = false;
         }
-        if (!has_non_epoch_abstract_fact(projected_source) &&
+        if (!retain_whole_stack_for_alias_capture &&
+            !has_non_epoch_abstract_fact(projected_source) &&
             !has_saved_stack_epoch(projected_source))
             continue;
-        if (!caller_sp.has_value() &&
+        if (!retain_whole_stack_for_alias_capture && !caller_sp.has_value() &&
             !has_direct_inventory_candidate_payload(projected_source) &&
             !carries_stack_callback_payload(projected_source))
             continue;
@@ -11538,7 +11708,8 @@ AbstractState make_callee_abi_input(
             // Only outgoing, word-aligned caller slots are part of the callee
             // ABI. Negative offsets are caller locals/spills and must never
             // become a callee argument by accident.
-            if (relative < 0 || relative > maximum_stack_distance ||
+            if ((!retain_whole_stack_for_alias_capture && relative < 0) ||
+                relative > maximum_stack_distance ||
                 (relative & 3) != 0)
                 continue;
             const auto relative_slot =
@@ -11556,7 +11727,9 @@ AbstractState make_callee_abi_input(
             const auto relative =
                 static_cast<std::int64_t>(caller.stack_tail.lower_bound) -
                 static_cast<std::int64_t>(projection_base);
-            const auto lower_bound = std::max<std::int64_t>(0, relative);
+            const auto lower_bound = retain_whole_stack_for_alias_capture
+                                         ? relative
+                                         : std::max<std::int64_t>(0, relative);
             if (lower_bound > maximum_stack_distance) continue;
             const auto bounded = static_cast<std::int32_t>(lower_bound);
             rebased_lower_bound = rebased_lower_bound.has_value()
@@ -11570,8 +11743,9 @@ AbstractState make_callee_abi_input(
             absorb_unresolved_stack_storage(input, caller.stack_tail.payload);
         }
         rebased_tail.lower_bound = *rebased_lower_bound;
-        if (!caller_sp.has_value() ||
+        if ((!caller_sp.has_value() ||
             caller_inventory_sp_coordinates.size() > 1u)
+            && !retain_whole_stack_for_alias_capture)
             normalize_stack_tail_payload(rebased_tail.payload);
         merge_stack_tail_summary(input, rebased_tail);
     }
@@ -11811,11 +11985,19 @@ void observe_callee_arguments(
     ObservedCalleeInputIndices* const observed_input_indices,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
     const ForwardedRegisterReadMap* const forwarded_register_reads,
+    const InventoryProvenanceRegisterReadMap* const
+        inventory_provenance_register_reads,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads,
     const std::map<std::uint32_t, FunctionValueSummary>* const
         memory_read_summaries = nullptr,
     const bool memory_read_contracts_authoritative = false,
-    const bool canonicalize_contextual_return_binding = false) {
+    const bool canonicalize_contextual_return_binding = false,
+    const InventoryStackMutationSourceMap* const
+        inventory_stack_mutation_conditional_sources = nullptr,
+    const InventoryStackMutationSourceMap* const
+        inventory_stack_mutation_unconditional_sources = nullptr,
+    const InventoryStackMutationAliasCreationMap* const
+        inventory_stack_alias_creation_contracts = nullptr) {
     if ((call_arguments == nullptr && observed_inputs == nullptr &&
          observed_input_indices == nullptr) ||
         candidate_callees.empty())
@@ -11830,10 +12012,39 @@ void observe_callee_arguments(
         }
         const FunctionValueSummary* memory_read_summary = nullptr;
         if (memory_read_contracts_authoritative &&
-            memory_read_summaries != nullptr) {
+                memory_read_summaries != nullptr) {
             const auto found = memory_read_summaries->find(candidate);
             if (found != memory_read_summaries->end())
                 memory_read_summary = &found->second;
+        }
+        auto inventory_provenance_mask =
+            std::numeric_limits<std::uint32_t>::max();
+        if (inventory_provenance_register_reads != nullptr) {
+            if (const auto reads =
+                    inventory_provenance_register_reads->find(candidate);
+                reads != inventory_provenance_register_reads->end())
+                inventory_provenance_mask = reads->second;
+        }
+        auto conditional_mutation_sources = 0u;
+        auto unconditional_mutation_sources = 0u;
+        auto alias_creation_contract = 0u;
+        if (inventory_stack_mutation_conditional_sources != nullptr) {
+            if (const auto sources =
+                    inventory_stack_mutation_conditional_sources->find(candidate);
+                sources != inventory_stack_mutation_conditional_sources->end())
+                conditional_mutation_sources = sources->second;
+        }
+        if (inventory_stack_mutation_unconditional_sources != nullptr) {
+            if (const auto sources =
+                    inventory_stack_mutation_unconditional_sources->find(candidate);
+                sources != inventory_stack_mutation_unconditional_sources->end())
+                unconditional_mutation_sources = sources->second;
+        }
+        if (inventory_stack_alias_creation_contracts != nullptr) {
+            if (const auto contract =
+                    inventory_stack_alias_creation_contracts->find(candidate);
+                contract != inventory_stack_alias_creation_contracts->end())
+                alias_creation_contract = contract->second;
         }
         auto observation = make_callee_abi_input(
             state,
@@ -11842,12 +12053,11 @@ void observe_callee_arguments(
             candidate,
             walk_diagnostics,
             required_stack_reads,
-            memory_read_summary);
-        mark_observed_code_pointer_arguments(image, observation);
-        normalize_stack_tail_summary(
-            observation,
-            true,
-            StackTailFoldPendingScalarPolicy::OmitAfterAbiBoundary);
+            memory_read_summary,
+            inventory_provenance_mask,
+            conditional_mutation_sources,
+            unconditional_mutation_sources,
+            alias_creation_contract);
         auto register_mask =
             std::numeric_limits<std::uint16_t>::max();
         if (forwarded_register_reads != nullptr) {
@@ -11871,7 +12081,20 @@ void observe_callee_arguments(
             memory_read_summary != nullptr
                 ? std::span<const FunctionMemoryWriteRange>{
                       memory_read_summary->memory_read_ranges}
-                : std::span<const FunctionMemoryWriteRange>{}));
+                : std::span<const FunctionMemoryWriteRange>{},
+            inventory_provenance_mask,
+            conditional_mutation_sources,
+            unconditional_mutation_sources,
+            alias_creation_contract));
+        // Project the independent provenance channel before the proven ABI
+        // boundary.  Otherwise an ordinary-only register/stack read could be
+        // promoted into Inventory even though this callee cannot carry it to
+        // an inventory or state sink.
+        mark_observed_code_pointer_arguments(image, observation);
+        normalize_stack_tail_summary(
+            observation,
+            true,
+            StackTailFoldPendingScalarPolicy::OmitAfterAbiBoundary);
         if (canonicalize_contextual_return_binding) {
             const bool has_authoritative_complete_stack_contract =
                 required_stack_reads != nullptr &&
@@ -11913,10 +12136,57 @@ void observe_callee_arguments(
 void mark_contextual_candidate_abi_arguments(
     AbstractState& state,
     const std::uint16_t entry_register_reads,
-    const AbiStackArgumentReadSet* const entry_stack_reads) {
+    const AbiStackArgumentReadSet* const entry_stack_reads,
+    const std::uint32_t inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max(),
+    const std::uint32_t inventory_stack_mutation_conditional_sources = 0u,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources = 0u,
+    const std::uint32_t inventory_stack_alias_creation_contract = 0u) {
+    const auto effective_inventory_mask = effective_inventory_provenance_mask(
+        state,
+        inventory_provenance_register_read_mask,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contract);
+    const auto effective_inventory_provenance_register_read_mask =
+        effective_inventory_mask.mask;
+    const bool provenance_contract_exact =
+        effective_inventory_provenance_register_read_mask !=
+        std::numeric_limits<std::uint32_t>::max();
+    const auto register_provenance_live =
+        [&](const std::uint8_t index) {
+            return !provenance_contract_exact ||
+                   (effective_inventory_provenance_register_read_mask &
+                    (std::uint32_t{1u} << index)) != 0u;
+        };
+    const auto register_contextual_argument_live =
+        [&](const std::uint8_t index) {
+            if (index == 15u) return false;
+            // A precise Inventory provenance contract is intentionally
+            // independent of the ordinary ABI-read mask: a provenance-only
+            // r0-r14 value can still flow through a return, store or call
+            // into the guarded candidate sink.  With no such contract keep
+            // the legacy ABI-argument scope as the conservative fallback.
+            return provenance_contract_exact
+                       ? register_provenance_live(index)
+                       : (entry_register_reads & register_bit(index)) != 0u;
+        };
+    const bool stack_provenance_live =
+        !provenance_contract_exact ||
+        (effective_inventory_provenance_register_read_mask &
+         inventory_provenance_stack_source) != 0u;
+    const bool retain_whole_stack_for_alias_capture =
+        (inventory_stack_alias_creation_contract &
+         inventory_stack_alias_creation_unconditional) != 0u ||
+        has_stack_derived_alias_creation_source(
+            state,
+            inventory_stack_alias_creation_contract &
+                inventory_provenance_source_mask);
     const bool observes_stack_domain =
-        entry_stack_reads == nullptr || !entry_stack_reads->complete ||
-        !entry_stack_reads->slots.empty();
+        stack_provenance_live &&
+        (retain_whole_stack_for_alias_capture ||
+         entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+         !entry_stack_reads->slots.empty());
     const auto mark_carrier = [](InventoryCandidateCarrier& carrier) {
         if (has_inventory_candidate_carrier_payload(carrier) ||
             has_pending_abi_scalar_payload(carrier))
@@ -11933,20 +12203,24 @@ void mark_contextual_candidate_abi_arguments(
             }
             for (auto& nested : epoch.unresolved_nested_epochs)
                 self(self, nested);
-        };
-    for (std::uint8_t index = 4u; index <= 7u; ++index) {
-        if ((entry_register_reads & register_bit(index)) != 0u)
+    };
+    for (std::uint8_t index = 0u; index < 15u; ++index) {
+        if (register_contextual_argument_live(index))
             state[index].contextual_candidate_dependency = true;
     }
     for (auto& [slot, value] : state.stack_values) {
-        if (entry_stack_reads == nullptr || !entry_stack_reads->complete ||
-            std::binary_search(entry_stack_reads->slots.begin(),
-                               entry_stack_reads->slots.end(),
-                               slot))
+        if (stack_provenance_live &&
+            (retain_whole_stack_for_alias_capture ||
+             entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+             std::binary_search(entry_stack_reads->slots.begin(),
+                                entry_stack_reads->slots.end(),
+                                slot)))
             value.contextual_candidate_dependency = true;
     }
     if (state.stack_tail.present &&
-        (entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+        stack_provenance_live &&
+        (retain_whole_stack_for_alias_capture ||
+         entry_stack_reads == nullptr || !entry_stack_reads->complete ||
          std::any_of(entry_stack_reads->slots.begin(),
                      entry_stack_reads->slots.end(),
                      [&](const auto slot) {
@@ -11962,18 +12236,59 @@ void mark_contextual_candidate_abi_arguments(
 [[nodiscard]] bool has_contextual_candidate_abi_argument(
     const AbstractState& state,
     const std::uint16_t entry_register_reads,
-    const AbiStackArgumentReadSet* const entry_stack_reads) {
-    for (std::uint8_t index = 4u; index <= 7u; ++index) {
-        if ((entry_register_reads & register_bit(index)) != 0u &&
+    const AbiStackArgumentReadSet* const entry_stack_reads,
+    const std::uint32_t inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max(),
+    const std::uint32_t inventory_stack_mutation_conditional_sources = 0u,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources = 0u,
+    const std::uint32_t inventory_stack_alias_creation_contract = 0u) {
+    const auto effective_inventory_mask = effective_inventory_provenance_mask(
+        state,
+        inventory_provenance_register_read_mask,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contract);
+    const auto effective_inventory_provenance_register_read_mask =
+        effective_inventory_mask.mask;
+    const bool provenance_contract_exact =
+        effective_inventory_provenance_register_read_mask !=
+        std::numeric_limits<std::uint32_t>::max();
+    const auto register_provenance_live =
+        [&](const std::uint8_t index) {
+            return !provenance_contract_exact ||
+                   (effective_inventory_provenance_register_read_mask &
+                    (std::uint32_t{1u} << index)) != 0u;
+        };
+    const auto register_contextual_argument_live =
+        [&](const std::uint8_t index) {
+            if (index == 15u) return false;
+            return provenance_contract_exact
+                       ? register_provenance_live(index)
+                       : (entry_register_reads & register_bit(index)) != 0u;
+        };
+    const bool stack_provenance_live =
+        !provenance_contract_exact ||
+        (effective_inventory_provenance_register_read_mask &
+         inventory_provenance_stack_source) != 0u;
+    const bool retain_whole_stack_for_alias_capture =
+        (inventory_stack_alias_creation_contract &
+         inventory_stack_alias_creation_unconditional) != 0u ||
+        has_stack_derived_alias_creation_source(
+            state,
+            inventory_stack_alias_creation_contract &
+                inventory_provenance_source_mask);
+    for (std::uint8_t index = 0u; index < 15u; ++index) {
+        if (register_contextual_argument_live(index) &&
             (state[index].contextual_candidate_dependency ||
              carries_stack_callback_payload(state[index]) ||
              has_latent_saved_stack_alias(state[index])))
             return true;
     }
     const bool may_read_stack =
-        entry_stack_reads == nullptr ||
+        stack_provenance_live &&
+        (retain_whole_stack_for_alias_capture || entry_stack_reads == nullptr ||
         !entry_stack_reads->complete ||
-        !entry_stack_reads->slots.empty();
+        !entry_stack_reads->slots.empty());
     const auto epoch_has_contextual_or_candidate_payload =
         [&](auto&& self, const InventorySavedStackEpoch& epoch) -> bool {
             if (epoch.candidate_payload_lost ||
@@ -12015,7 +12330,9 @@ void mark_contextual_candidate_abi_arguments(
              state.inventory_unresolved_stack_epoch)))
         return true;
     for (const auto& [slot, value] : state.stack_values) {
-        if ((entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+        if (stack_provenance_live &&
+            (retain_whole_stack_for_alias_capture ||
+             entry_stack_reads == nullptr || !entry_stack_reads->complete ||
              std::binary_search(entry_stack_reads->slots.begin(),
                                 entry_stack_reads->slots.end(),
                                 slot)) &&
@@ -12025,7 +12342,9 @@ void mark_contextual_candidate_abi_arguments(
             return true;
     }
     if (state.stack_tail.present &&
-        (entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+        stack_provenance_live &&
+        (retain_whole_stack_for_alias_capture ||
+         entry_stack_reads == nullptr || !entry_stack_reads->complete ||
          std::any_of(entry_stack_reads->slots.begin(),
                      entry_stack_reads->slots.end(),
                      [&](const auto slot) {
@@ -12050,10 +12369,19 @@ void observe_inventory_transfers(
     const bool observes_abi_arguments,
     std::vector<FunctionEvaluation::InventoryTransfer>* const transfers,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
+    const ForwardedRegisterReadMap* const forwarded_register_reads,
+    const InventoryProvenanceRegisterReadMap* const
+        inventory_provenance_register_reads,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads,
     const std::map<std::uint32_t, FunctionValueSummary>* const
         memory_read_summaries = nullptr,
-    const bool memory_read_contracts_authoritative = false) {
+    const bool memory_read_contracts_authoritative = false,
+    const InventoryStackMutationSourceMap* const
+        inventory_stack_mutation_conditional_sources = nullptr,
+    const InventoryStackMutationSourceMap* const
+        inventory_stack_mutation_unconditional_sources = nullptr,
+    const InventoryStackMutationAliasCreationMap* const
+        inventory_stack_alias_creation_contracts = nullptr) {
     if (transfers == nullptr || candidate_callees.empty()) return;
     for (const auto candidate_callee : candidate_callees) {
         const AbiStackArgumentReadSet* required_stack_reads = nullptr;
@@ -12073,6 +12401,43 @@ void observe_inventory_transfers(
             if (found != memory_read_summaries->end())
                 memory_read_summary = &found->second;
         }
+        auto inventory_provenance_mask =
+            std::numeric_limits<std::uint32_t>::max();
+        if (candidate_callee.kind == TailIngressTargetKind::Function &&
+            inventory_provenance_register_reads != nullptr) {
+            if (const auto reads =
+                    inventory_provenance_register_reads->find(
+                        candidate_callee.address);
+                reads != inventory_provenance_register_reads->end())
+                inventory_provenance_mask = reads->second;
+        }
+        auto conditional_mutation_sources = 0u;
+        auto unconditional_mutation_sources = 0u;
+        auto alias_creation_contract = 0u;
+        if (candidate_callee.kind == TailIngressTargetKind::Function &&
+            inventory_stack_mutation_conditional_sources != nullptr) {
+            if (const auto sources =
+                    inventory_stack_mutation_conditional_sources->find(
+                        candidate_callee.address);
+                sources != inventory_stack_mutation_conditional_sources->end())
+                conditional_mutation_sources = sources->second;
+        }
+        if (candidate_callee.kind == TailIngressTargetKind::Function &&
+            inventory_stack_mutation_unconditional_sources != nullptr) {
+            if (const auto sources =
+                    inventory_stack_mutation_unconditional_sources->find(
+                        candidate_callee.address);
+                sources != inventory_stack_mutation_unconditional_sources->end())
+                unconditional_mutation_sources = sources->second;
+        }
+        if (candidate_callee.kind == TailIngressTargetKind::Function &&
+            inventory_stack_alias_creation_contracts != nullptr) {
+            if (const auto contract =
+                    inventory_stack_alias_creation_contracts->find(
+                        candidate_callee.address);
+                contract != inventory_stack_alias_creation_contracts->end())
+                alias_creation_contract = contract->second;
+        }
         auto observation = make_callee_abi_input(
             state,
             owner,
@@ -12080,7 +12445,40 @@ void observe_inventory_transfers(
             candidate_callee.address,
             walk_diagnostics,
             required_stack_reads,
-            memory_read_summary);
+            memory_read_summary,
+            inventory_provenance_mask,
+            conditional_mutation_sources,
+            unconditional_mutation_sources,
+            alias_creation_contract);
+        auto register_mask = std::numeric_limits<std::uint16_t>::max();
+        if (candidate_callee.kind == TailIngressTargetKind::Function) {
+            if (forwarded_register_reads != nullptr) {
+                if (const auto reads = forwarded_register_reads->find(
+                        candidate_callee.address);
+                    reads != forwarded_register_reads->end())
+                    register_mask = reads->second;
+            }
+        }
+        AbiStackArgumentReadSet no_stack_projection;
+        no_stack_projection.complete = false;
+        static_cast<void>(canonicalize_evaluation_ingress_in_place(
+            observation,
+            register_mask,
+            required_stack_reads == nullptr
+                ? no_stack_projection
+                : *required_stack_reads,
+            memory_read_summary != nullptr &&
+                memory_read_summary->memory_read_complete,
+            memory_read_summary != nullptr &&
+                memory_read_summary->memory_read_unknown,
+            memory_read_summary != nullptr
+                ? std::span<const FunctionMemoryWriteRange>{
+                      memory_read_summary->memory_read_ranges}
+                : std::span<const FunctionMemoryWriteRange>{},
+            inventory_provenance_mask,
+            conditional_mutation_sources,
+            unconditional_mutation_sources,
+            alias_creation_contract));
         if (observes_abi_arguments)
             promote_tail_code_literal_arguments(
                 image, transfer_site, observation);
@@ -12268,13 +12666,21 @@ void apply_call(AbstractState& state,
                 GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics = nullptr,
                 const ForwardedRegisterReadMap* const
                     forwarded_register_reads = nullptr,
+                const InventoryProvenanceRegisterReadMap* const
+                    inventory_provenance_register_reads = nullptr,
                  const AbiStackArgumentReadMap* const
                      abi_stack_argument_reads = nullptr,
                  const bool memory_read_contracts_authoritative = false,
                  MemoryReadObservation* const
                      memory_read_observation = nullptr,
                  FunctionEvaluationHotPathDiagnostics* const
-                     hot_path_diagnostics = nullptr) {
+                     hot_path_diagnostics = nullptr,
+                 const InventoryStackMutationSourceMap* const
+                     inventory_stack_mutation_conditional_sources = nullptr,
+                 const InventoryStackMutationSourceMap* const
+                     inventory_stack_mutation_unconditional_sources = nullptr,
+                 const InventoryStackMutationAliasCreationMap* const
+                     inventory_stack_alias_creation_contracts = nullptr) {
     const ApplyCallDiagnosticsScope diagnostics_scope{
         hot_path_diagnostics};
     ObservedCalleeInputs observed_inputs;
@@ -12295,10 +12701,14 @@ void apply_call(AbstractState& state,
             : nullptr,
         walk_diagnostics,
         forwarded_register_reads,
+        inventory_provenance_register_reads,
         abi_stack_argument_reads,
         &summaries,
         memory_read_contracts_authoritative,
-        contextual_summaries != nullptr);
+        contextual_summaries != nullptr,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contracts);
     const auto& caller_memory = state.memory_values;
     const auto discard_stack_values = [&] {
         for (const auto& [slot, value] : state.stack_values) {
@@ -13872,6 +14282,8 @@ FunctionEvaluation evaluate_function(
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics = nullptr,
     const ForwardedRegisterReadMap* const
         forwarded_register_reads = nullptr,
+    const InventoryProvenanceRegisterReadMap* const
+        inventory_provenance_register_reads = nullptr,
     const AbiStackArgumentReadMap* const
         abi_stack_argument_reads = nullptr,
     const std::uint8_t inventory_sink_sources = 0u,
@@ -13879,7 +14291,13 @@ FunctionEvaluation evaluate_function(
      const bool memory_read_contracts_authoritative = false,
      const ResolutionCancellation* const cancel_requested = nullptr,
      FunctionEvaluationHotPathDiagnostics* const
-         hot_path_diagnostics = nullptr) {
+         hot_path_diagnostics = nullptr,
+     const InventoryStackMutationSourceMap* const
+         inventory_stack_mutation_conditional_sources = nullptr,
+     const InventoryStackMutationSourceMap* const
+         inventory_stack_mutation_unconditional_sources = nullptr,
+     const InventoryStackMutationAliasCreationMap* const
+         inventory_stack_alias_creation_contracts = nullptr) {
     throw_if_resolution_cancelled(cancel_requested);
     FunctionEvaluation evaluation;
     CurrentStackEpochMutation current_stack_epoch_mutation;
@@ -14185,10 +14603,14 @@ FunctionEvaluation evaluate_function(
                             contextual_summaries,
                             walk_diagnostics,
                             forwarded_register_reads,
-                             abi_stack_argument_reads,
+                            inventory_provenance_register_reads,
+                            abi_stack_argument_reads,
                              memory_read_contracts_authoritative,
                              &evaluation_memory_reads,
-                             hot_path_diagnostics);
+                             hot_path_diagnostics,
+                             inventory_stack_mutation_conditional_sources,
+                             inventory_stack_mutation_unconditional_sources,
+                             inventory_stack_alias_creation_contracts);
                 delayed_call.reset();
             }
             if (delayed_tail_ingress.has_value()) {
@@ -14204,9 +14626,14 @@ FunctionEvaluation evaluate_function(
                     delayed_tail_ingress->observes_abi_arguments,
                     inventory_transfers,
                     walk_diagnostics,
+                    forwarded_register_reads,
+                    inventory_provenance_register_reads,
                     abi_stack_argument_reads,
                     &summaries,
-                    memory_read_contracts_authoritative);
+                    memory_read_contracts_authoritative,
+                    inventory_stack_mutation_conditional_sources,
+                    inventory_stack_mutation_unconditional_sources,
+                    inventory_stack_alias_creation_contracts);
                 delayed_tail_ingress.reset();
             }
             if (call) {
@@ -14247,10 +14674,14 @@ FunctionEvaluation evaluate_function(
                                 contextual_summaries,
                                 walk_diagnostics,
                                 forwarded_register_reads,
+                                inventory_provenance_register_reads,
                                 abi_stack_argument_reads,
                                 memory_read_contracts_authoritative,
                                 &evaluation_memory_reads,
-                                hot_path_diagnostics);
+                                hot_path_diagnostics,
+                                inventory_stack_mutation_conditional_sources,
+                                inventory_stack_mutation_unconditional_sources,
+                                inventory_stack_alias_creation_contracts);
             }
             if (tail_ingress.has_value()) {
                 if (line.instruction.has_delay_slot) {
@@ -14273,9 +14704,14 @@ FunctionEvaluation evaluate_function(
                                                 tail_ingress->observes_abi_arguments,
                                                 inventory_transfers,
                                                 walk_diagnostics,
+                                                forwarded_register_reads,
+                                                inventory_provenance_register_reads,
                                                 abi_stack_argument_reads,
                                                 &summaries,
-                                                memory_read_contracts_authoritative);
+                                                memory_read_contracts_authoritative,
+                                                inventory_stack_mutation_conditional_sources,
+                                                inventory_stack_mutation_unconditional_sources,
+                                                inventory_stack_alias_creation_contracts);
                 }
             }
         }
@@ -14433,7 +14869,17 @@ FunctionEvaluation evaluate_function(
         std::set<std::uint32_t> evidence;
         for (const auto& [return_site, state] : returns) {
             static_cast<void>(return_site);
-            const auto& value = state[register_index];
+            // A raw stack-derived return has no public summary bit of its
+            // own. Materialize its SavedEpoch at this true RTS boundary
+            // before summarizing, so a caller cannot later store R0 as an
+            // uncaptured stack pointer. The capture is deliberately local to
+            // this summary copy; the converged return state remains exact.
+            const auto captured =
+                state[register_index].inventory_stack_derived &&
+                        !has_saved_stack_epoch(state[register_index])
+                    ? value_with_saved_stack_epoch(state, register_index, 4u)
+                    : state[register_index];
+            const auto& value = captured;
             inventory_stack_callback_loss_unresolved =
                 inventory_stack_callback_loss_unresolved ||
                 has_direct_stack_callback_loss(value);
@@ -15647,9 +16093,11 @@ bool guarded_inventory_store_instruction(
 constexpr std::uint8_t abi_stack_argument_taint = 1u << 4u;
 constexpr std::uint8_t abi_argument_taint_mask =
     (abi_stack_argument_taint << 1u) - 1u;
-
 struct AbiPersistentStoreFlowState {
     std::array<std::uint8_t, 16u> register_taints{};
+    // Separate from the r4-r7 ABI source slice: this tracks all 16 entry
+    // registers plus the incoming stack through the same bounded flow.
+    std::array<std::uint32_t, 16u> inventory_provenance_taints{};
     std::array<std::optional<std::int32_t>, 16u> stack_offsets{};
     std::array<std::vector<std::int32_t>, 16u> stack_offset_candidates;
     // `stack_derived` means every represented path is stack-derived.
@@ -15658,8 +16106,18 @@ struct AbiPersistentStoreFlowState {
     std::array<bool, 16u> stack_may_alias{};
     std::array<std::optional<std::uint32_t>, 16u> constants{};
     std::map<std::int32_t, std::uint8_t> stack_taints;
+    std::map<std::int32_t, std::uint32_t>
+        inventory_provenance_stack_taints;
     std::set<std::int32_t> stack_definitely_defined;
     bool stack_tracking_lost = false;
+    // Once set, a current SavedEpoch can be created by this function without
+    // relying on an alias supplied by its caller.  It is monotone through the
+    // local CFG; the bounded summary exposes the corresponding effect bit.
+    bool creates_current_stack_epoch_alias = false;
+    // Entry sources which may create a SavedEpoch only when their concrete
+    // ingress value is stack-derived.  This deliberately does not reuse the
+    // address-side stack_may_alias lattice.
+    std::uint32_t conditional_current_stack_epoch_alias_sources = 0u;
 
     bool operator==(const AbiPersistentStoreFlowState&) const = default;
 };
@@ -15714,6 +16172,42 @@ abi_stack_slots(const AbiPersistentStoreFlowState& state,
     return slots;
 }
 
+// Shared static counterpart of the bounded R0-indexed address enumerator.
+// It intentionally proves an exact stack alternative only when the stack
+// base is MUST-derived and the other addend is a finite non-stack constant.
+[[nodiscard]] std::vector<std::int32_t>
+abi_r0_indexed_stack_slots(const AbiPersistentStoreFlowState& state,
+                           const std::uint8_t other_register) {
+    if (other_register == 0u) return {};
+    const auto bounded_displacement =
+        [](const std::optional<std::uint32_t> value)
+            -> std::optional<std::int32_t> {
+            if (!value.has_value()) return std::nullopt;
+            auto signed_value = static_cast<std::int64_t>(*value);
+            if (signed_value > std::numeric_limits<std::int32_t>::max())
+                signed_value -= (std::int64_t{1} << 32u);
+            if (signed_value < -maximum_stack_distance ||
+                signed_value > maximum_stack_distance)
+                return std::nullopt;
+            return static_cast<std::int32_t>(signed_value);
+        };
+    const auto combine =
+        [&](const std::uint8_t stack_register,
+            const std::uint8_t displacement_register) {
+            if (!state.stack_derived[stack_register] ||
+                state.stack_may_alias[displacement_register])
+                return std::vector<std::int32_t>{};
+            const auto displacement = bounded_displacement(
+                state.constants[displacement_register]);
+            return displacement.has_value()
+                       ? abi_stack_slots(state, stack_register, *displacement)
+                       : std::vector<std::int32_t>{};
+        };
+    if (auto slots = combine(other_register, 0u); !slots.empty())
+        return slots;
+    return combine(0u, other_register);
+}
+
 bool adjust_abi_stack_offsets(
     AbiPersistentStoreFlowState& state,
     const std::uint8_t register_index,
@@ -15761,6 +16255,7 @@ void clear_abi_flow_register(AbiPersistentStoreFlowState& state,
     // Overwriting a register discards only that pointer. It does not make the
     // tracked stack memory or SP coordinate unknown.
     state.register_taints[register_index] = 0u;
+    state.inventory_provenance_taints[register_index] = 0u;
     state.stack_offsets[register_index].reset();
     state.stack_offset_candidates[register_index].clear();
     state.stack_derived[register_index] = false;
@@ -15806,6 +16301,27 @@ abi_stack_load_taint(const AbiPersistentStoreFlowState& state,
     return taint;
 }
 
+[[nodiscard]] std::uint32_t inventory_provenance_stack_load_sources(
+    const AbiPersistentStoreFlowState& state,
+    const std::span<const std::int32_t> slots) {
+    if (slots.empty())
+        return state.stack_tracking_lost
+                   ? inventory_provenance_source_mask
+                   : 0u;
+    auto sources = std::uint32_t{0u};
+    for (const auto slot : slots) {
+        if (const auto stored =
+                state.inventory_provenance_stack_taints.find(slot);
+            stored != state.inventory_provenance_stack_taints.end())
+            sources |= stored->second;
+        else if (slot >= 0)
+            sources |= inventory_provenance_stack_source;
+    }
+    if (state.stack_tracking_lost)
+        sources |= inventory_provenance_source_mask;
+    return sources & inventory_provenance_source_mask;
+}
+
 void store_abi_stack_taints(
     AbiPersistentStoreFlowState& state,
     const std::span<const std::int32_t> slots,
@@ -15840,6 +16356,35 @@ void store_abi_stack_taints(
     }
 }
 
+void store_inventory_provenance_stack_taints(
+    AbiPersistentStoreFlowState& state,
+    const std::span<const std::int32_t> slots,
+    const std::uint32_t sources) {
+    if (slots.empty()) {
+        state.stack_tracking_lost = true;
+        return;
+    }
+    for (const auto slot : slots) {
+        if (!state.inventory_provenance_stack_taints.contains(slot) &&
+            state.inventory_provenance_stack_taints.size() >=
+                maximum_abi_persistent_flow_stack_slots) {
+            state.stack_tracking_lost = true;
+            return;
+        }
+        auto stored_sources = sources;
+        if (slots.size() > 1u) {
+            if (const auto previous =
+                    state.inventory_provenance_stack_taints.find(slot);
+                previous != state.inventory_provenance_stack_taints.end())
+                stored_sources |= previous->second;
+            else if (slot >= 0)
+                stored_sources |= inventory_provenance_stack_source;
+        }
+        state.inventory_provenance_stack_taints[slot] =
+            stored_sources & inventory_provenance_source_mask;
+    }
+}
+
 [[nodiscard]] std::uint8_t
 abi_outgoing_stack_argument_taint(const AbiPersistentStoreFlowState& state) {
     if (state.stack_tracking_lost) return abi_argument_taint_mask;
@@ -15864,6 +16409,23 @@ abi_outgoing_stack_argument_taint(const AbiPersistentStoreFlowState& state) {
         (taint | abi_stack_argument_taint) & abi_argument_taint_mask);
 }
 
+[[nodiscard]] std::uint32_t inventory_provenance_outgoing_stack_sources(
+    const AbiPersistentStoreFlowState& state) {
+    if (state.stack_tracking_lost) return inventory_provenance_source_mask;
+    auto sources = inventory_provenance_stack_source;
+    const auto stack_bases = abi_stack_coordinates(state, 15u);
+    if (stack_bases.empty()) return sources;
+    for (const auto& [slot, value] :
+         state.inventory_provenance_stack_taints) {
+        if (std::any_of(
+                stack_bases.begin(),
+                stack_bases.end(),
+                [&](const auto stack_base) { return slot >= stack_base; }))
+            sources |= value;
+    }
+    return sources & inventory_provenance_source_mask;
+}
+
 [[nodiscard]] bool merge_abi_persistent_store_flow_state(
     AbiPersistentStoreFlowState& destination,
     const AbiPersistentStoreFlowState& source) {
@@ -15883,6 +16445,15 @@ abi_outgoing_stack_argument_taint(const AbiPersistentStoreFlowState& state) {
             destination.register_taints[index] | source.register_taints[index]);
         if (merged_taint != destination.register_taints[index]) {
             destination.register_taints[index] = merged_taint;
+            changed = true;
+        }
+        const auto merged_inventory_sources =
+            destination.inventory_provenance_taints[index] |
+            source.inventory_provenance_taints[index];
+        if (merged_inventory_sources !=
+            destination.inventory_provenance_taints[index]) {
+            destination.inventory_provenance_taints[index] =
+                merged_inventory_sources;
             changed = true;
         }
         // Definite stack provenance survives only when every predecessor has
@@ -16060,6 +16631,62 @@ abi_outgoing_stack_argument_taint(const AbiPersistentStoreFlowState& state) {
         destination.stack_tracking_lost = true;
         changed = true;
     }
+    std::set<std::int32_t> inventory_provenance_slots;
+    for (const auto& [slot, value] :
+         destination.inventory_provenance_stack_taints) {
+        static_cast<void>(value);
+        inventory_provenance_slots.insert(slot);
+    }
+    for (const auto& [slot, value] :
+         source.inventory_provenance_stack_taints) {
+        static_cast<void>(value);
+        inventory_provenance_slots.insert(slot);
+    }
+    if (destination.stack_tracking_lost ||
+        inventory_provenance_slots.size() >
+            maximum_abi_persistent_flow_stack_slots) {
+        if (!destination.inventory_provenance_stack_taints.empty()) {
+            destination.inventory_provenance_stack_taints.clear();
+            changed = true;
+        }
+    } else {
+        for (const auto slot : inventory_provenance_slots) {
+            const auto destination_value =
+                destination.inventory_provenance_stack_taints.find(slot);
+            const auto source_value =
+                source.inventory_provenance_stack_taints.find(slot);
+            const auto merged = static_cast<std::uint32_t>(
+                (destination_value ==
+                         destination.inventory_provenance_stack_taints.end()
+                     ? (slot >= 0 ? inventory_provenance_stack_source : 0u)
+                     : destination_value->second) |
+                (source_value == source.inventory_provenance_stack_taints.end()
+                     ? (slot >= 0 ? inventory_provenance_stack_source : 0u)
+                     : source_value->second));
+            if (destination_value ==
+                    destination.inventory_provenance_stack_taints.end() ||
+                destination_value->second != merged) {
+                destination.inventory_provenance_stack_taints[slot] =
+                    merged & inventory_provenance_source_mask;
+                changed = true;
+            }
+        }
+    }
+    if (source.creates_current_stack_epoch_alias &&
+        !destination.creates_current_stack_epoch_alias) {
+        destination.creates_current_stack_epoch_alias = true;
+        changed = true;
+    }
+    const auto merged_alias_creation_sources =
+        static_cast<std::uint32_t>(
+            destination.conditional_current_stack_epoch_alias_sources |
+            source.conditional_current_stack_epoch_alias_sources);
+    if (merged_alias_creation_sources !=
+        destination.conditional_current_stack_epoch_alias_sources) {
+        destination.conditional_current_stack_epoch_alias_sources =
+            merged_alias_creation_sources;
+        changed = true;
+    }
     return changed;
 }
 
@@ -16123,6 +16750,13 @@ struct AbiPersistentStoreSignature {
     // Incomplete/external exits deliberately keep the conservative top mask.
     bool return_sources_complete = false;
     std::uint8_t returned_r0_sources = abi_argument_taint_mask;
+    std::uint32_t inventory_provenance_return_sources =
+        inventory_provenance_source_mask;
+    std::uint32_t inventory_provenance_register_reads = 0u;
+    std::uint32_t inventory_stack_mutation_conditional_sources = 0u;
+    std::uint32_t inventory_stack_mutation_unconditional_sources = 0u;
+    std::uint32_t inventory_stack_alias_creation_conditional_sources = 0u;
+    bool creates_current_stack_epoch_alias = false;
     std::uint8_t persistent_store_sources = 0u;
     std::uint8_t indirect_dispatch_sources = 0u;
     AbiStackArgumentReadSet stack_slots_read_before_definition;
@@ -16144,6 +16778,19 @@ struct AbiInventorySinkSources {
 using TailIngressSinkSourceMap =
     std::map<TailIngressTarget, AbiInventorySinkSources>;
 
+[[nodiscard]] std::optional<std::uint16_t>
+known_general_register_read_mask(
+    const katana::sh4::DecodedInstruction& instruction);
+
+// Exact entry-register dependencies of a write to R15.  This deliberately
+// differs from the instruction's complete read mask: a pre-decrement store
+// reads its payload, but that payload does not determine the updated stack
+// pointer.  Returning nullopt is an explicit fail-closed Top for an
+// unclassified R15 write.
+[[nodiscard]] std::optional<std::uint16_t>
+stack_pointer_result_dependency_mask(
+    const katana::sh4::DecodedInstruction& instruction);
+
 [[nodiscard]] std::uint8_t compose_abi_return_taint(
     const AbiPersistentStoreFlowState& state,
     const std::uint8_t return_sources) {
@@ -16157,6 +16804,157 @@ using TailIngressSinkSourceMap =
         result = static_cast<std::uint8_t>(
             result | abi_outgoing_stack_argument_taint(state));
     return static_cast<std::uint8_t>(result & abi_argument_taint_mask);
+}
+
+[[nodiscard]] std::uint32_t compose_inventory_provenance_sources(
+    const AbiPersistentStoreFlowState& state,
+    const std::uint32_t callee_sources) {
+    auto result = std::uint32_t{0u};
+    for (std::uint8_t index = 0u; index < 16u; ++index) {
+        if ((callee_sources & (std::uint32_t{1u} << index)) != 0u)
+            result |= state.inventory_provenance_taints[index];
+    }
+    if ((callee_sources & inventory_provenance_stack_source) != 0u)
+        result |= inventory_provenance_outgoing_stack_sources(state);
+    return result & inventory_provenance_source_mask;
+}
+
+void compose_inventory_stack_mutation_effect(
+    std::uint32_t& destination,
+    const AbiPersistentStoreFlowState& state,
+    const std::uint32_t contract) {
+    if (!inventory_stack_mutation_effect_present(contract)) return;
+    merge_inventory_stack_mutation_effect(
+        destination,
+        compose_inventory_provenance_sources(
+            state, inventory_stack_mutation_sources(contract)));
+}
+
+// Every instruction which can reach a runtime current-epoch mutation path is
+// an effect here.  Only an actual 32-bit AbstractValue store carries an entry
+// source; byte/word, special-register, FPU and conservative unknown writes
+// record a source-free effect because their runtime counterpart injects an
+// unknown fail-closed mutation instead of a transferable payload.
+[[nodiscard]] bool stack_mutation_store_effect(
+    const AbiPersistentStoreFlowState& state,
+    const katana::sh4::DecodedInstruction& instruction) {
+    using K = katana::sh4::InstructionKind;
+    const auto may_target_stack = [&](const std::uint8_t index) {
+        return state.stack_derived[index] || state.stack_may_alias[index];
+    };
+    const auto can_reach_conservative_range_invalidator =
+        [&](const std::uint8_t index, const std::int32_t displacement = 0) {
+            return state.stack_may_alias[index] &&
+                   abi_stack_slots(state, index, displacement).empty();
+        };
+    const auto can_reach_conservative_r0_invalidator = [&] {
+        return (state.stack_may_alias[0u] ||
+                state.stack_may_alias[instruction.destination_register]) &&
+               abi_r0_indexed_stack_slots(
+                   state, instruction.destination_register).empty();
+    };
+    switch (instruction.kind) {
+    case K::MovLongStore:
+    case K::MovcaLong:
+    case K::MovLongStorePreDecrement:
+    case K::MovLongStoreDisplacement:
+        return may_target_stack(instruction.destination_register);
+    case K::MovLongStoreR0Indexed:
+        return may_target_stack(0u) ||
+               may_target_stack(instruction.destination_register);
+    case K::MovByteStore:
+    case K::MovWordStore:
+        return can_reach_conservative_range_invalidator(
+            instruction.destination_register);
+    case K::MovByteStorePreDecrement:
+    case K::MovWordStorePreDecrement:
+        return can_reach_conservative_range_invalidator(
+            instruction.destination_register,
+            instruction.kind == K::MovByteStorePreDecrement ? -1 : -2);
+    case K::MovByteStoreDisplacement:
+    case K::MovWordStoreDisplacement:
+        return can_reach_conservative_range_invalidator(
+            instruction.destination_register, instruction.displacement);
+    case K::MovByteStoreR0Indexed:
+    case K::MovWordStoreR0Indexed:
+        return can_reach_conservative_r0_invalidator();
+    case K::StoreSpecialRegisterPreDecrement:
+        return can_reach_conservative_range_invalidator(
+            instruction.destination_register, -4);
+    // The FPU paths use invalidate_stack_write_alternatives().  They now
+    // explicitly record the same source-free terminal mutation whenever an
+    // exact or MAY stack alternative is present.
+    case K::FmovStore:
+    case K::FmovStorePreDecrement:
+        return may_target_stack(instruction.destination_register);
+    case K::FmovStoreR0Indexed:
+        return may_target_stack(0u) ||
+               may_target_stack(instruction.destination_register);
+    case K::MovByteStoreGbrDisplacement:
+    case K::MovWordStoreGbrDisplacement:
+    case K::MovLongStoreGbrDisplacement:
+    case K::AndByteImmediate:
+    case K::XorByteImmediate:
+    case K::OrByteImmediate:
+    case K::TestAndSetByte:
+    case K::Prefetch:
+    case K::TrapAlways:
+    case K::Unknown: return true;
+    default: return false;
+    }
+}
+
+[[nodiscard]] std::uint32_t stack_mutation_store_sources(
+    const AbiPersistentStoreFlowState& state,
+    const katana::sh4::DecodedInstruction& instruction) {
+    if (!stack_mutation_store_effect(state, instruction)) return 0u;
+    using K = katana::sh4::InstructionKind;
+    switch (instruction.kind) {
+    case K::MovLongStore:
+    case K::MovcaLong:
+    case K::MovLongStorePreDecrement:
+    case K::MovLongStoreDisplacement:
+    case K::MovLongStoreR0Indexed:
+        return state.inventory_provenance_taints[instruction.source_register];
+    default:
+        return 0u;
+    }
+}
+
+[[nodiscard]] std::uint32_t stack_store_alias_creation_sources(
+    const AbiPersistentStoreFlowState& state,
+    const katana::sh4::DecodedInstruction& instruction) {
+    using K = katana::sh4::InstructionKind;
+    switch (instruction.kind) {
+    case K::MovLongStore:
+    case K::MovcaLong:
+    case K::MovLongStorePreDecrement:
+    case K::MovLongStoreDisplacement:
+    case K::MovLongStoreR0Indexed:
+        // The runtime capture predicate is inventory_stack_derived.  A
+        // non-derived entry register is therefore a *conditional* source,
+        // not a capture merely because its address may alias the stack.
+        return state.stack_derived[instruction.source_register]
+                   ? 0u
+                   : state.inventory_provenance_taints[
+                         instruction.source_register];
+    default: return 0u;
+    }
+}
+
+[[nodiscard]] bool stack_store_creates_current_epoch_alias_unconditionally(
+    const AbiPersistentStoreFlowState& state,
+    const katana::sh4::DecodedInstruction& instruction) {
+    using K = katana::sh4::InstructionKind;
+    switch (instruction.kind) {
+    case K::MovLongStore:
+    case K::MovcaLong:
+    case K::MovLongStorePreDecrement:
+    case K::MovLongStoreDisplacement:
+    case K::MovLongStoreR0Indexed:
+        return state.stack_derived[instruction.source_register];
+    default: return false;
+    }
 }
 
 void compose_abi_stack_argument_reads(
@@ -16215,11 +17013,20 @@ void compose_abi_stack_argument_reads(
     const katana::sh4::DisassemblyLine& line,
     const katana::io::ExecutableImage& image,
     AbiStackArgumentReadSet* const entry_stack_reads,
-    AbiStackReadTopReason* const top_reason = nullptr) {
+    AbiStackReadTopReason* const top_reason = nullptr,
+    std::uint32_t* const inventory_provenance_sink_sources = nullptr) {
     using K = katana::sh4::InstructionKind;
     const auto& instruction = line.instruction;
     const auto source_taint = state.register_taints[instruction.source_register];
-    const auto persistent_store = [&](const bool destination_is_stack) {
+    const auto source_inventory_provenance =
+        state.inventory_provenance_taints[instruction.source_register];
+    const auto persistent_store =
+        [&](const bool destination_is_stack,
+            const std::uint32_t address_inventory_provenance = 0u) {
+        if (!destination_is_stack &&
+            inventory_provenance_sink_sources != nullptr)
+            *inventory_provenance_sink_sources |=
+                source_inventory_provenance | address_inventory_provenance;
         return destination_is_stack ? std::uint8_t{0u} : source_taint;
     };
     const auto unknown_stack_load = [&] {
@@ -16234,46 +17041,21 @@ void compose_abi_stack_argument_reads(
                                  const std::int32_t displacement = 0) {
         const auto slots =
             abi_stack_slots(state, base, displacement);
-        if (state.stack_derived[base])
+        if (state.stack_derived[base]) {
             store_abi_stack_taints(
                 state, slots, source_taint);
-        else if (state.stack_may_alias[base])
+            store_inventory_provenance_stack_taints(
+                state, slots, source_inventory_provenance);
+        } else if (state.stack_may_alias[base])
             state.stack_tracking_lost = true;
-        return persistent_store(state.stack_derived[base]);
+        return persistent_store(
+            state.stack_derived[base],
+            state.inventory_provenance_taints[base]);
     };
-    const auto bounded_displacement =
-        [](const std::optional<std::uint32_t> value)
-            -> std::optional<std::int32_t> {
-            if (!value.has_value()) return std::nullopt;
-            auto signed_value = static_cast<std::int64_t>(*value);
-            if (signed_value > std::numeric_limits<std::int32_t>::max())
-                signed_value -= (std::int64_t{1} << 32u);
-            if (signed_value < -maximum_stack_distance ||
-                signed_value > maximum_stack_distance)
-                return std::nullopt;
-            return static_cast<std::int32_t>(signed_value);
-        };
     const auto r0_indexed_stack_slots =
         [&](const std::uint8_t other_register)
             -> std::vector<std::int32_t> {
-            if (other_register == 0u) return {};
-            const auto combine =
-                [&](const std::uint8_t stack_register,
-                    const std::uint8_t displacement_register)
-                    -> std::vector<std::int32_t> {
-                    if (!state.stack_derived[stack_register] ||
-                        state.stack_may_alias[displacement_register])
-                        return {};
-                    const auto displacement = bounded_displacement(
-                        state.constants[displacement_register]);
-                    if (!displacement.has_value()) return {};
-                    return abi_stack_slots(
-                        state, stack_register, *displacement);
-                };
-            if (auto slots = combine(other_register, 0u);
-                !slots.empty())
-                return slots;
-            return combine(0u, other_register);
+            return abi_r0_indexed_stack_slots(state, other_register);
         };
     const auto degrade_address_register_to_may_stack =
         [&](const std::uint8_t register_index) {
@@ -16283,6 +17065,7 @@ void compose_abi_stack_argument_reads(
             }
             state.stack_tracking_lost = true;
             state.register_taints[register_index] = 0u;
+            state.inventory_provenance_taints[register_index] = 0u;
             state.stack_offsets[register_index].reset();
             state.stack_offset_candidates[register_index].clear();
             state.stack_derived[register_index] = false;
@@ -16320,6 +17103,11 @@ void compose_abi_stack_argument_reads(
                     abi_stack_slots(state, base, displacement),
                     taint,
                     definitely_defines_long);
+                store_inventory_provenance_stack_taints(
+                    state,
+                    abi_stack_slots(state, base, displacement),
+                    state.inventory_provenance_taints[
+                        instruction.source_register]);
             } else if (state.stack_may_alias[base]) {
                 state.stack_tracking_lost = true;
             }
@@ -16330,6 +17118,8 @@ void compose_abi_stack_argument_reads(
             !state.stack_may_alias[instruction.source_register])
             state.stack_tracking_lost = true;
         state.register_taints[instruction.destination_register] = source_taint;
+        state.inventory_provenance_taints[instruction.destination_register] =
+            source_inventory_provenance;
         state.stack_offsets[instruction.destination_register] =
             state.stack_offsets[instruction.source_register];
         state.stack_offset_candidates[
@@ -16361,6 +17151,9 @@ void compose_abi_stack_argument_reads(
     case K::AddRegister:
     case K::SubRegister: {
         const auto destination_register = instruction.destination_register;
+        const auto result_may_alias =
+            state.stack_may_alias[destination_register] ||
+            state.stack_may_alias[instruction.source_register];
         const auto source_constant = state.constants[instruction.source_register];
         const auto destination_constant = state.constants[destination_register];
         if (state.stack_derived[destination_register]) {
@@ -16386,7 +17179,8 @@ void compose_abi_stack_argument_reads(
             state.constants[destination_register].reset();
             return std::uint8_t{0u};
         }
-        if (state.stack_may_alias[destination_register]) {
+        if (result_may_alias) {
+            state.stack_may_alias[destination_register] = true;
             degrade_address_register_to_may_stack(
                 destination_register);
             return std::uint8_t{0u};
@@ -16461,6 +17255,10 @@ void compose_abi_stack_argument_reads(
         overwrite_stack_slot(instruction.destination_register,
                              0,
                              abi_argument_taint_mask);
+        static_cast<void>(persistent_store(
+            state.stack_derived[instruction.destination_register],
+            state.inventory_provenance_taints[
+                instruction.destination_register]));
         return std::uint8_t{0u};
     case K::MovByteStorePreDecrement:
     case K::MovWordStorePreDecrement: {
@@ -16470,6 +17268,10 @@ void compose_abi_stack_argument_reads(
         overwrite_stack_slot(instruction.destination_register,
                              0,
                              abi_argument_taint_mask);
+        static_cast<void>(persistent_store(
+            state.stack_derived[instruction.destination_register],
+            state.inventory_provenance_taints[
+                instruction.destination_register]));
         return std::uint8_t{0u};
     }
     case K::MovLongStorePreDecrement:
@@ -16482,6 +17284,10 @@ void compose_abi_stack_argument_reads(
         overwrite_stack_slot(instruction.destination_register,
                              instruction.displacement,
                              abi_argument_taint_mask);
+        static_cast<void>(persistent_store(
+            state.stack_derived[instruction.destination_register],
+            state.inventory_provenance_taints[
+                instruction.destination_register]));
         return std::uint8_t{0u};
     case K::MovLongStoreR0Indexed: {
         if (const auto slots = r0_indexed_stack_slots(
@@ -16489,11 +17295,18 @@ void compose_abi_stack_argument_reads(
             !slots.empty()) {
             store_abi_stack_taints(
                 state, slots, source_taint);
+            store_inventory_provenance_stack_taints(
+                state, slots, source_inventory_provenance);
             return std::uint8_t{0u};
         }
         if (state.stack_may_alias[0u] ||
             state.stack_may_alias[instruction.destination_register])
             state.stack_tracking_lost = true;
+        static_cast<void>(persistent_store(
+            false,
+            state.inventory_provenance_taints[0u] |
+                state.inventory_provenance_taints[
+                    instruction.destination_register]));
         return source_taint;
     }
     case K::MovByteStoreR0Indexed:
@@ -16501,11 +17314,18 @@ void compose_abi_stack_argument_reads(
         if (state.stack_may_alias[0u] ||
             state.stack_may_alias[instruction.destination_register])
             state.stack_tracking_lost = true;
+        static_cast<void>(persistent_store(
+            false,
+            state.inventory_provenance_taints[0u] |
+                state.inventory_provenance_taints[
+                    instruction.destination_register]));
         return std::uint8_t{0u};
     case K::MovLongStoreGbrDisplacement:
+        static_cast<void>(persistent_store(false));
         return source_taint;
     case K::MovByteStoreGbrDisplacement:
     case K::MovWordStoreGbrDisplacement:
+        static_cast<void>(persistent_store(false));
         return std::uint8_t{0u};
     case K::StoreSpecialRegisterPreDecrement:
         adjust_address_register(instruction.destination_register, -4);
@@ -16580,6 +17400,7 @@ void compose_abi_stack_argument_reads(
     case K::MovWordLoadPostIncrement:
     case K::MovLongLoadPostIncrement: {
         const auto base = instruction.source_register;
+        const auto loaded_may_stack = state.stack_may_alias[base];
         const auto long_load =
             instruction.kind == K::MovLongLoad ||
             instruction.kind == K::MovLongLoadDisplacement ||
@@ -16603,8 +17424,25 @@ void compose_abi_stack_argument_reads(
                             ? unknown_stack_load()
                             : 0u
                 : 0u);
+        const auto inventory_sources =
+            long_load
+                ? state.stack_derived[base]
+                      ? inventory_provenance_stack_load_sources(
+                            state,
+                            abi_stack_slots(state, base, displacement))
+                      : state.stack_may_alias[base]
+                            ? inventory_provenance_source_mask
+                            : 0u
+                : 0u;
         clear_abi_flow_register(state, instruction.destination_register);
         state.register_taints[instruction.destination_register] = taint;
+        state.inventory_provenance_taints[
+            instruction.destination_register] = inventory_sources;
+        // An imprecise stack-addressed load can restore a SavedEpoch alias
+        // into an otherwise non-stack destination.  The ordinary flow has no
+        // value shape here, so retain only the may-alias fact.
+        state.stack_may_alias[instruction.destination_register] =
+            loaded_may_stack;
         const auto post_increment =
             instruction.kind == K::MovByteLoadPostIncrement ||
             instruction.kind == K::MovWordLoadPostIncrement ||
@@ -16620,6 +17458,9 @@ void compose_abi_stack_argument_reads(
         return std::uint8_t{0u};
     }
     case K::MovLongLoadR0Indexed: {
+        const auto loaded_may_stack =
+            state.stack_may_alias[0u] ||
+            state.stack_may_alias[instruction.source_register];
         const auto slots =
             r0_indexed_stack_slots(
                 instruction.source_register);
@@ -16627,12 +17468,18 @@ void compose_abi_stack_argument_reads(
             !slots.empty()
                 ? abi_stack_load_taint(
                       state, slots, entry_stack_reads, top_reason)
-                : state.stack_may_alias[0u] ||
-                          state.stack_may_alias[instruction.source_register]
-                      ? unknown_stack_load()
-                      : std::uint8_t{0u};
+                : loaded_may_stack ? unknown_stack_load()
+                                   : std::uint8_t{0u};
+        const auto inventory_sources =
+            !slots.empty()
+                ? inventory_provenance_stack_load_sources(state, slots)
+                : loaded_may_stack ? inventory_provenance_source_mask : 0u;
         clear_abi_flow_register(state, instruction.destination_register);
         state.register_taints[instruction.destination_register] = taint;
+        state.inventory_provenance_taints[
+            instruction.destination_register] = inventory_sources;
+        state.stack_may_alias[instruction.destination_register] =
+            loaded_may_stack;
         return std::uint8_t{0u};
     }
     case K::MovLongLoadGbrDisplacement:
@@ -16666,16 +17513,105 @@ void compose_abi_stack_argument_reads(
         return std::uint8_t{0u};
     default: {
         const auto written_registers = general_register_write_mask(instruction);
+        const auto known_reads = known_general_register_read_mask(instruction);
+        auto input_may_alias = false;
+        if (known_reads.has_value()) {
+            for (std::uint8_t index = 0u; index < 16u; ++index) {
+                if ((*known_reads & register_bit(index)) != 0u &&
+                    state.stack_may_alias[index]) {
+                    input_may_alias = true;
+                    break;
+                }
+            }
+        }
         for (std::uint8_t index = 0u; index < state.register_taints.size(); ++index) {
             if ((written_registers & register_bit(index)) == 0u)
                 continue;
-            if (state.stack_may_alias[index])
+            if (!known_reads.has_value()) {
+                // An unclassified write may preserve any input alias.  This
+                // is a Top in the pointer-flow lattice, not a proof of a
+                // concrete stack coordinate.
+                state.stack_may_alias[index] = true;
                 degrade_address_register_to_may_stack(index);
-            else
+            } else if (state.stack_may_alias[index] || input_may_alias) {
+                state.stack_may_alias[index] = true;
+                degrade_address_register_to_may_stack(index);
+            } else {
                 clear_abi_flow_register(state, index);
+            }
         }
         return std::uint8_t{0u};
     }
+    }
+}
+
+// The ABI-flow state is a proof that an entry source cannot reach an
+// Inventory/state sink.  It must therefore follow every AbstractValue
+// transformation that can preserve provenance, even when the narrower
+// ordinary ABI-taint flow intentionally clears its value bit.  The stack
+// pointer is deliberately excluded: its result dependencies are classified
+// separately by stack_pointer_result_dependency_mask(), so a pre-decrement
+// spill never makes the stored payload an R15 source.
+void preserve_abi_flow_result_inventory_provenance(
+    AbiPersistentStoreFlowState& state,
+    const katana::sh4::DecodedInstruction& instruction,
+    const std::array<std::uint32_t, 16u>& incoming_sources) {
+    using K = katana::sh4::InstructionKind;
+    auto written_registers = general_register_write_mask(instruction);
+    const bool banked_sr_clobber =
+        instruction.kind == K::LoadSpecialRegisterPostIncrement &&
+        instruction.special_register == katana::sh4::SpecialRegister::Sr;
+    if (banked_sr_clobber)
+        written_registers = static_cast<std::uint16_t>(
+            written_registers | std::uint16_t{0x00ffu});
+    if (written_registers == 0u) return;
+
+    // These output forms replace a GPR with a value that has no entry-GPR
+    // provenance in the concrete transfer.  They may remain precise rather
+    // than being widened to Top.
+    const auto overwrites_with_non_gpr_value = [&] {
+        switch (instruction.kind) {
+        case K::MovImmediate:
+        case K::MoveAddressPcRelative:
+        case K::MovWordLoadPcRelative:
+        case K::MovLongLoadPcRelative:
+        case K::MovByteLoadGbrDisplacement:
+        case K::MovWordLoadGbrDisplacement:
+        case K::MovLongLoadGbrDisplacement:
+        case K::StoreSpecialRegister:
+            return true;
+        default:
+            return false;
+        }
+    };
+    const auto known_reads = known_general_register_read_mask(instruction);
+    auto read_sources = std::uint32_t{0u};
+    if (known_reads.has_value()) {
+        for (std::uint8_t index = 0u; index < 16u; ++index) {
+            if ((*known_reads & register_bit(index)) != 0u) {
+                read_sources |= incoming_sources[index];
+            }
+        }
+    }
+
+    for (std::uint8_t index = 0u; index < 16u; ++index) {
+        if ((written_registers & register_bit(index)) == 0u || index == 15u)
+            continue;
+        if (banked_sr_clobber && index <= 7u) {
+            state.inventory_provenance_taints[index] =
+                inventory_provenance_source_mask;
+            continue;
+        }
+        if (overwrites_with_non_gpr_value()) continue;
+        if (!known_reads.has_value()) {
+            // An unclassified write can retain arbitrary Inventory payload.
+            // Top is required here; Bottom would incorrectly authorize the
+            // dual ingress projection to erase it.
+            state.inventory_provenance_taints[index] =
+                inventory_provenance_source_mask;
+            continue;
+        }
+        state.inventory_provenance_taints[index] |= read_sources;
     }
 }
 
@@ -16692,7 +17628,17 @@ analyze_abi_persistent_store_signature(
     const AbiStackArgumentReadMap* const abi_stack_argument_reads = nullptr,
     const TailIngressMap* const inventory_tail_ingresses = nullptr,
     const TailIngressSinkSourceMap* const tail_inventory_sink_sources =
-        nullptr) {
+        nullptr,
+    const InventoryProvenanceReturnSourceMap* const
+        inventory_provenance_return_sources = nullptr,
+    const InventoryProvenanceRegisterReadMap* const
+        inventory_provenance_register_reads = nullptr,
+    const InventoryStackMutationSourceMap* const
+        inventory_stack_mutation_conditional_sources = nullptr,
+    const InventoryStackMutationSourceMap* const
+        inventory_stack_mutation_unconditional_sources = nullptr,
+    const InventoryStackMutationAliasCreationMap* const
+        inventory_stack_mutation_alias_creations = nullptr) {
     std::unordered_set<std::uint32_t> members;
     members.reserve(function.block_addresses.size());
     members.insert(function.block_addresses.begin(), function.block_addresses.end());
@@ -16701,6 +17647,17 @@ analyze_abi_persistent_store_signature(
     AbiPersistentStoreFlowState entry;
     for (std::uint8_t index = 4u; index <= 7u; ++index)
         entry.register_taints[index] = static_cast<std::uint8_t>(1u << (index - 4u));
+    for (std::uint8_t index = 0u; index < 16u; ++index)
+        entry.inventory_provenance_taints[index] =
+            std::uint32_t{1u} << index;
+    // The real entry AbstractState permits a caller to pass a stack-derived
+    // or current-SavedEpoch alias through any GPR.  This flow is used to
+    // authorize provenance projection, so treating r0-r14 as proven
+    // non-stack would be unsound: a long store can both target the current
+    // stack and save such an alias before a later mutation.  Precise
+    // overwrite forms clear this may fact; moves, arithmetic, loads and CFG
+    // joins below retain it conservatively.
+    entry.stack_may_alias.fill(true);
     entry.stack_offsets[15u] = 0;
     entry.stack_derived[15u] = true;
     entry.stack_may_alias[15u] = true;
@@ -16715,8 +17672,15 @@ analyze_abi_persistent_store_signature(
     queued.insert(function.entry_address);
     AbiPersistentStoreSignature signature;
     signature.returned_r0_sources = 0u;
+    signature.inventory_provenance_return_sources = 0u;
+    // The current stack pointer is a namespace/state sink independently of
+    // ordinary entry reads.  If another entry source reaches r15, the loop
+    // below accumulates that source as well.
+    signature.inventory_provenance_register_reads =
+        std::uint32_t{1u} << 15u;
     bool saw_return = false;
     bool unknown_return_path = false;
+    bool unknown_inventory_provenance_sink_exit = false;
     const auto make_stack_read_top_frame =
         [&](const AbiStackReadTopReason reason,
             const std::uint32_t site) {
@@ -16765,14 +17729,154 @@ analyze_abi_persistent_store_signature(
                     source_mask = found->second;
             }
             const auto returned_taint = compose_abi_return_taint(state, source_mask);
+            auto provenance_sources = inventory_provenance_source_mask;
+            if (callee.has_value() &&
+                inventory_provenance_return_sources != nullptr) {
+                if (const auto found =
+                        inventory_provenance_return_sources->find(*callee);
+                    found != inventory_provenance_return_sources->end())
+                    provenance_sources = found->second;
+            }
+            const auto returned_inventory_provenance =
+                compose_inventory_provenance_sources(
+                    state, provenance_sources);
+            if (!callee.has_value() ||
+                inventory_stack_mutation_alias_creations == nullptr) {
+                state.creates_current_stack_epoch_alias = true;
+                state.conditional_current_stack_epoch_alias_sources |=
+                    inventory_provenance_source_mask;
+            } else {
+                const auto found = inventory_stack_mutation_alias_creations->find(
+                    *callee);
+                const auto contract =
+                    found == inventory_stack_mutation_alias_creations->end()
+                        ? static_cast<std::uint32_t>(
+                              inventory_provenance_source_mask |
+                              inventory_stack_alias_creation_unconditional)
+                        : found->second;
+                state.conditional_current_stack_epoch_alias_sources |=
+                    compose_inventory_provenance_sources(
+                        state,
+                        contract & inventory_provenance_source_mask);
+                if ((contract & inventory_stack_alias_creation_unconditional) !=
+                    0u)
+                    state.creates_current_stack_epoch_alias = true;
+            }
             for (std::uint8_t index = 0u; index <= 7u; ++index)
                 clear_abi_flow_register(state, index);
             state.register_taints[0u] = returned_taint;
+            state.inventory_provenance_taints[0u] =
+                returned_inventory_provenance;
+            // The ABI-flow summary has no separate return-pointer alias
+            // lattice.  A callee return can conservatively reintroduce a
+            // current-stack alias in r0; retaining this fact prevents a later
+            // long store from being misclassified as definitely non-stack.
+            state.stack_may_alias[0u] = true;
         };
     const auto observe_inventory_callee_sinks =
         [&](const AbiPersistentStoreFlowState& state,
-            const std::vector<std::uint32_t>& callees) {
+            const std::vector<std::uint32_t>& callees,
+            const bool complete = true,
+            const bool guarded = false) {
+            if ((!complete && !guarded) || callees.empty()) {
+                unknown_inventory_provenance_sink_exit = true;
+                signature.inventory_provenance_register_reads |=
+                    inventory_provenance_source_mask;
+                // An unbound callee may create a current SavedEpoch before
+                // mutating the stack, so its effect is unconditional.
+                merge_inventory_stack_mutation_effect(
+                    signature.inventory_stack_mutation_unconditional_sources,
+                    inventory_provenance_source_mask);
+                signature.creates_current_stack_epoch_alias = true;
+                signature.inventory_stack_alias_creation_conditional_sources |=
+                    inventory_provenance_source_mask;
+                return;
+            }
             for (const auto callee : callees) {
+                if (inventory_provenance_register_reads != nullptr) {
+                    const auto found =
+                        inventory_provenance_register_reads->find(callee);
+                    signature.inventory_provenance_register_reads |=
+                        compose_inventory_provenance_sources(
+                            state,
+                            found == inventory_provenance_register_reads->end()
+                                ? inventory_provenance_source_mask
+                                : found->second);
+                } else if (!callees.empty()) {
+                    signature.inventory_provenance_register_reads |=
+                        inventory_provenance_source_mask;
+                }
+                if (inventory_stack_mutation_conditional_sources != nullptr &&
+                    inventory_stack_mutation_unconditional_sources != nullptr) {
+                    const auto conditional =
+                        inventory_stack_mutation_conditional_sources->find(
+                            callee);
+                    const auto unconditional =
+                        inventory_stack_mutation_unconditional_sources->find(
+                            callee);
+                    const auto conditional_contract =
+                        conditional ==
+                                inventory_stack_mutation_conditional_sources
+                                    ->end()
+                            ? static_cast<std::uint32_t>(
+                                  inventory_provenance_source_mask |
+                                  inventory_stack_mutation_effect_bit)
+                            : conditional->second;
+                    const auto unconditional_contract =
+                        unconditional ==
+                                inventory_stack_mutation_unconditional_sources
+                                    ->end()
+                            ? static_cast<std::uint32_t>(
+                                  inventory_provenance_source_mask |
+                                  inventory_stack_mutation_effect_bit)
+                            : unconditional->second;
+                    compose_inventory_stack_mutation_effect(
+                        state.creates_current_stack_epoch_alias
+                            ? signature
+                                  .inventory_stack_mutation_unconditional_sources
+                            : signature
+                                  .inventory_stack_mutation_conditional_sources,
+                        state,
+                        conditional_contract);
+                    compose_inventory_stack_mutation_effect(
+                        signature.inventory_stack_mutation_unconditional_sources,
+                        state,
+                        unconditional_contract);
+                } else {
+                    auto& mutation =
+                        state.creates_current_stack_epoch_alias
+                            ? signature
+                                  .inventory_stack_mutation_unconditional_sources
+                            : signature
+                                  .inventory_stack_mutation_conditional_sources;
+                    merge_inventory_stack_mutation_effect(
+                        mutation, inventory_provenance_source_mask);
+                }
+                const auto alias_creation_contract =
+                    inventory_stack_mutation_alias_creations == nullptr
+                        ? static_cast<std::uint32_t>(
+                              inventory_provenance_source_mask |
+                              inventory_stack_alias_creation_unconditional)
+                        : [&] {
+                              const auto found =
+                                  inventory_stack_mutation_alias_creations
+                                      ->find(callee);
+                              return found ==
+                                             inventory_stack_mutation_alias_creations
+                                                 ->end()
+                                         ? static_cast<std::uint32_t>(
+                                               inventory_provenance_source_mask |
+                                               inventory_stack_alias_creation_unconditional)
+                                         : found->second;
+                          }();
+                signature.inventory_stack_alias_creation_conditional_sources |=
+                    compose_inventory_provenance_sources(
+                        state,
+                        alias_creation_contract &
+                            inventory_provenance_source_mask);
+                if ((alias_creation_contract &
+                     inventory_stack_alias_creation_unconditional) != 0u)
+                    signature.creates_current_stack_epoch_alias = true;
                 if (persistent_store_sources != nullptr) {
                     const auto found = persistent_store_sources->find(callee);
                     if (found != persistent_store_sources->end() &&
@@ -16891,11 +17995,57 @@ analyze_abi_persistent_store_signature(
                     AbiStackReadTopReason::MissingBlock, address),
                 nullptr);
             unknown_return_path = true;
+            unknown_inventory_provenance_sink_exit = true;
+            merge_inventory_stack_mutation_effect(
+                signature.inventory_stack_mutation_unconditional_sources,
+                inventory_provenance_source_mask);
+            signature.creates_current_stack_epoch_alias = true;
             continue;
         }
         auto state = inputs.at(address);
         std::optional<DelayedCall> delayed_call;
         for (const auto& line : block->second->lines) {
+            const auto incoming_inventory_provenance_sources =
+                state.inventory_provenance_taints;
+            const auto writes_stack_pointer =
+                (general_register_write_mask(line.instruction) &
+                 register_bit(15u)) != 0u;
+            // A genuine namespace hand-off or coordinate loss of R15 detaches
+            // the *existing* stack domain into the value analysis' SavedEpoch
+            // and unresolved-stack carriers.  Preserve its entry sources as a
+            // state sink before the ABI-flow transfer can clear the old
+            // coordinates.  This is intentionally separate from the result
+            // operand dependency below: an affine update, including a
+            // pre-decrement spill, retains the namespace and must not make its
+            // store payload live merely because it writes R15.
+            const auto outgoing_stack_sources_before =
+                writes_stack_pointer
+                    ? inventory_provenance_outgoing_stack_sources(state)
+                    : 0u;
+            const auto r15_was_stack_derived =
+                writes_stack_pointer && state.stack_derived[15u];
+            const auto stack_tracking_was_lost =
+                writes_stack_pointer && state.stack_tracking_lost;
+            // R15 is always a state-namespace sink.  The precise source
+            // flowing through it is retained so a move into SP keeps its
+            // source live without making unrelated callee-save traffic live.
+            signature.inventory_provenance_register_reads |=
+                state.inventory_provenance_taints[15u];
+            auto stack_pointer_mutation_sources = std::uint32_t{0u};
+            if (writes_stack_pointer) {
+                const auto reads = stack_pointer_result_dependency_mask(
+                    line.instruction);
+                if (!reads.has_value()) {
+                    stack_pointer_mutation_sources =
+                        inventory_provenance_source_mask;
+                } else {
+                    for (std::uint8_t index = 0u; index < 16u; ++index) {
+                        if ((*reads & register_bit(index)) != 0u)
+                            stack_pointer_mutation_sources |=
+                                state.inventory_provenance_taints[index];
+                    }
+                }
+            }
             const auto indirect_dispatch =
                 line.instruction.kind == katana::sh4::InstructionKind::Jmp ||
                 line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
@@ -16907,17 +18057,46 @@ analyze_abi_persistent_store_signature(
                         signature.indirect_dispatch_sources |
                         state.register_taints[
                             line.instruction.branch_register]);
+                signature.inventory_provenance_register_reads |=
+                    state.inventory_provenance_taints[
+                        line.instruction.branch_register];
             }
             const auto stack_reads_were_complete =
                 signature.stack_slots_read_before_definition.complete;
             auto local_top_reason = AbiStackReadTopReason::None;
+            const auto local_stack_mutation_effect =
+                stack_mutation_store_effect(state, line.instruction);
+            const auto local_stack_mutation_sources =
+                stack_mutation_store_sources(state, line.instruction);
+            const auto local_stack_mutation_is_unconditional =
+                state.creates_current_stack_epoch_alias;
+            const auto local_stack_alias_creation_sources =
+                stack_store_alias_creation_sources(state, line.instruction);
+            const auto local_stack_alias_creation_is_unconditional =
+                stack_store_creates_current_epoch_alias_unconditionally(
+                    state, line.instruction);
             const auto local_store_sources =
                 apply_abi_persistent_store_flow(
                     state,
                     line,
                     image,
-                    &signature.stack_slots_read_before_definition,
-                    &local_top_reason);
+                &signature.stack_slots_read_before_definition,
+                    &local_top_reason,
+                    &signature.inventory_provenance_register_reads);
+            preserve_abi_flow_result_inventory_provenance(
+                state,
+                line.instruction,
+                incoming_inventory_provenance_sources);
+            if (writes_stack_pointer &&
+                ((r15_was_stack_derived && !state.stack_derived[15u]) ||
+                 (!stack_tracking_was_lost && state.stack_tracking_lost))) {
+                // begin_fresh_inventory_stack_epoch()/the unresolved-stack
+                // path own the outgoing stack transport after this point.  A
+                // loss of its coordinate is therefore a real state sink, not
+                // a generic syntactic R15 write.
+                signature.inventory_provenance_register_reads |=
+                    outgoing_stack_sources_before;
+            }
             record_stack_read_top_transition(
                 stack_reads_were_complete,
                 make_stack_read_top_frame(
@@ -16928,6 +18107,29 @@ analyze_abi_persistent_store_signature(
                 nullptr);
             signature.persistent_store_sources = static_cast<std::uint8_t>(
                 signature.persistent_store_sources | local_store_sources);
+            if (local_stack_mutation_effect) {
+                auto& mutation = local_stack_mutation_is_unconditional
+                                     ? signature
+                                           .inventory_stack_mutation_unconditional_sources
+                                     : signature
+                                           .inventory_stack_mutation_conditional_sources;
+                merge_inventory_stack_mutation_effect(
+                    mutation, local_stack_mutation_sources);
+            }
+            // A current SavedEpoch capture is controlled by the stored
+            // value's *derived* fact, never its address-side MAY alias.  The
+            // exact conditional entry sources are activated against the
+            // concrete ingress by effective_inventory_provenance_mask().
+            signature.inventory_stack_alias_creation_conditional_sources |=
+                local_stack_alias_creation_sources;
+            state.conditional_current_stack_epoch_alias_sources |=
+                local_stack_alias_creation_sources;
+            signature.creates_current_stack_epoch_alias =
+                signature.creates_current_stack_epoch_alias ||
+                local_stack_alias_creation_is_unconditional;
+            state.creates_current_stack_epoch_alias =
+                state.creates_current_stack_epoch_alias ||
+                local_stack_alias_creation_is_unconditional;
             if (local_store_sources != 0u) {
                 signature.local_persistent_store_sites.push_back(
                     {line.address,
@@ -16939,7 +18141,10 @@ analyze_abi_persistent_store_signature(
             // clobbers the caller-visible registers.
             if (delayed_call.has_value()) {
                 observe_inventory_callee_sinks(
-                    state, delayed_call->inventory_callees);
+                    state,
+                    delayed_call->inventory_callees,
+                    delayed_call->stack_reads_complete,
+                    delayed_call->stack_reads_guarded);
                 observe_callee_stack_reads(
                     state,
                     delayed_call->call_site,
@@ -16988,7 +18193,11 @@ analyze_abi_persistent_store_signature(
                         stack_reads_complete,
                         stack_reads_guarded};
                 } else {
-                    observe_inventory_callee_sinks(state, inventory_callees);
+                    observe_inventory_callee_sinks(
+                        state,
+                        inventory_callees,
+                        stack_reads_complete,
+                        stack_reads_guarded);
                     observe_callee_stack_reads(
                         state,
                         line.address,
@@ -17000,6 +18209,11 @@ analyze_abi_persistent_store_signature(
                         false);
                     apply_call_return(state, return_callee);
                 }
+            }
+            if (writes_stack_pointer) {
+                signature.inventory_provenance_register_reads |=
+                    stack_pointer_mutation_sources |
+                    state.inventory_provenance_taints[15u];
             }
         }
         const auto& control = controlling_line(*block->second);
@@ -17017,7 +18231,7 @@ analyze_abi_persistent_store_signature(
              std::next(control_position)->is_delay_slot &&
              std::next(control_position)->address ==
                  control.address + 2u);
-        if (delayed_call.has_value() || !paired_delay_slot)
+        if (delayed_call.has_value() || !paired_delay_slot) {
             mark_stack_reads_top(
                 make_stack_read_top_frame(
                     AbiStackReadTopReason::MissingDelay,
@@ -17025,6 +18239,8 @@ analyze_abi_persistent_store_signature(
                         ? delayed_call->call_site
                         : control.address),
                 nullptr);
+            unknown_inventory_provenance_sink_exit = true;
+        }
         const auto ingress =
             inventory_tail_ingresses == nullptr
                 ? TailIngressMap::const_iterator{}
@@ -17033,6 +18249,132 @@ analyze_abi_persistent_store_signature(
             inventory_tail_ingresses != nullptr &&
             ingress != inventory_tail_ingresses->end();
         if (has_contract_ingress) {
+            if ((!ingress->second.complete && !ingress->second.guarded) ||
+                ingress->second.targets.empty()) {
+                unknown_inventory_provenance_sink_exit = true;
+                signature.inventory_provenance_register_reads |=
+                    inventory_provenance_source_mask;
+                merge_inventory_stack_mutation_effect(
+                    signature.inventory_stack_mutation_unconditional_sources,
+                    inventory_provenance_source_mask);
+                signature.creates_current_stack_epoch_alias = true;
+            } else if (inventory_provenance_register_reads != nullptr) {
+                for (const auto target : ingress->second.targets) {
+                    if (target.kind != TailIngressTargetKind::Function) {
+                        // A typed inventory region has no ordinary function
+                        // live-in contract. It is an explicit conservative
+                        // sink, not a reason to erase the source. Its stack
+                        // mutation becomes unconditional once a preceding
+                        // local/callee step may have created a receiver.
+                        signature.inventory_provenance_register_reads |=
+                            inventory_provenance_source_mask;
+                        auto& mutation =
+                            state.creates_current_stack_epoch_alias
+                                ? signature
+                                      .inventory_stack_mutation_unconditional_sources
+                                : signature
+                                      .inventory_stack_mutation_conditional_sources;
+                        merge_inventory_stack_mutation_effect(
+                            mutation, inventory_provenance_source_mask);
+                        continue;
+                    }
+                    const auto reads =
+                        inventory_provenance_register_reads->find(
+                            target.address);
+                    signature.inventory_provenance_register_reads |=
+                        compose_inventory_provenance_sources(
+                            state,
+                            reads == inventory_provenance_register_reads->end()
+                                ? inventory_provenance_source_mask
+                                : reads->second);
+                    if (inventory_stack_mutation_conditional_sources != nullptr &&
+                        inventory_stack_mutation_unconditional_sources != nullptr) {
+                        const auto conditional =
+                            inventory_stack_mutation_conditional_sources->find(
+                                target.address);
+                        const auto unconditional =
+                            inventory_stack_mutation_unconditional_sources->find(
+                                target.address);
+                        const auto conditional_contract =
+                            conditional ==
+                                    inventory_stack_mutation_conditional_sources
+                                        ->end()
+                                ? static_cast<std::uint32_t>(
+                                      inventory_provenance_source_mask |
+                                      inventory_stack_mutation_effect_bit)
+                                : conditional->second;
+                        const auto unconditional_contract =
+                            unconditional ==
+                                    inventory_stack_mutation_unconditional_sources
+                                        ->end()
+                                ? static_cast<std::uint32_t>(
+                                      inventory_provenance_source_mask |
+                                      inventory_stack_mutation_effect_bit)
+                                : unconditional->second;
+                        compose_inventory_stack_mutation_effect(
+                            state.creates_current_stack_epoch_alias
+                                ? signature
+                                      .inventory_stack_mutation_unconditional_sources
+                                : signature
+                                      .inventory_stack_mutation_conditional_sources,
+                            state,
+                            conditional_contract);
+                        compose_inventory_stack_mutation_effect(
+                            signature.inventory_stack_mutation_unconditional_sources,
+                            state,
+                            unconditional_contract);
+                    } else {
+                        auto& mutation =
+                            state.creates_current_stack_epoch_alias
+                                ? signature
+                                      .inventory_stack_mutation_unconditional_sources
+                                : signature
+                                      .inventory_stack_mutation_conditional_sources;
+                        merge_inventory_stack_mutation_effect(
+                            mutation, inventory_provenance_source_mask);
+                    }
+                    // A tail target may establish a current SavedEpoch. Its
+                    // source-conditioned capture contract stays distinct
+                    // from the address-side stack MAY flow.
+                    const auto alias_creation_contract =
+                        inventory_stack_mutation_alias_creations == nullptr
+                            ? static_cast<std::uint32_t>(
+                                  inventory_provenance_source_mask |
+                                  inventory_stack_alias_creation_unconditional)
+                            : [&] {
+                                  const auto found =
+                                      inventory_stack_mutation_alias_creations
+                                          ->find(target.address);
+                                  return found ==
+                                                 inventory_stack_mutation_alias_creations
+                                                     ->end()
+                                             ? static_cast<std::uint32_t>(
+                                                   inventory_provenance_source_mask |
+                                                   inventory_stack_alias_creation_unconditional)
+                                             : found->second;
+                              }();
+                    signature
+                        .inventory_stack_alias_creation_conditional_sources |=
+                        compose_inventory_provenance_sources(
+                            state,
+                            alias_creation_contract &
+                                inventory_provenance_source_mask);
+                    if ((alias_creation_contract &
+                         inventory_stack_alias_creation_unconditional) != 0u)
+                        signature.creates_current_stack_epoch_alias = true;
+                }
+            } else {
+                // Without the source contracts a typed tail cannot prove any
+                // effect absent.  This is a full provenance-sink exit, so its
+                // mutation and receiver creation are unconditional.
+                unknown_inventory_provenance_sink_exit = true;
+                signature.inventory_provenance_register_reads |=
+                    inventory_provenance_source_mask;
+                merge_inventory_stack_mutation_effect(
+                    signature.inventory_stack_mutation_unconditional_sources,
+                    inventory_provenance_source_mask);
+                signature.creates_current_stack_epoch_alias = true;
+            }
             if (tail_inventory_sink_sources != nullptr) {
                 for (const auto target : ingress->second.targets) {
                     const auto target_sources =
@@ -17108,6 +18450,7 @@ analyze_abi_persistent_store_signature(
                 if (control.instruction.control_flow ==
                         katana::sh4::ControlFlowKind::IndirectBranch ||
                     has_external_successor) {
+                    unknown_inventory_provenance_sink_exit = true;
                     auto frame = make_stack_read_top_frame(
                         control.instruction.control_flow ==
                                 katana::sh4::ControlFlowKind::IndirectBranch
@@ -17130,6 +18473,20 @@ analyze_abi_persistent_store_signature(
             saw_return = true;
             signature.returned_r0_sources = static_cast<std::uint8_t>(
                 signature.returned_r0_sources | state.register_taints[0u]);
+            signature.inventory_provenance_return_sources |=
+                state.inventory_provenance_taints[0u];
+            // The return Summary has no raw inventory_stack_derived bit. If
+            // a concrete caller value can make R0 stack-derived, the summary
+            // boundary materializes its SavedEpoch; retain precisely those
+            // entry sources so the caller keeps the entire captured stack.
+            signature.inventory_stack_alias_creation_conditional_sources |=
+                state.inventory_provenance_taints[0u];
+            // A locally proven raw stack pointer with no entry provenance is
+            // likewise captured at the return boundary, independent of the
+            // caller's values.
+            if (state.stack_derived[0u] &&
+                state.inventory_provenance_taints[0u] == 0u)
+                signature.creates_current_stack_epoch_alias = true;
         } else {
             bool has_internal_successor = false;
             for (const auto successor : block->second->successors) {
@@ -17146,8 +18503,28 @@ analyze_abi_persistent_store_signature(
                         katana::sh4::ControlFlowKind::IndirectCall)
                     unknown_return_path = true;
             }
-            if (!has_internal_successor) unknown_return_path = true;
+            if (!has_internal_successor) {
+                unknown_return_path = true;
+                const auto terminal_is_bound_tail =
+                    has_contract_ingress &&
+                    !ingress->second.targets.empty() &&
+                    (ingress->second.complete || ingress->second.guarded) &&
+                    (control.instruction.control_flow ==
+                         katana::sh4::ControlFlowKind::UnconditionalBranch ||
+                     control.instruction.control_flow ==
+                         katana::sh4::ControlFlowKind::IndirectBranch);
+                if (!terminal_is_bound_tail)
+                    unknown_inventory_provenance_sink_exit = true;
+            }
         }
+        // A call may have created a SavedEpoch alias even if this block has
+        // no following local store. Preserve that fact for the caller's
+        // conditional-vs-unconditional mutation composition.
+        signature.creates_current_stack_epoch_alias =
+            signature.creates_current_stack_epoch_alias ||
+            state.creates_current_stack_epoch_alias;
+        signature.inventory_stack_alias_creation_conditional_sources |=
+            state.conditional_current_stack_epoch_alias_sources;
         for (const auto successor : block->second->successors) {
             if (!members.contains(successor)) continue;
             const auto [input, inserted] = inputs.emplace(successor, state);
@@ -17158,8 +18535,21 @@ analyze_abi_persistent_store_signature(
         }
     }
     signature.return_sources_complete = saw_return && !unknown_return_path;
-    if (!signature.return_sources_complete)
+    if (!signature.return_sources_complete) {
         signature.returned_r0_sources = abi_argument_taint_mask;
+        signature.inventory_provenance_return_sources =
+            inventory_provenance_source_mask;
+    }
+    if (unknown_inventory_provenance_sink_exit) {
+        signature.inventory_provenance_register_reads =
+            inventory_provenance_source_mask;
+        signature.inventory_stack_mutation_unconditional_sources =
+            inventory_provenance_source_mask |
+            inventory_stack_mutation_effect_bit;
+        signature.inventory_stack_alias_creation_conditional_sources =
+            inventory_provenance_source_mask;
+        signature.creates_current_stack_epoch_alias = true;
+    }
     normalize_abi_persistent_store_sites(signature.local_persistent_store_sites);
     return signature;
 }
@@ -17396,6 +18786,95 @@ known_general_register_read_mask(const katana::sh4::DecodedInstruction& instruct
         return register_bit(instruction.branch_register);
 
     case K::Unknown:
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::optional<std::uint16_t>
+stack_pointer_result_dependency_mask(
+    const katana::sh4::DecodedInstruction& instruction) {
+    using K = katana::sh4::InstructionKind;
+    const auto source = register_bit(instruction.source_register);
+    const auto destination = register_bit(instruction.destination_register);
+    const auto stack_pointer = register_bit(15u);
+    switch (instruction.kind) {
+    // `mov Rm,Rn` transfers its source exactly.  In particular this keeps a
+    // callee-save payload in Rm out of the R15 sink when Rn is not R15.
+    case K::MovRegister:
+        return source;
+
+    // Arithmetic and immediate updates preserve the old R15 contribution;
+    // register arithmetic additionally depends on its explicit source.
+    case K::AddImmediate:
+    case K::DecrementAndTest:
+    case K::ShiftLogicalLeftOne:
+    case K::ShiftLogicalRightOne:
+    case K::ShiftArithmeticLeftOne:
+    case K::ShiftArithmeticRightOne:
+    case K::ShiftLogicalLeftTwo:
+    case K::ShiftLogicalLeftEight:
+    case K::ShiftLogicalLeftSixteen:
+    case K::ShiftLogicalRightTwo:
+    case K::ShiftLogicalRightEight:
+    case K::ShiftLogicalRightSixteen:
+    case K::RotateLeft:
+    case K::RotateRight:
+    case K::RotateLeftThroughT:
+    case K::RotateRightThroughT:
+        return stack_pointer;
+    case K::AddRegister:
+    case K::SubRegister:
+    case K::AddWithCarry:
+    case K::AddWithOverflow:
+    case K::SubWithCarry:
+    case K::SubWithOverflow:
+        return static_cast<std::uint16_t>(source | stack_pointer);
+
+    // The pre-decrement update is derived only from the address/base.  The
+    // stored general-register payload is deliberately absent.
+    case K::MovByteStorePreDecrement:
+    case K::MovWordStorePreDecrement:
+    case K::MovLongStorePreDecrement:
+    case K::StoreSpecialRegisterPreDecrement:
+    case K::FmovStorePreDecrement:
+        return destination;
+
+    // The post-increment address update derives from the source/base and the
+    // pre-update stack namespace.  If the loaded result itself is R15, these
+    // are still the only representable dependency sources here.
+    case K::MovByteLoadPostIncrement:
+    case K::MovWordLoadPostIncrement:
+    case K::MovLongLoadPostIncrement:
+    case K::LoadSpecialRegisterPostIncrement:
+    case K::FmovLoadPostIncrement:
+        return static_cast<std::uint16_t>(source | stack_pointer);
+
+    // A general memory load into R15 is determined by its base/index address
+    // source.  PC/GBR-relative loads have no entry-GPR dependency.
+    case K::MovByteLoad:
+    case K::MovWordLoad:
+    case K::MovLongLoad:
+    case K::MovByteLoadDisplacement:
+    case K::MovWordLoadDisplacement:
+    case K::MovLongLoadDisplacement:
+        return source;
+    case K::MovByteLoadR0Indexed:
+    case K::MovWordLoadR0Indexed:
+    case K::MovLongLoadR0Indexed:
+        return static_cast<std::uint16_t>(source | register_bit(0u));
+    case K::MovWordLoadPcRelative:
+    case K::MovLongLoadPcRelative:
+    case K::MovByteLoadGbrDisplacement:
+    case K::MovWordLoadGbrDisplacement:
+    case K::MovLongLoadGbrDisplacement:
+    case K::MoveAddressPcRelative:
+        return std::uint16_t{0u};
+    case K::MovImmediate:
+        // Treat an immediate replacement of R15 as a namespace transition.
+        // Keeping the prior R15 source is conservatively stronger than
+        // asserting a dead stack lineage at this state sink.
+        return stack_pointer;
     default:
         return std::nullopt;
     }
@@ -17981,6 +19460,17 @@ struct FunctionEvaluationProjection final {
     bool memory_contract_present = false;
     std::uint16_t register_read_mask =
         std::numeric_limits<std::uint16_t>::max();
+    std::uint32_t inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max();
+    // The target contract stays raw for re-projecting edge-local match
+    // states. This is the receiver-specialized mask that actually shaped
+    // `ingress`, and is the only entry mutation fact allowed in the physical
+    // evaluation key.
+    std::uint32_t effective_inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t inventory_stack_mutation_conditional_sources = 0u;
+    std::uint32_t inventory_stack_mutation_unconditional_sources = 0u;
+    std::uint32_t inventory_stack_alias_creation_contract = 0u;
     AbiStackArgumentReadSet stack_reads;
     bool memory_read_complete = false;
     bool memory_read_unknown = false;
@@ -18115,6 +19605,209 @@ struct FunctionEvaluationProjection final {
            static_cast<std::uint64_t>(candidate->address) < cell_end;
 }
 
+[[nodiscard]] bool has_current_stack_epoch_mutation_receiver(
+    const AbstractState& state) {
+    if (state.inventory_current_stack_epoch_alias_watcher ||
+        // A detached watcher is not a present mutation target yet, but a
+        // later SavedEpoch restore can re-arm it before a local write. Keep
+        // the source-side mutation contract live; runtime still decides
+        // whether any concrete mutation reaches the restored alias.
+        state.inventory_detached_stack_epoch_alias_watcher ||
+        state.inventory_unresolved_saved_stack_alias_tracks_current_sources !=
+            0u ||
+        inventory_saved_stack_epoch_tracks_current(
+            state.inventory_unresolved_stack_epoch) ||
+        inventory_saved_stack_epoch_tracks_current(
+            state.inventory_unresolved_memory_epoch))
+        return true;
+    if (std::any_of(
+            state.registers.begin(), state.registers.end(),
+            [](const auto& value) {
+                return inventory_saved_stack_epoch_tracks_current(
+                    value.inventory_saved_stack_epoch);
+            }) ||
+        std::any_of(
+            state.stack_values.begin(), state.stack_values.end(),
+            [](const auto& stored) {
+                return inventory_saved_stack_epoch_tracks_current(
+                    stored.second.inventory_saved_stack_epoch);
+            }) ||
+        std::any_of(
+            state.memory_values.begin(), state.memory_values.end(),
+            [](const auto& stored) {
+                return inventory_saved_stack_epoch_tracks_current(
+                    stored.second.inventory_saved_stack_epoch);
+            }))
+        return true;
+    return state.stack_tail.present &&
+           inventory_saved_stack_epoch_tracks_current(
+               state.stack_tail.payload.inventory_saved_stack_epoch);
+}
+
+// A conditional alias-capture source is activated only by the concrete
+// ingress value which can really satisfy value_with_saved_stack_epoch()'s
+// `inventory_stack_derived` predicate.  In contrast, stack_may_alias is an
+// address-side MAY fact and must never turn every ordinary long store into a
+// whole-stack capture.
+[[nodiscard]] bool has_stack_derived_alias_creation_source(
+    const AbstractState& ingress,
+    const std::uint32_t sources) {
+    for (std::size_t index = 0u; index < ingress.registers.size(); ++index) {
+        if ((sources & (std::uint32_t{1u} << index)) != 0u &&
+            ingress.registers[index].inventory_stack_derived)
+            return true;
+    }
+    // Bit 16 denotes the incoming stack domain, not a proof that a concrete
+    // payload has the MUST `inventory_stack_derived` fact required by
+    // value_with_saved_stack_epoch().  Inspect the actual retained domain;
+    // address-side stack MAY facts deliberately do not create aliases.
+    if ((sources & inventory_provenance_stack_source) == 0u) return false;
+    if (std::any_of(ingress.stack_values.begin(), ingress.stack_values.end(),
+                    [](const auto& value) {
+                        return value.second.inventory_stack_derived;
+                    }))
+        return true;
+    return ingress.stack_tail.present &&
+           ingress.stack_tail.payload.inventory_stack_derived;
+}
+
+[[nodiscard]] EffectiveInventoryProvenanceMask
+effective_inventory_provenance_mask(
+    const AbstractState& ingress,
+    const std::uint32_t inventory_provenance_register_read_mask,
+    const std::uint32_t inventory_stack_mutation_conditional_sources,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources,
+    const std::uint32_t inventory_stack_alias_creation_contract) {
+    EffectiveInventoryProvenanceMask result;
+    if (inventory_provenance_register_read_mask ==
+        std::numeric_limits<std::uint32_t>::max())
+        return result;
+    const auto has_receiver =
+        has_current_stack_epoch_mutation_receiver(ingress);
+    const auto inventory_stack_alias_creation_conditional_sources =
+        inventory_stack_alias_creation_contract &
+        inventory_provenance_source_mask;
+    const auto alias_creation_active =
+        (inventory_stack_alias_creation_contract &
+         inventory_stack_alias_creation_unconditional) != 0u ||
+        has_stack_derived_alias_creation_source(
+            ingress, inventory_stack_alias_creation_conditional_sources);
+    const auto active_conditional_sources =
+        inventory_stack_mutation_effect_present(
+            inventory_stack_mutation_conditional_sources) &&
+                (has_receiver || alias_creation_active)
+            ? inventory_stack_mutation_sources(
+                  inventory_stack_mutation_conditional_sources)
+            : 0u;
+    const auto unconditional_sources =
+        inventory_stack_mutation_effect_present(
+            inventory_stack_mutation_unconditional_sources)
+            ? inventory_stack_mutation_sources(
+                  inventory_stack_mutation_unconditional_sources)
+            : 0u;
+    result.mask = static_cast<std::uint32_t>(
+        (inventory_provenance_register_read_mask |
+         active_conditional_sources |
+         unconditional_sources |
+         (alias_creation_active
+              ? static_cast<std::uint32_t>(
+                    inventory_stack_alias_creation_conditional_sources |
+                    inventory_provenance_stack_source)
+              : 0u)) &
+        inventory_provenance_source_mask);
+    return result;
+}
+
+// Ordinary and inventory-provenance liveness are intentionally independent.
+// A provenance-dead register normally drops its Inventory transport.  A
+// dropped current SavedEpoch is the exception: both a later bounded stack
+// mutation and a namespace detach must remain observable to the caller-owned
+// alias, even when this callee has no local long stack store.
+void clear_inventory_transport(AbstractValue& value) {
+    value.inventory_stack_derived = false;
+    value.inventory_code_pointer = false;
+    value.inventory_pc_relative_code_literal = false;
+    value.inventory_code_pointer_values.clear();
+    value.inventory_pc_relative_code_literal_values.clear();
+    value.inventory_code_pointer_values_truncated = false;
+    value.inventory_pc_relative_code_literal_values_truncated = false;
+    value.contextual_candidate_dependency = false;
+    value.inventory_stack_callback_loss_unresolved = false;
+    value.inventory_saved_stack_epoch = {};
+    value.call_sites.clear();
+    value.callees.clear();
+}
+
+void clear_inventory_transport_with_current_epoch_watcher(
+    AbstractState& state,
+    AbstractValue& value) {
+    // This is not conditional on a local mutation source.  A stack-namespace
+    // switch detaches every current alias, including one that this function
+    // never writes through a long store; the caller must observe that detach.
+    if (inventory_saved_stack_epoch_tracks_current(
+            value.inventory_saved_stack_epoch))
+        state.inventory_current_stack_epoch_alias_watcher = true;
+    clear_inventory_transport(value);
+}
+
+void project_register_dual_contract(
+    AbstractState& state,
+    const std::uint8_t index,
+    const bool ordinary_live,
+    const bool inventory_provenance_live) {
+    if (ordinary_live && inventory_provenance_live) return;
+    if (!inventory_provenance_live &&
+        inventory_saved_stack_epoch_tracks_current(
+            state[index].inventory_saved_stack_epoch))
+        state.inventory_current_stack_epoch_alias_watcher = true;
+    if (ordinary_live) {
+        clear_inventory_transport(state[index]);
+        clear_inventory_stack_coordinates(state, index);
+        state.inventory_stack_may_alias[index] = true;
+        state.inventory_vbr_relative[index] = false;
+        state.inventory_fixed_storage_reference[index] = false;
+        return;
+    }
+    if (inventory_provenance_live) {
+        make_unknown_preserving_provenance(state[index]);
+        state.stack_offsets[index].reset();
+        state.stack_may_alias[index] = true;
+        return;
+    }
+    state[index] = {};
+    state.stack_offsets[index].reset();
+    clear_inventory_stack_coordinates(state, index);
+    state.stack_may_alias[index] = true;
+    state.inventory_stack_may_alias[index] = true;
+    state.inventory_vbr_relative[index] = false;
+    state.inventory_fixed_storage_reference[index] = false;
+}
+
+void clear_stack_inventory_domain(AbstractState& state) {
+    const bool dropped_tracking =
+        inventory_saved_stack_epoch_tracks_current(
+            state.inventory_unresolved_stack_epoch) ||
+        (state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
+         unresolved_saved_stack_alias_source_stack) != 0u;
+    if (dropped_tracking)
+        state.inventory_current_stack_epoch_alias_watcher = true;
+    state.inventory_unresolved_stack_carrier = {};
+    state.inventory_unresolved_stack_epoch = {};
+    state.inventory_unresolved_stack_callback_loss = false;
+    state.inventory_unresolved_saved_stack_alias_sources =
+        static_cast<std::uint8_t>(
+            state.inventory_unresolved_saved_stack_alias_sources &
+            ~unresolved_saved_stack_alias_source_stack);
+    state.inventory_unresolved_saved_stack_alias_tracks_current_sources =
+        static_cast<std::uint8_t>(
+            state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
+            ~unresolved_saved_stack_alias_source_stack);
+    state.inventory_callback_loss_identity_truncated_sources =
+        static_cast<std::uint8_t>(
+            state.inventory_callback_loss_identity_truncated_sources &
+            ~unresolved_saved_stack_alias_source_stack);
+}
+
 [[nodiscard]] std::optional<AbstractState>
 project_evaluation_ingress(
     const AbstractState& source,
@@ -18122,10 +19815,26 @@ project_evaluation_ingress(
     const AbiStackArgumentReadSet& stack_reads,
     const bool memory_read_complete,
     const bool memory_read_unknown,
-    const std::span<const FunctionMemoryWriteRange> memory_read_ranges) {
+    const std::span<const FunctionMemoryWriteRange> memory_read_ranges,
+    const std::uint32_t inventory_provenance_register_read_mask =
+        inventory_provenance_source_mask,
+    const std::uint32_t inventory_stack_mutation_conditional_sources = 0u,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources = 0u,
+    const std::uint32_t inventory_stack_alias_creation_contract = 0u) {
+    const auto effective_inventory_mask = effective_inventory_provenance_mask(
+        source,
+        inventory_provenance_register_read_mask,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contract);
+    const auto effective_inventory_provenance_register_read_mask =
+        effective_inventory_mask.mask;
     const bool project_registers =
         register_read_mask !=
         std::numeric_limits<std::uint16_t>::max();
+    const bool project_inventory_registers =
+        effective_inventory_provenance_register_read_mask !=
+        std::numeric_limits<std::uint32_t>::max();
     const bool project_stack =
         valid_complete_stack_read_contract(stack_reads);
     const bool project_memory =
@@ -18133,7 +19842,8 @@ project_evaluation_ingress(
             memory_read_complete,
             memory_read_unknown,
             memory_read_ranges);
-    if (!project_registers && !project_stack && !project_memory)
+    if (!project_registers && !project_inventory_registers &&
+        !project_stack && !project_memory)
         return std::nullopt;
     constexpr auto stack_pointer_bit =
         static_cast<std::uint16_t>(1u << 15u);
@@ -18145,38 +19855,49 @@ project_evaluation_ingress(
             : register_read_mask;
 
     AbstractState projected = source;
-    // State-wide inventory loss/watchers remain observable independent of
-    // one concrete register, stack slot, or ordinary memory identity.
-    if (project_registers) {
+    // Unattributed state-wide facts remain conservative. The stack-domain
+    // carrier/epoch/loss is source-scoped and may be removed by an exact dead
+    // incoming-stack bit, but every removed current alias still leaves the
+    // detached/current watcher for a later namespace transition.
+    if (project_registers || project_inventory_registers) {
         for (std::size_t index = 0u;
              index < projected.registers.size();
              ++index) {
             const auto bit = static_cast<std::uint16_t>(1u << index);
-            if ((effective_register_read_mask & bit) != 0u)
-                continue;
-            if (has_saved_stack_epoch(projected.registers[index]) &&
-                inventory_saved_stack_epoch_tracks_current(
-                    projected.registers[index]
-                        .inventory_saved_stack_epoch))
-                projected.inventory_current_stack_epoch_alias_watcher =
-                    true;
-            projected.registers[index] = {};
-            projected.stack_offsets[index].reset();
-            projected.inventory_stack_offsets[index].reset();
-            projected.inventory_stack_offset_candidates[index].clear();
-            projected.stack_may_alias[index] = true;
-            projected.inventory_stack_may_alias[index] = true;
-            projected.inventory_vbr_relative[index] = false;
-            projected.inventory_fixed_storage_reference[index] = false;
+            project_register_dual_contract(
+                projected,
+                static_cast<std::uint8_t>(index),
+                !project_registers ||
+                    (effective_register_read_mask & bit) != 0u,
+                index == 15u || !project_inventory_registers ||
+                    (effective_inventory_provenance_register_read_mask &
+                     (std::uint32_t{1u} << index)) != 0u);
         }
     }
 
-    if (project_stack) {
+    const bool stack_inventory_provenance_live =
+        !project_inventory_registers ||
+        (effective_inventory_provenance_register_read_mask &
+         inventory_provenance_stack_source) != 0u;
+    const bool retain_whole_stack_for_alias_capture =
+        (inventory_stack_alias_creation_contract &
+         inventory_stack_alias_creation_unconditional) != 0u ||
+        has_stack_derived_alias_creation_source(
+            source,
+            inventory_stack_alias_creation_contract &
+                inventory_provenance_source_mask);
+    if (project_stack && !retain_whole_stack_for_alias_capture) {
         for (auto stored = projected.stack_values.begin();
              stored != projected.stack_values.end();) {
             if (std::binary_search(stack_reads.slots.begin(),
                                    stack_reads.slots.end(),
                                    stored->first)) {
+                ++stored;
+                continue;
+            }
+            if (stack_inventory_provenance_live &&
+                has_inventory_transport_payload(stored->second)) {
+                make_unknown_preserving_provenance(stored->second);
                 ++stored;
                 continue;
             }
@@ -18189,31 +19910,51 @@ project_evaluation_ingress(
         }
         materialize_stack_tail_read_slots(
             projected, stack_reads.slots);
-        if (stack_reads.slots.empty()) {
-            const bool dropped_tracking =
-                (projected.inventory_unresolved_saved_stack_alias_tracks_current_sources &
-                 unresolved_saved_stack_alias_source_stack) != 0u;
-            if (inventory_saved_stack_epoch_tracks_current(
-                    projected.inventory_unresolved_stack_epoch) ||
-                dropped_tracking)
-                projected.inventory_current_stack_epoch_alias_watcher =
-                    true;
-            projected.inventory_unresolved_stack_carrier = {};
-            projected.inventory_unresolved_stack_epoch = {};
-            projected.inventory_unresolved_stack_callback_loss = false;
-            projected.inventory_unresolved_saved_stack_alias_sources =
-                static_cast<std::uint8_t>(
-                    projected.inventory_unresolved_saved_stack_alias_sources &
-                    ~unresolved_saved_stack_alias_source_stack);
-            projected.inventory_unresolved_saved_stack_alias_tracks_current_sources =
-                static_cast<std::uint8_t>(
-                    projected.inventory_unresolved_saved_stack_alias_tracks_current_sources &
-                    ~unresolved_saved_stack_alias_source_stack);
-            projected.inventory_callback_loss_identity_truncated_sources =
-                static_cast<std::uint8_t>(
-                    projected.inventory_callback_loss_identity_truncated_sources &
-                    ~unresolved_saved_stack_alias_source_stack);
+        const auto tail_is_ordinary_live = [&] {
+            return std::any_of(
+                stack_reads.slots.begin(),
+                stack_reads.slots.end(),
+                [&](const auto slot) {
+                    return projected.stack_tail.present &&
+                           slot >= projected.stack_tail.lower_bound &&
+                           !projected.stack_values.contains(slot);
+                });
+        };
+        if (project_inventory_registers &&
+            !stack_inventory_provenance_live) {
+            for (auto& [slot, value] : projected.stack_values) {
+                static_cast<void>(slot);
+                clear_inventory_transport_with_current_epoch_watcher(
+                    projected, value);
+            }
+            if (projected.stack_tail.present)
+                clear_inventory_transport_with_current_epoch_watcher(
+                    projected, projected.stack_tail.payload);
+            clear_stack_inventory_domain(projected);
+        } else if (projected.stack_tail.present && !tail_is_ordinary_live() &&
+                   stack_inventory_provenance_live &&
+                   has_inventory_transport_payload(
+                       projected.stack_tail.payload)) {
+            make_unknown_preserving_provenance(
+                projected.stack_tail.payload);
+        } else if (projected.stack_tail.present && !tail_is_ordinary_live()) {
+            projected.stack_tail = {};
         }
+        if (stack_reads.slots.empty() && !stack_inventory_provenance_live) {
+            clear_stack_inventory_domain(projected);
+        }
+    }
+    if (!project_stack && project_inventory_registers &&
+        !stack_inventory_provenance_live) {
+        for (auto& [slot, value] : projected.stack_values) {
+            static_cast<void>(slot);
+            clear_inventory_transport_with_current_epoch_watcher(
+                projected, value);
+        }
+        if (projected.stack_tail.present)
+            clear_inventory_transport_with_current_epoch_watcher(
+                projected, projected.stack_tail.payload);
+        clear_stack_inventory_domain(projected);
     }
     if (project_memory) {
         for (auto stored = projected.memory_values.begin();
@@ -18266,10 +20007,25 @@ project_evaluation_ingress(
     const bool memory_read_complete,
     const bool memory_read_unknown,
     const std::span<const FunctionMemoryWriteRange>
-        memory_read_ranges) {
+        memory_read_ranges,
+    const std::uint32_t inventory_provenance_register_read_mask,
+    const std::uint32_t inventory_stack_mutation_conditional_sources,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources,
+    const std::uint32_t inventory_stack_alias_creation_contract) {
+    const auto effective_inventory_mask = effective_inventory_provenance_mask(
+        state,
+        inventory_provenance_register_read_mask,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contract);
+    const auto effective_inventory_provenance_register_read_mask =
+        effective_inventory_mask.mask;
     const bool project_registers =
         register_read_mask !=
         std::numeric_limits<std::uint16_t>::max();
+    const bool project_inventory_registers =
+        effective_inventory_provenance_register_read_mask !=
+        std::numeric_limits<std::uint32_t>::max();
     const bool project_stack =
         valid_complete_stack_read_contract(stack_reads);
     const bool project_memory =
@@ -18277,7 +20033,8 @@ project_evaluation_ingress(
             memory_read_complete,
             memory_read_unknown,
             memory_read_ranges);
-    if (!project_registers && !project_stack && !project_memory)
+    if (!project_registers && !project_inventory_registers &&
+        !project_stack && !project_memory)
         return false;
     constexpr auto stack_pointer_bit =
         static_cast<std::uint16_t>(1u << 15u);
@@ -18287,33 +20044,44 @@ project_evaluation_ingress(
             ? static_cast<std::uint16_t>(
                   register_read_mask | stack_pointer_bit)
             : register_read_mask;
-    if (project_registers) {
+    if (project_registers || project_inventory_registers) {
         for (std::size_t index = 0u;
              index < state.registers.size();
              ++index) {
             const auto bit = static_cast<std::uint16_t>(1u << index);
-            if ((effective_register_read_mask & bit) != 0u)
-                continue;
-            if (has_saved_stack_epoch(state.registers[index]) &&
-                inventory_saved_stack_epoch_tracks_current(
-                    state.registers[index].inventory_saved_stack_epoch))
-                state.inventory_current_stack_epoch_alias_watcher = true;
-            state.registers[index] = {};
-            state.stack_offsets[index].reset();
-            state.inventory_stack_offsets[index].reset();
-            state.inventory_stack_offset_candidates[index].clear();
-            state.stack_may_alias[index] = true;
-            state.inventory_stack_may_alias[index] = true;
-            state.inventory_vbr_relative[index] = false;
-            state.inventory_fixed_storage_reference[index] = false;
+            project_register_dual_contract(
+                state,
+                static_cast<std::uint8_t>(index),
+                !project_registers ||
+                    (effective_register_read_mask & bit) != 0u,
+                index == 15u || !project_inventory_registers ||
+                    (effective_inventory_provenance_register_read_mask &
+                     (std::uint32_t{1u} << index)) != 0u);
         }
     }
-    if (project_stack) {
+    const bool stack_inventory_provenance_live =
+        !project_inventory_registers ||
+        (effective_inventory_provenance_register_read_mask &
+         inventory_provenance_stack_source) != 0u;
+    const bool retain_whole_stack_for_alias_capture =
+        (inventory_stack_alias_creation_contract &
+         inventory_stack_alias_creation_unconditional) != 0u ||
+        has_stack_derived_alias_creation_source(
+            state,
+            inventory_stack_alias_creation_contract &
+                inventory_provenance_source_mask);
+    if (project_stack && !retain_whole_stack_for_alias_capture) {
         for (auto stored = state.stack_values.begin();
              stored != state.stack_values.end();) {
             if (std::binary_search(stack_reads.slots.begin(),
                                    stack_reads.slots.end(),
                                    stored->first)) {
+                ++stored;
+                continue;
+            }
+            if (stack_inventory_provenance_live &&
+                has_inventory_transport_payload(stored->second)) {
+                make_unknown_preserving_provenance(stored->second);
                 ++stored;
                 continue;
             }
@@ -18324,30 +20092,49 @@ project_evaluation_ingress(
             stored = state.stack_values.erase(stored);
         }
         materialize_stack_tail_read_slots(state, stack_reads.slots);
-        if (stack_reads.slots.empty()) {
-            const bool dropped_tracking =
-                (state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
-                 unresolved_saved_stack_alias_source_stack) != 0u;
-            if (inventory_saved_stack_epoch_tracks_current(
-                    state.inventory_unresolved_stack_epoch) ||
-                dropped_tracking)
-                state.inventory_current_stack_epoch_alias_watcher = true;
-            state.inventory_unresolved_stack_carrier = {};
-            state.inventory_unresolved_stack_epoch = {};
-            state.inventory_unresolved_stack_callback_loss = false;
-            state.inventory_unresolved_saved_stack_alias_sources =
-                static_cast<std::uint8_t>(
-                    state.inventory_unresolved_saved_stack_alias_sources &
-                    ~unresolved_saved_stack_alias_source_stack);
-            state.inventory_unresolved_saved_stack_alias_tracks_current_sources =
-                static_cast<std::uint8_t>(
-                    state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
-                    ~unresolved_saved_stack_alias_source_stack);
-            state.inventory_callback_loss_identity_truncated_sources =
-                static_cast<std::uint8_t>(
-                    state.inventory_callback_loss_identity_truncated_sources &
-                    ~unresolved_saved_stack_alias_source_stack);
+        const auto tail_is_ordinary_live = [&] {
+            return std::any_of(
+                stack_reads.slots.begin(),
+                stack_reads.slots.end(),
+                [&](const auto slot) {
+                    return state.stack_tail.present &&
+                           slot >= state.stack_tail.lower_bound &&
+                           !state.stack_values.contains(slot);
+                });
+        };
+        if (project_inventory_registers &&
+            !stack_inventory_provenance_live) {
+            for (auto& [slot, value] : state.stack_values) {
+                static_cast<void>(slot);
+                clear_inventory_transport_with_current_epoch_watcher(
+                    state, value);
+            }
+            if (state.stack_tail.present)
+                clear_inventory_transport_with_current_epoch_watcher(
+                    state, state.stack_tail.payload);
+            clear_stack_inventory_domain(state);
+        } else if (state.stack_tail.present && !tail_is_ordinary_live() &&
+                   stack_inventory_provenance_live &&
+                   has_inventory_transport_payload(
+                       state.stack_tail.payload)) {
+            make_unknown_preserving_provenance(state.stack_tail.payload);
+        } else if (state.stack_tail.present && !tail_is_ordinary_live()) {
+            state.stack_tail = {};
         }
+        if (stack_reads.slots.empty() && !stack_inventory_provenance_live)
+            clear_stack_inventory_domain(state);
+    }
+    if (!project_stack && project_inventory_registers &&
+        !stack_inventory_provenance_live) {
+        for (auto& [slot, value] : state.stack_values) {
+            static_cast<void>(slot);
+            clear_inventory_transport_with_current_epoch_watcher(
+                state, value);
+        }
+        if (state.stack_tail.present)
+            clear_inventory_transport_with_current_epoch_watcher(
+                state, state.stack_tail.payload);
+        clear_stack_inventory_domain(state);
     }
     if (project_memory) {
         for (auto stored = state.memory_values.begin();
@@ -18406,7 +20193,12 @@ inventory_loss_in_evaluation_projection(
     const bool memory_read_complete = false,
     const bool memory_read_unknown = false,
     const std::span<const FunctionMemoryWriteRange>
-        memory_read_ranges = {}) {
+        memory_read_ranges = {},
+    const std::uint32_t inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max(),
+    const std::uint32_t inventory_stack_mutation_conditional_sources = 0u,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources = 0u,
+    const std::uint32_t inventory_stack_alias_creation_contract = 0u) {
     // Keep this predicate structurally identical to
     // project_evaluation_ingress(): state-wide loss and Memory remain
     // observable, while exact ABI contracts may prove individual register or
@@ -18416,6 +20208,17 @@ inventory_loss_in_evaluation_projection(
     const bool project_registers =
         register_read_mask !=
         std::numeric_limits<std::uint16_t>::max();
+    const auto effective_inventory_mask = effective_inventory_provenance_mask(
+        state,
+        inventory_provenance_register_read_mask,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contract);
+    const auto effective_inventory_provenance_register_read_mask =
+        effective_inventory_mask.mask;
+    const bool project_inventory_registers =
+        effective_inventory_provenance_register_read_mask !=
+        std::numeric_limits<std::uint32_t>::max();
     const bool project_stack =
         valid_complete_stack_read_contract(stack_reads);
     const bool project_memory =
@@ -18431,17 +20234,33 @@ inventory_loss_in_evaluation_projection(
             ? static_cast<std::uint16_t>(
                   register_read_mask | stack_pointer_bit)
             : register_read_mask;
-    const bool stack_carrier_observable =
-        !project_stack || !stack_reads.slots.empty();
     const bool memory_carrier_observable =
         !project_memory || memory_read_unknown || !memory_read_ranges.empty();
+    const bool stack_inventory_provenance_live =
+        !project_inventory_registers ||
+        (effective_inventory_provenance_register_read_mask &
+         inventory_provenance_stack_source) != 0u;
+    const bool retain_whole_stack_for_alias_capture =
+        (inventory_stack_alias_creation_contract &
+         inventory_stack_alias_creation_unconditional) != 0u ||
+        has_stack_derived_alias_creation_source(
+            state,
+            inventory_stack_alias_creation_contract &
+                inventory_provenance_source_mask);
+    // The state-wide stack carrier has already lost its exact slot identity.
+    // A complete-empty ordinary stack-read contract therefore cannot prove it
+    // dead by itself.  The independent incoming-stack provenance bit is the
+    // authoritative source selector: exact bit16-dead drops this domain,
+    // bit16-live keeps its Top/Loss observable even without the legacy
+    // formal ABI-stack bit.
+    const bool stack_state_sink_observable =
+        stack_inventory_provenance_live;
     loss.abi_stack_base_unresolved =
-        (inventory_sink_sources & abi_stack_argument_taint) != 0u &&
-        stack_carrier_observable &&
+        stack_state_sink_observable &&
         (state.inventory_unresolved_stack_callback_loss ||
          (state.inventory_callback_loss_identity_truncated_sources &
           unresolved_saved_stack_alias_source_stack) != 0u);
-    if (stack_carrier_observable) {
+    if (stack_state_sink_observable) {
         loss.candidate_values_truncated =
             loss.candidate_values_truncated ||
             (state.inventory_callback_loss_identity_truncated_sources &
@@ -18450,11 +20269,10 @@ inventory_loss_in_evaluation_projection(
                 state.inventory_unresolved_stack_carrier) ||
             inventory_saved_stack_epoch_truncated(
                 state.inventory_unresolved_stack_epoch);
-        if ((inventory_sink_sources & abi_stack_argument_taint) != 0u)
-            loss.abi_stack_base_unresolved =
-                loss.abi_stack_base_unresolved ||
-                inventory_saved_stack_epoch_truncated(
-                    state.inventory_unresolved_stack_epoch);
+        loss.abi_stack_base_unresolved =
+            loss.abi_stack_base_unresolved ||
+            inventory_saved_stack_epoch_truncated(
+                state.inventory_unresolved_stack_epoch);
     }
     if (memory_carrier_observable)
         loss.candidate_values_truncated =
@@ -18470,38 +20288,53 @@ inventory_loss_in_evaluation_projection(
          index < state.registers.size();
          ++index) {
         const auto bit = static_cast<std::uint16_t>(1u << index);
-        if (project_registers &&
-            (effective_register_read_mask & bit) == 0u)
+        if (project_inventory_registers) {
+            // project_register_dual_contract() retains R15 as the current
+            // state namespace even if an old/corrupt precise mask omitted
+            // bit15.  Keep the publication-loss lens structurally identical.
+            if (index != 15u &&
+                (effective_inventory_provenance_register_read_mask &
+                 (std::uint32_t{1u} << index)) == 0u)
+                continue;
+        } else if (project_registers &&
+                   (effective_register_read_mask & bit) == 0u) {
             continue;
+        }
         loss.candidate_values_truncated =
             loss.candidate_values_truncated ||
             inventory_candidate_values_truncated(
                 state.registers[index]);
-        if (index >= 4u && index < 8u &&
-            (inventory_sink_sources &
-             static_cast<std::uint8_t>(1u << (index - 4u))) != 0u)
+        // With an exact Inventory provenance contract, every live source bit
+        // already proves a path to an Inventory or state sink.  The legacy
+        // r4-r7 mask only describes the older ordinary ABI fallback.
+        const bool unresolved_callback_observable =
+            project_inventory_registers ||
+            (index >= 4u && index < 8u &&
+             (inventory_sink_sources &
+              static_cast<std::uint8_t>(1u << (index - 4u))) != 0u);
+        if (unresolved_callback_observable)
             loss.abi_stack_base_unresolved =
                 loss.abi_stack_base_unresolved ||
                 carries_unresolved_stack_callback(
                     state.registers[index]);
     }
     for (const auto& [slot, value] : state.stack_values) {
-        if (project_stack &&
+        if (!retain_whole_stack_for_alias_capture && project_stack &&
             !std::binary_search(stack_reads.slots.begin(),
                                 stack_reads.slots.end(),
                                 slot))
             continue;
+        if (!stack_inventory_provenance_live) continue;
         loss.candidate_values_truncated =
             loss.candidate_values_truncated ||
             inventory_candidate_values_truncated(value);
-        if ((inventory_sink_sources & abi_stack_argument_taint) != 0u)
-            loss.abi_stack_base_unresolved =
-                loss.abi_stack_base_unresolved ||
-                carries_unresolved_stack_callback(value);
+        loss.abi_stack_base_unresolved =
+            loss.abi_stack_base_unresolved ||
+            carries_unresolved_stack_callback(value);
     }
-    if (state.stack_tail.present) {
+    if (state.stack_tail.present && stack_inventory_provenance_live) {
         const auto tail_is_observable =
-            !project_stack ||
+            retain_whole_stack_for_alias_capture || !project_stack ||
             std::any_of(
                 stack_reads.slots.begin(),
                 stack_reads.slots.end(),
@@ -18514,11 +20347,10 @@ inventory_loss_in_evaluation_projection(
                 loss.candidate_values_truncated ||
                 inventory_candidate_values_truncated(
                     state.stack_tail.payload);
-            if ((inventory_sink_sources & abi_stack_argument_taint) != 0u)
-                loss.abi_stack_base_unresolved =
-                    loss.abi_stack_base_unresolved ||
-                    carries_unresolved_stack_callback(
-                        state.stack_tail.payload);
+            loss.abi_stack_base_unresolved =
+                loss.abi_stack_base_unresolved ||
+                carries_unresolved_stack_callback(
+                    state.stack_tail.payload);
         }
     }
     loss.candidate_values_truncated =
@@ -18546,6 +20378,14 @@ make_function_evaluation_projection(
     const std::uint32_t function_entry,
     const TailIngressTargetKind target_kind,
     const ForwardedRegisterReadMap& forwarded_register_reads,
+    const InventoryProvenanceRegisterReadMap&
+        inventory_provenance_register_reads,
+    const InventoryStackMutationSourceMap&
+        inventory_stack_mutation_conditional_sources,
+    const InventoryStackMutationSourceMap&
+        inventory_stack_mutation_unconditional_sources,
+    const InventoryStackMutationAliasCreationMap&
+        inventory_stack_alias_creation_contracts,
     const AbiStackArgumentReadMap& abi_stack_argument_reads,
     const std::map<std::uint32_t, FunctionValueSummary>&
         memory_read_summaries,
@@ -18571,6 +20411,32 @@ make_function_evaluation_projection(
         if (projection.register_contract_present)
             projection.register_read_mask = register_reads->second;
 
+        const auto inventory_provenance_reads =
+            inventory_provenance_register_reads.find(function_entry);
+        if (inventory_provenance_reads !=
+            inventory_provenance_register_reads.end())
+            projection.inventory_provenance_register_read_mask =
+                inventory_provenance_reads->second;
+
+        const auto conditional_mutation_sources =
+            inventory_stack_mutation_conditional_sources.find(function_entry);
+        if (conditional_mutation_sources !=
+            inventory_stack_mutation_conditional_sources.end())
+            projection.inventory_stack_mutation_conditional_sources =
+                conditional_mutation_sources->second;
+        const auto unconditional_mutation_sources =
+            inventory_stack_mutation_unconditional_sources.find(function_entry);
+        if (unconditional_mutation_sources !=
+            inventory_stack_mutation_unconditional_sources.end())
+            projection.inventory_stack_mutation_unconditional_sources =
+                unconditional_mutation_sources->second;
+        const auto alias_creation_contract =
+            inventory_stack_alias_creation_contracts.find(function_entry);
+        if (alias_creation_contract !=
+            inventory_stack_alias_creation_contracts.end())
+            projection.inventory_stack_alias_creation_contract =
+                alias_creation_contract->second;
+
         const auto stack_reads =
             abi_stack_argument_reads.find(function_entry);
         projection.stack_contract_present =
@@ -18595,6 +20461,15 @@ make_function_evaluation_projection(
         }
     }
 
+    projection.effective_inventory_provenance_register_read_mask =
+        effective_inventory_provenance_mask(
+            initial_state,
+            projection.inventory_provenance_register_read_mask,
+            projection.inventory_stack_mutation_conditional_sources,
+            projection.inventory_stack_mutation_unconditional_sources,
+            projection.inventory_stack_alias_creation_contract)
+            .mask;
+
     if (requested_lens == EvaluationLens::FullState) {
         projection.ingress = initial_state;
         return projection;
@@ -18617,7 +20492,10 @@ make_function_evaluation_projection(
             projection.memory_read_unknown,
             projection.memory_read_ranges);
     auto projected =
-        register_domain_precise || stack_domain_precise ||
+        register_domain_precise ||
+                projection.inventory_provenance_register_read_mask !=
+                    std::numeric_limits<std::uint32_t>::max() ||
+                stack_domain_precise ||
                 memory_domain_precise
             ? project_evaluation_ingress(
                   initial_state,
@@ -18625,7 +20503,11 @@ make_function_evaluation_projection(
                   projection.stack_reads,
                   projection.memory_read_complete,
                   projection.memory_read_unknown,
-                  projection.memory_read_ranges)
+                  projection.memory_read_ranges,
+                  projection.inventory_provenance_register_read_mask,
+                  projection.inventory_stack_mutation_conditional_sources,
+                  projection.inventory_stack_mutation_unconditional_sources,
+                  projection.inventory_stack_alias_creation_contract)
             : std::nullopt;
     if (!projected.has_value()) {
         projection.full_state_fallback = true;
@@ -18640,6 +20522,14 @@ make_function_evaluation_projection(
 void canonicalize_evaluation_outputs(
     FunctionEvaluation& evaluation,
     const ForwardedRegisterReadMap& forwarded_register_reads,
+    const InventoryProvenanceRegisterReadMap&
+        inventory_provenance_register_reads,
+    const InventoryStackMutationSourceMap&
+        inventory_stack_mutation_conditional_sources,
+    const InventoryStackMutationSourceMap&
+        inventory_stack_mutation_unconditional_sources,
+    const InventoryStackMutationAliasCreationMap&
+        inventory_stack_alias_creation_contracts,
     const AbiStackArgumentReadMap& abi_stack_argument_reads,
     const std::map<std::uint32_t, FunctionValueSummary>&
         memory_read_summaries,
@@ -18653,9 +20543,25 @@ void canonicalize_evaluation_outputs(
             forwarded_register_reads.find(target);
         const auto stack_reads =
             abi_stack_argument_reads.find(target);
+        const auto inventory_provenance_reads =
+            inventory_provenance_register_reads.find(target);
         const auto memory_reads =
             memory_read_summaries.find(target);
+        const auto conditional_mutation_sources =
+            inventory_stack_mutation_conditional_sources.find(target);
+        const auto unconditional_mutation_sources =
+            inventory_stack_mutation_unconditional_sources.find(target);
+        const auto alias_creation_contract =
+            inventory_stack_alias_creation_contracts.find(target);
         if (register_reads == forwarded_register_reads.end() &&
+            inventory_provenance_reads ==
+                inventory_provenance_register_reads.end() &&
+            conditional_mutation_sources ==
+                inventory_stack_mutation_conditional_sources.end() &&
+            unconditional_mutation_sources ==
+                inventory_stack_mutation_unconditional_sources.end() &&
+            alias_creation_contract ==
+                inventory_stack_alias_creation_contracts.end() &&
             stack_reads == abi_stack_argument_reads.end() &&
             (!memory_read_contracts_authoritative ||
              memory_reads == memory_read_summaries.end()))
@@ -18685,7 +20591,23 @@ void canonicalize_evaluation_outputs(
                 memory_contract_present
                     ? std::span<const FunctionMemoryWriteRange>{
                           memory_reads->second.memory_read_ranges}
-                    : std::span<const FunctionMemoryWriteRange>{}));
+                    : std::span<const FunctionMemoryWriteRange>{},
+                inventory_provenance_reads ==
+                        inventory_provenance_register_reads.end()
+                    ? std::numeric_limits<std::uint32_t>::max()
+                    : inventory_provenance_reads->second,
+                conditional_mutation_sources ==
+                        inventory_stack_mutation_conditional_sources.end()
+                    ? 0u
+                    : conditional_mutation_sources->second,
+                unconditional_mutation_sources ==
+                        inventory_stack_mutation_unconditional_sources.end()
+                    ? 0u
+                    : unconditional_mutation_sources->second,
+                alias_creation_contract ==
+                        inventory_stack_alias_creation_contracts.end()
+                    ? 0u
+                    : alias_creation_contract->second));
         };
     for (auto& call : evaluation.call_arguments)
         reconstruct_state(call.callee, call.state);
@@ -19855,6 +21777,14 @@ make_function_evaluation_cache_key(
     const TailIngressMap* const local_tail_ingresses,
     const bool collect_walk_diagnostics,
     const ForwardedRegisterReadMap& forwarded_register_reads,
+    const InventoryProvenanceRegisterReadMap&
+        inventory_provenance_register_reads,
+    const InventoryStackMutationSourceMap&
+        inventory_stack_mutation_conditional_sources,
+    const InventoryStackMutationSourceMap&
+        inventory_stack_mutation_unconditional_sources,
+    const InventoryStackMutationAliasCreationMap&
+        inventory_stack_mutation_alias_creations,
     const AbiStackArgumentReadMap* const abi_stack_argument_reads,
     const std::uint8_t inventory_sink_sources,
     const bool collect_component_hashes,
@@ -19862,7 +21792,7 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes, omit_evidence);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{10u});
+    key.append(std::uint32_t{13u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -19899,6 +21829,37 @@ make_function_evaluation_cache_key(
     key.append(projection.register_contract_present);
     if (projection.register_contract_present)
         key.append(projection.register_read_mask);
+    // The receiver-specialized mask determines the projected ingress, but
+    // make_callee_abi_input()/output canonicalization also consult the raw
+    // conditional, unconditional and alias-creation contracts while this
+    // evaluation runs.  Keep their structure in the private cache key.
+    key.append(projection.inventory_provenance_register_read_mask);
+    const auto entry_conditional_mutation_sources =
+        inventory_stack_mutation_conditional_sources.find(
+            function.entry_address);
+    key.append(entry_conditional_mutation_sources !=
+               inventory_stack_mutation_conditional_sources.end());
+    if (entry_conditional_mutation_sources !=
+        inventory_stack_mutation_conditional_sources.end())
+        key.append(entry_conditional_mutation_sources->second);
+    const auto entry_unconditional_mutation_sources =
+        inventory_stack_mutation_unconditional_sources.find(
+            function.entry_address);
+    key.append(entry_unconditional_mutation_sources !=
+               inventory_stack_mutation_unconditional_sources.end());
+    if (entry_unconditional_mutation_sources !=
+        inventory_stack_mutation_unconditional_sources.end())
+        key.append(entry_unconditional_mutation_sources->second);
+    const auto entry_alias_creation =
+        inventory_stack_mutation_alias_creations.find(
+            function.entry_address);
+    key.append(entry_alias_creation !=
+               inventory_stack_mutation_alias_creations.end());
+    if (entry_alias_creation !=
+        inventory_stack_mutation_alias_creations.end())
+        key.append(entry_alias_creation->second);
+    key.append(
+        projection.effective_inventory_provenance_register_read_mask);
     key.append(projection.stack_contract_present);
     if (projection.stack_contract_present)
         encode(key, projection.stack_reads);
@@ -20050,6 +22011,34 @@ make_function_evaluation_cache_key(
                        forwarded_register_reads.end());
             if (register_reads != forwarded_register_reads.end())
                 key.append(register_reads->second);
+            const auto inventory_provenance_reads =
+                inventory_provenance_register_reads.find(address);
+            key.append(inventory_provenance_reads !=
+                       inventory_provenance_register_reads.end());
+            if (inventory_provenance_reads !=
+                inventory_provenance_register_reads.end())
+                key.append(inventory_provenance_reads->second);
+            const auto conditional_mutation_sources =
+                inventory_stack_mutation_conditional_sources.find(address);
+            key.append(conditional_mutation_sources !=
+                       inventory_stack_mutation_conditional_sources.end());
+            if (conditional_mutation_sources !=
+                inventory_stack_mutation_conditional_sources.end())
+                key.append(conditional_mutation_sources->second);
+            const auto unconditional_mutation_sources =
+                inventory_stack_mutation_unconditional_sources.find(address);
+            key.append(unconditional_mutation_sources !=
+                       inventory_stack_mutation_unconditional_sources.end());
+            if (unconditional_mutation_sources !=
+                inventory_stack_mutation_unconditional_sources.end())
+                key.append(unconditional_mutation_sources->second);
+            const auto alias_creation =
+                inventory_stack_mutation_alias_creations.find(address);
+            key.append(alias_creation !=
+                       inventory_stack_mutation_alias_creations.end());
+            if (alias_creation !=
+                inventory_stack_mutation_alias_creations.end())
+                key.append(alias_creation->second);
             if (abi_stack_argument_reads == nullptr) return;
             const auto reads =
                 abi_stack_argument_reads->find(address);
@@ -22286,10 +24275,16 @@ namespace {
 inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
 // Contextual lane admission now reuses an authoritative hybrid ingress even
 // when that ingress retains sticky Candidate/ABI loss.  The persisted walk
-// diagnostics also distinguish semantic evaluation exhaustion from the two
-// private provenance-replay resource limits. Existing epochs encode neither
-// contract, so do not reuse them.
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 19u;
+// diagnostics distinguish semantic evaluation exhaustion from private
+// provenance-replay limits, and the ABI contract now includes the conditional
+// SavedEpoch mutation/capture source maps. Existing epochs encode neither
+// complete contract, so do not reuse them.
+// Mutation effects now carry a distinct zero-source presence bit and cover
+// every runtime conservative stack-write path. Returned raw stack-derived
+// values are also materialized to SavedEpochs at the Summary boundary, so an
+// older persisted source-only contract cannot be reused as an equivalent
+// projection/root identity.
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 26u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -25039,8 +27034,18 @@ struct FunctionAnalysisEpoch final {
     CallsiteContributionRelation abi_callsite_contributions;
     CallsiteContributionRelation summary_callsite_contributions;
     AbiReturnSourceMap abi_return_sources;
+    InventoryProvenanceReturnSourceMap
+        inventory_provenance_return_sources;
     AbiStackArgumentReadMap abi_stack_argument_reads;
     ForwardedRegisterReadMap forwarded_register_reads;
+    InventoryProvenanceRegisterReadMap
+        inventory_provenance_register_reads;
+    InventoryStackMutationSourceMap
+        inventory_stack_mutation_conditional_sources;
+    InventoryStackMutationSourceMap
+        inventory_stack_mutation_unconditional_sources;
+    InventoryStackMutationAliasCreationMap
+        inventory_stack_mutation_alias_creations;
     std::unordered_map<std::uint32_t, std::uint8_t>
         abi_persistent_store_sources;
     AbiIndirectDispatchSourceMap abi_indirect_dispatch_sources;
@@ -25072,8 +27077,15 @@ struct FunctionAnalysisEpoch final {
         std::vector<std::uint32_t> callers;
         std::set<CallsiteContributionKey> callsite_contributions;
         std::uint8_t return_sources = abi_argument_taint_mask;
+        std::uint32_t inventory_provenance_return_sources =
+            inventory_provenance_source_mask;
         AbiStackArgumentReadSet stack_argument_reads;
         std::uint16_t forwarded_register_reads = 0u;
+        std::uint32_t inventory_provenance_register_reads = 0u;
+        std::uint32_t inventory_stack_mutation_conditional_sources = 0u;
+        std::uint32_t inventory_stack_mutation_unconditional_sources = 0u;
+        std::uint32_t inventory_stack_alias_creation_contract = 0u;
+        bool creates_current_stack_epoch_alias = false;
         std::uint8_t persistent_store_sources = 0u;
         std::uint8_t indirect_dispatch_sources = 0u;
         std::vector<AbiPersistentStoreSite> direct_local_store_sites;
@@ -25558,6 +27570,38 @@ void write_inventory_candidate_values(
         reader,
         [&] { return reader.scalar<std::uint32_t>(); },
         maximum);
+}
+
+template <typename Map>
+void write_u32_source_map(PersistentFunctionEpochWriter& writer,
+                          const Map& sources) {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> ordered{
+        sources.begin(), sources.end()};
+    std::sort(ordered.begin(), ordered.end());
+    writer.count(ordered.size());
+    for (const auto& [address, source_mask] : ordered) {
+        writer.scalar(address);
+        writer.scalar(source_mask);
+    }
+}
+
+template <typename Map>
+void read_u32_source_map(PersistentFunctionEpochReader& reader,
+                         const FunctionProgramGraph& program,
+                         Map& sources,
+                         const std::uint32_t allowed_mask =
+                             inventory_provenance_source_mask) {
+    const auto count = reader.count(program.function_view().size());
+    sources.clear();
+    sources.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+        const auto address = reader.scalar<std::uint32_t>();
+        const auto source_mask = reader.scalar<std::uint32_t>();
+        if (program.find_function(address) == nullptr ||
+            (source_mask & ~allowed_mask) != 0u ||
+            !sources.emplace(address, source_mask).second)
+            throw PersistentFunctionEpochIncomplete{};
+    }
 }
 
 void write_inventory_candidate_carrier(
@@ -27269,6 +29313,21 @@ void write_presentation_metadata(
         writer.scalar(summary_version->second);
         writer.scalar(input_version->second);
     });
+    // These two masks participate in the ABI/evaluation identity.  The cold
+    // importer deliberately recomputes the larger ABI-contract family, but
+    // retaining the source masks here keeps a persisted epoch's provenance
+    // contract explicit and makes any accidental cross-process reuse
+    // structurally verifiable.
+    write_u32_source_map(
+        writer, epoch.inventory_provenance_return_sources);
+    write_u32_source_map(
+        writer, epoch.inventory_provenance_register_reads);
+    write_u32_source_map(
+        writer, epoch.inventory_stack_mutation_conditional_sources);
+    write_u32_source_map(
+        writer, epoch.inventory_stack_mutation_unconditional_sources);
+    write_u32_source_map(
+        writer, epoch.inventory_stack_mutation_alias_creations);
     std::vector<std::uint32_t> inventory_sinks{
         epoch.inventory_sink_functions.begin(),
         epoch.inventory_sink_functions.end()};
@@ -27368,6 +29427,58 @@ read_persistent_function_epoch_body(
                 summary_version, input_version});
     }
     epoch->summary_candidate_shards = std::move(summary_index);
+    read_u32_source_map(
+        reader,
+        *epoch->program,
+        epoch->inventory_provenance_return_sources);
+    read_u32_source_map(
+        reader,
+        *epoch->program,
+        epoch->inventory_provenance_register_reads);
+    read_u32_source_map(
+        reader,
+        *epoch->program,
+        epoch->inventory_stack_mutation_conditional_sources,
+        inventory_provenance_source_mask |
+            inventory_stack_mutation_effect_bit);
+    read_u32_source_map(
+        reader,
+        *epoch->program,
+        epoch->inventory_stack_mutation_unconditional_sources,
+        inventory_provenance_source_mask |
+            inventory_stack_mutation_effect_bit);
+    read_u32_source_map(
+        reader,
+        *epoch->program,
+        epoch->inventory_stack_mutation_alias_creations,
+        inventory_provenance_source_mask |
+            inventory_stack_alias_creation_unconditional);
+    const auto invalid_inventory_provenance_source_map =
+        [](const auto& values, const std::uint32_t allowed_mask) {
+            return std::any_of(
+                values.begin(), values.end(), [&](const auto& value) {
+                    return (value.second & ~allowed_mask) != 0u;
+                });
+        };
+    if (invalid_inventory_provenance_source_map(
+            epoch->inventory_provenance_return_sources,
+            inventory_provenance_source_mask) ||
+        invalid_inventory_provenance_source_map(
+            epoch->inventory_provenance_register_reads,
+            inventory_provenance_source_mask) ||
+        invalid_inventory_provenance_source_map(
+            epoch->inventory_stack_mutation_conditional_sources,
+            inventory_provenance_source_mask |
+                inventory_stack_mutation_effect_bit) ||
+        invalid_inventory_provenance_source_map(
+            epoch->inventory_stack_mutation_unconditional_sources,
+            inventory_provenance_source_mask |
+                inventory_stack_mutation_effect_bit) ||
+        invalid_inventory_provenance_source_map(
+            epoch->inventory_stack_mutation_alias_creations,
+            inventory_provenance_source_mask |
+                inventory_stack_alias_creation_unconditional))
+        throw PersistentFunctionEpochIncomplete{};
     auto inventory_sinks = read_u32_values(reader);
     if (!std::is_sorted(inventory_sinks.begin(), inventory_sinks.end()) ||
         std::adjacent_find(inventory_sinks.begin(), inventory_sinks.end()) !=
@@ -31881,6 +33992,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             const auto complete_previous_contract =
                 previous_epoch->abi_stack_argument_reads.contains(address) &&
                 previous_epoch->forwarded_register_reads.contains(address) &&
+                previous_epoch->inventory_provenance_return_sources.contains(
+                    address) &&
+                previous_epoch->inventory_provenance_register_reads.contains(
+                    address) &&
+                previous_epoch
+                    ->inventory_stack_mutation_conditional_sources.contains(
+                        address) &&
+                previous_epoch
+                    ->inventory_stack_mutation_unconditional_sources.contains(
+                        address) &&
+                previous_epoch
+                    ->inventory_stack_mutation_alias_creations.contains(
+                        address) &&
                 (!graph_function_index.contains(address) ||
                  (previous_epoch->abi_return_sources.contains(address) &&
                   previous_epoch->abi_persistent_store_sources.contains(
@@ -32212,6 +34336,77 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         abi_signature_iterations,
         pending_abi_signatures.size(),
         abi_signature_iterations);
+
+    // Return provenance has the same narrowing contract as the existing
+    // r4-r7 return-source map, but ranges over all entry registers plus the
+    // incoming stack.  Keep it separate: this map is only used to compose an
+    // r0 value into a later inventory sink, never to widen ordinary ABI
+    // reads.
+    InventoryProvenanceReturnSourceMap inventory_provenance_return_sources;
+    inventory_provenance_return_sources.reserve(functions.size());
+    for (const auto& function : functions) {
+        auto sources = inventory_provenance_source_mask;
+        if (previous_epoch != nullptr &&
+            !abi_contract_dirty.contains(function.entry_address)) {
+            if (const auto previous =
+                    previous_epoch->inventory_provenance_return_sources.find(
+                        function.entry_address);
+                previous !=
+                    previous_epoch->inventory_provenance_return_sources.end())
+                sources = previous->second;
+        }
+        inventory_provenance_return_sources.emplace(
+            function.entry_address, sources);
+    }
+    if (!result.budget_exhausted && !reuse_abi_contract_epoch) {
+        std::deque<std::uint32_t> pending_inventory_provenance_returns;
+        std::unordered_set<std::uint32_t>
+            queued_inventory_provenance_returns;
+        for (const auto& function : functions) {
+            if (!abi_contract_dirty.contains(function.entry_address)) continue;
+            pending_inventory_provenance_returns.push_back(
+                function.entry_address);
+            queued_inventory_provenance_returns.insert(
+                function.entry_address);
+        }
+        std::size_t iterations = 0u;
+        while (!pending_inventory_provenance_returns.empty()) {
+            if (iterations++ >= maximum_fixpoint_iterations) {
+                result.budget_exhausted = true;
+                break;
+            }
+            const auto address = pending_inventory_provenance_returns.front();
+            pending_inventory_provenance_returns.pop_front();
+            queued_inventory_provenance_returns.erase(address);
+            const auto function = function_by_address.find(address);
+            if (function == function_by_address.end()) continue;
+            const auto signature = analyze_abi_persistent_store_signature(
+                image,
+                *function->second,
+                block_index,
+                &abi_return_sources,
+                nullptr,
+                nullptr,
+                &inventory_indirect_callees,
+                nullptr,
+                &abi_contract_tail_ingresses,
+                nullptr,
+                &inventory_provenance_return_sources,
+                nullptr);
+            auto& previous = inventory_provenance_return_sources.at(address);
+            const auto narrowed = previous &
+                signature.inventory_provenance_return_sources;
+            if (narrowed == previous) continue;
+            previous = narrowed;
+            if (const auto callers = abi_contract_callers_by_callee.find(address);
+                callers != abi_contract_callers_by_callee.end()) {
+                for (const auto caller : callers->second) {
+                    if (queued_inventory_provenance_returns.insert(caller).second)
+                        pending_inventory_provenance_returns.push_back(caller);
+                }
+            }
+        }
+    }
 
     // Stack arguments need an exact identity, not the legacy aggregate stack
     // taint bit. This positive interprocedural fixed point records only slots
@@ -32612,6 +34807,205 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      function.entry_address)});
         }
     }
+
+    // Unlike `forwarded_register_reads`, this positive fixed point starts at
+    // real inventory/state sinks and follows only source-preserving moves,
+    // exact stack spills/reloads, calls, returns and typed tail ingress.  A
+    // missing or unguarded-incomplete target is Top; an ordinary local
+    // spill/reload with no later sink contributes nothing.
+    InventoryProvenanceRegisterReadMap inventory_provenance_register_reads;
+    inventory_provenance_register_reads.reserve(
+        abi_contract_function_by_address.size());
+    for (const auto& [address, function] :
+         abi_contract_function_by_address) {
+        static_cast<void>(function);
+        auto reads = std::uint32_t{0u};
+        if (previous_epoch != nullptr && !abi_contract_dirty.contains(address)) {
+            if (const auto previous =
+                    previous_epoch->inventory_provenance_register_reads.find(
+                        address);
+                previous !=
+                    previous_epoch->inventory_provenance_register_reads.end())
+                reads = previous->second;
+        }
+        inventory_provenance_register_reads.emplace(address, reads);
+    }
+    if (!result.budget_exhausted && !reuse_abi_contract_epoch) {
+        std::deque<std::uint32_t> pending_inventory_provenance_reads;
+        std::unordered_set<std::uint32_t>
+            queued_inventory_provenance_reads;
+        for (const auto& [address, function] :
+             abi_contract_function_by_address) {
+            static_cast<void>(function);
+            if (!abi_contract_dirty.contains(address)) continue;
+            pending_inventory_provenance_reads.push_back(address);
+            queued_inventory_provenance_reads.insert(address);
+        }
+        std::size_t iterations = 0u;
+        while (!pending_inventory_provenance_reads.empty()) {
+            if (iterations++ >= maximum_fixpoint_iterations) {
+                result.budget_exhausted = true;
+                break;
+            }
+            const auto address = pending_inventory_provenance_reads.front();
+            pending_inventory_provenance_reads.pop_front();
+            queued_inventory_provenance_reads.erase(address);
+            const auto function = function_by_address.find(address);
+            if (function == function_by_address.end()) continue;
+            const auto signature = analyze_abi_persistent_store_signature(
+                image,
+                *function->second,
+                block_index,
+                &abi_return_sources,
+                &abi_persistent_store_sources,
+                &abi_indirect_dispatch_sources,
+                &inventory_indirect_callees,
+                &abi_stack_argument_reads,
+                &abi_contract_tail_ingresses,
+                nullptr,
+                &inventory_provenance_return_sources,
+                &inventory_provenance_register_reads);
+            auto& previous = inventory_provenance_register_reads.at(address);
+            const auto expanded = previous |
+                signature.inventory_provenance_register_reads;
+            if (expanded == previous) continue;
+            previous = expanded;
+            if (const auto callers = abi_contract_callers_by_callee.find(address);
+                callers != abi_contract_callers_by_callee.end()) {
+                for (const auto caller : callers->second) {
+                    if (queued_inventory_provenance_reads.insert(caller).second)
+                        pending_inventory_provenance_reads.push_back(caller);
+                }
+            }
+        }
+    }
+
+    // Stack-store mutation is an independent, bounded function effect.  A
+    // source before any locally created SavedEpoch is conditional on the
+    // caller having supplied one; after a local save or a callee which can
+    // create one it is unconditional.  Both forms compose over calls/tails,
+    // while the ingress projection only activates the former for a concrete
+    // receiver.
+    InventoryStackMutationSourceMap
+        inventory_stack_mutation_conditional_sources;
+    InventoryStackMutationSourceMap
+        inventory_stack_mutation_unconditional_sources;
+    InventoryStackMutationAliasCreationMap
+        inventory_stack_mutation_alias_creations;
+    inventory_stack_mutation_conditional_sources.reserve(
+        abi_contract_function_by_address.size());
+    inventory_stack_mutation_unconditional_sources.reserve(
+        abi_contract_function_by_address.size());
+    inventory_stack_mutation_alias_creations.reserve(
+        abi_contract_function_by_address.size());
+    for (const auto& [address, function] : abi_contract_function_by_address) {
+        static_cast<void>(function);
+        auto conditional_sources = std::uint32_t{0u};
+        auto unconditional_sources = std::uint32_t{0u};
+        auto alias_creation_contract = std::uint32_t{0u};
+        if (previous_epoch != nullptr &&
+            !abi_contract_dirty.contains(address)) {
+            if (const auto previous =
+                    previous_epoch
+                        ->inventory_stack_mutation_conditional_sources.find(
+                            address);
+                previous !=
+                previous_epoch
+                    ->inventory_stack_mutation_conditional_sources.end())
+                conditional_sources = previous->second;
+            if (const auto previous =
+                    previous_epoch
+                        ->inventory_stack_mutation_unconditional_sources.find(
+                            address);
+                previous !=
+                previous_epoch
+                    ->inventory_stack_mutation_unconditional_sources.end())
+                unconditional_sources = previous->second;
+            if (const auto previous =
+                    previous_epoch
+                        ->inventory_stack_mutation_alias_creations.find(
+                            address);
+                previous != previous_epoch
+                                ->inventory_stack_mutation_alias_creations.end())
+                alias_creation_contract = previous->second;
+        }
+        inventory_stack_mutation_conditional_sources.emplace(
+            address, conditional_sources);
+        inventory_stack_mutation_unconditional_sources.emplace(
+            address, unconditional_sources);
+        inventory_stack_mutation_alias_creations.emplace(
+            address, alias_creation_contract);
+    }
+    if (!result.budget_exhausted && !reuse_abi_contract_epoch) {
+        std::deque<std::uint32_t> pending_inventory_stack_mutations;
+        std::unordered_set<std::uint32_t>
+            queued_inventory_stack_mutations;
+        for (const auto& [address, function] :
+             abi_contract_function_by_address) {
+            static_cast<void>(function);
+            if (!abi_contract_dirty.contains(address)) continue;
+            pending_inventory_stack_mutations.push_back(address);
+            queued_inventory_stack_mutations.insert(address);
+        }
+        std::size_t iterations = 0u;
+        while (!pending_inventory_stack_mutations.empty()) {
+            if (iterations++ >= maximum_fixpoint_iterations) {
+                result.budget_exhausted = true;
+                break;
+            }
+            const auto address = pending_inventory_stack_mutations.front();
+            pending_inventory_stack_mutations.pop_front();
+            queued_inventory_stack_mutations.erase(address);
+            const auto function = function_by_address.find(address);
+            if (function == function_by_address.end()) continue;
+            const auto signature = analyze_abi_persistent_store_signature(
+                image,
+                *function->second,
+                block_index,
+                &abi_return_sources,
+                &abi_persistent_store_sources,
+                &abi_indirect_dispatch_sources,
+                &inventory_indirect_callees,
+                &abi_stack_argument_reads,
+                &abi_contract_tail_ingresses,
+                nullptr,
+                &inventory_provenance_return_sources,
+                &inventory_provenance_register_reads,
+                &inventory_stack_mutation_conditional_sources,
+                &inventory_stack_mutation_unconditional_sources,
+                &inventory_stack_mutation_alias_creations);
+            auto& previous_conditional =
+                inventory_stack_mutation_conditional_sources.at(address);
+            auto& previous_unconditional =
+                inventory_stack_mutation_unconditional_sources.at(address);
+            auto& previous_alias_creation =
+                inventory_stack_mutation_alias_creations.at(address);
+            const auto expanded_conditional = previous_conditional |
+                signature.inventory_stack_mutation_conditional_sources;
+            const auto expanded_unconditional = previous_unconditional |
+                signature.inventory_stack_mutation_unconditional_sources;
+            const auto expanded_alias_creation = static_cast<std::uint32_t>(
+                previous_alias_creation |
+                signature.inventory_stack_alias_creation_conditional_sources |
+                (signature.creates_current_stack_epoch_alias
+                     ? inventory_stack_alias_creation_unconditional
+                     : 0u));
+            if (expanded_conditional == previous_conditional &&
+                expanded_unconditional == previous_unconditional &&
+                expanded_alias_creation == previous_alias_creation)
+                continue;
+            previous_conditional = expanded_conditional;
+            previous_unconditional = expanded_unconditional;
+            previous_alias_creation = expanded_alias_creation;
+            if (const auto callers = abi_contract_callers_by_callee.find(address);
+                callers != abi_contract_callers_by_callee.end()) {
+                for (const auto caller : callers->second) {
+                    if (queued_inventory_stack_mutations.insert(caller).second)
+                        pending_inventory_stack_mutations.push_back(caller);
+                }
+            }
+        }
+    }
     run_work.abi_contract_entries_visited.store(
         abi_contract_entries_visited, std::memory_order_relaxed);
     std::unordered_set<std::uint32_t> summary_dirty_functions;
@@ -32995,9 +35389,27 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         [&](const AbstractState& state, const std::uint32_t target) {
             auto register_read_mask =
                 std::numeric_limits<std::uint16_t>::max();
+            auto inventory_provenance_mask =
+                std::numeric_limits<std::uint32_t>::max();
             if (const auto reads = forwarded_register_reads.find(target);
                 reads != forwarded_register_reads.end())
                 register_read_mask = reads->second;
+            if (const auto reads =
+                    inventory_provenance_register_reads.find(target);
+                reads != inventory_provenance_register_reads.end())
+                inventory_provenance_mask = reads->second;
+            const auto conditional_mutation_sources =
+                inventory_stack_mutation_conditional_sources.contains(target)
+                    ? inventory_stack_mutation_conditional_sources.at(target)
+                    : 0u;
+            const auto unconditional_mutation_sources =
+                inventory_stack_mutation_unconditional_sources.contains(target)
+                    ? inventory_stack_mutation_unconditional_sources.at(target)
+                    : 0u;
+            const auto alias_creation_contract =
+                inventory_stack_mutation_alias_creations.contains(target)
+                    ? inventory_stack_mutation_alias_creations.at(target)
+                    : 0u;
             AbiStackArgumentReadSet stack_reads;
             stack_reads.complete = false;
             if (const auto reads = abi_stack_argument_reads.find(target);
@@ -33016,12 +35428,18 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 memory_reads != summaries.end()
                     ? std::span<const FunctionMemoryWriteRange>{
                           memory_reads->second.memory_read_ranges}
-                    : std::span<const FunctionMemoryWriteRange>{});
+                    : std::span<const FunctionMemoryWriteRange>{},
+                inventory_provenance_mask,
+                conditional_mutation_sources,
+                unconditional_mutation_sources,
+                alias_creation_contract);
         };
     const auto inventory_loss_reaches_tail_sink =
         [&](const AbstractState& state, const TailIngressTarget target) {
             auto register_read_mask =
                 std::numeric_limits<std::uint16_t>::max();
+            auto inventory_provenance_mask =
+                std::numeric_limits<std::uint32_t>::max();
             AbiStackArgumentReadSet stack_reads;
             stack_reads.complete = false;
             if (target.kind == TailIngressTargetKind::Function) {
@@ -33030,10 +35448,36 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     reads != forwarded_register_reads.end())
                     register_read_mask = reads->second;
                 if (const auto reads =
+                        inventory_provenance_register_reads.find(
+                            target.address);
+                    reads != inventory_provenance_register_reads.end())
+                        inventory_provenance_mask = reads->second;
+                if (const auto reads =
                         abi_stack_argument_reads.find(target.address);
                     reads != abi_stack_argument_reads.end())
-                    stack_reads = reads->second;
+                        stack_reads = reads->second;
             }
+            const auto conditional_mutation_sources =
+                target.kind == TailIngressTargetKind::Function &&
+                        inventory_stack_mutation_conditional_sources.contains(
+                            target.address)
+                    ? inventory_stack_mutation_conditional_sources.at(
+                          target.address)
+                    : 0u;
+            const auto unconditional_mutation_sources =
+                target.kind == TailIngressTargetKind::Function &&
+                        inventory_stack_mutation_unconditional_sources.contains(
+                            target.address)
+                    ? inventory_stack_mutation_unconditional_sources.at(
+                          target.address)
+                    : 0u;
+            const auto alias_creation_contract =
+                target.kind == TailIngressTargetKind::Function &&
+                        inventory_stack_mutation_alias_creations.contains(
+                            target.address)
+                    ? inventory_stack_mutation_alias_creations.at(
+                          target.address)
+                    : 0u;
             const auto memory_reads =
                 target.kind == TailIngressTargetKind::Function
                     ? summaries.find(target.address)
@@ -33050,7 +35494,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 memory_reads != summaries.end()
                     ? std::span<const FunctionMemoryWriteRange>{
                           memory_reads->second.memory_read_ranges}
-                    : std::span<const FunctionMemoryWriteRange>{});
+                    : std::span<const FunctionMemoryWriteRange>{},
+                inventory_provenance_mask,
+                conditional_mutation_sources,
+                unconditional_mutation_sources,
+                alias_creation_contract);
         };
 
     // Candidate call carriers are private inventory transport, not semantic
@@ -33096,12 +35544,39 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     };
     inventory_topology_entries_visited += functions.size();
     for (const auto& function : functions) {
-        // Only functions that can carry an incoming ABI value into a persistent
-        // callback store or an indirect dispatch are roots for the expensive
-        // isolated forwarding walk. This keeps unrelated object/data stores
-        // out of the guarded AOT inventory slice.
+        // The legacy five-bit ABI slice identifies the classic r4-r7/store
+        // and dispatch roots.  The independent 17-bit provenance slice adds
+        // r0-r15 and incoming-stack roots which reach a real inventory sink.
+        // Bit 15 alone is the obligatory current-stack namespace fact, not a
+        // proof that every function is an expensive inventory root.
+        const auto provenance_reads =
+            inventory_provenance_register_reads.find(
+                function.entry_address);
+        const auto has_nontrivial_provenance_sink =
+            provenance_reads != inventory_provenance_register_reads.end() &&
+            (provenance_reads->second &
+             (inventory_provenance_source_mask &
+              ~(std::uint32_t{1u} << 15u))) != 0u;
+        // Source-conditioned effects are deliberately not static roots: every
+        // entry GPR may carry an address-side stack MAY, but only a concrete
+        // `inventory_stack_derived` ingress can create a SavedEpoch.  Their
+        // dynamic root activation happens after CandidateInput construction.
+        const auto has_stack_mutation_effect =
+            inventory_stack_mutation_unconditional_sources.contains(
+                function.entry_address) &&
+            inventory_stack_mutation_effect_present(
+                inventory_stack_mutation_unconditional_sources.at(
+                    function.entry_address));
+        const auto has_stack_capture_effect =
+            inventory_stack_mutation_alias_creations.contains(
+                function.entry_address) &&
+            (inventory_stack_mutation_alias_creations.at(
+                 function.entry_address) &
+             inventory_stack_alias_creation_unconditional) != 0u;
         if (abi_persistent_store_sources.at(function.entry_address) == 0u &&
-            abi_indirect_dispatch_sources.at(function.entry_address) == 0u)
+            abi_indirect_dispatch_sources.at(function.entry_address) == 0u &&
+            !has_nontrivial_provenance_sink && !has_stack_mutation_effect &&
+            !has_stack_capture_effect)
             continue;
         add_inventory_sink(function.entry_address);
     }
@@ -33463,6 +35938,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 function.entry_address,
                 evaluation_target_kind,
                 forwarded_register_reads,
+                inventory_provenance_register_reads,
+                inventory_stack_mutation_conditional_sources,
+                inventory_stack_mutation_unconditional_sources,
+                inventory_stack_mutation_alias_creations,
                 abi_stack_argument_reads,
                 summaries,
                 effective_memory_read_contracts_authoritative,
@@ -33536,6 +36015,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                          ? &artifact->walk_diagnostics
                          : nullptr,
                     &forwarded_register_reads,
+                    &inventory_provenance_register_reads,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                      prepared_plan,
@@ -33543,13 +36023,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      cancel_requested,
                      request_diagnostics != nullptr
                          ? &request_diagnostics->hot_path
-                         : nullptr);
+                         : nullptr,
+                     &inventory_stack_mutation_conditional_sources,
+                     &inventory_stack_mutation_unconditional_sources,
+                     &inventory_stack_mutation_alias_creations);
                 if (!evaluation_memory_read_contract_holds(
                         projection, artifact->evaluation.summary))
                     throw MemoryReadContractExpanded{};
                 canonicalize_evaluation_outputs(
                     artifact->evaluation,
                     forwarded_register_reads,
+                    inventory_provenance_register_reads,
+                    inventory_stack_mutation_conditional_sources,
+                    inventory_stack_mutation_unconditional_sources,
+                    inventory_stack_mutation_alias_creations,
                     abi_stack_argument_reads,
                     summaries,
                     effective_memory_read_contracts_authoritative);
@@ -33586,6 +36073,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     local_tail_ingresses,
                     walk_diagnostics != nullptr,
                     forwarded_register_reads,
+                    inventory_provenance_register_reads,
+                    inventory_stack_mutation_conditional_sources,
+                    inventory_stack_mutation_unconditional_sources,
+                    inventory_stack_mutation_alias_creations,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                     evaluation_cache
@@ -33644,6 +36135,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                                 ->walk_diagnostics
                                          : nullptr,
                                     &forwarded_register_reads,
+                                    &inventory_provenance_register_reads,
                                     evaluation_abi_stack_argument_reads,
                                     inventory_sink_sources,
                                      prepared_plan,
@@ -33651,7 +36143,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                      cancel_requested,
                                      request_diagnostics != nullptr
                                          ? &request_diagnostics->hot_path
-                                         : nullptr);
+                                         : nullptr,
+                                     &inventory_stack_mutation_conditional_sources,
+                                     &inventory_stack_mutation_unconditional_sources,
+                                     &inventory_stack_mutation_alias_creations);
                             if (!evaluation_memory_read_contract_holds(
                                     projection,
                                     artifact->evaluation.summary))
@@ -33659,6 +36154,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             canonicalize_evaluation_outputs(
                                 artifact->evaluation,
                                 forwarded_register_reads,
+                                inventory_provenance_register_reads,
+                                inventory_stack_mutation_conditional_sources,
+                                inventory_stack_mutation_unconditional_sources,
+                                inventory_stack_mutation_alias_creations,
                                 abi_stack_argument_reads,
                                 summaries,
                                 effective_memory_read_contracts_authoritative);
@@ -33759,6 +36258,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                          ? &fallback->walk_diagnostics
                          : nullptr,
                     &forwarded_register_reads,
+                    &inventory_provenance_register_reads,
                     evaluation_abi_stack_argument_reads,
                     inventory_sink_sources,
                      prepared_plan,
@@ -33766,13 +36266,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      cancel_requested,
                      request_diagnostics != nullptr
                          ? &request_diagnostics->hot_path
-                         : nullptr);
+                         : nullptr,
+                     &inventory_stack_mutation_conditional_sources,
+                     &inventory_stack_mutation_unconditional_sources,
+                     &inventory_stack_mutation_alias_creations);
                 if (!evaluation_memory_read_contract_holds(
                         projection, fallback->evaluation.summary))
                     throw MemoryReadContractExpanded{};
                 canonicalize_evaluation_outputs(
                     fallback->evaluation,
                     forwarded_register_reads,
+                    inventory_provenance_register_reads,
+                    inventory_stack_mutation_conditional_sources,
+                    inventory_stack_mutation_unconditional_sources,
+                    inventory_stack_mutation_alias_creations,
                     abi_stack_argument_reads,
                     summaries,
                     effective_memory_read_contracts_authoritative);
@@ -34279,6 +36786,93 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         }
     };
     const auto& final_candidate_inputs = std::as_const(candidate_inputs);
+    // A conditional Stack-Mutation/Capture contract becomes an inventory root
+    // only for an ingress which can actually receive the effect.  This keeps
+    // entry address-MAY facts out of the static root set while still routing a
+    // concrete stack-derived saved-pointer through the isolated inventory
+    // path, including its callers.
+    for (const auto& [address, input] : final_candidate_inputs) {
+        const auto alias_creation =
+            inventory_stack_mutation_alias_creations.find(address);
+        const auto alias_creation_contract =
+            alias_creation == inventory_stack_mutation_alias_creations.end()
+                ? 0u
+                : alias_creation->second;
+        const auto conditional_alias_creation_sources =
+            alias_creation_contract & inventory_provenance_source_mask;
+        const auto conditional_mutation =
+            inventory_stack_mutation_conditional_sources.find(address);
+        const auto conditional_mutation_contract =
+            conditional_mutation ==
+                    inventory_stack_mutation_conditional_sources.end()
+                ? 0u
+                : conditional_mutation->second;
+        const auto alias_creation_active_for =
+            [&](const AbstractState& ingress) {
+                return (alias_creation_contract &
+                        inventory_stack_alias_creation_unconditional) != 0u ||
+                       has_stack_derived_alias_creation_source(
+                           ingress, conditional_alias_creation_sources);
+            };
+        const auto conditional_mutation_active_for =
+            [&](const AbstractState& ingress) {
+                return inventory_stack_mutation_effect_present(
+                           conditional_mutation_contract) &&
+                       (has_current_stack_epoch_mutation_receiver(ingress) ||
+                        alias_creation_active_for(ingress));
+            };
+        // CandidateInput.state is a MAY-join; inventory_stack_derived is a
+        // MUST fact and can be erased by that join.  Root activation must
+        // inspect every concrete contribution before deciding that no
+        // receiver/capture can exist.
+        bool alias_creation_active =
+            (alias_creation_contract &
+             inventory_stack_alias_creation_unconditional) != 0u;
+        bool conditional_mutation_active = false;
+        const auto inspect_ingress = [&](const AbstractState& ingress) {
+            alias_creation_active =
+                alias_creation_active || alias_creation_active_for(ingress);
+            conditional_mutation_active =
+                conditional_mutation_active ||
+                conditional_mutation_active_for(ingress);
+        };
+        inspect_ingress(input.state);
+        for (const auto& [site, observation] : input.contribution_observations) {
+            static_cast<void>(site);
+            inspect_ingress(observation);
+        }
+        for (const auto& [site, observation] : input.observations) {
+            static_cast<void>(site);
+            inspect_ingress(observation);
+        }
+        if (input.unknown_ingress) {
+            alias_creation_active =
+                alias_creation_active ||
+                conditional_alias_creation_sources != 0u;
+            conditional_mutation_active =
+                conditional_mutation_active ||
+                inventory_stack_mutation_effect_present(
+                    conditional_mutation_contract);
+        }
+        if (!alias_creation_active && !conditional_mutation_active)
+            continue;
+        add_inventory_sink(address);
+    }
+    // `add_inventory_sink` is monotone.  Propagating only the newly active
+    // dynamic roots preserves the precomputed static reachability while making
+    // the per-ingress contract visible to all callers before root planning.
+    while (!pending_inventory_reachability.empty()) {
+        ++inventory_topology_entries_visited;
+        const auto callee = pending_inventory_reachability.front();
+        pending_inventory_reachability.pop_front();
+        ++inventory_reachability_iterations;
+        const auto callers = inventory_callers_by_callee.find(callee);
+        if (callers == inventory_callers_by_callee.end()) continue;
+        inventory_topology_entries_visited += callers->second.size();
+        for (const auto caller : callers->second) add_inventory_sink(caller);
+    }
+    run_work.inventory_topology_entries_visited.store(
+        inventory_topology_entries_visited, std::memory_order_relaxed);
     const auto& final_function_by_address = std::as_const(function_by_address);
     const auto& final_direct_local_persistent_store_sites =
         std::as_const(direct_local_persistent_store_sites);
@@ -35058,6 +37652,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         if (ordinary_graph_node &&
             return_sources != abi_return_sources.end())
             key.append(return_sources->second);
+        const auto inventory_provenance_return =
+            inventory_provenance_return_sources.find(address);
+        key.append(ordinary_graph_node &&
+                   inventory_provenance_return !=
+                       inventory_provenance_return_sources.end());
+        if (ordinary_graph_node &&
+            inventory_provenance_return !=
+                inventory_provenance_return_sources.end())
+            key.append(inventory_provenance_return->second);
         const auto stack_reads =
             abi_stack_argument_reads.find(address);
         key.append(ordinary_graph_node &&
@@ -35072,6 +37675,42 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         if (ordinary_graph_node &&
             register_reads != forwarded_register_reads.end())
             key.append(register_reads->second);
+        const auto inventory_provenance_reads =
+            inventory_provenance_register_reads.find(address);
+        key.append(ordinary_graph_node &&
+                   inventory_provenance_reads !=
+                       inventory_provenance_register_reads.end());
+        if (ordinary_graph_node &&
+            inventory_provenance_reads !=
+                inventory_provenance_register_reads.end())
+            key.append(inventory_provenance_reads->second);
+        const auto conditional_mutation_sources =
+            inventory_stack_mutation_conditional_sources.find(address);
+        key.append(ordinary_graph_node &&
+                   conditional_mutation_sources !=
+                       inventory_stack_mutation_conditional_sources.end());
+        if (ordinary_graph_node &&
+            conditional_mutation_sources !=
+                inventory_stack_mutation_conditional_sources.end())
+            key.append(conditional_mutation_sources->second);
+        const auto unconditional_mutation_sources =
+            inventory_stack_mutation_unconditional_sources.find(address);
+        key.append(ordinary_graph_node &&
+                   unconditional_mutation_sources !=
+                       inventory_stack_mutation_unconditional_sources.end());
+        if (ordinary_graph_node &&
+            unconditional_mutation_sources !=
+                inventory_stack_mutation_unconditional_sources.end())
+            key.append(unconditional_mutation_sources->second);
+        const auto alias_creation_contract =
+            inventory_stack_mutation_alias_creations.find(address);
+        key.append(ordinary_graph_node &&
+                   alias_creation_contract !=
+                       inventory_stack_mutation_alias_creations.end());
+        if (ordinary_graph_node &&
+            alias_creation_contract !=
+                inventory_stack_mutation_alias_creations.end())
+            key.append(alias_creation_contract->second);
         const auto store_sources =
             abi_persistent_store_sources.find(address);
         key.append(ordinary_graph_node && store_sources !=
@@ -36048,6 +38687,27 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 root_input->second
                     .fixpoint_abi_stack_base_unresolved);
         }
+        const auto root_conditional_mutation =
+            inventory_stack_mutation_conditional_sources.find(root);
+        root_key.append(root_conditional_mutation !=
+                        inventory_stack_mutation_conditional_sources.end());
+        if (root_conditional_mutation !=
+            inventory_stack_mutation_conditional_sources.end())
+            root_key.append(root_conditional_mutation->second);
+        const auto root_unconditional_mutation =
+            inventory_stack_mutation_unconditional_sources.find(root);
+        root_key.append(root_unconditional_mutation !=
+                        inventory_stack_mutation_unconditional_sources.end());
+        if (root_unconditional_mutation !=
+            inventory_stack_mutation_unconditional_sources.end())
+            root_key.append(root_unconditional_mutation->second);
+        const auto root_alias_creation =
+            inventory_stack_mutation_alias_creations.find(root);
+        root_key.append(root_alias_creation !=
+                        inventory_stack_mutation_alias_creations.end());
+        if (root_alias_creation !=
+            inventory_stack_mutation_alias_creations.end())
+            root_key.append(root_alias_creation->second);
         root_key.append(forwarded_evidence_tokens.empty());
         root_key.append_range(
             root_nodes,
@@ -36359,6 +39019,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     function_entry,
                     target_kind,
                     forwarded_register_reads,
+                    inventory_provenance_register_reads,
+                    inventory_stack_mutation_conditional_sources,
+                    inventory_stack_mutation_unconditional_sources,
+                    inventory_stack_mutation_alias_creations,
                     abi_stack_argument_reads,
                     summaries,
                     memory_read_contracts_authoritative &&
@@ -36710,6 +39374,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         context_key];
                 auto target_register_read_mask =
                     std::numeric_limits<std::uint16_t>::max();
+                auto target_inventory_provenance_mask =
+                    std::numeric_limits<std::uint32_t>::max();
+                auto target_inventory_stack_mutation_conditional_sources = 0u;
+                auto target_inventory_stack_mutation_unconditional_sources = 0u;
+                auto target_inventory_stack_alias_creation_contract = 0u;
                 AbiStackArgumentReadSet target_stack_reads;
                 target_stack_reads.complete = false;
                 auto target_inventory_sink_sources =
@@ -36721,6 +39390,31 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             forwarded_register_reads.find(target);
                         reads != forwarded_register_reads.end())
                         target_register_read_mask = reads->second;
+                    if (const auto reads =
+                            inventory_provenance_register_reads.find(target);
+                        reads != inventory_provenance_register_reads.end())
+                        target_inventory_provenance_mask = reads->second;
+                    if (const auto sources =
+                            inventory_stack_mutation_conditional_sources.find(
+                                target);
+                        sources !=
+                        inventory_stack_mutation_conditional_sources.end())
+                        target_inventory_stack_mutation_conditional_sources =
+                            sources->second;
+                    if (const auto sources =
+                            inventory_stack_mutation_unconditional_sources.find(
+                                target);
+                        sources !=
+                        inventory_stack_mutation_unconditional_sources.end())
+                        target_inventory_stack_mutation_unconditional_sources =
+                            sources->second;
+                    if (const auto contract =
+                            inventory_stack_mutation_alias_creations.find(
+                                target);
+                        contract !=
+                        inventory_stack_mutation_alias_creations.end())
+                        target_inventory_stack_alias_creation_contract =
+                            contract->second;
                     if (const auto reads =
                             abi_stack_argument_reads.find(target);
                         reads != abi_stack_argument_reads.end())
@@ -36753,7 +39447,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                         ? std::span<const FunctionMemoryWriteRange>{
                                               target_memory_reads
                                                   ->memory_read_ranges}
-                                        : std::span<const FunctionMemoryWriteRange>{});
+                                        : std::span<const FunctionMemoryWriteRange>{},
+                                    target_inventory_provenance_mask,
+                                    target_inventory_stack_mutation_conditional_sources,
+                                    target_inventory_stack_mutation_unconditional_sources,
+                                    target_inventory_stack_alias_creation_contract);
                             };
                         const auto left_loss = loss(left);
                         const auto right_loss = loss(right);
@@ -38021,6 +40719,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                ? std::numeric_limits<std::uint16_t>::max()
                                : found->second;
                 };
+            const auto contextual_entry_inventory_provenance_reads =
+                [&](const std::uint32_t address) {
+                    const auto found =
+                        inventory_provenance_register_reads.find(address);
+                    return found ==
+                                   inventory_provenance_register_reads.end()
+                               ? std::numeric_limits<std::uint32_t>::max()
+                               : found->second;
+                };
             const auto contextual_entry_stack_reads =
                 [&](const std::uint32_t address)
                     -> const AbiStackArgumentReadSet* {
@@ -38151,6 +40858,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         nullptr,
                         true,
                         forwarded_register_reads,
+                        inventory_provenance_register_reads,
+                        inventory_stack_mutation_conditional_sources,
+                        inventory_stack_mutation_unconditional_sources,
+                        inventory_stack_mutation_alias_creations,
                         &abi_stack_argument_reads,
                         0u,
                         false,
@@ -38522,30 +41233,25 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                              slot.relative_slot));
                             }
                         };
-                    if (exact_source_state
-                            .inventory_callback_loss_identity_truncated_sources !=
-                        0u) {
-                        emit_bounded_analyzer_diagnostic(
-                            detailed_analyzer_diagnostic_kind_candidate_truncation,
-                            function_entry,
-                            0u,
-                            static_cast<std::uint32_t>(Carrier::State) << 16u,
-                            static_cast<std::uint8_t>(Domain::Identity),
-                            [&] {
-                                std::fprintf(
-                                    stderr,
-                                    "KATANA_ANALYZER_CANDIDATE_TRUNCATION "
-                                    "owner=0x%08X carrier=state "
-                                    "coordinate=identity domain=identity "
-                                    "values=0 saved_slots=0 "
-                                    "saved_slot_index=-1 "
-                                    "saved_relative_slot=-1\n",
-                                    static_cast<unsigned int>(function_entry));
-                            });
-                    }
                     const bool project_registers =
                         projection.register_read_mask !=
                         std::numeric_limits<std::uint16_t>::max();
+                    const bool project_inventory_registers =
+                        projection.inventory_provenance_register_read_mask !=
+                        std::numeric_limits<std::uint32_t>::max();
+                    const auto effective_inventory_mask =
+                        effective_inventory_provenance_mask(
+                            exact_source_state,
+                            projection
+                                .inventory_provenance_register_read_mask,
+                            projection
+                                .inventory_stack_mutation_conditional_sources,
+                            projection
+                                .inventory_stack_mutation_unconditional_sources,
+                            projection
+                                .inventory_stack_alias_creation_contract);
+                    const auto effective_inventory_provenance_register_read_mask =
+                        effective_inventory_mask.mask;
                     const bool project_stack =
                         valid_complete_stack_read_contract(
                             projection.stack_reads);
@@ -38564,12 +41270,58 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                   projection.register_read_mask |
                                   stack_pointer_bit)
                             : projection.register_read_mask;
+                    const bool stack_inventory_provenance_live =
+                        !project_inventory_registers ||
+                        (effective_inventory_provenance_register_read_mask &
+                         inventory_provenance_stack_source) != 0u;
+                    const bool retain_whole_stack_for_alias_capture =
+                        (projection.inventory_stack_alias_creation_contract &
+                         inventory_stack_alias_creation_unconditional) != 0u ||
+                        has_stack_derived_alias_creation_source(
+                            exact_source_state,
+                            projection
+                                    .inventory_stack_alias_creation_contract &
+                                inventory_provenance_source_mask);
+                    const bool memory_carrier_observable =
+                        !project_memory || projection.memory_read_unknown ||
+                        !projection.memory_read_ranges.empty();
+                    const auto identity_sources = exact_source_state
+                        .inventory_callback_loss_identity_truncated_sources;
+                    if (((identity_sources &
+                          unresolved_saved_stack_alias_source_stack) != 0u &&
+                         stack_inventory_provenance_live) ||
+                        ((identity_sources &
+                          unresolved_saved_stack_alias_source_memory) != 0u &&
+                         memory_carrier_observable)) {
+                        emit_bounded_analyzer_diagnostic(
+                            detailed_analyzer_diagnostic_kind_candidate_truncation,
+                            function_entry,
+                            0u,
+                            static_cast<std::uint32_t>(Carrier::State) << 16u,
+                            static_cast<std::uint8_t>(Domain::Identity),
+                            [&] {
+                                std::fprintf(
+                                    stderr,
+                                    "KATANA_ANALYZER_CANDIDATE_TRUNCATION "
+                                    "owner=0x%08X carrier=state "
+                                    "coordinate=identity domain=identity "
+                                    "values=0 saved_slots=0 "
+                                    "saved_slot_index=-1 "
+                                    "saved_relative_slot=-1\n",
+                                    static_cast<unsigned int>(function_entry));
+                            });
+                    }
                     for (std::size_t index = 0u;
                          index < exact_source_state.registers.size();
                          ++index) {
                         const auto bit =
                             static_cast<std::uint16_t>(1u << index);
-                        if (project_registers &&
+                        if (project_inventory_registers) {
+                            if (index != 15u &&
+                                (effective_inventory_provenance_register_read_mask &
+                                 (std::uint32_t{1u} << index)) == 0u)
+                                continue;
+                        } else if (project_registers &&
                             (effective_register_read_mask & bit) == 0u)
                             continue;
                         emit_value(exact_source_state.registers[index],
@@ -38580,11 +41332,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                     for (const auto& [slot, value] :
                          exact_source_state.stack_values) {
-                        if (project_stack &&
-                            !std::binary_search(
-                                projection.stack_reads.slots.begin(),
-                                projection.stack_reads.slots.end(),
-                                slot))
+                        if (!stack_inventory_provenance_live ||
+                            (!retain_whole_stack_for_alias_capture &&
+                             project_stack &&
+                              !std::binary_search(
+                                 projection.stack_reads.slots.begin(),
+                                 projection.stack_reads.slots.end(),
+                                 slot)))
                             continue;
                         emit_value(value,
                                    "stack",
@@ -38592,8 +41346,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                    static_cast<std::int64_t>(slot),
                                    static_cast<std::uint32_t>(slot));
                     }
-                    if (exact_source_state.stack_tail.present) {
+                    if (exact_source_state.stack_tail.present &&
+                        stack_inventory_provenance_live) {
                         const auto tail_is_observable =
+                            retain_whole_stack_for_alias_capture ||
                             !project_stack ||
                             std::any_of(
                                 projection.stack_reads.slots.begin(),
@@ -38697,7 +41453,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 function_entry),
                             projection.memory_read_complete,
                             projection.memory_read_unknown,
-                            projection.memory_read_ranges);
+                            projection.memory_read_ranges,
+                            projection.inventory_provenance_register_read_mask,
+                            projection.inventory_stack_mutation_conditional_sources,
+                            projection.inventory_stack_mutation_unconditional_sources,
+                            projection.inventory_stack_alias_creation_contract);
                     if (inventory_loss.candidate_values_truncated) {
                         emit_contextual_candidate_truncation_carriers(
                             function_entry,
@@ -38767,6 +41527,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         projection.register_contract_present &&
                         projection.register_read_mask !=
                             std::numeric_limits<std::uint16_t>::max();
+                    const bool projects_inventory_provenance =
+                        projection.inventory_provenance_register_read_mask !=
+                        std::numeric_limits<std::uint32_t>::max();
                     const bool projects_stack =
                         projection.stack_contract_present &&
                         valid_complete_stack_read_contract(
@@ -38777,7 +41540,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             projection.memory_read_complete,
                             projection.memory_read_unknown,
                             projection.memory_read_ranges);
-                    if (!projects_registers && !projects_stack &&
+                    if (!projects_registers &&
+                        !projects_inventory_provenance && !projects_stack &&
                         !projects_memory)
                         return false;
                     return true;
@@ -40531,6 +43295,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 item.address,
                                 TailIngressTargetKind::Function,
                                 forwarded_register_reads,
+                                inventory_provenance_register_reads,
+                                inventory_stack_mutation_conditional_sources,
+                                inventory_stack_mutation_unconditional_sources,
+                                inventory_stack_mutation_alias_creations,
                                 abi_stack_argument_reads,
                                 summaries,
                                 effective_memory_projection,
@@ -40559,6 +43327,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 item.address,
                                 TailIngressTargetKind::Function,
                                 forwarded_register_reads,
+                                inventory_provenance_register_reads,
+                                inventory_stack_mutation_conditional_sources,
+                                inventory_stack_mutation_unconditional_sources,
+                                inventory_stack_mutation_alias_creations,
                                 abi_stack_argument_reads,
                                 summaries,
                                 effective_memory_projection,
@@ -41192,6 +43964,24 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     auto& context_evaluation = *item.evaluation;
                     for (auto& observation :
                          context_evaluation.call_arguments) {
+                        const auto contextual_mutation_conditional_sources =
+                            inventory_stack_mutation_conditional_sources.contains(
+                                observation.callee)
+                                ? inventory_stack_mutation_conditional_sources.at(
+                                      observation.callee)
+                                : 0u;
+                        const auto contextual_mutation_unconditional_sources =
+                            inventory_stack_mutation_unconditional_sources.contains(
+                                observation.callee)
+                                ? inventory_stack_mutation_unconditional_sources.at(
+                                      observation.callee)
+                                : 0u;
+                        const auto contextual_alias_creation_contract =
+                            inventory_stack_mutation_alias_creations.contains(
+                                observation.callee)
+                                ? inventory_stack_mutation_alias_creations.at(
+                                      observation.callee)
+                                : 0u;
                         const auto pair = candidate_call_pair_key(
                             observation.call_site,
                             observation.callee);
@@ -41207,7 +43997,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 contextual_entry_register_reads(
                                     observation.callee),
                                 contextual_entry_stack_reads(
-                                    observation.callee)) &&
+                                    observation.callee),
+                                contextual_entry_inventory_provenance_reads(
+                                    observation.callee),
+                                contextual_mutation_conditional_sources,
+                                contextual_mutation_unconditional_sources,
+                                contextual_alias_creation_contract) &&
                             requires_contextual_return(
                                 observation.callee);
                         if (!candidate_call &&
@@ -41226,7 +44021,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 contextual_entry_register_reads(
                                     observation.callee),
                                 contextual_entry_stack_reads(
-                                    observation.callee));
+                                    observation.callee),
+                                contextual_entry_inventory_provenance_reads(
+                                    observation.callee),
+                                contextual_mutation_conditional_sources,
+                                contextual_mutation_unconditional_sources,
+                                contextual_alias_creation_contract);
                         }
                         const bool effective_memory_projection =
                             memory_read_contracts_authoritative &&
@@ -41247,6 +44047,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 observation.callee,
                                 TailIngressTargetKind::Function,
                                 forwarded_register_reads,
+                                inventory_provenance_register_reads,
+                                inventory_stack_mutation_conditional_sources,
+                                inventory_stack_mutation_unconditional_sources,
+                                inventory_stack_mutation_alias_creations,
                                 abi_stack_argument_reads,
                                 summaries,
                                 effective_memory_projection,
@@ -41317,7 +44121,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     callee_read_projection
                                         .memory_read_unknown,
                                     callee_read_projection
-                                        .memory_read_ranges);
+                                        .memory_read_ranges,
+                                    callee_read_projection
+                                        .inventory_provenance_register_read_mask,
+                                    callee_read_projection
+                                        .inventory_stack_mutation_conditional_sources,
+                                    callee_read_projection
+                                        .inventory_stack_mutation_unconditional_sources,
+                                    callee_read_projection
+                                        .inventory_stack_alias_creation_contract);
                             if (projected_match_input.has_value()) {
                                 if (collect_contextual_return_product_telemetry) {
                                     const auto source_memory_cells =
@@ -42704,6 +45516,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 {std::nullopt, &unknown_ingress_state, false});
         auto source_register_read_mask =
             std::numeric_limits<std::uint16_t>::max();
+        auto source_inventory_provenance_mask =
+            std::numeric_limits<std::uint32_t>::max();
+        auto source_inventory_stack_mutation_conditional_sources = 0u;
+        auto source_inventory_stack_mutation_unconditional_sources = 0u;
+        auto source_inventory_stack_alias_creation_contract = 0u;
         AbiStackArgumentReadSet source_stack_reads;
         source_stack_reads.complete = false;
         if (!result.budget_exhausted) {
@@ -42715,6 +45532,28 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     function->entry_address);
                 reads != abi_stack_argument_reads.end())
                 source_stack_reads = reads->second;
+            if (const auto reads = inventory_provenance_register_reads.find(
+                    function->entry_address);
+                reads != inventory_provenance_register_reads.end())
+                source_inventory_provenance_mask = reads->second;
+            if (const auto sources =
+                    inventory_stack_mutation_conditional_sources.find(
+                        function->entry_address);
+                sources != inventory_stack_mutation_conditional_sources.end())
+                source_inventory_stack_mutation_conditional_sources =
+                    sources->second;
+            if (const auto sources =
+                    inventory_stack_mutation_unconditional_sources.find(
+                        function->entry_address);
+                sources != inventory_stack_mutation_unconditional_sources.end())
+                source_inventory_stack_mutation_unconditional_sources =
+                    sources->second;
+            if (const auto contract =
+                    inventory_stack_mutation_alias_creations.find(
+                        function->entry_address);
+                contract != inventory_stack_mutation_alias_creations.end())
+                source_inventory_stack_alias_creation_contract =
+                    contract->second;
         }
         bool source_candidate_values_truncated = false;
         bool source_stack_base_unresolved = false;
@@ -42746,7 +45585,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     source_memory_reads != summaries.end()
                         ? std::span<const FunctionMemoryWriteRange>{
                               source_memory_reads->second.memory_read_ranges}
-                        : std::span<const FunctionMemoryWriteRange>{});
+                        : std::span<const FunctionMemoryWriteRange>{},
+                    source_inventory_provenance_mask,
+                    source_inventory_stack_mutation_conditional_sources,
+                    source_inventory_stack_mutation_unconditional_sources,
+                    source_inventory_stack_alias_creation_contract);
             source_candidate_values_truncated =
                 source_candidate_values_truncated ||
                 source_loss.candidate_values_truncated;
@@ -44287,12 +47130,39 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         if (const auto value = abi_return_sources.find(address);
             value != abi_return_sources.end())
             abi_shard.return_sources = value->second;
+        if (const auto value =
+                inventory_provenance_return_sources.find(address);
+            value != inventory_provenance_return_sources.end())
+            abi_shard.inventory_provenance_return_sources = value->second;
         if (const auto value = abi_stack_argument_reads.find(address);
             value != abi_stack_argument_reads.end())
             abi_shard.stack_argument_reads = value->second;
         if (const auto value = forwarded_register_reads.find(address);
             value != forwarded_register_reads.end())
             abi_shard.forwarded_register_reads = value->second;
+        if (const auto value =
+                inventory_provenance_register_reads.find(address);
+            value != inventory_provenance_register_reads.end())
+            abi_shard.inventory_provenance_register_reads = value->second;
+        if (const auto value =
+                inventory_stack_mutation_conditional_sources.find(address);
+            value != inventory_stack_mutation_conditional_sources.end())
+            abi_shard.inventory_stack_mutation_conditional_sources =
+                value->second;
+        if (const auto value =
+                inventory_stack_mutation_unconditional_sources.find(address);
+            value != inventory_stack_mutation_unconditional_sources.end())
+            abi_shard.inventory_stack_mutation_unconditional_sources =
+                value->second;
+        if (const auto value =
+                inventory_stack_mutation_alias_creations.find(address);
+            value != inventory_stack_mutation_alias_creations.end()) {
+            abi_shard.inventory_stack_alias_creation_contract =
+                value->second;
+            abi_shard.creates_current_stack_epoch_alias =
+                (value->second &
+                 inventory_stack_alias_creation_unconditional) != 0u;
+        }
         if (const auto value = abi_persistent_store_sources.find(address);
             value != abi_persistent_store_sources.end())
             abi_shard.persistent_store_sources = value->second;
@@ -44471,10 +47341,20 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::move(summary_callsite_contributions);
         staged_epoch->abi_return_sources =
             std::move(abi_return_sources);
+        staged_epoch->inventory_provenance_return_sources =
+            std::move(inventory_provenance_return_sources);
         staged_epoch->abi_stack_argument_reads =
             std::move(abi_stack_argument_reads);
         staged_epoch->forwarded_register_reads =
             std::move(forwarded_register_reads);
+        staged_epoch->inventory_provenance_register_reads =
+            std::move(inventory_provenance_register_reads);
+        staged_epoch->inventory_stack_mutation_conditional_sources =
+            std::move(inventory_stack_mutation_conditional_sources);
+        staged_epoch->inventory_stack_mutation_unconditional_sources =
+            std::move(inventory_stack_mutation_unconditional_sources);
+        staged_epoch->inventory_stack_mutation_alias_creations =
+            std::move(inventory_stack_mutation_alias_creations);
         staged_epoch->abi_persistent_store_sources =
             std::move(abi_persistent_store_sources);
         staged_epoch->abi_indirect_dispatch_sources =
