@@ -65,16 +65,18 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Der aktuelle Source-Stand ist der RuntimeOnly-Bring-up-Meilenstein;
+Der aktuelle Source-Stand ist der RuntimeOnly-v25/v29-Produktstand;
+funktionaler Source-Checkpoint `2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`,
 Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
 `port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
 vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
-Der Hostbuild und der publizierende RuntimeOnly-Lauf sind erfolgreich: 83
-Translation Units, `game.exe`, `19,077 s`, `1.631` native Funktionen, `41`
-Partitionen, `3` latente AOT-Module, `3.967` RuntimeOnly-Stellen und `0`
-unresolved. Der sichtbare Start bis mindestens zum Memory-Card-Screen bleibt
-das offene KR-4981-Gate.
+RuntimeOnly-v25/v29 wurde in `149,1 s` exportiert; wegen
+Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
+Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
+Der sichtbare Start zeigte Sega-Lizenz, PAL-Screen und Presented by Sega, aber
+noch keinen Memory-Card-Screen oder Hauptmenue; das bleibt das offene
+KR-4981-Gate.
 
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
@@ -174,7 +176,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v16 erreichte erstmals den sichtbaren SEGA-Screen, stoppte danach fail-closed an `missing-aot`; Memory-Card-Screen bleibt offen, kein weiterer Lauf ohne ausdrueckliche Freigabe |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 zeigt Sega-Lizenz, PAL-Screen und Presented by Sega, aber noch keinen Memory-Card-Screen oder Hauptmenue; der bewiesene Composite-Callsite `0x8C6658D0` muss vor nativen Singleton-Chaining in den RuntimeOnly-Dispatcher zurueckkehren |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |

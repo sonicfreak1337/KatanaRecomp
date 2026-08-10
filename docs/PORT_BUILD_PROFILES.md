@@ -32,11 +32,24 @@ maximal zwei physische Linkpaesse. Ein fehlender optionaler Pass wird nur
 durch vorhandenen erfolgreichen Build-, Artefakt- oder Up-to-date-Nachweis
 geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
 
-RuntimeOnly-v16 erreichte im realen Sonic-PAL-Lauf nach etwa `4,014 s`
-erstmals den echten SEGA-Screen sowie echte Guest- und Presented-Frames bei
-etwa `9,16 MHz`. Das aktuelle Native-AOT-Emissionsprofil ist `25` mit
-AOT-Partitionsschema `5`. Der Lauf stoppte nach etwa `27 s` korrekt fail-closed am generischen Fehler
-`missing-aot`. Das Memory-Card-Gate bleibt offen.
+RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
+Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
+Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
+Der aktuelle funktionale RuntimeOnly-Source-Checkpoint ist
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Das aktuelle Native-AOT-
+Emissionsprofil ist `25` mit AOT-Partitionsschema `5`.
+
+Der beaufsichtigte Sonic-PAL-Lauf dauerte `45 s` ohne Fatal- oder Runtimefehler.
+Er zeigte Sega-Lizenz, PAL-Screen und Presented by Sega, danach schwarz;
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Der verbleibende P0
+ist serieller Runtime-/Dispatch-Overhead. Der Composite-Memcpy-Descriptor
+wurde nicht versucht, weil der bewiesene Composite-Callsite `0x8C6658D0` den
+guarded Singleton-Pfad nimmt; er muss vor dem nativen Singleton-Chaining in
+den RuntimeOnly-Dispatcher zurueckkehren. Die vorhandene
+`BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer Grundlage
+und Analogie; andere Aufrufe desselben Composite-Ziels werden nicht pauschal
+verlangsamt. Der fruehere v16-/9,16-MHz-Lauf bleibt historische
+Zwischen-Evidenz.
 
 ## Compiler und Linker
 

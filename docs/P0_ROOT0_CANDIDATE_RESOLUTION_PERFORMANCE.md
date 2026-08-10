@@ -13,22 +13,34 @@ weiterhin nativen AOT-Code und nutzt RuntimeOnly-Dispatch ueber eine exakte
 statische Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv;
 kein Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad.
 
-Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
-`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf war nach `19,077 s`
-erfolgreich: `1.631` native Funktionen, `41` Partitionen, `3` latente
-AOT-Module, `3.967` RuntimeOnly-Stellen, `0` unresolved, Analyse-CFG
-`1,177 s`, IR-Optimierung `2,296 s`, statisches Runtime-Linking. Portpaket
-und `game.exe` sind publiziert; Retailsektoren sind nicht im Paket. Der
-beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt als
-globaler KR-4981-Gate offen. Der Whole-Export-Cache ist modegebunden.
+Der aktuelle RuntimeOnly-v25/v29-Export dauerte `149,1 s`; wegen
+Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
+Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
+Der aktuelle funktionale RuntimeOnly-Source-Checkpoint ist
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Der Whole-Export-Cache ist
+modegebunden.
 
-RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
-Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
-und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
-korrekt fail-closed am generischen Fehler `missing-aot`. Das erste sichtbare
-SEGA-Gate ist erreicht; der Memory-Card-Screen bleibt das offene globale
-KR-4981-Produktgate. Candidate-Resolution und PlatformAbi-Optimierungen sind
-deferred.
+Der beaufsichtigte Sonic-PAL-Lauf dauerte `45 s` ohne Fatal- oder Runtimefehler.
+Er zeigte Sega-Lizenz, PAL-Screen und Presented by Sega, danach schwarz;
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Die manuelle
+Sichtpruefung beendete den Lauf mit `run_error=null`. Post-entry wurden
+`1.900.952.548` Gastzyklen in `39,6586 s` verarbeitet (`37,4627 MHz`), mit
+`24.944.655` zentralen Dispatches, `24.944.624` Bloecken, `8.960`
+YUV-Makrobloecken, `334` Presented Frames und `320` Render-
+Requests/-Completions. D3D/Hardwareanzeige war aktiv; der verbleibende P0 ist
+serieller Runtime-/Dispatch-Overhead.
+
+Der Composite-Memcpy-Descriptor ist exportiert und registriert, wurde aber
+kein einziges Mal versucht. Der bewiesene Composite-Callsite `0x8C6658D0`
+nimmt den guarded Singleton-Pfad und umgeht den zentralen Dispatcher/Fastpath.
+Dieser Callsite muss vor dem nativen Singleton-Chaining in den RuntimeOnly-
+Dispatcher zurueckkehren; die vorhandene
+`BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer Grundlage
+und Analogie. Andere Aufrufe desselben Composite-Ziels werden nicht pauschal
+verlangsamt. Kein Analyzer- oder Candidate-Resolution-Refactoring.
+
+Der fruehere v16-/9,16-MHz-Lauf bleibt historische Zwischen-Evidenz und ist
+nicht der aktuelle Produktstand. Candidate-Resolution bleibt deferred.
 
 Dieses Dokument ergaenzt
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md)
@@ -762,6 +774,8 @@ KR-4981-Lauf folgt nicht automatisch.
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
+  -> Composite-Callsite vor nativen Singleton-Chaining in den RuntimeOnly-
+     Dispatcher zurueckfuehren
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen
 ```
 

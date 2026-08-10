@@ -95,11 +95,14 @@ Dispatch ueber eine exakte statische Guest->Host-Tabelle; Stop-on-miss und
 typed abort bleiben aktiv. Es gibt keinen Interpreter, JIT, Runtime-Decoder
 oder geratenen Zielpfad. Der Whole-Export-Cache bindet den Modus.
 
-Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
-`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf war nach `19,077 s`
-erfolgreich mit `1.631` nativen Funktionen, `41` Partitionen, `3` latenten
-AOT-Modulen, `3.967` RuntimeOnly-Stellen und `0` unresolved. Das naechste
-Produktgate ist der beaufsichtigte Start bis mindestens zum Memory-Card-Screen.
+RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
+Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
+Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
+Der aktuelle funktionale RuntimeOnly-Source-Checkpoint ist
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Der beaufsichtigte Sonic-PAL-Lauf
+dauerte `45 s` ohne Fatal- oder Runtimefehler und zeigte Sega-Lizenz,
+PAL-Screen und Presented by Sega, aber noch keinen Memory-Card-Screen oder
+Hauptmenue.
 
 ## Zwei Produktpfade
 

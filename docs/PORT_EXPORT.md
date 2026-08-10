@@ -65,20 +65,33 @@ Stop-on-miss und typed abort bleiben aktiv; Interpreter, JIT, Runtime-Decoder
 und geratenen Ziele sind ausgeschlossen.
 
 Der Whole-Export-Cache bindet den Analysemodus und verwendet keinen Eintrag
-des anderen Modus. Der erste vollstaendige Hostbuild kompilierte 83
-Translation Units und linkte `game.exe`; der publizierende Sonic-PAL-
-RuntimeOnly-Lauf war nach `19,077 s` erfolgreich mit `1.631` nativen
-Funktionen, `41` Partitionen, `3` latenten AOT-Modulen, `3.967` RuntimeOnly-
-Stellen und `0` unresolved. Das verteilbare Paket enthaelt keine
-Retailsektoren. Der Build-/Export-Gate ist bestanden; der beaufsichtigte
-Start bis mindestens zum Memory-Card-Screen bleibt das naechste
-Produktgate.
+des anderen Modus. RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte
+`149,1 s`. Wegen Source-/Projektidentitaetswechsel gab es `0/147` Codegen-
+Cache-Hits, der Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten
+kompilieren. Der aktuelle funktionale RuntimeOnly-Source-Checkpoint ist
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`.
 
-RuntimeOnly-v16 erreichte im realen Sonic-PAL-Lauf nach etwa `4,014 s`
-erstmals den echten SEGA-Screen sowie echte Guest- und Presented-Frames bei
-etwa `9,16 MHz`. Das aktuelle Native-AOT-Emissionsprofil ist `25` bei
-AOT-Partitionsschema `5`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach korrekt fail-closed am
-generischen Fehler `missing-aot`. Candidate-Resolution und PlatformAbi-
+Der beaufsichtigte Sonic-PAL-Lauf dauerte `45 s` ohne Fatal- oder Runtimefehler.
+Er zeigte Sega-Lizenz, PAL-Screen und Presented by Sega, danach schwarz;
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Die manuelle
+Sichtpruefung beendete den Lauf mit `run_error=null`. Post-entry wurden
+`1.900.952.548` Gastzyklen in `39,6586 s` verarbeitet (`37,4627 MHz`), mit
+`24.944.655` zentralen Dispatches, `24.944.624` Bloecken, `8.960`
+YUV-Makrobloecken, `334` Presented Frames und `320` Render-
+Requests/-Completions. D3D/Hardwareanzeige war aktiv; der verbleibende P0 ist
+serieller Runtime-/Dispatch-Overhead.
+
+Der Composite-Memcpy-Descriptor ist exportiert und registriert, wurde aber
+kein einziges Mal versucht. Der bewiesene Composite-Callsite `0x8C6658D0`
+nimmt den guarded Singleton-Pfad und umgeht den zentralen Dispatcher/Fastpath.
+Dieser Callsite muss vor dem nativen Singleton-Chaining in den RuntimeOnly-
+Dispatcher zurueckkehren; die vorhandene
+`BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer Grundlage
+und Analogie. Andere Aufrufe desselben Composite-Ziels werden nicht pauschal
+verlangsamt. Kein Analyzer- oder Candidate-Resolution-Refactoring.
+
+Der fruehere v16-/9,16-MHz-Lauf bleibt historische Zwischen-Evidenz und ist
+nicht der aktuelle Produktstand. Candidate-Resolution und PlatformAbi-
 Optimierungen bleiben deferred; Stop-on-miss und typed abort bleiben aktiv.
 
 ## Opt-in Portbuild-Telemetrie

@@ -4,27 +4,41 @@
 
 ### Geaendert
 
-- RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
-  Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
-  und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
-  korrekt fail-closed am generischen Fehler `missing-aot`. Der sichtbare
-  SEGA-Meilenstein ist erreicht, das Memory-Card-Produktgate bleibt offen.
-  Der generische Source-Fortschritt umfasst Cross-Shard-Codecopy-Abhaengigkeit,
-  togglebaren direkten AOT-Bytecopy-Batch und begrenztes Post-Root-Drain fuer
-  Host-Build-Helfer; Candidate-Resolution bleibt deferred.
+- RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
+  Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
+  Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
+  Der beaufsichtigte Sonic-PAL-Lauf dauerte `45 s` ohne Fatal- oder
+  Runtimefehler und zeigte Sega-Lizenz, PAL-Screen und Presented by Sega,
+  danach schwarz. Memory-Card-Screen und Hauptmenue wurden nicht erreicht.
+  Der fruehere v16-/9,16-MHz-Lauf ist historische Zwischen-Evidenz.
 
-- RuntimeOnly-NativeDisc-Bring-up ist als opt-in Pfad abgeschlossen: `port
+- Der aktuelle RuntimeOnly-Source-Checkpoint ist
+  `2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Post-entry wurden
+  `1.900.952.548` Gastzyklen in `39,6586 s` verarbeitet (`37,4627 MHz`),
+  mit `24.944.655` zentralen Dispatches, `24.944.624` Bloecken, `8.960`
+  YUV-Makrobloecken, `334` Presented Frames und `320` Render-
+  Requests/-Completions. Der verbleibende P0 ist serieller Runtime-/Dispatch-
+  Overhead.
+
+- Der exportierte Composite-Memcpy-Descriptor wurde im Lauf kein einziges Mal
+  versucht, weil der bewiesene Composite-Callsite `0x8C6658D0` den guarded
+  Singleton-Pfad nimmt und den zentralen Dispatcher/Fastpath umgeht. Dieser
+  Callsite muss vor dem nativen Singleton-Chaining in den RuntimeOnly-
+  Dispatcher zurueckkehren; die vorhandene
+  `BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer
+  Grundlage und Analogie. Andere Aufrufe desselben Composite-Ziels werden nicht
+  pauschal verlangsamt; kein Analyzer- oder Candidate-Resolution-Refactoring.
+
+- Der RuntimeOnly-NativeDisc-Bring-up bleibt ein opt-in Pfad: `port
   --analysis-mode runtime-only` gilt nur mit `--game-project`, der Default
   bleibt `platform`, und `GuestCallAbi::Unknown` umgeht die blockierende
-  SuperHC-FunctionValue-/Candidate-Resolution konservativ. Der vollstaendige
-  Hostbuild kompilierte 83 Translation Units und linkte `game.exe`; der
-  publizierende Sonic-PAL-Lauf dauerte `19,077 s` und erzeugte `1.631` native
-  Funktionen, `41` Partitionen, `3` latente AOT-Module, `3.967` RuntimeOnly-
-  Stellen und `0` unresolved. Kein Interpreter, Runtime-Decoder oder
-  geratener Zielpfad wird verwendet; das sichtbare Startgate bis mindestens
-  zum Memory-Card-Screen bleibt offen. Der Whole-Export-Cache ist
-  modegebunden, Windows-Argumenttransport ist CRT-konform, und Ninja-
-  `vs_link_exe` bleibt auf hoechstens zwei physische Linkpaesse begrenzt.
+  SuperHC-FunctionValue-/Candidate-Resolution konservativ. Der aktuelle
+  v25/v29-Export und der sichtbare Sega-/PAL-/Presented-by-Sega-Stand sind
+  oben dokumentiert; Memory-Card-Screen und Hauptmenue bleiben offen. Kein
+  Interpreter, Runtime-Decoder oder geratener Zielpfad wird verwendet. Der
+  Whole-Export-Cache ist modegebunden, Windows-Argumenttransport ist
+  CRT-konform, und Ninja-`vs_link_exe` bleibt auf hoechstens zwei physische
+  Linkpaesse begrenzt.
 - Der Candidate-Resolution-Explosionsbug ist quellseitig behoben: kanonische
   Full-State-Semantic-Lanes deduplizieren semantische Arbeit kollisionssicher,
   waehrend exakte Contributions und Evidence als Provenienzabonnenten privat

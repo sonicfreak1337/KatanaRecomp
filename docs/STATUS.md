@@ -27,7 +27,7 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 ## Aktueller Bring-up-Stand
 
 Funktionaler RuntimeOnly-Source-Checkpoint:
-`4e1d67566f4159a15483a085199bf641128e373c`.
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
 Der opt-in Modus `port --analysis-mode runtime-only` gilt nur fuer den
@@ -39,30 +39,37 @@ exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
-`game.exe`. Der publizierende Sonic-PAL-RuntimeOnly-Lauf endete erfolgreich nach
-`19,077 s` mit `1.631` nativen Funktionen, `41` Partitionen, `3` latenten
-AOT-Modulen, `3.967` RuntimeOnly-Stellen und `0` unresolved. Es gab keinen
-Interpreterpfad; statisches Runtime-Linking war aktiv. Analyse-CFG dauerte
-`1,177 s`, IR-Optimierung `2,296 s`; Portpaket und `game.exe` sind publiziert,
-Retailsektoren sind nicht im Paket. Der naechste globale Gate-Schritt ist der
-beaufsichtigte Start bis mindestens zum Memory-Card-Screen.
+RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
+Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
+Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
 
-## RuntimeOnly-v16: erster sichtbarer SEGA-Meilenstein
+## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
-Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
-und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
-korrekt fail-closed am generischen Fehler `missing-aot`. Das ist ein sichtbarer
-Bring-up-Meilenstein, aber noch kein Memory-Card-Produktgate: Der
-beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt offen.
+Der aktuelle funktionale Source-Checkpoint ist
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Der beaufsichtigte Sonic-PAL-Lauf
+dauerte `45 s` ohne Fatal- oder Runtimefehler. Er zeigte Sega-Lizenz, PAL-Screen
+und Presented by Sega, danach schwarz; Memory-Card-Screen und Hauptmenue wurden
+nicht erreicht. Die manuelle Sichtpruefung beendete den Lauf mit
+`run_error=null`.
 
-Die generische Source-Aenderung umfasst eine Cross-Shard-Codecopy-
-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren direkten
-AOT-Bytecopy-Batch in `port_export.cpp` und ein begrenztes Post-Root-Drain fuer
-haengenbleibende Host-Build-Helfer in `main.cpp`. Candidate-Resolution und
-PlatformAbi-Optimierungen bleiben deferred; Stop-on-miss und typed abort sind
-unveraendert.
+Post-entry wurden `1.900.952.548` Gastzyklen in `39,6586 s` verarbeitet
+(`37,4627 MHz`), mit `24.944.655` zentralen Dispatches, `24.944.624` Bloecken,
+`8.960` YUV-Makrobloecken, `334` Presented Frames und `320` Render-
+Requests/-Completions. D3D/Hardwareanzeige war aktiv; die CPU-Last lag bei
+etwa `1,649` Kernen bzw. `6,873 %` der 24-Thread-Maschine, ohne Host-CPU-
+Limit-Wait. Der verbleibende P0 ist serieller Runtime-/Dispatch-Overhead.
+
+Der Composite-Memcpy-Descriptor ist exportiert und registriert, wurde aber
+kein einziges Mal versucht. Der bewiesene Composite-Callsite `0x8C6658D0`
+nimmt den guarded Singleton-Pfad und umgeht den zentralen Dispatcher/Fastpath.
+Dieser Callsite muss vor dem nativen Singleton-Chaining in den RuntimeOnly-
+Dispatcher zurueckkehren; die vorhandene
+`BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer Grundlage
+und Analogie. Andere Aufrufe desselben Composite-Ziels werden nicht pauschal
+verlangsamt. Kein Analyzer- oder Candidate-Resolution-Refactoring.
+
+Der fruehere v16-/9,16-MHz-Lauf bleibt historische Zwischen-Evidenz und ist
+nicht der aktuelle Produktstand.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
@@ -369,6 +376,8 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
+  -> Composite-Callsite vor nativen Singleton-Chaining in den RuntimeOnly-
+     Dispatcher zurueckfuehren
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen
 ```
 

@@ -9,7 +9,7 @@ Portprojektvertrag 75.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
 Aktueller funktionaler RuntimeOnly-Source-Checkpoint:
-`4e1d67566f4159a15483a085199bf641128e373c`.
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`.
 
 Der neue opt-in-Modus `port --analysis-mode runtime-only` ist nur fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
@@ -21,29 +21,48 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-Der erste vollstaendige Hostbuild kompilierte 83 Translation Units und linkte
-`game.exe`. Der anschliessende publizierende Sonic-PAL-RuntimeOnly-Lauf war
-nach `19,077 s` erfolgreich: `1.631` native Funktionen, `41` Partitionen,
-`3` latente AOT-Module, `3.967` RuntimeOnly-Stellen, `0` unresolved,
-kein Interpreter und statisches Runtime-Linking. Die Analyse-CFG dauerte
-`1,177 s`, die IR-Optimierung `2,296 s`; das Portpaket und `game.exe` sind
-publiziert, Retailsektoren sind nicht im Paket.
+RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
+Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
+Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
 
 Damit ist der RuntimeOnly-Build-/Export-Gate bestanden. Das globale KR-4981-
-Produktgate bleibt offen: Der naechste Gate-Schritt ist ein beaufsichtigter
-Start bis mindestens zum Memory-Card-Screen. Der Default-PlatformAbi-Pfad
+Produktgate bleibt offen. Der naechste enge Fix ist, den bewiesenen
+Composite-Callsite `0x8C6658D0` vor dem nativen Singleton-Chaining in den
+RuntimeOnly-Dispatcher zurueckzufuehren; danach bleibt der beaufsichtigte
+Start bis mindestens zum Memory-Card-Screen das Produktgate. Der
+Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
 Bring-up-Meilensteins.
 
-## RuntimeOnly-v16: erster sichtbarer SEGA-Meilenstein
+## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-Lauf nach etwa
-`4,014 s` erstmals den echten SEGA-Screen sowie echte Guest- und Presented-
-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach korrekt
-fail-closed am generischen Fehler `missing-aot`. Das ist ein sichtbarer
-Bring-up-Meilenstein, aber noch kein Memory-Card-Produktgate: Der
-beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt offen.
+Der aktuelle funktionale Source-Checkpoint ist
+`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Der beaufsichtigte Sonic-PAL-Lauf
+dauerte `45 s` ohne Fatal- oder Runtimefehler. Er zeigte die Sega-Lizenz, den
+PAL-Screen und Presented by Sega, danach schwarz; der Memory-Card-Screen und
+das Hauptmenue wurden nicht erreicht. Die manuelle Sichtpruefung beendete den
+Lauf mit `run_error=null`.
+
+Post-entry wurden `1.900.952.548` Gastzyklen in `39,6586 s` verarbeitet
+(`37,4627 MHz`), dazu `24.944.655` zentrale Dispatches, `24.944.624`
+Bloecke, `8.960` YUV-Makrobloecke, `334` Presented Frames und `320`
+Render-Requests/-Completions. D3D/Hardwareanzeige war aktiv; die CPU-Last lag
+bei etwa `1,649` Kernen bzw. `6,873 %` der 24-Thread-Maschine, ohne
+Host-CPU-Limit-Wait. Der verbleibende P0 ist serieller Runtime-/Dispatch-
+Overhead.
+
+Der Composite-Memcpy-Descriptor ist exportiert und registriert, wurde im Lauf
+aber kein einziges Mal versucht. Der bewiesene Composite-Callsite
+`0x8C6658D0` nimmt den guarded Singleton-Pfad und umgeht dadurch den zentralen
+Dispatcher/Fastpath. Er muss vor dem nativen Singleton-Chaining in den
+RuntimeOnly-Dispatcher zurueckkehren; die vorhandene
+`BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer Grundlage
+und Analogie. Andere Aufrufe desselben Composite-Ziels werden nicht pauschal
+verlangsamt. Kein Analyzer- oder Candidate-Resolution-Refactoring.
+
+Der fruehere v16-/9,16-MHz-Lauf bleibt historische Zwischen-Evidenz und ist
+nicht der aktuelle Produktstand.
 
 Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
 Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren
