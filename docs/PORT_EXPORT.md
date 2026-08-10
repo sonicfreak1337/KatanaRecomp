@@ -74,6 +74,13 @@ Retailsektoren. Der Build-/Export-Gate ist bestanden; der beaufsichtigte
 Start bis mindestens zum Memory-Card-Screen bleibt das naechste
 Produktgate.
 
+RuntimeOnly-v16 erreichte im realen Sonic-PAL-Lauf nach etwa `4,014 s`
+erstmals den echten SEGA-Screen sowie echte Guest- und Presented-Frames bei
+etwa `9,16 MHz`. Das aktuelle Native-AOT-Emissionsprofil ist `25` bei
+AOT-Partitionsschema `5`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach korrekt fail-closed am
+generischen Fehler `missing-aot`. Candidate-Resolution und PlatformAbi-
+Optimierungen bleiben deferred; Stop-on-miss und typed abort bleiben aktiv.
+
 ## Opt-in Portbuild-Telemetrie
 
 `port` und `port-executable` akzeptieren

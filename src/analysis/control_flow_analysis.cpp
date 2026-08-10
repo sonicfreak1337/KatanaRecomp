@@ -621,6 +621,8 @@ class IncrementalCfaScanCache final {
             components_.insert_or_assign(begin, std::move(component));
         }
 
+        refresh_runtime_copy_dependencies(image, telemetry);
+
         const auto dirty_dispatches = last_changed_dispatches_;
         for (const auto address : dirty_dispatches) {
             recognition_index_.erase(address);
@@ -861,6 +863,124 @@ class IncrementalCfaScanCache final {
         const auto found = direct_target_references_.find(address);
         if (found == direct_target_references_.end()) return;
         if (--found->second == 0u) direct_target_references_.erase(found);
+    }
+
+    [[nodiscard]] static bool same_runtime_code_patch(
+        const RuntimeCodePatchCandidate& left,
+        const RuntimeCodePatchCandidate& right) noexcept {
+        return left.store_instruction_address ==
+                   right.store_instruction_address &&
+               left.slot_address == right.slot_address &&
+               left.live_value == right.live_value &&
+               left.target_address == right.target_address;
+    }
+
+    [[nodiscard]] static bool same_runtime_code_mutable_range(
+        const RuntimeCodeMutableRangeCandidate& left,
+        const RuntimeCodeMutableRangeCandidate& right) noexcept {
+        return left.store_instruction_address ==
+                   right.store_instruction_address &&
+               left.load_instruction_address ==
+                   right.load_instruction_address &&
+               left.slot_address == right.slot_address &&
+               left.size == right.size;
+    }
+
+    [[nodiscard]] static bool same_runtime_code_copy(
+        const RuntimeCodeCopy& left,
+        const RuntimeCodeCopy& right) noexcept {
+        return left.setup_address == right.setup_address &&
+               left.loop_address == right.loop_address &&
+               left.source_begin == right.source_begin &&
+               left.source_end_inclusive ==
+                   right.source_end_inclusive &&
+               left.source_byte_count == right.source_byte_count &&
+               left.destination_vbr_delta ==
+                   right.destination_vbr_delta &&
+               left.mutable_range_analysis_complete ==
+                   right.mutable_range_analysis_complete &&
+               left.evidence == right.evidence &&
+               left.aot_candidates_only == right.aot_candidates_only &&
+               left.reason == right.reason &&
+               left.patch_candidates.size() ==
+                   right.patch_candidates.size() &&
+               std::equal(left.patch_candidates.begin(),
+                          left.patch_candidates.end(),
+                          right.patch_candidates.begin(),
+                          same_runtime_code_patch) &&
+               left.mutable_ranges.size() == right.mutable_ranges.size() &&
+               std::equal(left.mutable_ranges.begin(),
+                          left.mutable_ranges.end(),
+                          right.mutable_ranges.begin(),
+                          same_runtime_code_mutable_range);
+    }
+
+    void refresh_runtime_copy_dependencies(
+        const katana::io::ExecutableImage& image,
+        ControlFlowAnalysisResult& telemetry) {
+        for (auto& [key, copy] : runtime_copy_index_) {
+            const auto owner = component_containing(copy.setup_address);
+            if (owner == components_.end())
+                throw std::logic_error(
+                    "Runtime-Codecopy besitzt keinen inkrementellen Owner.");
+
+            // Recognition belongs to the copy-loop owner, but its exact AOT
+            // contract also depends on pre-copy patch stores, the copied
+            // template body, and every direct entry into that body.  Those
+            // dependencies may live in other function-owner shards.  Rebuild
+            // the small union here so componentization cannot silently drop
+            // patch targets or proven mutable scratch slots.
+            std::vector<katana::sh4::DisassemblyLine> dependency_lines =
+                owner->second.lines;
+            const auto source_end =
+                static_cast<std::uint64_t>(copy.source_begin) +
+                copy.source_byte_count;
+            auto source = lines_.lower_bound(copy.source_begin);
+            while (source != lines_.end() &&
+                   source->first < source_end) {
+                dependency_lines.push_back(source->second);
+                ++source;
+            }
+            for (const auto& [address, line] : lines_) {
+                static_cast<void>(address);
+                if (!line.target_address.has_value()) continue;
+                const auto target = *line.target_address;
+                if (target > copy.source_begin && target < source_end)
+                    dependency_lines.push_back(line);
+            }
+            std::sort(dependency_lines.begin(),
+                      dependency_lines.end(),
+                      [](const auto& left, const auto& right) {
+                          return left.address < right.address;
+                      });
+            dependency_lines.erase(
+                std::unique(dependency_lines.begin(),
+                            dependency_lines.end(),
+                            [](const auto& left, const auto& right) {
+                                return left.address == right.address;
+                            }),
+                dependency_lines.end());
+            telemetry.runtime_copy_instruction_visits +=
+                dependency_lines.size();
+
+            const auto completed = analyze_runtime_code_copies(
+                image, dependency_lines);
+            const auto rebuilt = std::find_if(
+                completed.copies.begin(),
+                completed.copies.end(),
+                [&](const auto& candidate) {
+                    return candidate.setup_address == key.first &&
+                           candidate.loop_address == key.second;
+                });
+            if (rebuilt == completed.copies.end())
+                throw std::logic_error(
+                    "Runtime-Codecopy konnte aus ihrem vollstaendigen "
+                    "Abhaengigkeitsfenster nicht rekonstruiert werden.");
+            if (same_runtime_code_copy(copy, *rebuilt)) continue;
+            copy = *rebuilt;
+            last_changed_runtime_copies_.insert(key);
+            ++telemetry.runtime_copy_result_entries_rebuilt;
+        }
     }
 
     std::map<std::uint32_t, katana::sh4::DisassemblyLine> lines_;
@@ -3330,6 +3450,15 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                                                       table.entry_count,
                                                       table.entry_stride,
                                                       encoding);
+                if (jump_table.reason == "table-segment-writable")
+                    jump_table = analyze_declared_jump_table(
+                        image,
+                        table.dispatch_address,
+                        table.table_address,
+                        table.relative_base,
+                        table.entry_count,
+                        table.entry_stride,
+                        encoding);
                 jump_table.dispatch_kind =
                     actual_call
                         ? JumpTableDispatchKind::Call

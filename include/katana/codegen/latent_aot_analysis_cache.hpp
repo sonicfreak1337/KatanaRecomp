@@ -22,7 +22,7 @@ inline constexpr bool latent_aot_positive_product_cache_enabled = false;
 inline constexpr std::uint32_t latent_aot_analysis_ir_schema = 3u;
 inline constexpr std::uint32_t latent_aot_analysis_optimizer_schema = 1u;
 inline constexpr std::string_view latent_aot_analysis_implementation_id =
-    "katana-latent-aot-analysis-v4";
+    "katana-latent-aot-analysis-v10";
 
 inline constexpr std::size_t maximum_latent_aot_analysis_cache_artifact_bytes =
     32u * 1024u * 1024u;

@@ -2,8 +2,9 @@
 
 Status: Aktiver uebergeordneter Performancevertrag. Der aktuelle Bring-up-
 Meilenstein verwendet Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27
-und lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
-`port --analysis-mode runtime-only` ist fuer den vollstaendigen NativeDisc-
+und lokales In-Process-Evaluation-Cache-Schema 13. Das aktuelle
+Native-AOT-Emissionsprofil ist 25; das AOT-Partitionsschema ist 5. Der opt-in
+Modus `port --analysis-mode runtime-only` ist fuer den vollstaendigen NativeDisc-
 Produktport mit `--game-project` zulaessig; der Default bleibt `platform`.
 RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht die blockierende SuperHC-
 FunctionValue-/Candidate-Resolution, erzeugt weiterhin nativen AOT-Code und
@@ -26,6 +27,15 @@ aktuellen RuntimeOnly-Bring-up. Der PlatformAbi-Default bleibt erhalten;
 Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind deferred.
 Der historische Candidate-Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
+
+RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
+Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
+und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
+korrekt fail-closed am generischen Fehler `missing-aot`. Das erste sichtbare
+SEGA-Gate ist erreicht; der beaufsichtigte Start bis mindestens zum
+Memory-Card-Screen bleibt offen. Die generischen Source-Deltas sind
+Cross-Shard-Codecopy-Abhaengigkeit, togglebarer direkter AOT-Bytecopy-Batch
+und begrenztes Post-Root-Drain fuer Host-Build-Helfer.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv

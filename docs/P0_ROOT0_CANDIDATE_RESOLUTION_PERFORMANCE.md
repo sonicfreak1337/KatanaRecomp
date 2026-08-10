@@ -4,7 +4,8 @@ Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
 Diagnostik. Der aktuelle RuntimeOnly-Bring-up verwendet Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27 und lokales In-Process-Evaluation-Cache-
-Schema 13. Der opt-in Modus `port --analysis-mode runtime-only` ist nur mit
+Schema 13. Native-AOT-Emissionsprofil 25 und AOT-Partitionsschema 5 sind
+aktuell. Der opt-in Modus `port --analysis-mode runtime-only` ist nur mit
 `--game-project` fuer den vollstaendigen NativeDisc-Produktport zulaessig;
 der Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`,
 umgeht die blockierende SuperHC-FunctionValue-/Candidate-Resolution, erzeugt
@@ -20,6 +21,14 @@ AOT-Module, `3.967` RuntimeOnly-Stellen, `0` unresolved, Analyse-CFG
 und `game.exe` sind publiziert; Retailsektoren sind nicht im Paket. Der
 beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt als
 globaler KR-4981-Gate offen. Der Whole-Export-Cache ist modegebunden.
+
+RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
+Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
+und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
+korrekt fail-closed am generischen Fehler `missing-aot`. Das erste sichtbare
+SEGA-Gate ist erreicht; der Memory-Card-Screen bleibt das offene globale
+KR-4981-Produktgate. Candidate-Resolution und PlatformAbi-Optimierungen sind
+deferred.
 
 Dieses Dokument ergaenzt
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md)

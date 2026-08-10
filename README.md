@@ -6,6 +6,10 @@ Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 87, Block-ABI 5,
 Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
 Portprojektvertrag 75.
+Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
+
+Aktueller funktionaler RuntimeOnly-Source-Checkpoint:
+`4e1d67566f4159a15483a085199bf641128e373c`.
 
 Der neue opt-in-Modus `port --analysis-mode runtime-only` ist nur fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
@@ -31,6 +35,22 @@ Start bis mindestens zum Memory-Card-Screen. Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
 Bring-up-Meilensteins.
+
+## RuntimeOnly-v16: erster sichtbarer SEGA-Meilenstein
+
+RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-Lauf nach etwa
+`4,014 s` erstmals den echten SEGA-Screen sowie echte Guest- und Presented-
+Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach korrekt
+fail-closed am generischen Fehler `missing-aot`. Das ist ein sichtbarer
+Bring-up-Meilenstein, aber noch kein Memory-Card-Produktgate: Der
+beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt offen.
+
+Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
+Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren
+direkten AOT-Bytecopy-Batch in `port_export.cpp` und ein begrenztes
+Post-Root-Drain fuer haengenbleibende Host-Build-Helfer in `main.cpp`.
+Candidate-Resolution und PlatformAbi-Optimierungen bleiben deferred; der
+RuntimeOnly-Pfad bleibt statisches AOT mit Stop-on-miss und typed abort.
 
 Der terminale v56-Stand und die folgenden Candidate-Resolution-Laeufe sind
 historische PlatformAbi-Diagnostik. Ihre Aussagen ueber fehlende Artefakte
@@ -153,7 +173,7 @@ Analyzer-ABI:                   34
 PlatformServices-ABI:           13
 Backend-Interface-ABI:          12
 Portprojektvertrag:             75
-Native-AOT-Emissionsprofil:     13
+Native-AOT-Emissionsprofil:     25
 AOT-Partitionsschema:            5
 ```
 

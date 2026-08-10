@@ -6,6 +6,7 @@
 
 #include "katana/ir/ir.hpp"
 #include "cpp_lexical_replace.hpp"
+#include "native_aot_resume.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -18,6 +19,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace katana::codegen {
 
@@ -273,9 +275,31 @@ bool has_proven_linear_ram_read(const katana::ir::Instruction& instruction) noex
     }
 }
 
+bool has_guarded_linear_ram_read(
+    const katana::ir::Instruction& instruction) noexcept {
+    return detail::native_aot_has_guarded_linear_ram_read(instruction);
+}
+
+bool has_direct_linear_ram_read(
+    const katana::ir::Instruction& instruction) noexcept {
+    return has_proven_linear_ram_read(instruction) ||
+           has_guarded_linear_ram_read(instruction);
+}
+
 bool has_proven_linear_ram_write(const katana::ir::Instruction& instruction) noexcept {
     return instruction.memory_effects.access == katana::ir::MemoryAccessKind::Write &&
            instruction.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam;
+}
+
+bool has_guarded_linear_ram_write(
+    const katana::ir::Instruction& instruction) noexcept {
+    return detail::native_aot_has_guarded_linear_ram_write(instruction);
+}
+
+bool has_direct_linear_ram_write(
+    const katana::ir::Instruction& instruction) noexcept {
+    return has_proven_linear_ram_write(instruction) ||
+           has_guarded_linear_ram_write(instruction);
 }
 
 enum class DirectRamReadKind : std::uint8_t { U8, S8, U16, S16, U32 };
@@ -287,7 +311,7 @@ constexpr std::uint8_t direct_ram_read_kind_mask(const DirectRamReadKind kind) n
 
 std::uint8_t required_direct_ram_read_kinds(
     const katana::ir::Instruction& instruction) noexcept {
-    if (!has_proven_linear_ram_read(instruction)) return 0u;
+    if (!has_direct_linear_ram_read(instruction)) return 0u;
 
     using katana::ir::OperandWidth;
     switch (instruction.memory_effects.width) {
@@ -325,7 +349,7 @@ constexpr std::uint8_t direct_ram_write_kind_mask(const DirectRamWriteKind kind)
 
 std::uint8_t required_direct_ram_write_kinds(
     const katana::ir::Instruction& instruction) noexcept {
-    if (!has_proven_linear_ram_write(instruction)) return 0u;
+    if (!has_direct_linear_ram_write(instruction)) return 0u;
 
     using katana::ir::OperandWidth;
     switch (instruction.memory_effects.width) {
@@ -397,10 +421,14 @@ std::string direct_ram_read_expression(const katana::ir::Instruction& instructio
 
     const auto fallback = std::string{"katana::runtime::"} + guest_read +
                           "(cpu, guest_origin, " + address + ")";
-    if (!has_proven_linear_ram_read(instruction)) return fallback;
+    if (!has_direct_linear_ram_read(instruction)) return fallback;
 
     return std::string{"katana_direct_ram_read_"} + direct_ram_read_suffix(kind) +
-           "(guest_origin, " + address + ")";
+           "(guest_origin, " + address + ", " +
+           (has_proven_linear_ram_read(instruction)
+                ? "true"
+                : "katana_guarded_unknown_ram_reads") +
+           ")";
 }
 
 void emit_direct_ram_read_helper(std::ostringstream& output,
@@ -440,10 +468,17 @@ void emit_direct_ram_read_helper(std::ostringstream& output,
     output << "    const auto katana_direct_ram_read_" << direct_ram_read_suffix(kind)
            << " =\n"
            << "        [&](const katana::runtime::GuestInstructionOrigin& katana_origin,\n"
-           << "            const std::uint32_t katana_ram_address) -> std::uint32_t {\n"
+           << "            const std::uint32_t katana_ram_address,\n"
+           << "            const bool katana_allow_direct_read) -> std::uint32_t {\n"
            << "        " << raw_type << " katana_ram_value = 0u;\n"
-           << "        if (cpu.privileged_mode() && katana::runtime::" << direct_read
-           << "(katana_direct_ram, katana_ram_address, katana_ram_value)) {\n";
+           << "        std::uint32_t katana_direct_ram_address = 0u;\n"
+           << "        if (katana_allow_direct_read &&\n"
+           << "            katana_direct_ram_resolve(\n"
+           << "                katana_ram_address, sizeof(katana_ram_value),\n"
+           << "                katana_direct_ram_address) &&\n"
+           << "            katana::runtime::" << direct_read
+           << "(katana_direct_ram, katana_direct_ram_address, "
+              "katana_ram_value)) {\n";
     if (kind == DirectRamReadKind::S8) {
         output << "            return (katana_ram_value & 0x80u) != 0u\n"
                << "                ? 0xFFFFFF00u | static_cast<std::uint32_t>(katana_ram_value)\n"
@@ -471,6 +506,193 @@ void emit_direct_ram_read_helper(std::ostringstream& output,
            << "    };\n";
 }
 
+std::string guarded_linear_ram_access_flag(
+    const katana::ir::Instruction& instruction) {
+    std::ostringstream output;
+    output << "katana_guarded_linear_access_" << std::hex << std::uppercase
+           << std::setw(8) << std::setfill('0') << instruction.source_address;
+    return output.str();
+}
+
+std::optional<std::string> guarded_linear_ram_read_preflight_expression(
+    const katana::ir::Instruction& instruction) {
+    using Operation = katana::ir::Operation;
+    if (!has_guarded_linear_ram_read(instruction)) return std::nullopt;
+
+    const auto general = [](const std::uint8_t index) {
+        return "cpu.r[" + std::to_string(index) + "]";
+    };
+    const auto displacement = [&] {
+        return std::to_string(
+                   static_cast<std::uint32_t>(instruction.displacement)) +
+               "u";
+    };
+    const auto can_read = [](std::string address, const unsigned width) {
+        return "katana_direct_ram_can_read(" + std::move(address) + ", " +
+               std::to_string(width) + "u)";
+    };
+
+    switch (instruction.operation) {
+    case Operation::FmovLoad:
+    case Operation::FmovLoadPostIncrement:
+    case Operation::FmovLoadR0Indexed: {
+        auto address = general(instruction.source_register);
+        if (instruction.operation == Operation::FmovLoadR0Indexed)
+            address = "cpu.r[0] + " + address;
+        return can_read(address, 4u) +
+               " && (!cpu.fpu_transfer_pair() || " +
+               can_read("(" + address + ") + 4u", 4u) + ")";
+    }
+    case Operation::MultiplyAccumulateWord:
+    case Operation::MultiplyAccumulateLong: {
+        const auto width =
+            instruction.operation == Operation::MultiplyAccumulateWord ? 2u : 4u;
+        auto source_address = general(instruction.source_register);
+        if (instruction.source_register == instruction.destination_register)
+            source_address = "(" + source_address + ") + " +
+                             std::to_string(width) + "u";
+        return can_read(general(instruction.destination_register), width) +
+               " && " + can_read(std::move(source_address), width);
+    }
+    case Operation::TestByteImmediate:
+        return can_read("cpu.gbr + cpu.r[0]", 1u);
+    case Operation::LoadByteSigned:
+    case Operation::LoadByteSignedPostIncrement:
+        return can_read(general(instruction.source_register), 1u);
+    case Operation::LoadWordSigned:
+    case Operation::LoadWordSignedPostIncrement:
+        return can_read(general(instruction.source_register), 2u);
+    case Operation::LoadLong:
+    case Operation::LoadLongPostIncrement:
+    case Operation::LoadSpecialRegisterPostIncrement:
+        return can_read(general(instruction.source_register), 4u);
+    case Operation::LoadByteSignedDisplacement:
+        return can_read(general(instruction.source_register) + " + " +
+                            displacement(),
+                        1u);
+    case Operation::LoadWordSignedDisplacement:
+        return can_read(general(instruction.source_register) + " + " +
+                            displacement(),
+                        2u);
+    case Operation::LoadLongDisplacement:
+        return can_read(general(instruction.source_register) + " + " +
+                            displacement(),
+                        4u);
+    case Operation::LoadByteSignedR0Indexed:
+        return can_read("cpu.r[0] + " + general(instruction.source_register), 1u);
+    case Operation::LoadWordSignedR0Indexed:
+        return can_read("cpu.r[0] + " + general(instruction.source_register), 2u);
+    case Operation::LoadLongR0Indexed:
+        return can_read("cpu.r[0] + " + general(instruction.source_register), 4u);
+    case Operation::LoadByteSignedGbrDisplacement:
+        return can_read("cpu.gbr + " + displacement(), 1u);
+    case Operation::LoadWordSignedGbrDisplacement:
+        return can_read("cpu.gbr + " + displacement(), 2u);
+    case Operation::LoadLongGbrDisplacement:
+        return can_read("cpu.gbr + " + displacement(), 4u);
+    case Operation::LoadWordSignedPcRelative:
+        if (instruction.effective_address.has_value())
+            return can_read(
+                relocated_code_address(*instruction.effective_address), 2u);
+        return std::nullopt;
+    case Operation::LoadLongPcRelative:
+        if (instruction.effective_address.has_value())
+            return can_read(
+                relocated_code_address(*instruction.effective_address), 4u);
+        return std::nullopt;
+    default:
+        return std::nullopt;
+    }
+}
+
+std::optional<std::string> guarded_linear_ram_write_preflight_expression(
+    const katana::ir::Instruction& instruction) {
+    using Operation = katana::ir::Operation;
+    if (!has_guarded_linear_ram_write(instruction)) return std::nullopt;
+
+    const auto general = [](const std::uint8_t index) {
+        return "cpu.r[" + std::to_string(index) + "]";
+    };
+    const auto displacement = [&] {
+        return std::to_string(
+                   static_cast<std::uint32_t>(instruction.displacement)) +
+               "u";
+    };
+    const auto can_write = [](std::string address, const unsigned width) {
+        return "katana_direct_ram_can_write(" + std::move(address) + ", " +
+               std::to_string(width) + "u)";
+    };
+
+    switch (instruction.operation) {
+    case Operation::FmovStore:
+    case Operation::FmovStorePreDecrement:
+    case Operation::FmovStoreR0Indexed: {
+        auto address = general(instruction.destination_register);
+        if (instruction.operation == Operation::FmovStoreR0Indexed)
+            address = "cpu.r[0] + " + address;
+        else if (instruction.operation == Operation::FmovStorePreDecrement)
+            address = address + " - (cpu.fpu_transfer_pair() ? 8u : 4u)";
+        return can_write(address, 4u) +
+               " && (!cpu.fpu_transfer_pair() || " +
+               can_write("(" + address + ") + 4u", 4u) + ")";
+    }
+    case Operation::StoreByte:
+        return can_write(general(instruction.destination_register), 1u);
+    case Operation::StoreWord:
+        return can_write(general(instruction.destination_register), 2u);
+    case Operation::StoreLong:
+    case Operation::MovcaLong:
+        return can_write(general(instruction.destination_register), 4u);
+    case Operation::StoreBytePreDecrement:
+        return can_write(general(instruction.destination_register) + " - 1u", 1u);
+    case Operation::StoreWordPreDecrement:
+        return can_write(general(instruction.destination_register) + " - 2u", 2u);
+    case Operation::StoreLongPreDecrement:
+    case Operation::StoreSpecialRegisterPreDecrement:
+        return can_write(general(instruction.destination_register) + " - 4u", 4u);
+    case Operation::StoreByteDisplacement:
+        return can_write(general(instruction.destination_register) + " + " +
+                             displacement(),
+                         1u);
+    case Operation::StoreWordDisplacement:
+        return can_write(general(instruction.destination_register) + " + " +
+                             displacement(),
+                         2u);
+    case Operation::StoreLongDisplacement:
+        return can_write(general(instruction.destination_register) + " + " +
+                             displacement(),
+                         4u);
+    case Operation::StoreByteR0Indexed:
+        return can_write("cpu.r[0] + " +
+                             general(instruction.destination_register),
+                         1u);
+    case Operation::StoreWordR0Indexed:
+        return can_write("cpu.r[0] + " +
+                             general(instruction.destination_register),
+                         2u);
+    case Operation::StoreLongR0Indexed:
+        return can_write("cpu.r[0] + " +
+                             general(instruction.destination_register),
+                         4u);
+    case Operation::StoreByteGbrDisplacement:
+        return can_write("cpu.gbr + " + displacement(), 1u);
+    case Operation::StoreWordGbrDisplacement:
+        return can_write("cpu.gbr + " + displacement(), 2u);
+    case Operation::StoreLongGbrDisplacement:
+        return can_write("cpu.gbr + " + displacement(), 4u);
+    default:
+        return std::nullopt;
+    }
+}
+
+std::optional<std::string> guarded_linear_ram_access_preflight_expression(
+    const katana::ir::Instruction& instruction) {
+    if (auto read =
+            guarded_linear_ram_read_preflight_expression(instruction))
+        return read;
+    return guarded_linear_ram_write_preflight_expression(instruction);
+}
+
 std::string direct_ram_write_statement(const katana::ir::Instruction& instruction,
                                        std::string address,
                                        std::string value,
@@ -490,13 +712,17 @@ std::string direct_ram_write_statement(const katana::ir::Instruction& instructio
         break;
     }
 
-    if (!has_proven_linear_ram_write(instruction)) {
+    if (!has_direct_linear_ram_write(instruction)) {
         return std::string{"katana::runtime::"} + guest_write +
                "(cpu, guest_origin, " + address + ", " + value + ", " + source + ")";
     }
     return std::string{"katana_direct_ram_write_"} + direct_ram_write_suffix(kind) +
            "(katana_direct_ram_writes, guest_origin, " + address + ", " + value +
-           ", " + source + ")";
+           ", " + source + ", " +
+           (has_proven_linear_ram_write(instruction)
+                ? "true"
+                : "katana_guarded_unknown_ram_writes") +
+           ")";
 }
 
 void emit_direct_ram_write_helper(std::ostringstream& output,
@@ -533,10 +759,20 @@ void emit_direct_ram_write_helper(std::ostringstream& output,
            << "            const katana::runtime::GuestInstructionOrigin& katana_origin,\n"
            << "            const std::uint32_t katana_ram_address,\n"
            << "            const " << raw_type << " katana_ram_value,\n"
-           << "            const katana::runtime::CodeWriteSource katana_source) {\n"
+           << "            const katana::runtime::CodeWriteSource katana_source,\n"
+           << "            const bool katana_allow_direct_write) {\n"
+           << "        std::uint32_t katana_direct_ram_address = 0u;\n"
+           << "        const bool katana_direct_address_resolved =\n"
+           << "            katana_allow_direct_write &&\n"
+           << "            cpu.memory."
+              "guest_write_observer_allows_prevalidated_linear_writes() &&\n"
+           << "            katana_direct_ram_resolve(\n"
+           << "                katana_ram_address, sizeof(katana_ram_value),\n"
+           << "                katana_direct_ram_address);\n"
            << "        const auto katana_physical_address =\n"
            << "            katana::runtime::canonical_physical_address("
-              "katana_ram_address);\n"
+              "katana_direct_address_resolved\n"
+           << "                ? katana_direct_ram_address : katana_ram_address);\n"
            << "        const auto katana_code_generation_before = "
               "katana::runtime::native_aot_code_tracker_generation(\n"
            << "                katana_direct_ram_code_tracker);\n"
@@ -547,8 +783,7 @@ void emit_direct_ram_write_helper(std::ostringstream& output,
            << "                sizeof(katana_ram_value));\n"
            << "        if (katana_direct_ram_code_tracker != nullptr &&\n"
            << "            !katana_aliases_executable && katana_batch != nullptr &&\n"
-           << "            cpu.privileged_mode() &&\n"
-           << "            (katana_ram_address & 0xC0000000u) == 0x80000000u &&\n"
+           << "            katana_direct_address_resolved &&\n"
            << "            katana_batch->" << batch_stage
            << "(katana_physical_address,\n"
            << "                                      katana_ram_value, "
@@ -562,25 +797,25 @@ void emit_direct_ram_write_helper(std::ostringstream& output,
            << "                katana_direct_ram_write_exit_requested || "
               "katana_had_staged_writes;\n"
            << "        }\n";
-    if (registers.enabled())
-        output << "        const bool katana_reacquire_registers = "
-                  "katana_registers.owns_registers();\n"
-               << "        katana_registers.flush_release();\n";
-    output << "        const bool katana_direct_written = "
-              "cpu.privileged_mode() &&\n"
-           << "            (katana_ram_address & 0xC0000000u) == 0x80000000u &&\n"
+    output << "        const bool katana_direct_written =\n"
+           << "            katana_direct_address_resolved &&\n"
            << "            cpu.memory." << direct_write
            << "(katana_physical_address,\n"
            << "                                                katana_ram_value,\n"
            << "                                                katana_source);\n"
-           << "        if (!katana_direct_written)\n"
-           << "            katana::runtime::" << guest_write
+           << "        if (!katana_direct_written) {\n";
+    if (registers.enabled())
+        output << "            const bool katana_reacquire_registers = "
+                  "katana_registers.owns_registers();\n"
+               << "            katana_registers.flush_release();\n";
+    output << "            katana::runtime::" << guest_write
            << "(cpu, katana_origin, katana_ram_address,\n"
            << "                                         katana_ram_value, "
               "katana_source);\n";
     if (registers.enabled())
-        output << "        if (katana_reacquire_registers) "
+        output << "            if (katana_reacquire_registers) "
                   "katana_registers.reload_acquire();\n";
+    output << "        }\n";
     output << "        katana_direct_ram_write_exit_requested =\n"
            << "            katana_direct_ram_write_exit_requested ||\n"
            << "            katana_direct_ram_code_tracker == nullptr ||\n"
@@ -2456,18 +2691,7 @@ void emit_instruction_observer(std::ostringstream& output,
 
 bool requires_post_instruction_architectural_safepoint(
     const katana::ir::Instruction& instruction) noexcept {
-    using Operation = katana::ir::Operation;
-    using Register = katana::ir::SpecialRegister;
-
-    if ((instruction.operation == Operation::LoadSpecialRegister ||
-         instruction.operation == Operation::LoadSpecialRegisterPostIncrement) &&
-        (instruction.special_register == Register::Sr ||
-         instruction.special_register == Register::Fpscr))
-        return true;
-
-    return instruction.operation == Operation::LoadTlb ||
-           instruction.operation == Operation::Frchg ||
-           instruction.operation == Operation::Fschg;
+    return detail::native_aot_requires_architectural_resume(instruction);
 }
 
 bool requires_native_register_boundary(
@@ -2501,6 +2725,34 @@ bool requires_native_register_boundary(
         return true;
     default:
         return false;
+    }
+}
+
+bool guarded_linear_access_keeps_native_registers(
+    const katana::ir::Instruction& instruction,
+    const bool external_instruction_observer) noexcept {
+    using Operation = katana::ir::Operation;
+
+    if (external_instruction_observer || instruction.is_privileged ||
+        instruction.operation == Operation::Unknown ||
+        is_fpu_operation(instruction) ||
+        requires_post_instruction_architectural_safepoint(instruction) ||
+        !detail::native_aot_has_guarded_linear_ram_access(instruction))
+        return false;
+
+    // These operations have non-memory architectural side effects that retain
+    // their existing full CpuState boundary even when their address happens to
+    // resolve into the direct-linear RAM window.
+    switch (instruction.operation) {
+    case Operation::Prefetch:
+    case Operation::Ocbi:
+    case Operation::Ocbp:
+    case Operation::Ocbwb:
+    case Operation::MovcaLong:
+    case Operation::LoadTlb:
+        return false;
+    default:
+        return true;
     }
 }
 
@@ -2574,7 +2826,7 @@ void emit_direct_write_instruction_exit(
     const bool single_block,
     const NativeRegisterEmission& registers) {
     if (!has_direct_ram_writes ||
-        !has_proven_linear_ram_write(instruction) ||
+        !has_direct_linear_ram_write(instruction) ||
         instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot)
         return;
     emit_indent(output, indent);
@@ -2617,7 +2869,8 @@ void emit_post_instruction_safepoint(std::ostringstream& output,
                                      const katana::ir::Instruction& instruction,
                                      const int indent,
                                      const bool track_mmio_boundary,
-                                     const bool defer_until_terminal) {
+                                     const bool defer_until_terminal,
+                                     const NativeRegisterEmission& registers) {
     const bool architectural =
         requires_post_instruction_architectural_safepoint(instruction);
     if ((!architectural && !track_mmio_boundary) ||
@@ -2638,6 +2891,7 @@ void emit_post_instruction_safepoint(std::ostringstream& output,
 
     emit_indent(output, indent);
     output << "if (services != nullptr && " << condition << ") {\n";
+    emit_register_flush_release(output, indent + 1, registers);
     emit_indent(output, indent + 1);
     output << "cpu.pc = " << relocated_code_address(fallthrough_address(instruction)) << ";\n";
     emit_indent(output, indent + 1);
@@ -2645,6 +2899,7 @@ void emit_post_instruction_safepoint(std::ostringstream& output,
     emit_indent(output, indent + 2);
     output << "cpu, *services, " << relocated_code_address(instruction.source_address)
            << ")) return;\n";
+    emit_register_reload_acquire(output, indent + 1, registers);
     emit_indent(output, indent);
     output << "}\n";
 }
@@ -2656,6 +2911,7 @@ void emit_deferred_post_instruction_safepoint(
     const NativeRegisterEmission& registers) {
     emit_indent(output, indent);
     output << "if (services != nullptr && " << deferred_safepoint_flag(instruction) << ") {\n";
+    emit_register_flush_release(output, indent + 1, registers);
     emit_indent(output, indent + 1);
     output << "if (katana_commit_post_instruction_safepoint(\n";
     emit_indent(output, indent + 2);
@@ -2674,8 +2930,15 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const bool defer_post_instruction_safepoint = false,
                                      const NativeRegisterEmission& registers = {},
                                      const bool has_direct_ram_writes = false,
-                                     const bool direct_block_exit_metadata = false) {
+                                     const bool direct_block_exit_metadata = false,
+                                     const bool guarded_unknown_ram_accesses = false) {
     const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+    auto guarded_linear_access =
+        guarded_unknown_ram_accesses && !external_instruction_observer
+            ? guarded_linear_ram_access_preflight_expression(instruction)
+            : std::nullopt;
+    if (guarded_linear_access)
+        localize_instruction_fragment(*guarded_linear_access, registers);
     const bool possible_mmio =
         timing.requires_cycle_flush && !has_proven_linear_ram_access(instruction);
     const bool track_mmio_boundary =
@@ -2686,18 +2949,31 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     const bool register_boundary =
         registers.enabled() &&
         requires_native_register_boundary(
-            instruction, external_instruction_observer);
+            instruction, external_instruction_observer) &&
+        !(guarded_linear_access &&
+          guarded_linear_access_keeps_native_registers(
+              instruction, external_instruction_observer));
     const NativeRegisterEmission unlocalized_registers;
     emit_indent(output, indent);
     output << "{\n";
     emit_indent(output, indent);
     output << "    // katana-guest " << hex32(instruction.source_address) << "\n";
+    if (guarded_linear_access) {
+        emit_indent(output, indent + 1);
+        output << "const bool " << guarded_linear_ram_access_flag(instruction)
+               << " = " << *guarded_linear_access << ";\n";
+    }
     if (register_boundary)
         emit_register_flush_release(output, indent + 1, registers);
     emit_instruction_observer(output, instruction, indent + 1, external_instruction_observer);
     if (timing.requires_cycle_flush && !has_proven_linear_ram_access(instruction)) {
         emit_indent(output, indent + 1);
-        output << "if (services != nullptr) "
+        if (guarded_linear_access)
+            output << "if (!" << guarded_linear_ram_access_flag(instruction)
+                   << " && services != nullptr) ";
+        else
+            output << "if (services != nullptr) ";
+        output <<
                   "katana::runtime::flush_pending_guest_cycles(cpu, *services);\n";
     }
     if (track_mmio_boundary) {
@@ -2743,7 +3019,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                         instruction,
                                         indent + 1,
                                         track_mmio_boundary,
-                                        defer_post_instruction_safepoint);
+                                        defer_post_instruction_safepoint,
+                                        registers);
         if (register_boundary && !defer_post_instruction_safepoint &&
             instruction.operation != katana::ir::Operation::Unknown)
             emit_register_reload_acquire(output, indent + 1, registers);
@@ -2802,7 +3079,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                     instruction,
                                     indent + 1,
                                     track_mmio_boundary,
-                                    defer_post_instruction_safepoint);
+                                    defer_post_instruction_safepoint,
+                                    registers);
     if (register_boundary && !defer_post_instruction_safepoint)
         emit_register_reload_acquire(output, indent + 1, registers);
     emit_indent(output, indent);
@@ -2815,9 +3093,10 @@ void emit_call_delay_slot(std::ostringstream& output,
                           const bool single_block,
                           const bool external_instruction_observer,
                           const bool defer_post_instruction_safepoint,
-                          const NativeRegisterEmission& registers,
-                          const bool has_direct_ram_writes,
-                          const bool direct_block_exit_metadata) {
+                           const NativeRegisterEmission& registers,
+                           const bool has_direct_ram_writes,
+                           const bool direct_block_exit_metadata,
+                           const bool guarded_unknown_ram_reads) {
     emit_indent(output, indent);
     output << "const auto exception_generation_before_delay_slot = "
               "cpu.exception_generation;\n";
@@ -2832,7 +3111,8 @@ void emit_call_delay_slot(std::ostringstream& output,
         defer_post_instruction_safepoint,
         registers,
         has_direct_ram_writes,
-        direct_block_exit_metadata);
+        direct_block_exit_metadata,
+        guarded_unknown_ram_reads);
     emit_indent(output, indent);
     output << "}();\n";
     emit_indent(output, indent);
@@ -2883,6 +3163,53 @@ void emit_direct_call(std::ostringstream& output,
     } else {
         output << "unresolved_call(cpu, " << runtime_target << ");\n";
     }
+}
+
+std::optional<std::uint32_t> native_owner_for_target(
+    const std::uint32_t target,
+    const std::unordered_set<std::uint32_t>& known_functions,
+    const std::unordered_map<std::uint32_t, std::uint32_t>&
+        native_block_owner_entries) {
+    if (const auto owner = native_block_owner_entries.find(target);
+        owner != native_block_owner_entries.end())
+        return owner->second;
+    if (known_functions.contains(target)) return target;
+    return std::nullopt;
+}
+
+void emit_native_owner_transfer(std::ostringstream& output,
+                                const int indent,
+                                const std::uint32_t owner_entry,
+                                const bool table_compatible_function_entries,
+                                const NativeRegisterEmission& registers) {
+    emit_register_flush_release(output, indent, registers);
+    emit_indent(output, indent);
+    output << "if (services != nullptr && "
+              "services->can_chain_executable_block(cpu.pc)) {\n";
+    emit_indent(output, indent + 1);
+    output << "katana::runtime::NativeAotCallDepthGuard native_call_depth;\n";
+    emit_indent(output, indent + 1);
+    output << "if (native_call_depth) {\n";
+    emit_indent(output, indent + 2);
+    if (table_compatible_function_entries)
+        output << "static_cast<void>("
+               << cpp_runtime_block_function_name(owner_entry)
+               << "(cpu, context));\n";
+    else
+        output << cpp_service_function_name(owner_entry)
+               << "(cpu, services);\n";
+    if (table_compatible_function_entries) {
+        // The nested owner can run beyond its entry block, including through
+        // an RTS. Its per-owner exit-state frame deliberately restores this
+        // caller's metadata, so explicitly tell the outer table invocation
+        // that the nominal branch/fallthrough exit has already been consumed.
+        emit_indent(output, indent + 2);
+        output << "runtime_dispatch_detail::tail_dispatch_completed = true;\n";
+    }
+    emit_indent(output, indent + 1);
+    output << "}\n";
+    emit_indent(output, indent);
+    output << "}\n";
 }
 
 const char* dynamic_dispatch_name(const katana::ir::Instruction& instruction,
@@ -2951,9 +3278,12 @@ void emit_conditional_block_transition(std::ostringstream& output,
                                        const std::uint32_t fallthrough_target,
                                        const bool branch_target_local,
                                        const bool fallthrough_target_local,
+                                       const std::optional<std::uint32_t> branch_target_owner,
+                                       const std::optional<std::uint32_t> fallthrough_target_owner,
                                        const bool native_internal_block_labels,
                                        const bool uses_proven_linear_ram,
-                                       const NativeRegisterEmission& registers) {
+                                       const NativeRegisterEmission& registers,
+                                       const bool table_compatible_function_entries) {
     if (!native_internal_block_labels) {
         emit_block_transition(output,
                               indent,
@@ -2997,7 +3327,9 @@ void emit_conditional_block_transition(std::ostringstream& output,
     }
 
     if (!guarded_local_block_chaining ||
-        (!branch_target_local && !fallthrough_target_local)) {
+        (!branch_target_local && !fallthrough_target_local &&
+         !branch_target_owner.has_value() &&
+         !fallthrough_target_owner.has_value())) {
         emit_indent(output, indent);
         output << "return;\n";
         return;
@@ -3011,6 +3343,12 @@ void emit_conditional_block_transition(std::ostringstream& output,
                   "services->can_chain_executable_block(cpu.pc))\n";
         emit_indent(output, indent + 2);
         output << "goto " << cpp_block_label(branch_target) << ";\n";
+    } else if (branch_target_owner.has_value()) {
+        emit_native_owner_transfer(output,
+                                   indent + 1,
+                                   *branch_target_owner,
+                                   table_compatible_function_entries,
+                                   registers);
     }
     emit_indent(output, indent + 1);
     output << "return;\n";
@@ -3022,6 +3360,12 @@ void emit_conditional_block_transition(std::ostringstream& output,
                   "services->can_chain_executable_block(cpu.pc))\n";
         emit_indent(output, indent + 1);
         output << "goto " << cpp_block_label(fallthrough_target) << ";\n";
+    } else if (fallthrough_target_owner.has_value()) {
+        emit_native_owner_transfer(output,
+                                   indent,
+                                   *fallthrough_target_owner,
+                                   table_compatible_function_entries,
+                                   registers);
     }
     emit_indent(output, indent);
     output << "return;\n";
@@ -3100,7 +3444,7 @@ void emit_terminal(std::ostringstream& output,
     }
 
     switch (instruction.operation) {
-    case Operation::Branch:
+    case Operation::Branch: {
         if (!instruction.target_address.has_value()) {
             throw std::runtime_error("Direkter IR-Sprung besitzt kein Ziel.");
         }
@@ -3115,7 +3459,8 @@ void emit_terminal(std::ostringstream& output,
                 defer_delay_slot_safepoint,
                 registers,
                 has_direct_ram_writes,
-                table_compatible_function_entries);
+                table_compatible_function_entries,
+                guarded_local_block_chaining);
         }
 
         emit_indent(output, indent);
@@ -3133,17 +3478,35 @@ void emit_terminal(std::ostringstream& output,
             has_direct_ram_writes,
             single_block,
             registers);
-        emit_block_transition(output,
-                              indent,
-                              single_block,
-                              guarded_local_block_chaining,
-                              current_blocks.contains(*instruction.target_address)
-                                  ? instruction.target_address
-                                  : std::nullopt,
-                              native_internal_block_labels,
-                              uses_proven_linear_ram,
-                              registers);
+        const auto branch_target_local =
+            current_blocks.contains(*instruction.target_address);
+        const auto branch_target_owner = native_owner_for_target(
+            *instruction.target_address,
+            known_functions,
+            native_block_owner_entries);
+        if (single_block && guarded_local_block_chaining &&
+            !branch_target_local && branch_target_owner.has_value()) {
+            emit_native_owner_transfer(output,
+                                       indent,
+                                       *branch_target_owner,
+                                       table_compatible_function_entries,
+                                       registers);
+            emit_indent(output, indent);
+            output << "return;\n";
+        } else {
+            emit_block_transition(output,
+                                  indent,
+                                  single_block,
+                                  guarded_local_block_chaining,
+                                  branch_target_local
+                                      ? instruction.target_address
+                                      : std::nullopt,
+                                  native_internal_block_labels,
+                                  uses_proven_linear_ram,
+                                  registers);
+        }
         return;
+    }
 
     case Operation::Call:
         if (!instruction.target_address.has_value()) {
@@ -3169,9 +3532,10 @@ void emit_terminal(std::ostringstream& output,
                                  single_block,
                                  external_instruction_observer,
                                  defer_delay_slot_safepoint,
-                                 registers,
-                                 has_direct_ram_writes,
-                                 table_compatible_function_entries);
+                                  registers,
+                                  has_direct_ram_writes,
+                                  table_compatible_function_entries,
+                                  guarded_local_block_chaining);
         }
 
         emit_indent(output, indent);
@@ -3192,9 +3556,11 @@ void emit_terminal(std::ostringstream& output,
             registers);
         if (single_block) {
             const auto return_address = instruction.source_address + 4u;
-            if (native_internal_block_labels &&
-                known_functions.contains(*instruction.target_address) &&
-                current_blocks.contains(return_address)) {
+            const auto target_owner = native_owner_for_target(
+                *instruction.target_address,
+                known_functions,
+                native_block_owner_entries);
+            if (guarded_local_block_chaining && target_owner.has_value()) {
                 emit_register_flush_release(output, indent, registers);
                 emit_indent(output, indent);
                 output << "if (services != nullptr && "
@@ -3209,29 +3575,36 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 2);
                 if (table_compatible_function_entries)
                     output << "static_cast<void>("
-                           << cpp_runtime_block_function_name(*instruction.target_address)
+                           << cpp_runtime_block_function_name(*target_owner)
                            << "(cpu, context));\n";
                 else
-                    output << cpp_service_function_name(*instruction.target_address)
+                    output << cpp_service_function_name(*target_owner)
                            << "(cpu, services);\n";
                 emit_indent(output, indent + 2);
                 output << "if (cpu.exception_generation != "
                           "exception_generation_before_native_call) return;\n";
+                if (native_internal_block_labels &&
+                    current_blocks.contains(return_address)) {
+                    emit_indent(output, indent + 2);
+                    output << "if (" << unrelocated_code_address("cpu.pc") << " == "
+                           << hex32(return_address)
+                            << " && services->can_chain_executable_block(cpu.pc)";
+                    if (uses_proven_linear_ram)
+                        output << " && cpu.memory.direct_linear_memory_guard_current("
+                                  "katana_direct_ram, false)";
+                    output << ") {\n";
+                    emit_register_reload_acquire(
+                        output, indent + 3, registers);
+                    emit_indent(output, indent + 3);
+                    output << "goto " << cpp_block_label(return_address)
+                           << ";\n";
+                    emit_indent(output, indent + 2);
+                    output << "}\n";
+                }
                 emit_indent(output, indent + 2);
-                output << "if (" << unrelocated_code_address("cpu.pc") << " == "
-                       << hex32(return_address)
-                        << " && services->can_chain_executable_block(cpu.pc)";
-                if (uses_proven_linear_ram)
-                    output << " && cpu.memory.direct_linear_memory_guard_current("
-                              "katana_direct_ram, false)";
-                output << ") {\n";
-                emit_register_reload_acquire(
-                    output, indent + 3, registers);
-                emit_indent(output, indent + 3);
-                output << "goto " << cpp_block_label(return_address)
-                       << ";\n";
+                output << "runtime_dispatch_detail::tail_dispatch_completed = true;\n";
                 emit_indent(output, indent + 2);
-                output << "}\n";
+                output << "return;\n";
                 emit_indent(output, indent + 1);
                 output << "}\n";
                 emit_indent(output, indent);
@@ -3287,7 +3660,8 @@ void emit_terminal(std::ostringstream& output,
                 defer_delay_slot_safepoint,
                 registers,
                 has_direct_ram_writes,
-                table_compatible_function_entries);
+                table_compatible_function_entries,
+                guarded_local_block_chaining);
 
             emit_indent(output, indent);
             output << "cpu.pc = take_branch ? "
@@ -3321,9 +3695,16 @@ void emit_terminal(std::ostringstream& output,
             fallthrough_address(instruction),
             current_blocks.contains(*instruction.target_address),
             current_blocks.contains(fallthrough_address(instruction)),
+            native_owner_for_target(*instruction.target_address,
+                                    known_functions,
+                                    native_block_owner_entries),
+            native_owner_for_target(fallthrough_address(instruction),
+                                    known_functions,
+                                    native_block_owner_entries),
             native_internal_block_labels,
             uses_proven_linear_ram,
-            registers);
+            registers,
+            table_compatible_function_entries);
         return;
     }
 
@@ -3347,7 +3728,8 @@ void emit_terminal(std::ostringstream& output,
                 defer_delay_slot_safepoint,
                 registers,
                 has_direct_ram_writes,
-                table_compatible_function_entries);
+                table_compatible_function_entries,
+                guarded_local_block_chaining);
         }
 
         emit_indent(output, indent);
@@ -3387,25 +3769,12 @@ void emit_terminal(std::ostringstream& output,
                                           registers);
                 } else if (const auto owner = native_block_owner_entries.find(target);
                            owner != native_block_owner_entries.end()) {
-                    emit_register_flush_release(
-                        output, indent + 2, registers);
-                    emit_indent(output, indent + 2);
-                    output << "if (services != nullptr && "
-                              "services->can_chain_executable_block(cpu.pc)) {\n";
-                    emit_indent(output, indent + 3);
-                    output << "katana::runtime::NativeAotCallDepthGuard "
-                              "native_call_depth;\n";
-                    emit_indent(output, indent + 3);
-                    output << "if (native_call_depth) ";
-                    if (table_compatible_function_entries)
-                        output << "static_cast<void>("
-                               << cpp_runtime_block_function_name(owner->second)
-                               << "(cpu, context));\n";
-                    else
-                        output << cpp_service_function_name(owner->second)
-                               << "(cpu, services);\n";
-                    emit_indent(output, indent + 2);
-                    output << "}\n";
+                    emit_native_owner_transfer(
+                        output,
+                        indent + 2,
+                        owner->second,
+                        table_compatible_function_entries,
+                        registers);
                     emit_indent(output, indent + 2);
                     output << "return;\n";
                 } else {
@@ -3523,9 +3892,10 @@ void emit_terminal(std::ostringstream& output,
                                  single_block,
                                  external_instruction_observer,
                                  defer_delay_slot_safepoint,
-                                 registers,
-                                 has_direct_ram_writes,
-                                 table_compatible_function_entries);
+                                  registers,
+                                  has_direct_ram_writes,
+                                  table_compatible_function_entries,
+                                  guarded_local_block_chaining);
         }
 
         emit_indent(output, indent);
@@ -3672,6 +4042,83 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent);
                 output << "}\n";
             }
+            const bool can_dispatch_nested_call =
+                instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::RuntimeOnly ||
+                instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::GuardedComplete ||
+                instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::GuardedPartial;
+            if (guarded_local_block_chaining && can_dispatch_nested_call) {
+                emit_register_flush_release(output, indent, registers);
+                emit_indent(output, indent);
+                output << "if (services != nullptr && "
+                          "!katana::runtime::native_aot_call_is_nested()) {\n";
+                if (!external_instruction_observer &&
+                    table_compatible_function_entries) {
+                    emit_indent(output, indent + 1);
+                    output << "if (runtime_dispatch_detail::"
+                              "try_static_return_nop_callback(cpu, call_target)) {\n";
+                    if (native_internal_block_labels &&
+                        current_blocks.contains(return_address)) {
+                        emit_indent(output, indent + 2);
+                        output << "if (" << unrelocated_code_address("cpu.pc") << " == "
+                               << hex32(return_address)
+                               << " && services->can_chain_executable_block(cpu.pc)";
+                        if (uses_proven_linear_ram)
+                            output << " && cpu.memory.direct_linear_memory_guard_current("
+                                      "katana_direct_ram, false)";
+                        output << ") {\n";
+                        emit_register_reload_acquire(
+                            output, indent + 3, registers);
+                        emit_indent(output, indent + 3);
+                        output << "goto " << cpp_block_label(return_address)
+                               << ";\n";
+                        emit_indent(output, indent + 2);
+                        output << "}\n";
+                    }
+                    emit_indent(output, indent + 2);
+                    output << "runtime_dispatch_detail::tail_dispatch_completed = true;\n";
+                    emit_indent(output, indent + 2);
+                    output << "return;\n";
+                    emit_indent(output, indent + 1);
+                    output << "}\n";
+                }
+                emit_indent(output, indent + 1);
+                output << "katana::runtime::NativeAotDispatchDepthGuard "
+                          "native_dispatch_depth;\n";
+                emit_indent(output, indent + 1);
+                output << "if (native_dispatch_depth) {\n";
+                emit_indent(output, indent + 2);
+                output << dynamic_dispatch_name(instruction, true)
+                       << "(cpu, call_target);\n";
+                if (native_internal_block_labels &&
+                    current_blocks.contains(return_address)) {
+                    emit_indent(output, indent + 2);
+                    output << "if (" << unrelocated_code_address("cpu.pc") << " == "
+                           << hex32(return_address)
+                           << " && services->can_chain_executable_block(cpu.pc)";
+                    if (uses_proven_linear_ram)
+                        output << " && cpu.memory.direct_linear_memory_guard_current("
+                                  "katana_direct_ram, false)";
+                    output << ") {\n";
+                    emit_register_reload_acquire(
+                        output, indent + 3, registers);
+                    emit_indent(output, indent + 3);
+                    output << "goto " << cpp_block_label(return_address)
+                           << ";\n";
+                    emit_indent(output, indent + 2);
+                    output << "}\n";
+                }
+                emit_indent(output, indent + 2);
+                output << "runtime_dispatch_detail::tail_dispatch_completed = true;\n";
+                emit_indent(output, indent + 2);
+                output << "return;\n";
+                emit_indent(output, indent + 1);
+                output << "}\n";
+                emit_indent(output, indent);
+                output << "}\n";
+            }
             emit_indent(output, indent);
             output << "return;\n";
             return;
@@ -3752,7 +4199,8 @@ void emit_terminal(std::ostringstream& output,
                 defer_delay_slot_safepoint,
                 registers,
                 has_direct_ram_writes,
-                table_compatible_function_entries);
+                table_compatible_function_entries,
+                guarded_local_block_chaining);
         }
 
         emit_indent(output, indent);
@@ -3807,7 +4255,8 @@ void emit_terminal(std::ostringstream& output,
                 defer_delay_slot_safepoint,
                 registers,
                 has_direct_ram_writes,
-                table_compatible_function_entries);
+                table_compatible_function_entries,
+                guarded_local_block_chaining);
         }
         emit_terminal_instruction_completion(output, indent, single_block);
         if (defer_delay_slot_safepoint)
@@ -4164,16 +4613,17 @@ void emit_instruction_accounting_region(std::ostringstream& output,
 }
 
 void emit_block_entry_dispatch(std::ostringstream& output,
-                               const katana::ir::BasicBlock& block,
-                               const std::unordered_set<std::uint32_t>& current_blocks) {
-    const auto segment = block.start_address >> 29u;
+                               const std::uint32_t entry_address,
+                               const std::uint32_t destination_block,
+                               const std::unordered_set<std::uint32_t>& current_entries) {
+    const auto segment = entry_address >> 29u;
     if (segment == 4u || segment == 5u) {
-        const auto direct_alias = block.start_address ^ 0x20000000u;
-        if (!current_blocks.contains(direct_alias))
+        const auto direct_alias = entry_address ^ 0x20000000u;
+        if (!current_entries.contains(direct_alias))
             output << "            case " << hex32(direct_alias) << ":\n";
     }
-    output << "            case " << hex32(block.start_address) << ":\n"
-           << "                goto " << cpp_block_label(block.start_address) << ";\n";
+    output << "            case " << hex32(entry_address) << ":\n"
+           << "                goto " << cpp_block_label(destination_block) << ";\n";
 }
 
 void emit_block(std::ostringstream& output,
@@ -4192,7 +4642,16 @@ void emit_block(std::ostringstream& output,
                 const bool external_instruction_observer,
                 const NativeRegisterEmission& registers,
                 const bool has_direct_ram_writes,
-                const bool enable_direct_write_batch) {
+                const bool enable_direct_write_batch,
+                const std::unordered_set<std::uint32_t>& native_resume_entries) {
+    auto resume_entries = detail::native_aot_internal_resume_entries(block);
+    resume_entries.erase(
+        std::remove_if(resume_entries.begin(),
+                       resume_entries.end(),
+                       [&](const auto address) {
+                           return !native_resume_entries.contains(address);
+                       }),
+        resume_entries.end());
     const bool table_compatible_function_entries =
         block_entry_metadata_mode == BlockEntryMetadataMode::Direct;
     if (native_internal_block_labels) {
@@ -4255,6 +4714,21 @@ void emit_block(std::ostringstream& output,
                    "katana_direct_ram_writes = nullptr;\n";
         }
     }
+    if (!resume_entries.empty()) {
+        output << "                switch ("
+               << unrelocated_code_address("cpu.pc") << ") {\n"
+               << "                case " << hex32(block.start_address) << ":\n"
+               << "                    break;\n";
+        for (const auto resume : resume_entries) {
+            output << "                case " << hex32(resume) << ":\n"
+                   << "                    goto " << cpp_block_label(resume)
+                   << "_resume;\n";
+        }
+        output << "                default:\n"
+               << "                    throw std::runtime_error("
+               << "\"PC liegt ausserhalb des generierten IR-Blocks\");\n"
+               << "                }\n";
+    }
 
     std::optional<std::size_t> control_index;
     std::size_t accounting_region_instruction_count = 0u;
@@ -4273,6 +4747,14 @@ void emit_block(std::ostringstream& output,
 
         if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot) {
             continue;
+        }
+
+        if (std::binary_search(resume_entries.begin(),
+                               resume_entries.end(),
+                               instruction.source_address)) {
+            emit_pending_accounting_region();
+            emit_indent(output, 4);
+            output << cpp_block_label(instruction.source_address) << "_resume:\n";
         }
 
         if (is_control_flow(instruction.operation)) {
@@ -4299,7 +4781,8 @@ void emit_block(std::ostringstream& output,
             false,
             registers,
             has_direct_ram_writes,
-            table_compatible_function_entries);
+            table_compatible_function_entries,
+            guarded_local_block_chaining);
     }
 
     // A completed non-faulting prefix must become architecturally visible before
@@ -4325,10 +4808,11 @@ void emit_block(std::ostringstream& output,
                       has_direct_ram_writes,
                       enable_direct_write_batch);
     } else if (block.successors.size() == 1u) {
+        const auto successor = block.successors.front();
         emit_direct_write_batch_flush(
             output, 4, enable_direct_write_batch);
         emit_indent(output, 4);
-        output << "cpu.pc = " << relocated_code_address(block.successors.front()) << ";\n";
+        output << "cpu.pc = " << relocated_code_address(successor) << ";\n";
         emit_direct_write_batch_exit(
             output,
             4,
@@ -4336,27 +4820,43 @@ void emit_block(std::ostringstream& output,
             single_block,
             registers);
 
-        emit_block_transition(output,
-                              4,
-                              single_block,
-                              guarded_local_block_chaining,
-                              current_blocks.contains(block.successors.front())
-                                  ? std::optional{block.successors.front()}
-                                  : std::nullopt,
-                              native_internal_block_labels,
-                              uses_proven_linear_ram,
-                              registers);
+        const auto successor_local = current_blocks.contains(successor);
+        const auto successor_owner = native_owner_for_target(
+            successor, known_functions, native_block_owner_entries);
+        if (single_block && guarded_local_block_chaining &&
+            !successor_local && successor_owner.has_value()) {
+            emit_native_owner_transfer(output,
+                                       4,
+                                       *successor_owner,
+                                       table_compatible_function_entries,
+                                       registers);
+            emit_indent(output, 4);
+            output << "return;\n";
+        } else {
+            emit_block_transition(output,
+                                  4,
+                                  single_block,
+                                  guarded_local_block_chaining,
+                                  successor_local
+                                      ? std::optional{successor}
+                                      : std::nullopt,
+                                  native_internal_block_labels,
+                                  uses_proven_linear_ram,
+                                  registers);
+        }
     } else if (block.successors.empty()) {
         // Function discovery deliberately removes successors that cross a function boundary.
         // Every backend mode still has to expose the architectural fallthrough PC when it
         // returns across that boundary. Otherwise either an external dispatcher redispatches
         // the retired block or a direct backend caller observes a stale PC.
+        std::optional<std::uint32_t> fallthrough;
         if (!block.instructions.empty()) {
+            fallthrough = fallthrough_address(block.instructions.back());
             emit_direct_write_batch_flush(
                 output, 4, enable_direct_write_batch);
             emit_indent(output, 4);
             output << "cpu.pc = "
-                   << relocated_code_address(fallthrough_address(block.instructions.back()))
+                   << relocated_code_address(*fallthrough)
                    << ";\n";
         }
         emit_direct_write_batch_exit(
@@ -4367,6 +4867,18 @@ void emit_block(std::ostringstream& output,
             registers);
         emit_multi_block_completion(
             output, 4, single_block, false, registers);
+        const auto fallthrough_owner =
+            fallthrough.has_value()
+                ? native_owner_for_target(
+                      *fallthrough, known_functions, native_block_owner_entries)
+                : std::nullopt;
+        if (single_block && guarded_local_block_chaining &&
+            fallthrough_owner.has_value())
+            emit_native_owner_transfer(output,
+                                       4,
+                                       *fallthrough_owner,
+                                       table_compatible_function_entries,
+                                       registers);
         emit_indent(output, 4);
         output << "return;\n";
     } else {
@@ -4447,22 +4959,46 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
     std::unordered_set<std::uint32_t> architectural_boundary_entries(
         request.architectural_boundary_entries.begin(),
         request.architectural_boundary_entries.end());
+    std::unordered_set<std::uint32_t> native_resume_entries;
+    native_resume_entries.reserve(architectural_boundary_entries.size());
     for (const auto boundary : architectural_boundary_entries) {
-        if (!known_functions.contains(boundary) &&
-            std::none_of(
-                functions.begin(),
-                functions.end(),
-                [&](const auto& function) {
-                    return std::any_of(
-                        function.blocks.begin(),
-                        function.blocks.end(),
-                        [&](const auto& block) {
-                            return block.start_address == boundary;
-                        });
-                }))
+        const auto block_entry = std::any_of(
+            functions.begin(), functions.end(), [&](const auto& function) {
+                return std::any_of(
+                    function.blocks.begin(),
+                    function.blocks.end(),
+                    [&](const auto& block) {
+                        return block.start_address == boundary;
+                    });
+            });
+        const auto resume_entry = std::any_of(
+            functions.begin(), functions.end(), [&](const auto& function) {
+                return std::any_of(
+                    function.blocks.begin(),
+                    function.blocks.end(),
+                    [&](const auto& block) {
+                        const auto candidates =
+                            detail::native_aot_internal_resume_entries(block);
+                        return std::binary_search(candidates.begin(),
+                                                  candidates.end(),
+                                                  boundary);
+                    });
+            });
+        if (!known_functions.contains(boundary) && !block_entry &&
+            !resume_entry)
             throw std::invalid_argument(
                 "Architekturgrenze besitzt keinen emittierten AOT-Entry.");
+        if (!known_functions.contains(boundary) && !block_entry &&
+            resume_entry)
+            native_resume_entries.insert(boundary);
         known_functions.erase(boundary);
+    }
+    for (const auto& function : functions) {
+        for (const auto& block : function.blocks) {
+            for (const auto resume :
+                 detail::native_aot_internal_resume_entries(block))
+                native_resume_entries.insert(resume);
+        }
     }
     std::unordered_map<std::uint32_t, std::uint32_t> guarded_native_call_targets;
     guarded_native_call_targets.reserve(request.guarded_native_call_targets.size());
@@ -4558,10 +5094,12 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "extern thread_local PlatformServices* active_services;\n"
                 << "extern thread_local katana::runtime::BlockAddress active_exit_source;\n"
                 << "extern thread_local katana::runtime::BlockEndKind active_exit_kind;\n"
-                << "extern thread_local katana::runtime::DynamicDispatchSiteClass "
-                   "active_exit_site_class;\n"
-                << "extern thread_local bool tail_dispatch_completed;\n"
-                << "} // namespace runtime_dispatch_detail\n";
+                 << "extern thread_local katana::runtime::DynamicDispatchSiteClass "
+                    "active_exit_site_class;\n"
+                 << "extern thread_local bool tail_dispatch_completed;\n"
+                 << "[[nodiscard]] bool try_static_return_nop_callback(\n"
+                    "    CpuState& cpu, std::uint32_t target) noexcept;\n"
+                 << "} // namespace runtime_dispatch_detail\n";
         }
         declarations << "void resolved_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_call(CpuState& cpu, std::uint32_t target);\n"
@@ -4648,13 +5186,25 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             request.external_instruction_observer);
         std::uint8_t direct_ram_read_kinds = 0u;
         std::uint8_t direct_ram_write_kinds = 0u;
+        bool has_guarded_linear_ram_reads = false;
+        bool has_guarded_linear_ram_writes = false;
         for (const auto& block : function.blocks) {
             for (const auto& instruction : block.instructions) {
                 direct_ram_read_kinds |= required_direct_ram_read_kinds(instruction);
                 direct_ram_write_kinds |= required_direct_ram_write_kinds(instruction);
+                has_guarded_linear_ram_reads =
+                    has_guarded_linear_ram_reads ||
+                    has_guarded_linear_ram_read(instruction);
+                has_guarded_linear_ram_writes =
+                    has_guarded_linear_ram_writes ||
+                    has_guarded_linear_ram_write(instruction);
             }
         }
-        const bool uses_proven_linear_ram = direct_ram_read_kinds != 0u;
+        const bool uses_direct_linear_ram_accesses =
+            direct_ram_read_kinds != 0u || direct_ram_write_kinds != 0u;
+        const bool guarded_unknown_ram_accesses =
+            request.guarded_local_block_chaining &&
+            !request.external_instruction_observer;
         const bool has_direct_ram_writes =
             direct_ram_write_kinds != 0u;
         const bool enable_direct_write_batch =
@@ -4702,10 +5252,75 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "    auto* const katana_direct_ram_code_tracker = "
                    "services != nullptr\n"
                 << "        ? services->executable_code_tracker() : nullptr;\n";
-        if (uses_proven_linear_ram)
+        if (uses_direct_linear_ram_accesses) {
             emitted_function
                 << "    auto katana_direct_ram = "
-                   "cpu.memory.direct_linear_memory_guard(false);\n";
+                   "cpu.memory.direct_linear_memory_guard(false);\n"
+                << "    const auto katana_direct_ram_resolve =\n"
+                << "        [&](const std::uint32_t katana_virtual_address,\n"
+                << "            const std::size_t katana_ram_width,\n"
+                << "            std::uint32_t& katana_direct_address) noexcept {\n"
+                << "        const auto katana_segment = "
+                   "katana_virtual_address >> 29u;\n"
+                << "        if (katana_segment == 4u || katana_segment == 5u) {\n"
+                << "            if (!cpu.privileged_mode()) return false;\n"
+                << "            katana_direct_address = katana_virtual_address;\n"
+                << "        } else {\n"
+                << "            if ((cpu.mmucr & 1u) != 0u || "
+                   "katana_segment >= 7u ||\n"
+                << "                (!cpu.privileged_mode() &&\n"
+                << "                 katana_virtual_address >= 0x80000000u))\n"
+                << "                return false;\n"
+                << "            katana_direct_address =\n"
+                << "                katana::runtime::canonical_physical_address(\n"
+                << "                    katana_virtual_address) | 0x80000000u;\n"
+                << "        }\n"
+                << "        if (!cpu.memory.direct_linear_memory_guard_current(\n"
+                << "                katana_direct_ram, false))\n"
+                << "            return false;\n"
+                << "        std::uint32_t katana_ignored_ram_offset = 0u;\n"
+                << "        return katana::runtime::direct_linear_guard_offset(\n"
+                << "            katana_direct_ram, katana_direct_address,\n"
+                << "            katana_ram_width, katana_ignored_ram_offset);\n"
+                << "    };\n";
+        }
+        if (has_guarded_linear_ram_reads) {
+            emitted_function
+                << "    static constexpr bool katana_guarded_unknown_ram_reads = "
+                << (guarded_unknown_ram_accesses ? "true" : "false")
+                << ";\n";
+        }
+        if (has_guarded_linear_ram_writes) {
+            emitted_function
+                << "    static constexpr bool katana_guarded_unknown_ram_writes = "
+                << (guarded_unknown_ram_accesses ? "true" : "false")
+                << ";\n";
+        }
+        if (has_guarded_linear_ram_reads && guarded_unknown_ram_accesses) {
+            emitted_function
+                << "    const auto katana_direct_ram_can_read =\n"
+                << "        [&](const std::uint32_t katana_ram_address,\n"
+                << "            const std::size_t katana_ram_width) noexcept {\n"
+                << "        std::uint32_t katana_direct_address = 0u;\n"
+                << "        return katana_direct_ram_resolve(\n"
+                << "            katana_ram_address, katana_ram_width,\n"
+                << "            katana_direct_address);\n"
+                << "    };\n";
+        }
+        if (has_guarded_linear_ram_writes && guarded_unknown_ram_accesses) {
+            emitted_function
+                << "    const auto katana_direct_ram_can_write =\n"
+                << "        [&](const std::uint32_t katana_ram_address,\n"
+                << "            const std::size_t katana_ram_width) noexcept {\n"
+                << "        if (!cpu.memory."
+                   "guest_write_observer_allows_prevalidated_linear_writes())\n"
+                << "            return false;\n"
+                << "        std::uint32_t katana_direct_address = 0u;\n"
+                << "        return katana_direct_ram_resolve(\n"
+                << "            katana_ram_address, katana_ram_width,\n"
+                << "            katana_direct_address);\n"
+                << "    };\n";
+        }
         for (const auto kind : {DirectRamReadKind::U8,
                                DirectRamReadKind::S8,
                                DirectRamReadKind::U16,
@@ -4735,12 +5350,21 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             << "    for (;;) {\n"
             << "        switch (katana::runtime::unrelocate_code_address(cpu.pc)) {\n";
 
-        std::unordered_set<std::uint32_t> all_current_blocks;
-        all_current_blocks.reserve(function.blocks.size());
+        std::unordered_set<std::uint32_t> all_current_entries;
+        all_current_entries.reserve(function.blocks.size());
         std::unordered_set<std::uint32_t> current_blocks;
         current_blocks.reserve(function.blocks.size());
         for (const auto& block : function.blocks) {
-            all_current_blocks.insert(block.start_address);
+            if (!all_current_entries.insert(block.start_address).second)
+                throw std::invalid_argument(
+                    "Native AOT-Funktion besitzt doppelte Blockentries.");
+            for (const auto resume :
+                 detail::native_aot_internal_resume_entries(block)) {
+                if (!native_resume_entries.contains(resume)) continue;
+                if (!all_current_entries.insert(resume).second)
+                    throw std::invalid_argument(
+                        "Nativer AOT-Resume-Entry kollidiert mit einem Blockentry.");
+            }
             if (!architectural_boundary_entries.contains(
                     block.start_address))
                 current_blocks.insert(block.start_address);
@@ -4749,7 +5373,18 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         if (native_internal_block_labels) {
             for (const auto& block : function.blocks) {
                 emit_block_entry_dispatch(
-                    emitted_function, block, all_current_blocks);
+                    emitted_function,
+                    block.start_address,
+                    block.start_address,
+                    all_current_entries);
+                for (const auto resume :
+                     detail::native_aot_internal_resume_entries(block)) {
+                    if (!native_resume_entries.contains(resume)) continue;
+                    emit_block_entry_dispatch(emitted_function,
+                                              resume,
+                                              block.start_address,
+                                              all_current_entries);
+                }
             }
             emitted_function << "            default:\n"
                              << "                throw std::runtime_error("
@@ -4770,12 +5405,13 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        request.single_block_execution,
                        request.guarded_local_block_chaining,
                        native_internal_block_labels,
-                       uses_proven_linear_ram,
+                       uses_direct_linear_ram_accesses,
                        effective_block_entry_metadata_mode,
                        request.external_instruction_observer,
                        registers,
                        has_direct_ram_writes,
-                       enable_direct_write_batch);
+                       enable_direct_write_batch,
+                       native_resume_entries);
         }
 
         if (!native_internal_block_labels) {

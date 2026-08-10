@@ -2281,6 +2281,7 @@ struct SupervisedHostCommandResult final {
     bool interrupted = false;
     std::optional<int> forwarded_signal;
     bool process_tree_quiescent = false;
+    bool post_exit_descendants_terminated = false;
 };
 
 class SupervisedHostCommandTelemetryAttempt final {
@@ -2307,7 +2308,10 @@ class SupervisedHostCommandTelemetryAttempt final {
         observation_.process_tree_quiescent =
             result_.process_tree_quiescent;
 #ifdef _WIN32
-        observation_.process_tree_scope = "job-object-tree";
+        observation_.process_tree_scope =
+            result_.post_exit_descendants_terminated
+                ? "job-object-tree-post-exit-drain"
+                : "job-object-tree";
         observation_.process_tree_query_complete =
             result_.process_tree_quiescent;
 #elif defined(__linux__)
@@ -2336,6 +2340,9 @@ class SupervisedHostCommandTelemetryAttempt final {
 
 inline constexpr auto maximum_port_host_command_runtime =
     std::chrono::minutes(15);
+
+inline constexpr auto windows_port_host_post_exit_grace =
+    std::chrono::milliseconds(500);
 
 using PortHostCommandTimeout =
     std::optional<std::chrono::milliseconds>;
@@ -3675,6 +3682,8 @@ SupervisedHostCommandResult run_supervised_host_command(
             : std::nullopt;
     bool root_terminal = false;
     DWORD root_exit_code = 1u;
+    std::optional<std::chrono::steady_clock::time_point>
+        root_descendant_grace_deadline;
     for (;;) {
         if (supervision_heartbeat) supervision_heartbeat();
         const auto root_wait =
@@ -3721,6 +3730,9 @@ SupervisedHostCommandResult run_supervised_host_command(
                     "werden; sein Prozessbaum wurde beendet.");
             }
             root_terminal = true;
+            root_descendant_grace_deadline =
+                std::chrono::steady_clock::now() +
+                windows_port_host_post_exit_grace;
         }
 
         const auto empty = query_windows_job_empty(job);
@@ -3746,6 +3758,29 @@ SupervisedHostCommandResult run_supervised_host_command(
             result.exit_code = static_cast<int>(root_exit_code);
             result.exit_code_available = true;
             result.process_tree_quiescent = true;
+            break;
+        }
+
+        if (root_terminal && root_descendant_grace_deadline &&
+            std::chrono::steady_clock::now() >=
+                *root_descendant_grace_deadline) {
+            const auto quiescence =
+                terminate_windows_job_and_wait(
+                    job,
+                    process.hProcess,
+                    125u);
+            if (quiescence !=
+                WindowsJobQuiescenceResult::Quiescent) {
+                close_supervision_handles();
+                throw std::runtime_error(
+                    "Nach Ende des Port-Hostprozesses verbliebene "
+                    "Hilfsprozesse konnten nicht nachweislich geleert "
+                    "werden.");
+            }
+            result.exit_code = static_cast<int>(root_exit_code);
+            result.exit_code_available = true;
+            result.process_tree_quiescent = true;
+            result.post_exit_descendants_terminated = true;
             break;
         }
 
@@ -4078,9 +4113,24 @@ bool unsafe_port_filesystem_link(
     const std::filesystem::file_status status) noexcept {
     if (std::filesystem::is_symlink(status)) return true;
 #ifdef _WIN32
-    const auto attributes = GetFileAttributesW(path.c_str());
-    return attributes == INVALID_FILE_ATTRIBUTES ||
-           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+    try {
+        auto inspected = std::filesystem::absolute(path).lexically_normal();
+        inspected.make_preferred();
+        const auto native = inspected.native();
+        if (native.starts_with(LR"(\\.\)")) return true;
+        if (!native.starts_with(LR"(\\?\)")) {
+            inspected = native.starts_with(LR"(\\)")
+                ? std::filesystem::path(
+                      std::wstring(LR"(\\?\UNC\)") + native.substr(2u))
+                : std::filesystem::path(
+                      std::wstring(LR"(\\?\)") + native);
+        }
+        const auto attributes = GetFileAttributesW(inspected.c_str());
+        return attributes == INVALID_FILE_ATTRIBUTES ||
+               (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+    } catch (...) {
+        return true;
+    }
 #else
     static_cast<void>(path);
     return false;
@@ -5346,12 +5396,21 @@ void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
 }
 
 #ifdef _WIN32
-void require_optimized_msvc_relwithdebinfo(const std::filesystem::path& build_root) {
+void require_optimized_msvc_configuration(
+    const std::filesystem::path& build_root,
+    const std::string_view configuration) {
     std::ifstream cache(build_root / "CMakeCache.txt", std::ios::binary);
     if (!cache)
         throw std::runtime_error(
             "CMakeCache fehlt nach erfolgreicher Hostbuild-Konfiguration.");
-    constexpr std::string_view entry = "CMAKE_CXX_FLAGS_RELWITHDEBINFO:";
+    auto configuration_upper = std::string(configuration);
+    std::transform(configuration_upper.begin(),
+                   configuration_upper.end(),
+                   configuration_upper.begin(),
+                   [](const unsigned char value) {
+                       return static_cast<char>(std::toupper(value));
+                   });
+    const auto entry = "CMAKE_CXX_FLAGS_" + configuration_upper + ':';
     std::string flags;
     std::string line;
     while (std::getline(cache, line)) {
@@ -5372,7 +5431,8 @@ void require_optimized_msvc_relwithdebinfo(const std::filesystem::path& build_ro
                          contains("-OFAST");
     if (flags.empty() || disabled || !enabled)
         throw std::runtime_error(
-            "MSVC-RelWithDebInfo-Configure besitzt keine wirksame Optimierung.");
+            "MSVC-" + std::string(configuration) +
+            "-Configure besitzt keine wirksame Optimierung.");
 }
 #endif
 
@@ -6299,6 +6359,9 @@ using PortAnalysisMode = katana::codegen::PortAnalysisMode;
 
 constexpr std::uint64_t latent_aot_entry_disc_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hint_arguments = 1024u;
+constexpr std::uintmax_t maximum_latent_aot_entry_file_bytes = 1024u * 1024u;
+constexpr std::size_t maximum_latent_aot_entry_file_line_bytes = 512u;
+constexpr std::size_t maximum_native_aot_resume_entry_arguments = 4096u;
 
 LatentAotDiscoveryModeArgument parse_latent_aot_discovery_mode(
     const std::string_view text) {
@@ -6316,6 +6379,21 @@ PortAnalysisMode parse_port_analysis_mode(const std::string_view text) {
         return PortAnalysisMode::ConservativeRuntimeOnly;
     throw std::invalid_argument(
         "--analysis-mode erwartet platform oder runtime-only.");
+}
+
+std::uint32_t parse_native_aot_resume_entry(const std::string_view text) {
+    if (text.size() < 3u || text.size() > 10u ||
+        !(text.starts_with("0x") || text.starts_with("0X")))
+        throw std::invalid_argument(
+            "--native-aot-resume-entry erwartet eine 32-Bit-Hexadresse mit 0x-Praefix.");
+    std::uint32_t address = 0u;
+    const auto conversion = std::from_chars(
+        text.data() + 2u, text.data() + text.size(), address, 16);
+    if (conversion.ec != std::errc{} ||
+        conversion.ptr != text.data() + text.size() || (address & 1u) != 0u)
+        throw std::invalid_argument(
+            "--native-aot-resume-entry besitzt keine gerade 32-Bit-Hexadresse.");
+    return address;
 }
 
 std::string_view port_analysis_mode_identity(const PortAnalysisMode mode) {
@@ -6431,6 +6509,92 @@ LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view te
             disc_byte_offset,
             static_cast<std::uint32_t>(byte_size),
             static_cast<std::uint32_t>(module_relative_offset)};
+}
+
+std::vector<LatentAotEntryHintArgument> load_latent_aot_entry_hint_file(
+    const std::filesystem::path& path) {
+    if (path.empty())
+        throw std::invalid_argument(
+            "--latent-aot-entry-file besitzt keinen Dateipfad.");
+
+    std::error_code status_error;
+    const auto status = std::filesystem::symlink_status(path, status_error);
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        unsafe_port_filesystem_link(path, status))
+        throw std::invalid_argument(
+            "--latent-aot-entry-file muss eine regulaere Nicht-Symlink-Datei sein.");
+    const auto canonical = std::filesystem::canonical(path, status_error);
+    if (status_error)
+        throw std::invalid_argument(
+            "--latent-aot-entry-file kann nicht kanonisiert werden.");
+    const auto byte_size = std::filesystem::file_size(canonical, status_error);
+    if (status_error || byte_size == 0u ||
+        byte_size > maximum_latent_aot_entry_file_bytes)
+        throw std::invalid_argument(
+            "--latent-aot-entry-file ist leer oder ueberschreitet 1 MiB.");
+
+    std::ifstream input(canonical, std::ios::binary | std::ios::ate);
+    if (!input || input.tellg() != static_cast<std::streamoff>(byte_size))
+        throw std::runtime_error(
+            "--latent-aot-entry-file kann nicht stabil geoeffnet werden.");
+    std::string contents(static_cast<std::size_t>(byte_size), '\0');
+    input.seekg(0, std::ios::beg);
+    input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+    if (!input)
+        throw std::runtime_error(
+            "--latent-aot-entry-file kann nicht gelesen werden.");
+    input.close();
+
+    const auto final_status =
+        std::filesystem::symlink_status(canonical, status_error);
+    if (status_error || !std::filesystem::is_regular_file(final_status) ||
+        unsafe_port_filesystem_link(canonical, final_status) ||
+        std::filesystem::file_size(canonical, status_error) != byte_size ||
+        status_error)
+        throw std::runtime_error(
+            "--latent-aot-entry-file wurde waehrend des Lesens veraendert.");
+    if (contents.find('\0') != std::string::npos)
+        throw std::invalid_argument(
+            "--latent-aot-entry-file enthaelt ein ungueltiges NUL-Byte.");
+
+    std::vector<LatentAotEntryHintArgument> hints;
+    std::size_t line_number = 0u;
+    std::size_t line_begin = 0u;
+    while (line_begin <= contents.size()) {
+        ++line_number;
+        const auto line_end = contents.find('\n', line_begin);
+        const auto line_length =
+            (line_end == std::string::npos ? contents.size() : line_end) -
+            line_begin;
+        if (line_length > maximum_latent_aot_entry_file_line_bytes)
+            throw std::invalid_argument(
+                "--latent-aot-entry-file Zeile " +
+                std::to_string(line_number) + " ist zu lang.");
+        auto line = std::string_view(contents).substr(line_begin, line_length);
+        const auto ascii_space = [](const char character) noexcept {
+            return character == ' ' || character == '\t' || character == '\r';
+        };
+        while (!line.empty() && ascii_space(line.front())) line.remove_prefix(1u);
+        while (!line.empty() && ascii_space(line.back())) line.remove_suffix(1u);
+        if (!line.empty() && !line.starts_with('#')) {
+            if (hints.size() >= maximum_latent_aot_entry_hint_arguments)
+                throw std::invalid_argument(
+                    "--latent-aot-entry-file ueberschreitet das Hintbudget.");
+            try {
+                hints.push_back(parse_latent_aot_entry_hint(line));
+            } catch (const std::invalid_argument& error) {
+                throw std::invalid_argument(
+                    "--latent-aot-entry-file Zeile " +
+                    std::to_string(line_number) + ": " + error.what());
+            }
+        }
+        if (line_end == std::string::npos) break;
+        line_begin = line_end + 1u;
+    }
+    if (hints.empty())
+        throw std::invalid_argument(
+            "--latent-aot-entry-file enthaelt keine Entry-Hints.");
+    return hints;
 }
 
 bool latent_aot_entry_hint_less(const LatentAotEntryHintArgument& left,
@@ -6578,12 +6742,14 @@ int export_port_project(const std::filesystem::path& source_path,
                             runtime_image_payload_arguments = {},
                         const std::vector<LatentAotEntryHintArgument>&
                             latent_aot_entry_hints = {},
-                        const LatentAotDiscoveryModeArgument
-                            latent_aot_discovery_mode =
-                                LatentAotDiscoveryModeArgument::
-                                     HintsAndHeuristics,
-                        const std::optional<std::filesystem::path>&
-                            telemetry_jsonl_path = std::nullopt,
+                         const LatentAotDiscoveryModeArgument
+                             latent_aot_discovery_mode =
+                                 LatentAotDiscoveryModeArgument::
+                                      HintsAndHeuristics,
+                         const std::vector<std::uint32_t>&
+                             native_aot_resume_entries = {},
+                         const std::optional<std::filesystem::path>&
+                             telemetry_jsonl_path = std::nullopt,
                         const PortAnalysisMode analysis_mode =
                             PortAnalysisMode::PlatformAbi) {
     if (!valid_port_target_name(target_name))
@@ -6606,6 +6772,13 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--analysis-mode runtime-only braucht einen vollstaendigen "
             "NativeDisc-Produktport mit --game-project.");
+    if (!native_aot_resume_entries.empty() &&
+        (analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly ||
+         diagnostic_partial || boot_executable_artifact ||
+         !game_project_path.has_value()))
+        throw std::invalid_argument(
+            "--native-aot-resume-entry braucht einen vollstaendigen "
+            "RuntimeOnly-NativeDisc-Port mit --game-project.");
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_binding = discover_runtime_binding_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
@@ -7263,6 +7436,8 @@ int export_port_project(const std::filesystem::path& source_path,
                 : nullptr;
         export_options.game_project_runtime_image_payloads =
             runtime_image_payloads;
+        export_options.native_aot_resume_entries =
+            native_aot_resume_entries;
         export_options.latent_aot_entry_hints =
             normalized_latent_aot_entry_hints;
         export_options.latent_aot_discovery_mode =
@@ -7385,6 +7560,15 @@ int export_port_project(const std::filesystem::path& source_path,
         if (build_profile != "bringup" && build_profile != "gate")
             throw std::invalid_argument(
                 "KATANA_PORT_BUILD_PROFILE muss bringup oder gate sein.");
+        const auto host_build_configuration =
+            configured_environment_value(
+                "KATANA_PORT_HOST_BUILD_CONFIGURATION")
+                .value_or("RelWithDebInfo");
+        if (host_build_configuration != "RelWithDebInfo" &&
+            host_build_configuration != "Release")
+            throw std::invalid_argument(
+                "KATANA_PORT_HOST_BUILD_CONFIGURATION muss RelWithDebInfo "
+                "oder Release sein.");
         auto compiler_launcher =
             configured_environment_value("KATANA_COMPILER_CACHE");
         if (!compiler_launcher)
@@ -7610,14 +7794,18 @@ int export_port_project(const std::filesystem::path& source_path,
             configure += " -G \"Visual Studio 17 2022\" -A x64";
             if (host_compiler == "clang-cl") configure += " -T ClangCL";
             configure +=
-                " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" + shell_quote(build_path);
+                " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_" +
+                std::string(host_build_configuration == "Release"
+                                ? "RELEASE"
+                                : "RELWITHDEBINFO") +
+                '=' + shell_quote(build_path);
         }
 #else
         configure += " -G Ninja";
 #endif
         configure +=
-            " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_PORT_BUILD_PROFILE=" +
-            build_profile;
+            " -DCMAKE_BUILD_TYPE=" + host_build_configuration +
+            " -DKATANA_PORT_BUILD_PROFILE=" + build_profile;
         configure +=
             " -DKATANA_HOST_COMPILE_JOBS_REQUESTED=" +
             std::to_string(host_compile_budget.requested) +
@@ -7763,7 +7951,8 @@ int export_port_project(const std::filesystem::path& source_path,
         }
 #ifdef _WIN32
         try {
-            require_optimized_msvc_relwithdebinfo(build_path);
+            require_optimized_msvc_configuration(
+                build_path, host_build_configuration);
         } catch (const std::exception& configuration_error) {
             try {
                 remove_failed_port_host_build_state(report.output_root, build_path);
@@ -7901,7 +8090,8 @@ int export_port_project(const std::filesystem::path& source_path,
             if (!wrapper_directory.ends_with('\\'))
                 wrapper_directory += '\\';
             build +=
-                " --config RelWithDebInfo -- /nodeReuse:false "
+                " --config " + host_build_configuration +
+                " -- /nodeReuse:false "
                 "/p:UseMultiToolTask=true "
                 "/p:EnforceProcessCountAcrossBuilds=true "
                 "/p:MultiProcMaxCount=" +
@@ -8184,6 +8374,7 @@ int export_port_project(const std::filesystem::path& source_path,
                   << "Retail-Sektoren im Portpaket: 0\n"
                   << "Hostcompiler: " << host_compiler << '\n'
                   << "Hostlinker: " << host_linker << '\n'
+                  << "Hostkonfiguration: " << host_build_configuration << '\n'
                   << "Buildprofil: " << build_profile << '\n'
                    << "Inkrementeller Hostbuild-Cache: " << build_path.string() << '\n'
                    << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
@@ -8275,13 +8466,15 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
               "[--game-project <Descriptor-Artefakt>] "
-              "[--analysis-mode <platform|runtime-only>] "
-              "[--runtime-image-payload <Image-ID>=<private-Datei>] "
+               "[--analysis-mode <platform|runtime-only>] "
+               "[--native-aot-resume-entry <0xAdresse>]... "
+               "[--runtime-image-payload <Image-ID>=<private-Datei>] "
               "[--telemetry-jsonl <Datei>] "
               "[--latent-aot-mode <heuristic|exact-only>] "
               "[--latent-aot-entry "
               "<sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
-              "<module-relative-offset>>]...\n"
+              "<module-relative-offset>>]... "
+              "[--latent-aot-entry-file <Datei>]...\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <...>] [--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
@@ -8322,7 +8515,19 @@ int main(const int argc, char* argv[]) {
                     "KATANA_HOST_BUILD_EVENT_ROOT");
                 const auto real_tool = configured_environment_value(
                     "KATANA_HOST_BUILD_REAL_ARCHIVER");
-                if (!event_root || argc < 2) return 125;
+                std::optional<std::filesystem::path> derived_event_root;
+                if (!event_root) {
+                    const auto wrapper_directory =
+                        current_process_executable_path().parent_path();
+                    if (wrapper_directory.filename() ==
+                        ".katana-host-build-tools") {
+                        derived_event_root =
+                            wrapper_directory.parent_path() /
+                            ".katana-host-build-events";
+                    }
+                }
+                if ((!event_root && !derived_event_root) || argc < 2)
+                    return 125;
                 const auto tool = real_tool
                                       ? *real_tool
                                       : std::string(argv[1]);
@@ -8334,7 +8539,9 @@ int main(const int argc, char* argv[]) {
                     arguments.push_back(argv[index]);
                 return katana::cli::run_host_build_tool_launcher(
                     katana::cli::HostBuildToolKind::Archive,
-                    *event_root,
+                    event_root
+                        ? std::filesystem::path(*event_root)
+                        : *derived_event_root,
                     tool,
                     arguments);
             }
@@ -8771,6 +8978,7 @@ int main(const int argc, char* argv[]) {
                 runtime_image_payload_arguments;
             std::vector<LatentAotEntryHintArgument>
                 latent_aot_entry_hints;
+            std::vector<std::uint32_t> native_aot_resume_entries;
             auto latent_aot_discovery_mode =
                 LatentAotDiscoveryModeArgument::HintsAndHeuristics;
             bool latent_aot_discovery_mode_seen = false;
@@ -8825,6 +9033,21 @@ int main(const int argc, char* argv[]) {
                            port_command == "port") {
                     latent_aot_entry_hints.push_back(
                         parse_latent_aot_entry_hint(argv[argument + 1u]));
+                } else if (option == "--latent-aot-entry-file" &&
+                           port_command == "port") {
+                    auto file_hints = load_latent_aot_entry_hint_file(
+                        std::filesystem::path(argv[argument + 1u]));
+                    if (file_hints.size() >
+                        maximum_latent_aot_entry_hint_arguments -
+                            std::min(latent_aot_entry_hints.size(),
+                                     maximum_latent_aot_entry_hint_arguments))
+                        throw std::invalid_argument(
+                            "--latent-aot-entry-file ueberschreitet zusammen mit "
+                            "direkten Hints das Hintbudget.");
+                    latent_aot_entry_hints.insert(
+                        latent_aot_entry_hints.end(),
+                        std::make_move_iterator(file_hints.begin()),
+                        std::make_move_iterator(file_hints.end()));
                 } else if (option == "--latent-aot-mode" &&
                            port_command == "port" &&
                            !latent_aot_discovery_mode_seen) {
@@ -8832,6 +9055,14 @@ int main(const int argc, char* argv[]) {
                         parse_latent_aot_discovery_mode(
                             argv[argument + 1u]);
                     latent_aot_discovery_mode_seen = true;
+                } else if (option == "--native-aot-resume-entry" &&
+                           port_command == "port") {
+                    if (native_aot_resume_entries.size() >=
+                        maximum_native_aot_resume_entry_arguments)
+                        throw std::invalid_argument(
+                            "--native-aot-resume-entry ueberschreitet das Argumentbudget.");
+                    native_aot_resume_entries.push_back(
+                        parse_native_aot_resume_entry(argv[argument + 1u]));
                 } else if (option == "--analysis-mode" &&
                            port_command == "port" && !analysis_mode_seen) {
                     analysis_mode = parse_port_analysis_mode(
@@ -8844,6 +9075,13 @@ int main(const int argc, char* argv[]) {
             }
             latent_aot_entry_hints =
                 normalize_latent_aot_entry_hints(std::move(latent_aot_entry_hints));
+            std::sort(native_aot_resume_entries.begin(),
+                      native_aot_resume_entries.end());
+            if (std::adjacent_find(native_aot_resume_entries.begin(),
+                                   native_aot_resume_entries.end()) !=
+                native_aot_resume_entries.end())
+                throw std::invalid_argument(
+                    "--native-aot-resume-entry darf nicht doppelt angegeben werden.");
             if (!latent_aot_discovery_mode_seen &&
                 !latent_aot_entry_hints.empty())
                 latent_aot_discovery_mode =
@@ -8867,6 +9105,7 @@ int main(const int argc, char* argv[]) {
                                        runtime_image_payload_arguments,
                                        latent_aot_entry_hints,
                                        latent_aot_discovery_mode,
+                                       native_aot_resume_entries,
                                        telemetry_jsonl_path,
                                        analysis_mode);
         }

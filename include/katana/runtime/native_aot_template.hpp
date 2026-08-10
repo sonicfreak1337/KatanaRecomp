@@ -29,6 +29,9 @@ enum class NativeAotTemplateDestination : std::uint8_t {
 };
 
 struct NativeAotTemplateBlockIdentity {
+    // Identities are ordered by their exact entry offset. RuntimeBlock
+    // templates may contain nested contextual resume ranges; duplicate entry
+    // offsets remain invalid.
     std::uint32_t source_offset = 0u;
     std::uint32_t size = 0u;
     std::string sha256;

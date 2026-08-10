@@ -7,6 +7,10 @@ aelteren Prozessbeschreibungen.
 
 ## Aktueller RuntimeOnly-Bring-up
 
+Funktionaler RuntimeOnly-Source-Checkpoint:
+`4e1d67566f4159a15483a085199bf641128e373c`.
+Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
+
 Der opt-in CLI-Modus `port --analysis-mode runtime-only` ist fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
 Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht
@@ -31,6 +35,21 @@ wurden im RuntimeOnly-Bring-up nicht implementiert. Aeltere Candidate-
 Resolution-Abschnitte in diesem Handoff sind historische PlatformAbi-
 Diagnostik und keine Aussage, dass der aktuelle Bring-up kein `game.exe`
 erzeugt.
+
+### RuntimeOnly-v16: sichtbarer SEGA-Meilenstein
+
+RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
+Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
+und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
+korrekt fail-closed am generischen Fehler `missing-aot`. Der Memory-Card-
+Screen bleibt das offene nächste Produktgate; Candidate-Resolution und
+PlatformAbi-Optimierungen bleiben deferred.
+
+Die drei generischen Source-Deltas sind die Cross-Shard-Codecopy-
+Abhaengigkeit in `control_flow_analysis.cpp`, der togglebare direkte
+AOT-Bytecopy-Batch in `port_export.cpp` und das begrenzte Post-Root-Drain fuer
+haengenbleibende Host-Build-Helfer in `main.cpp`. Stop-on-miss und typed abort
+bleiben unveraendert.
 
 ## Pflichtlekture vor jeder Aenderung
 

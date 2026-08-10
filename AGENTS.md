@@ -117,16 +117,26 @@ aktuelle ausdrueckliche Nutzeranweisung hat Vorrang.
 
 ## Aktueller Bring-up-Pfad
 
-- Der dokumentierte Candidate-Resolution-Pfad KR-4985 bis KR-4991 und KR-4993
-  bleibt die aktuelle Taskreihenfolge; KR-4992 bleibt der bedingte Folgezweig
-  nach einem verfehlten KR-4981.
-- Fuer jeden dieser Tasks gilt der projektweite Dreischritt:
-  **implementieren -> betroffene Pfade reviewen und Findings schliessen ->
-  direkt auf main pushen**.
-- D1 und D2 bleiben ausdruecklich freizugebende reale Sonic-Diagnoseexporte.
-  Sie sind Produktdiagnose, keine neue Testmatrix.
-- KR-4993 bleibt ein abschliessender betroffener-Pfade-Gesamtreview vor dem
-  naechsten Sonic-Produktgate. Er darf keine neue Testsuite, Matrix oder
-  synthetische Ersatzabnahme erzeugen.
+- Der aktuelle Produkt-Bring-up verwendet opt-in
+  `port --analysis-mode runtime-only` mit einem hashgebundenen GameProject.
+  Der RuntimeOnly-Build-/Export-Gate ist bestanden; das aktuelle Produktgate
+  ist der beaufsichtigte reale Sonic-Lauf bis mindestens zum Memory-Card-
+  Screen. Die ausdrueckliche Nutzerfreigabe fuer diesen Lauf liegt vor.
+- RuntimeOnly bleibt statisches AOT: exakte Guest->Host-Bindung,
+  Stop-on-miss und typed abort bleiben aktiv. Ein Interpreter, JIT,
+  Runtime-Decoder, geratenes Ziel oder Sonic-spezifischer Adresshack im
+  generischen Kern ist auch fuer den Bring-up unzulaessig.
+- Bestaetigte AOT-Coverage-, Binding- und Laufzeit-Performancefehler auf dem
+  Bring-up-Pfad werden als allgemeine Katana-Probleme im vollstaendigen
+  betroffenen Pfad geschlossen. Optimierungen bleiben nach Moeglichkeit
+  abschaltbar, sodass der exakte skalare AOT-Pfad als Fallback erhalten bleibt.
+- Der historische Candidate-Resolution-Pfad KR-4985 bis KR-4991, KR-4993 und
+  sein bedingter KR-4992-Zweig bleiben fuer den PlatformAbi-Default
+  dokumentiert, sind aber deferred und blockieren den RuntimeOnly-Bring-up
+  nicht. D1 und D2 sind historische Produktdiagnose, keine aktuelle
+  Taskreihenfolge.
+- Fuer jeden aktuellen Bring-up-Task gilt weiterhin der projektweite
+  Dreischritt: **implementieren -> betroffene Pfade reviewen und Findings
+  schliessen -> direkt auf main pushen**.
 - KR-4982 und KR-4983 bleiben gestrichen und duerfen nur durch eine neue
   ausdrueckliche Nutzeranweisung reaktiviert werden.

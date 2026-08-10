@@ -453,7 +453,8 @@ struct GuardedCodeInventoryWalkDiagnostics {
     // Silently dropping that edge would make product completeness unsound.
     bool inventory_tail_target_unresolved = false;
 
-    [[nodiscard]] constexpr bool truncated() const noexcept {
+    [[nodiscard]] constexpr bool
+    truncated_except_candidate_stack_resolution_loss() const noexcept {
         return pending_inventory_region_count != 0u ||
                inventory_region_block_limited_regions != 0u ||
                forwarded_store_context_limited_functions != 0u ||
@@ -466,9 +467,13 @@ struct GuardedCodeInventoryWalkDiagnostics {
                abi_stack_argument_projection_truncated_functions != 0u ||
                local_fixpoint_limited_evaluations != 0u ||
                resolution_root_logical_budget_exhausted ||
-               inventory_candidate_values_truncated ||
-               abi_stack_base_unresolved ||
                inventory_tail_target_unresolved;
+    }
+
+    [[nodiscard]] constexpr bool truncated() const noexcept {
+        return truncated_except_candidate_stack_resolution_loss() ||
+               inventory_candidate_values_truncated ||
+               abi_stack_base_unresolved;
     }
 
     bool operator==(const GuardedCodeInventoryWalkDiagnostics&) const = default;

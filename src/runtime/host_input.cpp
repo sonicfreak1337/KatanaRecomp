@@ -1,8 +1,10 @@
 #include "katana/runtime/host_input.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -113,7 +115,24 @@ ControllerState merge_states(ControllerState controller, const ControllerState& 
     controller.pressed_buttons |= keyboard.pressed_buttons;
     controller.left_trigger = std::max(controller.left_trigger, keyboard.left_trigger);
     controller.right_trigger = std::max(controller.right_trigger, keyboard.right_trigger);
+    if (keyboard.joystick_x != ControllerState{}.joystick_x)
+        controller.joystick_x = keyboard.joystick_x;
+    if (keyboard.joystick_y != ControllerState{}.joystick_y)
+        controller.joystick_y = keyboard.joystick_y;
+    if (keyboard.joystick2_x != ControllerState{}.joystick2_x)
+        controller.joystick2_x = keyboard.joystick2_x;
+    if (keyboard.joystick2_y != ControllerState{}.joystick2_y)
+        controller.joystick2_y = keyboard.joystick2_y;
     return controller;
+}
+
+bool keyboard_dpad_as_left_stick_enabled() noexcept {
+    static const bool enabled = [] {
+        const auto* const configured =
+            std::getenv("KATANA_KEYBOARD_DPAD_AS_LEFT_STICK");
+        return configured != nullptr && std::string_view{configured} == "1";
+    }();
+    return enabled;
 }
 
 std::uint8_t kind_priority(const HostControllerKind kind) noexcept {
@@ -410,10 +429,17 @@ ControllerState ControllerInputTimeline::keyboard_state_locked() const noexcept 
     if (held(KeyboardControllerKey::B)) press(result, ControllerButton::B);
     if (held(KeyboardControllerKey::X)) press(result, ControllerButton::X);
     if (held(KeyboardControllerKey::Y)) press(result, ControllerButton::Y);
-    if (held(KeyboardControllerKey::DpadUp)) press(result, ControllerButton::DpadUp);
-    if (held(KeyboardControllerKey::DpadDown)) press(result, ControllerButton::DpadDown);
-    if (held(KeyboardControllerKey::DpadLeft)) press(result, ControllerButton::DpadLeft);
-    if (held(KeyboardControllerKey::DpadRight)) press(result, ControllerButton::DpadRight);
+    if (keyboard_dpad_as_left_stick_enabled()) {
+        if (held(KeyboardControllerKey::DpadUp)) result.joystick_y = 0x00u;
+        if (held(KeyboardControllerKey::DpadDown)) result.joystick_y = 0xFFu;
+        if (held(KeyboardControllerKey::DpadLeft)) result.joystick_x = 0x00u;
+        if (held(KeyboardControllerKey::DpadRight)) result.joystick_x = 0xFFu;
+    } else {
+        if (held(KeyboardControllerKey::DpadUp)) press(result, ControllerButton::DpadUp);
+        if (held(KeyboardControllerKey::DpadDown)) press(result, ControllerButton::DpadDown);
+        if (held(KeyboardControllerKey::DpadLeft)) press(result, ControllerButton::DpadLeft);
+        if (held(KeyboardControllerKey::DpadRight)) press(result, ControllerButton::DpadRight);
+    }
     if (held(KeyboardControllerKey::LeftTrigger)) result.left_trigger = 0xFFu;
     if (held(KeyboardControllerKey::RightTrigger)) result.right_trigger = 0xFFu;
     return result;

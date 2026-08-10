@@ -26,6 +26,10 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
+Funktionaler RuntimeOnly-Source-Checkpoint:
+`4e1d67566f4159a15483a085199bf641128e373c`.
+Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
+
 Der opt-in Modus `port --analysis-mode runtime-only` gilt nur fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project`; der Default bleibt
 `platform`. RuntimeOnly setzt fuer die Bootanalyse `GuestCallAbi::Unknown`,
@@ -43,6 +47,22 @@ Interpreterpfad; statisches Runtime-Linking war aktiv. Analyse-CFG dauerte
 `1,177 s`, IR-Optimierung `2,296 s`; Portpaket und `game.exe` sind publiziert,
 Retailsektoren sind nicht im Paket. Der naechste globale Gate-Schritt ist der
 beaufsichtigte Start bis mindestens zum Memory-Card-Screen.
+
+## RuntimeOnly-v16: erster sichtbarer SEGA-Meilenstein
+
+RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
+Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
+und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
+korrekt fail-closed am generischen Fehler `missing-aot`. Das ist ein sichtbarer
+Bring-up-Meilenstein, aber noch kein Memory-Card-Produktgate: Der
+beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt offen.
+
+Die generische Source-Aenderung umfasst eine Cross-Shard-Codecopy-
+Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren direkten
+AOT-Bytecopy-Batch in `port_export.cpp` und ein begrenztes Post-Root-Drain fuer
+haengenbleibende Host-Build-Helfer in `main.cpp`. Candidate-Resolution und
+PlatformAbi-Optimierungen bleiben deferred; Stop-on-miss und typed abort sind
+unveraendert.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde

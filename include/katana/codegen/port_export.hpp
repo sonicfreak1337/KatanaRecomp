@@ -93,6 +93,10 @@ struct PortExportOptions {
     // are rejected.
     std::span<const GameProjectRuntimeImagePayload>
         game_project_runtime_image_payloads;
+    // Opt-in exact mid-block continuation entries for static AOT. Each entry
+    // is accepted only when it is an instruction fallthrough inside the
+    // hash-bound immutable boot image at which generated code can yield.
+    std::span<const std::uint32_t> native_aot_resume_entries;
     // Export-time-only, hash-bound native entries for exact disc modules.
     // The caller owns the descriptors; they contain no source bytes or paths.
     std::span<const LatentAotEntryHint> latent_aot_entry_hints;

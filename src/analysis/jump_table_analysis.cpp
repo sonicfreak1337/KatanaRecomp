@@ -597,8 +597,12 @@ JumpTableAnalysis analyze_declared_jump_table(
         image.find_segment(table_address, static_cast<std::size_t>(byte_count));
     const auto offset =
         segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
+    const bool writable_snapshot_source =
+        segment != nullptr && segment->permissions.writable &&
+        snapshot_candidate_source(image, *segment);
     if (segment == nullptr || !segment->permissions.readable ||
-        segment->permissions.writable || !offset.has_value() ||
+        (segment->permissions.writable && !writable_snapshot_source) ||
+        !offset.has_value() ||
         *offset > segment->bytes.size() ||
         byte_count > segment->bytes.size() - *offset) {
         analysis.reason =
@@ -643,13 +647,20 @@ JumpTableAnalysis analyze_declared_jump_table(
         }
         entry.target = static_cast<std::uint32_t>(target);
         const auto validation = validate_decode_candidate(image, entry.target);
-        if (!validation.valid()) {
+        if (!validation.valid() ||
+            (writable_snapshot_source &&
+             (validation.segment == nullptr ||
+              !snapshot_candidate_source(image, *validation.segment)))) {
             entry.reason = code_address_status_name(validation.status);
+            if (validation.valid())
+                entry.reason = "target-not-in-initial-snapshot";
             analysis.reason = "table-entry-rejected";
         } else {
             entry.target = validation.resolved_address;
             entry.accepted = true;
-            entry.reason = "identity-bound-declared-target";
+            entry.reason = writable_snapshot_source
+                ? "identity-bound-declared-snapshot-target"
+                : "identity-bound-declared-target";
         }
         analysis.entries.push_back(std::move(entry));
     }
@@ -660,8 +671,16 @@ JumpTableAnalysis analyze_declared_jump_table(
                             [](const auto& entry) {
                                 return entry.accepted;
                             });
-    if (analysis.resolved)
-        analysis.reason = "identity-bound-declared-table";
+    if (analysis.resolved) {
+        if (writable_snapshot_source) {
+            analysis.aot_candidates_only = true;
+            analysis.evidence = ControlFlowEvidence::GuardedPartial;
+            analysis.reason =
+                "identity-bound-declared-snapshot-candidates";
+        } else {
+            analysis.reason = "identity-bound-declared-table";
+        }
+    }
     else if (analysis.reason.empty())
         analysis.reason = "table-entry-rejected";
     return analysis;

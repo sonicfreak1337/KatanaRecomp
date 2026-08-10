@@ -127,6 +127,22 @@ Memory-Card-Screen noch aussteht. Der Default-PlatformAbi-Pfad bleibt
 unveraendert; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses Bring-up.
 
+## RuntimeOnly-v16: erster sichtbarer SEGA-Meilenstein
+
+RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
+Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
+und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
+korrekt fail-closed am generischen Fehler `missing-aot`. Das belegt den ersten
+sichtbaren Bring-up-Meilenstein, aber noch nicht das Memory-Card-Produktgate:
+Der beaufsichtigte Start bis mindestens zum Memory-Card-Screen bleibt offen.
+
+Der zugehoerige generische Source-Fortschritt umfasst die Cross-Shard-
+Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren
+direkten AOT-Bytecopy-Batch in `port_export.cpp` und ein begrenztes Post-Root-
+Drain fuer haengenbleibende Host-Build-Helfer in `main.cpp`. Candidate-
+Resolution und PlatformAbi-Optimierungen bleiben deferred; RuntimeOnly bleibt
+statisches AOT mit Stop-on-miss und typed abort.
+
 ## Historischer Candidate-Evidenzstand
 
 Die folgenden Staende bleiben getrennt:
@@ -136,10 +152,12 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 funktionaler Source-Stand:
-  RuntimeOnly-Bring-up-Meilenstein dieses Commits
+  4e1d67566f4159a15483a085199bf641128e373c
+  (RuntimeOnly-Bring-up-Meilenstein)
   Analyzer-ABI 34
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13
+  Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
 
 frueherer Vergleichslauf:
   D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s

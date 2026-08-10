@@ -15,6 +15,16 @@
 
 namespace katana::codegen {
 
+// Native internal resume entries are separate authenticated dispatch entries,
+// but they are not separate IR blocks. Keep their transport budget aligned
+// with the exporter/runtime template contract instead of reusing the smaller
+// analysis block budget.
+inline constexpr std::size_t maximum_prepared_latent_aot_block_identities =
+    65'536u;
+inline constexpr std::uint64_t
+    maximum_prepared_latent_aot_block_identity_bytes =
+        64ull * 1024ull * 1024ull;
+
 // A local, export-time-only request for a native entry in an exact disc module.
 // The offset is meaningful only for the exact byte identity and logical disc
 // location; it is never inferred from mutable runtime memory.
@@ -34,8 +44,19 @@ enum class LatentAotDiscoveryMode : std::uint8_t {
     ExactOnly,
 };
 
+enum class LatentAotCompletenessPolicy : std::uint8_t {
+    // Publication requires the complete guarded inventory contract.
+    Strict,
+    // Exact, byte-identity-bound entries may retain only candidate-domain or
+    // ABI-stack-base inventory loss. Their emitted CFG remains complete and
+    // RuntimeOnly dispatch still stops on every omitted target.
+    ExactRuntimeOnlyStopOnMiss,
+};
+
 struct LatentAotDiscoveryOptions {
     LatentAotDiscoveryMode mode = LatentAotDiscoveryMode::HintsAndHeuristics;
+    LatentAotCompletenessPolicy completeness_policy =
+        LatentAotCompletenessPolicy::Strict;
     // Optional persistent, local-only negative analysis cache. The caller must place it
     // below its existing private codegen-cache root; neither this path nor a
     // cache key survives into exported product metadata. Persistent caching is
@@ -109,8 +130,10 @@ struct PreparedLatentAotModule {
     // require a native source block for every listed offset before publishing
     // a loaded-module template.
     std::vector<std::uint32_t> entry_offsets;
-    // Sorted, non-overlapping identities for every uniquely emitted native IR
-    // block. Only hashes survive export-time discovery; source bytes do not.
+    // Sorted identities for every uniquely emitted native IR block and exact
+    // internal resume entry. Resume ranges may be nested suffixes of their IR
+    // owner, but entry offsets are unique. Only hashes survive export-time
+    // discovery; source bytes do not.
     std::vector<PreparedLatentAotBlockIdentity> block_identities;
     std::vector<katana::ir::Function> program;
 };

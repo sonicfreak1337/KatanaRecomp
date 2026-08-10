@@ -340,25 +340,64 @@ RuntimeBlockTable::register_static_contextual_bulk(std::vector<RuntimeBlock> blo
     if (static_sealed_) {
         throw std::logic_error("Statische Blockregistry ist bereits versiegelt.");
     }
-    if (active_count_ != 0u) {
-        throw std::logic_error(
-            "Kontextuell ueberlappende Bloecke brauchen eine leere statische Registry.");
+    // Validate only address-neighbouring entries of the same variant. Product
+    // ports contain tens of thousands of static blocks, while contextual
+    // overlaps are sparse resume/entry aliases; a full quadratic scan would
+    // turn a correctness feature into a startup stall.
+    std::vector<const RuntimeBlock*> validation_blocks;
+    validation_blocks.reserve(active_count_ + blocks.size());
+    for (const auto& [id, record] : records_) {
+        static_cast<void>(id);
+        if (!record.active) continue;
+        if (!record.static_block || record.block.runtime_registered)
+            throw std::logic_error(
+                "Kontextuelle statische Registry enthaelt bereits einen Runtimeblock.");
+        validation_blocks.push_back(&record.block);
     }
+    for (const auto& block : blocks) validation_blocks.push_back(&block);
+    std::sort(validation_blocks.begin(),
+              validation_blocks.end(),
+              [](const auto* left, const auto* right) {
+                  return std::tie(left->variant.address_space_generation,
+                                  left->variant.mmu_generation,
+                                  left->variant.watchpoint_generation,
+                                  left->variant.fpscr_mode,
+                                  left->variant.runtime_generation,
+                                  left->virtual_start,
+                                  left->physical_origin,
+                                  left->provenance) <
+                         std::tie(right->variant.address_space_generation,
+                                  right->variant.mmu_generation,
+                                  right->variant.watchpoint_generation,
+                                  right->variant.fpscr_mode,
+                                  right->variant.runtime_generation,
+                                  right->virtual_start,
+                                  right->physical_origin,
+                                  right->provenance);
+    });
     bool has_contextual_overlap = false;
-    for (std::size_t left = 0u; left < blocks.size(); ++left) {
-        for (std::size_t right = left + 1u; right < blocks.size(); ++right) {
-            if (blocks[left].variant != blocks[right].variant ||
-                !ranges_overlap(blocks[left].virtual_start,
-                                blocks[left].size,
-                                blocks[right].virtual_start,
-                                blocks[right].size))
+    for (std::size_t left = 0u; left < validation_blocks.size(); ++left) {
+        for (std::size_t right = left + 1u;
+             right < validation_blocks.size();
+             ++right) {
+            const auto& left_block = *validation_blocks[left];
+            const auto& right_block = *validation_blocks[right];
+            if (left_block.variant != right_block.variant) break;
+            const auto left_end =
+                static_cast<std::uint64_t>(left_block.virtual_start) +
+                left_block.size;
+            if (right_block.virtual_start >= left_end) break;
+            if (!ranges_overlap(left_block.virtual_start,
+                                left_block.size,
+                                right_block.virtual_start,
+                                right_block.size))
                 continue;
             has_contextual_overlap = true;
-            if (blocks[left].virtual_start == blocks[right].virtual_start ||
-                !compatible_physical_overlap(blocks[left], blocks[right])) {
+            if (left_block.virtual_start == right_block.virtual_start ||
+                !compatible_physical_overlap(left_block, right_block)) {
                 throw std::invalid_argument(
                     "Kontextuelle Blockueberlappung ist nicht eindeutig abbildbar: " +
-                    blocks[left].provenance + " <-> " + blocks[right].provenance);
+                    left_block.provenance + " <-> " + right_block.provenance);
             }
         }
     }
@@ -390,7 +429,35 @@ RuntimeBlockHandle RuntimeBlockTable::register_bootstrap_static(RuntimeBlock blo
 
 RuntimeBlockHandle RuntimeBlockTable::register_runtime(RuntimeBlock block) {
     const bool seal_after_registration = !static_sealed_;
-    const auto handle = insert(std::move(block), true);
+    const bool contextual_aot_entry = block.aot_template.has_value();
+    bool has_contextual_overlap = false;
+    if (contextual_aot_entry) {
+        auto candidate =
+            active_virtual_ranges_.lower_bound({block.variant, 0u});
+        for (;
+             candidate != active_virtual_ranges_.end() &&
+             candidate->first.variant == block.variant;
+             ++candidate) {
+            const auto& active = records_.at(candidate->second).block;
+            if (!ranges_overlap(block.virtual_start,
+                                block.size,
+                                active.virtual_start,
+                                active.size))
+                continue;
+            has_contextual_overlap = true;
+            if (block.virtual_start == active.virtual_start ||
+                !compatible_physical_overlap(block, active)) {
+                throw std::invalid_argument(
+                    "Kontextuelle Runtime-AOT-Ueberlappung ist nicht "
+                    "eindeutig abbildbar: " +
+                    active.provenance + " <-> " + block.provenance);
+            }
+        }
+    }
+    contextual_virtual_overlaps_ =
+        contextual_virtual_overlaps_ || has_contextual_overlap;
+    const auto handle =
+        insert(std::move(block), true, contextual_aot_entry);
     if (seal_after_registration) seal_static();
     return handle;
 }

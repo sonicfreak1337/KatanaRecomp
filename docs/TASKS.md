@@ -102,6 +102,22 @@ KR-4981 bleibt als sichtbares globales Produktgate offen. Der PlatformAbi-
 Default bleibt erhalten. Ordinary-/Inventory-Stack-Alias-Capture und Lane-
 Fusion sind deferred PlatformAbi-Optimierungsbefunde und nicht implementiert.
 
+## RuntimeOnly-v16: erster sichtbarer SEGA-Meilenstein
+
+RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
+Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
+und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
+korrekt fail-closed am generischen Fehler `missing-aot`. Das erste sichtbare
+SEGA-Gate ist damit erreicht; KR-4981 bleibt bis zum beaufsichtigten Start
+mindestens zum Memory-Card-Screen offen.
+
+Die generischen Source-Deltas sind eine Cross-Shard-Codecopy-Abhaengigkeit in
+`control_flow_analysis.cpp`, ein togglebarer direkter AOT-Bytecopy-Batch in
+`port_export.cpp` und ein begrenztes Post-Root-Drain fuer haengenbleibende
+Host-Build-Helfer in `main.cpp`. Candidate-Resolution und PlatformAbi-
+Optimierungen bleiben deferred. Stop-on-miss und typed abort bleiben der
+RuntimeOnly-Vertrag; kein Interpreter, JIT oder Runtime-Decoder.
+
 ## Historische Candidate-Evidenz
 
 ```text
@@ -109,9 +125,11 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Funktionaler Source-Stand:
-  RuntimeOnly-Bring-up-Meilenstein dieses Commits
+  4e1d67566f4159a15483a085199bf641128e373c
+  (RuntimeOnly-Bring-up-Meilenstein)
   Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
+  Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -166,7 +184,9 @@ Status: Der allgemeine Guarded-AOT-Entry- und
 Exportvollstaendigkeitsvertrag ist quellseitig vorhanden. Fuer den historischen
 PlatformAbi-Pfad fehlt ein Produktnachweis, weil Candidate-Resolution vor dem
 Portexport endet; der aktuelle RuntimeOnly-Build-/Export-Gate ist separat
-bestanden.
+bestanden und erreichte den ersten sichtbaren SEGA-Screen. Wegen des
+anschliessenden fail-closed `missing-aot` bleibt die vollstaendige AOT-Coverage
+und damit dieser Task offen.
 
 ### Noch offen
 

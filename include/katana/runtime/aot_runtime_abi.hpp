@@ -34,10 +34,17 @@ native_aot_code_tracker_tracks_address(
 // guest-visible failure: generated code leaves cpu.pc at the already prepared
 // callee and unwinds to the central dispatcher, which resumes the same call
 // without a native fallback, runtime decoding, or emulation.
-inline constexpr std::uint32_t native_aot_call_depth_limit = 128u;
+// Generated owners can have materially larger host frames than ordinary C++
+// functions.  A depth of 128 can therefore exhaust the 1 MiB default Windows
+// executable stack before this guard ever gets a chance to hand control back
+// to the iterative dispatcher.  Keep both recursive entry paths shallow; the
+// prepared cpu.pc makes hitting either limit a transparent dispatch boundary.
+inline constexpr std::uint32_t native_aot_call_depth_limit = 32u;
+inline constexpr std::uint32_t native_aot_dispatch_depth_limit = 32u;
 
 namespace detail {
 inline thread_local std::uint32_t native_aot_call_depth = 0u;
+inline thread_local std::uint32_t native_aot_dispatch_depth = 0u;
 }
 
 class NativeAotCallDepthGuard final {
@@ -53,6 +60,33 @@ class NativeAotCallDepthGuard final {
 
     NativeAotCallDepthGuard(const NativeAotCallDepthGuard&) = delete;
     NativeAotCallDepthGuard& operator=(const NativeAotCallDepthGuard&) = delete;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return acquired_; }
+
+  private:
+    bool acquired_ = false;
+};
+
+// Runtime-only/guarded dynamic calls use the validated central dispatcher but
+// may enter it directly from an outer generated block. Keep that host
+// recursion independently bounded: unlike NativeAotCallDepthGuard this guard
+// must not suppress BlockExit construction in the blocks selected by the
+// nested dispatcher.
+class NativeAotDispatchDepthGuard final {
+  public:
+    NativeAotDispatchDepthGuard() noexcept
+        : acquired_(detail::native_aot_dispatch_depth <
+                    native_aot_dispatch_depth_limit) {
+        if (acquired_) ++detail::native_aot_dispatch_depth;
+    }
+
+    ~NativeAotDispatchDepthGuard() noexcept {
+        if (acquired_) --detail::native_aot_dispatch_depth;
+    }
+
+    NativeAotDispatchDepthGuard(const NativeAotDispatchDepthGuard&) = delete;
+    NativeAotDispatchDepthGuard&
+    operator=(const NativeAotDispatchDepthGuard&) = delete;
 
     [[nodiscard]] explicit operator bool() const noexcept { return acquired_; }
 

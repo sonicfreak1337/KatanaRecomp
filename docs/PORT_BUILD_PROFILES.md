@@ -32,6 +32,12 @@ maximal zwei physische Linkpaesse. Ein fehlender optionaler Pass wird nur
 durch vorhandenen erfolgreichen Build-, Artefakt- oder Up-to-date-Nachweis
 geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
 
+RuntimeOnly-v16 erreichte im realen Sonic-PAL-Lauf nach etwa `4,014 s`
+erstmals den echten SEGA-Screen sowie echte Guest- und Presented-Frames bei
+etwa `9,16 MHz`. Das aktuelle Native-AOT-Emissionsprofil ist `25` mit
+AOT-Partitionsschema `5`. Der Lauf stoppte nach etwa `27 s` korrekt fail-closed am generischen Fehler
+`missing-aot`. Das Memory-Card-Gate bleibt offen.
+
 ## Compiler und Linker
 
 Unter Windows:

@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- RuntimeOnly-v16 wurde erfolgreich gebaut und erreichte im realen Sonic-PAL-
+  Lauf nach etwa `4,014 s` erstmals den echten SEGA-Screen sowie echte Guest-
+  und Presented-Frames bei etwa `9,16 MHz`. Der Lauf lief bis etwa `27 s` weiter und stoppte danach
+  korrekt fail-closed am generischen Fehler `missing-aot`. Der sichtbare
+  SEGA-Meilenstein ist erreicht, das Memory-Card-Produktgate bleibt offen.
+  Der generische Source-Fortschritt umfasst Cross-Shard-Codecopy-Abhaengigkeit,
+  togglebaren direkten AOT-Bytecopy-Batch und begrenztes Post-Root-Drain fuer
+  Host-Build-Helfer; Candidate-Resolution bleibt deferred.
+
 - RuntimeOnly-NativeDisc-Bring-up ist als opt-in Pfad abgeschlossen: `port
   --analysis-mode runtime-only` gilt nur mit `--game-project`, der Default
   bleibt `platform`, und `GuestCallAbi::Unknown` umgeht die blockierende

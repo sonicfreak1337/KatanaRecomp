@@ -299,9 +299,24 @@ bool unsafe_application_path_link(
     const std::filesystem::file_status status) noexcept {
     if (std::filesystem::is_symlink(status)) return true;
 #ifdef _WIN32
-    const auto attributes = GetFileAttributesW(path.c_str());
-    return attributes == INVALID_FILE_ATTRIBUTES ||
-           (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+    try {
+        auto inspected = std::filesystem::absolute(path).lexically_normal();
+        inspected.make_preferred();
+        const auto native = inspected.native();
+        if (native.starts_with(LR"(\\.\)")) return true;
+        if (!native.starts_with(LR"(\\?\)")) {
+            inspected = native.starts_with(LR"(\\)")
+                ? std::filesystem::path(
+                      std::wstring(LR"(\\?\UNC\)") + native.substr(2u))
+                : std::filesystem::path(
+                      std::wstring(LR"(\\?\)") + native);
+        }
+        const auto attributes = GetFileAttributesW(inspected.c_str());
+        return attributes == INVALID_FILE_ATTRIBUTES ||
+               (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+    } catch (...) {
+        return true;
+    }
 #else
     static_cast<void>(path);
     return false;

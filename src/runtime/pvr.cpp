@@ -1410,6 +1410,20 @@ std::uint64_t texture_pixel_index(const PvrMaterial& material,
            static_cast<std::uint64_t>(x / minimum + y / minimum) * minimum * minimum;
 }
 
+template <typename RegisterView>
+std::uint32_t effective_texture_stride_width(
+    const RegisterView& registers,
+    const PvrMaterial& material) {
+    if (!material.texture_x32_stride) return 0u;
+    const auto configured =
+        (registers.read(pvr_register::TextureModulo) & 0x1Fu) * 32u;
+    // A zero TEXT_CONTROL modulo selects the ordinary TSP width.  A nonzero
+    // planar stride is an independent row pitch and may legitimately be
+    // smaller than the power-of-two logical width (for example a video frame
+    // whose UV range covers only the populated columns).
+    return configured == 0u ? material.texture_width : configured;
+}
+
 float texture_coordinate(float value, const bool clamp, const bool flip) {
     if (clamp) return std::clamp(value, 0.0f, 1.0f);
     const auto tile = static_cast<std::int64_t>(std::floor(value));
@@ -1741,14 +1755,25 @@ bool depth_passes(const std::uint8_t comparison, const float source, const float
 float blend_factor(const std::uint8_t mode,
                    const Rgba8 source,
                    const Rgba8 destination,
-                   const unsigned channel) noexcept {
+                   const unsigned channel,
+                   const bool source_factor) noexcept {
+    const auto source_channel =
+        channel == 0u   ? source.r
+        : channel == 1u ? source.g
+        : channel == 2u ? source.b
+                        : source.a;
     const auto destination_channel =
-        channel == 0u ? destination.r : channel == 1u ? destination.g : destination.b;
+        channel == 0u   ? destination.r
+        : channel == 1u ? destination.g
+        : channel == 2u ? destination.b
+                        : destination.a;
+    const auto other_channel =
+        source_factor ? destination_channel : source_channel;
     switch (mode) {
     case 0u: return 0.0f;
     case 1u: return 1.0f;
-    case 2u: return destination_channel / 255.0f;
-    case 3u: return 1.0f - destination_channel / 255.0f;
+    case 2u: return other_channel / 255.0f;
+    case 3u: return 1.0f - other_channel / 255.0f;
     case 4u: return source.a / 255.0f;
     case 5u: return 1.0f - source.a / 255.0f;
     case 6u: return destination.a / 255.0f;
@@ -1764,12 +1789,17 @@ Rgba8 blend_color(const Rgba8 source,
                              const std::uint8_t destination_channel,
                              const unsigned channel) {
         const auto value = source_channel * blend_factor(
-                                                material.source_blend, source, destination, channel) +
+                                                material.source_blend,
+                                                source,
+                                                destination,
+                                                channel,
+                                                true) +
                            destination_channel * blend_factor(
                                                      material.destination_blend,
                                                      source,
                                                      destination,
-                                                     channel);
+                                                     channel,
+                                                     false);
         return static_cast<std::uint8_t>(std::lround(std::clamp(value, 0.0f, 255.0f)));
     };
     return {combine(source.r, destination.r, 0u),
@@ -3471,13 +3501,8 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     background_material.offset_color_enabled = offset_color;
     background_material.shadow_enabled = shadow;
     decode_ta_texture_words(background_material, background_tsp, background_tcw);
-    if (background_material.texture_x32_stride) {
-        background_material.texture_stride_width =
-            (registers.read(pvr_register::TextureModulo) & 0x1Fu) * 32u;
-        if (background_material.texture_stride_width < background_material.texture_width)
-            throw std::runtime_error(
-                "PVR-Hintergrundtexturstride ist kleiner als die logische Texturbreite.");
-    }
+    background_material.texture_stride_width =
+        effective_texture_stride_width(registers, background_material);
     const auto read_vertex = [&](const std::uint64_t address) {
         PvrVertex vertex;
         vertex.x = std::bit_cast<float>(read_background_word(address));
@@ -3603,8 +3628,6 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                         material.texture_stride_width == 0u
                             ? material.texture_width
                             : material.texture_stride_width;
-                    if (stride < material.texture_width)
-                        return std::nullopt;
                     return static_cast<std::uint64_t>(
                                material.texture_height - 1u) *
                                stride +
@@ -3738,16 +3761,8 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                     return false;
                 if (material.blend_source_accumulation)
                     material.textured = false;
-                if (material.texture_x32_stride) {
-                    material.texture_stride_width =
-                        (registers.read(
-                             pvr_register::TextureModulo) &
-                         0x1Fu) *
-                        32u;
-                    if (material.texture_stride_width <
-                        material.texture_width)
-                        return false;
-                }
+                material.texture_stride_width =
+                    effective_texture_stride_width(registers, material);
                 for (const auto& vertex : vertices)
                     if (!safe_vertex(vertex)) return false;
                 if (material.textured) {
@@ -3993,6 +4008,39 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                           maximum_clip_y + 1u});
         raster_plan.counters.assign(1u, {});
     }
+    const auto read_region_word = [&](const std::uint64_t address) {
+        const auto logical_offset =
+            static_cast<std::uint32_t>(
+                address & (dreamcast_vram_size - 1u)) &
+            0x007FFFFCu;
+        return vram.read_u32(
+            dreamcast_vram_32bit_to_linear_offset(logical_offset));
+    };
+    const bool translucent_autosort_enabled = [&] {
+        const auto parameter_config =
+            registers.read(pvr_register::ParameterConfig);
+        const bool type_one_region_header =
+            (parameter_config & 0x00200000u) == 0u;
+        if (type_one_region_header)
+            return (registers.read(pvr_register::IspFeedConfig) & 1u) == 0u;
+
+        constexpr std::uint64_t type_two_region_size = 6u * 4u;
+        auto region_address = static_cast<std::uint64_t>(
+            registers.read(pvr_register::RegionBase));
+        bool first_region_empty = true;
+        for (std::uint64_t pointer = 1u; pointer < 6u; ++pointer) {
+            if ((read_region_word(region_address + pointer * 4u) &
+                 0x80000000u) == 0u) {
+                first_region_empty = false;
+                break;
+            }
+        }
+        if (first_region_empty)
+            region_address += type_two_region_size;
+        const auto region_header = read_region_word(region_address);
+        const bool presorted = (region_header & 0x20000000u) != 0u;
+        return !presorted;
+    }();
     std::vector<PvrPrimitive> prepared_opaque_volume_primitives;
     std::vector<PvrPrimitive> prepared_translucent_volume_primitives;
     if (raster_plan.parallel_safe) {
@@ -4032,6 +4080,50 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
             prepared_opaque_volume_primitives.clear();
             prepared_translucent_volume_primitives.clear();
         }
+    }
+    struct PreparedTranslucentTriangle {
+        PvrPrimitive primitive;
+        float minimum_depth = 0.0f;
+    };
+    std::vector<PreparedTranslucentTriangle>
+        prepared_translucent_triangles;
+    if (translucent_autosort_enabled) {
+        std::size_t triangle_count = 0u;
+        for (const auto& primitive : frame.primitives) {
+            if (primitive.list == PvrListType::Translucent &&
+                primitive.vertices.size() > 2u)
+                triangle_count += primitive.vertices.size() - 2u;
+        }
+        prepared_translucent_triangles.reserve(triangle_count);
+        for (const auto& primitive : frame.primitives) {
+            if (primitive.list != PvrListType::Translucent)
+                continue;
+            for (std::size_t index = 2u;
+                 index < primitive.vertices.size();
+                 ++index) {
+                auto* first = &primitive.vertices[index - 2u];
+                auto* second = &primitive.vertices[index - 1u];
+                const auto* third = &primitive.vertices[index];
+                if ((index & 1u) != 0u)
+                    std::swap(first, second);
+                auto selected = primitive;
+                selected.vertices = {*first, *second, *third};
+                // The PVR's autosort path compares translucent fragments
+                // against the opaque/punch-through depth buffer with GEQ and
+                // never updates that buffer while drawing the sorted list.
+                selected.material.depth_compare = 6u;
+                selected.material.depth_write = false;
+                prepared_translucent_triangles.push_back({
+                    std::move(selected),
+                    std::min({first->z, second->z, third->z})});
+            }
+        }
+        std::stable_sort(
+            prepared_translucent_triangles.begin(),
+            prepared_translucent_triangles.end(),
+            [](const auto& left, const auto& right) {
+                return left.minimum_depth < right.minimum_depth;
+            });
     }
 
     const auto render_region = [&](const PvrRasterTile& tile,
@@ -4144,13 +4236,8 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
         auto texture_material = primitive.material;
         if (texture_material.blend_source_accumulation)
             texture_material.textured = false;
-        if (texture_material.texture_x32_stride) {
-            texture_material.texture_stride_width =
-                (registers.read(pvr_register::TextureModulo) & 0x1Fu) * 32u;
-            if (texture_material.texture_stride_width < texture_material.texture_width)
-                throw std::runtime_error(
-                    "PVR-Texturstride ist kleiner als die logische Texturbreite.");
-        }
+        texture_material.texture_stride_width =
+            effective_texture_stride_width(registers, texture_material);
         for (std::size_t index = 2u; index < primitive.vertices.size(); ++index) {
             auto* a = &primitive.vertices[index - 2u];
             auto* b = &primitive.vertices[index - 1u];
@@ -4348,7 +4435,8 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                         primitive.material.blend_destination_accumulation
                             ? secondary_accumulation[pixel_index]
                             : read_render_pixel(vram, offset, pack_mode);
-                    if (primitive.list == PvrListType::Translucent)
+                    if (primitive.list == PvrListType::Translucent ||
+                        primitive.list == PvrListType::PunchThrough)
                         source = blend_color(source, destination, primitive.material);
                     if (primitive.material.blend_destination_accumulation) {
                         secondary_accumulation[pixel_index] = source;
@@ -4548,9 +4636,16 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     };
 
     for (const auto& primitive : frame.primitives) {
-        if (primitive.list == PvrListType::Opaque ||
-            primitive.list == PvrListType::PunchThrough)
+        if (primitive.list == PvrListType::Opaque)
             render_primitive(primitive, nullptr);
+    }
+    for (const auto& primitive : frame.primitives) {
+        if (primitive.list != PvrListType::PunchThrough)
+            continue;
+        auto selected = primitive;
+        selected.material.depth_compare = 6u;
+        selected.material.depth_write = true;
+        render_primitive(selected, nullptr);
     }
     counters.opaque_modifier_affected =
         apply_modifier_volumes(PvrListType::OpaqueModifier);
@@ -4566,9 +4661,14 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                   volume_material_eligible.begin() + end,
                   std::uint8_t{0u});
     }
-    for (const auto& primitive : frame.primitives) {
-        if (primitive.list == PvrListType::Translucent)
-            render_primitive(primitive, nullptr);
+    if (translucent_autosort_enabled) {
+        for (const auto& triangle : prepared_translucent_triangles)
+            render_primitive(triangle.primitive, nullptr);
+    } else {
+        for (const auto& primitive : frame.primitives) {
+            if (primitive.list == PvrListType::Translucent)
+                render_primitive(primitive, nullptr);
+        }
     }
     counters.translucent_modifier_affected =
         apply_modifier_volumes(PvrListType::TranslucentModifier);

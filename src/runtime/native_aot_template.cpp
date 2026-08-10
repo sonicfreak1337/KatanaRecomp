@@ -54,17 +54,24 @@ bool valid_sha256(const std::string_view value) noexcept {
 
 bool block_identities_valid(
     const std::span<const NativeAotTemplateBlockIdentity> identities,
-    const std::uint32_t extent) noexcept {
+    const std::uint32_t extent,
+    const bool allow_contextual_overlap) noexcept {
     if (identities.empty() || identities.size() > maximum_block_identities)
         return false;
     std::uint64_t prior_end = 0u;
+    std::optional<std::uint32_t> prior_start;
     for (const auto& identity : identities) {
         const auto end =
             static_cast<std::uint64_t>(identity.source_offset) + identity.size;
         if ((identity.source_offset & 1u) != 0u || identity.size < 2u ||
             (identity.size & 1u) != 0u || end > extent ||
-            identity.source_offset < prior_end || !valid_sha256(identity.sha256))
+            (prior_start.has_value() && identity.source_offset <= *prior_start) ||
+            (!allow_contextual_overlap && identity.source_offset < prior_end) ||
+            (allow_contextual_overlap && identity.source_offset < prior_end &&
+             end != prior_end) ||
+            !valid_sha256(identity.sha256))
             return false;
+        prior_start = identity.source_offset;
         prior_end = end;
     }
     return true;
@@ -232,15 +239,22 @@ NativeAotTemplateBinder::NativeAotTemplateBinder(
                 definition.block_identities.empty());
             break;
         case NativeAotTemplateDestination::LoadedModule:
+            // Loaded modules use the same exact contextual suffix identities
+            // as fixed runtime images so an interrupt may resume inside the
+            // materialized owner block without admitting arbitrary entries.
             fixed_block_identities_valid_.push_back(
                 definition.block_identities.empty() ||
                 block_identities_valid(
-                    definition.block_identities, definition.extent));
+                    definition.block_identities, definition.extent, true));
             break;
         case NativeAotTemplateDestination::FixedAddress:
+            // Fixed runtime images may expose exact internal resume entries.
+            // Their ranges can be nested inside the parent AOT block, but the
+            // strictly unique source offsets keep every materialization probe
+            // and source-table lookup unambiguous.
             fixed_block_identities_valid_.push_back(
                 block_identities_valid(
-                    definition.block_identities, definition.extent));
+                    definition.block_identities, definition.extent, true));
             break;
         }
     }
@@ -683,6 +697,46 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     }
     if (!match.has_value() && has_loaded_module_definition &&
         resolved_loaded_module != nullptr) {
+        if (native_aot_bind_diagnostics_enabled()) {
+            const auto offset = module_offset(
+                *resolved_loaded_module, physical_origin, 2u);
+            constexpr std::string_view hex_digits = "0123456789abcdef";
+            std::string byte_prefix;
+            const auto prefix_size = std::min<std::size_t>(
+                resolved_loaded_module->bytes.size(), 32u);
+            byte_prefix.reserve(prefix_size * 2u);
+            for (std::size_t index = 0u; index < prefix_size; ++index) {
+                const auto byte = resolved_loaded_module->bytes[index];
+                byte_prefix.push_back(hex_digits[byte >> 4u]);
+                byte_prefix.push_back(hex_digits[byte & 0x0Fu]);
+            }
+            std::cerr << "KATANA_NATIVE_AOT_BIND_RESOLVED_OWNER"
+                      << " target=" << target
+                      << " physical_origin=" << physical_origin
+                      << " id=" << resolved_loaded_module->id
+                      << " template_id="
+                      << (resolved_loaded_module->native_aot_template_id.empty()
+                              ? std::string{"none"}
+                              : resolved_loaded_module->native_aot_template_id)
+                      << " content_identity="
+                      << resolved_loaded_module->content_identity
+                      << " byte_identity="
+                      << resolved_loaded_module->byte_identity
+                      << " source_identity="
+                      << resolved_loaded_module->source_identity
+                      << " byte_prefix=" << byte_prefix
+                      << " start=" << resolved_loaded_module->guest_start
+                      << " size=" << resolved_loaded_module->bytes.size()
+                      << " active="
+                      << static_cast<unsigned>(resolved_loaded_module->active)
+                      << " active_extents="
+                      << resolved_loaded_module->active_extents.size()
+                      << " offset="
+                      << (offset.has_value()
+                              ? std::to_string(*offset)
+                              : std::string{"none"})
+                      << '\n';
+        }
         if (!loaded_template_identity_matched)
             return reject_missing_aot(
                 "loaded-module-template-id-mismatch", target);
