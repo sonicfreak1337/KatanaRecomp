@@ -88,30 +88,31 @@ Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv; kein
 Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad. Der Whole-Export-
 Cache ist modegebunden.
 
-Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
+`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
 
 Der aktuelle RuntimeOnly-Build-/Export-Unterauftrag ist damit abgeschlossen;
 der Performance-P0 ist fuer diesen Bring-up ausreichend verbessert. KR-4981
-bleibt als sichtbares globales Produktgate offen; der aktuelle Runtime-Blocker
-liegt nach Presented by Sega in der Gast-Presentation/Framebuffer-Promotion
-oder PVR-/Scanout-Semantik. Weitere Performancearbeit erfolgt nur bei einem
-echten Blocker. Der PlatformAbi-Default bleibt erhalten.
+bleibt als sichtbares globales Produktgate offen. Der vollstaendige Video-/
+ISP-/TSP-RenderDone-Pfad ist negativ als alleinige Ursache abgenommen; der
+aktuelle Runtime-Blocker liegt nach Presented by Sega in der nachgelagerten
+Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Weitere Performancearbeit erfolgt nur
+bei einem echten Blocker. Der PlatformAbi-Default bleibt erhalten.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der bereinigte Source-Checkpoint hebt Runtime-ABI `87` auf `88` und
-PlatformServices-ABI `13` auf `14`; Backend-Interface-ABI `13` bleibt aktuell.
-Sonic-spezifische `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces sind entfernt;
-allgemeine Runtime-/Codegen-Fixes bleiben erhalten.
+Der vorherige bereinigte Source-Checkpoint hob Runtime-ABI `87` auf `88` und
+PlatformServices-ABI `13` auf `14`. Der funktionale Checkpoint `efc531b` hebt
+Runtime-ABI wegen der PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
+Backend-Interface-ABI `13` bleibt aktuell.
 
-Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
-`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
-Diagnose-Overhead ist keine Speed-Abnahme. Decode, Readiness und Render-Engine
-laufen, aber der Scanout bleibt nach Presented by Sega schwarz. StartRender
-wurde beobachtet; die fruehere gegenteilige Diagnose ist verworfen. KR-4981
-bleibt offen.
+Der Lauf verarbeitete `2.205.542.705` Gastzyklen; post-entry wurden
+`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen. `396`
+Renderabschluesse lieferten Video, ISP und TSP am selben Gastzyklus; `396`
+Lifetime-Frames blieben ueber `807` post-entry TA-Resets monoton sichtbar.
+Der Scanout bleibt nach Presented by Sega schwarz. Damit ist die fehlende
+RenderDone-Fanout als alleinige Ursache widerlegt; KR-4981 bleibt offen.
 
 ## Historische Candidate-Evidenz
 
@@ -121,7 +122,7 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   bereinigter Runtime-/Codegen-Checkpoint dieses Meilensteins
-  Runtime-ABI 88, PlatformServices-ABI 14, Backend-Interface-ABI 13
+  Runtime-ABI 89, PlatformServices-ABI 14, Backend-Interface-ABI 13
   Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
@@ -152,7 +153,7 @@ Messwert abgeleitet werden.
 KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994: source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> sichtbarer Start bis mindestens Memory-Card-Screen offen;
-     aktuell blockiert durch Gast-Presentation/Framebuffer-/PVR-Scanout
+     aktuell blockiert durch nachgelagerte Gast-IRQ-/ACK-/FB_R-Scanout-Folge
 ```
 
 Jeder Task in dieser Kette folgt einzeln:
@@ -699,10 +700,10 @@ Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
 - KR-4981 bleibt das globale Produktgate; RuntimeOnly-Build-/Export-Gate ist
   bestanden, der Performance-P0 ist fuer den Bring-up ausreichend verbessert,
-  und der aktuelle Runtime-Blocker liegt in Gast-Presentation/Framebuffer-
-  Promotion oder PVR-/Scanout-Semantik. Memory-Card-Screen und Hauptmenue
-  bleiben offen; weitere Performancearbeit ist nur bei einem echten Blocker
-  zulaessig.
+  und der aktuelle Runtime-Blocker liegt nach negativer RenderDone-Fanout-
+  Abnahme in der nachgelagerten Gast-IRQ-/ACK-/FB_R-Scanout-Folge. Memory-Card-
+  Screen und Hauptmenue bleiben offen; weitere Performancearbeit ist nur bei
+  einem echten Blocker zulaessig.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von
@@ -719,10 +720,16 @@ vollstaendigen Produktport abgenommen.
 Prioritaet: P0 Produkt- und Performancegate
 
 Abhaengigkeit: RuntimeOnly-Build-/Export-Gate bestanden; der aktuelle
-Runtime-Blocker liegt nach Presented by Sega in der Gast-Presentation/
-Framebuffer-Promotion oder PVR-/Scanout-Semantik. Memory-Card-Screen und
-Hauptmenue bleiben offen. Weitere Performancearbeit ist nur bei einem echten
-Blocker zulaessig.
+Runtime-Blocker liegt nach Presented by Sega in der nachgelagerten Gast-IRQ-/
+ACK-/FB_R-Scanout-Folge. Memory-Card-Screen und Hauptmenue bleiben offen.
+Weitere Performancearbeit ist nur bei einem echten Blocker zulaessig.
+
+### Abgeschlossene Vorstufe
+
+- [x] `efc531b`: erfolgreiche PVR-Renderabschluesse publizieren Video, ISP und
+  TSP am selben Gastzyklus; TA-Lifetime-/Resetzaehler bleiben ueber Softresets
+  monoton. Der 45-Sekunden-Sonic-Lauf blieb nach Presented by Sega schwarz und
+  widerlegt diese Fanout-Luecke als alleinige Produktursache.
 
 ### Umfang
 
@@ -778,7 +785,7 @@ sonst ungenutzter Kerne fuer verwerfbare spaetere Rootarbeit einsetzen.
 | KR-4962 | NativeDisc-/DirectBoot-Paritaet am Game Entry offen |
 | KR-4963 | inkrementeller Runtime-/Spielbuild und Compilervergleich offen |
 | KR-4964 | v0.49-Produktabnahme bis sichtbarem Spielbild und Echtzeit offen |
-| KR-4966 bis KR-4970 | relatives Gate, atomarer Handoff sowie AICA/PVR/Maple-Vertraege quellseitig vorhanden, aktueller Produktnachweis offen |
+| KR-4966 bis KR-4970 | relatives Gate, atomarer Handoff sowie AICA/PVR/Maple-Vertraege quellseitig vorhanden; PVR-RenderDone-Fanout und resetfeste TA-Metrik abgeschlossen, sichtbarer Produktnachweis offen |
 
 Auch diese Aufgaben folgen dem repositoryweiten Dreischritt und erzeugen
 keine neuen Tests oder Testmatrizen.

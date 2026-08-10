@@ -7,8 +7,7 @@ aelteren Prozessbeschreibungen.
 
 ## Aktueller RuntimeOnly-Bring-up
 
-Funktionaler RuntimeOnly-Source-Stand: der bereinigte Runtime-/Codegen-
-Checkpoint dieses Meilensteins. Aktuell gelten Runtime-ABI `88`,
+Funktionaler RuntimeOnly-Source-Stand: `efc531b`. Aktuell gelten Runtime-ABI `89`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
 `13` und Portprojektvertrag `75`.
@@ -39,25 +38,31 @@ erzeugt.
 
 ### Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der letzte saubere Sonic-PAL-Lauf dauerte `45,608 s` ohne Fatalfehler oder
-Crash. Nach Presented by Sega blieb der Kontaktbogen ab etwa `24 s` schwarz;
+Der aktuelle Sonic-PAL-Lauf dauerte `45,539 s` ohne Fatalfehler oder Crash.
+Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s` schwarz;
 Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Post-entry wurden
-`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen; der
-Diagnose-Overhead ist keine Speed-Abnahme. Decode, Readiness und Render-Engine
-laufen. Der aktuelle P0 liegt in Gast-Presentation/Framebuffer-Promotion oder
-PVR-/Scanout-Semantik. StartRender wurde beobachtet; die fruehere gegenteilige
-Diagnose ist verworfen. KR-4981 bleibt offen.
+`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen. `396`
+erfolgreiche Renderabschluesse publizierten Video, ISP und TSP am selben
+Gastzyklus. Die resetfeste TA-Metrik meldete `396` Lifetime-Frames ueber `807`
+post-entry Resets. Der unveraenderte Sichtpfad widerlegt die fehlende
+RenderDone-Fanout als alleinige Ursache. Der aktuelle P0 liegt in der
+nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge; KR-4981 bleibt offen.
+
+Der naechste Lauf benoetigt vorab eine kleine generische Korrelation der drei
+Completionbits mit Maskierung/ACK und dem anschliessend vom Gast gewaehlten
+FB_R-Scanout. Kein automatischer FB_W->FB_R-Flip, kein Movie-Skip und keine
+private Bildbruecke ist als Produktfix zulaessig.
 
 Historische v16-Evidenz (nicht aktueller Produktstand):
 Der alte Lauf endete fail-closed am generischen Fehler `missing-aot`.
 Das historische Memory-Card-Gate blieb offen; Candidate-Resolution und
 PlatformAbi-Optimierungen bleiben deferred.
 
-Die drei generischen Source-Deltas sind die Cross-Shard-Codecopy-
-Abhaengigkeit in `control_flow_analysis.cpp`, der togglebare direkte
-AOT-Bytecopy-Batch in `port_export.cpp` und das begrenzte Post-Root-Drain fuer
-haengenbleibende Host-Build-Helfer in `main.cpp`. Stop-on-miss und typed abort
-bleiben unveraendert.
+Die aktuellen generischen Source-Deltas umfassen zusaetzlich die vollstaendige
+Holly-RenderDone-Fanout und resetfeste TA-Lifetime-/Resetmetriken. Die Cross-
+Shard-Codecopy-Abhaengigkeit, der togglebare direkte AOT-Bytecopy-Batch und das
+begrenzte Post-Root-Drain bleiben erhalten. Stop-on-miss und typed abort bleiben
+unveraendert.
 
 ## Pflichtlekture vor jeder Aenderung
 

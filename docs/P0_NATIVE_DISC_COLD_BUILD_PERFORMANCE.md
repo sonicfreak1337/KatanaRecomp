@@ -1,7 +1,7 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Der aktuelle Bring-up-
-Meilenstein verwendet Runtime-ABI 88, PlatformServices-ABI 14, Analyzer-ABI 34,
+Meilenstein verwendet Runtime-ABI 89, PlatformServices-ABI 14, Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27
 und lokales In-Process-Evaluation-Cache-Schema 13. Das aktuelle
 Native-AOT-Emissionsprofil ist 25; das AOT-Partitionsschema ist 5. Der opt-in
@@ -13,9 +13,9 @@ nutzt RuntimeOnly-Dispatch ueber eine exakte statische Guest->Host-Tabelle.
 Der Whole-Export-Cache ist modegebunden; kein Interpreter, JIT, Runtime-
 Decoder oder geratener Zielpfad wird verwendet.
 
-Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
+`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
 Der bereinigte Runtime-/Codegen-Checkpoint entfernt Sonic-spezifische
 `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces; allgemeine Fixes bleiben.
 
@@ -26,17 +26,16 @@ Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind deferred.
 Der historische Candidate-Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
 
-Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
-`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
-Diagnose-Overhead ist keine Speed-Abnahme.
+Der Lauf verarbeitete `2.205.542.705` Gastzyklen; post-entry wurden
+`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen.
 
 Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
 Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Readiness und
-Render-Engine laufen. Der aktuelle P0 liegt in Gast-Presentation/Framebuffer-
-Promotion oder PVR-/Scanout-Semantik; StartRender wurde beobachtet und die
-fruehere gegenteilige Diagnose verworfen. Der Performance-P0 ist fuer diesen
-Bring-up ausreichend verbessert; weitere Arbeit erfolgt nur bei einem echten
-Blocker.
+Render-Engine laufen. Die vollstaendige Video-/ISP-/TSP-Completion-Fanout
+aenderte den schwarzen Sichtpfad nicht; der aktuelle P0 liegt in der
+nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Der Performance-P0 ist
+fuer diesen Bring-up ausreichend verbessert; weitere Arbeit erfolgt nur bei
+einem echten Blocker.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv

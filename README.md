@@ -2,7 +2,7 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 88, Block-ABI 5,
+Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 89, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
@@ -11,7 +11,7 @@ Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
 Der aktuelle funktionale RuntimeOnly-Source-Stand umfasst die bereinigten
 Runtime-/Codegen-Aenderungen dieses Checkpoints. Die oeffentlichen Runtime-
-und PlatformServices-Layouts sind deshalb auf ABI 88 beziehungsweise 14
+und PlatformServices-Layouts sind deshalb auf ABI 89 beziehungsweise 14
 versioniert; Backend-Interface-ABI 13 bleibt aktuell.
 Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
 `PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
@@ -28,29 +28,29 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
-Nach dem Presented-by-Sega-Bild blieb der Kontaktbogen ab etwa `24 s`
+`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
+Nach dem Presented-by-Sega-Bild blieb der Kontaktbogen ab etwa `30 s`
 schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Das
 RuntimeOnly-Build-/Export-Gate bleibt bestanden, aber KR-4981 ist kein
 Bring-up-Gate-Pass.
 
-Der Lauf verarbeitete `1.839.534.869` Gastzyklen; die Diagnosemessung ergab
-post-entry `35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s`. Dieser
-Trace-/Diagnose-Overhead ist keine Speed-Abnahme. Erfasst wurden `305`
-PVR-Render-Requests und -Completions, `305` Rendererframes, `8.960` YUV-
-Makrobloecke, `319` Hostframes sowie `427` Audiopuffer mit `313.845`
-Audiobildern.
+Der Lauf verarbeitete `2.205.542.705` Gastzyklen; die Diagnosemessung ergab
+post-entry `45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s`. Erfasst
+wurden `396` PVR-Render-Requests und -Completions, `396` Rendererframes,
+`5.040` YUV-Makrobloecke, `410` Hostframes sowie `537` Audiopuffer mit
+`394.695` Audiobildern. Die resetfeste TA-Telemetrie meldete trotz final
+leerem aktuellen Parserzustand `396` Lifetime-Frames und `807` post-entry
+Resets.
 
-Der belastbare aktuelle P0 liegt in der Gast-Presentation beziehungsweise
-Framebuffer-Promotion oder allgemeinen PVR-/Scanout-Semantik: Decode,
-Readiness und Render-Engine laufen, aber der sichtbare Scanout bleibt nach
-Presented by Sega schwarz. Eine fruehere private Diagnosebruecke machte das
-Bild sichtbar, ist aber kein Fix und nicht Teil des Produktpfads. StartRender
-wurde mehrfach beobachtet; die fruehere Aussage, StartRender oder Frame-
-Finalize fehlten, ist verworfen. Weitere Performancearbeit erfolgt nur bei
-einem echten Blocker.
+Der funktionale Checkpoint `efc531b` publiziert nach jedem erfolgreichen
+Renderabschluss die drei realen Holly-Stufenbits Video, ISP und TSP am selben
+Gastzyklus. Der unveraenderte schwarze Sichtpfad widerlegt die fehlende
+RenderDone-Fanout als alleinige Sonic-Ursache. Der aktuelle P0 liegt enger in
+der folgenden Gast-IRQ-/ACK- und FB_R-Scanout-Folge; ein automatischer
+Framebuffer-Flip oder eine private Diagnosebruecke bleibt ausgeschlossen.
+Weitere Performancearbeit erfolgt nur bei einem echten Blocker.
 Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
@@ -58,16 +58,14 @@ Bring-up-Meilensteins.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der letzte saubere beaufsichtigte Sonic-PAL-Lauf endete ohne Fatal- oder
-Watchdogfehler. Nach Presented by Sega blieb der Kontaktbogen ab etwa `24 s`
+Der aktuelle beaufsichtigte Sonic-PAL-Lauf endete ohne Fatal- oder
+Watchdogfehler. Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s`
 schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Post-entry
-wurden `35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen; der
-Trace-/Diagnose-Overhead ist keine Speed-Abnahme. Decode, Readiness und
-Render-Engine laufen. Der aktuelle P0 liegt in Gast-Presentation/Framebuffer-
-Promotion oder PVR-/Scanout-Semantik. StartRender wurde beobachtet; die
-fruehere gegenteilige Diagnose ist verworfen. Die oeffentlichen
-Layoutaenderungen sind durch Runtime-ABI 88 und PlatformServices-ABI 14
-versioniert.
+wurden `45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen.
+Render-Engine und die vollstaendige Video-/ISP-/TSP-Completion-Fanout laufen;
+deren negativer Kausalnachweis verengt den P0 auf die nachgelagerte Gast-IRQ-/
+ACK- und FB_R-Scanout-Folge. Die oeffentlichen Layoutaenderungen sind durch
+Runtime-ABI 89 und PlatformServices-ABI 14 versioniert.
 
 Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
 Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren
@@ -191,10 +189,10 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    87
+Runtime-ABI:                    89
 Block-ABI:                       5
 Analyzer-ABI:                   34
-PlatformServices-ABI:           13
+PlatformServices-ABI:           14
 Backend-Interface-ABI:          13
 Portprojektvertrag:             75
 Native-AOT-Emissionsprofil:     25

@@ -61,9 +61,11 @@ Gastbenachrichtigung, sodass auch ein ablehnender Interruptsink keine
 Completion verschluckt.
 
 Ein PVR-`StartRender` plant ebenfalls ein Completionereignis. Erst dessen
-Callback erhoeht den Completionzaehler und meldet `PvrRenderDone` an den
-System-ASIC. Softreset, Destruktion und Schedulerreset koennen keine alten
-Callbacks auf neue Geraetezustaende anwenden.
+Callback erhoeht den Completionzaehler und meldet die drei realen Holly-
+RenderDone-Stufen TSP, ISP und Video am selben Gastzyklus an den System-ASIC.
+Zwischen diesen Publikationen kann keine Gastarbeit laufen. Softreset,
+Destruktion und Schedulerreset koennen keine alten Callbacks auf neue
+Geraetezustaende anwenden.
 
 ## Budget und SLEEP
 

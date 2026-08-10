@@ -66,16 +66,17 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der aktuelle Source-Stand ist der bereinigte RuntimeOnly-v25/v29-
-Produktstand; Runtime-ABI 88, PlatformServices-ABI 14, Analyzer-ABI 34,
+Produktstand; Runtime-ABI 89, PlatformServices-ABI 14, Analyzer-ABI 34,
 Backend-Interface-ABI 13, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
 `port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
 vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
-Der letzte saubere RuntimeOnly-v25/v29-Lauf dauerte `45,608 s` ohne
-Fatalfehler oder Crash. Nach Presented by Sega blieb der Kontaktbogen schwarz;
-Memory-Card-Screen und Hauptmenue wurden nicht erreicht. KR-4981 bleibt offen;
-der aktuelle Runtime-P0 liegt in Gast-Presentation/Framebuffer-Promotion oder
-PVR-/Scanout-Semantik.
+Der aktuelle RuntimeOnly-v25/v29-Lauf dauerte `45,539 s` ohne Fatalfehler oder
+Crash. Nach Presented by Sega blieb der Kontaktbogen schwarz; Memory-Card-
+Screen und Hauptmenue wurden nicht erreicht. Die vollstaendige PVR-RenderDone-
+Fanout wurde negativ als alleinige Ursache abgenommen. KR-4981 bleibt offen;
+der aktuelle Runtime-P0 liegt in der nachgelagerten Gast-IRQ-/ACK-/FB_R-
+Scanout-Folge.
 
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
@@ -163,7 +164,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4966 | Post-Entry-Produktgate und erforderliche Meilensteine | quellseitig implementiert, Produktabnahme offen; relatives Post-Entry-Ziel, getrennte Arbeitsmetriken und Gate-Exit nur bei vollem Budget plus Meilenstein |
 | KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | quellseitig implementiert, Produktabnahme offen; alle falliblen Vorbereitungen vor Commit, CPU-PC/PR zuletzt, frischer ABI-passender Handoff offen |
 | KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | quellseitig implementiert, Produktabnahme offen; Adapter, Event-/IRQ-Vertrag und historische G2-Completion vorhanden, ABI-passende Paritaet offen |
-| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | quellseitig implementiert, Produktabnahme offen; gastseitiger Zustand und neue Post-Entry-Evidenzbaseline vorhanden, sichtbare ABI-passende Abnahme offen |
+| KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | quellseitig implementiert, Produktabnahme offen; Video-/ISP-/TSP-RenderDone-Fanout und resetfeste TA-Metrik unter Runtime-ABI 89 vorhanden, sichtbare Abnahme weiter offen |
 | KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | quellseitig implementiert, Produktabnahme offen; installierte VMU-/Flashdaten bleiben autoritativ, Hostdiagnostik wird nicht als Gastzustand restauriert |
 | KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze `0x8C010F22 + 0x18`, getrennte AOT-Template-Diagnose belegt |
 | KR-4972 | Hashgebundene Shared-Callback-/Thunk-AOT-Coverage herstellen | quellseitig implementiert, Produktabnahme offen; Guarded-AOT-Entry und Exportinvariante erhalten Ziel/Shared-Body, reale Carrier-Kanten und Codepointerprovenienz ohne erfundene feste CFG-Kante |
@@ -175,7 +176,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; Gast-Presentation/Framebuffer-/PVR-Scanout-Blocker offen |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; RenderDone-Fanout negativ, nachgelagerter Gast-IRQ-/ACK-/FB_R-Scanout-Blocker offen |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |

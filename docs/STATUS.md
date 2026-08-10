@@ -26,8 +26,7 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
-Funktionaler RuntimeOnly-Source-Stand: der bereinigte Runtime-/Codegen-
-Checkpoint dieses Meilensteins. Aktuell gelten Runtime-ABI `88`,
+Funktionaler RuntimeOnly-Source-Stand: `efc531b`. Aktuell gelten Runtime-ABI `89`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
 `13` und Portprojektvertrag `75`.
@@ -46,26 +45,27 @@ exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
+`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
-`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
-Trace-/Diagnose-Overhead ist keine Speed-Abnahme. Erfasst wurden `305` PVR-
-Render-Requests und -Completions, `305` Rendererframes, `8.960` YUV-
-Makrobloecke, `319` Hostframes sowie `427` Audiopuffer mit `313.845`
-Audiobildern.
+Der Lauf verarbeitete `2.205.542.705` Gastzyklen; post-entry wurden
+`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen. Erfasst
+wurden `396` PVR-Render-Requests und -Completions, `396` Rendererframes,
+`5.040` YUV-Makrobloecke, `410` Hostframes sowie `537` Audiopuffer mit
+`394.695` Audiobildern. Die neue resetfeste TA-Telemetrie meldete `396`
+Lifetime-Frames und `807` post-entry Resets, obwohl die aktuelle Parser-
+Generation am Laufende wieder null Frames enthielt.
 
-Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
-Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Readiness und
-Render-Engine laufen. Der aktuelle P0 liegt in Gast-Presentation/Framebuffer-
-Promotion oder PVR-/Scanout-Semantik. StartRender wurde beobachtet; die
-fruehere gegenteilige Diagnose ist verworfen. Der Performance-P0 ist fuer
-diesen Bring-up ausreichend verbessert; weitere Arbeit erfolgt nur bei einem
-echten Blocker.
+Der Sichtpfad zeigte SEGA und Presented by Sega, blieb ab etwa `30 s` aber
+schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Der neue
+Pfad publizierte bei jedem erfolgreichen Renderabschluss Video, ISP und TSP am
+selben Gastzyklus. Weil das Sichtbild unveraendert blieb, ist die fehlende
+RenderDone-Fanout als alleinige Ursache widerlegt. Der aktuelle P0 liegt in der
+nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Ein automatischer
+Framebuffer-Flip bleibt ausgeschlossen.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
@@ -373,7 +373,7 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
-     aktuell blockiert durch Gast-Presentation/Framebuffer-/PVR-Scanout
+     aktuell blockiert durch nachgelagerte Gast-IRQ-/ACK-/FB_R-Scanout-Folge
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und

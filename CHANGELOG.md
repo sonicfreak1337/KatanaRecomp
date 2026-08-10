@@ -4,10 +4,21 @@
 
 ### Geaendert
 
-- Der letzte saubere RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,608 s`
-  ohne Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-  `b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
-  Nach Presented by Sega blieb der Kontaktbogen ab etwa `24 s` schwarz;
+- `efc531b` vervollstaendigt den generischen Holly-Renderabschluss: Ein
+  erfolgreicher PVR-Render publiziert Video, ISP und TSP in dieser Reihenfolge
+  am selben Gastzyklus. Fehlgeschlagene Render erfinden weiterhin keine
+  Completion. Runtime-ABI steigt wegen des oeffentlichen Ereignis- und
+  Metrikvertrags von `88` auf `89`.
+
+- Die PVR-TA-Metrik trennt Frames der aktuellen Parsergeneration von
+  monotonen Lifetime-Frames und zaehlt Resetgeneration sowie Lifetime-Resets.
+  Der PVR-State-Contract steigt auf `2`; Probe, Persistenz und generierte
+  Produktevidenz verwenden denselben Vertrag.
+
+- Der aktuelle RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,539 s` ohne
+  Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
+  `a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
+  Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s` schwarz;
   Memory-Card-Screen und Hauptmenue wurden nicht erreicht.
 
 - Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
@@ -15,26 +26,25 @@
   Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
   werden.
 
-- Der bereinigte Runtime-/Codegen-Checkpoint hebt Runtime-ABI `87` auf `88`
+- Der vorherige bereinigte Runtime-/Codegen-Checkpoint hob Runtime-ABI `87` auf `88`
   und PlatformServices-ABI `13` auf `14`; Backend-Interface-ABI `13` bleibt
   unveraendert. Er entfernt Sonic-spezifische `SA_PRIVATE_*`-Dumps und
   Diagnose-Stacktraces aus dem Repository, waehrend die allgemeinen
   Runtime-AOT-, Memory-, DMA-, GD-ROM-, PVR-, YUV-, FPU- und
   Invalidation-Fixes erhalten bleiben.
 
-- Der Lauf verarbeitete `1.839.534.869` Gastzyklen; die Diagnosemessung ergab
-  post-entry `35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s`.
-  Dieser Trace-/Diagnose-Overhead ist keine Speed-Abnahme. Erfasst wurden
-  `305` PVR-Render-Requests und -Completions, `305` Rendererframes,
-  `8.960` YUV-Makrobloecke, `319` Hostframes sowie `427` Audiopuffer mit
-  `313.845` Audiobildern.
+- Der Lauf verarbeitete `2.205.542.705` Gastzyklen; die Diagnosemessung ergab
+  post-entry `45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s`.
+  Erfasst wurden `396` PVR-Render-Requests und -Completions, `396`
+  Rendererframes, `396` TA-Lifetime-Frames ueber `807` post-entry Resets,
+  `5.040` YUV-Makrobloecke, `410` Hostframes sowie `537` Audiopuffer mit
+  `394.695` Audiobildern.
 
 - Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz.
-  Decode, Readiness und Render-Engine laufen; der aktuelle P0 liegt in
-  Gast-Presentation/Framebuffer-Promotion oder allgemeiner PVR-/Scanout-
-  Semantik. StartRender wurde mehrfach beobachtet; die fruehere Aussage,
-  StartRender oder Frame-Finalize fehlten, ist verworfen. Eine private
-  Diagnosebruecke war kein Fix und bleibt ausserhalb des Produktpfads.
+  Die nun vollstaendige Video-/ISP-/TSP-Fanout aenderte diesen Befund nicht und
+  ist damit als alleinige Sonic-Ursache widerlegt. Der aktuelle P0 liegt enger
+  in der nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Eine private
+  Diagnosebruecke oder ein automatischer Framebuffer-Flip ist kein Fix.
   Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte wortprojizierte U32-Pattern-
   Batches mit exakter GuestWrite-/PVR-Dirty-/Counter-Semantik; Vram32 scalar
   U16/U32 nutzt direkte Backing-Projektion.
@@ -1627,10 +1637,10 @@
   Busfehler geworfen. Scheduler-abhaengige GD-ROM-, DMAC-, TMU- und RTC-
   Objekte pruefen beim Abbau den Lebenszeit-Token und greifen nicht mehr auf
   einen bereits zerstoerten Scheduler zu.
-- Der PVR-Produktpfad signalisiert `PvrRenderDone` nur nach einem tatsaechlich
-  erfolgreichen Render. Reservierte Framebufferformate, ungueltiger TA-Zustand
-  und nicht unterstuetzte Features bleiben als sichtbarer Rendererfehler ohne
-  vorgetaeuschte Completion erhalten.
+- Der PVR-Produktpfad signalisiert die drei RenderDone-Stufen Video, ISP und TSP
+  nur nach einem tatsaechlich erfolgreichen Render. Reservierte
+  Framebufferformate, ungueltiger TA-Zustand und nicht unterstuetzte Features
+  bleiben als sichtbarer Rendererfehler ohne vorgetaeuschte Completion erhalten.
 - `DreamcastRuntimeFirmwareMode::Direct` installiert keine HLE-BIOS-Vektoren
   mehr; nur der explizite HLE-Modus aktiviert die BIOS-ABI.
 
