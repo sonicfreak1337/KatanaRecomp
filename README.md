@@ -11,6 +11,10 @@ Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 Aktueller funktionaler RuntimeOnly-Source-Stand: Ausgangscheckpoint
 `5046c01fb3774da2fa88ff8a469294d423f1abfb` plus die vier in diesem
 Meilenstein enthaltenen Source-Aenderungen.
+Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
+`PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
+Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
+werden.
 
 Der neue opt-in-Modus `port --analysis-mode runtime-only` ist nur fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
@@ -44,8 +48,7 @@ Watchdogfehler. Der Composite-Callback wurde erstmals angenommen
 (`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen). Post-entry wurden
 `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet (`71,8322 MHz`), mit
 `10.855.776` zentralen Dispatches und `10.855.746` Bloecken. Das entspricht
-`+86,8 %` gegenueber `38,5462 MHz` und `+91,7 %` gegenueber der frueheren
-`37,4627-MHz`-Basis.
+`+49,9 %` gegenueber `47,9329 MHz`.
 
 Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
 PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
@@ -183,7 +186,7 @@ Runtime-ABI:                    87
 Block-ABI:                       5
 Analyzer-ABI:                   34
 PlatformServices-ABI:           13
-Backend-Interface-ABI:          12
+Backend-Interface-ABI:          13
 Portprojektvertrag:             75
 Native-AOT-Emissionsprofil:     25
 AOT-Partitionsschema:            5

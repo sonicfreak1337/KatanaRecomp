@@ -28,6 +28,10 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 Funktionaler RuntimeOnly-Source-Stand: Ausgangscheckpoint `5046c01` plus die
 vier Runtime-/Codegen-Aenderungen dieses Meilensteins.
+Die oeffentlichen SDK-Layouts `PortExportOptions` und
+`LatentAotDiscoveryOptions` wurden inkompatibel erweitert; Backend-Interface-
+ABI `13` ist deshalb aktuell und bestehende generierte Ports muessen neu
+exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
 Der opt-in Modus `port --analysis-mode runtime-only` gilt nur fuer den
@@ -51,8 +55,7 @@ der Composite-Callback wurde erstmals angenommen
 (`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen). Post-entry wurden
 `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet (`71,8322 MHz`), mit
 `10.855.776` zentralen Dispatches und `10.855.746` Bloecken. Das entspricht
-`+86,8 %` gegenueber `38,5462 MHz` und `+91,7 %` gegenueber der frueheren
-`37,4627-MHz`-Basis.
+`+49,9 %` gegenueber `47,9329 MHz`.
 
 Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
 PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und

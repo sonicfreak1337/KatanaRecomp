@@ -9,6 +9,10 @@ aelteren Prozessbeschreibungen.
 
 Funktionaler RuntimeOnly-Source-Stand: Ausgangscheckpoint `5046c01` plus die
 vier Runtime-/Codegen-Aenderungen dieses Meilensteins.
+Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
+`PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
+Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
+werden.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
 Der opt-in CLI-Modus `port --analysis-mode runtime-only` ist fuer den
@@ -40,8 +44,7 @@ der Composite-Callback wurde erstmals angenommen
 
 Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
 (`71,8322 MHz`), mit `10.855.776` zentralen Dispatches und `10.855.746`
-Bloecken. Das entspricht `+86,8 %` gegenueber `38,5462 MHz` und `+91,7 %`
-gegenueber der frueheren `37,4627-MHz`-Basis.
+Bloecken. Das entspricht `+49,9 %` gegenueber `47,9329 MHz`.
 
 Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
 PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und

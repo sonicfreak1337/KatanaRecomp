@@ -108,8 +108,7 @@ der Composite-Callback wurde erstmals angenommen
 
 Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
 (`71,8322 MHz`), mit `10.855.776` zentralen Dispatches und `10.855.746`
-Bloecken. Das entspricht `+86,8 %` gegenueber `38,5462 MHz` und `+91,7 %`
-gegenueber der frueheren `37,4627-MHz`-Basis.
+Bloecken. Das entspricht `+49,9 %` gegenueber `47,9329 MHz`.
 
 Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
 PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und

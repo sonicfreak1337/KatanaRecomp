@@ -68,8 +68,8 @@ Sichtnachweis stehen noch aus.
 Der aktuelle Source-Stand ist der RuntimeOnly-v25/v29-Produktstand;
 Ausgangscheckpoint `5046c01` plus die vier Runtime-/Codegen-Aenderungen
 dieses Meilensteins,
-Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
-In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
+Analyzer-ABI 34, Backend-Interface-ABI 13, Function-Analysis-Epoch-Schema 27,
+lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
 `port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
 vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
 RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
