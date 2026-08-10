@@ -1,55 +1,79 @@
 # AICA-ARM7-Strategie
 
-## Unterstuetzter v0.29-Pfad
+## Aktueller Vertrag
 
-KatanaRecomp verwendet fuer den minimalen Audiopfad ein explizites
-High-Level-Audioprofil. SH-4-seitige AICA-Register, Sampledekodierung, Mixer,
-Timer, Interruptzustand und Host-Pufferausgabe werden als getrennte
-Runtime-Komponenten modelliert. Der ARM7 fuehrt in diesem Profil keine
-Instruktionen aus.
+Seit `e1d8ade` ist der echte AICA-ARM7TDMI-Pfad Bestandteil des RuntimeOnly-
+Bring-ups. Der oeffentliche Runtime-Vertrag steht auf ABI `90`, der portable
+AICA-Handoff auf Version `2`. Das aendert nicht die SH-4-Produktgrenze:
+RuntimeOnly bleibt statisches SH-4-AOT mit exakter Guest->Host-Tabelle,
+Stop-on-miss und typed abort; es gibt keinen SH-4-Interpreter, JIT,
+Runtime-Decoder oder geratenen Zielpfad.
 
-`AicaExecutionController` implementiert diesen Vertrag. Der Modus
-`HighLevelAudio` ist der einzige unterstuetzte Modus. Eine Anforderung von
-`LowLevelArm7` scheitert vor jeder Zustandsaenderung sichtbar; es gibt weder
-einen stillen Dummy-Prozessor noch eine vorgetaeuschte erfolgreiche
-Firmwareausfuehrung.
+`AicaExecutionController` behaelt `HighLevelAudio` fuer den Reset-/Fallback-
+Lebenszyklus und wechselt bei der gastseitigen ARM-Resetfreigabe auf
+`LowLevelArm7`. Der ARM7 fuehrt dann echten Code aus dem gemeinsamen AICA-
+Sound-RAM aus. Ein fehlender Bus, ein ungueltiger Restore oder ein CPU-Fehler
+endet sichtbar und fail-closed als `Arm7ExecutionFailure`; der Controller
+behauptet keine erfolgreiche Firmwareausfuehrung.
 
-Die drei AICA-Timer laufen auf explizit uebergebenen Audiozyklen. Ihre
-Ueberlaeufe setzen getrennte Pending-Bits, die erst nach Aktivierung der
-Interruptmaske sichtbar zugestellt und ausdruecklich quittiert werden.
-Damit bleibt der HLE-Pfad deterministisch und kann spaeter an den zentralen
-Phase-6-Scheduler angebunden werden.
+## Takt und Bus
 
-Direkter Execution-, Register- und Schedulerreset verwenden denselben
-vollstaendigen Resetvertrag. Er stellt den HLE-Modus wieder her, gibt den
-ARM7-Resetzustand frei, loescht alle Timerteiler/-reste sowie Pending- und
-Enablebits und verwirft das alte Audiotickereignis. Bei einem weiter lebenden
-Scheduler wird danach genau ein neuer Tick geplant; alte Ereignis-IDs koennen
-keinen neuen Geraetezustand mehr veraendern. Die Resetgrenze bleibt
-`noexcept`: Kann der Scheduler den Ersatztick nicht aufnehmen, zeigt der
-Snapshot `TickScheduleFailure` ohne lebendes Tickereignis. Ein spaeterer
-erfolgreicher Schedulerreset loescht den Fehler und stellt die
-Ein-Tick-Invariante wieder her.
+- Der ARM7 erhaelt `512` Zyklen je 44,1-kHz-Audiosample. Das entspricht dem
+  22,5792-MHz-AICA-ARM-Takt.
+- ARM-Adressen sind 24 Bit breit. Das 2-MiB-Sound-RAM wird entsprechend der
+  AICA-Sicht gespiegelt; der Registerbereich fuehrt auf dasselbe Registerfile,
+  das SH-4-MMIO, Mixer, Snapshot und Restore verwenden.
+- Byte-, Halfword- und Wordzugriffe laufen ueber einen gemeinsamen Busvertrag.
+  ARM7 und SH-4 beobachten deshalb denselben Channel-, Timer- und
+  Interruptzustand.
+- Der HLE-Mixer bleibt fuer die native PCM-Ausgabe verantwortlich, liest aber
+  die vom echten ARM7 programmierten 64 AICA-Slots. PCM16, PCM8 und AICA-ADPCM,
+  Keying, Loopgrenzen, Pitch, Lautstaerke, Direct Send, Pan und Master Volume
+  bleiben darin deterministisch.
 
-Byte-, Halfword- und Wordwrites leiten ihre Wirkung aus den danach
-rekonstruierten Registerbytes ab. Das gilt fuer Channel-Key-On/-Off,
-Timerkonfiguration, Interruptenable/-quittierung und ARM7-Reset; insbesondere
-wirken auch Writes auf das jeweilige Highbyte. Identische finale
-Registerbelegungen erzeugen damit denselben ausgefuehrten Geraetezustand.
+## Interrupt- und Monitor-Lifecycle
 
-Ein gastseitig ausserhalb des Sound-RAM programmierter PCM16-, PCM8- oder
-ADPCM-Zugriff beendet nicht den Host-Audiocallback. Nur die betroffene Voice
-wird deaktiviert, waehrend die uebrigen Voices und der Ausgabepuffer
-weiterlaufen. Zaehler und erster strukturierter Fehler speichern Format,
-Channel, Sampleadresse und absoluten Renderframe und sind Bestandteil des
-AICA-Snapshots; Reset loescht diesen Fehlerzustand. Fehlendes gemeinsames
-Sound-RAM bleibt davon getrennt ein interner Lebenszyklusfehler.
+Der Registervertrag umfasst SCIEB/SCIPD/SCIRE fuer den Soundprozessor,
+MCIEB/MCIPD/MCIRE fuer den SH-4, SCILV0/1/2 sowie REG_L/REG_M. Sample-Done und
+die drei Timer setzen ihre jeweiligen Pending-Bits; aktivierte Soundinterrupts
+werden auf die ARM7-FIQ-Leitung und den Vektor `0x1c` gefuehrt. Main-
+Interrupts bleiben ueber den bestehenden AICA-/ASIC-Pfad sichtbar.
 
-## Spaeterer optionaler LLE-Pfad
+Die Common-Monitorregister liefern den fuer Retailtreiber benoetigten MIDI-
+Leerstatus, den Envelope-/Sample-Lifecycle des ausgewaehlten Channels und
+dessen Current Address. Der Loop-Latch wird beim vorgesehenen Highbyte-Read
+quittiert. Damit stehen Polling und Zeitbasis nicht mehr auf statischen
+Defaultwerten.
 
-Ein ARM7-LLE-Profil ist nicht Voraussetzung fuer BIOS-freien Homebrew oder
-die Phase-6-Gates. Eine spaetere Implementierung braucht einen eigenen
-ARM7-Interpreter oder ein kompatibles Backend, definierte AICA-RAM- und
-Registerarbitrierung, Interrupt- und Resetsemantik sowie Differenztests gegen
-das HLE-Profil. Nutzerbereitgestellte Firmware bleibt dabei externe,
-read-only Eingabe und darf nie in Repository, Tests oder Releases gelangen.
+Reset, Schedulerreset und Restore verwenden denselben Lifecycle. Portable
+Snapshots enthalten Registerbanken, Pipeline-/Prefetchzustand,
+Blocktransfer-Zwischenzustand, Zyklenschuld, FIQ-/Waitzustand und
+Ausfuehrungszaehler. Restore validiert Modus, Grenzen und Fehlerkonsistenz vor
+der Zustandsuebernahme.
+
+## Herkunft und rechtliche Grenze
+
+Der ARM7TDMI-Kern stammt aus SkyEmu-Commit
+`01516d6798e3652b583e6a366085bb51c43b528d` und ist unter MIT eingebunden.
+`third_party/skyemu/LICENSE` und `third_party/skyemu/README.md` dokumentieren
+Lizenz, Provenienz und die einzige lokale const-correctness-Anpassung. Es
+wurden keine Dreamcast-Firmware, Sonic-Retailbytes oder Spieldaten in das
+Repository aufgenommen; solche Daten bleiben nutzerbereitgestellte externe
+Read-only-Eingaben.
+
+## Nachweis und verbleibende Produktgrenze
+
+Der vorhandene `katana-aica-execution-tests`-Pfad wurde an den realen ARM7-
+Lifecycle angepasst und bestand nach einem erfolgreichen 24-Thread-Build.
+Ein diagnostischer Sonic-Lauf belegte rund 50,7 Millionen ausgefuehrte ARM-
+Instruktionen ohne CPU-Fehler, zwei aktive Stimmen und einen vom frueheren
+Stillewert abweichenden Audiohash.
+
+Der anschliessende `45,564 s` lange Sonic-PAL-Produktlauf erreichte SEGA,
+PAL-Auswahl und Presented by Sega ohne Fatalfehler. Der zuvor bei null
+stehende Sofdec-Audiotakt erreichte `0x2D0` und `0x890` bei der Einheit
+`0xAC44` (`44.100`). Der Film blieb trotzdem unsichtbar. AICA-Bereitschaft und
+Audiotakt sind damit geschlossen, nicht aber KR-4981. Der naechste P0 ist die
+nachgelagerte CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerte FB_R-
+Bildpublikationsfolge. Movie-Skip, automatischer Framebuffer-Flip oder
+titelbezogener Runtime-Hack sind keine Produktloesung.

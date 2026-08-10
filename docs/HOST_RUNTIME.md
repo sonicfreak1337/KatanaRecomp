@@ -20,12 +20,14 @@ verfuegbares Audiogeraet bleibt der Recording-Pfad nutzbar. Nicht implementierte
 Plattformen behaupten keine native Audioausgabe.
 
 Im generierten Port ist dieser Mixer kein Platzhalter: Jeder Audio-Tick liest
-die 64 AICA-Slots aus demselben Registerfile und Sound-RAM, die der native
-Gastcode ueber MMIO beschreibt. Der HLE-Pfad dekodiert PCM16, PCM8 und AICA-
-ADPCM und wendet Keying, Loopgrenzen, Pitch, Lautstaerke, Direct Send, Pan und
-Master Volume an. Nicht implementiertes ARM7-LLE bleibt explizit
-`unsupported`; es wird weder emuliert noch als erfolgreiche Ausfuehrung
-gemeldet.
+die 64 AICA-Slots aus demselben Registerfile und Sound-RAM, die SH-4 und der
+echte AICA-ARM7 gemeinsam beschreiben. Seit `e1d8ade` startet der ARM7TDMI bei
+der gastseitigen Resetfreigabe, erhaelt `512` Zyklen je Sample und bedient
+Sound-/Main-Interrupts, Timer, REG_L/REG_M und Common-Monitorregister. Der
+Mixer dekodiert die dadurch programmierten PCM16-, PCM8- und AICA-ADPCM-
+Stimmen und wendet Keying, Loopgrenzen, Pitch, Lautstaerke, Direct Send, Pan
+und Master Volume an. ARM-Fehler werden als `Arm7ExecutionFailure` sichtbar
+und niemals als erfolgreiche Ausfuehrung gemeldet.
 
 ## Eingabe und Lebenszyklus
 

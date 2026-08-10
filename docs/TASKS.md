@@ -88,31 +88,34 @@ Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv; kein
 Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad. Der Whole-Export-
 Cache ist modegebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
+`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
 
 Der aktuelle RuntimeOnly-Build-/Export-Unterauftrag ist damit abgeschlossen;
 der Performance-P0 ist fuer diesen Bring-up ausreichend verbessert. KR-4981
-bleibt als sichtbares globales Produktgate offen. Der vollstaendige Video-/
-ISP-/TSP-RenderDone-Pfad ist negativ als alleinige Ursache abgenommen; der
-aktuelle Runtime-Blocker liegt nach Presented by Sega in der nachgelagerten
-Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Weitere Performancearbeit erfolgt nur
-bei einem echten Blocker. Der PlatformAbi-Default bleibt erhalten.
+bleibt als sichtbares globales Produktgate offen. PVR-RenderDone und der echte
+AICA-ARM7-/Sound-Interrupt-/Common-Monitorpfad sind abgeschlossen; der
+Sofdec-Audiotakt laeuft. Der aktuelle Runtime-Blocker liegt nach Presented by
+Sega in der nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten
+FB_R-Bildpublikationsfolge. Weitere Performancearbeit erfolgt nur bei einem
+echten Blocker. Der PlatformAbi-Default bleibt erhalten.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
 Der vorherige bereinigte Source-Checkpoint hob Runtime-ABI `87` auf `88` und
 PlatformServices-ABI `13` auf `14`. Der funktionale Checkpoint `efc531b` hebt
 Runtime-ABI wegen der PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
-Backend-Interface-ABI `13` bleibt aktuell.
+`e1d8ade` hebt ihn wegen der oeffentlichen AICA-/ARM7-Fortsetzung weiter auf
+`90`; Backend-Interface-ABI `13` bleibt aktuell.
 
-Der Lauf verarbeitete `2.205.542.705` Gastzyklen; post-entry wurden
-`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen. `396`
-Renderabschluesse lieferten Video, ISP und TSP am selben Gastzyklus; `396`
-Lifetime-Frames blieben ueber `807` post-entry TA-Resets monoton sichtbar.
-Der Scanout bleibt nach Presented by Sega schwarz. Damit ist die fehlende
-RenderDone-Fanout als alleinige Ursache widerlegt; KR-4981 bleibt offen.
+Der Lauf verarbeitete `1.720.931.837` Gastzyklen; post-entry wurden
+`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen. `275`
+Renderabschluesse, `392` Audiopuffer und zwei aktive AICA-Stimmen liefen ohne
+Fatal- oder ARM7-Ausfuehrungsfehler. Der Sofdec-Audiotakt erreichte `0x2D0`
+und `0x890` bei `44.100` Einheiten pro Sekunde. Der Scanout bleibt nach
+Presented by Sega schwarz; KR-4981 bleibt fuer die nachgelagerte
+Movie-Bildpublikation offen.
 
 ## Historische Candidate-Evidenz
 
@@ -121,8 +124,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Aktueller funktionaler Source-Stand:
-  bereinigter Runtime-/Codegen-Checkpoint dieses Meilensteins
-  Runtime-ABI 89, PlatformServices-ABI 14, Backend-Interface-ABI 13
+  e1d8ade
+  Runtime-ABI 90, PlatformServices-ABI 14, Backend-Interface-ABI 13
   Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
@@ -150,10 +153,11 @@ Messwert abgeleitet werden.
 ## Verbindliche Reihenfolge
 
 ```text
-KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994: source-seitig abgeschlossen
+KR-4985, KR-4986, KR-4993, KR-4987, KR-4994 und KR-4995: source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> sichtbarer Start bis mindestens Memory-Card-Screen offen;
-     aktuell blockiert durch nachgelagerte Gast-IRQ-/ACK-/FB_R-Scanout-Folge
+     aktuell blockiert durch nachgelagerte CRI-/Sofdec-Callback-/YUV-/TA-/
+     gastgesteuerte FB_R-Bildpublikationsfolge
 ```
 
 Jeder Task in dieser Kette folgt einzeln:
@@ -167,7 +171,7 @@ einzige freigegebene D1-Lauf war nichtterminal; D1/G1 bleibt fail-closed und
 unentschieden. D2/G2 ist abgeschlossen und negativ, ohne positiven
 Schedulerhebel. D9 ist historisch beendet und Root 0 konvergierte fail-closed
 ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
-KR-4994 ist source-seitig abgeschlossen. Die PlatformAbi-Candidate-Resolution
+KR-4994 und KR-4995 sind source-seitig abgeschlossen. Die PlatformAbi-Candidate-Resolution
 bleibt deferred und ist kein RuntimeOnly-Buildblocker. KR-4981 bleibt als
 sichtbares Produktgate offen. KR-4982 und KR-4983 bleiben gestrichen.
 
@@ -700,10 +704,11 @@ Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
 - KR-4981 bleibt das globale Produktgate; RuntimeOnly-Build-/Export-Gate ist
   bestanden, der Performance-P0 ist fuer den Bring-up ausreichend verbessert,
-  und der aktuelle Runtime-Blocker liegt nach negativer RenderDone-Fanout-
-  Abnahme in der nachgelagerten Gast-IRQ-/ACK-/FB_R-Scanout-Folge. Memory-Card-
-  Screen und Hauptmenue bleiben offen; weitere Performancearbeit ist nur bei
-  einem echten Blocker zulaessig.
+  und der aktuelle Runtime-Blocker liegt nach abgeschlossener RenderDone- und
+  AICA-/ARM7-Abnahme in der nachgelagerten CRI-/Sofdec-Callback-/YUV-/TA-/
+  gastgesteuerten FB_R-Bildpublikationsfolge. Memory-Card-Screen und
+  Hauptmenue bleiben offen; weitere Performancearbeit ist nur bei einem
+  echten Blocker zulaessig.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von
@@ -715,13 +720,44 @@ vollstaendigen Produktport abgenommen.
 
 ---
 
+## [x] KR-4995 - AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle
+
+Prioritaet: P0 Runtime-Bring-up
+
+Status: Source-seitig abgeschlossen in `e1d8ade`; Runtime-ABI `90`,
+AICA-Handoff-Vertrag `2`.
+
+### Ergebnis
+
+- der ARM7TDMI beginnt bei AICA-Resetfreigabe und verwendet den gemeinsamen
+  24-Bit-AICA-Bus fuer das gespiegelte 2-MiB-Sound-RAM und die Register;
+- Sound-/Main-Interrupts, REG_L/REG_M, Timer, Common-Monitorregister und die
+  portable ARM-Fortsetzung teilen einen fail-closed Reset-/Fehlervertrag;
+- SkyEmu-Commit `01516d6` ist als MIT-lizenzierter ARM7-Kern mit Provenienz
+  eingebunden; Retail-Firmware und Spieldaten bleiben externe Eingaben;
+- der vorhandene AICA-Ausfuehrungstest wurde an den realen LLE-Lifecycle
+  angepasst und bestand nach dem 24-Thread-Build;
+- im `45,564 s` langen Sonic-Lauf liefen zwei Stimmen und der zuvor stehende
+  Sofdec-Audiotakt erreichte `0x2D0` und `0x890` bei `44.100` Einheiten pro
+  Sekunde.
+
+### Offene Produktgrenze
+
+Der Film blieb unsichtbar. KR-4995 schliesst deshalb nur die AICA-
+Bereitschaft; KR-4981 bleibt fuer die anschliessende CRI-/Sofdec-Callback-,
+YUV-/TA- und gastgesteuerte FB_R-Bildpublikationsfolge offen. Ein Movie-Skip,
+automatischer FB_W->FB_R-Flip oder titelbezogener Runtime-Hack ist kein Fix.
+
+---
+
 ## [ ] KR-4981 - Einmaliges 24-Thread-Sonic-Produktzeitgate
 
 Prioritaet: P0 Produkt- und Performancegate
 
 Abhaengigkeit: RuntimeOnly-Build-/Export-Gate bestanden; der aktuelle
-Runtime-Blocker liegt nach Presented by Sega in der nachgelagerten Gast-IRQ-/
-ACK-/FB_R-Scanout-Folge. Memory-Card-Screen und Hauptmenue bleiben offen.
+Runtime-Blocker liegt nach Presented by Sega in der nachgelagerten CRI-/
+Sofdec-Callback-, YUV-/TA- und gastgesteuerten FB_R-Bildpublikationsfolge.
+Memory-Card-Screen und Hauptmenue bleiben offen.
 Weitere Performancearbeit ist nur bei einem echten Blocker zulaessig.
 
 ### Abgeschlossene Vorstufe
@@ -730,6 +766,9 @@ Weitere Performancearbeit ist nur bei einem echten Blocker zulaessig.
   TSP am selben Gastzyklus; TA-Lifetime-/Resetzaehler bleiben ueber Softresets
   monoton. Der 45-Sekunden-Sonic-Lauf blieb nach Presented by Sega schwarz und
   widerlegt diese Fanout-Luecke als alleinige Produktursache.
+- [x] `e1d8ade`: echter AICA-ARM7-, Sound-/Main-Interrupt- und Common-
+  Monitorpfad; zwei aktive Stimmen und fortschreitender Sofdec-Audiotakt im
+  Sonic-Produktlauf. Die verbleibende Bildpublikation liegt danach.
 
 ### Umfang
 

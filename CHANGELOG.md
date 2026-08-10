@@ -4,6 +4,29 @@
 
 ### Geaendert
 
+- `e1d8ade` schliesst KR-4995 source-seitig: Die AICA fuehrt den ARM7TDMI-
+  Soundprozessor ab Resetfreigabe mit `512` ARM-Zyklen je 44,1-kHz-Sample
+  aus. Sound-RAM-/Registerbus, REG_L/REG_M, Sound-/Main-Interrupts, Timer,
+  Common-Monitorregister und portable ARM-Fortsetzung verwenden einen
+  gemeinsamen fail-closed Lifecycle. Der SH-4-Produktpfad bleibt rein
+  statisches RuntimeOnly-AOT ohne Interpreter oder Runtime-Fallback.
+
+- Die oeffentlichen AICA-/ARM7-Handoff-Layouts und der Fehlervertrag heben
+  Runtime-ABI `89` auf `90` und den AICA-Handoff-Vertrag auf `2`. Der
+  eingebundene ARM7TDMI-Kern stammt aus SkyEmu-Commit `01516d6` unter MIT;
+  Lizenz und Provenienz liegen im Repository, Retail-Firmware oder
+  Spieldaten wurden nicht aufgenommen.
+
+- Der vorhandene AICA-Ausfuehrungstest wurde an den realen LLE-Lifecycle
+  angepasst und bestand nach einem erfolgreichen 24-Thread-Build. Der
+  nachfolgende Sonic-PAL-Lauf lief `45,564 s` ohne Fatalfehler oder Crash;
+  die `game.exe` hat SHA-256
+  `8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
+  Zwei AICA-Stimmen waren aktiv und der zuvor stehende Sofdec-Audiotakt
+  erreichte `0x2D0` und `0x890` bei `44.100` Einheiten pro Sekunde. Der Film
+  blieb dennoch unsichtbar; KR-4981 bleibt fuer die nachgelagerte CRI-
+  Callback-/YUV-/TA-/gastgesteuerte FB_R-Publikationsfolge offen.
+
 - `efc531b` vervollstaendigt den generischen Holly-Renderabschluss: Ein
   erfolgreicher PVR-Render publiziert Video, ISP und TSP in dieser Reihenfolge
   am selben Gastzyklus. Fehlgeschlagene Render erfinden weiterhin keine
@@ -15,7 +38,7 @@
   Der PVR-State-Contract steigt auf `2`; Probe, Persistenz und generierte
   Produktevidenz verwenden denselben Vertrag.
 
-- Der aktuelle RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,539 s` ohne
+- Der vorherige RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,539 s` ohne
   Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
   `a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
   Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s` schwarz;
@@ -40,9 +63,9 @@
   `5.040` YUV-Makrobloecke, `410` Hostframes sowie `537` Audiopuffer mit
   `394.695` Audiobildern.
 
-- Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz.
+- Dieser vorherige Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz.
   Die nun vollstaendige Video-/ISP-/TSP-Fanout aenderte diesen Befund nicht und
-  ist damit als alleinige Sonic-Ursache widerlegt. Der aktuelle P0 liegt enger
+  ist damit als alleinige Sonic-Ursache widerlegt. Der damalige P0 lag enger
   in der nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Eine private
   Diagnosebruecke oder ein automatischer Framebuffer-Flip ist kein Fix.
   Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte wortprojizierte U32-Pattern-

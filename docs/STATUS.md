@@ -26,7 +26,7 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
-Funktionaler RuntimeOnly-Source-Stand: `efc531b`. Aktuell gelten Runtime-ABI `89`,
+Funktionaler RuntimeOnly-Source-Stand: `e1d8ade`. Aktuell gelten Runtime-ABI `90`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
 `13` und Portprojektvertrag `75`.
@@ -45,27 +45,27 @@ exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
+`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der Lauf verarbeitete `2.205.542.705` Gastzyklen; post-entry wurden
-`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen. Erfasst
-wurden `396` PVR-Render-Requests und -Completions, `396` Rendererframes,
-`5.040` YUV-Makrobloecke, `410` Hostframes sowie `537` Audiopuffer mit
-`394.695` Audiobildern. Die neue resetfeste TA-Telemetrie meldete `396`
-Lifetime-Frames und `807` post-entry Resets, obwohl die aktuelle Parser-
-Generation am Laufende wieder null Frames enthielt.
+Der Lauf verarbeitete `1.720.931.837` Gastzyklen; post-entry wurden
+`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen. Erfasst
+wurden `275` PVR-Render-Requests und -Completions, `275` Rendererframes,
+`2.240` YUV-Makrobloecke, `289` Hostframes sowie `392` Audiopuffer mit
+`288.120` Audiobildern. Der ARM7 lief ohne Ausfuehrungsfehler, zwei AICA-
+Stimmen waren aktiv und der Audiohash wich vom frueheren Stillewert ab.
 
-Der Sichtpfad zeigte SEGA und Presented by Sega, blieb ab etwa `30 s` aber
-schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Der neue
-Pfad publizierte bei jedem erfolgreichen Renderabschluss Video, ISP und TSP am
-selben Gastzyklus. Weil das Sichtbild unveraendert blieb, ist die fehlende
-RenderDone-Fanout als alleinige Ursache widerlegt. Der aktuelle P0 liegt in der
-nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Ein automatischer
-Framebuffer-Flip bleibt ausgeschlossen.
+Der Sichtpfad zeigte SEGA und Presented by Sega, blieb ab etwa `32 s` aber
+schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Der echte
+AICA-ARM7-, Sound-/Main-Interrupt- und Common-Monitorpfad laeuft; der zuvor
+stehende Sofdec-Audiotakt erreichte `0x2D0` und `0x890` bei `44.100` Einheiten
+pro Sekunde. Die AICA-Bereitschaft ist damit geschlossen. Der aktuelle P0
+liegt in der nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und
+gastgesteuerten FB_R-Bildpublikationsfolge. Ein automatischer Framebuffer-Flip
+bleibt ausgeschlossen.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
@@ -82,7 +82,7 @@ historische v56-Produktevidenz:
   Epoch-Retention: incomplete-root, kein Portartefakt aus diesem alten Lauf
 
 aktueller Dokumentationsstand:
-  Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 abgeschlossen;
+  Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 abgeschlossen;
   RuntimeOnly-Build-/Export-Gate bestanden, sichtbares KR-4981-Gate offen
 ```
 
@@ -370,10 +370,11 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 ## Aktueller kritischer Pfad
 
 ```text
-KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
+KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
-     aktuell blockiert durch nachgelagerte Gast-IRQ-/ACK-/FB_R-Scanout-Folge
+     aktuell blockiert durch nachgelagerte CRI-/Sofdec-Callback-/YUV-/TA-/
+     gastgesteuerte FB_R-Bildpublikationsfolge
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und
@@ -384,7 +385,7 @@ wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
 ist abgeschlossen und negativ, ohne positiven Schedulerhebel. D9 ist beendet
 und Root 0 konvergierte fail-closed, ohne Portartefakt oder Produkterfolg.
 Dieser D9-Befund ist historische PlatformAbi-Diagnostik. KR-4988 bis KR-4991
-bleiben inaktiv; KR-4994 ist source-seitig abgeschlossen. KR-4981 bleibt als
+bleiben inaktiv; KR-4994 und KR-4995 sind source-seitig abgeschlossen. KR-4981 bleibt als
 sichtbares Produktgate nach dem RuntimeOnly-Build-/Export-Gate offen.
 
 ## Quellseitig vorhandene Hauptvertraege
@@ -441,9 +442,10 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 
 ```text
 D9 ist historisch beendet und fail-closed; Root 0 konvergierte ohne
-Portartefakt und Produkterfolg. KR-4994 ist source-seitig abgeschlossen; die
-PlatformAbi-Candidate-Resolution bleibt deferred. KR-4981 bleibt das globale
-sichtbare Produktgate und ist nach dem RuntimeOnly-Build-/Export-Gate offen.
+Portartefakt und Produkterfolg. KR-4994 und KR-4995 sind source-seitig
+abgeschlossen; die PlatformAbi-Candidate-Resolution bleibt deferred. KR-4981
+bleibt das globale sichtbare Produktgate und ist nach dem RuntimeOnly-Build-/
+Export-Gate fuer die Movie-Bildpublikation offen.
 ```
 
 Ein zweiter D1-Lauf gehoert nicht zu diesem Dokumentationspass. D2/G2 ist

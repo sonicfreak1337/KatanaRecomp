@@ -66,17 +66,17 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der aktuelle Source-Stand ist der bereinigte RuntimeOnly-v25/v29-
-Produktstand; Runtime-ABI 89, PlatformServices-ABI 14, Analyzer-ABI 34,
+Produktstand `e1d8ade`; Runtime-ABI 90, PlatformServices-ABI 14, Analyzer-ABI 34,
 Backend-Interface-ABI 13, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
 `port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
 vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
-Der aktuelle RuntimeOnly-v25/v29-Lauf dauerte `45,539 s` ohne Fatalfehler oder
+Der aktuelle RuntimeOnly-v25/v29-Lauf dauerte `45,564 s` ohne Fatalfehler oder
 Crash. Nach Presented by Sega blieb der Kontaktbogen schwarz; Memory-Card-
-Screen und Hauptmenue wurden nicht erreicht. Die vollstaendige PVR-RenderDone-
-Fanout wurde negativ als alleinige Ursache abgenommen. KR-4981 bleibt offen;
-der aktuelle Runtime-P0 liegt in der nachgelagerten Gast-IRQ-/ACK-/FB_R-
-Scanout-Folge.
+Screen und Hauptmenue wurden nicht erreicht. ARM7/AICA und der Sofdec-Audiotakt
+laufen; KR-4981 bleibt offen. Der aktuelle Runtime-P0 liegt in der
+nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten FB_R-
+Bildpublikationsfolge.
 
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
@@ -85,7 +85,7 @@ keinen erreichten Root 1; D1/G1 bleibt unentschieden. KR-4987 ist source-seitig
 abgeschlossen; D9 ist beendet und Root 0 konvergierte fail-closed ohne
 Portartefakt oder Produkterfolg. D2/G2 ist abgeschlossen und negativ; kein
 positiver Schedulerhebel ist belegt. KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; die fehlende
+KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen; die fehlende
 Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
 Stackvertrag/Gate bleibt als historischer PlatformAbi-Befund dokumentiert.
 KR-4981 bleibt das globale sichtbare Produktgate und ist nach dem
@@ -163,7 +163,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4965 | ADXT/mwSnd-Sound-Completion bis zum Writer schliessen | abgeschlossen ueber Alternativabnahme; allgemeine G2-Ursache repariert, alter Poll verlassen und engerer Blocker belegt |
 | KR-4966 | Post-Entry-Produktgate und erforderliche Meilensteine | quellseitig implementiert, Produktabnahme offen; relatives Post-Entry-Ziel, getrennte Arbeitsmetriken und Gate-Exit nur bei vollem Budget plus Meilenstein |
 | KR-4967 | Atomarer CompletePlatform-Capture-/Apply-Koordinator | quellseitig implementiert, Produktabnahme offen; alle falliblen Vorbereitungen vor Commit, CPU-PC/PR zuletzt, frischer ABI-passender Handoff offen |
-| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | quellseitig implementiert, Produktabnahme offen; Adapter, Event-/IRQ-Vertrag und historische G2-Completion vorhanden, ABI-passende Paritaet offen |
+| KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | quellseitig implementiert; echter ARM7-/Sound-/Main-Interrupt- und Common-Monitorpfad unter Runtime-ABI 90 laeuft, vollstaendige Produktabnahme bleibt KR-4981 |
 | KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | quellseitig implementiert, Produktabnahme offen; Video-/ISP-/TSP-RenderDone-Fanout und resetfeste TA-Metrik unter Runtime-ABI 89 vorhanden, sichtbare Abnahme weiter offen |
 | KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | quellseitig implementiert, Produktabnahme offen; installierte VMU-/Flashdaten bleiben autoritativ, Hostdiagnostik wird nicht als Gastzustand restauriert |
 | KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze `0x8C010F22 + 0x18`, getrennte AOT-Template-Diagnose belegt |
@@ -176,7 +176,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; RenderDone-Fanout negativ, nachgelagerter Gast-IRQ-/ACK-/FB_R-Scanout-Blocker offen |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; ARM7/AICA und Sofdec-Audiotakt laufen, CRI-Callback-/YUV-/TA-/gastgesteuerte FB_R-Bildpublikation offen |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
@@ -190,6 +190,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
+| KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und Sonic-Lauf belegen echten ARM7, zwei Stimmen und fortschreitenden Sofdec-Audiotakt; Movie-Bildpublikation bleibt KR-4981 |
 
 ## Aktuelle Meilensteinzuordnung
 

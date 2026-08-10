@@ -7,7 +7,7 @@ aelteren Prozessbeschreibungen.
 
 ## Aktueller RuntimeOnly-Bring-up
 
-Funktionaler RuntimeOnly-Source-Stand: `efc531b`. Aktuell gelten Runtime-ABI `89`,
+Funktionaler RuntimeOnly-Source-Stand: `e1d8ade`. Aktuell gelten Runtime-ABI `90`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
 `13` und Portprojektvertrag `75`.
@@ -38,20 +38,20 @@ erzeugt.
 
 ### Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der aktuelle Sonic-PAL-Lauf dauerte `45,539 s` ohne Fatalfehler oder Crash.
-Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s` schwarz;
+Der aktuelle Sonic-PAL-Lauf dauerte `45,564 s` ohne Fatalfehler oder Crash.
+Nach Presented by Sega blieb der Kontaktbogen ab etwa `32 s` schwarz;
 Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Post-entry wurden
-`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen. `396`
-erfolgreiche Renderabschluesse publizierten Video, ISP und TSP am selben
-Gastzyklus. Die resetfeste TA-Metrik meldete `396` Lifetime-Frames ueber `807`
-post-entry Resets. Der unveraenderte Sichtpfad widerlegt die fehlende
-RenderDone-Fanout als alleinige Ursache. Der aktuelle P0 liegt in der
-nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge; KR-4981 bleibt offen.
+`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen. Der echte
+AICA-ARM7 lief ohne Ausfuehrungsfehler, zwei Stimmen waren aktiv und der
+Sofdec-Audiotakt erreichte `0x2D0` und `0x890` bei `44.100` Einheiten pro
+Sekunde. Damit ist die AICA-Bereitschaft geschlossen. Der aktuelle P0 liegt
+in der nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten
+FB_R-Bildpublikationsfolge; KR-4981 bleibt offen.
 
-Der naechste Lauf benoetigt vorab eine kleine generische Korrelation der drei
-Completionbits mit Maskierung/ACK und dem anschliessend vom Gast gewaehlten
-FB_R-Scanout. Kein automatischer FB_W->FB_R-Flip, kein Movie-Skip und keine
-private Bildbruecke ist als Produktfix zulaessig.
+Der naechste Implementierungs-/Diagnoseschritt korreliert den fortschreitenden
+Audiotakt und die CRI-Readiness/-Callbacks mit YUV-/TA-Paketen, gastseitigen
+FB_R-Writes und dem sichtbaren Scanout. Kein automatischer FB_W->FB_R-Flip,
+kein Movie-Skip und keine private Bildbruecke ist als Produktfix zulaessig.
 
 Historische v16-Evidenz (nicht aktueller Produktstand):
 Der alte Lauf endete fail-closed am generischen Fehler `missing-aot`.
@@ -533,7 +533,7 @@ Der verbindliche aktuelle Pfad lautet:
 D9 beendet fail-closed; kein Portartefakt und kein Produkterfolg
 ```
 
-KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen;
+KR-4988 bis KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen;
 der historische P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-
 Closure beim vollstaendigen Stackvertrag/Gate.
 Candidate-Resolution-Gesamtzeit,
@@ -547,7 +547,7 @@ nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
 Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; das
-Analyzer-ABI-Finding ist geschlossen; der aktuelle Analyzer-ABI ist `34`. KR-4994 ist source-seitig
+Analyzer-ABI-Finding ist geschlossen; der aktuelle Analyzer-ABI ist `34`. KR-4994 und KR-4995 sind source-seitig
 abgeschlossen, aber die autoritative Hybrid-Join-Closure ist beim vollstaendigen
 Stackvertrag/Gate noch nicht wirksam. Es gibt kein
 bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.

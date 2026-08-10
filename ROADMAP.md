@@ -113,9 +113,9 @@ Stop-on-miss und typed abort bleiben aktiv, ohne Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist
 modegebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
+`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
 
 Das RuntimeOnly-Build-/Export-Gate ist bestanden. Der Performance-P0 ist fuer
 diesen Bring-up ausreichend verbessert; KR-4981 bleibt als globales
@@ -129,16 +129,18 @@ unveraendert.
 Der vorherige bereinigte Runtime-/Codegen-Checkpoint hob Runtime-ABI `87` auf
 `88` und PlatformServices-ABI `13` auf `14`. `efc531b` hebt Runtime-ABI wegen
 der vollstaendigen PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
-Backend-Interface-ABI `13` bleibt aktuell.
+`e1d8ade` hebt ihn wegen der oeffentlichen AICA-/ARM7-Fortsetzung weiter auf
+`90`; Backend-Interface-ABI `13` bleibt aktuell.
 
-Der aktuelle Sonic-PAL-Lauf dauerte `45,539 s`; nach Presented by Sega blieb
-der Kontaktbogen ab etwa `30 s` schwarz. Post-entry wurden `1.790.309.442`
-Gastzyklen in `39,1658 s` beziehungsweise `45,7111 MHz` verarbeitet. `396`
-Renderabschluesse publizierten nun Video, ISP und TSP am selben Gastzyklus;
-`396` resetfeste TA-Lifetime-Frames ueberlebten `807` post-entry Resets. Der
-negative Sichtnachweis schliesst die fehlende RenderDone-Fanout als alleinige
-Ursache aus und verengt den P0 auf die nachgelagerte Gast-IRQ-/ACK- und FB_R-
-Scanout-Folge. KR-4981 bleibt offen.
+Der aktuelle Sonic-PAL-Lauf dauerte `45,564 s`; nach Presented by Sega blieb
+der Kontaktbogen ab etwa `32 s` schwarz. Post-entry wurden `1.305.698.574`
+Gastzyklen in `39,4322 s` beziehungsweise `33,1125 MHz` verarbeitet. Der neue
+ARM7-Pfad lief ohne Ausfuehrungsfehler, Sonic aktivierte zwei Stimmen und der
+Sofdec-Audiotakt bewegte sich erstmals von null auf `0x2D0` und `0x890` bei
+der Einheit `0xAC44` (`44.100`). Damit ist die AICA-Bereitschaft als Blocker
+geschlossen. Der verbleibende P0 liegt in der nachgelagerten CRI-/Sofdec-
+Callback-, YUV-/TA- und gastgesteuerten FB_R-Bildpublikationsfolge. KR-4981
+bleibt offen.
 
 ## Historischer Candidate-Evidenzstand
 
@@ -149,8 +151,8 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 aktueller funktionaler Source-Stand:
-  bereinigter Runtime-/Codegen-Checkpoint dieses Meilensteins
-  Runtime-ABI 89, PlatformServices-ABI 14, Backend-Interface-ABI 13
+  e1d8ade
+  Runtime-ABI 90, PlatformServices-ABI 14, Backend-Interface-ABI 13
   Analyzer-ABI 34
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13
@@ -291,10 +293,11 @@ bleiben inaktiv.
 
 Der Performance-P0 ist fuer diesen Bring-up ausreichend verbessert. KR-4981
 bleibt offen, weil der Sichtpfad nach Presented by Sega schwarz bleibt und
-Memory-Card-Screen sowie Hauptmenue nicht erreicht wurden. Der verbleibende
-Runtime-Blocker liegt nach negativer Video-/ISP-/TSP-Completion-Abnahme in der
-nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Weitere
-Performancearbeit erfolgt nur bei einem echten Blocker.
+Memory-Card-Screen sowie Hauptmenue nicht erreicht wurden. ARM7-Ausfuehrung,
+AICA-Interrupt-/Monitor-Lifecycle und Sofdec-Audiotakt laufen. Der verbleibende
+Runtime-Blocker liegt in der nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA-
+und gastgesteuerten FB_R-Bildpublikationsfolge. Weitere Performancearbeit
+erfolgt nur bei einem echten Blocker.
 
 Der Candidate-Resolution-P0 bleibt als historische PlatformAbi-Diagnostik
 dokumentiert. Null Eviction-Recomputes liefern keinen Beleg fuer Cache-Eviction
@@ -344,17 +347,19 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; vollstaendige PVR-RenderDone-Fanout negativ abgenommen, nachgelagerter Gast-IRQ-/ACK-/FB_R-Scanout-Blocker offen |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; ARM7/AICA und Sofdec-Audiotakt laufen, nachgelagerte CRI-Callback-/YUV-/TA-/gastgesteuerte FB_R-Bildpublikation offen |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
+| KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen und mit Sonic produktseitig bis zum fortschreitenden Sofdec-Audiotakt belegt; Movie-Bildpublikation bleibt KR-4981 |
 
 Die Reihenfolge ist normativ:
 
 ```text
-KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
+KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
-     aktuell blockiert durch nachgelagerte Gast-IRQ-/ACK-/FB_R-Scanout-Folge
+     aktuell blockiert durch nachgelagerte CRI-/Sofdec-Callback-/YUV-/TA-/
+     gastgesteuerte FB_R-Bildpublikationsfolge
   -> PlatformAbi-Candidate-Resolution bleibt deferred und ist kein RuntimeOnly-
      Buildblocker
 ```
@@ -363,7 +368,7 @@ D1 und D2 sind reale, begrenzte Sonic-Diagnoseexporte, keine neue Testmatrix.
 D1/G1 bleibt historisch unentschieden; D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist historisch beendet und Root 0
 konvergierte fail-closed ohne Portartefakt oder Produkterfolg. KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; die
+KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen; die
 PlatformAbi-Optimierungsbefunde bleiben deferred. KR-4981 bleibt als sichtbares
 Produktgate offen. KR-4982 und KR-4983 bleiben gestrichen.
 

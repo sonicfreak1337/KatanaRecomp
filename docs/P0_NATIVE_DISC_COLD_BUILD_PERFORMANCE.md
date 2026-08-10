@@ -1,7 +1,7 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Der aktuelle Bring-up-
-Meilenstein verwendet Runtime-ABI 89, PlatformServices-ABI 14, Analyzer-ABI 34,
+Meilenstein verwendet Runtime-ABI 90, PlatformServices-ABI 14, Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27
 und lokales In-Process-Evaluation-Cache-Schema 13. Das aktuelle
 Native-AOT-Emissionsprofil ist 25; das AOT-Partitionsschema ist 5. Der opt-in
@@ -13,9 +13,9 @@ nutzt RuntimeOnly-Dispatch ueber eine exakte statische Guest->Host-Tabelle.
 Der Whole-Export-Cache ist modegebunden; kein Interpreter, JIT, Runtime-
 Decoder oder geratener Zielpfad wird verwendet.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
+`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
 Der bereinigte Runtime-/Codegen-Checkpoint entfernt Sonic-spezifische
 `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces; allgemeine Fixes bleiben.
 
@@ -26,21 +26,21 @@ Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind deferred.
 Der historische Candidate-Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
 
-Der Lauf verarbeitete `2.205.542.705` Gastzyklen; post-entry wurden
-`45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen.
+Der Lauf verarbeitete `1.720.931.837` Gastzyklen; post-entry wurden
+`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen.
 
 Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
-Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Readiness und
-Render-Engine laufen. Die vollstaendige Video-/ISP-/TSP-Completion-Fanout
-aenderte den schwarzen Sichtpfad nicht; der aktuelle P0 liegt in der
-nachgelagerten Gast-IRQ-/ACK- und FB_R-Scanout-Folge. Der Performance-P0 ist
-fuer diesen Bring-up ausreichend verbessert; weitere Arbeit erfolgt nur bei
-einem echten Blocker.
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Render-
+Engine, echter AICA-ARM7, Sound-/Main-Interrupts und Common-Monitorregister
+laufen; der Sofdec-Audiotakt schreitet fort. Der aktuelle P0 liegt in der
+nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten FB_R-
+Bildpublikationsfolge. Der Performance-P0 ist fuer diesen Bring-up ausreichend
+verbessert; weitere Arbeit erfolgt nur bei einem echten Blocker.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
 exportiert werden kann. KR-4982 und KR-4983 bleiben gestrichen. KR-4993 und
-KR-4994 ist source-seitig abgeschlossen; der historische P0 ist die fehlende
+KR-4994 und KR-4995 sind source-seitig abgeschlossen; der historische P0 ist die fehlende
 Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
 Stackvertrag/Gate. Der historische D-Lauf bestand das
 globale KR-4981-Produktgate nicht. Ein weiterer Lauf ist nicht automatisch
@@ -283,8 +283,10 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 ## Aktiver Taskpfad
 
 ```text
-KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
-  -> D-Lauf beendet nach belegter Nichtverbesserung; Candidate-Resolution offen
+KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
+  -> RuntimeOnly-Build-/Export-Gate bestanden
+  -> Sonic-Film nach Presented by Sega weiterhin unsichtbar;
+     CRI-Callback-/YUV-/TA-/gastgesteuerte FB_R-Bildpublikation offen
 ```
 
 Fuer jeden Implementierungstask gilt:
@@ -298,10 +300,12 @@ Produkt- und Integrationstest. Die vorliegende D1-/D9-Evidenz ist nichtterminal;
 D1/G1 bleibt historisch unentschieden, D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
-KR-4991 bleiben inaktiv. KR-4994 ist source-seitig abgeschlossen; der aktuelle
-P0 ist die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
-vollstaendigen Stackvertrag/Gate. KR-4981 bleibt das
-globale Produktgate und ist nicht bestanden.
+KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen;
+die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure bleibt ein
+historischer PlatformAbi-Befund. Der aktuelle RuntimeOnly-P0 ist die
+nachgelagerte CRI-/Sofdec-Callback-/YUV-/TA-/gastgesteuerte FB_R-
+Bildpublikationsfolge. KR-4981 bleibt das globale Produktgate und ist nicht
+bestanden.
 Es gibt keine begleitende neue Testmatrix.
 
 ### Lauf nach Candidate-Domain-Top-Fix

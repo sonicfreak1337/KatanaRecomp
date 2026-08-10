@@ -2,17 +2,17 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.0`
 
-Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 89, Block-ABI 5,
+Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 90, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
 Portprojektvertrag 75.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
-Der aktuelle funktionale RuntimeOnly-Source-Stand umfasst die bereinigten
-Runtime-/Codegen-Aenderungen dieses Checkpoints. Die oeffentlichen Runtime-
-und PlatformServices-Layouts sind deshalb auf ABI 89 beziehungsweise 14
-versioniert; Backend-Interface-ABI 13 bleibt aktuell.
+Der aktuelle funktionale RuntimeOnly-Source-Stand ist `e1d8ade`. Die
+oeffentlichen AICA-/ARM7-Handoff-Layouts sind deshalb auf Runtime-ABI 90
+versioniert; PlatformServices-ABI 14 und Backend-Interface-ABI 13 bleiben
+aktuell.
 Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
 `PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
 Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
@@ -28,28 +28,30 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,539 s` ohne
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
 Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
-Nach dem Presented-by-Sega-Bild blieb der Kontaktbogen ab etwa `30 s`
+`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
+Nach dem Presented-by-Sega-Bild blieb der Kontaktbogen ab etwa `32 s`
 schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Das
 RuntimeOnly-Build-/Export-Gate bleibt bestanden, aber KR-4981 ist kein
 Bring-up-Gate-Pass.
 
-Der Lauf verarbeitete `2.205.542.705` Gastzyklen; die Diagnosemessung ergab
-post-entry `45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s`. Erfasst
-wurden `396` PVR-Render-Requests und -Completions, `396` Rendererframes,
-`5.040` YUV-Makrobloecke, `410` Hostframes sowie `537` Audiopuffer mit
-`394.695` Audiobildern. Die resetfeste TA-Telemetrie meldete trotz final
-leerem aktuellen Parserzustand `396` Lifetime-Frames und `807` post-entry
-Resets.
+Der Lauf verarbeitete `1.720.931.837` Gastzyklen; post-entry wurden
+`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen. Erfasst
+wurden `275` PVR-Render-Requests und -Completions, `275` Rendererframes,
+`2.240` YUV-Makrobloecke, `289` Hostframes sowie `392` Audiopuffer mit
+`288.120` Audiobildern. Der ARM7 laeuft im echten AICA-Sound-RAM ohne
+Ausfuehrungsfehler, Sonic aktiviert zwei Stimmen und der Audiohash ist nicht
+mehr der fruehere Stillewert.
 
-Der funktionale Checkpoint `efc531b` publiziert nach jedem erfolgreichen
-Renderabschluss die drei realen Holly-Stufenbits Video, ISP und TSP am selben
-Gastzyklus. Der unveraenderte schwarze Sichtpfad widerlegt die fehlende
-RenderDone-Fanout als alleinige Sonic-Ursache. Der aktuelle P0 liegt enger in
-der folgenden Gast-IRQ-/ACK- und FB_R-Scanout-Folge; ein automatischer
-Framebuffer-Flip oder eine private Diagnosebruecke bleibt ausgeschlossen.
+`e1d8ade` bindet einen echten AICA-ARM7TDMI-Kern, Sound-/Main-Interrupts,
+REG_L/REG_M, portable Fortsetzung und die Common-Monitorregister fuer MIDI-
+Leerstand, Channel-Lifecycle und Current Address. Der zuvor bei null stehende
+Sofdec-Audiotakt erreicht nun `0x2D0` und `0x890` bei der Einheit `0xAC44`
+(`44.100`). Der aktuelle P0 liegt damit hinter der AICA-Bereitschaft in der
+restlichen CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten FB_R-Flipfolge;
+ein automatischer Framebuffer-Flip oder eine private Bildbruecke bleibt
+ausgeschlossen.
 Weitere Performancearbeit erfolgt nur bei einem echten Blocker.
 Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
@@ -59,13 +61,13 @@ Bring-up-Meilensteins.
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
 Der aktuelle beaufsichtigte Sonic-PAL-Lauf endete ohne Fatal- oder
-Watchdogfehler. Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s`
+Watchdogfehler. Nach Presented by Sega blieb der Kontaktbogen ab etwa `32 s`
 schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Post-entry
-wurden `45,7111 MHz` aus `1.790.309.442` Zyklen in `39,1658 s` gemessen.
-Render-Engine und die vollstaendige Video-/ISP-/TSP-Completion-Fanout laufen;
-deren negativer Kausalnachweis verengt den P0 auf die nachgelagerte Gast-IRQ-/
-ACK- und FB_R-Scanout-Folge. Die oeffentlichen Layoutaenderungen sind durch
-Runtime-ABI 89 und PlatformServices-ABI 14 versioniert.
+wurden `33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen.
+Render-Engine, Video-/ISP-/TSP-Completion-Fanout und der ARM7-Soundtreiber
+laufen. Der nun fortschreitende Sofdec-Audiotakt verengt den P0 auf die
+nachgelagerte Movie-Callback-/Bildpublikationsfolge. Die oeffentlichen
+Layoutaenderungen sind durch Runtime-ABI 90 versioniert.
 
 Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
 Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren
@@ -80,7 +82,7 @@ gelten fuer diese alten Versuche, nicht fuer den aktuellen RuntimeOnly-
 Bring-up. Die historischen Zaehldomaenen sind nicht gemeinsam scoped und
 werden nicht zu Requeue- oder Per-Context-Messwerten verrechnet.
 
-KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994 sind source-seitig
+KR-4985, KR-4986, KR-4993, KR-4987, KR-4994 und KR-4995 sind source-seitig
 abgeschlossen. KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. Der
 Candidate-Resolution-P0 bleibt als historischer PlatformAbi-Folgepunkt
 dokumentiert; er ist nicht der aktuelle RuntimeOnly-Buildblocker. Der
@@ -189,7 +191,7 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    89
+Runtime-ABI:                    90
 Block-ABI:                       5
 Analyzer-ABI:                   34
 PlatformServices-ABI:           14
