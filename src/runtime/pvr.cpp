@@ -2791,7 +2791,12 @@ PvrTaFrame PvrTaFifo::finish_frame() {
     frame.modifier_volumes = std::move(modifier_volumes_);
     modifier_volumes_.clear();
     active_modifier_volume_.reset();
-    ++metrics_.frames;
+    if (metrics_.frames_current_generation !=
+        std::numeric_limits<std::uint64_t>::max())
+        ++metrics_.frames_current_generation;
+    if (metrics_.frames_lifetime !=
+        std::numeric_limits<std::uint64_t>::max())
+        ++metrics_.frames_lifetime;
     frame_packets_ = 0u;
     return frame;
 }
@@ -2842,7 +2847,7 @@ void PvrTaFifo::validate_state_restore(
         state.metrics.polygon_headers == 0u &&
         state.metrics.vertices == 0u &&
         state.metrics.list_completions == 0u &&
-        state.metrics.frames == 0u &&
+        state.metrics.frames_current_generation == 0u &&
         state.metrics.continuations == 0u &&
         state.metrics.rejected_packets == 0u;
     if (!valid_pvr_list_type(state.active_list) ||
@@ -2853,7 +2858,10 @@ void PvrTaFifo::validate_state_restore(
         state.user_clip_end_y > 1023u ||
         state.frame_packets > pvr_ta_maximum_frame_packets ||
         (!metrics_are_fresh &&
-         state.metrics.packets < state.frame_packets))
+         state.metrics.packets < state.frame_packets) ||
+        state.metrics.frames_lifetime <
+            state.metrics.frames_current_generation ||
+        state.metrics.reset_generation != state.metrics.resets_total)
         throw std::invalid_argument(
             "PVR-TA-FIFO-Handoff besitzt ungueltige Parserdaten.");
     validate_pvr_material(state.active_material);
@@ -2972,7 +2980,19 @@ void PvrTaFifo::discard_frame_state() noexcept {
 
 void PvrTaFifo::reset() noexcept {
     discard_frame_state();
+    const auto frames_lifetime = metrics_.frames_lifetime;
+    const auto reset_generation = metrics_.reset_generation;
+    const auto resets_total = metrics_.resets_total;
     metrics_ = {};
+    metrics_.frames_lifetime = frames_lifetime;
+    metrics_.reset_generation = reset_generation;
+    metrics_.resets_total = resets_total;
+    if (metrics_.reset_generation !=
+        std::numeric_limits<std::uint64_t>::max())
+        ++metrics_.reset_generation;
+    if (metrics_.resets_total !=
+        std::numeric_limits<std::uint64_t>::max())
+        ++metrics_.resets_total;
     first_input_error_.reset();
 }
 
@@ -6173,7 +6193,10 @@ void encode_ta_metrics(PvrStateWriter& writer,
     writer.u64(metrics.polygon_headers);
     writer.u64(metrics.vertices);
     writer.u64(metrics.list_completions);
-    writer.u64(metrics.frames);
+    writer.u64(metrics.frames_current_generation);
+    writer.u64(metrics.frames_lifetime);
+    writer.u64(metrics.reset_generation);
+    writer.u64(metrics.resets_total);
     writer.u64(metrics.continuations);
     writer.u64(metrics.rejected_packets);
 }
@@ -6186,7 +6209,10 @@ void encode_ta_metrics(PvrStateWriter& writer,
     metrics.polygon_headers = reader.u64();
     metrics.vertices = reader.u64();
     metrics.list_completions = reader.u64();
-    metrics.frames = reader.u64();
+    metrics.frames_current_generation = reader.u64();
+    metrics.frames_lifetime = reader.u64();
+    metrics.reset_generation = reader.u64();
+    metrics.resets_total = reader.u64();
     metrics.continuations = reader.u64();
     metrics.rejected_packets = reader.u64();
     return metrics;

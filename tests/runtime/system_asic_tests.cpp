@@ -199,11 +199,11 @@ int main() {
                 throws([&] { bus.write_u32(0x005F6948u, 1u); }) &&
                 throws([&] { static_cast<void>(bus.read_u16(0x005F6900u)); }),
             "Unbekanntes oder falsch breites ASIC-MMIO war still erfolgreich.");
-    require(throws([&] { asic->raise(SystemAsicEvent::PvrRenderDone, 9u); }),
+    require(throws([&] { asic->raise(SystemAsicEvent::PvrRenderDoneTsp, 9u); }),
             "Rueckwaerts laufende Gastzeit wurde akzeptiert.");
 
     DreamcastSystemAsic bounded_asic(router, 3u);
-    bounded_asic.raise(SystemAsicEvent::PvrRenderDone, 20u);
+    bounded_asic.raise(SystemAsicEvent::PvrRenderDoneTsp, 20u);
     bounded_asic.raise(SystemAsicEvent::PvrVblank, 21u);
     bounded_asic.raise(SystemAsicEvent::PvrOpaqueList, 22u);
     bounded_asic.raise(SystemAsicEvent::PvrTranslucentList, 23u);
@@ -228,7 +228,7 @@ int main() {
             "ASIC-Ringreset laesst Ereignisprovenienz oder Zaehler stehen.");
 
     DreamcastSystemAsic history_disabled_asic(router, 0u);
-    history_disabled_asic.raise(SystemAsicEvent::PvrRenderDone, 25u);
+    history_disabled_asic.raise(SystemAsicEvent::PvrRenderDoneTsp, 25u);
     require(history_disabled_asic.events().empty() &&
                 history_disabled_asic.last_event() &&
                 history_disabled_asic.last_event()->sequence == 1u &&

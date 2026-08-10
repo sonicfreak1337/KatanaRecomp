@@ -262,7 +262,7 @@ inline constexpr std::array<RuntimeProbeDeviceSchema, 35u>
         {RuntimeProbeDeviceKind::HostAudio, 0u, 4u},
         {RuntimeProbeDeviceKind::Scif, 0u, 17u},
         {RuntimeProbeDeviceKind::SystemAsic, 0u, 28u},
-        {RuntimeProbeDeviceKind::PvrTa, 0u, 154u},
+        {RuntimeProbeDeviceKind::PvrTa, 0u, 157u},
         {RuntimeProbeDeviceKind::PvrTaAperture, 0u, 6u},
         {RuntimeProbeDeviceKind::PvrYuv, 0u, 8u},
         {RuntimeProbeDeviceKind::IoPort, 0u, 10u},

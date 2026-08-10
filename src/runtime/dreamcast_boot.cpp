@@ -842,6 +842,19 @@ initialize_dreamcast_runtime(CpuState& cpu,
             throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
         target->raise(event, clock->current_cycle());
     };
+    const auto raise_pvr_render_done = [asic, scheduler] {
+        const auto target = asic.lock();
+        const auto clock = scheduler.lock();
+        if (!target || !clock)
+            throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
+        const auto guest_cycle = clock->current_cycle();
+        // Holly exposes one completion bit per render stage. Katana models one
+        // aggregate render latency, so publish all completed stages at the same
+        // guest cycle in the ordering used by established Dreamcast runtimes.
+        target->raise(SystemAsicEvent::PvrRenderDoneTsp, guest_cycle);
+        target->raise(SystemAsicEvent::PvrRenderDoneIsp, guest_cycle);
+        target->raise(SystemAsicEvent::PvrRenderDoneVideo, guest_cycle);
+    };
     const auto channel2_control = std::weak_ptr<DreamcastSystemBusControl>(state.system_bus_control);
     state.dmac->set_completion_observer([channel2_control, raise_now](const std::size_t channel) {
         if (channel != 2u) return;
@@ -940,7 +953,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto pvr_renderer = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
     const auto vram = std::weak_ptr<LinearMemoryDevice>(state.vram);
     state.pvr_registers->set_render_job_factory(
-        [ta_fifo, pvr_renderer, vram, raise_now](
+        [ta_fifo, pvr_renderer, vram, raise_pvr_render_done](
             const PvrRegisterSnapshot& register_snapshot,
             const std::uint64_t request,
             const std::uint64_t generation,
@@ -1012,7 +1025,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
                  registers = register_snapshot,
                  pvr_renderer,
                  vram,
-                 raise_now,
+                 raise_pvr_render_done,
                  request,
                  generation]() mutable {
                     const auto renderer = pvr_renderer.lock();
@@ -1059,7 +1072,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                                 "none",
                                                 std::string(detail));
                     }
-                    raise_now(SystemAsicEvent::PvrRenderDone);
+                    raise_pvr_render_done();
                     return PvrRenderResult::Success;
                 },
                 [fifo, staged_fifo = std::move(staged_fifo)]() mutable noexcept {

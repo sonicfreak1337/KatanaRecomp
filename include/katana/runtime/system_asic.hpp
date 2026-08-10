@@ -108,7 +108,9 @@ class DreamcastSystemBusControl final {
 };
 
 enum class SystemAsicEvent : std::uint16_t {
-    PvrRenderDone = 0x0002u,
+    PvrRenderDoneVideo = 0x0000u,
+    PvrRenderDoneIsp = 0x0001u,
+    PvrRenderDoneTsp = 0x0002u,
     PvrVblank = 0x0003u,
     PvrVblankOut = 0x0004u,
     PvrHblank = 0x0005u,
@@ -151,7 +153,7 @@ enum class SystemAsicEvent : std::uint16_t {
 struct SystemAsicEventRecord {
     std::uint64_t guest_cycle = 0u;
     std::uint64_t sequence = 0u;
-    SystemAsicEvent event = SystemAsicEvent::PvrRenderDone;
+    SystemAsicEvent event = SystemAsicEvent::PvrRenderDoneTsp;
 
     [[nodiscard]] bool operator==(const SystemAsicEventRecord&) const = default;
 };
@@ -171,7 +173,7 @@ struct DreamcastSystemAsicSnapshot {
     bool g2_dma_trigger_observer_bound = false;
     struct ScheduledEvent {
         std::uint64_t guest_cycle = 0u;
-        SystemAsicEvent event = SystemAsicEvent::PvrRenderDone;
+        SystemAsicEvent event = SystemAsicEvent::PvrRenderDoneTsp;
         std::optional<SchedulerEventId> event_id;
         bool event_rehydration_pending = false;
 
@@ -270,7 +272,7 @@ class DreamcastSystemAsic final {
         EventScheduler* scheduler = nullptr;
         SchedulerLifetimeToken scheduler_lifetime;
         std::uint64_t guest_cycle = 0u;
-        SystemAsicEvent event = SystemAsicEvent::PvrRenderDone;
+        SystemAsicEvent event = SystemAsicEvent::PvrRenderDoneTsp;
         std::optional<SchedulerEventId> event_id;
         bool event_rehydration_pending = false;
     };

@@ -584,7 +584,10 @@ struct PvrTaMetrics {
     std::uint64_t polygon_headers = 0u;
     std::uint64_t vertices = 0u;
     std::uint64_t list_completions = 0u;
-    std::uint64_t frames = 0u;
+    std::uint64_t frames_current_generation = 0u;
+    std::uint64_t frames_lifetime = 0u;
+    std::uint64_t reset_generation = 0u;
+    std::uint64_t resets_total = 0u;
     std::uint64_t continuations = 0u;
     std::uint64_t rejected_packets = 0u;
 };
@@ -943,7 +946,7 @@ class PvrSoftwareRenderer final {
     std::size_t last_render_jobs_ = 1u;
 };
 
-inline constexpr std::uint32_t dreamcast_pvr_state_contract_version = 1u;
+inline constexpr std::uint32_t dreamcast_pvr_state_contract_version = 2u;
 
 struct DreamcastPvrStateSnapshot {
     std::uint32_t contract_version = dreamcast_pvr_state_contract_version;

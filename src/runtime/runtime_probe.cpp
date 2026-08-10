@@ -1452,7 +1452,10 @@ make_runtime_probe_device_snapshot(const PvrTaFifoSnapshot& snapshot,
     fields.scalar(snapshot.metrics.polygon_headers);
     fields.scalar(snapshot.metrics.vertices);
     fields.scalar(snapshot.metrics.list_completions);
-    fields.scalar(snapshot.metrics.frames);
+    fields.scalar(snapshot.metrics.frames_current_generation);
+    fields.scalar(snapshot.metrics.frames_lifetime);
+    fields.scalar(snapshot.metrics.reset_generation);
+    fields.scalar(snapshot.metrics.resets_total);
     fields.scalar(snapshot.metrics.continuations);
     fields.scalar(snapshot.metrics.rejected_packets);
     fields.scalar(snapshot.frame_packets);

@@ -352,8 +352,8 @@ int main() {
                 registration_failure.active_render_payload_digest == 0u &&
                 registration_failure.last_render_start_error ==
                     PvrRenderStartError::SchedulerFailure &&
-                fifo_after_registration.metrics.frames ==
-                    fifo_before_registration.metrics.frames &&
+                fifo_after_registration.metrics.frames_current_generation ==
+                    fifo_before_registration.metrics.frames_current_generation &&
                 fifo_after_registration.metrics.packets ==
                     fifo_before_registration.metrics.packets &&
                 fifo_after_registration.accelerator.frame_has_list ==
@@ -362,8 +362,10 @@ int main() {
                     fifo_before_registration.accelerator.list_open,
             "Schedulerfehler nach STARTRENDER-Prepare konsumiert den alten TA-Auftrag.");
     static_cast<void>(registration_fifo.finish_frame());
-    require(registration_fifo.metrics().frames ==
-                fifo_before_registration.metrics.frames + 1u,
+    require(registration_fifo.metrics().frames_current_generation ==
+                fifo_before_registration.metrics.frames_current_generation + 1u &&
+                registration_fifo.metrics().frames_lifetime ==
+                    fifo_before_registration.metrics.frames_lifetime + 1u,
             "Nach Schedulerrollback ist der vorbereitete TA-Auftrag nicht mehr renderbar.");
 
     EventScheduler scan_scheduler;
@@ -603,7 +605,8 @@ int main() {
     policy_snapshot.ta_fifo.frame_packets = 5u;
     policy_snapshot.ta_fifo.pending_intensity_header = true;
     policy_snapshot.ta_fifo.metrics.packets = 17u;
-    policy_snapshot.ta_fifo.metrics.frames = 3u;
+    policy_snapshot.ta_fifo.metrics.frames_current_generation = 3u;
+    policy_snapshot.ta_fifo.metrics.frames_lifetime = 3u;
     policy_snapshot.ta_fifo.metrics.rejected_packets = 1u;
     policy_snapshot.ta_fifo.first_input_error =
         PvrTaInputError{PvrTaInputErrorReason::InvalidPacket, 17u, "captured"};
@@ -650,7 +653,8 @@ int main() {
                 policy_snapshot.registers.vblank_in == 0u &&
                 !policy_snapshot.registers.last_render_start_error &&
                 policy_snapshot.ta_fifo.metrics.packets == 0u &&
-                policy_snapshot.ta_fifo.metrics.frames == 0u &&
+                policy_snapshot.ta_fifo.metrics.frames_current_generation == 0u &&
+                policy_snapshot.ta_fifo.metrics.frames_lifetime == 0u &&
                 policy_snapshot.ta_fifo.metrics.rejected_packets == 0u &&
                 !policy_snapshot.ta_fifo.first_input_error &&
                 policy_snapshot.yuv.converted_macroblocks == 0u &&

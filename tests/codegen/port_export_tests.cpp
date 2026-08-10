@@ -1059,7 +1059,11 @@ int run_test(const int argc, char* argv[]) {
                              hle_runtime_state.system_asic->events().end(),
                              [](const auto& event) {
                                  return event.event ==
-                                        katana::runtime::SystemAsicEvent::PvrRenderDone;
+                                            katana::runtime::SystemAsicEvent::PvrRenderDoneVideo ||
+                                        event.event ==
+                                            katana::runtime::SystemAsicEvent::PvrRenderDoneIsp ||
+                                        event.event ==
+                                            katana::runtime::SystemAsicEvent::PvrRenderDoneTsp;
                              });
     };
     hle_runtime_state.pvr_registers->write(
@@ -1116,8 +1120,8 @@ int run_test(const int argc, char* argv[]) {
     static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 64u));
     require(hle_runtime_state.pvr_registers->render_completion_count() ==
                     render_completions_before_success + 1u &&
-                render_done_count() == render_done_before_failure + 1u,
-            "Gueltiger PVR-Renderabschluss erreicht RenderDone nicht deterministisch.");
+                render_done_count() == render_done_before_failure + 3u,
+            "Gueltiger PVR-Renderabschluss erreicht den Drei-Stufen-Fan-out nicht deterministisch.");
     auto input = std::make_shared<katana::runtime::ReplayInputBackend>(
         std::vector<katana::runtime::ControllerState>{{}});
     hle_runtime_state.maple->attach(
@@ -1139,8 +1143,10 @@ int run_test(const int argc, char* argv[]) {
                            hle_runtime_state.system_asic->events().end(),
                            [&](const auto& event) { return event.event == expected; });
     };
-    require(has_asic_event(katana::runtime::SystemAsicEvent::PvrRenderDone),
-            "Produktives PVR-RenderDone erreicht das System-ASIC nicht.");
+    require(has_asic_event(katana::runtime::SystemAsicEvent::PvrRenderDoneVideo) &&
+                has_asic_event(katana::runtime::SystemAsicEvent::PvrRenderDoneIsp) &&
+                has_asic_event(katana::runtime::SystemAsicEvent::PvrRenderDoneTsp),
+            "Produktiver PVR-RenderDone-Fan-out erreicht das System-ASIC nicht.");
     require(has_asic_event(katana::runtime::SystemAsicEvent::MapleDma),
             "Produktives Maple-DMA erreicht das System-ASIC nicht.");
     require(has_asic_event(katana::runtime::SystemAsicEvent::GdromCommand),
