@@ -16,6 +16,7 @@
 namespace katana::runtime {
 
 class AicaExecutionController;
+class AicaArm7Core;
 
 inline constexpr std::uint32_t aica_register_physical_base = 0x00700000u;
 inline constexpr std::size_t aica_register_size = 0x00008000u;
@@ -56,6 +57,7 @@ struct AicaChannelRuntimeSnapshot {
     std::int32_t adpcm_predictor = 0;
     std::int32_t adpcm_step = 127;
     bool active = false;
+    bool looped = false;
 
     [[nodiscard]] bool operator==(const AicaChannelRuntimeSnapshot&) const = default;
 };
@@ -112,15 +114,22 @@ class AicaRegisterFile final {
         AicaRegisterSnapshot state) noexcept;
 
   private:
+    friend class AicaArm7Core;
     struct ChannelRuntime {
         std::uint64_t phase = 0u;
         std::uint32_t adpcm_position = 0u;
         std::int32_t adpcm_predictor = 0;
         std::int32_t adpcm_step = 127;
         bool active = false;
+        mutable bool looped = false;
     };
     [[nodiscard]] static std::size_t width_bytes(MemoryAccessWidth width) noexcept;
     void check(std::uint32_t offset, MemoryAccessWidth width) const;
+    [[nodiscard]] std::uint32_t read_arm(std::uint32_t offset,
+                                         MemoryAccessWidth width) const;
+    void write_arm(std::uint32_t offset,
+                   std::uint32_t value,
+                   MemoryAccessWidth width);
     void record_voice_error(AicaVoiceError error,
                             AicaSampleFormat format,
                             std::size_t channel,
@@ -233,7 +242,44 @@ class RecordingAicaAudioBackend final : public AicaAudioBackend {
 };
 
 enum class AicaArm7Mode : std::uint8_t { HighLevelAudio, LowLevelArm7 };
-enum class AicaExecutionError : std::uint8_t { None, TickScheduleFailure };
+enum class AicaExecutionError : std::uint8_t {
+    None,
+    TickScheduleFailure,
+    Arm7ExecutionFailure,
+};
+
+struct AicaArm7BlockTransferSnapshot {
+    std::uint32_t address = 0u;
+    std::uint32_t r15_offset = 0u;
+    std::uint32_t last_bank = 0u;
+    std::uint32_t base_address = 0u;
+    std::uint32_t cycle = 0u;
+    std::uint32_t register_count = 0u;
+
+    [[nodiscard]] bool operator==(const AicaArm7BlockTransferSnapshot&) const = default;
+};
+
+// Portable guest-visible ARM7TDMI continuation. Debug rings, callback pointers
+// and host-only lookup tables deliberately stay outside the handoff contract.
+struct AicaArm7Snapshot {
+    std::array<std::uint32_t, 37u> registers{};
+    std::array<std::uint32_t, 5u> prefetch_opcodes{};
+    std::uint32_t prefetch_pc = 0xFFFFFFFFu;
+    std::uint32_t instruction_cycles = 0u;
+    std::uint32_t phased_opcode = 0u;
+    std::uint32_t phased_operation = 1u;
+    std::uint32_t phase = 0u;
+    AicaArm7BlockTransferSnapshot block;
+    std::uint64_t executed_instructions = 0u;
+    std::uint64_t executed_cycles = 0u;
+    std::uint64_t cycle_debt = 0u;
+    bool next_fetch_sequential = false;
+    bool waiting_for_interrupt = false;
+    bool enabled = false;
+    bool faulted = false;
+
+    [[nodiscard]] bool operator==(const AicaArm7Snapshot&) const = default;
+};
 
 class AicaTimer final {
   public:
@@ -319,6 +365,11 @@ class AicaExecutionController final {
         bool arm7_reset_asserted = false;
         std::array<AicaTimer::Snapshot, timer_count> timers{};
         AicaInterruptState::Snapshot interrupts{};
+        AicaInterruptState::Snapshot sound_interrupts{};
+        std::array<std::uint8_t, 3u> sound_interrupt_levels{};
+        std::uint8_t arm_interrupt_level = 0u;
+        bool arm_interrupt_output = false;
+        AicaArm7Snapshot arm7;
         std::optional<SchedulerEventId> tick_event;
         // SchedulerEventId is process-local. Portable state carries the typed
         // AICA tick event separately and sets this flag until rehydration.
@@ -347,13 +398,34 @@ class AicaExecutionController final {
     [[nodiscard]] bool event_rehydration_pending() const noexcept;
 
   private:
+    friend class AicaRegisterFile;
+    friend class AicaArm7Core;
+    friend std::shared_ptr<AicaRegisterFile>
+    map_aica_registers(Memory&,
+                       std::shared_ptr<AicaExecutionController>,
+                       std::shared_ptr<LinearMemoryDevice>);
     void schedule_tick();
     void handle_tick(SchedulerEventId event_id);
     void handle_scheduler_reset() noexcept;
+    void bind_arm7_bus(const std::shared_ptr<AicaRegisterFile>& registers,
+                       const std::shared_ptr<LinearMemoryDevice>& ram);
+    void set_sound_interrupt_enabled(std::uint32_t mask);
+    void request_sound_interrupt(std::uint32_t mask);
+    void acknowledge_sound_interrupt(std::uint32_t mask) noexcept;
+    void set_sound_interrupt_levels(std::array<std::uint8_t, 3u> levels) noexcept;
+    [[nodiscard]] std::uint32_t sound_interrupt_pending() const noexcept;
+    [[nodiscard]] std::uint8_t arm_interrupt_level() const noexcept;
+    void accept_arm_interrupt() noexcept;
+    void refresh_arm_interrupt() noexcept;
     AicaArm7Mode mode_ = AicaArm7Mode::HighLevelAudio;
     bool arm7_reset_asserted_ = false;
     std::array<AicaTimer, timer_count> timers_{};
     AicaInterruptState interrupts_;
+    AicaInterruptState sound_interrupts_;
+    std::array<std::uint8_t, 3u> sound_interrupt_levels_{};
+    std::uint8_t arm_interrupt_level_ = 0u;
+    bool arm_interrupt_output_ = false;
+    std::unique_ptr<AicaArm7Core> arm7_;
     EventScheduler* scheduler_ = nullptr;
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
@@ -365,7 +437,7 @@ class AicaExecutionController final {
     static constexpr std::uint64_t audio_cycles_per_tick = 256u;
 };
 
-inline constexpr std::uint32_t dreamcast_aica_state_contract_version = 1u;
+inline constexpr std::uint32_t dreamcast_aica_state_contract_version = 2u;
 
 struct DreamcastAicaStateSnapshot {
     std::uint32_t contract_version = dreamcast_aica_state_contract_version;

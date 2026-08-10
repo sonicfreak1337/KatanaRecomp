@@ -6,7 +6,7 @@ endif()
 
 # Compatibility values are maintained here and emitted into the public SDK.
 # Increment the relevant value for every incompatible contract change.
-set(KATANA_RUNTIME_ABI_VERSION 89)
+set(KATANA_RUNTIME_ABI_VERSION 90)
 set(KATANA_BLOCK_ABI_VERSION 5)
 set(KATANA_ANALYZER_ABI_VERSION 34)
 set(KATANA_PLATFORM_SERVICES_ABI_VERSION 14)

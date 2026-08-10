@@ -34,9 +34,9 @@ int main() {
     require(execution.mode() == AicaArm7Mode::HighLevelAudio &&
                 !execution.arm7_executes_instructions(),
             "AICA startet nicht im dokumentierten HLE-Audioprofil.");
-    require(throws<std::runtime_error>([&] { execution.set_mode(AicaArm7Mode::LowLevelArm7); }) &&
+    require(throws<std::logic_error>([&] { execution.set_mode(AicaArm7Mode::LowLevelArm7); }) &&
                 execution.mode() == AicaArm7Mode::HighLevelAudio,
-            "Nicht implementiertes ARM7-LLE wird still akzeptiert oder veraendert den Modus.");
+            "ARM7-LLE wird ohne gebundenen AICA-Bus aktiviert.");
 
     execution.timer(0u).configure(254u, 1u, true);
     execution.interrupts().set_enabled(AicaExecutionController::timer_interrupt_base);
@@ -45,9 +45,9 @@ int main() {
             "AICA-Timer ignoriert Teiler oder loest zu frueh aus.");
     execution.tick(1u);
     require(execution.timer(0u).counter() == 0u && execution.interrupts().asserted() &&
-                execution.interrupts().pending() == (1u << 6u),
+                execution.interrupts().pending() == ((1u << 6u) | (1u << 10u)),
             "AICA-Timeroverflow erzeugt keinen maskierten Interrupt.");
-    execution.interrupts().acknowledge(1u << 6u);
+    execution.interrupts().acknowledge((1u << 6u) | (1u << 10u));
     require(!execution.interrupts().asserted() && execution.interrupts().pending() == 0u,
             "AICA-Timerinterrupt kann nicht quittiert werden.");
     std::uint32_t dma_requests = 0u;
@@ -60,7 +60,8 @@ int main() {
             "Ein expliziter AICA-DMA-Request erreicht den G2-Hardwaretrigger nicht.");
     execution.timer(1u).configure(255u, 0u, true);
     execution.tick(1u);
-    require(execution.interrupts().pending() == (1u << 7u) && !execution.interrupts().asserted(),
+    require(execution.interrupts().pending() == ((1u << 7u) | (1u << 10u)) &&
+                !execution.interrupts().asserted(),
             "Maskierter AICA-Interrupt geht verloren oder wird faelschlich zugestellt.");
     require(throws<std::out_of_range>([&] { static_cast<void>(execution.timer(3u)); }),
             "Ungueltiger AICA-Timerindex wird akzeptiert.");
@@ -80,8 +81,8 @@ int main() {
             "AICA-ARM-Resetbit und VREG sind nicht mit dem ExecutionController verbunden.");
     memory.write_u8(0x00702C00u, 0u);
     require(!product_execution->arm7_reset_asserted() && memory.read_u8(0x00702C00u) == 0u &&
-                !product_execution->arm7_executes_instructions(),
-            "AICA-ARM-Freigabe wird nicht verfolgt oder behauptet faelschlich ARM7-LLE.");
+                product_execution->arm7_executes_instructions(),
+            "AICA-ARM-Freigabe startet den gebundenen ARM7 nicht.");
     sound_ram->write_u16(0u, 1000u);
     sound_ram->write_u16(2u, std::bit_cast<std::uint16_t>(std::int16_t{-1000}));
     memory.write_u32(0x00702800u, 0x0Fu);
@@ -330,5 +331,5 @@ int main() {
                 reset_scheduler.pending_event_count() == 1u,
             "AICA erholt sich nach Schedulerreset nicht vom sichtbaren Tickfehler.");
 
-    std::cout << "KR-2904 ARM7-HLE-Strategie, Timer und Interrupts erfolgreich.\n";
+    std::cout << "KR-2904 ARM7-, Timer- und Interruptpfad erfolgreich.\n";
 }

@@ -527,6 +527,7 @@ set(KATANA_RUNTIME_CORE_SOURCES
     src/io/input_provenance.cpp
     src/io/json_report.cpp
     src/runtime/aica.cpp
+    src/runtime/aica_arm7_core.cpp
     src/runtime/block_abi.cpp
     src/runtime/block_table.cpp
     src/runtime/indirect_dispatch.cpp
@@ -617,6 +618,7 @@ function(katana_configure_runtime_objects target)
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_BINARY_DIR}/generated/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     )
     katana_enable_warnings(${target})
     if(MSVC)

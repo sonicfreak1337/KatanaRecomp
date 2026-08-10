@@ -1,5 +1,6 @@
 #include "katana/runtime/aica.hpp"
 
+#include "aica_arm7_core.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "parallel_work.hpp"
 
@@ -192,6 +193,35 @@ std::uint32_t AicaRegisterFile::read(const std::uint32_t offset,
         return value;
     };
     const auto logical_byte = [this, &stored_word](const std::uint32_t byte_offset) {
+        // The common monitor block is read-driven hardware state. Returning
+        // stale backing bytes here can leave retail ARM sound drivers waiting
+        // forever for an empty MIDI FIFO or a completed sample channel.
+        if (byte_offset == 0x2808u) return std::uint8_t{0u};
+        if (byte_offset == 0x2809u) {
+            // MIEMP=1 and MOEMP=1; both unimplemented FIFOs are empty.
+            return std::uint8_t{0x09u};
+        }
+        const auto monitored_channel = static_cast<std::size_t>(
+            registers_[0x280Du] & 0x3Fu);
+        if (byte_offset == 0x2810u || byte_offset == 0x2811u) {
+            auto& channel = channels_[monitored_channel];
+            const auto envelope = channel.active ? 0u : 0x1FFFu;
+            const auto generator_state = channel.active ? 2u : 3u;
+            const auto monitor = static_cast<std::uint16_t>(
+                envelope | (generator_state << 13u) |
+                (channel.looped ? 0x8000u : 0u));
+            const auto result = static_cast<std::uint8_t>(
+                monitor >> ((byte_offset - 0x2810u) * 8u));
+            if (byte_offset == 0x2811u) channel.looped = false;
+            return result;
+        }
+        if (byte_offset == 0x2814u || byte_offset == 0x2815u) {
+            const auto current_address = static_cast<std::uint16_t>(
+                channels_[monitored_channel].phase >> 32u);
+            return static_cast<std::uint8_t>(
+                current_address >> ((byte_offset - 0x2814u) * 8u));
+        }
+
         if (!execution_) return registers_[byte_offset];
 
         constexpr std::uint32_t timer_base = 0x2890u;
@@ -219,6 +249,14 @@ std::uint32_t AicaRegisterFile::read(const std::uint32_t offset,
                 ((byte_offset - interrupt_pending_offset) * 8u));
         }
 
+        constexpr std::uint32_t sound_interrupt_pending_offset = 0x28A0u;
+        if (byte_offset >= sound_interrupt_pending_offset &&
+            byte_offset < sound_interrupt_pending_offset + sizeof(std::uint32_t)) {
+            return static_cast<std::uint8_t>(
+                execution_->sound_interrupt_pending() >>
+                ((byte_offset - sound_interrupt_pending_offset) * 8u));
+        }
+
         constexpr std::uint32_t arm_reset_offset = 0x2C00u;
         if (byte_offset >= arm_reset_offset &&
             byte_offset < arm_reset_offset + sizeof(std::uint32_t)) {
@@ -238,6 +276,29 @@ std::uint32_t AicaRegisterFile::read(const std::uint32_t offset,
                   << (index * 8u);
     }
     return result;
+}
+
+std::uint32_t AicaRegisterFile::read_arm(const std::uint32_t offset,
+                                         const MemoryAccessWidth width) const {
+    constexpr std::uint32_t interrupt_level_offset = 0x2D00u;
+    constexpr std::uint32_t interrupt_accept_offset = 0x2D04u;
+    if (offset == interrupt_level_offset)
+        return execution_ ? execution_->arm_interrupt_level() : 0u;
+    if (offset == interrupt_accept_offset) return 0u;
+    return read(offset, width);
+}
+
+void AicaRegisterFile::write_arm(const std::uint32_t offset,
+                                 const std::uint32_t value,
+                                 const MemoryAccessWidth width) {
+    constexpr std::uint32_t interrupt_level_offset = 0x2D00u;
+    constexpr std::uint32_t interrupt_accept_offset = 0x2D04u;
+    if (offset == interrupt_level_offset) return;
+    if (offset == interrupt_accept_offset) {
+        if (execution_ && (value & 1u) != 0u) execution_->accept_arm_interrupt();
+        return;
+    }
+    write(offset, value, width);
 }
 
 void AicaRegisterFile::write(const std::uint32_t offset,
@@ -309,8 +370,19 @@ void AicaRegisterFile::write(const std::uint32_t offset,
                 static_cast<std::uint8_t>((timer_value >> 8u) & 7u),
                 true);
         }
+        if (overlaps(0x289Cu, 4u))
+            execution_->set_sound_interrupt_enabled(load32(0x289Cu));
+        if (overlaps(0x28A0u, 4u) && (load32(0x28A0u) & (1u << 5u)) != 0u)
+            execution_->request_sound_interrupt(1u << 5u);
+        if (overlaps(0x28A4u, 4u))
+            execution_->acknowledge_sound_interrupt(load32(0x28A4u));
+        if (overlaps(0x28A8u, 12u))
+            execution_->set_sound_interrupt_levels({
+                registers_[0x28A8u], registers_[0x28ACu], registers_[0x28B0u]});
         if (overlaps(0x28B4u, 4u))
-            execution_->interrupts().set_enabled(load32(0x28B4u));
+            execution_->interrupts().set_enabled(load32(0x28B4u) & 0x7FFu);
+        if (overlaps(0x28B8u, 4u) && (load32(0x28B8u) & (1u << 5u)) != 0u)
+            execution_->interrupts().request(1u << 5u);
         if (overlaps(0x28BCu, 4u))
             execution_->interrupts().acknowledge(load32(0x28BCu));
     }
@@ -510,6 +582,7 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
                     position = std::min(loop_start, loop_end - 1u);
                     runtime.phase =
                         static_cast<std::uint64_t>(position) << 32u;
+                    runtime.looped = true;
                     if (format >= 2u) reset_adpcm();
                 }
                 std::int16_t sample = 0;
@@ -649,7 +722,8 @@ AicaRegisterSnapshot AicaRegisterFile::snapshot() const noexcept {
                                   source.adpcm_position,
                                   source.adpcm_predictor,
                                   source.adpcm_step,
-                                  source.active};
+                                  source.active,
+                                  source.looped};
     }
     result.writes = writes_;
     result.rendered_buffers = rendered_buffers_;
@@ -718,6 +792,7 @@ void AicaRegisterFile::commit_validated_state_restore(
             source.adpcm_predictor,
             source.adpcm_step,
             source.active,
+            source.looped,
         };
     }
     writes_ = state.writes;
@@ -933,7 +1008,7 @@ void AicaInterruptState::reset() noexcept {
 AicaExecutionController::AicaExecutionController(EventScheduler* const scheduler,
                                                  const std::uint64_t guest_clock_hz,
                                                  const std::uint64_t audio_clock_hz)
-    : scheduler_(scheduler) {
+    : arm7_(std::make_unique<AicaArm7Core>()), scheduler_(scheduler) {
     if (scheduler_ == nullptr) return;
     if (guest_clock_hz == 0u || audio_clock_hz == 0u ||
         guest_clock_hz > std::numeric_limits<std::uint64_t>::max() / audio_cycles_per_tick)
@@ -973,6 +1048,7 @@ void AicaExecutionController::handle_tick(const SchedulerEventId event_id) {
         throw std::logic_error("AICA-Timercompletion besitzt kein aktives Ereignis.");
     tick_event_.reset();
     tick(audio_cycles_per_tick);
+    if (error_ == AicaExecutionError::Arm7ExecutionFailure) return;
     try {
         schedule_tick();
         error_ = AicaExecutionError::None;
@@ -1032,6 +1108,11 @@ void AicaExecutionController::reset() noexcept {
     arm7_reset_asserted_ = false;
     for (auto& timer : timers_) timer.reset();
     interrupts_.reset();
+    sound_interrupts_.reset();
+    sound_interrupt_levels_.fill(0u);
+    arm_interrupt_level_ = 0u;
+    arm_interrupt_output_ = false;
+    arm7_->reset(false);
     error_ = AicaExecutionError::None;
 
     if (scheduler_ != nullptr && !scheduler_lifetime_.expired() && tick_event_)
@@ -1048,20 +1129,49 @@ void AicaExecutionController::reset() noexcept {
 }
 
 void AicaExecutionController::set_mode(const AicaArm7Mode mode) {
-    if (mode == AicaArm7Mode::LowLevelArm7) {
-        throw std::runtime_error("AICA-ARM7-LLE ist im v0.29-HLE-Audioprofil nicht implementiert.");
-    }
+    if (mode == AicaArm7Mode::LowLevelArm7 && arm7_reset_asserted_)
+        throw std::logic_error("AICA-ARM7 kann waehrend Reset nicht ausgefuehrt werden.");
+    if (mode == AicaArm7Mode::LowLevelArm7 && !arm7_->bus_bound())
+        throw std::logic_error("AICA-ARM7 braucht vor der Freigabe einen gebundenen Bus.");
+    if (mode == AicaArm7Mode::LowLevelArm7 && arm7_->faulted())
+        throw std::logic_error("AICA-ARM7 muss nach einem Ausfuehrungsfehler zurueckgesetzt werden.");
     mode_ = mode;
+    arm7_->set_enabled(mode == AicaArm7Mode::LowLevelArm7 && !arm7_reset_asserted_);
 }
 
 AicaArm7Mode AicaExecutionController::mode() const noexcept {
     return mode_;
 }
 bool AicaExecutionController::arm7_executes_instructions() const noexcept {
-    return false;
+    return mode_ == AicaArm7Mode::LowLevelArm7 && arm7_->enabled();
 }
 
 void AicaExecutionController::set_arm7_reset_asserted(const bool asserted) noexcept {
+    if (asserted) {
+        if (!arm7_reset_asserted_ || arm7_->enabled()) arm7_->reset(false);
+        mode_ = AicaArm7Mode::HighLevelAudio;
+        if (error_ == AicaExecutionError::Arm7ExecutionFailure) {
+            error_ = AicaExecutionError::None;
+            if (scheduler_ != nullptr && !scheduler_lifetime_.expired() && !tick_event_) {
+                try {
+                    schedule_tick();
+                } catch (...) {
+                    error_ = AicaExecutionError::TickScheduleFailure;
+                }
+            }
+        }
+    } else if (!arm7_->enabled()) {
+        if (!arm7_->bus_bound()) {
+            mode_ = AicaArm7Mode::HighLevelAudio;
+            arm7_->mark_faulted();
+            error_ = AicaExecutionError::Arm7ExecutionFailure;
+            arm7_reset_asserted_ = asserted;
+            return;
+        }
+        arm7_->reset(true);
+        arm7_->set_fiq_line(arm_interrupt_output_);
+        mode_ = AicaArm7Mode::LowLevelArm7;
+    }
     arm7_reset_asserted_ = asserted;
 }
 
@@ -1097,11 +1207,84 @@ void AicaExecutionController::request_dma() {
     if (dma_request_observer_) dma_request_observer_();
 }
 
+void AicaExecutionController::bind_arm7_bus(
+    const std::shared_ptr<AicaRegisterFile>& registers,
+    const std::shared_ptr<LinearMemoryDevice>& ram) {
+    arm7_->bind_bus(registers, ram);
+}
+
+void AicaExecutionController::set_sound_interrupt_enabled(const std::uint32_t mask) {
+    sound_interrupts_.set_enabled(mask & 0x7FFu);
+    refresh_arm_interrupt();
+}
+
+void AicaExecutionController::request_sound_interrupt(const std::uint32_t mask) {
+    sound_interrupts_.request(mask & 0x7FFu);
+    refresh_arm_interrupt();
+}
+
+void AicaExecutionController::acknowledge_sound_interrupt(const std::uint32_t mask) noexcept {
+    sound_interrupts_.acknowledge(mask & 0x7FFu);
+    refresh_arm_interrupt();
+}
+
+void AicaExecutionController::set_sound_interrupt_levels(
+    const std::array<std::uint8_t, 3u> levels) noexcept {
+    sound_interrupt_levels_ = levels;
+    refresh_arm_interrupt();
+}
+
+std::uint32_t AicaExecutionController::sound_interrupt_pending() const noexcept {
+    return sound_interrupts_.pending();
+}
+
+std::uint8_t AicaExecutionController::arm_interrupt_level() const noexcept {
+    return arm_interrupt_level_;
+}
+
+void AicaExecutionController::accept_arm_interrupt() noexcept {
+    arm_interrupt_output_ = false;
+    arm7_->set_fiq_line(false);
+    refresh_arm_interrupt();
+}
+
+void AicaExecutionController::refresh_arm_interrupt() noexcept {
+    if (!arm_interrupt_output_ && sound_interrupts_.asserted()) {
+        const auto active = sound_interrupts_.pending() & sound_interrupts_.enabled();
+        std::uint32_t source = 0u;
+        while (source < 11u && (active & (1u << source)) == 0u) ++source;
+        const auto level_bit = std::min<std::uint32_t>(source, 7u);
+        const auto mask = static_cast<std::uint8_t>(1u << level_bit);
+        arm_interrupt_level_ = static_cast<std::uint8_t>(
+            ((sound_interrupt_levels_[0] & mask) != 0u ? 1u : 0u) |
+            ((sound_interrupt_levels_[1] & mask) != 0u ? 2u : 0u) |
+            ((sound_interrupt_levels_[2] & mask) != 0u ? 4u : 0u));
+        arm_interrupt_output_ = true;
+    }
+    arm7_->set_fiq_line(arm_interrupt_output_);
+}
+
 void AicaExecutionController::tick(const std::uint64_t audio_cycles) {
-    for (std::size_t index = 0u; index < timers_.size(); ++index) {
-        if (timers_[index].tick(audio_cycles) != 0u) {
-            interrupts_.request(timer_interrupt_base << index);
+    constexpr std::uint64_t arm_cycles_per_sample = 512u;
+    constexpr std::uint32_t sample_done_interrupt = 1u << 10u;
+    for (std::uint64_t sample = 0u; sample < audio_cycles; ++sample) {
+        if (arm7_executes_instructions()) {
+            arm7_->run_cycles(arm_cycles_per_sample);
+            if (arm7_->faulted()) {
+                error_ = AicaExecutionError::Arm7ExecutionFailure;
+                return;
+            }
         }
+        for (std::size_t index = 0u; index < timers_.size(); ++index) {
+            if (timers_[index].tick(1u) != 0u) {
+                const auto interrupt = timer_interrupt_base << index;
+                interrupts_.request(interrupt);
+                sound_interrupts_.request(interrupt);
+            }
+        }
+        interrupts_.request(sample_done_interrupt);
+        sound_interrupts_.request(sample_done_interrupt);
+        refresh_arm_interrupt();
     }
 }
 
@@ -1112,6 +1295,11 @@ AicaExecutionController::Snapshot AicaExecutionController::snapshot() const noex
     for (std::size_t index = 0u; index < timers_.size(); ++index)
         result.timers[index] = timers_[index].snapshot();
     result.interrupts = interrupts_.snapshot();
+    result.sound_interrupts = sound_interrupts_.snapshot();
+    result.sound_interrupt_levels = sound_interrupt_levels_;
+    result.arm_interrupt_level = arm_interrupt_level_;
+    result.arm_interrupt_output = arm_interrupt_output_;
+    result.arm7 = arm7_->snapshot();
     result.tick_event = tick_event_;
     result.tick_event_rehydration_pending =
         tick_event_rehydration_pending_;
@@ -1134,17 +1322,30 @@ void AicaExecutionController::validate_state_restore(
         switch (error) {
         case AicaExecutionError::None:
         case AicaExecutionError::TickScheduleFailure:
+        case AicaExecutionError::Arm7ExecutionFailure:
             return true;
         }
         return false;
     };
-    if (!valid_mode(state.mode) || !valid_error(state.error) ||
-        state.mode != AicaArm7Mode::HighLevelAudio)
+    if (!valid_mode(state.mode) || !valid_error(state.error))
         throw std::invalid_argument(
             "AICA-Execution-Handoff besitzt einen nicht unterstuetzten Modus.");
     for (std::size_t index = 0u; index < timers_.size(); ++index)
         timers_[index].validate_state_restore(state.timers[index]);
     interrupts_.validate_state_restore(state.interrupts);
+    sound_interrupts_.validate_state_restore(state.sound_interrupts);
+    arm7_->validate_state_restore(state.arm7);
+    const auto arm_failed =
+        state.error == AicaExecutionError::Arm7ExecutionFailure;
+    const auto expected_arm_enabled =
+        state.mode == AicaArm7Mode::LowLevelArm7 &&
+        !state.arm7_reset_asserted && !arm_failed;
+    if (state.arm_interrupt_level > 7u ||
+        state.arm7.enabled != expected_arm_enabled ||
+        state.arm7.faulted != arm_failed ||
+        state.arm7_reset_asserted && state.arm7.enabled)
+        throw std::invalid_argument(
+            "AICA-Execution-Handoff besitzt inkonsistenten ARM7-Zustand.");
     if (state.tick_event && state.tick_event_rehydration_pending)
         throw std::invalid_argument(
             "AICA-Execution-Handoff darf kein gebundenes und ausstehendes "
@@ -1192,6 +1393,13 @@ void AicaExecutionController::commit_validated_state_restore(
             std::move(state.timers[index]));
     interrupts_.commit_validated_state_restore(
         std::move(state.interrupts));
+    sound_interrupts_.commit_validated_state_restore(
+        std::move(state.sound_interrupts));
+    sound_interrupt_levels_ = state.sound_interrupt_levels;
+    arm_interrupt_level_ = state.arm_interrupt_level;
+    arm_interrupt_output_ = state.arm_interrupt_output;
+    arm7_->commit_validated_state_restore(std::move(state.arm7));
+    arm7_->set_fiq_line(arm_interrupt_output_);
     error_ = state.error;
     tick_event_rehydration_pending_ = needs_tick_rehydration;
 }
@@ -1506,6 +1714,19 @@ void validate_aica_payload_shape(
     if (state.contract_version != dreamcast_aica_state_contract_version)
         throw std::invalid_argument(
             "AICA-Handoff-Payload besitzt einen inkompatiblen Vertrag.");
+    const auto valid_arm_mode = [](const std::uint32_t mode) noexcept {
+        switch (mode) {
+        case 0x10u:
+        case 0x11u:
+        case 0x12u:
+        case 0x13u:
+        case 0x17u:
+        case 0x1Bu:
+        case 0x1Fu:
+            return true;
+        }
+        return false;
+    };
     for (const auto& channel : state.registers.channels) {
         if (channel.adpcm_predictor < -32768 ||
             channel.adpcm_predictor > 32767 ||
@@ -1538,10 +1759,13 @@ void validate_aica_payload_shape(
                 state.rtc.guest_clock_hz))
         throw std::invalid_argument(
             "AICA-Handoff-Payload besitzt ungueltigen RTC-Zustand.");
-    if (state.execution.mode != AicaArm7Mode::HighLevelAudio ||
+    if ((state.execution.mode != AicaArm7Mode::HighLevelAudio &&
+         state.execution.mode != AicaArm7Mode::LowLevelArm7) ||
         (state.execution.error != AicaExecutionError::None &&
          state.execution.error !=
-             AicaExecutionError::TickScheduleFailure) ||
+             AicaExecutionError::TickScheduleFailure &&
+         state.execution.error !=
+             AicaExecutionError::Arm7ExecutionFailure) ||
         state.execution.tick_event)
         throw std::invalid_argument(
             "AICA-Handoff-Payload besitzt ungueltigen Executionzustand.");
@@ -1557,6 +1781,26 @@ void validate_aica_payload_shape(
           state.execution.interrupts.enabled) != 0u))
         throw std::invalid_argument(
             "AICA-Handoff-Payload besitzt ungueltigen Interruptpegel.");
+    const auto arm_failed =
+        state.execution.error == AicaExecutionError::Arm7ExecutionFailure;
+    const auto expected_arm_enabled =
+        state.execution.mode == AicaArm7Mode::LowLevelArm7 &&
+        !state.execution.arm7_reset_asserted && !arm_failed;
+    if (state.execution.sound_interrupts.asserted !=
+            ((state.execution.sound_interrupts.pending &
+              state.execution.sound_interrupts.enabled) != 0u) ||
+        state.execution.arm_interrupt_level > 7u ||
+        !valid_arm_mode(state.execution.arm7.registers[16u] & 0x1Fu) ||
+        state.execution.arm7.phased_operation > 2u ||
+        state.execution.arm7.phase > 16u ||
+        state.execution.arm7.block.cycle > 16u ||
+        state.execution.arm7.block.register_count > 16u ||
+        state.execution.arm7.instruction_cycles > 64u ||
+        state.execution.arm7.cycle_debt > 64u ||
+        state.execution.arm7.enabled != expected_arm_enabled ||
+        state.execution.arm7.faulted != arm_failed)
+        throw std::invalid_argument(
+            "AICA-Handoff-Payload besitzt ungueltigen ARM7-Zustand.");
     if (state.execution.guest_cycles_per_tick == 0u) {
         if (state.execution.tick_event_rehydration_pending)
             throw std::invalid_argument(
@@ -1588,6 +1832,7 @@ std::vector<std::uint8_t> encode_dreamcast_aica_state(
         writer.i32(channel.adpcm_predictor);
         writer.i32(channel.adpcm_step);
         writer.boolean(channel.active);
+        writer.boolean(channel.looped);
     }
     writer.u64(state.registers.writes);
     writer.u64(state.registers.rendered_buffers);
@@ -1621,6 +1866,32 @@ std::vector<std::uint8_t> encode_dreamcast_aica_state(
     writer.u32(state.execution.interrupts.enabled);
     writer.u32(state.execution.interrupts.pending);
     writer.boolean(state.execution.interrupts.asserted);
+    writer.u32(state.execution.sound_interrupts.enabled);
+    writer.u32(state.execution.sound_interrupts.pending);
+    writer.boolean(state.execution.sound_interrupts.asserted);
+    for (const auto level : state.execution.sound_interrupt_levels) writer.u8(level);
+    writer.u8(state.execution.arm_interrupt_level);
+    writer.boolean(state.execution.arm_interrupt_output);
+    for (const auto value : state.execution.arm7.registers) writer.u32(value);
+    for (const auto value : state.execution.arm7.prefetch_opcodes) writer.u32(value);
+    writer.u32(state.execution.arm7.prefetch_pc);
+    writer.u32(state.execution.arm7.instruction_cycles);
+    writer.u32(state.execution.arm7.phased_opcode);
+    writer.u32(state.execution.arm7.phased_operation);
+    writer.u32(state.execution.arm7.phase);
+    writer.u32(state.execution.arm7.block.address);
+    writer.u32(state.execution.arm7.block.r15_offset);
+    writer.u32(state.execution.arm7.block.last_bank);
+    writer.u32(state.execution.arm7.block.base_address);
+    writer.u32(state.execution.arm7.block.cycle);
+    writer.u32(state.execution.arm7.block.register_count);
+    writer.u64(state.execution.arm7.executed_instructions);
+    writer.u64(state.execution.arm7.executed_cycles);
+    writer.u64(state.execution.arm7.cycle_debt);
+    writer.boolean(state.execution.arm7.next_fetch_sequential);
+    writer.boolean(state.execution.arm7.waiting_for_interrupt);
+    writer.boolean(state.execution.arm7.enabled);
+    writer.boolean(state.execution.arm7.faulted);
     writer.boolean(
         state.execution.tick_event_rehydration_pending);
     write_aica_enum(writer, state.execution.error);
@@ -1645,6 +1916,7 @@ DreamcastAicaStateSnapshot decode_dreamcast_aica_state(
         channel.adpcm_predictor = reader.i32();
         channel.adpcm_step = reader.i32();
         channel.active = reader.boolean();
+        channel.looped = reader.boolean();
     }
     state.registers.writes = reader.u64();
     state.registers.rendered_buffers = reader.u64();
@@ -1679,6 +1951,32 @@ DreamcastAicaStateSnapshot decode_dreamcast_aica_state(
     state.execution.interrupts.enabled = reader.u32();
     state.execution.interrupts.pending = reader.u32();
     state.execution.interrupts.asserted = reader.boolean();
+    state.execution.sound_interrupts.enabled = reader.u32();
+    state.execution.sound_interrupts.pending = reader.u32();
+    state.execution.sound_interrupts.asserted = reader.boolean();
+    for (auto& level : state.execution.sound_interrupt_levels) level = reader.u8();
+    state.execution.arm_interrupt_level = reader.u8();
+    state.execution.arm_interrupt_output = reader.boolean();
+    for (auto& value : state.execution.arm7.registers) value = reader.u32();
+    for (auto& value : state.execution.arm7.prefetch_opcodes) value = reader.u32();
+    state.execution.arm7.prefetch_pc = reader.u32();
+    state.execution.arm7.instruction_cycles = reader.u32();
+    state.execution.arm7.phased_opcode = reader.u32();
+    state.execution.arm7.phased_operation = reader.u32();
+    state.execution.arm7.phase = reader.u32();
+    state.execution.arm7.block.address = reader.u32();
+    state.execution.arm7.block.r15_offset = reader.u32();
+    state.execution.arm7.block.last_bank = reader.u32();
+    state.execution.arm7.block.base_address = reader.u32();
+    state.execution.arm7.block.cycle = reader.u32();
+    state.execution.arm7.block.register_count = reader.u32();
+    state.execution.arm7.executed_instructions = reader.u64();
+    state.execution.arm7.executed_cycles = reader.u64();
+    state.execution.arm7.cycle_debt = reader.u64();
+    state.execution.arm7.next_fetch_sequential = reader.boolean();
+    state.execution.arm7.waiting_for_interrupt = reader.boolean();
+    state.execution.arm7.enabled = reader.boolean();
+    state.execution.arm7.faulted = reader.boolean();
     state.execution.tick_event.reset();
     state.execution.tick_event_rehydration_pending =
         reader.boolean();
@@ -1703,7 +2001,11 @@ std::shared_ptr<AicaRegisterFile>
 map_aica_registers(Memory& memory,
                    std::shared_ptr<AicaExecutionController> execution,
                    std::shared_ptr<LinearMemoryDevice> ram) {
+    auto bound_execution = execution;
+    auto bound_ram = ram;
     auto registers = std::make_shared<AicaRegisterFile>(std::move(execution), std::move(ram));
+    if (bound_execution && bound_ram)
+        bound_execution->bind_arm7_bus(registers, bound_ram);
     auto device = std::make_shared<MmioMemoryDevice>(
         aica_register_size,
         [registers](const std::uint32_t offset, const MemoryAccessWidth width) {
