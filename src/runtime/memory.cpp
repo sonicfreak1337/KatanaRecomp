@@ -2063,26 +2063,63 @@ Memory::prepare_prevalidated_linear_u32_pattern(
         return std::nullopt;
 
     const auto size = word_count * word_size;
-    const auto* const mapped = prevalidated_writable_linear_region(address, size);
+    const auto* const mapped = prevalidated_writable_region(address, size);
     if (mapped == nullptr) return std::nullopt;
 
     const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
-    const auto backing = mapped->linear->bytes();
     PreparedLinearU32Pattern prepared;
     try {
         prepared.observer_ = guest_write_observer_;
-        if (prepared.observer_) {
-            prepared.changed_words_.reserve(word_count);
-            const auto word_changed = [&](const std::size_t word) {
-                const auto byte = offset + word * word_size;
-                return backing[byte] != static_cast<std::uint8_t>(value) ||
-                       backing[byte + 1u] != static_cast<std::uint8_t>(value >> 8u) ||
-                       backing[byte + 2u] != static_cast<std::uint8_t>(value >> 16u) ||
-                       backing[byte + 3u] != static_cast<std::uint8_t>(value >> 24u);
-            };
+        if (prepared.observer_) prepared.changed_words_.reserve(word_count);
+        if (mapped->linear != nullptr) {
+            const auto backing = mapped->linear->bytes();
+            if (prepared.observer_) {
+                const auto word_changed = [&](const std::size_t word) {
+                    const auto byte = offset + word * word_size;
+                    return backing[byte] != static_cast<std::uint8_t>(value) ||
+                           backing[byte + 1u] != static_cast<std::uint8_t>(value >> 8u) ||
+                           backing[byte + 2u] != static_cast<std::uint8_t>(value >> 16u) ||
+                           backing[byte + 3u] != static_cast<std::uint8_t>(value >> 24u);
+                };
+                for (std::size_t word = 0u; word < word_count; ++word) {
+                    prepared.changed_words_.push_back(
+                        static_cast<std::uint8_t>(word_changed(word)));
+                }
+            }
+        } else {
+            // The Dreamcast 32-bit VRAM aperture is word-projected rather than one
+            // contiguous host span.  Validate every scalar store and projection before
+            // guest time is accepted; commit then uses the same device path as write_u32.
             for (std::size_t word = 0u; word < word_count; ++word) {
-                prepared.changed_words_.push_back(
-                    static_cast<std::uint8_t>(word_changed(word)));
+                const auto word_offset = offset + word * word_size;
+                if (word_offset > std::numeric_limits<std::uint32_t>::max())
+                    return std::nullopt;
+                mapped->device->validate_write(
+                    static_cast<std::uint32_t>(word_offset), word_size, source);
+                const auto projection = mapped->device->linear_projection(
+                    static_cast<std::uint32_t>(word_offset), MemoryAccessWidth::Word);
+                if (!projection || !projection.contiguous ||
+                    projection.byte_count != word_size || projection.backing == nullptr)
+                    return std::nullopt;
+                const auto projected_offset =
+                    static_cast<std::size_t>(projection.byte_offsets.front());
+                const auto backing = projection.backing->bytes();
+                if (projected_offset > backing.size() ||
+                    word_size > backing.size() - projected_offset ||
+                    projection.byte_offsets[1u] != projected_offset + 1u ||
+                    projection.byte_offsets[2u] != projected_offset + 2u ||
+                    projection.byte_offsets[3u] != projected_offset + 3u)
+                    return std::nullopt;
+                if (prepared.observer_) {
+                    prepared.changed_words_.push_back(static_cast<std::uint8_t>(
+                        backing[projected_offset] != static_cast<std::uint8_t>(value) ||
+                        backing[projected_offset + 1u] !=
+                            static_cast<std::uint8_t>(value >> 8u) ||
+                        backing[projected_offset + 2u] !=
+                            static_cast<std::uint8_t>(value >> 16u) ||
+                        backing[projected_offset + 3u] !=
+                            static_cast<std::uint8_t>(value >> 24u)));
+                }
             }
         }
     } catch (...) {
@@ -2105,19 +2142,27 @@ Memory::prepare_prevalidated_linear_u32_pattern(
 void Memory::commit_prepared_linear_u32_pattern(
     PreparedLinearU32Pattern prepared) noexcept {
     constexpr std::size_t word_size = sizeof(std::uint32_t);
-    const std::array pattern{
-        static_cast<std::uint8_t>(prepared.value_),
-        static_cast<std::uint8_t>(prepared.value_ >> 8u),
-        static_cast<std::uint8_t>(prepared.value_ >> 16u),
-        static_cast<std::uint8_t>(prepared.value_ >> 24u),
-    };
-    auto backing = prepared.linear_->writable_bytes();
-    auto* const target =
-        backing.data() + static_cast<std::ptrdiff_t>(prepared.offset_);
-    for (std::size_t word = 0u; word < prepared.word_count_; ++word) {
-        std::copy(pattern.begin(),
-                  pattern.end(),
-                  target + static_cast<std::ptrdiff_t>(word * word_size));
+    if (prepared.linear_ != nullptr) {
+        const std::array pattern{
+            static_cast<std::uint8_t>(prepared.value_),
+            static_cast<std::uint8_t>(prepared.value_ >> 8u),
+            static_cast<std::uint8_t>(prepared.value_ >> 16u),
+            static_cast<std::uint8_t>(prepared.value_ >> 24u),
+        };
+        auto backing = prepared.linear_->writable_bytes();
+        auto* const target =
+            backing.data() + static_cast<std::ptrdiff_t>(prepared.offset_);
+        for (std::size_t word = 0u; word < prepared.word_count_; ++word) {
+            std::copy(pattern.begin(),
+                      pattern.end(),
+                      target + static_cast<std::ptrdiff_t>(word * word_size));
+        }
+    } else {
+        for (std::size_t word = 0u; word < prepared.word_count_; ++word) {
+            prepared.device_lifetime_->write_u32(
+                static_cast<std::uint32_t>(prepared.offset_ + word * word_size),
+                prepared.value_);
+        }
     }
 
     prepared.owner_->performance_counters_.unobserved_accesses +=

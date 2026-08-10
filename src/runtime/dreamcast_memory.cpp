@@ -41,8 +41,24 @@ class Vram32BitMemoryDevice final : public MemoryDevice {
         return backing_->read_u8(dreamcast_vram_32bit_to_linear_offset(offset));
     }
 
+    [[nodiscard]] std::uint16_t read_u16(const std::uint32_t offset) const override {
+        return backing_->read_u16(dreamcast_vram_32bit_to_linear_offset(offset));
+    }
+
+    [[nodiscard]] std::uint32_t read_u32(const std::uint32_t offset) const override {
+        return backing_->read_u32(dreamcast_vram_32bit_to_linear_offset(offset));
+    }
+
     void write_u8(const std::uint32_t offset, const std::uint8_t value) override {
         backing_->write_u8(dreamcast_vram_32bit_to_linear_offset(offset), value);
+    }
+
+    void write_u16(const std::uint32_t offset, const std::uint16_t value) override {
+        backing_->write_u16(dreamcast_vram_32bit_to_linear_offset(offset), value);
+    }
+
+    void write_u32(const std::uint32_t offset, const std::uint32_t value) override {
+        backing_->write_u32(dreamcast_vram_32bit_to_linear_offset(offset), value);
     }
 
     [[nodiscard]] LinearMemoryProjection

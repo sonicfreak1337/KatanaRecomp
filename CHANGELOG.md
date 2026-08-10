@@ -4,30 +4,28 @@
 
 ### Geaendert
 
-- RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
-  Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
-  Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
-  Der beaufsichtigte Sonic-PAL-Lauf dauerte `45 s` ohne Fatal- oder
-  Runtimefehler und zeigte Sega-Lizenz, PAL-Screen und Presented by Sega,
-  danach schwarz. Memory-Card-Screen und Hauptmenue wurden nicht erreicht.
-  Der fruehere v16-/9,16-MHz-Lauf ist historische Zwischen-Evidenz.
+- RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
+  `147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits.
+  Die erzeugte `game.exe` hat SHA-256
+  `e7c035ec1d0fe637beb1c48188af00cb7f06e775d7a2f7763e34ad041233aaf6`.
+  Der beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder
+  Watchdogfehler. Der Composite-Callback wurde erstmals angenommen
+  (`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen).
 
-- Der aktuelle RuntimeOnly-Source-Checkpoint ist
-  `2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Post-entry wurden
-  `1.900.952.548` Gastzyklen in `39,6586 s` verarbeitet (`37,4627 MHz`),
-  mit `24.944.655` zentralen Dispatches, `24.944.624` Bloecken, `8.960`
-  YUV-Makrobloecken, `334` Presented Frames und `320` Render-
-  Requests/-Completions. Der verbleibende P0 ist serieller Runtime-/Dispatch-
-  Overhead.
+- Der gemeinsame Source-/Dokumentations-Checkpoint baut auf `5046c01` auf und
+  umfasst die vier Runtime-/Codegen-Aenderungen dieses Meilensteins.
+  Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
+  (`71,8322 MHz`), mit `10.855.776` zentralen Dispatches und `10.855.746`
+  Bloecken. Das sind `+86,8 %` gegenueber `38,5462 MHz` und `+91,7 %`
+  gegenueber der frueheren `37,4627-MHz`-Basis.
 
-- Der exportierte Composite-Memcpy-Descriptor wurde im Lauf kein einziges Mal
-  versucht, weil der bewiesene Composite-Callsite `0x8C6658D0` den guarded
-  Singleton-Pfad nimmt und den zentralen Dispatcher/Fastpath umgeht. Dieser
-  Callsite muss vor dem nativen Singleton-Chaining in den RuntimeOnly-
-  Dispatcher zurueckkehren; die vorhandene
-  `BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer
-  Grundlage und Analogie. Andere Aufrufe desselben Composite-Ziels werden nicht
-  pauschal verlangsamt; kein Analyzer- oder Candidate-Resolution-Refactoring.
+- Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
+  PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
+  Memory-Card-Screen wurden nicht erreicht. Der Performance-P0 ist fuer den
+  Bring-up ausreichend verbessert; weitere Performancearbeit erfolgt nur bei
+  einem echten Blocker. Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte
+  wortprojizierte U32-Pattern-Batches mit exakter GuestWrite-/PVR-Dirty-/
+  Counter-Semantik; Vram32 scalar U16/U32 nutzt direkte Backing-Projektion.
 
 - Der RuntimeOnly-NativeDisc-Bring-up bleibt ein opt-in Pfad: `port
   --analysis-mode runtime-only` gilt nur mit `--game-project`, der Default

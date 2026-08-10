@@ -3380,6 +3380,8 @@ void emit_terminal(std::ostringstream& output,
                    const std::unordered_map<std::uint32_t, std::uint32_t>&
                        native_block_owner_entries,
                    const std::unordered_set<std::uint32_t>& current_blocks,
+                   const std::unordered_set<std::uint32_t>&
+                       architectural_boundary_entries,
                    const int indent,
                    const bool single_block,
                    const bool guarded_local_block_chaining,
@@ -3914,6 +3916,16 @@ void emit_terminal(std::ostringstream& output,
             registers);
         if (single_block) {
             const auto return_address = instruction.source_address + 4u;
+            if (architectural_boundary_entries.contains(return_address)) {
+                // The continuation is an architectural dispatcher boundary.
+                // Preserve the original Call exit and its source callsite;
+                // entering any callee here would turn it into a nested return
+                // and hide the boundary from product fastpaths and hooks.
+                emit_register_flush_release(output, indent, registers);
+                emit_indent(output, indent);
+                output << "return;\n";
+                return;
+            }
             if (!instruction.resolved_targets.empty()) {
                 emit_register_flush_release(output, indent, registers);
                 emit_indent(output, indent);
@@ -4634,6 +4646,8 @@ void emit_block(std::ostringstream& output,
                 const std::unordered_map<std::uint32_t, std::uint32_t>&
                     native_block_owner_entries,
                 const std::unordered_set<std::uint32_t>& current_blocks,
+                const std::unordered_set<std::uint32_t>&
+                    architectural_boundary_entries,
                 const bool single_block,
                 const bool guarded_local_block_chaining,
                 const bool native_internal_block_labels,
@@ -4797,6 +4811,7 @@ void emit_block(std::ostringstream& output,
                       guarded_native_call_targets,
                       native_block_owner_entries,
                       current_blocks,
+                      architectural_boundary_entries,
                       4,
                       single_block,
                       guarded_local_block_chaining,
@@ -5402,6 +5417,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        guarded_native_call_targets,
                        native_block_owner_entries,
                        current_blocks,
+                       architectural_boundary_entries,
                        request.single_block_execution,
                        request.guarded_local_block_chaining,
                        native_internal_block_labels,

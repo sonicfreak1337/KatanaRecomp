@@ -32,24 +32,19 @@ maximal zwei physische Linkpaesse. Ein fehlender optionaler Pass wird nur
 durch vorhandenen erfolgreichen Build-, Artefakt- oder Up-to-date-Nachweis
 geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
 
-RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
-Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
-Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
-Der aktuelle funktionale RuntimeOnly-Source-Checkpoint ist
-`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Das aktuelle Native-AOT-
-Emissionsprofil ist `25` mit AOT-Partitionsschema `5`.
+RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
+`147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits.
+Der gemeinsame Source-/Dokumentations-Checkpoint baut auf `5046c01` auf und
+umfasst die vier Runtime-/Codegen-Aenderungen dieses Meilensteins. Das aktuelle
+Native-AOT-Emissionsprofil ist `25` mit AOT-Partitionsschema `5`.
 
-Der beaufsichtigte Sonic-PAL-Lauf dauerte `45 s` ohne Fatal- oder Runtimefehler.
-Er zeigte Sega-Lizenz, PAL-Screen und Presented by Sega, danach schwarz;
-Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Der verbleibende P0
-ist serieller Runtime-/Dispatch-Overhead. Der Composite-Memcpy-Descriptor
-wurde nicht versucht, weil der bewiesene Composite-Callsite `0x8C6658D0` den
-guarded Singleton-Pfad nimmt; er muss vor dem nativen Singleton-Chaining in
-den RuntimeOnly-Dispatcher zurueckkehren. Die vorhandene
-`BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer Grundlage
-und Analogie; andere Aufrufe desselben Composite-Ziels werden nicht pauschal
-verlangsamt. Der fruehere v16-/9,16-MHz-Lauf bleibt historische
-Zwischen-Evidenz.
+Der beaufsichtigte Sonic-PAL-Lauf endete sauber; der Composite-Callback wurde
+erstmals angenommen (`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen).
+Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
+(`71,8322 MHz`). Der Sichtpfad erreichte SEGA, PAL-TV-Setting und 60-Hz-
+Testbild, kehrte aber wegen eines langen Right-Pulses zum PAL-Dialog zurueck;
+Memory-Card-Screen und Hauptmenue bleiben offen. Der Performance-P0 ist fuer
+diesen Bring-up ausreichend verbessert.
 
 ## Compiler und Linker
 

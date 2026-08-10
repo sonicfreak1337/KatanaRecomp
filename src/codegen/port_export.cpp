@@ -4987,6 +4987,9 @@ std::string handwritten_main(
            "                state_.main_ram &&\n"
            "                state_.main_ram->size() ==\n"
            "                    katana::runtime::dreamcast_main_ram_size &&\n"
+           "                state_.vram &&\n"
+           "                state_.vram->size() ==\n"
+           "                    katana::runtime::dreamcast_vram_size &&\n"
            "                state_.address_space && cpu_.address_space &&\n"
            "                cpu_.address_space.get() == state_.address_space.get() &&\n"
            "                state_.address_space->mode() ==\n"
@@ -5320,7 +5323,7 @@ std::string handwritten_main(
            "        const auto source_read = prove_main_ram_translation(\n"
            "            cpu_, state_, source_address, 4u,\n"
            "            katana::runtime::TranslationAccess::Read);\n"
-           "        const auto target_write = prove_main_ram_translation(\n"
+           "        const auto target_write = prove_contiguous_translation(\n"
            "            cpu_, state_, target_address, target_size,\n"
            "            katana::runtime::TranslationAccess::Write);\n"
            "        if (!source_read || !target_write ||\n"
@@ -5332,13 +5335,37 @@ std::string handwritten_main(
            "            source_read->physical_address, 4u);\n"
            "        const auto target_backing = dreamcast_main_ram_backing_offset(\n"
            "            target_write->physical_address, target_size);\n"
-           "        if (!source_backing || !target_backing ||\n"
+           "        const bool target_is_main_ram = target_backing &&\n"
+           "            cpu_.memory.maps_device(\n"
+           "                target_write->physical_address, target_size,\n"
+           "                state_.main_ram.get(), false) &&\n"
+           "            cpu_.memory.is_writable_linear_range(\n"
+           "                target_write->physical_address, target_size, false);\n"
+           "        const auto translated_target_end =\n"
+           "            static_cast<std::uint64_t>(target_write->physical_address) +\n"
+           "                target_size;\n"
+           "        const bool target_is_vram_32bit =\n"
+           "            std::any_of(\n"
+           "                katana::runtime::dreamcast_vram_32bit_physical_bases.begin(),\n"
+           "                katana::runtime::dreamcast_vram_32bit_physical_bases.end(),\n"
+           "                [&](const std::uint32_t base) {\n"
+           "                    const auto begin = static_cast<std::uint64_t>(base);\n"
+           "                    return target_write->physical_address >= begin &&\n"
+           "                        translated_target_end <=\n"
+           "                            begin + katana::runtime::dreamcast_vram_size;\n"
+           "                });\n"
+           "        if (!source_backing ||\n"
+           "            (!target_is_main_ram && !target_is_vram_32bit))\n"
+           "            return reject(\"memory-region\");\n"
+           "        if (target_is_main_ram &&\n"
            "            (*target_backing < *source_backing + 4u &&\n"
            "             *source_backing < *target_backing + target_size))\n"
            "            return reject(\"ram-alias\");\n"
-           "        const auto target_physical = static_cast<std::uint32_t>(\n"
-           "            katana::runtime::dreamcast_main_ram_area_bases.front() +\n"
-           "            *target_backing);\n"
+           "        const auto target_physical = target_is_main_ram\n"
+           "            ? static_cast<std::uint32_t>(\n"
+           "                  katana::runtime::dreamcast_main_ram_area_bases.front() +\n"
+           "                  *target_backing)\n"
+           "            : target_write->physical_address;\n"
            "        const auto target_physical_end =\n"
            "            static_cast<std::uint64_t>(target_physical) + target_size;\n"
            "        const auto overlaps_synthetic_code = [&](const auto& registration) {\n"
@@ -5348,18 +5375,20 @@ std::string handwritten_main(
            "            return static_cast<std::uint64_t>(target_physical) < end &&\n"
            "                begin < target_physical_end;\n"
            "        };\n"
-           "        if (overlaps_synthetic_code(call_block->second) ||\n"
+           "        if (target_is_main_ram &&\n"
+           "            (overlaps_synthetic_code(call_block->second) ||\n"
            "            overlaps_synthetic_code(continuation->second) ||\n"
            "            overlaps_synthetic_code(kernel->second) ||\n"
            "            (split_kernel &&\n"
            "             overlaps_synthetic_code(kernel_body->second)) ||\n"
-           "            overlaps_synthetic_code(kernel_return->second))\n"
+           "            overlaps_synthetic_code(kernel_return->second)))\n"
            "            return reject(\"synthetic-code-overlap\");\n"
            "        // A full AOT map marks stable title pages executable.  The\n"
            "        // prevalidated write observer invalidates changed blocks before\n"
            "        // redispatch; only code consumed by this synthetic transaction\n"
            "        // must stay immutable for the entire batch.\n"
-           "        if (state_.runtime_blocks->may_overlap_active_physical(\n"
+           "        if (target_is_main_ram &&\n"
+           "            state_.runtime_blocks->may_overlap_active_physical(\n"
            "                target_physical, target_size))\n"
            "            return reject(\"runtime-code-overlap\");\n"
            "\n"
@@ -5395,7 +5424,7 @@ std::string handwritten_main(
            "        const auto pattern = state_.main_ram->read_u32(*source_backing);\n"
            "        auto prepared_pattern =\n"
            "            cpu_.memory.prepare_prevalidated_linear_u32_pattern(\n"
-           "                target_write->physical_address, word_count, pattern,\n"
+           "                target_write->raw_physical_address, word_count, pattern,\n"
            "                katana::runtime::CodeWriteSource::Cpu, word_count,\n"
            "                word_count * 2u);\n"
            "        if (!prepared_pattern)\n"
@@ -9779,10 +9808,9 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     const std::span<const katana::ir::Function> program,
     const std::span<const std::uint32_t> native_aot_resume_entries,
     const bool diagnostic_interpreter,
+    const std::span<const CompositeCallbackBatchProof>
+        composite_callback_batches,
     const std::span<const katana::analysis::RuntimeCodeCopy> runtime_code_copies,
-    const std::span<const katana::analysis::IndirectControlFlowResolution>
-        indirect_control_flow,
-    const std::span<const katana::analysis::FunctionCandidate> function_candidates,
     const std::span<const katana::analysis::GuardedAotEntry>
         guarded_aot_entries,
     const katana::io::ExecutableImage& image,
@@ -9841,8 +9869,6 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     }
     const auto counted_loops = counted_loop_batch_proofs(program);
     const auto memory_fill_loops = memory_fill_loop_batch_proofs(program);
-    const auto composite_callback_batches = composite_callback_batch_proofs(
-        program, indirect_control_flow, function_candidates);
     std::vector<const CompositeCallbackBatchProof*> composite_callback_emission;
     composite_callback_emission.reserve(composite_callback_batches.size());
     for (const auto& proof : composite_callback_batches)
@@ -13862,6 +13888,26 @@ static PortExportResult export_dreamcast_port_project_impl(
     const auto wait_loop_descriptors = runtime_wait_loop_descriptors(hardware_audit);
     const auto mmio_wait_loops =
         mmio_wait_loop_batch_proofs(emitted_program, hardware_audit);
+    std::vector<CompositeCallbackBatchProof> composite_callback_batches;
+    if (!options.diagnostic_partial) {
+        composite_callback_batches = composite_callback_batch_proofs(
+            emitted_program,
+            prepared.analysis.indirect_control_flow,
+            prepared.analysis.recursive.functions);
+    }
+    // Composite admission belongs to the product dispatcher and matches the
+    // original indirect Call source. Treating its continuation as an
+    // architectural boundary prevents local singleton or nested dispatch from
+    // consuming that Call first, while unrelated callers of the callback
+    // target retain native chaining.
+    std::unordered_set<std::uint32_t>
+        composite_callback_architectural_boundaries;
+    composite_callback_architectural_boundaries.reserve(
+        composite_callback_batches.size());
+    for (const auto& proof : composite_callback_batches) {
+        composite_callback_architectural_boundaries.insert(
+            proof.descriptor.continuation_address);
+    }
     report_progress(options, "partition-codegen");
     const auto partitions = partition_translation_units(emitted_program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
@@ -13923,6 +13969,11 @@ static PortExportResult export_dreamcast_port_project_impl(
             runtime_image_architectural_boundaries.insert(
                 function.entry_address);
     }
+    const auto is_generated_architectural_boundary =
+        [&](const std::uint32_t address) {
+            return runtime_image_architectural_boundaries.contains(address) ||
+                   composite_callback_architectural_boundaries.contains(address);
+        };
 
     // Runtime-only analysis candidates are not promoted to static CFG edges:
     // writable callback slots remain authoritative. A singleton candidate can
@@ -13985,7 +14036,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                 external_callees.push_back(owner->second);
         };
         for (const auto& function : functions) {
-            if (runtime_image_architectural_boundaries.contains(
+            if (is_generated_architectural_boundary(
                     function.entry_address))
                 partition_architectural_boundaries.push_back(
                     function.entry_address);
@@ -13996,7 +14047,7 @@ static PortExportResult export_dreamcast_port_project_impl(
             }
             for (const auto& block : function.blocks) {
                 if (external_hook_entries.contains(block.start_address) ||
-                    runtime_image_architectural_boundaries.contains(
+                    is_generated_architectural_boundary(
                         block.start_address))
                     partition_architectural_boundaries.push_back(
                         block.start_address);
@@ -14066,7 +14117,7 @@ static PortExportResult export_dreamcast_port_project_impl(
             external_callees.end());
         for (const auto callee : external_callees) {
             if (external_hook_entries.contains(callee) ||
-                runtime_image_architectural_boundaries.contains(callee))
+                is_generated_architectural_boundary(callee))
                 partition_architectural_boundaries.push_back(callee);
         }
         std::sort(partition_guarded_native_calls.begin(),
@@ -14523,9 +14574,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         emitted_program,
         native_aot_resume_entries,
         options.diagnostic_partial,
+        composite_callback_batches,
         prepared.analysis.runtime_code_copies.copies,
-        prepared.analysis.indirect_control_flow,
-        prepared.analysis.recursive.functions,
         prepared.analysis.guarded_aot_entries,
         prepared.image,
         prepared.boot_address,

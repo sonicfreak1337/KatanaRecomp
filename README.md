@@ -8,8 +8,9 @@ In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
 Portprojektvertrag 75.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
-Aktueller funktionaler RuntimeOnly-Source-Checkpoint:
-`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`.
+Aktueller funktionaler RuntimeOnly-Source-Stand: Ausgangscheckpoint
+`5046c01fb3774da2fa88ff8a469294d423f1abfb` plus die vier in diesem
+Meilenstein enthaltenen Source-Aenderungen.
 
 Der neue opt-in-Modus `port --analysis-mode runtime-only` ist nur fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
@@ -21,48 +22,40 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
-Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
-Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
+RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
+`147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits. Die
+erzeugte `game.exe` hat SHA-256
+`e7c035ec1d0fe637beb1c48188af00cb7f06e775d7a2f7763e34ad041233aaf6`.
 
-Damit ist der RuntimeOnly-Build-/Export-Gate bestanden. Das globale KR-4981-
-Produktgate bleibt offen. Der naechste enge Fix ist, den bewiesenen
-Composite-Callsite `0x8C6658D0` vor dem nativen Singleton-Chaining in den
-RuntimeOnly-Dispatcher zurueckzufuehren; danach bleibt der beaufsichtigte
-Start bis mindestens zum Memory-Card-Screen das Produktgate. Der
-Default-PlatformAbi-Pfad
+Damit ist das RuntimeOnly-Build-/Export-Gate bestanden. Der Performance-P0
+ist fuer diesen Bring-up ausreichend verbessert; das globale KR-4981-
+Produktgate bleibt offen. Als naechstes folgt ein kurzer korrekter Right+A-
+Lauf, danach der verbleibende Runtime-Blocker bis Memory-Card-Screen und
+Hauptmenue. Weitere Performancearbeit erfolgt nur bei einem echten Blocker.
+Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
 Bring-up-Meilensteins.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der aktuelle funktionale Source-Checkpoint ist
-`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Der beaufsichtigte Sonic-PAL-Lauf
-dauerte `45 s` ohne Fatal- oder Runtimefehler. Er zeigte die Sega-Lizenz, den
-PAL-Screen und Presented by Sega, danach schwarz; der Memory-Card-Screen und
-das Hauptmenue wurden nicht erreicht. Die manuelle Sichtpruefung beendete den
-Lauf mit `run_error=null`.
+Der aktuelle beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder
+Watchdogfehler. Der Composite-Callback wurde erstmals angenommen
+(`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen). Post-entry wurden
+`2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet (`71,8322 MHz`), mit
+`10.855.776` zentralen Dispatches und `10.855.746` Bloecken. Das entspricht
+`+86,8 %` gegenueber `38,5462 MHz` und `+91,7 %` gegenueber der frueheren
+`37,4627-MHz`-Basis.
 
-Post-entry wurden `1.900.952.548` Gastzyklen in `39,6586 s` verarbeitet
-(`37,4627 MHz`), dazu `24.944.655` zentrale Dispatches, `24.944.624`
-Bloecke, `8.960` YUV-Makrobloecke, `334` Presented Frames und `320`
-Render-Requests/-Completions. D3D/Hardwareanzeige war aktiv; die CPU-Last lag
-bei etwa `1,649` Kernen bzw. `6,873 %` der 24-Thread-Maschine, ohne
-Host-CPU-Limit-Wait. Der verbleibende P0 ist serieller Runtime-/Dispatch-
-Overhead.
-
-Der Composite-Memcpy-Descriptor ist exportiert und registriert, wurde im Lauf
-aber kein einziges Mal versucht. Der bewiesene Composite-Callsite
-`0x8C6658D0` nimmt den guarded Singleton-Pfad und umgeht dadurch den zentralen
-Dispatcher/Fastpath. Er muss vor dem nativen Singleton-Chaining in den
-RuntimeOnly-Dispatcher zurueckkehren; die vorhandene
-`BackendRequest::architectural_boundary_entries`-Mechanik ist dafuer Grundlage
-und Analogie. Andere Aufrufe desselben Composite-Ziels werden nicht pauschal
-verlangsamt. Kein Analyzer- oder Candidate-Resolution-Refactoring.
-
-Der fruehere v16-/9,16-MHz-Lauf bleibt historische Zwischen-Evidenz und ist
-nicht der aktuelle Produktstand.
+Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
+PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
+Memory-Card-Screen wurden deshalb nicht erreicht. Das ist kein Bring-up-
+Gate-Pass. Die Composite-Callsite bleibt eine explizite architektonische
+Dispatcher-Grenze. Der 8-MiB-PVR-VRAM-Clear ueber die 32-Bit-Apertur nutzt
+vorvalidierte wortprojizierte U32-Pattern-Batches mit unveraenderter
+GuestWrite-/PVR-Dirty-/Counter-Semantik; Vram32 scalar U16/U32 nutzt direkte
+Backing-Projektion. Es gibt keine oeffentliche Layoutaenderung und keinen
+Analyzer-ABI-Bump.
 
 Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
 Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren

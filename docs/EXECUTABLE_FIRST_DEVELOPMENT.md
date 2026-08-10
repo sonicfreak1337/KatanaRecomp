@@ -95,14 +95,13 @@ Dispatch ueber eine exakte statische Guest->Host-Tabelle; Stop-on-miss und
 typed abort bleiben aktiv. Es gibt keinen Interpreter, JIT, Runtime-Decoder
 oder geratenen Zielpfad. Der Whole-Export-Cache bindet den Modus.
 
-RuntimeOnly-v25/v29 wurde exportiert; der Export dauerte `149,1 s`. Wegen
-Source-/Projektidentitaetswechsel gab es `0/147` Codegen-Cache-Hits, der
-Hostcompile nutzte `620/624` Hits und musste nur vier Einheiten kompilieren.
-Der aktuelle funktionale RuntimeOnly-Source-Checkpoint ist
-`2e343ebcac8e2eb87b3a6d2e1d5eee735009a61b`. Der beaufsichtigte Sonic-PAL-Lauf
-dauerte `45 s` ohne Fatal- oder Runtimefehler und zeigte Sega-Lizenz,
-PAL-Screen und Presented by Sega, aber noch keinen Memory-Card-Screen oder
-Hauptmenue.
+RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
+`147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits. Der
+gemeinsame Source-/Dokumentations-Checkpoint baut auf `5046c01` auf und
+umfasst die vier Runtime-/Codegen-Aenderungen dieses Meilensteins. Der
+beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder Watchdogfehler,
+zeigte SEGA, PAL-TV-Setting und 60-Hz-Testbild, erreichte aber noch keinen
+Memory-Card-Screen oder Hauptmenue.
 
 ## Zwei Produktpfade
 
