@@ -13,24 +13,17 @@ weiterhin nativen AOT-Code und nutzt RuntimeOnly-Dispatch ueber eine exakte
 statische Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv;
 kein Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad.
 
-Der aktuelle RuntimeOnly-v25/v29-Export dauerte `112,571 s`: `6.546`
-Funktionen, `147` Partitionen, Release-Hostbuild und `623/624`
-Compile-Cache-Hits. Der gemeinsame Source-/Dokumentations-Checkpoint baut auf
-`5046c01` auf und umfasst die vier Runtime-/Codegen-Aenderungen dieses
-Meilensteins. Der Whole-Export-Cache ist modegebunden.
+Der aktuelle RuntimeOnly-Build-/Export-Gate ist bestanden. Der letzte saubere
+RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s`; nach Presented by Sega blieb
+der Kontaktbogen schwarz und Memory-Card-Screen sowie Hauptmenue wurden nicht
+erreicht. Candidate-Resolution bleibt im RuntimeOnly-Bring-up deferred und
+ist nicht der aktuelle Produktblocker.
 
-Der beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder Watchdogfehler;
-der Composite-Callback wurde erstmals angenommen
-(`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen). Post-entry wurden
-`2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet (`71,8322 MHz`), mit
-`10.855.776` zentralen Dispatches und `10.855.746` Bloecken.
-
-Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
-PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
-Memory-Card-Screen wurden deshalb nicht erreicht. Das ist kein Bring-up-
-Gate-Pass. Candidate-Resolution bleibt deferred und ist nicht der aktuelle
-Performancehebel; weitere Performancearbeit erfolgt nur bei einem echten
-Blocker.
+Der aktuelle Runtime-P0 liegt in Gast-Presentation/Framebuffer-Promotion oder
+allgemeiner PVR-/Scanout-Semantik, nicht in fehlender Movie-Decodierung. Die
+fruehere StartRender-/Frame-Finalize-Diagnose ist verworfen; StartRender wurde
+beobachtet. Dieses Dokument bewahrt die Candidate-Resolution-Diagnostik und
+deren historische Gates, behauptet aber keinen RuntimeOnly-Produktblocker.
 
 Dieses Dokument ergaenzt
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md)
@@ -764,8 +757,8 @@ KR-4981-Lauf folgt nicht automatisch.
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> kurzer korrekter Right+A-Lauf
-  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen
+  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
+     aktuell blockiert durch Gast-Presentation/Framebuffer-/PVR-Scanout
 ```
 
 Die einzige D1-Evidenz ist ein unvollstaendiger, nichtterminaler Root-0-Lauf;

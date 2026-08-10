@@ -708,6 +708,12 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         if (ta_continue_observer_) ta_continue_observer_();
         return;
     }
+    if (offset == pvr_register::YuvAddress || offset == pvr_register::YuvConfig) {
+        registers_[index(offset)] =
+            offset == pvr_register::YuvAddress ? value & 0x00FFFFF8u : value;
+        if (yuv_reset_observer_) yuv_reset_observer_();
+        return;
+    }
     if (offset == pvr_register::TaObjectListBase || offset == pvr_register::TaIspBase ||
         offset == pvr_register::TaObjectListLimit || offset == pvr_register::TaIspLimit ||
         offset == pvr_register::TaNextOpbInit) {
@@ -926,6 +932,9 @@ void PvrRegisterFile::set_ta_reset_observer(std::function<void()> observer) {
 }
 void PvrRegisterFile::set_ta_continue_observer(std::function<void()> observer) {
     ta_continue_observer_ = std::move(observer);
+}
+void PvrRegisterFile::set_yuv_reset_observer(std::function<void()> observer) {
+    yuv_reset_observer_ = std::move(observer);
 }
 void PvrRegisterFile::record_ta_packet(const std::uint32_t bytes) {
     auto& position = registers_[index(pvr_register::TaVertexBufferPosition)];
@@ -3162,6 +3171,12 @@ void PvrYuvConverterMemoryDevice::refresh_configuration() {
     const auto configuration = registers_->read(pvr_register::YuvConfig);
     const auto destination = registers_->read(pvr_register::YuvAddress) & 0x007FFFFFu;
     if (configuration == configuration_ && destination == destination_) return;
+    restart_frame_from_registers();
+}
+
+void PvrYuvConverterMemoryDevice::restart_frame_from_registers() {
+    const auto configuration = registers_->read(pvr_register::YuvConfig);
+    const auto destination = registers_->read(pvr_register::YuvAddress) & 0x007FFFFFu;
     configuration_ = configuration;
     destination_ = destination;
     frame_macroblock_ = 0u;
@@ -3169,11 +3184,18 @@ void PvrYuvConverterMemoryDevice::refresh_configuration() {
     registers_->write(pvr_register::YuvStatus, 0u);
 }
 
+std::uint64_t PvrYuvConverterMemoryDevice::configured_macroblock_count() const noexcept {
+    return static_cast<std::uint64_t>((configuration_ & 0x3Fu) + 1u) *
+           (((configuration_ >> 8u) & 0x3Fu) + 1u);
+}
+
 void PvrYuvConverterMemoryDevice::write_u8(const std::uint32_t offset,
                                             const std::uint8_t value) {
     if (offset >= aperture_size)
         throw std::out_of_range("PVR-YUV-Aperturoffset ist ungueltig.");
     refresh_configuration();
+    if (frame_macroblock_ == configured_macroblock_count())
+        restart_frame_from_registers();
     const bool yuv422 = (configuration_ & 0x01000000u) != 0u;
     const auto macroblock_size = yuv422 ? 512u : 384u;
     input_.push_back(value);
@@ -3196,7 +3218,7 @@ void PvrYuvConverterMemoryDevice::convert_macroblock() {
     const bool yuv422 = (configuration_ & 0x01000000u) != 0u;
     const auto blocks_x = (configuration_ & 0x3Fu) + 1u;
     const auto blocks_y = ((configuration_ >> 8u) & 0x3Fu) + 1u;
-    const auto total_blocks = static_cast<std::uint64_t>(blocks_x) * blocks_y;
+    const auto total_blocks = configured_macroblock_count();
     if (frame_macroblock_ >= total_blocks)
         throw std::runtime_error("PVR-YUV-Eingabe ueberschreitet die konfigurierte Framegroesse.");
     const auto block_x = frame_macroblock_ % blocks_x;

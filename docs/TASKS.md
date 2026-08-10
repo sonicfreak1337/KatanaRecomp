@@ -88,37 +88,30 @@ Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv; kein
 Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad. Der Whole-Export-
 Cache ist modegebunden.
 
-RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
-`147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits.
+Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
+`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
 
 Der aktuelle RuntimeOnly-Build-/Export-Unterauftrag ist damit abgeschlossen;
 der Performance-P0 ist fuer diesen Bring-up ausreichend verbessert. KR-4981
-bleibt als sichtbares globales Produktgate offen; als naechstes folgt ein
-kurzer korrekter Right+A-Lauf und danach der verbleibende Runtime-Blocker bis
-Memory-Card-Screen und Hauptmenue. Weitere Performancearbeit erfolgt nur bei
-einem echten Blocker. Der PlatformAbi-Default bleibt erhalten.
+bleibt als sichtbares globales Produktgate offen; der aktuelle Runtime-Blocker
+liegt nach Presented by Sega in der Gast-Presentation/Framebuffer-Promotion
+oder PVR-/Scanout-Semantik. Weitere Performancearbeit erfolgt nur bei einem
+echten Blocker. Der PlatformAbi-Default bleibt erhalten.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der gemeinsame Source-/Dokumentations-Checkpoint baut auf `5046c01` auf und
-umfasst die vier Runtime-/Codegen-Aenderungen dieses Meilensteins. Der
-beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder Watchdogfehler;
-der Composite-Callback wurde erstmals angenommen
-(`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen).
+Der bereinigte Source-Checkpoint hebt Runtime-ABI `87` auf `88` und
+PlatformServices-ABI `13` auf `14`; Backend-Interface-ABI `13` bleibt aktuell.
+Sonic-spezifische `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces sind entfernt;
+allgemeine Runtime-/Codegen-Fixes bleiben erhalten.
 
-Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
-(`71,8322 MHz`), mit `10.855.776` zentralen Dispatches und `10.855.746`
-Bloecken. Das entspricht `+49,9 %` gegenueber `47,9329 MHz`.
-
-Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
-PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
-Memory-Card-Screen wurden deshalb nicht erreicht. Das ist kein Bring-up-
-Gate-Pass. Die Composite-Callsite bleibt eine explizite architektonische
-Dispatcher-Grenze. Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte wortprojizierte
-U32-Pattern-Batches mit exakter GuestWrite-/PVR-Dirty-/Counter-Semantik;
-Vram32 scalar U16/U32 nutzt direkte Backing-Projektion. Es gibt keine
-oeffentliche Layoutaenderung und keinen Analyzer-ABI-Bump. Weitere
-Performancearbeit erfolgt nur bei einem echten Blocker.
+Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
+`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
+Diagnose-Overhead ist keine Speed-Abnahme. Decode, Readiness und Render-Engine
+laufen, aber der Scanout bleibt nach Presented by Sega schwarz. StartRender
+wurde beobachtet; die fruehere gegenteilige Diagnose ist verworfen. KR-4981
+bleibt offen.
 
 ## Historische Candidate-Evidenz
 
@@ -126,9 +119,9 @@ Performancearbeit erfolgt nur bei einem echten Blocker.
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-Funktionaler Source-Stand:
-  5046c01 plus vier Runtime-/Codegen-Aenderungen dieses Meilensteins
-  (aktueller RuntimeOnly-v25/v29-Produktstand)
+Aktueller funktionaler Source-Stand:
+  bereinigter Runtime-/Codegen-Checkpoint dieses Meilensteins
+  Runtime-ABI 88, PlatformServices-ABI 14, Backend-Interface-ABI 13
   Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
@@ -158,8 +151,8 @@ Messwert abgeleitet werden.
 ```text
 KR-4985, KR-4986, KR-4993, KR-4987 und KR-4994: source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> kurzer korrekter Right+A-Lauf
-  -> sichtbarer Start bis mindestens Memory-Card-Screen offen
+  -> sichtbarer Start bis mindestens Memory-Card-Screen offen;
+     aktuell blockiert durch Gast-Presentation/Framebuffer-/PVR-Scanout
 ```
 
 Jeder Task in dieser Kette folgt einzeln:
@@ -706,9 +699,10 @@ Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
 - KR-4981 bleibt das globale Produktgate; RuntimeOnly-Build-/Export-Gate ist
   bestanden, der Performance-P0 ist fuer den Bring-up ausreichend verbessert,
-  und zuerst folgt ein kurzer korrekter Right+A-Lauf. Memory-Card-Screen und
-  Hauptmenue bleiben offen; weitere Performancearbeit ist nur bei einem echten
-  Blocker zulaessig.
+  und der aktuelle Runtime-Blocker liegt in Gast-Presentation/Framebuffer-
+  Promotion oder PVR-/Scanout-Semantik. Memory-Card-Screen und Hauptmenue
+  bleiben offen; weitere Performancearbeit ist nur bei einem echten Blocker
+  zulaessig.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von
@@ -724,11 +718,11 @@ vollstaendigen Produktport abgenommen.
 
 Prioritaet: P0 Produkt- und Performancegate
 
-Abhaengigkeit: RuntimeOnly-Build-/Export-Gate bestanden; der Composite-Callback
-wurde angenommen und der Performance-P0 ist fuer den Bring-up ausreichend
-verbessert. Als naechstes folgt ein kurzer korrekter Right+A-Lauf; danach bleibt
-der Runtime-Blocker bis Memory-Card-Screen und Hauptmenue offen. Weitere
-Performancearbeit ist nur bei einem echten Blocker zulaessig.
+Abhaengigkeit: RuntimeOnly-Build-/Export-Gate bestanden; der aktuelle
+Runtime-Blocker liegt nach Presented by Sega in der Gast-Presentation/
+Framebuffer-Promotion oder PVR-/Scanout-Semantik. Memory-Card-Screen und
+Hauptmenue bleiben offen. Weitere Performancearbeit ist nur bei einem echten
+Blocker zulaessig.
 
 ### Umfang
 

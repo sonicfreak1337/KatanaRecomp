@@ -26,8 +26,11 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
-Funktionaler RuntimeOnly-Source-Stand: Ausgangscheckpoint `5046c01` plus die
-vier Runtime-/Codegen-Aenderungen dieses Meilensteins.
+Funktionaler RuntimeOnly-Source-Stand: der bereinigte Runtime-/Codegen-
+Checkpoint dieses Meilensteins. Aktuell gelten Runtime-ABI `88`,
+PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
+`27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
+`13` und Portprojektvertrag `75`.
 Die oeffentlichen SDK-Layouts `PortExportOptions` und
 `LatentAotDiscoveryOptions` wurden inkompatibel erweitert; Backend-Interface-
 ABI `13` ist deshalb aktuell und bestehende generierte Ports muessen neu
@@ -43,30 +46,26 @@ exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
-`147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits. Die
-erzeugte `game.exe` hat SHA-256
-`e7c035ec1d0fe637beb1c48188af00cb7f06e775d7a2f7763e34ad041233aaf6`.
+Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
+`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder Watchdogfehler;
-der Composite-Callback wurde erstmals angenommen
-(`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen). Post-entry wurden
-`2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet (`71,8322 MHz`), mit
-`10.855.776` zentralen Dispatches und `10.855.746` Bloecken. Das entspricht
-`+49,9 %` gegenueber `47,9329 MHz`.
+Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
+`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
+Trace-/Diagnose-Overhead ist keine Speed-Abnahme. Erfasst wurden `305` PVR-
+Render-Requests und -Completions, `305` Rendererframes, `8.960` YUV-
+Makrobloecke, `319` Hostframes sowie `427` Audiopuffer mit `313.845`
+Audiobildern.
 
-Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
-PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
-Memory-Card-Screen wurden deshalb nicht erreicht. Das ist kein Bring-up-
-Gate-Pass. Die Composite-Callsite bleibt eine explizite architektonische
-Dispatcher-Grenze. Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte wortprojizierte
-U32-Pattern-Batches mit exakter GuestWrite-/PVR-Dirty-/Counter-Semantik;
-Vram32 scalar U16/U32 nutzt direkte Backing-Projektion. Es gibt keine
-oeffentliche Layoutaenderung und keinen Analyzer-ABI-Bump. Der Performance-P0
-ist fuer diesen Bring-up ausreichend verbessert; weitere Performancearbeit
-erfolgt nur bei einem echten Blocker.
+Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Readiness und
+Render-Engine laufen. Der aktuelle P0 liegt in Gast-Presentation/Framebuffer-
+Promotion oder PVR-/Scanout-Semantik. StartRender wurde beobachtet; die
+fruehere gegenteilige Diagnose ist verworfen. Der Performance-P0 ist fuer
+diesen Bring-up ausreichend verbessert; weitere Arbeit erfolgt nur bei einem
+echten Blocker.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
@@ -373,8 +372,8 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> kurzer korrekter Right+A-Lauf
-  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen
+  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
+     aktuell blockiert durch Gast-Presentation/Framebuffer-/PVR-Scanout
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und

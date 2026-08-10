@@ -113,37 +113,32 @@ Stop-on-miss und typed abort bleiben aktiv, ohne Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist
 modegebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Export dauerte `112,571 s`: `6.546`
-Funktionen, `147` Partitionen, Release-Hostbuild und `623/624`
-Compile-Cache-Hits.
+Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
+`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
 
-Der RuntimeOnly-Build-/Export-Gate ist bestanden. Der Performance-P0 ist fuer
+Das RuntimeOnly-Build-/Export-Gate ist bestanden. Der Performance-P0 ist fuer
 diesen Bring-up ausreichend verbessert; KR-4981 bleibt als globales
-Produktgate offen. Als naechstes folgt ein kurzer korrekter Right+A-Lauf,
-danach der verbleibende Runtime-Blocker bis Memory-Card-Screen und Hauptmenue.
-Weitere Performancearbeit erfolgt nur bei einem echten Blocker. Der Default-
-PlatformAbi-Pfad bleibt unveraendert.
+Produktgate offen. Der naechste Arbeitsfokus ist der verbleibende Runtime-
+Blocker bis Memory-Card-Screen und Hauptmenue; weitere Performancearbeit
+erfolgt nur bei einem echten Blocker. Der Default-PlatformAbi-Pfad bleibt
+unveraendert.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der gemeinsame Source-/Dokumentations-Checkpoint baut auf `5046c01` auf und
-umfasst die vier Runtime-/Codegen-Aenderungen dieses Meilensteins. Der
-beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder Watchdogfehler;
-der Composite-Callback wurde erstmals angenommen
-(`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen).
+Der bereinigte Runtime-/Codegen-Checkpoint hebt Runtime-ABI `87` auf `88`
+und PlatformServices-ABI `13` auf `14`; Backend-Interface-ABI `13` bleibt
+aktuell. Sonic-spezifische `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces sind
+aus dem Repository entfernt, allgemeine Runtime-/Codegen-Fixes bleiben.
 
-Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
-(`71,8322 MHz`), mit `10.855.776` zentralen Dispatches und `10.855.746`
-Bloecken. Das entspricht `+49,9 %` gegenueber `47,9329 MHz`.
-
-Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
-PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
-Memory-Card-Screen wurden deshalb nicht erreicht. Das ist kein Bring-up-
-Gate-Pass. Die Composite-Callsite bleibt eine explizite architektonische
-Dispatcher-Grenze. Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte wortprojizierte
-U32-Pattern-Batches mit exakter GuestWrite-/PVR-Dirty-/Counter-Semantik;
-Vram32 scalar U16/U32 nutzt direkte Backing-Projektion. Es gibt keine
-oeffentliche Layoutaenderung und keinen Analyzer-ABI-Bump.
+Der letzte saubere Sonic-PAL-Lauf dauerte `45,608 s`; nach Presented by Sega
+blieb der Kontaktbogen ab etwa `24 s` schwarz. Post-entry wurden
+`1.839.534.869` Gastzyklen verarbeitet; die Diagnosemessung ergab
+`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s`. Das ist wegen
+Trace-Overhead keine Speed-Abnahme. Decode, Readiness und Render-Engine laufen;
+der aktuelle P0 liegt in Gast-Presentation/Framebuffer-Promotion oder PVR-/
+Scanout-Semantik. StartRender wurde beobachtet; die fruehere gegenteilige
+Diagnose ist verworfen. KR-4981 bleibt offen.
 
 ## Historischer Candidate-Evidenzstand
 
@@ -153,9 +148,9 @@ Die folgenden Staende bleiben getrennt:
 letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
-funktionaler Source-Stand:
-  5046c01 plus vier Runtime-/Codegen-Aenderungen dieses Meilensteins
-  (aktueller RuntimeOnly-v25/v29-Produktstand)
+aktueller funktionaler Source-Stand:
+  bereinigter Runtime-/Codegen-Checkpoint dieses Meilensteins
+  Runtime-ABI 88, PlatformServices-ABI 14, Backend-Interface-ABI 13
   Analyzer-ABI 34
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13
@@ -294,11 +289,11 @@ bleiben inaktiv.
 
 ## Aktueller P0: RuntimeOnly-Bring-up bis Memory-Card/Hauptmenue
 
-Der Composite-Callback wurde erstmals angenommen und der Performance-P0 ist
-fuer diesen Bring-up ausreichend verbessert. KR-4981 bleibt offen, weil der
-Sichtpfad noch nicht bis Memory-Card-Screen oder Hauptmenue lief. Als naechstes
-folgt ein kurzer korrekter Right+A-Lauf; danach wird der verbleibende Runtime-
-Blocker eingegrenzt. Weitere Performancearbeit erfolgt nur bei einem echten
+Der Performance-P0 ist fuer diesen Bring-up ausreichend verbessert. KR-4981
+bleibt offen, weil der Sichtpfad nach Presented by Sega schwarz bleibt und
+Memory-Card-Screen sowie Hauptmenue nicht erreicht wurden. Der verbleibende
+Runtime-Blocker liegt in Gast-Presentation/Framebuffer-Promotion oder PVR-/
+Scanout-Semantik. Weitere Performancearbeit erfolgt nur bei einem echten
 Blocker.
 
 Der Candidate-Resolution-P0 bleibt als historische PlatformAbi-Diagnostik
@@ -349,7 +344,7 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; RuntimeOnly-v25/v29 nahm den Composite-Callback an und erreichte SEGA/PAL/60-Hz-Testbild, aber noch keinen Memory-Card-Screen oder Hauptmenue; naechster Schritt ist ein kurzer korrekter Right+A-Lauf, danach der Runtime-Blocker |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; Gast-Presentation/Framebuffer-/PVR-Scanout-Blocker offen |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 
@@ -358,8 +353,8 @@ Die Reihenfolge ist normativ:
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> kurzer korrekter Right+A-Lauf
-  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen
+  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
+     aktuell blockiert durch Gast-Presentation/Framebuffer-/PVR-Scanout
   -> PlatformAbi-Candidate-Resolution bleibt deferred und ist kein RuntimeOnly-
      Buildblocker
 ```

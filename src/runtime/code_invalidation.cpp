@@ -604,8 +604,20 @@ bool ExecutableCodeTracker::tracks_address(const std::uint32_t address,
     const auto first_page = canonical / page_size * page_size;
     const auto last_address = static_cast<std::uint32_t>(canonical + size - 1u);
     const auto last_page = last_address / page_size * page_size;
+    const auto access_end = static_cast<std::uint64_t>(canonical) + size;
     for (auto page = first_page;; page += page_size) {
-        if (page_blocks_.contains(page)) return true;
+        if (const auto found = page_blocks_.find(page);
+            found != page_blocks_.end()) {
+            for (const auto index : found->second) {
+                if (index >= blocks_.size()) return true;
+                const auto& block = blocks_[index].block;
+                const auto block_end =
+                    static_cast<std::uint64_t>(block.physical_start) +
+                    block.size;
+                if (canonical < block_end && block.physical_start < access_end)
+                    return true;
+            }
+        }
         if (page == last_page) break;
     }
     return false;

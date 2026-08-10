@@ -298,6 +298,7 @@ class PvrRegisterFile final {
     void set_hblank_observer(std::function<void()> observer);
     void set_ta_reset_observer(std::function<void()> observer);
     void set_ta_continue_observer(std::function<void()> observer);
+    void set_yuv_reset_observer(std::function<void()> observer);
     void record_ta_packet(std::uint32_t bytes);
 
   private:
@@ -341,6 +342,7 @@ class PvrRegisterFile final {
     std::function<void()> hblank_observer_;
     std::function<void()> ta_reset_observer_;
     std::function<void()> ta_continue_observer_;
+    std::function<void()> yuv_reset_observer_;
     std::optional<SchedulerEventId> vblank_in_event_;
     std::optional<SchedulerEventId> vblank_out_event_;
     std::optional<SchedulerEventId> hblank_event_;
@@ -759,6 +761,7 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
     void set_guest_memory_access_memory(Memory* memory) noexcept;
+    void restart_frame_from_registers();
     void reset() noexcept;
     [[nodiscard]] std::uint64_t converted_macroblocks() const noexcept;
     struct Snapshot {
@@ -776,6 +779,7 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
 
   private:
     void refresh_configuration();
+    [[nodiscard]] std::uint64_t configured_macroblock_count() const noexcept;
     void convert_macroblock();
     std::shared_ptr<PvrRegisterFile> registers_;
     std::shared_ptr<LinearMemoryDevice> vram_;

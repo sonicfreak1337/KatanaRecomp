@@ -2208,6 +2208,172 @@ bool Memory::commit_prevalidated_linear_u32_pattern(
     return true;
 }
 
+std::optional<Memory::PreparedLinearU32Copy>
+Memory::prepare_prevalidated_linear_u32_copy(
+    const std::uint32_t address,
+    const std::span<const std::uint8_t> bytes,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
+    constexpr std::size_t word_size = sizeof(std::uint32_t);
+    if (bytes.empty() || (bytes.size() % word_size) != 0u ||
+        (address & (word_size - 1u)) != 0u ||
+        lookup_mode_ != MemoryLookupMode::Indexed || access_observers_active() ||
+        mmio_access_tracking_enabled_ || mmio_trace_handler_ ||
+        guest_memory_access_sink_ ||
+        !guest_write_observer_allows_prevalidated_linear_writes())
+        return std::nullopt;
+
+    const auto* const mapped = prevalidated_writable_region(address, bytes.size());
+    if (mapped == nullptr) return std::nullopt;
+
+    const auto offset =
+        static_cast<std::size_t>(region_offset(mapped->info, address));
+    const auto word_count = bytes.size() / word_size;
+    PreparedLinearU32Copy prepared;
+    try {
+        prepared.bytes_.assign(bytes.begin(), bytes.end());
+        prepared.observer_ = guest_write_observer_;
+        if (prepared.observer_) prepared.changed_words_.reserve(word_count);
+        if (mapped->linear != nullptr) {
+            const auto backing = mapped->linear->bytes();
+            if (offset > backing.size() ||
+                prepared.bytes_.size() > backing.size() - offset)
+                return std::nullopt;
+            if (prepared.observer_) {
+                for (std::size_t word = 0u; word < word_count; ++word) {
+                    const auto byte = word * word_size;
+                    prepared.changed_words_.push_back(
+                        static_cast<std::uint8_t>(std::memcmp(
+                            backing.data() +
+                                static_cast<std::ptrdiff_t>(offset + byte),
+                            prepared.bytes_.data() +
+                                static_cast<std::ptrdiff_t>(byte),
+                            word_size) != 0));
+                }
+            }
+        } else {
+            // Word-projected devices do not expose one contiguous host span.
+            // Prove every scalar store and exact four-byte projection before
+            // the caller accepts any guest time.
+            for (std::size_t word = 0u; word < word_count; ++word) {
+                const auto word_offset = offset + word * word_size;
+                if (word_offset > std::numeric_limits<std::uint32_t>::max())
+                    return std::nullopt;
+                mapped->device->validate_write(
+                    static_cast<std::uint32_t>(word_offset), word_size, source);
+                const auto projection = mapped->device->linear_projection(
+                    static_cast<std::uint32_t>(word_offset),
+                    MemoryAccessWidth::Word);
+                if (!projection || !projection.contiguous ||
+                    projection.byte_count != word_size ||
+                    projection.backing == nullptr)
+                    return std::nullopt;
+                const auto projected_offset =
+                    static_cast<std::size_t>(projection.byte_offsets.front());
+                const auto backing = projection.backing->bytes();
+                if (projected_offset > backing.size() ||
+                    word_size > backing.size() - projected_offset ||
+                    projection.byte_offsets[1u] != projected_offset + 1u ||
+                    projection.byte_offsets[2u] != projected_offset + 2u ||
+                    projection.byte_offsets[3u] != projected_offset + 3u)
+                    return std::nullopt;
+                if (prepared.observer_) {
+                    const auto byte = word * word_size;
+                    prepared.changed_words_.push_back(
+                        static_cast<std::uint8_t>(std::memcmp(
+                            backing.data() + static_cast<std::ptrdiff_t>(
+                                                 projected_offset),
+                            prepared.bytes_.data() +
+                                static_cast<std::ptrdiff_t>(byte),
+                            word_size) != 0));
+                }
+            }
+        }
+    } catch (...) {
+        return std::nullopt;
+    }
+
+    prepared.owner_ = this;
+    prepared.device_lifetime_ = mapped->device;
+    prepared.linear_ = mapped->linear;
+    prepared.offset_ = offset;
+    prepared.address_ = address;
+    prepared.source_ = source;
+    prepared.additional_unobserved_accesses_ =
+        additional_unobserved_accesses;
+    prepared.additional_indexed_region_hits_ =
+        additional_indexed_region_hits;
+    return prepared;
+}
+
+void Memory::commit_prepared_linear_u32_copy(
+    PreparedLinearU32Copy prepared) noexcept {
+    constexpr std::size_t word_size = sizeof(std::uint32_t);
+    if (prepared.owner_ != this || prepared.bytes_.empty() ||
+        (prepared.bytes_.size() % word_size) != 0u)
+        std::terminate();
+    const auto word_count = prepared.bytes_.size() / word_size;
+    if (prepared.linear_ != nullptr) {
+        auto backing = prepared.linear_->writable_bytes();
+        std::copy(prepared.bytes_.begin(),
+                  prepared.bytes_.end(),
+                  backing.begin() +
+                      static_cast<std::ptrdiff_t>(prepared.offset_));
+    } else {
+        for (std::size_t word = 0u; word < word_count; ++word) {
+            const auto byte = word * word_size;
+            const auto value =
+                static_cast<std::uint32_t>(prepared.bytes_[byte]) |
+                (static_cast<std::uint32_t>(prepared.bytes_[byte + 1u]) << 8u) |
+                (static_cast<std::uint32_t>(prepared.bytes_[byte + 2u]) << 16u) |
+                (static_cast<std::uint32_t>(prepared.bytes_[byte + 3u]) << 24u);
+            prepared.device_lifetime_->write_u32(
+                static_cast<std::uint32_t>(prepared.offset_ + byte), value);
+        }
+    }
+
+    performance_counters_.unobserved_accesses += word_count;
+    performance_counters_.unobserved_accesses +=
+        prepared.additional_unobserved_accesses_;
+    performance_counters_.indexed_region_hits +=
+        prepared.additional_indexed_region_hits_;
+
+    if (prepared.observer_) {
+        for (std::size_t word = 0u; word < word_count; ++word) {
+            try {
+                prepared.observer_(
+                    {prepared.address_ +
+                         static_cast<std::uint32_t>(word * word_size),
+                     word_size,
+                     prepared.source_,
+                     prepared.changed_words_[word] != 0u});
+            } catch (...) {
+                // All stores are already visible. Partial invalidation must
+                // never be followed by resumed guest execution.
+                std::terminate();
+            }
+        }
+    }
+}
+
+bool Memory::commit_prevalidated_linear_u32_copy(
+    const std::uint32_t address,
+    const std::span<const std::uint8_t> bytes,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
+    auto prepared = prepare_prevalidated_linear_u32_copy(
+        address,
+        bytes,
+        source,
+        additional_unobserved_accesses,
+        additional_indexed_region_hits);
+    if (!prepared) return false;
+    commit_prepared_linear_u32_copy(std::move(*prepared));
+    return true;
+}
+
 std::optional<Memory::PreparedRepeatedU32Sequence>
 Memory::prepare_prevalidated_repeated_u32_sequence(
     const std::uint32_t address,
@@ -2549,7 +2715,6 @@ void Memory::copy_bytes(const std::uint32_t destination,
                                 destination,
                                 MemoryAccessWidth::Byte,
                                 destination_region.info.name);
-
     if (!access_observers_active() && source_region.linear != nullptr &&
         destination_region.linear != nullptr) {
         const auto source_offset = region_offset(source_region.info, source_address);

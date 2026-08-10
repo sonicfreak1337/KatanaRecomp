@@ -115,7 +115,12 @@ void write_dr_double(CpuState& cpu, const std::uint8_t even_index, const double 
 std::uint64_t read_fpu_pair_bits(const CpuState& cpu, const std::uint8_t encoded_index) noexcept {
     const auto& bank = (encoded_index & 1u) != 0u ? cpu.xf : cpu.fr;
     const std::uint8_t even = even_register(encoded_index);
-    return (static_cast<std::uint64_t>(bank[even]) << 32u) | bank[even + 1u];
+    // FPSCR.SZ selects a raw 64-bit FMOV register pair, not the numeric DR
+    // bit layout used by double-precision arithmetic.  On the little-endian
+    // SH-4 used by Dreamcast, the lower-addressed memory longword maps to the
+    // even FR/XF register and the upper longword maps to the odd register.
+    return static_cast<std::uint64_t>(bank[even]) |
+           (static_cast<std::uint64_t>(bank[even + 1u]) << 32u);
 }
 
 void write_fpu_pair_bits(CpuState& cpu,
@@ -123,8 +128,8 @@ void write_fpu_pair_bits(CpuState& cpu,
                          const std::uint64_t bits) noexcept {
     auto& bank = (encoded_index & 1u) != 0u ? cpu.xf : cpu.fr;
     const std::uint8_t even = even_register(encoded_index);
-    bank[even] = static_cast<std::uint32_t>(bits >> 32u);
-    bank[even + 1u] = static_cast<std::uint32_t>(bits);
+    bank[even] = static_cast<std::uint32_t>(bits);
+    bank[even + 1u] = static_cast<std::uint32_t>(bits >> 32u);
 }
 
 void fpu_binary(CpuState& cpu,

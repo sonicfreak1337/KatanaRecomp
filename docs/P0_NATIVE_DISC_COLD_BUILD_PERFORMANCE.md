@@ -1,7 +1,8 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
 Status: Aktiver uebergeordneter Performancevertrag. Der aktuelle Bring-up-
-Meilenstein verwendet Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27
+Meilenstein verwendet Runtime-ABI 88, PlatformServices-ABI 14, Analyzer-ABI 34,
+Function-Analysis-Epoch-Schema 27
 und lokales In-Process-Evaluation-Cache-Schema 13. Das aktuelle
 Native-AOT-Emissionsprofil ist 25; das AOT-Partitionsschema ist 5. Der opt-in
 Modus `port --analysis-mode runtime-only` ist fuer den vollstaendigen NativeDisc-
@@ -12,11 +13,11 @@ nutzt RuntimeOnly-Dispatch ueber eine exakte statische Guest->Host-Tabelle.
 Der Whole-Export-Cache ist modegebunden; kein Interpreter, JIT, Runtime-
 Decoder oder geratener Zielpfad wird verwendet.
 
-Der aktuelle RuntimeOnly-v25/v29-Export dauerte `112,571 s`: `6.546`
-Funktionen, `147` Partitionen, Release-Hostbuild und `623/624`
-Compile-Cache-Hits. Der gemeinsame Source-/Dokumentations-Checkpoint baut auf
-`5046c01` auf und umfasst die vier Runtime-/Codegen-Aenderungen dieses
-Meilensteins.
+Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
+`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
+Der bereinigte Runtime-/Codegen-Checkpoint entfernt Sonic-spezifische
+`SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces; allgemeine Fixes bleiben.
 
 Die folgenden Candidate-Resolution- und D1/D9-Befunde sind historische
 PlatformAbi-Diagnostik. Ihr alter Status ohne Portartefakt gilt nicht fuer den
@@ -25,23 +26,17 @@ Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind deferred.
 Der historische Candidate-Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
 
-Der beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder Watchdogfehler;
-der Composite-Callback wurde erstmals angenommen
-(`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen). Post-entry wurden
-`2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet (`71,8322 MHz`), mit
-`10.855.776` zentralen Dispatches und `10.855.746` Bloecken. Das entspricht
-`+49,9 %` gegenueber `47,9329 MHz`.
+Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
+`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
+Diagnose-Overhead ist keine Speed-Abnahme.
 
-Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
-PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
-Memory-Card-Screen wurden deshalb nicht erreicht. Das ist kein Bring-up-
-Gate-Pass. Die Composite-Callsite bleibt eine explizite architektonische
-Dispatcher-Grenze. Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte wortprojizierte
-U32-Pattern-Batches mit exakter GuestWrite-/PVR-Dirty-/Counter-Semantik;
-Vram32 scalar U16/U32 nutzt direkte Backing-Projektion. Es gibt keine
-oeffentliche Layoutaenderung und keinen Analyzer-ABI-Bump. Der Performance-P0
-ist fuer diesen Bring-up ausreichend verbessert; weitere Performancearbeit
-erfolgt nur bei einem echten Blocker.
+Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Readiness und
+Render-Engine laufen. Der aktuelle P0 liegt in Gast-Presentation/Framebuffer-
+Promotion oder PVR-/Scanout-Semantik; StartRender wurde beobachtet und die
+fruehere gegenteilige Diagnose verworfen. Der Performance-P0 ist fuer diesen
+Bring-up ausreichend verbessert; weitere Arbeit erfolgt nur bei einem echten
+Blocker.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv

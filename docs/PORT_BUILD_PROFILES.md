@@ -32,19 +32,16 @@ maximal zwei physische Linkpaesse. Ein fehlender optionaler Pass wird nur
 durch vorhandenen erfolgreichen Build-, Artefakt- oder Up-to-date-Nachweis
 geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
 
-RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
-`147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits.
-Der gemeinsame Source-/Dokumentations-Checkpoint baut auf `5046c01` auf und
-umfasst die vier Runtime-/Codegen-Aenderungen dieses Meilensteins. Das aktuelle
-Native-AOT-Emissionsprofil ist `25` mit AOT-Partitionsschema `5`.
+Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
+Fatalfehler oder Crash. Die aktuelle `game.exe` besitzt den dokumentierten
+Produkt-Hash; das Native-AOT-Emissionsprofil ist `25` mit AOT-Partitionsschema
+`5`.
 
-Der beaufsichtigte Sonic-PAL-Lauf endete sauber; der Composite-Callback wurde
-erstmals angenommen (`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen).
-Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
-(`71,8322 MHz`). Der Sichtpfad erreichte SEGA, PAL-TV-Setting und 60-Hz-
-Testbild, kehrte aber wegen eines langen Right-Pulses zum PAL-Dialog zurueck;
-Memory-Card-Screen und Hauptmenue bleiben offen. Der Performance-P0 ist fuer
-diesen Bring-up ausreichend verbessert.
+Post-entry wurden `35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s`
+gemessen; der Diagnose-Overhead ist keine Speed-Abnahme. Der Sichtpfad zeigte
+SEGA und Presented by Sega, blieb danach aber schwarz; Memory-Card-Screen und
+Hauptmenue bleiben offen. Der aktuelle Runtime-P0 liegt in Gast-Presentation/
+Framebuffer-Promotion oder PVR-/Scanout-Semantik.
 
 ## Compiler und Linker
 

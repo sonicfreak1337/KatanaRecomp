@@ -4,32 +4,40 @@
 
 ### Geaendert
 
-- RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
-  `147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits.
-  Die erzeugte `game.exe` hat SHA-256
-  `e7c035ec1d0fe637beb1c48188af00cb7f06e775d7a2f7763e34ad041233aaf6`.
-  Der beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder
-  Watchdogfehler. Der Composite-Callback wurde erstmals angenommen
-  (`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen).
+- Der letzte saubere RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,608 s`
+  ohne Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
+  `b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
+  Nach Presented by Sega blieb der Kontaktbogen ab etwa `24 s` schwarz;
+  Memory-Card-Screen und Hauptmenue wurden nicht erreicht.
 
 - Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
   `PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
   Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
   werden.
 
-- Der gemeinsame Source-/Dokumentations-Checkpoint baut auf `5046c01` auf und
-  umfasst die vier Runtime-/Codegen-Aenderungen dieses Meilensteins.
-  Post-entry wurden `2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet
-  (`71,8322 MHz`), mit `10.855.776` zentralen Dispatches und `10.855.746`
-  Bloecken. Das sind `+49,9 %` gegenueber `47,9329 MHz`.
+- Der bereinigte Runtime-/Codegen-Checkpoint hebt Runtime-ABI `87` auf `88`
+  und PlatformServices-ABI `13` auf `14`; Backend-Interface-ABI `13` bleibt
+  unveraendert. Er entfernt Sonic-spezifische `SA_PRIVATE_*`-Dumps und
+  Diagnose-Stacktraces aus dem Repository, waehrend die allgemeinen
+  Runtime-AOT-, Memory-, DMA-, GD-ROM-, PVR-, YUV-, FPU- und
+  Invalidation-Fixes erhalten bleiben.
 
-- Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
-  PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
-  Memory-Card-Screen wurden nicht erreicht. Der Performance-P0 ist fuer den
-  Bring-up ausreichend verbessert; weitere Performancearbeit erfolgt nur bei
-  einem echten Blocker. Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte
-  wortprojizierte U32-Pattern-Batches mit exakter GuestWrite-/PVR-Dirty-/
-  Counter-Semantik; Vram32 scalar U16/U32 nutzt direkte Backing-Projektion.
+- Der Lauf verarbeitete `1.839.534.869` Gastzyklen; die Diagnosemessung ergab
+  post-entry `35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s`.
+  Dieser Trace-/Diagnose-Overhead ist keine Speed-Abnahme. Erfasst wurden
+  `305` PVR-Render-Requests und -Completions, `305` Rendererframes,
+  `8.960` YUV-Makrobloecke, `319` Hostframes sowie `427` Audiopuffer mit
+  `313.845` Audiobildern.
+
+- Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz.
+  Decode, Readiness und Render-Engine laufen; der aktuelle P0 liegt in
+  Gast-Presentation/Framebuffer-Promotion oder allgemeiner PVR-/Scanout-
+  Semantik. StartRender wurde mehrfach beobachtet; die fruehere Aussage,
+  StartRender oder Frame-Finalize fehlten, ist verworfen. Eine private
+  Diagnosebruecke war kein Fix und bleibt ausserhalb des Produktpfads.
+  Der 8-MiB-PVR-VRAM-Clear nutzt vorvalidierte wortprojizierte U32-Pattern-
+  Batches mit exakter GuestWrite-/PVR-Dirty-/Counter-Semantik; Vram32 scalar
+  U16/U32 nutzt direkte Backing-Projektion.
 
 - Der RuntimeOnly-NativeDisc-Bring-up bleibt ein opt-in Pfad: `port
   --analysis-mode runtime-only` gilt nur mit `--game-project`, der Default

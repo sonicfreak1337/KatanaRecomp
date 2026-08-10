@@ -19,6 +19,8 @@ namespace katana::runtime {
 
 class ExecutableCodeTracker;
 class ExecutableModuleCatalog;
+class DemandBlockMaterializer;
+class RuntimeBlockTable;
 struct BlockVariantKey;
 
 inline constexpr std::uint32_t platform_services_abi_version =
@@ -224,6 +226,18 @@ class PlatformServices {
                                            ExecutableBlockTimingClass,
                                            std::uint64_t) {}
     virtual void allow_executable_block_chaining(std::uint32_t) {}
+    // Generated products register every AOT-template source entry here, including
+    // entries which are intentionally absent from the static runtime table.  The
+    // platform may use this bounded metadata only after the runtime dispatcher has
+    // bound the table/materializer which proved the concrete destination identity.
+    virtual void reserve_runtime_aot_chain_contracts(std::size_t) {}
+    virtual void register_runtime_aot_chain_contract(std::uint32_t,
+                                                     std::uint32_t,
+                                                     ExecutableBlockTimingClass,
+                                                     std::uint64_t,
+                                                     bool) {}
+    virtual void bind_runtime_dispatch_context(RuntimeBlockTable*,
+                                               DemandBlockMaterializer*) noexcept {}
     virtual void begin_executable_block(const BlockVariantKey&) noexcept {}
     virtual void begin_executable_block(std::uint32_t,
                                         std::uint32_t,

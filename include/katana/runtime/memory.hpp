@@ -608,6 +608,45 @@ class Memory {
         std::vector<std::uint8_t> changed_words_;
     };
 
+    class PreparedLinearU32Copy final {
+      public:
+        PreparedLinearU32Copy(const PreparedLinearU32Copy&) = delete;
+        PreparedLinearU32Copy& operator=(const PreparedLinearU32Copy&) = delete;
+        PreparedLinearU32Copy(PreparedLinearU32Copy&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)),
+              device_lifetime_(std::move(other.device_lifetime_)),
+              linear_(std::exchange(other.linear_, nullptr)),
+              offset_(std::exchange(other.offset_, 0u)),
+              address_(std::exchange(other.address_, 0u)),
+              bytes_(std::move(other.bytes_)),
+              source_(other.source_),
+              additional_unobserved_accesses_(
+                  std::exchange(other.additional_unobserved_accesses_, 0u)),
+              additional_indexed_region_hits_(
+                  std::exchange(other.additional_indexed_region_hits_, 0u)),
+              observer_(std::move(other.observer_)),
+              changed_words_(std::move(other.changed_words_)) {}
+        PreparedLinearU32Copy&
+        operator=(PreparedLinearU32Copy&&) noexcept = delete;
+        ~PreparedLinearU32Copy() = default;
+
+      private:
+        friend class Memory;
+        PreparedLinearU32Copy() = default;
+
+        Memory* owner_ = nullptr;
+        std::shared_ptr<MemoryDevice> device_lifetime_;
+        LinearMemoryDevice* linear_ = nullptr;
+        std::size_t offset_ = 0u;
+        std::uint32_t address_ = 0u;
+        std::vector<std::uint8_t> bytes_;
+        CodeWriteSource source_ = CodeWriteSource::Copy;
+        std::size_t additional_unobserved_accesses_ = 0u;
+        std::size_t additional_indexed_region_hits_ = 0u;
+        GuestWriteObserver observer_;
+        std::vector<std::uint8_t> changed_words_;
+    };
+
     class PreparedRepeatedU32Sequence final {
       public:
         PreparedRepeatedU32Sequence(const PreparedRepeatedU32Sequence&) = delete;
@@ -882,6 +921,28 @@ class Memory {
         std::uint32_t address,
         std::size_t word_count,
         std::uint32_t value,
+        CodeWriteSource source = CodeWriteSource::Copy,
+        std::size_t additional_unobserved_accesses = 0u,
+        std::size_t additional_indexed_region_hits = 0u) noexcept;
+    // Owns an arbitrary sequence of little-endian 32-bit stores. This is the
+    // variable-value counterpart of PreparedLinearU32Pattern and also admits
+    // word-projected devices such as the Dreamcast 32-bit VRAM aperture after
+    // every scalar store and projection has been validated.
+    [[nodiscard]] std::optional<PreparedLinearU32Copy>
+    prepare_prevalidated_linear_u32_copy(
+        std::uint32_t address,
+        std::span<const std::uint8_t> bytes,
+        CodeWriteSource source = CodeWriteSource::Copy,
+        std::size_t additional_unobserved_accesses = 0u,
+        std::size_t additional_indexed_region_hits = 0u) noexcept;
+    void commit_prepared_linear_u32_copy(
+        PreparedLinearU32Copy prepared) noexcept;
+
+    // Compatibility wrapper for immediate prepare/commit.
+    [[nodiscard]] bool
+    commit_prevalidated_linear_u32_copy(
+        std::uint32_t address,
+        std::span<const std::uint8_t> bytes,
         CodeWriteSource source = CodeWriteSource::Copy,
         std::size_t additional_unobserved_accesses = 0u,
         std::size_t additional_indexed_region_hits = 0u) noexcept;

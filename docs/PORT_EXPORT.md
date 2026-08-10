@@ -65,23 +65,19 @@ Stop-on-miss und typed abort bleiben aktiv; Interpreter, JIT, Runtime-Decoder
 und geratenen Ziele sind ausgeschlossen.
 
 Der Whole-Export-Cache bindet den Analysemodus und verwendet keinen Eintrag
-des anderen Modus. RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert:
-`6.546` Funktionen, `147` Partitionen, Release-Hostbuild und `623/624`
-Compile-Cache-Hits. Der gemeinsame Source-/Dokumentations-Checkpoint baut auf
-`5046c01` auf und umfasst die vier Runtime-/Codegen-Aenderungen dieses
-Meilensteins.
+des anderen Modus. Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte
+`45,608 s` ohne Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
+`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
 
-Der beaufsichtigte Sonic-PAL-Lauf endete sauber ohne Fatal- oder Watchdogfehler;
-der Composite-Callback wurde erstmals angenommen
-(`KATANA_COMPOSITE_CALLBACK_ADMIT`, `4.107` Iterationen). Post-entry wurden
-`2.492.558.436` Gastzyklen in `34,6997 s` verarbeitet (`71,8322 MHz`), mit
-`10.855.776` zentralen Dispatches und `10.855.746` Bloecken.
+Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
+`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
+Diagnose-Overhead ist keine Speed-Abnahme.
 
-Der Sichtpfad war SEGA -> PAL-TV-Setting -> 60-Hz-Testbild -> zurueck zum
-PAL-Dialog. Ein langer Right-Puls wanderte bis TEST; Hauptmenue und
-Memory-Card-Screen wurden deshalb nicht erreicht. Der Performance-P0 ist fuer
-diesen Bring-up ausreichend verbessert; weitere Performancearbeit erfolgt nur
-bei einem echten Blocker. Stop-on-miss und typed abort bleiben aktiv.
+Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Readiness und
+Render-Engine laufen; der offene Runtime-P0 liegt in Gast-Presentation/
+Framebuffer-Promotion oder PVR-/Scanout-Semantik. Stop-on-miss und typed abort
+bleiben aktiv.
 
 ## Opt-in Portbuild-Telemetrie
 

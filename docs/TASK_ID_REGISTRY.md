@@ -65,19 +65,17 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Der aktuelle Source-Stand ist der RuntimeOnly-v25/v29-Produktstand;
-Ausgangscheckpoint `5046c01` plus die vier Runtime-/Codegen-Aenderungen
-dieses Meilensteins,
-Analyzer-ABI 34, Backend-Interface-ABI 13, Function-Analysis-Epoch-Schema 27,
+Der aktuelle Source-Stand ist der bereinigte RuntimeOnly-v25/v29-
+Produktstand; Runtime-ABI 88, PlatformServices-ABI 14, Analyzer-ABI 34,
+Backend-Interface-ABI 13, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
 `port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
 vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
-RuntimeOnly-v25/v29 wurde in `112,571 s` exportiert: `6.546` Funktionen,
-`147` Partitionen, Release-Hostbuild und `623/624` Compile-Cache-Hits. Der
-Composite-Callback wurde erstmals angenommen; der Lauf zeigte Sega-Lizenz,
-PAL-TV-Setting und 60-Hz-Testbild, erreichte aber weder Memory-Card-Screen
-noch Hauptmenue. KR-4981 bleibt offen; der naechste Schritt ist ein kurzer
-korrekter Right+A-Lauf.
+Der letzte saubere RuntimeOnly-v25/v29-Lauf dauerte `45,608 s` ohne
+Fatalfehler oder Crash. Nach Presented by Sega blieb der Kontaktbogen schwarz;
+Memory-Card-Screen und Hauptmenue wurden nicht erreicht. KR-4981 bleibt offen;
+der aktuelle Runtime-P0 liegt in Gast-Presentation/Framebuffer-Promotion oder
+PVR-/Scanout-Semantik.
 
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
@@ -177,7 +175,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 nahm den Composite-Callback an und erreichte SEGA/PAL/60-Hz-Testbild, aber noch keinen Memory-Card-Screen oder Hauptmenue; naechster Schritt ist ein kurzer korrekter Right+A-Lauf |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; Gast-Presentation/Framebuffer-/PVR-Scanout-Blocker offen |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |

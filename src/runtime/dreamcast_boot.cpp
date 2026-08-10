@@ -910,6 +910,12 @@ initialize_dreamcast_runtime(CpuState& cpu,
         state.pvr_registers,
         state.vram,
         [raise_now] { raise_now(SystemAsicEvent::PvrYuvDone); });
+    const auto reset_yuv_converter =
+        std::weak_ptr<PvrYuvConverterMemoryDevice>(state.pvr_yuv_converter);
+    state.pvr_registers->set_yuv_reset_observer([reset_yuv_converter] {
+        if (const auto converter = reset_yuv_converter.lock())
+            converter->restart_frame_from_registers();
+    });
     state.pvr_yuv_converter->set_guest_memory_access_memory(&cpu.memory);
     for (const auto segment : dreamcast_direct_segment_bases) {
         const auto ta_base = segment + 0x10000000u;
