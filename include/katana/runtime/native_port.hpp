@@ -11,6 +11,7 @@
 namespace katana::runtime {
 
 struct CpuState;
+class NativePortGraphicsDevice;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     build_contract::native_port_profile_contract_version;
@@ -218,6 +219,7 @@ enum class NativePortStopReason : std::uint8_t {
 struct NativePortContext final {
     CpuState* cpu = nullptr;
     NativePortHostServices* host = nullptr;
+    NativePortGraphicsDevice* graphics = nullptr;
     NativePortAotBridge aot;
     void* title_state = nullptr;
     std::uint64_t frame_index = 0u;

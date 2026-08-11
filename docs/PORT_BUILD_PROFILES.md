@@ -36,7 +36,7 @@ erzwingen `diagnostic-interpreter`. Der historische Geraetepfad ist nur ein
 internes Buildbaum-Orakel und kein generiertes Portprofil. Compilerbuildordner
 und Telemetrie sind an das Runtimeprofil gebunden. `native-port` linkt
 ausschliesslich `KatanaRecomp::native_port_runtime`, verlangt Native-Port-
-Profilvertrag `6` und Portprojektvertrag `81` und erzeugt eine Linkmap. Ein
+Profilvertrag `7` und Portprojektvertrag `82` und erzeugt eine Linkmap. Ein
 Post-Link-Audit verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-,
 CPU-PVR-/TA- oder Interpreterbestandteilen. Es existiert kein automatischer
 Rueckfall.
@@ -51,6 +51,12 @@ in-process LGPL-Shared-FFmpeg/libav-Provider ohne `ffmpeg.exe`. Der Provider
 prueft Header, ABI und Lizenz der fuenf benoetigten DLLs und deployt nur diese
 Closure samt Notices; ein User-Override wird nicht veraendert, der automatische
 Cache wird auf die benoetigte Closure begrenzt.
+
+KR-5003 bindet den hardware-only-D3D11-GPU-Pfad ohne WARP/REF/GDI/CPU-
+Rasterizer, PVR/TA oder historische Geraeteruntime. Render-/Outputaufloesung
+und Game-/UI-/Kamera-Viewports sind getrennte Vertraege; Standard ist
+1920x1080. Oeffentliche FFmpeg-Pakete benoetigen die vollstaendige
+entsprechende Source-Closure und bleiben ohne sie `redistribution_ready=false`.
 
 ## Historischer RuntimeOnly-Pfad und Windows-Hostbuild
 

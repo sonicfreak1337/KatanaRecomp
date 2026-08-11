@@ -135,7 +135,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `81`, Native-Port-Profilvertrag `6` und
+kein Portprofil. Portprojektvertrag `82`, Native-Port-Profilvertrag `7` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -145,7 +145,7 @@ endet typisiert als `UnresolvedHardwareAccess` ohne Emulator-/Interpreter- oder
 Runtimefallback. Der generierte Runner verlangt Executable plus privaten
 ContentRoot und validiert beide Pfade; der Bring-up-Schalter gilt nur bei
 unvollstaendiger Closure. KR-5001 und seine Hookkarten-/Closure-Verbindung
-sind source-seitig abgeschlossen; der aktive Folgetask ist KR-5002.
+sind source-seitig abgeschlossen; KR-5002 ist abgeschlossen.
 
 `KR-5001` ist source-seitig abgeschlossen. Die deterministische
 `metadata/native-hook-requirements.json`-Karte verlangt fuer Function- und
@@ -156,14 +156,24 @@ nur ueber range-geprueften Native Memory und enden ausserhalb typisiert.
 `MemoryAccessError`, Emitter und Native-Dispatch transportieren
 `GuestInstructionOrigin` auch ohne Tracesink. Die Hardware-Closure steht auf
 Schema `v2`; ein Diagnosebypass ohne `NativePortDefinition` ist geschlossen.
-Aktiv ist jetzt `KR-5002` fuer den nativen Audio-/Moviepfad. WinMM PCM und
+`KR-5002` ist source-seitig abgeschlossen. WinMM PCM und
 ein in-process LGPL-Shared-FFmpeg/libav-Provider arbeiten ohne Dreamcast-
 Geraetefallback. Hash-/handlegebundene, reparse-sichere und waehrend Decode
 exklusiv gesperrte Bytequellen, strikte Timestamps/EOS und bounded Queues
 bilden den Dienstvertrag. Headerloser Sofdec-PS-Inhalt wird nur ueber ein
 bounded virtuelles Praefix fuer den Demuxer erkannt; `Ready` bis `Stopped` ist
 der oeffentliche `NativePortMovieSession`-Lebenszyklus. Der relevante
-24-Worker-Inkrementalbuild war in etwa `4,5 s` erfolgreich.
+24-Worker-Inkrementalbuild war in etwa `4,5 s` erfolgreich. `KR-5003` ist
+source- und produktseitig abgeschlossen: Der native GPU-Pfad ist hardware-only
+D3D11 ohne WARP/REF/GDI/CPU-Rasterizer, PVR/TA oder historische Geraeteruntime.
+Native Vertices, Texturen und Drawstate nutzen GPU-Offscreen-Renderflaeche und
+Swapchain; Standard ist 1920x1080, Render-/Outputaufloesung sowie Game-, UI-
+und Kamera-Viewports/Aspect-Policies sind getrennt. Die native SFD-Abnahme
+durchlief `Ready` -> `Playing` -> `Completed` -> `Stopped` mit 200 dekodierten
+und 200 GPU-praesentierten Videoframes, 294.016 dekodierten Audioframes,
+114.688.000 GPU-Uploadbytes und `hardware_accelerated=true`; PVR/Scanout/
+Gastframebuffer waren nicht beteiligt. Der inkrementelle 24-Worker-Targetbuild
+war in `4,9 s` erfolgreich. Aktiver Folgetask ist `KR-5004`.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -209,8 +219,8 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 94, PlatformServices-ABI 14, Backend-Interface-ABI 18,
-  PVR-State-Contract 3, Portprojektvertrag 81, Native-Port-Profilvertrag 6
+  Runtime-ABI 95, PlatformServices-ABI 14, Backend-Interface-ABI 19,
+  PVR-State-Contract 3, Portprojektvertrag 82, Native-Port-Profilvertrag 7
   Analyzer-ABI 36
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13

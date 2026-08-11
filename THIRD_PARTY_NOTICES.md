@@ -13,10 +13,17 @@ License. The exact vendored license text is retained in
 The Windows native-port media runtime dynamically links a pinned FFmpeg
 `n8.1.2-34-g9b6c8969e0` LGPL shared build for Sofdec MPEG-PS, CRI ADX, audio
 resampling and decoded video conversion. GPL and nonfree FFmpeg components are
-excluded and rejected again at runtime. Katana distributes only the required
-shared-library closure, its LGPLv3 license and the reproducible source/build
-provenance in `third_party/ffmpeg/NOTICE.txt`; it never launches or packages
-the FFmpeg command-line programs.
+excluded and rejected again at runtime. Katana deploys only the required
+shared-library closure and never launches or packages the FFmpeg command-line
+programs. A local build without the complete corresponding-source archive is
+marked `FFmpeg-DEVELOPMENT-ONLY.txt` and is not a redistributable package.
+Public packaging is fail-closed until the exact FFmpeg source, exact BtbN
+recipe, complete pinned BtbN dependency-source cache, configure line and empty
+Katana changes diff are bundled as `FFmpeg-Corresponding-Source.zip`. The
+bundle, DLLs, LGPLv3 text, notice and build configuration are individually
+hash-bound by the native port runtime-dependency manifest. Exact identities
+and the bundle procedure are recorded in `third_party/ffmpeg/NOTICE.txt` and
+`tools/dependencies/package-ffmpeg-corresponding-source.ps1`.
 
 The project is built with a C++20 compiler and the compiler's standard and
 operating-system libraries. CMake and Ninja orchestrate builds. Optional local

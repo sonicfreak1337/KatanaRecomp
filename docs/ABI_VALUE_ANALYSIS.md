@@ -2,9 +2,9 @@
 
 Historischer Einfuehrungsstand: KR-4716
 
-Aktueller KR-5002-Stand: Die oeffentlichen ABI- und Portvertraege folgen dem
-aktiven Buildvertrag. KR-5001 ist source-seitig abgeschlossen; KR-5002 ist
-der aktive native Audio-/Moviepfad. Historische Checkpoint- und Laufangaben
+Aktueller KR-5003-Stand: Die oeffentlichen ABI- und Portvertraege folgen dem
+aktiven Buildvertrag. KR-5001 bis KR-5003 sind source-seitig abgeschlossen;
+KR-5004 ist der aktive native Disc-/Eingabe-/Savepfad. Historische Checkpoint- und Laufangaben
 bleiben an ihre damaligen Vertraege gebunden.
 
 Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter

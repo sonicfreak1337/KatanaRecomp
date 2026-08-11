@@ -650,6 +650,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/native_port_codec.hpp
     include/katana/runtime/native_port_content.hpp
     include/katana/runtime/native_port_ffmpeg_codec.hpp
+    include/katana/runtime/native_port_graphics.hpp
     include/katana/runtime/native_port_movie.hpp
     include/katana/runtime/runtime.hpp
 )
@@ -754,6 +755,7 @@ set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
     src/runtime/native_port_codec.cpp
     src/runtime/native_port_content.cpp
     ${KATANA_NATIVE_PORT_FFMPEG_SOURCE}
+    src/runtime/native_port_graphics.cpp
     src/runtime/native_port_movie.cpp
     src/runtime/native_port_runtime.cpp
 )
@@ -844,6 +846,9 @@ if(WIN32)
             mfreadwrite
             mfuuid
             ole32
+            d3d11
+            dxgi
+            user32
             winmm
     )
 endif()
@@ -5496,6 +5501,18 @@ if(WIN32)
         FILES ${KATANA_FFMPEG_NOTICE_FILE}
         DESTINATION ${CMAKE_INSTALL_DATADIR}/KatanaRecomp/licenses
         RENAME FFmpeg-NOTICE.txt
+        COMPONENT runtime-sdk
+    )
+    install(
+        FILES ${KATANA_FFMPEG_BUILD_CONFIGURATION_FILE}
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/KatanaRecomp/licenses
+        RENAME FFmpeg-BUILD-CONFIGURATION.txt
+        COMPONENT runtime-sdk
+    )
+    install(
+        FILES ${KATANA_FFMPEG_REDISTRIBUTION_FILE}
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/KatanaRecomp/licenses
+        RENAME ${KATANA_FFMPEG_REDISTRIBUTION_FILENAME}
         COMPONENT runtime-sdk
     )
 endif()

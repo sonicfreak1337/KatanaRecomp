@@ -1,0 +1,24 @@
+FFmpeg binary identity
+======================
+
+Package: ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-shared-8.1.zip
+Package SHA-256: c222a490dde4e7059f45495deef6bfb98dbcacc2b43df5b607546252037aa95c
+FFmpeg source commit: 9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b
+FFmpeg source archive: https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b
+FFmpeg source archive SHA-256: 7e779215eae16ad7e93ddad59bd82822bd3d34e4dc61f9996f9481b2c0605bc3
+BtbN build-recipe commit: a99e8230eae00d1cee38f23076a7a1f55cd984e2
+BtbN build-recipe archive: https://codeload.github.com/BtbN/FFmpeg-Builds/tar.gz/a99e8230eae00d1cee38f23076a7a1f55cd984e2
+BtbN build-recipe archive SHA-256: 7deac4a5190b2be84d4d548db2885d05152f9e3d77069d0e34841a46efd95e2b
+BtbN workflow run: 30631423920
+BtbN source-cache artifact: 8793574986
+BtbN source-cache artifact URL: https://github.com/BtbN/FFmpeg-Builds/actions/runs/30631423920/artifacts/8793574986
+BtbN source-cache artifact SHA-256: dd9e5cf1278e07532ffd2cb32f50d252394f1757cb4fc34a899f81395e153a0b
+
+KatanaRecomp applies no source changes to FFmpeg or to the BtbN dependency
+sources. The corresponding-source bundle therefore contains an empty
+changes.diff plus the exact FFmpeg source, BtbN recipe and BtbN source cache.
+
+Runtime-reported configure line
+===============================
+
+--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --enable-shared --disable-static --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libshaderc --enable-libvorbis --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --enable-libaribb24 --disable-avisynth --enable-chromaprint --enable-libdav1d --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librav1e --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20260731

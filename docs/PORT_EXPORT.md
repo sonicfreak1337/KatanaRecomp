@@ -168,7 +168,7 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `80` ist `native-port` das einzige Produktprofil;
+Seit Portprojektvertrag `82` ist `native-port` das einzige Produktprofil;
 `diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
 historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
 `aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von
@@ -188,7 +188,10 @@ die benoetigten fuenf FFmpeg-DLLs plus Lizenz-/Notice-Dateien; Header-, ABI- und
 Lizenzpruefungen bleiben aktiv. Ein User-Override wird nicht veraendert, und
 der automatische Cache wird auf diese Closure bereinigt. Der generierte
 NativePortMovieSession-Vertrag reicht von `Ready` bis `Stopped`; kein
-Dreamcast-Geraetefallback.
+Dreamcast-Geraetefallback. KR-5003 fuehrt native hardware-only-D3D11-Grafik
+mit GPU-Offscreen-Renderflaeche und Swapchain ein. WARP/REF/GDI/CPU-
+Rasterizer sowie PVR/TA und historische Geraeteruntime bleiben aus dem
+Produktlink ausgeschlossen.
 
 `game.katana-install` enthaelt Recipe-Version 2, Jobgeneration,
 Descriptor-SHA-256, Boot-SHA-256, Contentidentitaet und pro Track Nummer, LBA,

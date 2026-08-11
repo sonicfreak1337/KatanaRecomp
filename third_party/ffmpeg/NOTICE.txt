@@ -12,9 +12,23 @@ Pinned binary build:
   Asset ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-shared-8.1.zip
   SHA-256 c222a490dde4e7059f45495deef6bfb98dbcacc2b43df5b607546252037aa95c
 
-Corresponding upstream sources and build recipe:
-  https://github.com/FFmpeg/FFmpeg/tree/9b6c8969e0
-  https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-07-31-14-10
+Exact corresponding-source inputs:
+  FFmpeg commit 9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b
+  FFmpeg source archive SHA-256
+    7e779215eae16ad7e93ddad59bd82822bd3d34e4dc61f9996f9481b2c0605bc3
+  BtbN recipe commit a99e8230eae00d1cee38f23076a7a1f55cd984e2
+  BtbN recipe archive SHA-256
+    7deac4a5190b2be84d4d548db2885d05152f9e3d77069d0e34841a46efd95e2b
+  BtbN workflow run 30631423920
+  BtbN complete source-cache artifact 8793574986
+  BtbN source-cache SHA-256
+    dd9e5cf1278e07532ffd2cb32f50d252394f1757cb4fc34a899f81395e153a0b
+
+The complete configure line is retained in FFmpeg-BUILD-CONFIGURATION.txt.
+The BtbN source cache is required because the selected FFmpeg DLLs statically
+contain enabled third-party libraries in addition to dynamically exposing the
+five libav DLL interfaces. An upstream FFmpeg checkout alone is therefore not
+accepted as the corresponding-source closure.
 
 The selected shared build is licensed under GNU LGPL version 3 or later and
 has GPL and nonfree components disabled. KatanaRecomp verifies the linked
@@ -22,3 +36,11 @@ component ABI majors, license strings and configuration flags before opening a
 media source. The complete LGPLv3 text is distributed as FFmpeg-LGPL.txt next
 to native product binaries. The DLLs remain replaceable by ABI-compatible
 LGPL builds.
+
+Local development builds carry FFmpeg-DEVELOPMENT-ONLY.txt and are not
+redistributable packages. A redistributable Katana package must instead carry
+FFmpeg-Corresponding-Source.zip, hash-bind it in runtime-dependencies.json and
+must not contain the development-only marker. The bundle is produced by
+tools/dependencies/package-ffmpeg-corresponding-source.ps1 from the exact
+FFmpeg source archive, BtbN recipe archive and complete BtbN source-cache
+artifact. Katana applies no changes to those sources; changes.diff is empty.

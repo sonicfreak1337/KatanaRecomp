@@ -4,11 +4,11 @@ Dieser KR-4704-Vertrag trennt den Inhalt geladener Bytes von ihren
 Laufzeitberechtigungen und von der Frage, wann ein Block kompiliert sein muss.
 Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
-Der aktuelle KR-5002-Stand verwendet Runtime-ABI 94, Block-ABI 5,
-Analyzer-ABI 36, PlatformServices-ABI 14, Backend-Interface-ABI 18,
-Portprojektvertrag 81, Native-AOT-Emissionsprofil 27 und
+Der aktuelle KR-5003-Stand verwendet Runtime-ABI 95, Block-ABI 5,
+Analyzer-ABI 36, PlatformServices-ABI 14, Backend-Interface-ABI 19,
+Portprojektvertrag 82, Native-AOT-Emissionsprofil 27 und
 Portpartitionsschema 7. Historische Checkpoint- und Laufangaben bleiben an
-ihre damaligen Vertraege gebunden; der naechste aktive Task ist KR-5001.
+ihre damaligen Vertraege gebunden; der naechste aktive Task ist KR-5004.
 
 ## Byteinventar
 
@@ -276,9 +276,9 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
-abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 94,
-Block-ABI 5, Analyzer-ABI 36, Backend-Interface-ABI 18,
-PlatformServices-ABI 14, Portprojektvertrag 81, Native-AOT-Emissionsprofil 27
+abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 95,
+Block-ABI 5, Analyzer-ABI 36, Backend-Interface-ABI 19,
+PlatformServices-ABI 14, Portprojektvertrag 82, Native-AOT-Emissionsprofil 27
 und Portpartitionsschema 7. Systemreplay-Schema 8
 und Runtime-Probe-Schema 5
 skalieren die Produktbeobachtung, ohne den interpreterfreien

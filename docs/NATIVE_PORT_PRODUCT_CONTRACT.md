@@ -130,8 +130,8 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `94`, Analyzer-ABI `36`, Backend-
-Interface-ABI `18`, Portprojektvertrag `81` und Native-Port-Profilvertrag `6`.
+KR-5000 bindet diese Grenze an Runtime-ABI `95`, Analyzer-ABI `36`, Backend-
+Interface-ABI `19`, Portprojektvertrag `82` und Native-Port-Profilvertrag `7`.
 Der historische
 GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
 enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -188,6 +188,27 @@ Closure begrenzt. Headerloser Sofdec-PS-Inhalt wird nur ueber ein virtuelles,
 bounded Praefix fuer den Demuxer erkannt; die Originalquelle bleibt
 unveraendert. Der oeffentliche `NativePortMovieSession`-Lebenszyklus reicht
 von `Ready` bis `Stopped`.
+
+KR-5003 bindet den nativen GPU-Pfad ausschliesslich an hardwarebeschleunigtes
+D3D11. WARP, REF, GDI, CPU-Rasterizer, PVR/TA und historische Geraeteruntime
+sind im Produktpfad unzulaessig. Native Vertices, Texturen und Drawstate nutzen
+eine GPU-Offscreen-Renderflaeche und Swapchain. Standard ist 1920x1080;
+Render-/Outputaufloesung sowie Game-, UI- und Kamera-Viewports und Aspect-
+Policies sind getrennte Vertraege. Der native SFD-Lifecycle wurde von `Ready`
+ueber `Playing` und `Completed` bis `Stopped` mit 200 dekodierten und 200
+GPU-praesentierten Videoframes, 294.016 Audioframes und 114.688.000
+GPU-Uploadbytes abgenommen; `hardware_accelerated=true` und kein
+PVR/Scanout/Gastframebuffer sind Teil der Evidenz. Oeffentliche Enums,
+Budgets, Lebensdauern und Ownerthread-Regeln bleiben fail-closed; Titel werden
+vor Besitzkopie auf 1024 Bytes begrenzt, endliche Vertices vollstaendig
+geprueft und Resize im offenen Frame an das Renderziel zurueckgebunden.
+
+Die KR-5002-FFmpeg-Distribution bleibt strikt: Public Packages benoetigen
+`FFmpeg-Corresponding-Source.zip` und fuehren DLL, Lizenz, Notice,
+Buildkonfiguration und Source einzeln in `runtime-dependencies.json` Schema
+`v3`. Ohne vollstaendige Source bleibt `redistribution_ready=false`; die
+exakte 2-GB-Quellclosure liegt nicht im Repository, und DEVELOPMENT-ONLY-
+Builds sind nicht redistributierbar.
 
 ## Verbindliche Taskreihenfolge
 

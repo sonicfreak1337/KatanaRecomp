@@ -38,8 +38,8 @@
   validiert beide Pfade; der Bring-up-Schalter gilt nur bei unvollstaendiger
   Closure.
 
-- Runtime-ABI `94`, Analyzer-ABI `36`, Backend-Interface-ABI `18`,
-  Portprojektvertrag `81`, Native-Port-Profilvertrag `6`, Hardwareaudit-Schema
+- Runtime-ABI `95`, Analyzer-ABI `36`, Backend-Interface-ABI `19`,
+  Portprojektvertrag `82`, Native-Port-Profilvertrag `7`, Hardwareaudit-Schema
   `v5`, Hardwareaudit-Set-Schema `v2`
   und Port-
   Metadatencache-Schema `3` versionieren
@@ -47,7 +47,7 @@
   historische GameProject-Vertrag `5` samt Artefaktformat `4` bleibt
   unveraendert und enthaelt bewusst keine Native-Port-Definition; deren
   unabhaengiger privater Provider wurde mit KR-5001 angebunden.
-  Backend-Interface-ABI `18` bindet den erweiterten unabhaengigen
+  Backend-Interface-ABI `19` bindet den erweiterten unabhaengigen
   `PortExportOptions::native_port_definition`-Zeiger; er wird nicht in den
   alten Dreamcast-Spielprojektvertrag eingebaut. Der korrekte SkyEmu-MIT-
   Hinweis und die vendorte Lizenz bleiben im Repository
@@ -75,7 +75,8 @@
   laufen ausschliesslich ueber range-geprueften nativen Speicher und enden
   ausserhalb typisiert. `MemoryAccessError` und Native-Dispatch tragen die
   exakte `GuestInstructionOrigin` auch ohne Tracesink. KR-5001 ist
-  source-seitig abgeschlossen; KR-5002 ist der naechste aktive Task.
+  source-seitig abgeschlossen; in jenem damaligen Checkpoint war KR-5002 der
+  naechste aktive Task.
 
 - KR-5002 schliesst native Audio-/Movie-Dienste ohne Dreamcast-Geraetefallback:
   WinMM PCM, hash-/handlegebundene und reparse-sichere Bytequellen mit
@@ -87,12 +88,33 @@
   bleibt unveraendert. Der `NativePortMovieSession`-Lebenszyklus erreicht
   `Ready` bis `Stopped`. Der 24-Worker-Inkrementalbuild der relevanten Ziele
   war in etwa `4,5 s` erfolgreich; es wurden keine neuen Tests ausgefuehrt.
-  KR-5002 ist source-seitig abgeschlossen; KR-5003 ist aktiv.
+  KR-5002 ist source-seitig abgeschlossen; KR-5003 ist source- und
+  produktseitig abgeschlossen. Der naechste aktive Task ist KR-5004.
   Ein externer Consumer konnte das installierte Runtime-SDK in einem frischen
   Prefix konfigurieren, linken und starten; das Produktarchiv enthaelt nur
   die fuenf benoetigten DLLs sowie LGPL-/Notice-Dateien und keine absoluten
   Worktree- oder Dependency-Cache-Pfade. Der private Provider decodierte den
   gebundenen Sofdec-/ADX-Inhalt vollstaendig bis EOS.
+
+- KR-5003 schliesst den nativen hardware-only-D3D11-GPU-Pfad. WARP, REF, GDI,
+  CPU-Rasterizer, PVR/TA und historische Geraeteruntime sind ausgeschlossen;
+  native Vertices, Texturen und Drawstate nutzen GPU-Offscreen-Renderflaeche
+  und Swapchain. Render-/Outputaufloesung sowie Game-, UI- und Kamera-Viewport-
+  und Aspect-Vertraege bleiben getrennt, Standard ist 1920x1080. Die native
+  SFD-Abnahme durchlief `Ready` -> `Playing` -> `Completed` -> `Stopped` mit
+  `200` dekodierten und `200` GPU-praesentierten Videoframes, `294.016`
+  dekodierten Audioframes, `114.688.000` GPU-Uploadbytes und
+  `hardware_accelerated=true`; PVR/Scanout/Gastframebuffer waren nicht
+  beteiligt. Ein installierter Runtime-SDK-Consumer baute und linkte; der
+  inkrementelle 24-Worker-Targetbuild war in `4,9 s` erfolgreich. KR-5004 ist
+  jetzt aktiv.
+
+- Der KR-5002-FFmpeg-Review ist vollstaendig geschlossen: die fuenf DLLs,
+  Lizenz, Notice, Buildkonfiguration und Quellbindung werden einzeln in
+  `runtime-dependencies.json` Schema `v3` gefuehrt. Oeffentliche Pakete
+  verlangen `FFmpeg-Corresponding-Source.zip`; ohne vollstaendige Quelle bleibt
+  `redistribution_ready=false`. Die exakte 2-GB-Quellclosure liegt nicht im
+  Repository; lokale DEVELOPMENT-ONLY-Builds sind nicht redistributierbar.
 
 - Der historische Runtime-Performance-Zwischenstand haelt den natuerlichen
   No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` stabil. Der identische

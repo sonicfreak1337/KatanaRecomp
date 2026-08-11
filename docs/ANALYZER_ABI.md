@@ -1,9 +1,9 @@
 # Analyzer-ABI
 
 Der aktuelle oeffentliche Analyzervertrag ist Version `36`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 94, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 18, Portprojektvertrag 81 und Native-Port-
-Profilvertrag 6.
+Source-Stand verwendet Runtime-ABI 95, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 19, Portprojektvertrag 82 und Native-Port-
+Profilvertrag 7.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
@@ -31,7 +31,7 @@ Oberflaeche in installierte Consumer.
 
 Die davon getrennte oeffentliche Codegen-Grenze
 `PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
-`18` und Portprojektvertrag `81` versioniert. Analyzer-ABI `36` bindet den
+`19` und Portprojektvertrag `82` versioniert. Analyzer-ABI `36` bindet den
 aktuellen SDK-Vertrag einschliesslich des Hardwareaudit-Layouts; die Zaehler
 ersetzen einander nicht.
 

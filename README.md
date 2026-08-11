@@ -25,11 +25,11 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 94, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 95, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 81, Native-Port-Profilvertrag 6 sowie PVR-State-Contract 3.
+Portprojektvertrag 82, Native-Port-Profilvertrag 7 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
@@ -68,9 +68,19 @@ FFmpeg/libav-Provider. Hash-/handlegebundene, reparse-sichere und waehrend
 des Decodes gesperrte Bytequellen, strikte Timestamps/EOS und bounded Queues
 bleiben aktiv. Headerloser Sofdec-PS-Inhalt wird nur fuer den Demuxer ueber
 ein bounded virtuelles Praefix erkannt; der oeffentliche
-`NativePortMovieSession`-Lebenszyklus reicht von `Ready` bis `Stopped`. Aktiv
-ist jetzt KR-5003 fuer den nativen GPU-Pfad mit Standard 1920x1080 sowie
-getrennten Render-, Output-, Game-, UI- und Kameraviewports.
+`NativePortMovieSession`-Lebenszyklus reicht von `Ready` bis `Stopped`. KR-5003
+ist source- und produktseitig abgeschlossen: Der native GPU-Pfad verwendet
+ausschliesslich hardwarebeschleunigtes D3D11, ohne WARP/REF/GDI/CPU-
+Rasterizer, PVR/TA oder historische Geraeteruntime. Native Vertices, Texturen
+und Drawstate laufen ueber eine GPU-Offscreen-Renderflaeche und Swapchain.
+Standard ist 1920x1080; Render-/Outputaufloesung sowie Game-, UI- und Kamera-
+Viewports/Aspect-Policies sind getrennt. Eine sichtbare native SFD-Abnahme
+erreichte Ready, Playing, Completed und Stopped mit 200 dekodierten und 200
+GPU-praesentierten Videoframes, 294.016 dekodierten Audioframes,
+114.688.000 GPU-Uploadbytes und `hardware_accelerated=true`; PVR/Scanout/
+Gastframebuffer waren nicht beteiligt. Das installierte Runtime-SDK wurde
+von einem externen Consumer gebaut, gelinkt und gestartet; der naechste aktive
+Task ist KR-5004.
 
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
 Runtime-Performance-Checkpoint. Die
@@ -80,7 +90,7 @@ diesem historischen Checkpoint. Die damalige Erweiterung von
 `PortExportOptions` und `LatentAotDiscoveryOptions` fuehrte Backend-
 Interface-ABI `13` ein; der jetzt unabhaengige
 `PortExportOptions::native_port_definition`-Vertrag wurde inzwischen auf
-Backend-Interface-ABI `18` weiterentwickelt.
+Backend-Interface-ABI `19` weiterentwickelt.
 
 Der historische opt-in-Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zugelassen. Ab v0.49.1 ist er ausschliesslich internes
@@ -254,13 +264,13 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    92
+Runtime-ABI:                    95
 Block-ABI:                       5
 Analyzer-ABI:                   36
 PlatformServices-ABI:           14
-Backend-Interface-ABI:          16
-Portprojektvertrag:             79
-Native-Port-Profilvertrag:       4
+Backend-Interface-ABI:          19
+Portprojektvertrag:             82
+Native-Port-Profilvertrag:       7
 Native-AOT-Emissionsprofil:     27
 AOT-Partitionsschema:            7
 ```
@@ -377,8 +387,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der dokumentierte
-Der aktuelle KR-5002-Stand verwendet Runtime-ABI 94 und
-Portprojektvertrag 81. Davon getrennt verwendet `GameProject` Vertrag 5 und
+Der aktuelle KR-5003-Stand verwendet Runtime-ABI 95 und
+Portprojektvertrag 82. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

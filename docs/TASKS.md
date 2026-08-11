@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `81` und Native-Port-Profilvertrag `6` machen
+Portprojektvertrag `82` und Native-Port-Profilvertrag `7` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -162,21 +162,28 @@ reicht von `Ready` bis `Stopped`. Der relevante 24-Worker-Inkrementalbuild war
 in etwa `4,5 s` erfolgreich. Keine neuen Tests/Testmatrix und kein alter
 Voll-Exporter wurden aktiviert.
 
-## [ ] KR-5003 - Nativer GPU-Pfad
+## [x] KR-5003 - Nativer GPU-Pfad
 
 Prioritaet: P0 Produkt
 
-Status: aktiv nach KR-5002. Renderarbeit laeuft ueber eine native GPU-API;
-Standardaufloesung ist 1920x1080; Renderaufloesung, Output-Aspekt und Game-,
-UI- sowie Kameraviewports bleiben getrennt fuer spaetere 4K-/21:9-Pfade.
-der CPU-PVR-Softwarerasterizer ist aus dem Produktlink entfernt. Diese Aufgabe
-ist kein optionaler GPU-Offload des alten Emulationspfads.
+Status: source- und produktseitig abgeschlossen. Der hardware-only-D3D11-
+Pfad verwendet keine WARP/REF/GDI-/CPU-Rasterizer und keine PVR/TA- oder
+historische Geraeteruntime; native Vertices, Texturen und Drawstate nutzen
+GPU-Offscreen-Renderflaeche und Swapchain. Standardaufloesung ist 1920x1080;
+Render-/Outputaufloesung sowie Game-, UI- und Kameraviewports/Aspect-Policies
+bleiben getrennt fuer spaetere 4K-/21:9-Pfade. Die sichtbare native SFD-
+Abnahme lief `Ready` -> `Playing` -> `Completed` -> `Stopped` mit 200
+dekodierten und 200 GPU-praesentierten Videoframes, 294.016 Audioframes,
+114.688.000 GPU-Uploadbytes und `hardware_accelerated=true`; PVR/Scanout/
+Gastframebuffer waren nicht beteiligt. Der inkrementelle 24-Worker-Targetbuild
+war in `4,9 s` erfolgreich. Diese Aufgabe ist kein optionaler GPU-Offload des
+alten Emulationspfads.
 
 ## [ ] KR-5004 - Native Disc-, Eingabe- und Save-Dienste
 
 Prioritaet: P0 Produkt
 
-Status: geplant nach KR-5002. Originaldaten bleiben lokal; Dateizugriff,
+Status: aktiv nach KR-5003. Originaldaten bleiben lokal; Dateizugriff,
 Controller und atomare Speicherstaende verwenden native PC-Dienste.
 
 ## [ ] KR-5005 - Nativer No-Skip-Sonic-Produktlauf
@@ -233,8 +240,8 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 94, PlatformServices-ABI 14, Backend-Interface-ABI 18,
-  PVR-State-Contract 3, Portprojektvertrag 81, Native-Port-Profilvertrag 6
+  Runtime-ABI 95, PlatformServices-ABI 14, Backend-Interface-ABI 19,
+  PVR-State-Contract 3, Portprojektvertrag 82, Native-Port-Profilvertrag 7
   Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7

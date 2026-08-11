@@ -5736,13 +5736,174 @@ std::string disc_install_manifest_document(
            std::string(executable_sha256) + "\"}]}\n";
 }
 
+struct PortRuntimeDependency final {
+    std::filesystem::path relative_path;
+    std::uint64_t size = 0u;
+    std::string sha256;
+
+    friend bool operator==(const PortRuntimeDependency&,
+                           const PortRuntimeDependency&) = default;
+};
+
+struct PortRuntimeDependencySnapshot final {
+    std::vector<PortRuntimeDependency> files;
+    bool redistribution_ready = true;
+};
+
+PortRuntimeDependencySnapshot capture_port_runtime_dependencies(
+    const std::filesystem::path& directory) {
+    PortRuntimeDependencySnapshot snapshot;
+#ifdef _WIN32
+    constexpr std::array<std::string_view, 8u> required_names{
+        "avformat-62.dll",
+        "avcodec-62.dll",
+        "avutil-60.dll",
+        "swresample-6.dll",
+        "swscale-9.dll",
+        "FFmpeg-LGPL.txt",
+        "FFmpeg-NOTICE.txt",
+        "FFmpeg-BUILD-CONFIGURATION.txt"};
+    constexpr std::string_view source_name =
+        "FFmpeg-Corresponding-Source.zip";
+    constexpr std::string_view development_name =
+        "FFmpeg-DEVELOPMENT-ONLY.txt";
+
+    const auto capture = [&](const std::string_view name) {
+        const auto path = directory / std::string(name);
+        std::error_code status_error;
+        const auto status =
+            std::filesystem::symlink_status(path, status_error);
+        if (status_error || !std::filesystem::is_regular_file(status) ||
+            unsafe_port_filesystem_link(path, status))
+            throw std::runtime_error(
+                "Native Runtimeabhaengigkeit fehlt oder ist unsicher: " +
+                std::string(name));
+        const auto provenance =
+            katana::io::capture_input_provenance(
+                "native-runtime-dependency", path);
+        if (provenance.size == 0u || provenance.sha256.size() != 64u)
+            throw std::runtime_error(
+                "Native Runtimeabhaengigkeit besitzt keine sichere Identitaet: " +
+                std::string(name));
+        snapshot.files.push_back(
+            {std::filesystem::path(name),
+             provenance.size,
+             provenance.sha256});
+    };
+
+    for (const auto name : required_names) capture(name);
+    const auto safe_optional = [&](const std::string_view name) {
+        const auto path = directory / std::string(name);
+        std::error_code status_error;
+        const auto status =
+            std::filesystem::symlink_status(path, status_error);
+        if (status_error == std::errc::no_such_file_or_directory ||
+            (!status_error &&
+             status.type() == std::filesystem::file_type::not_found))
+            return false;
+        if (status_error || !std::filesystem::is_regular_file(status) ||
+            unsafe_port_filesystem_link(path, status))
+            throw std::runtime_error(
+                "Optionale Runtimeabhaengigkeit ist unsicher: " +
+                std::string(name));
+        return true;
+    };
+    const auto has_source = safe_optional(source_name);
+    const auto has_development_marker = safe_optional(development_name);
+    if (has_source == has_development_marker)
+        throw std::runtime_error(
+            "FFmpeg-Runtime braucht exakt Quellbundle oder Development-Marker.");
+    snapshot.redistribution_ready = has_source;
+    capture(has_source ? source_name : development_name);
+#else
+    static_cast<void>(directory);
+#endif
+    std::sort(
+        snapshot.files.begin(), snapshot.files.end(),
+        [](const auto& left, const auto& right) {
+            return left.relative_path.generic_string() <
+                   right.relative_path.generic_string();
+        });
+    return snapshot;
+}
+
+PortRuntimeDependencySnapshot publish_port_runtime_dependencies(
+    const std::filesystem::path& source_directory,
+    const std::filesystem::path& output_root) {
+    const auto source =
+        capture_port_runtime_dependencies(source_directory);
+#ifdef _WIN32
+    constexpr std::array<std::string_view, 2u> alternatives{
+        "FFmpeg-Corresponding-Source.zip",
+        "FFmpeg-DEVELOPMENT-ONLY.txt"};
+    for (const auto name : alternatives) {
+        const auto target = output_root / std::string(name);
+        require_safe_replaceable_port_file(
+            output_root, target, "Veraltete Runtimeabhaengigkeit");
+        if (std::none_of(
+                source.files.begin(), source.files.end(),
+                [&](const auto& file) {
+                    return file.relative_path == name;
+                })) {
+            std::error_code remove_error;
+            std::filesystem::remove(target, remove_error);
+            if (remove_error &&
+                remove_error != std::errc::no_such_file_or_directory)
+                throw std::filesystem::filesystem_error(
+                    "Veraltete Runtimeabhaengigkeit konnte nicht entfernt werden.",
+                    target,
+                    remove_error);
+        }
+    }
+    for (const auto& dependency : source.files) {
+        const auto source_path =
+            source_directory / dependency.relative_path;
+        const auto target = output_root / dependency.relative_path;
+        require_safe_replaceable_port_file(
+            output_root, target, "Publizierte Runtimeabhaengigkeit");
+        std::filesystem::copy_file(
+            source_path,
+            target,
+            std::filesystem::copy_options::overwrite_existing);
+    }
+#else
+    static_cast<void>(output_root);
+#endif
+    const auto published =
+        capture_port_runtime_dependencies(output_root);
+    if (published.files != source.files ||
+        published.redistribution_ready != source.redistribution_ready)
+        throw std::runtime_error(
+            "Publizierte Runtimeabhaengigkeiten sind nicht byteidentisch.");
+    return published;
+}
+
 std::string runtime_dependency_manifest_document(
     const katana::runtime::DiscInstallRecipe& recipe,
-    const std::string_view runtime_profile) {
-    return "{\"schema\":\"katana-runtime-dependencies\",\"version\":2,"
-           "\"linkage\":\"static\",\"runtime_profile\":\"" +
-           std::string(runtime_profile) + "\",\"job_generation\":\"" +
-           recipe.job_generation + "\",\"files\":[]}\n";
+    const std::string_view runtime_profile,
+    const PortRuntimeDependencySnapshot& dependencies) {
+    std::ostringstream document;
+    document << "{\"schema\":\"katana-runtime-dependencies\",\"version\":3,"
+                "\"linkage\":\"static-aot-plus-shared-native-media\","
+                "\"runtime_profile\":"
+             << katana::io::quote_json(runtime_profile)
+             << ",\"job_generation\":"
+             << katana::io::quote_json(recipe.job_generation)
+             << ",\"redistribution_ready\":"
+             << (dependencies.redistribution_ready ? "true" : "false")
+             << ",\"files\":[";
+    for (std::size_t index = 0u; index < dependencies.files.size(); ++index) {
+        if (index != 0u) document << ',';
+        const auto& file = dependencies.files[index];
+        document << "{\"path\":"
+                 << katana::io::quote_json(
+                        file.relative_path.generic_string())
+                 << ",\"size\":" << file.size
+                 << ",\"sha256\":"
+                 << katana::io::quote_json(file.sha256) << '}';
+    }
+    document << "]}\n";
+    return document.str();
 }
 
 std::string declared_port_distribution_target_name(
@@ -5836,6 +5997,10 @@ void copy_validated_port_distribution(
         allowed.push_back(path.lexically_relative(source));
     for (const auto& path : *generated_sources)
         allowed.push_back(path.lexically_relative(source));
+    const auto runtime_dependencies =
+        capture_port_runtime_dependencies(source);
+    for (const auto& dependency : runtime_dependencies.files)
+        allowed.push_back(dependency.relative_path);
     std::sort(allowed.begin(), allowed.end(), [](const auto& left, const auto& right) {
         return left.generic_string() < right.generic_string();
     });
@@ -5886,7 +6051,8 @@ void copy_validated_port_distribution(
             source / "runtime" / "runtime-dependencies.json") !=
         runtime_dependency_manifest_document(
             expected_recipe,
-            expected_runtime_profile))
+            expected_runtime_profile,
+            runtime_dependencies))
         throw std::runtime_error(
             "Portdistributions-Runtimevertrag ist nicht die sichere "
             "statische Dateiliste.");
@@ -8449,7 +8615,7 @@ int export_port_project(const std::filesystem::path& source_path,
             port_progress.begin(
                 katana::ProgressOperation::Packaging,
                 katana::ProgressUnit::Steps,
-                6u,
+                7u,
                 "port-distribution");
         const auto published_executable = report.output_root / built_executable.filename();
         require_safe_replaceable_port_file(
@@ -8459,6 +8625,10 @@ int export_port_project(const std::filesystem::path& source_path,
         std::filesystem::copy_file(built_executable,
                                    published_executable,
                                    std::filesystem::copy_options::overwrite_existing);
+        packaging_progress.advance(1u);
+        const auto runtime_dependencies =
+            publish_port_runtime_dependencies(
+                built_executable.parent_path(), report.output_root);
         packaging_progress.advance(1u);
         const auto recipe = katana::runtime::parse_disc_install_recipe(report.disc_install_recipe);
         if (recipe.job_generation != report.job_generation ||
@@ -8503,7 +8673,8 @@ int export_port_project(const std::filesystem::path& source_path,
                                        std::ios::binary | std::ios::trunc);
         runtime_manifest << runtime_dependency_manifest_document(
             recipe,
-            port_runtime_profile);
+            port_runtime_profile,
+            runtime_dependencies);
         if (!runtime_manifest)
             throw std::runtime_error(
                 "Runtime-Abhaengigkeitsmanifest konnte nicht geschrieben werden.");

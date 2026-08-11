@@ -1,0 +1,11 @@
+FFmpeg runtime redistribution is not enabled for this build.
+
+The adjacent FFmpeg DLLs are present only for local KatanaRecomp development
+and product bring-up. Do not publish, upload, redistribute, or describe this
+directory as a release package.
+
+A redistributable build must provide KATANA_FFMPEG_CORRESPONDING_SOURCE_ARCHIVE
+and KATANA_FFMPEG_CORRESPONDING_SOURCE_SHA256 at configure time. The archive
+must have been produced from the exact source inputs recorded in NOTICE.txt
+and BUILD-CONFIGURATION.txt, including the complete pinned BtbN source cache.
+KatanaRecomp then replaces this marker with FFmpeg-Corresponding-Source.zip.
