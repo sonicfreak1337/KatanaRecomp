@@ -13,9 +13,10 @@ nutzt RuntimeOnly-Dispatch ueber eine exakte statische Guest->Host-Tabelle.
 Der Whole-Export-Cache ist modegebunden; kein Interpreter, JIT, Runtime-
 Decoder oder geratener Zielpfad wird verwendet.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
-Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
+Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
+Fehler nach dem Sonic-Team-Film. Die erzeugte `game.exe` hat
+SHA-256
+`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
 Der bereinigte Runtime-/Codegen-Checkpoint entfernt Sonic-spezifische
 `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces; allgemeine Fixes bleiben.
 
@@ -26,16 +27,14 @@ Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind deferred.
 Der historische Candidate-Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
 
-Der Lauf verarbeitete `1.720.931.837` Gastzyklen; post-entry wurden
-`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen.
+Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
+gemessen.
 
-Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
-Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Render-
-Engine, echter AICA-ARM7, Sound-/Main-Interrupts und Common-Monitorregister
-laufen; der Sofdec-Audiotakt schreitet fort. Der aktuelle P0 liegt in der
-nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten FB_R-
-Bildpublikationsfolge. Der Performance-P0 ist fuer diesen Bring-up ausreichend
-verbessert; weitere Arbeit erfolgt nur bei einem echten Blocker.
+Der Sichtpfad zeigt ohne Skip den Sonic-Team-Film bis zum Fade. `56.000`
+YUV-Makrobloecke, `579` Renderabschluesse, Player-Status `5` und der
+gastgesteuerte FB_R-Wechsel belegen den echten Moviepfad. Der aktuelle
+Runtime-P0 liegt danach am fail-closed AOT-Ziel `0x8C9000E8`; zugleich ist die
+gemessene Videoleistung von `19,577 MHz` der naechste Performancehebel.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
@@ -285,8 +284,8 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> Sonic-Film nach Presented by Sega weiterhin unsichtbar;
-     CRI-Callback-/YUV-/TA-/gastgesteuerte FB_R-Bildpublikation offen
+  -> No-Skip-Sonic-Team-Film sichtbar; 19,577 MHz, Ziel mindestens 100 MHz
+  -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
 ```
 
 Fuer jeden Implementierungstask gilt:
@@ -302,10 +301,11 @@ kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen;
 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure bleibt ein
-historischer PlatformAbi-Befund. Der aktuelle RuntimeOnly-P0 ist die
-nachgelagerte CRI-/Sofdec-Callback-/YUV-/TA-/gastgesteuerte FB_R-
-Bildpublikationsfolge. KR-4981 bleibt das globale Produktgate und ist nicht
-bestanden.
+historischer PlatformAbi-Befund. Der aktuelle RuntimeOnly-P0 sind die im
+sichtbaren No-Skip-Sonic-Team-Film gemessenen `19,577 MHz`; Ziel sind
+mindestens `100 MHz` ohne Audio-/Videoregression. Danach folgt der
+post-filmische Identity-Miss `0x8C054008 -> 0x8C9000E8`. KR-4981 bleibt das
+globale Produktgate und ist bis Hauptmenue nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.
 
 ### Lauf nach Candidate-Domain-Top-Fix

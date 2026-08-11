@@ -113,16 +113,16 @@ Stop-on-miss und typed abort bleiben aktiv, ohne Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist
 modegebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
-Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
+Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
+Fehler nach dem Sonic-Team-Film. Die erzeugte `game.exe` hat
+SHA-256
+`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
 
-Das RuntimeOnly-Build-/Export-Gate ist bestanden. Der Performance-P0 ist fuer
-diesen Bring-up ausreichend verbessert; KR-4981 bleibt als globales
-Produktgate offen. Der naechste Arbeitsfokus ist der verbleibende Runtime-
-Blocker bis Memory-Card-Screen und Hauptmenue; weitere Performancearbeit
-erfolgt nur bei einem echten Blocker. Der Default-PlatformAbi-Pfad bleibt
-unveraendert.
+Das RuntimeOnly-Build-/Export- und No-Skip-Movie-Gate ist bestanden. Die im
+Film gemessenen `19,577 MHz` sind nun der aktive Performance-P0; Ziel sind
+mindestens `100 MHz` auf dem vollstaendigen sichtbaren Audio-/Videopfad. Erst
+danach folgt der post-filmische RuntimeOnly-Identity-Blocker bis Memory-Card-
+Screen und Hauptmenue. Der Default-PlatformAbi-Pfad bleibt unveraendert.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
@@ -132,15 +132,15 @@ der vollstaendigen PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
 `e1d8ade` hebt ihn wegen der oeffentlichen AICA-/ARM7-Fortsetzung weiter auf
 `90`; Backend-Interface-ABI `13` bleibt aktuell.
 
-Der aktuelle Sonic-PAL-Lauf dauerte `45,564 s`; nach Presented by Sega blieb
-der Kontaktbogen ab etwa `32 s` schwarz. Post-entry wurden `1.305.698.574`
-Gastzyklen in `39,4322 s` beziehungsweise `33,1125 MHz` verarbeitet. Der neue
-ARM7-Pfad lief ohne Ausfuehrungsfehler, Sonic aktivierte zwei Stimmen und der
-Sofdec-Audiotakt bewegte sich erstmals von null auf `0x2D0` und `0x890` bei
-der Einheit `0xAC44` (`44.100`). Damit ist die AICA-Bereitschaft als Blocker
-geschlossen. Der verbleibende P0 liegt in der nachgelagerten CRI-/Sofdec-
-Callback-, YUV-/TA- und gastgesteuerten FB_R-Bildpublikationsfolge. KR-4981
-bleibt offen.
+Der aktuelle Sonic-PAL-Lauf zeigt ohne Start-Impuls oder Movie-Skip den
+Sonic-Team-Film von etwa `60 s` bis zum Fade bei etwa `145 s`. Player-Status
+`5`, `56.000` YUV-Makrobloecke, `579` Renderabschluesse und der gastgesteuerte
+FB_R-Wechsel belegen die vollstaendige CRI-/Sofdec-/YUV-/PVR-/Scanoutfolge.
+Post-entry wurden `2.536.286.549` Gastzyklen in `129,554 s` beziehungsweise
+`19,577 MHz` verarbeitet. Der naechste P0 ist das erst danach aufgerufene
+RuntimeOnly-Ziel `0x8C9000E8`: Der Callsite `0x8C054008` endet wegen
+`byte-identity-mismatch` fail-closed. KR-4981 bleibt bis Memory-Card-Screen
+und Hauptmenue offen.
 
 ## Historischer Candidate-Evidenzstand
 
@@ -291,13 +291,14 @@ bleiben inaktiv.
 
 ## Aktueller P0: RuntimeOnly-Bring-up bis Memory-Card/Hauptmenue
 
-Der Performance-P0 ist fuer diesen Bring-up ausreichend verbessert. KR-4981
-bleibt offen, weil der Sichtpfad nach Presented by Sega schwarz bleibt und
-Memory-Card-Screen sowie Hauptmenue nicht erreicht wurden. ARM7-Ausfuehrung,
-AICA-Interrupt-/Monitor-Lifecycle und Sofdec-Audiotakt laufen. Der verbleibende
-Runtime-Blocker liegt in der nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA-
-und gastgesteuerten FB_R-Bildpublikationsfolge. Weitere Performancearbeit
-erfolgt nur bei einem echten Blocker.
+Der No-Skip-Sichtpfad rendert den Sonic-Team-Film jetzt korrekt, erreicht im
+Film aber nur `19,577 MHz`. Die aktive Produktreihenfolge ist deshalb:
+denselben vollstaendigen Sicht-/Audiopfad ohne Regression auf mindestens
+`100 MHz` anheben, danach den post-filmischen AOT-Identity-Blocker schliessen.
+KR-4981 bleibt bis Memory-Card-Screen und Hauptmenue offen.
+ARM7-Ausfuehrung, AICA-Interrupt-/Monitor-Lifecycle, Sofdec-Audiotakt und
+Movie-Bildpublikation laufen. Der nachgelagerte funktionale Blocker ist der
+Call `0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`).
 
 Der Candidate-Resolution-P0 bleibt als historische PlatformAbi-Diagnostik
 dokumentiert. Null Eviction-Recomputes liefern keinen Beleg fuer Cache-Eviction
@@ -347,19 +348,20 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; ARM7/AICA und Sofdec-Audiotakt laufen, nachgelagerte CRI-Callback-/YUV-/TA-/gastgesteuerte FB_R-Bildpublikation offen |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; RuntimeOnly-v25/v29 rendert ohne Skip den Sonic-Team-Film mit Status 5, erreicht dort aber nur 19,577 MHz und endet danach am Identity-Miss `0x8C054008 -> 0x8C9000E8`; Ziel sind mindestens 100 MHz bis Hauptmenue |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
-| KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen und mit Sonic produktseitig bis zum fortschreitenden Sofdec-Audiotakt belegt; Movie-Bildpublikation bleibt KR-4981 |
+| KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen und mit Sonic produktseitig durch fortschreitenden Sofdec-Audiotakt, Readiness 1, Player-Status 5 und sichtbare Movie-Bildpublikation belegt |
 
 Die Reihenfolge ist normativ:
 
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
-     aktuell blockiert durch nachgelagerte CRI-/Sofdec-Callback-/YUV-/TA-/
-     gastgesteuerte FB_R-Bildpublikationsfolge
+  -> No-Skip-Sonic-Team-Film sichtbar, aber nur 19,577 MHz
+  -> denselben realen Audio-/Videopfad ohne Regression auf mindestens 100 MHz
+  -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
+  -> beaufsichtigter Start bis mindestens Memory-Card-Screen/Hauptmenue
   -> PlatformAbi-Candidate-Resolution bleibt deferred und ist kein RuntimeOnly-
      Buildblocker
 ```

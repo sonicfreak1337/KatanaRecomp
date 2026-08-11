@@ -71,12 +71,12 @@ Backend-Interface-ABI 13, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
 `port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
 vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
-Der aktuelle RuntimeOnly-v25/v29-Lauf dauerte `45,564 s` ohne Fatalfehler oder
-Crash. Nach Presented by Sega blieb der Kontaktbogen schwarz; Memory-Card-
-Screen und Hauptmenue wurden nicht erreicht. ARM7/AICA und der Sofdec-Audiotakt
-laufen; KR-4981 bleibt offen. Der aktuelle Runtime-P0 liegt in der
-nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten FB_R-
-Bildpublikationsfolge.
+Der aktuelle No-Skip-RuntimeOnly-v25/v29-Lauf rendert den Sonic-Team-Film
+sichtbar bis zum Fade. Player-Status `5`, `56.000` YUV-Makrobloecke, `579`
+Renderabschluesse und gastgesteuertes FB_R schliessen den bisherigen
+Movie-Renderblocker. KR-4981 bleibt fuer Memory-Card-Screen und Hauptmenue
+offen; der aktuelle Runtime-P0 ist der danach fail-closed abgelehnte Call
+`0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`).
 
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
@@ -176,7 +176,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 erreichte SEGA und Presented by Sega, blieb danach aber im Scanout schwarz und erreichte keinen Memory-Card-Screen oder Hauptmenue; ARM7/AICA und Sofdec-Audiotakt laufen, CRI-Callback-/YUV-/TA-/gastgesteuerte FB_R-Bildpublikation offen |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 rendert SEGA, PAL, Presented by Sega und den No-Skip-Sonic-Team-Film mit Player-Status 5; Memory-Card-Screen/Hauptmenue offen, naechster Blocker `0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`) |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
@@ -190,7 +190,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
-| KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und Sonic-Lauf belegen echten ARM7, zwei Stimmen und fortschreitenden Sofdec-Audiotakt; Movie-Bildpublikation bleibt KR-4981 |
+| KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und No-Skip-Sonic-Lauf belegen echten ARM7, fortschreitenden Sofdec-Audiotakt, Player-Status 5 und sichtbare Movie-Bildpublikation |
 
 ## Aktuelle Meilensteinzuordnung
 

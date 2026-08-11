@@ -45,27 +45,23 @@ exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
-Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
+Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
+Fehler nach dem Sonic-Team-Film. Die erzeugte `game.exe` hat
+SHA-256
+`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der Lauf verarbeitete `1.720.931.837` Gastzyklen; post-entry wurden
-`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen. Erfasst
-wurden `275` PVR-Render-Requests und -Completions, `275` Rendererframes,
-`2.240` YUV-Makrobloecke, `289` Hostframes sowie `392` Audiopuffer mit
-`288.120` Audiobildern. Der ARM7 lief ohne Ausfuehrungsfehler, zwei AICA-
-Stimmen waren aktiv und der Audiohash wich vom frueheren Stillewert ab.
+Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
+gemessen. Erfasst wurden `56.000` YUV-Makrobloecke, `579`
+Renderabschluesse und `761` Audiopuffer.
 
-Der Sichtpfad zeigte SEGA und Presented by Sega, blieb ab etwa `32 s` aber
-schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Der echte
-AICA-ARM7-, Sound-/Main-Interrupt- und Common-Monitorpfad laeuft; der zuvor
-stehende Sofdec-Audiotakt erreichte `0x2D0` und `0x890` bei `44.100` Einheiten
-pro Sekunde. Die AICA-Bereitschaft ist damit geschlossen. Der aktuelle P0
-liegt in der nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und
-gastgesteuerten FB_R-Bildpublikationsfolge. Ein automatischer Framebuffer-Flip
-bleibt ausgeschlossen.
+Der No-Skip-Sichtpfad zeigt SEGA, PAL, Presented by Sega und danach den
+Sonic-Team-Film sichtbar von etwa `60 s` bis `145 s`. Beide Readinesspfade
+schalten auf `1`, der Player erreicht Status `5`, und der Gast publiziert den
+Moviebuffer selbst ueber FB_R. Der aktuelle P0 liegt erst nach dem Film:
+`0x8C054008 -> 0x8C9000E8` endet fail-closed mit
+`byte-identity-mismatch`. Memory-Card-Screen und Hauptmenue bleiben offen.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
@@ -83,7 +79,8 @@ historische v56-Produktevidenz:
 
 aktueller Dokumentationsstand:
   Source-Tasks KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 abgeschlossen;
-  RuntimeOnly-Build-/Export-Gate bestanden, sichtbares KR-4981-Gate offen
+  RuntimeOnly-Build-/Export- und sichtbares Movie-Gate bestanden;
+  KR-4981 bis Memory-Card-Screen/Hauptmenue offen
 ```
 
 Source-, Diagnose- und Produktevidenz duerfen nicht als derselbe Fortschritt
@@ -372,9 +369,10 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> beaufsichtigter Start bis mindestens Memory-Card-Screen offen;
-     aktuell blockiert durch nachgelagerte CRI-/Sofdec-Callback-/YUV-/TA-/
-     gastgesteuerte FB_R-Bildpublikationsfolge
+  -> No-Skip-Sonic-Team-Film sichtbar, aber nur 19,577 MHz
+  -> denselben realen Audio-/Videopfad ohne Regression auf mindestens 100 MHz
+  -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
+  -> beaufsichtigter Start bis mindestens Memory-Card-Screen/Hauptmenue
 ```
 
 KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und
@@ -444,8 +442,9 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 D9 ist historisch beendet und fail-closed; Root 0 konvergierte ohne
 Portartefakt und Produkterfolg. KR-4994 und KR-4995 sind source-seitig
 abgeschlossen; die PlatformAbi-Candidate-Resolution bleibt deferred. KR-4981
-bleibt das globale sichtbare Produktgate und ist nach dem RuntimeOnly-Build-/
-Export-Gate fuer die Movie-Bildpublikation offen.
+bleibt das globale sichtbare Produktgate. Movie-Bildpublikation und
+Player-Status 5 sind bestanden; offen sind mindestens 100 MHz auf demselben
+Pfad, danach der Identity-Miss 0x8C054008 -> 0x8C9000E8 und das Hauptmenue.
 ```
 
 Ein zweiter D1-Lauf gehoert nicht zu diesem Dokumentationspass. D2/G2 ist

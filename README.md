@@ -28,31 +28,33 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-Der aktuelle RuntimeOnly-v25/v29-Produktlauf dauerte `45,564 s` ohne
-Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
-Nach dem Presented-by-Sega-Bild blieb der Kontaktbogen ab etwa `32 s`
-schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Das
-RuntimeOnly-Build-/Export-Gate bleibt bestanden, aber KR-4981 ist kein
-Bring-up-Gate-Pass.
+Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
+nachgelagerten AOT-Fehler. Die erzeugte `game.exe` hat SHA-256
+`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
+Ohne Start-Impuls, Movie-Skip, automatischen Framebuffer-Flip oder private
+Bildbruecke rendert der Port den Sonic-Team-Film sichtbar von etwa `60 s`
+bis zum Fade bei etwa `145 s`. Der Player erreicht Status `5`; beide zuvor
+stehenden Freigabepfade schalten auf `1` und laufen danach weiter.
 
-Der Lauf verarbeitete `1.720.931.837` Gastzyklen; post-entry wurden
-`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen. Erfasst
-wurden `275` PVR-Render-Requests und -Completions, `275` Rendererframes,
-`2.240` YUV-Makrobloecke, `289` Hostframes sowie `392` Audiopuffer mit
-`288.120` Audiobildern. Der ARM7 laeuft im echten AICA-Sound-RAM ohne
-Ausfuehrungsfehler, Sonic aktiviert zwei Stimmen und der Audiohash ist nicht
-mehr der fruehere Stillewert.
+Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
+gemessen. Erfasst wurden `56.000` YUV-Makrobloecke, `579`
+Renderabschluesse und `761` Audiopuffer. `FB_R_SOF1` schaltete gastgesteuert
+auf den Moviebuffer; der
+sichtbare Film ist damit erstmals als echter Produktpfad belegt.
 
 `e1d8ade` bindet einen echten AICA-ARM7TDMI-Kern, Sound-/Main-Interrupts,
 REG_L/REG_M, portable Fortsetzung und die Common-Monitorregister fuer MIDI-
 Leerstand, Channel-Lifecycle und Current Address. Der zuvor bei null stehende
 Sofdec-Audiotakt erreicht nun `0x2D0` und `0x890` bei der Einheit `0xAC44`
-(`44.100`). Der aktuelle P0 liegt damit hinter der AICA-Bereitschaft in der
-restlichen CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten FB_R-Flipfolge;
-ein automatischer Framebuffer-Flip oder eine private Bildbruecke bleibt
-ausgeschlossen.
-Weitere Performancearbeit erfolgt nur bei einem echten Blocker.
+(`44.100`). Im No-Skip-Lauf gingen beide Readinesspfade auf `1`, der
+Movie-Lifecycle auf Status `5`, und YUV-/PVR-/FB_R-Publikation wurde sichtbar.
+Der naechste P0 liegt erst nach dem Sonic-Team-Film: Der Call an
+`0x8C054008 -> 0x8C9000E8` endet fail-closed mit
+`byte-identity-mismatch`. Memory-Card-Screen und Hauptmenue bleiben offen.
+Parallel ist die gemessene Filmleistung von `19,577 MHz` ein echter
+Performance-P0. Vor dem weiteren Bring-up wird der vollstaendige reale
+Sicht-/Audiopfad auf mindestens `100 MHz` angehoben; der sichtbare Film darf
+dabei nicht regressieren.
 Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
@@ -60,14 +62,14 @@ Bring-up-Meilensteins.
 
 ## Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der aktuelle beaufsichtigte Sonic-PAL-Lauf endete ohne Fatal- oder
-Watchdogfehler. Nach Presented by Sega blieb der Kontaktbogen ab etwa `32 s`
-schwarz; Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Post-entry
-wurden `33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen.
-Render-Engine, Video-/ISP-/TSP-Completion-Fanout und der ARM7-Soundtreiber
-laufen. Der nun fortschreitende Sofdec-Audiotakt verengt den P0 auf die
-nachgelagerte Movie-Callback-/Bildpublikationsfolge. Die oeffentlichen
-Layoutaenderungen sind durch Runtime-ABI 90 versioniert.
+Der aktuelle beaufsichtigte Sonic-PAL-Lauf rendert ohne Skip den vollstaendigen
+Sonic-Team-Film bis zum Fade. `56.000` YUV-Makrobloecke, `579` erfolgreiche
+Renderabschluesse, der gastgesteuerte FB_R-Wechsel und Player-Status `5`
+belegen den echten Decode-/Publish-/Scanoutpfad. Der Lauf endet erst danach
+am neuen fail-closed RuntimeOnly-Ziel `0x8C9000E8` mit
+`byte-identity-mismatch`; Memory-Card-Screen und Hauptmenue wurden noch nicht
+erreicht. Die oeffentlichen Layoutaenderungen sind durch Runtime-ABI 90
+versioniert.
 
 Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
 Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren

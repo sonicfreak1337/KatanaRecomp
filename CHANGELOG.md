@@ -4,6 +4,23 @@
 
 ### Geaendert
 
+- Der No-Skip-Sonic-PAL-Lauf
+  `katana-visible-accept-20260811T035207101Z` belegt erstmals den echten
+  sichtbaren Moviepfad: `game.exe` mit SHA-256
+  `8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`
+  zeigt ohne Start-Impuls, Movie-Skip, automatischen FB-Flip oder private
+  Bildbruecke den Sonic-Team-Film von etwa `60 s` bis zum Fade bei etwa
+  `145 s`. `56.000` YUV-Makrobloecke, `579` erfolgreiche Renderabschluesse,
+  der gastgesteuerte Moviebuffer und Player-Status `5` schliessen den
+  bisherigen Movie-Renderblocker.
+
+- Der Lauf endet erst nach dem Film am neuen, engeren RuntimeOnly-AOT-Blocker:
+  Der Call `0x8C054008 -> 0x8C9000E8` wird wegen
+  `byte-identity-mismatch` fail-closed abgelehnt. Memory-Card-Screen und
+  Hauptmenue bleiben deshalb KR-4981. Die private Produktevidenz liegt nur im
+  nicht veroeffentlichten SA-Projektordner; Retaildaten wurden nicht in das
+  Repository aufgenommen.
+
 - `e1d8ade` schliesst KR-4995 source-seitig: Die AICA fuehrt den ARM7TDMI-
   Soundprozessor ab Resetfreigabe mit `512` ARM-Zyklen je 44,1-kHz-Sample
   aus. Sound-RAM-/Registerbus, REG_L/REG_M, Sound-/Main-Interrupts, Timer,
@@ -18,8 +35,8 @@
   Spieldaten wurden nicht aufgenommen.
 
 - Der vorhandene AICA-Ausfuehrungstest wurde an den realen LLE-Lifecycle
-  angepasst und bestand nach einem erfolgreichen 24-Thread-Build. Der
-  nachfolgende Sonic-PAL-Lauf lief `45,564 s` ohne Fatalfehler oder Crash;
+  angepasst und bestand nach einem erfolgreichen 24-Thread-Build. Ein
+  frueherer Sonic-PAL-Lauf lief `45,564 s` ohne Fatalfehler oder Crash;
   die `game.exe` hat SHA-256
   `8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
   Zwei AICA-Stimmen waren aktiv und der zuvor stehende Sofdec-Audiotakt
@@ -38,7 +55,7 @@
   Der PVR-State-Contract steigt auf `2`; Probe, Persistenz und generierte
   Produktevidenz verwenden denselben Vertrag.
 
-- Der vorherige RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,539 s` ohne
+- Ein noch frueherer RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,539 s` ohne
   Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
   `a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
   Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s` schwarz;

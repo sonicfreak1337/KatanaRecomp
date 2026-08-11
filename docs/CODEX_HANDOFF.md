@@ -38,20 +38,17 @@ erzeugt.
 
 ### Aktueller RuntimeOnly-v25/v29-Produktstand
 
-Der aktuelle Sonic-PAL-Lauf dauerte `45,564 s` ohne Fatalfehler oder Crash.
-Nach Presented by Sega blieb der Kontaktbogen ab etwa `32 s` schwarz;
-Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Post-entry wurden
-`33,1125 MHz` aus `1.305.698.574` Zyklen in `39,4322 s` gemessen. Der echte
-AICA-ARM7 lief ohne Ausfuehrungsfehler, zwei Stimmen waren aktiv und der
-Sofdec-Audiotakt erreichte `0x2D0` und `0x890` bei `44.100` Einheiten pro
-Sekunde. Damit ist die AICA-Bereitschaft geschlossen. Der aktuelle P0 liegt
-in der nachgelagerten CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerten
-FB_R-Bildpublikationsfolge; KR-4981 bleibt offen.
+Der aktuelle No-Skip-Sonic-PAL-Lauf rendert den Sonic-Team-Film sichtbar von
+etwa `60 s` bis zum Fade bei etwa `145 s`. `56.000` YUV-Makrobloecke, `579`
+Renderabschluesse, gastgesteuertes FB_R und Player-Status `5` belegen den
+vollstaendigen Moviepfad ohne Start-Impuls, Skip oder private Bildbruecke.
+Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
+gemessen.
 
-Der naechste Implementierungs-/Diagnoseschritt korreliert den fortschreitenden
-Audiotakt und die CRI-Readiness/-Callbacks mit YUV-/TA-Paketen, gastseitigen
-FB_R-Writes und dem sichtbaren Scanout. Kein automatischer FB_W->FB_R-Flip,
-kein Movie-Skip und keine private Bildbruecke ist als Produktfix zulaessig.
+Der Lauf endet erst nach dem Film fail-closed am RuntimeOnly-Call
+`0x8C054008 -> 0x8C9000E8` mit `byte-identity-mismatch`. Das ist der naechste
+enge AOT-Blocker; Memory-Card-Screen und Hauptmenue bleiben KR-4981. Der
+Sichtpfad darf bei der folgenden Performance-/AOT-Arbeit nicht regressieren.
 
 Historische v16-Evidenz (nicht aktueller Produktstand):
 Der alte Lauf endete fail-closed am generischen Fehler `missing-aot`.

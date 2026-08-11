@@ -69,11 +69,13 @@ Ein diagnostischer Sonic-Lauf belegte rund 50,7 Millionen ausgefuehrte ARM-
 Instruktionen ohne CPU-Fehler, zwei aktive Stimmen und einen vom frueheren
 Stillewert abweichenden Audiohash.
 
-Der anschliessende `45,564 s` lange Sonic-PAL-Produktlauf erreichte SEGA,
-PAL-Auswahl und Presented by Sega ohne Fatalfehler. Der zuvor bei null
-stehende Sofdec-Audiotakt erreichte `0x2D0` und `0x890` bei der Einheit
-`0xAC44` (`44.100`). Der Film blieb trotzdem unsichtbar. AICA-Bereitschaft und
-Audiotakt sind damit geschlossen, nicht aber KR-4981. Der naechste P0 ist die
-nachgelagerte CRI-/Sofdec-Callback-, YUV-/TA- und gastgesteuerte FB_R-
-Bildpublikationsfolge. Movie-Skip, automatischer Framebuffer-Flip oder
-titelbezogener Runtime-Hack sind keine Produktloesung.
+Der aktuelle No-Skip-Sonic-PAL-Lauf erreicht SEGA, PAL-Auswahl, Presented by
+Sega und den sichtbaren Sonic-Team-Film. Beide Readinesspfade schalten auf
+`1`, der Player erreicht Status `5`, und `56.000` YUV-Makrobloecke werden
+ueber `579` erfolgreiche Renderabschluesse gastgesteuert publiziert. Damit
+sind AICA-Bereitschaft, Audiotakt und Movie-Bildpublikation gemeinsam belegt.
+
+KR-4981 bleibt dennoch offen: Nach dem Film endet der Call
+`0x8C054008 -> 0x8C9000E8` wegen `byte-identity-mismatch` fail-closed, bevor
+Memory-Card-Screen oder Hauptmenue erreicht werden. Movie-Skip, automatischer
+Framebuffer-Flip oder titelbezogener Runtime-Hack bleiben ausgeschlossen.
