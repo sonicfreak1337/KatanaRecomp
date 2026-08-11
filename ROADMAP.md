@@ -149,8 +149,8 @@ Hookkarte/ABI/Closure, nicht ein historischer Launcherpfad.
 
 `KR-5001` ist source-seitig abgeschlossen. Die deterministische
 `metadata/native-hook-requirements.json`-Karte verlangt fuer Function- und
-Instruction-Replacement exakte Grenzen, Eigentumer, Entrys, Resume-/Seed-/
-Guarded-/Kontext-/CFG-Eingaenge. Bekannte Hardware- und unbekannte
+Instruction-Replacement exakte Grenzen, Eigentumer und echte Funktionsentry-
+Grenzen; interne Resume-Labels bilden keinen Replacement-Beweis. Bekannte Hardware- und unbekannte
 Instruktionsstellen bleiben hookpflichtig; dynamische Speicherzugriffe laufen
 nur ueber range-geprueften Native Memory und enden ausserhalb typisiert.
 `MemoryAccessError`, Emitter und Native-Dispatch transportieren
@@ -171,12 +171,10 @@ Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist
 modegebunden.
 
 Der letzte historische RuntimeOnly-Lauf erreichte ohne Skip, Start-Impuls oder
-kuenstlichen Moviepfad das Milestone `FirstVisibleGameFrame`. Der erste Frame
-ist durch Digest `16866779858248182758` bei Gastzyklus `622122619` belegt;
-`341` Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke und
-`470` Audiopuffer mit `345.450` Audiobildern wurden erreicht. `100 MHz`, das
-Memory-Card-Gate und das Hauptmenue bleiben offen. Der Default-PlatformAbi-
-Pfad bleibt unveraendert.
+kuenstlichen Moviepfad das Milestone `FirstVisibleGameFrame`. Die begrenzte
+Bild- und Audiopublikation war nachweisbar; private Frame-, Audio- und
+Ausfuehrungszaehler sind nicht Teil der Roadmap. Das Memory-Card-Gate und das
+Hauptmenue bleiben offen. Der Default-PlatformAbi-Pfad bleibt unveraendert.
 
 ## Historischer RuntimeOnly-Geraetestand
 
@@ -187,15 +185,12 @@ der vollstaendigen PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
 `90`; Backend-Interface-ABI `13` und PVR-State-Contract `3` gehoeren zu
 diesem historischen Geraetestand.
 
-Der letzte identische Diagnosevergleich stieg von `23,7959 MHz` ueber
-`24,1885 MHz` und `24,2825 MHz` auf `24,2926 MHz`, insgesamt `+0,4967 MHz`
-beziehungsweise `+2,09 %`. Die PVR-Fullevidenz endete nach vier bewiesenen
-Frames mit `1.228.800` geaenderten Pixeln; der Audiohash
-`8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau identisch.
-Der Hostprozess nutzte nur etwa `1,64` Kerne beziehungsweise `6,8 %` der
-24-Thread-Kapazitaet. Der serielle Runtime-/Dispatch-Overhead und der
-der post-filmische private Identity-Miss bleibt ein historischer
-Diagnosebefunde, sind aber keine aktiven Produktgates des nativen Pfads.
+Historische Diagnosevergleiche und begrenzte PVR-/Audioevidenz bleiben von
+den aktuellen Produktgates getrennt. Private Frame-, Audio- und
+Ausfuehrungsidentitaeten werden nicht in der Roadmap geführt. Serielle
+Runtime-/Dispatch-Kosten und der post-filmische private Identity-Miss sind
+historische Diagnosebefunde, aber keine aktiven Produktgates des nativen
+Pfads.
 
 ## Historischer Candidate-Evidenzstand
 
@@ -351,12 +346,11 @@ bleiben inaktiv.
 
 ## Historischer RuntimeOnly-P0 bis FirstVisibleGameFrame
 
-Der No-Skip-Sicht- und Audiopfad erreicht `FirstVisibleGameFrame`; die
-identische Vergleichsreihe stieg von `23,7959 MHz` auf `24,2926 MHz`
-(`+2,09 %`). Die aktive Produktreihenfolge ist deshalb: denselben
-vollstaendigen Sicht-/Audiopfad ohne Regression auf mindestens `100 MHz`
-anheben, danach den post-filmischen AOT-Identity-Blocker schliessen.
-KR-4981 bleibt bis Memory-Card-Screen und Hauptmenue offen.
+Der No-Skip-Sicht- und Audiopfad erreichte historisch
+`FirstVisibleGameFrame`. Die aktive Produktreihenfolge ist deshalb: den
+vollstaendigen Sicht-/Audiopfad bis zum Memory-Card-Screen und Hauptmenue
+absichern, danach den post-filmischen AOT-Identity-Blocker schliessen.
+KR-4981 bleibt historisch und bis zu diesen sichtbaren Produktgates offen.
 ARM7-Ausfuehrung, AICA-Interrupt-/Monitor-Lifecycle, Sofdec-Audiotakt und
 Movie-Bildpublikation laufen. Der nachgelagerte funktionale Blocker ist der
 nachgelagerte private Identity-Miss (`byte-identity-mismatch`).
@@ -409,7 +403,7 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist mit dem SDK-Linkabschluss unter dem aktuellen Analyzer-ABI 36 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | historisches RuntimeOnly-Gate; `FirstVisibleGameFrame` und 24,2926 MHz belegt, durch das native Alpha-Gate KR-5005 abgeloest |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | historisches RuntimeOnly-Gate; `FirstVisibleGameFrame` historisch erreicht, durch das native Alpha-Gate KR-5005 abgeloest |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 | KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen und mit Sonic produktseitig durch fortschreitenden Sofdec-Audiotakt, Readiness 1, Player-Status 5 und sichtbare Movie-Bildpublikation belegt |
@@ -419,8 +413,8 @@ Die Reihenfolge ist normativ:
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
-  -> historische RuntimeOnly-Performancezielmarke mindestens 100 MHz
+  -> No-Skip-Sonic-Audio-/Videopfad historisch bis FirstVisibleGameFrame
+  -> weitere RuntimeOnly-Performancemarken bleiben historische Diagnostik
   -> post-filmischen privaten Identity-Miss schliessen
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen/Hauptmenue
   -> PlatformAbi-Candidate-Resolution bleibt deferred und ist kein RuntimeOnly-

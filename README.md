@@ -50,13 +50,14 @@ erste unaufgeloeste Plattformzugriff endet typisiert als
 `UnresolvedHardwareAccess` ohne Emulator-/Interpreter-/Runtimefallback. Der
 generierte Runner verlangt Executable plus privaten ContentRoot und validiert
 beide Pfade; der explizite Bring-up-Schalter gilt nur bei unvollstaendiger
-Closure. Einen historischen Guest-Cycle-Budgetpfad gibt es nicht. Das
+Closure. Einen historischen Zyklusbudgetpfad gibt es nicht. Das
 identitaetsgebundene Image-/Hookmanifest bleibt Teil des Produktvertrags.
 Der historische Dreamcast-Launcher wird niemals als nativer Fallback gelinkt.
 
 KR-5001 ist source-seitig abgeschlossen: Die deterministische
 `metadata/native-hook-requirements.json`-Karte und Hardware-Closure Schema
-`v2` verlangen exakte Function-/Instruction-Replacement-Proofs. Bekannte
+`v2` verlangen exakte Function-/Instruction-Replacement-Proofs an echten
+Funktionsentry-Grenzen. Bekannte
 Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
 range-gepruefte Native-Memory-Zugriffe enden ausserhalb typisiert. Der
 `GuestInstructionOrigin` bleibt in `MemoryAccessError`, Emitter und
@@ -83,20 +84,13 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-Der historische 70-s-No-Skip-RuntimeOnly-Diagnoselauf erreichte das damalige
+Ein historischer No-Skip-RuntimeOnly-Diagnoselauf erreichte das damalige
 Milestone `FirstVisibleGameFrame` ohne Start-Impuls, Movie-Skip,
-Framebuffer-Hack oder kuenstlichen Moviepfad. Der erste Frame ist durch Digest
-`16866779858248182758` bei Gastzyklus `622122619` belegt. Es gab `341`
-Renderrequests, Rendercompletions und Rendererframes, `15.680`
-YUV-Makrobloecke sowie `470` Audiopuffer mit `345.450` Audiobildern.
-
-Die PVR-Fullevidenz endete nach vier bewiesenen Frames mit `1.228.800`
-geaenderten Pixeln; danach wurde keine fortlaufende Vollbild-Evidenz behauptet.
-Der Audiohash `8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau
-identisch. Es gab keine Fatal- oder Runtimefehler. Die Vergleichsreihe der
-identischen historischen Diagnoselast stieg von `23,7959 MHz` ueber `24,1885 MHz` und
-`24,2825 MHz` auf `24,2926 MHz`, insgesamt `+0,4967 MHz` beziehungsweise
-`+2,09 %`.
+Framebuffer-Hack oder kuenstlichen Moviepfad. Die begrenzte Bild- und
+Audiopublikation war dort nachweisbar; private Frame-, Audio- und
+Ausfuehrungszaehler sind bewusst nicht Teil dieser Produktdokumentation.
+Dieser historische Befund ersetzt weder eine fortlaufende Vollbild-Evidenz
+noch das noch offene Memory-Card-/Hauptmenue-Gate.
 
 Der fruehere Checkpoint `e1d8ade` bindet einen echten AICA-ARM7TDMI-Kern,
 Sound-/Main-Interrupts,
@@ -513,14 +507,9 @@ belegen noch keinen Hotpathgewinn.
 Der **historische v30-DirectBoot** verwendet weiterhin das externe,
 hashgebundene `GameProjectArtifact`. Die darin privat beschriebene exakte
 Funktionsgrenze wird durch Analyzer, CFG, IR und AOT transportiert; dadurch
-passiert der Produktlauf den bisherigen Blocker aus KR-4971. Der echte Lauf
-endet bei Gastzyklus `553.990.562`, also nach `138.757.292`
-Post-Entry-Zyklen und `10.079.932` Zentraldispatches. Gegen v26 sind das
-`+1.086.915` Gastzyklen. Der historische v28-Fehler-zu-Fehler-Vergleich mass
-dieselben `138.757.292` Post-Entry-Zyklen in 5,275792 Sekunden, also
-26,3008 MHz gegen 23,9578 MHz bei v26 und provisorisch `+9,78 %`. Der
-v30-Sichtlauf ist kein kontrollierter Performancebenchmark; wegen des
-vorzeitigen Fehlers gibt es weiterhin keine 600-Millionen-Abnahme.
+passiert der Produktlauf den damaligen Blocker aus KR-4971. Der historische
+Sichtlauf ist kein kontrollierter Performancebenchmark und belegt keine
+vollstaendige Langlaufabnahme.
 
 Sein erster Blocker war KR-4972:
 die geprüfte private Callback-Kante. Das unveraenderte Ziel beginnt mit einem Sprung
@@ -551,16 +540,10 @@ Diagnoseproof praesentiert. `port <gdi>` akzeptiert nun ausserdem dieselbe
 hashgebundene Option `--game-project` wie `port-executable`.
 
 Der kanonische, frisch exportierte und ueber die private Original-GDI
-installierte v32-MSVC-Port zeigt ab 2,032 Sekunden den Sega-Lizenzscreen und
-praesentiert 127 Hostframes. Er endet bei
-Gastzyklus 553.990.562 und damit exakt wie DirectBoot-v30 an
-die geprüfte private Callback-Kante; NativeDisc ist sichtbar, DirectBoot-v30 blieb am
-gleichen Punkt schwarz. Der Lauf dauerte 6,701 Sekunden, fuehrte
-11.080.283 Zentraldispatches aus, erreichte 82,67 MHz bis zum Fehler und
-erzeugte eine 53.677.056 Byte grosse EXE. Er erreichte wegen KR-4972 nicht
-das 600-Millionen-Performancegate. Diese v32-Zahlen bleiben historische
-Vergleichsevidenz und sind kein Nachweis fuer den aktuellen
-Source-Checkpoint.
+installierte v32-MSVC-Port erreichte historisch einen sichtbaren Lizenzscreen,
+beendete jedoch am damaligen verifizierten Callback-Gate. Diese Beobachtung
+bleibt historische Vergleichsevidenz und ist kein Nachweis fuer den aktuellen
+Source-Checkpoint oder ein Langlauf-Performancegate.
 
 ## Diagnose
 
@@ -573,7 +556,8 @@ Source-Checkpoint.
 - **Tiefe Diagnose:** Wait-Loop-Rohwerttrace und vollstaendige
   Dispatchereignisse sind explizite lokale Opt-ins.
 
-Ein automatisch durch Gastzyklus/PC/Fehler begrenztes Triggerfenster ist in
+Ein automatisch durch Ausfuehrungsfortschritt/PC/Fehler begrenztes
+Triggerfenster ist in
 v0.49 noch kein abgeschlossener oeffentlicher Runtimevertrag.
 
 Private Pfade, Identitaeten, Gastbytes und Titeladressen gehoeren nicht in

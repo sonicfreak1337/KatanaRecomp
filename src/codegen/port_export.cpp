@@ -15845,18 +15845,28 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
                                           hook.guest_address)
                                     : 0u;
     if (hook.kind == HookKind::Instruction) {
-        const bool unique_dispatch_entry =
-            (block_entries == 1u && resume_entries == 0u) ||
-            (block_entries == 0u && resume_entries == 1u);
-        if (!unique_dispatch_entry)
-            return {false, "instruction-hook-static-entry-unproven"};
+        // Generated functions can jump directly to an internal block or a
+        // store-resume label.  A dispatcher-visible resume label is therefore
+        // not a replacement boundary: ordinary fallthrough can reach it
+        // without passing the hook.  Without an emitted split/dispatch edge,
+        // a required instruction replacement is sound only at the unique
+        // entry of its unique emitted function.
+        if (block_entries != 1u || resume_entries != 0u ||
+            !index.function_entries.contains(hook.guest_address))
+            return {false, "instruction-hook-function-entry-unproven"};
         if (instruction_address != hook.guest_address ||
             hook.covered_size != 2u)
             return {false, "instruction-hook-address-mismatch"};
+        const auto functions =
+            index.functions_by_entry.find(hook.guest_address);
+        if (functions == index.functions_by_entry.end() ||
+            functions->second.size() != 1u)
+            return {false, "instruction-hook-ir-owner-unproven"};
         const auto owners =
             index.instruction_owners.find(instruction_address);
         return owners != index.instruction_owners.end() &&
-                       owners->second.size() == 1u
+                       owners->second.size() == 1u &&
+                       *owners->second.begin() == hook.guest_address
                    ? NativePortHookCoverageProof{true, {}}
                    : NativePortHookCoverageProof{
                          false, "instruction-hook-owner-ambiguous"};
@@ -17112,6 +17122,36 @@ static PortExportResult export_dreamcast_port_project_impl(
                 // emitted body. Its exact boundary, ownership and entry
                 // isolation are proven after the program index is built.
                 continue;
+            if (hook.kind ==
+                    katana::runtime::NativePortHookKind::Instruction &&
+                hook.original_policy ==
+                    katana::runtime::NativePortHookOriginalPolicy::
+                        ReplacesOriginal) {
+                std::size_t block_entries = 0u;
+                std::size_t resume_entries = 0u;
+                for (const auto& function : emitted_program) {
+                    for (const auto& block : function.blocks) {
+                        block_entries +=
+                            block.start_address == hook.guest_address ? 1u : 0u;
+                        const auto candidates =
+                            detail::native_aot_internal_resume_entries(block);
+                        resume_entries +=
+                            std::binary_search(
+                                candidates.begin(), candidates.end(),
+                                hook.guest_address)
+                                ? 1u
+                                : 0u;
+                    }
+                }
+                if (block_entries != 1u || resume_entries != 0u)
+                    throw std::invalid_argument(
+                        "Erforderlicher Instruction-Replacement-Hook besitzt "
+                        "keinen eindeutigen statischen AOT-Funktionsentry.");
+                // The program-index proof below additionally establishes the
+                // unique emitted function and instruction ownership.  Never
+                // turn a Store-resume label into a replacement entry.
+                continue;
+            }
             std::size_t block_entries = 0u;
             std::size_t resume_entries = 0u;
             for (const auto& function : emitted_program) {

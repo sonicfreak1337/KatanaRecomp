@@ -2,11 +2,10 @@
 
 Historischer Einfuehrungsstand: KR-4716
 
-Aktueller KR-5001-Stand: Runtime-ABI 93, Block-ABI 5, Analyzer-ABI 36,
-PlatformServices-ABI 14, Backend-Interface-ABI 17, Portprojektvertrag 80,
-Native-AOT-Emissionsprofil 27 und Portpartitionsschema 7. Historische
-Checkpoint- und Laufangaben bleiben an ihre damaligen Vertraege gebunden;
-der naechste aktive Task ist KR-5001.
+Aktueller KR-5002-Stand: Die oeffentlichen ABI- und Portvertraege folgen dem
+aktiven Buildvertrag. KR-5001 ist source-seitig abgeschlossen; KR-5002 ist
+der aktive native Audio-/Moviepfad. Historische Checkpoint- und Laufangaben
+bleiben an ihre damaligen Vertraege gebunden.
 
 Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter
 [Analyzer-ABI 36](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
