@@ -23,6 +23,7 @@ extern "C" {
 #include <libavutil/mem.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/rational.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
@@ -67,6 +68,8 @@ struct OutputSample final {
     std::uint32_t width = 0u;
     std::uint32_t height = 0u;
     std::uint32_t stride = 0u;
+    std::uint32_t display_aspect_numerator = 0u;
+    std::uint32_t display_aspect_denominator = 0u;
     std::vector<std::byte> pixels;
 };
 
@@ -270,6 +273,10 @@ class FfmpegDecoder final {
             result.sample.video_stride_bytes = current_.stride;
             result.sample.video_pixels = current_.pixels.data();
             result.sample.video_byte_count = current_.pixels.size();
+            result.sample.video_display_aspect_numerator =
+                current_.display_aspect_numerator;
+            result.sample.video_display_aspect_denominator =
+                current_.display_aspect_denominator;
         }
     }
 
@@ -521,7 +528,10 @@ class FfmpegDecoder final {
         if (converted < 0) return fail(map_error(converted), converted);
         sample.audio.resize(static_cast<std::size_t>(converted) * audio_channels_);
         if (sample.audio.empty()) return true;
-        sample.timestamp = frame_timestamp(*frame_, audio_stream_index_, next_audio_timestamp_);
+        sample.timestamp = normalize_reordered_timestamp(
+            frame_timestamp(*frame_, audio_stream_index_, next_audio_timestamp_),
+            next_audio_timestamp_,
+            true);
         sample.duration = samples_to_ns(converted);
         next_audio_timestamp_ = saturating_add(sample.timestamp, sample.duration);
         if (!validate_stream_timestamp(sample.timestamp, true)) return false;
@@ -596,6 +606,24 @@ class FfmpegDecoder final {
         sample.width = static_cast<std::uint32_t>(frame_->width);
         sample.height = static_cast<std::uint32_t>(frame_->height);
         sample.stride = static_cast<std::uint32_t>(stride64);
+        auto sample_aspect = av_guess_sample_aspect_ratio(
+            format_, format_->streams[video_stream_index_], frame_);
+        if (sample_aspect.num <= 0 || sample_aspect.den <= 0)
+            sample_aspect = AVRational{1, 1};
+        int display_numerator = 0;
+        int display_denominator = 0;
+        static_cast<void>(av_reduce(
+            &display_numerator,
+            &display_denominator,
+            static_cast<std::int64_t>(frame_->width) * sample_aspect.num,
+            static_cast<std::int64_t>(frame_->height) * sample_aspect.den,
+            65'535));
+        if (display_numerator <= 0 || display_denominator <= 0)
+            return fail_invalid_data();
+        sample.display_aspect_numerator =
+            static_cast<std::uint32_t>(display_numerator);
+        sample.display_aspect_denominator =
+            static_cast<std::uint32_t>(display_denominator);
         sample.pixels.resize(static_cast<std::size_t>(bytes64));
         std::uint8_t* planes[] = {
             reinterpret_cast<std::uint8_t*>(sample.pixels.data()), nullptr, nullptr, nullptr};
@@ -603,7 +631,10 @@ class FfmpegDecoder final {
         const auto rows = sws_scale(
             video_scaler_, frame_->data, frame_->linesize, 0, frame_->height, planes, strides);
         if (rows != frame_->height) return fail_invalid_data();
-        sample.timestamp = frame_timestamp(*frame_, video_stream_index_, next_video_timestamp_);
+        sample.timestamp = normalize_reordered_timestamp(
+            frame_timestamp(*frame_, video_stream_index_, next_video_timestamp_),
+            next_video_timestamp_,
+            false);
         sample.duration = video_duration(*frame_);
         next_video_timestamp_ = saturating_add(sample.timestamp, sample.duration);
         if (!validate_stream_timestamp(sample.timestamp, false)) return false;
@@ -651,6 +682,25 @@ class FfmpegDecoder final {
         initialized = true;
         last = timestamp;
         return true;
+    }
+
+    [[nodiscard]] std::uint64_t normalize_reordered_timestamp(
+        const std::uint64_t decoded,
+        const std::uint64_t expected,
+        const bool audio) const noexcept {
+        const bool initialized =
+            audio ? audio_timestamp_initialized_ : video_timestamp_initialized_;
+        const auto last = audio ? last_audio_timestamp_ : last_video_timestamp_;
+        constexpr std::uint64_t maximum_reorder_regression_nanoseconds =
+            1'000'000'000u;
+        if (!initialized || decoded >= last || expected < last ||
+            last - decoded > maximum_reorder_regression_nanoseconds)
+            return decoded;
+        // MPEG/Sofdec can yield decoded B-frames with missing or slightly
+        // reordered PTS at GOP boundaries. The decoder returns frames in
+        // presentation order, so place only bounded regressions at the exact
+        // next expected stream position. Larger discontinuities remain fatal.
+        return expected;
     }
 
     [[nodiscard]] bool fail_invalid_data() {

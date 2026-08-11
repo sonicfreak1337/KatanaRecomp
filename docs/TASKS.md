@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `82` und Native-Port-Profilvertrag `7` machen
+Portprojektvertrag `83` und Native-Port-Profilvertrag `8` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -179,18 +179,33 @@ Gastframebuffer waren nicht beteiligt. Der inkrementelle 24-Worker-Targetbuild
 war in `4,9 s` erfolgreich. Diese Aufgabe ist kein optionaler GPU-Offload des
 alten Emulationspfads.
 
-## [ ] KR-5004 - Native Disc-, Eingabe- und Save-Dienste
+Der native Fidelity-Modus folgt visuell standardmaessig 1:1 der Dreamcast-
+Referenz: originale Modelle, Texturen, Beleuchtung, Fog, Blend-/Farbsemantik,
+Animationen und Framing sind massgeblich; SADX/Steam ist keine visuelle
+Ground Truth. 1080p ist die Standardausgabe. 4K, 21:9 und Filter bleiben
+spaetere optionale, togglebare Modi und duerfen den Fidelity-Modus nicht
+veraendern.
+
+## [x] KR-5004 - Native Disc-, Eingabe- und Save-Dienste
 
 Prioritaet: P0 Produkt
 
-Status: aktiv nach KR-5003. Originaldaten bleiben lokal; Dateizugriff,
-Controller und atomare Speicherstaende verwenden native PC-Dienste.
+Status: source- und produktseitig abgeschlossen. Der neue
+`NativePortPlatformServices`-Vertrag bindet exakt identitaetsgebundene
+read-only Dateien/Ranges, XInput fuer vier Gamepads mit Analog/Button/
+Vibration sowie atomare projekt-/slot-/schema-gebundene Saves mit Backup-
+Recovery und exklusiver Instanzsperre. Read-only-/Writable-Roots ueberlappen
+nicht; sichere IDs, kanonischer User-Data-Save-Root, Digest-Domaenen und
+inkompatible Primaries bleiben fail-closed. Der vollstaendige originale
+SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit 3.257
+dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
+3.257 GPU-Presents und `hardware=1`.
 
 ## [ ] KR-5005 - Nativer No-Skip-Sonic-Produktlauf
 
 Prioritaet: P0 Alpha-Gate
 
-Status: wartet auf KR-5000 bis KR-5004. Abnahme: korrektes Opening mit Bild
+Status: aktiv nach KR-5000 bis KR-5004. Abnahme: korrektes Opening mit Bild
 und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
 rein nativen Pfad sowie native Eingabe. Erst dann wird `v0.50.0 Alpha`
 freigegeben.
@@ -240,8 +255,8 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 95, PlatformServices-ABI 14, Backend-Interface-ABI 19,
-  PVR-State-Contract 3, Portprojektvertrag 82, Native-Port-Profilvertrag 7
+  Runtime-ABI 96, PlatformServices-ABI 14, Backend-Interface-ABI 20,
+  PVR-State-Contract 3, Portprojektvertrag 83, Native-Port-Profilvertrag 8
   Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7

@@ -67,6 +67,11 @@ struct NativePortMovieVideoFrame final {
     // BGRA8 in decoder storage order. The span remains valid only for the
     // callback duration; bottom_up tells the renderer which row is first.
     std::span<const std::byte> pixels;
+    // Display aspect after applying decoder/container pixel-aspect metadata.
+    // This is intentionally separate from the coded pixel extent: Sofdec and
+    // other native assets commonly use non-square pixels.
+    std::uint32_t display_aspect_numerator = 0u;
+    std::uint32_t display_aspect_denominator = 0u;
 };
 
 using NativePortMovieVideoCallback = void (*)(void* user,
@@ -99,12 +104,17 @@ struct NativePortMovieConfig final {
     const NativePortCodecProvider* codec_provider = &native_port_ffmpeg_codec_provider();
     std::uint32_t audio_sample_rate = 44'100u;
     std::uint32_t maximum_audio_queue_frames = 44'100u;
-    // Bound decoder-controlled host memory. Queued video remains close to the
-    // presentation horizon instead of allowing a malformed source/provider to
-    // accumulate an unbounded number of frames.
-    std::uint32_t maximum_video_queue_frames = 16u;
+    // Bound decoder-controlled host memory. A modest interleaved tail is
+    // required when one multiplexed stream ends before the other; the byte
+    // ceiling remains authoritative for large frames.
+    std::uint32_t maximum_video_queue_frames = 64u;
     std::uint64_t maximum_video_frame_bytes = 64u * 1024u * 1024u;
     std::uint64_t maximum_video_queue_bytes = 128u * 1024u * 1024u;
+    // Optional title/presentation override. Zero/zero consumes the decoder's
+    // display aspect. This is required for formats such as Sofdec where the
+    // game-side quad, rather than the MPEG stream, defines non-square pixels.
+    std::uint32_t video_display_aspect_numerator = 0u;
+    std::uint32_t video_display_aspect_denominator = 0u;
     bool require_audio = true;
     bool require_video = true;
 };

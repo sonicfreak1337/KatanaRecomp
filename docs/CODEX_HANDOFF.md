@@ -31,7 +31,7 @@ Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
 `KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
 ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
-Profilvertrag `7`, Portprojektvertrag `82` und der Linkmap-Audit verhindern
+Profilvertrag `8`, Portprojektvertrag `83` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
 Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
 NativePortRuntime und Bootstrap sowie read-only Content-Mappings, Hook-/
@@ -66,6 +66,21 @@ dekodierten und 200 GPU-praesentierten Videoframes, 294.016 Audioframes,
 Gastframebuffer. Aktiv ist `KR-5004`. Niemals den historischen Launcher als
 Fallback aktivieren.
 
+`KR-5004` ist source- und produktseitig abgeschlossen: Native Plattformdienste
+binden exakt identitaetsgebundene read-only Content-Ranges, XInput fuer vier
+Gamepads sowie atomare projekt-/slot-/schema-gebundene Saves mit Backup-
+Recovery und exklusiver Instanzsperre. Read-only-/Writable-Roots, sichere IDs,
+User-Data-Save-Root und Digest-Domaenen bleiben fail-closed. Der vollstaendige
+originale SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit
+3.257 dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760
+Audioframes, 3.257 GPU-Presents und `hardware=1`. Aktiv ist `KR-5005`.
+
+Der native Fidelity-Modus folgt visuell standardmaessig 1:1 der Dreamcast-
+Referenz: originale Modelle, Texturen, Beleuchtung, Fog, Blend-/Farbsemantik,
+Animationen und Framing sind massgeblich; SADX/Steam ist keine visuelle
+Ground Truth. 1080p ist die Standardausgabe. 4K, 21:9 und Filter sind spaeter
+optionale, togglebare Modi und duerfen den Fidelity-Modus nicht veraendern.
+
 Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 `katana_analyzer_sdk` und `katana_native_port_runtime` in einem inkrementellen
 24-Worker-Build in `14,2 s` bestaetigt. Dieser historische Abschnitt ist kein
@@ -73,17 +88,17 @@ aktueller Taskstatus; nach dem abgeschlossenen KR-5003 ist jetzt KR-5004 aktiv.
 
 ## Historischer RuntimeOnly-Bring-up
 
-Funktionaler Source-Stand: aktueller KR-5003-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `95`,
+Funktionaler Source-Stand: aktueller KR-5004-Architekturreview-Checkpoint.
+Aktuell gelten Runtime-ABI `96`,
 PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`19`, PVR-State-Contract `3`, Portprojektvertrag `82` und Native-Port-
-Profilvertrag `7`.
+`20`, PVR-State-Contract `3`, Portprojektvertrag `83` und Native-Port-
+Profilvertrag `8`.
 Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
 Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
 `native_port_artifact.hpp` aus der Analyzer-Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze hebt das
-Backend-Interface-ABI auf `19`; bestehende generierte Ports muessen neu
+Backend-Interface-ABI auf `20`; bestehende generierte Ports muessen neu
 exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 

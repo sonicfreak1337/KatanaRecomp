@@ -214,6 +214,16 @@ void validate_image(const NativePortImageView& image,
     if (required > image.pixels.size())
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::InvalidResource, 0u, "image-bytes");
+    const bool implicit_aspect = image.display_aspect_numerator == 0u &&
+                                 image.display_aspect_denominator == 0u;
+    const bool explicit_aspect = valid_aspect(
+        {image.display_aspect_numerator,
+         image.display_aspect_denominator});
+    if (!implicit_aspect && !explicit_aspect)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidResource,
+            0u,
+            "image-display-aspect");
 }
 
 void saturating_increment(std::uint64_t& value) noexcept {
@@ -478,7 +488,6 @@ class NativePortGraphicsDevice::Impl final {
 
         DrawConstants constants{};
         constants.transform = packet.transform.values;
-        constants.uses_texture = packet.texture ? 1u : 0u;
         context_->UpdateSubresource(
             draw_constants_.Get(), 0u, nullptr, &constants, 0u, 0u);
 
@@ -613,8 +622,12 @@ class NativePortGraphicsDevice::Impl final {
         float v0 = 0.0f;
         float u1 = 1.0f;
         float v1 = 1.0f;
-        const NativePortAspectRatio source_aspect{
-            image.extent.width, image.extent.height};
+        const NativePortAspectRatio source_aspect =
+            image.display_aspect_numerator != 0u
+                ? NativePortAspectRatio{image.display_aspect_numerator,
+                                        image.display_aspect_denominator}
+                : NativePortAspectRatio{image.extent.width,
+                                        image.extent.height};
         if (fit == NativePortImageFit::Contain) {
             destination = fit_aspect(target, source_aspect);
         } else if (fit == NativePortImageFit::Cover &&
@@ -675,8 +688,6 @@ class NativePortGraphicsDevice::Impl final {
   private:
     struct DrawConstants final {
         std::array<float, 16u> transform{};
-        std::uint32_t uses_texture = 0u;
-        std::array<std::uint32_t, 3u> padding{};
     };
 
     struct TextureSlot final {
@@ -1629,8 +1640,6 @@ const wchar_t native_graphics_window_class[] =
 constexpr char native_graphics_shader_source[] = R"(
 cbuffer DrawConstants : register(b0) {
     row_major float4x4 draw_transform;
-    uint draw_uses_texture;
-    float3 draw_padding;
 };
 
 struct DrawVertexInput {
@@ -1657,10 +1666,7 @@ Texture2D draw_texture : register(t0);
 SamplerState draw_sampler : register(s0);
 
 float4 draw_pixel_main(DrawVertexOutput input) : SV_Target {
-    float4 texel = draw_uses_texture != 0
-        ? draw_texture.Sample(draw_sampler, input.texcoord)
-        : float4(1.0, 1.0, 1.0, 1.0);
-    return texel * input.color;
+    return draw_texture.Sample(draw_sampler, input.texcoord) * input.color;
 }
 
 struct CompositeVertexOutput {

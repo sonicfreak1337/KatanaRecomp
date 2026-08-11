@@ -130,8 +130,8 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `95`, Analyzer-ABI `36`, Backend-
-Interface-ABI `19`, Portprojektvertrag `82` und Native-Port-Profilvertrag `7`.
+KR-5000 bindet diese Grenze an Runtime-ABI `96`, Analyzer-ABI `36`, Backend-
+Interface-ABI `20`, Portprojektvertrag `83` und Native-Port-Profilvertrag `8`.
 Der historische
 GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
 enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -203,6 +203,32 @@ Budgets, Lebensdauern und Ownerthread-Regeln bleiben fail-closed; Titel werden
 vor Besitzkopie auf 1024 Bytes begrenzt, endliche Vertices vollstaendig
 geprueft und Resize im offenen Frame an das Renderziel zurueckgebunden.
 
+KR-5004 bindet native Datei-, Eingabe- und Save-Dienste ohne GD-ROM-, Maple-
+oder VMU-Geraetevertrag. `NativePortPlatformServices` liest ausschliesslich
+exakt SHA-256-identitaetsgebundene read-only Dateien/Ranges, stellt XInput fuer
+vier Gamepads mit Analog/Button/Vibration bereit und speichert atomare,
+projekt-/slot-/schema-gebundene Records mit Backup-Recovery und exklusiver
+Instanzsperre. Read-only- und Writable-Roots duerfen nicht ueberlappen; IDs,
+Windows-Geraetenamen, der kanonische User-Data-Save-Root und die
+laengenpraefixierten Digest-Domaenen werden fail-closed validiert. Ein inkompatibles
+Primary ist autoritativ, waehrend der Recovery-Store einen guten Backupbestand
+bewahrt. Der native Linkaudit enthaelt nur native Plattform-/Runtime-/Media-/
+Grafik-TUs und keine historischen Geraetesymbole.
+
+Der vollstaendige originale SFD-Opening-Stream wurde ohne Skip ueber den
+nativen FFmpeg-, GPU- und Audiopfad bis EOS abgenommen: `Ready` -> `Playing` ->
+`Completed` -> `Stopped`, 3.257 dekodierte und 3.257 GPU-praesentierte
+Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
+Der Codec-Provider-Vertrag steht auf `2`; PTS-Reorder bleibt begrenzt und der
+interleaved Video-Tail ist auf 64 Frames begrenzt.
+
+Der native Produktpfad folgt visuell standardmaessig 1:1 der Dreamcast-
+Referenz. Originale Modelle, Texturen, Beleuchtung, Fog, Blend-/Farbsemantik,
+Animationen und Framing sind verbindlich; SADX/Steam ist keine visuelle Ground
+Truth. 1080p ist die Standardausgabe. 4K, 21:9 und Filter sind spaetere
+optionale, togglebare Modi und duerfen den Dreamcast-Fidelity-Modus nicht
+veraendern.
+
 Die KR-5002-FFmpeg-Distribution bleibt strikt: Public Packages benoetigen
 `FFmpeg-Corresponding-Source.zip` und fuehren DLL, Lizenz, Notice,
 Buildkonfiguration und Source einzeln in `runtime-dependencies.json` Schema
@@ -216,11 +242,11 @@ Builds sind nicht redistributierbar.
 2. `KR-5001`: private SH-4-Spiel-/SDK-Grenzen und native Hookbindung
    vollstaendig ableiten. [x]
 3. `KR-5002`: Audio-/Moviepfad nativ anbinden und ARM7/AICA aus dem
-   Produktprofil entfernen.
+   Produktprofil entfernen. [x]
 4. `KR-5003`: Grafikpfad an eine native GPU-API anbinden und CPU-PVR aus dem
-   Produktprofil entfernen.
+   Produktprofil entfernen. [x]
 5. `KR-5004`: Disc, Eingabe, Save und verbleibende Plattformdienste nativ
-   anbinden.
+   anbinden. [x]
 6. `KR-5005`: echter No-Skip-Sonic-Lauf bis Hauptmenue mit nativer Bild-,
    Ton- und Eingabekette; erst dieses Gate gibt `v0.50.0 Alpha` frei.
 

@@ -7,7 +7,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_codec_provider_contract_version = 1u;
+inline constexpr std::uint32_t native_port_codec_provider_contract_version = 2u;
 
 // Read-only random access to the exact content object whose complete SHA-256
 // identity was verified by the native runtime. Provider callbacks must not
@@ -43,7 +43,11 @@ struct NativePortCodecOpenRequest final {
     NativePortCodecByteSource source;
     std::uint32_t requested_audio_sample_rate = 44'100u;
     std::uint32_t maximum_audio_queue_frames = 44'100u;
-    std::uint32_t maximum_video_queue_frames = 16u;
+    // MPEG-PS streams may end audio before video. The provider must retain the
+    // bounded video tail until the demuxer can prove that no earlier audio
+    // sample remains; 64 frames covers the verified Sofdec tail while the byte
+    // budget remains the hard memory ceiling.
+    std::uint32_t maximum_video_queue_frames = 64u;
     std::uint64_t maximum_video_frame_bytes = 64u * 1024u * 1024u;
     std::uint64_t maximum_video_queue_bytes = 128u * 1024u * 1024u;
     std::uint32_t require_audio = 1u;
@@ -77,6 +81,10 @@ struct NativePortCodecSample final {
     std::uint32_t video_bottom_up = 0u;
     const void* video_pixels = nullptr;
     std::uint64_t video_byte_count = 0u;
+    // Display aspect after applying the source pixel/sample aspect ratio.
+    // Both values must be non-zero for every video sample.
+    std::uint32_t video_display_aspect_numerator = 0u;
+    std::uint32_t video_display_aspect_denominator = 0u;
 };
 
 enum class NativePortCodecReadStatus : std::uint8_t {

@@ -135,6 +135,10 @@ struct NativePortImageView final {
     std::uint32_t stride_bytes = 0u;
     bool bottom_up = false;
     std::span<const std::byte> pixels;
+    // Zero/zero uses extent.width:extent.height. Otherwise both values form
+    // the intended display aspect for content with non-square source pixels.
+    std::uint32_t display_aspect_numerator = 0u;
+    std::uint32_t display_aspect_denominator = 0u;
 };
 
 enum class NativePortViewportTarget : std::uint8_t {

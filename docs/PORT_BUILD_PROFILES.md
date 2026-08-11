@@ -36,7 +36,7 @@ erzwingen `diagnostic-interpreter`. Der historische Geraetepfad ist nur ein
 internes Buildbaum-Orakel und kein generiertes Portprofil. Compilerbuildordner
 und Telemetrie sind an das Runtimeprofil gebunden. `native-port` linkt
 ausschliesslich `KatanaRecomp::native_port_runtime`, verlangt Native-Port-
-Profilvertrag `7` und Portprojektvertrag `82` und erzeugt eine Linkmap. Ein
+Profilvertrag `8` und Portprojektvertrag `83` und erzeugt eine Linkmap. Ein
 Post-Link-Audit verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-,
 CPU-PVR-/TA- oder Interpreterbestandteilen. Es existiert kein automatischer
 Rueckfall.
@@ -57,6 +57,10 @@ Rasterizer, PVR/TA oder historische Geraeteruntime. Render-/Outputaufloesung
 und Game-/UI-/Kamera-Viewports sind getrennte Vertraege; Standard ist
 1920x1080. Oeffentliche FFmpeg-Pakete benoetigen die vollstaendige
 entsprechende Source-Closure und bleiben ohne sie `redistribution_ready=false`.
+
+KR-5004 fuehrt native Datei-, Eingabe- und Save-Dienste ein. Read-only-
+Content-Ranges sind SHA-256-identitaetsgebunden; XInput bietet vier Gamepads,
+und Saves sind atomar projekt-/slot-/schema-gebunden mit Backup-Recovery.
 
 ## Historischer RuntimeOnly-Pfad und Windows-Hostbuild
 

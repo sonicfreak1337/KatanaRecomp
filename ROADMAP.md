@@ -98,6 +98,11 @@ Daraus folgen verbindlich:
   Geraeteverbund im Produkt;
 - Grafik ueber eine native GPU-API, Audio/Movie ueber native Hostdienste und
   Disc/Eingabe/Save ueber native PC-Plattformdienste;
+- Der native Port folgt standardmaessig visuell 1:1 der Dreamcast-Referenz:
+  originale Modelle, Texturen, Beleuchtung, Fog, Blend-/Farbsemantik,
+  Animationen und Framing sind massgeblich. SADX/Steam ist keine visuelle
+  Ground Truth. 1080p ist die Standardausgabe; 4K, 21:9 und Filter sind
+  spaetere optionale, togglebare Modi und veraendern den Fidelity-Modus nicht;
 - keine stillen No-op-Stubs oder erfundenen Hardwareerfolge;
 - keine Sonic-spezifischen Adresshacks im generischen Katana-Kern;
 - keine Retail-, BIOS- oder Assetdaten im Repository oder verteilbaren Paket;
@@ -135,7 +140,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `82`, Native-Port-Profilvertrag `7` und
+kein Portprofil. Portprojektvertrag `83`, Native-Port-Profilvertrag `8` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -173,7 +178,16 @@ durchlief `Ready` -> `Playing` -> `Completed` -> `Stopped` mit 200 dekodierten
 und 200 GPU-praesentierten Videoframes, 294.016 dekodierten Audioframes,
 114.688.000 GPU-Uploadbytes und `hardware_accelerated=true`; PVR/Scanout/
 Gastframebuffer waren nicht beteiligt. Der inkrementelle 24-Worker-Targetbuild
-war in `4,9 s` erfolgreich. Aktiver Folgetask ist `KR-5004`.
+war in `4,9 s` erfolgreich. `KR-5004` ist source- und produktseitig
+abgeschlossen: Native Plattformdienste binden exakt identitaetsgebundene
+read-only Content-Ranges, XInput fuer vier Gamepads und atomare projekt-,
+Slot- und schema-gebundene Saves mit Backup-Recovery. Read-only-/Writable-
+Roots, sichere IDs, User-Data-Save-Root und Digest-Domaenen bleiben
+fail-closed; der Linkaudit enthaelt keine historischen Geraetesymbole. Der
+vollstaendige originale SFD-Opening-Stream lief ohne Skip bis EOS und endete
+`Completed` mit 3.257 dekodierten und 3.257 GPU-praesentierten Videoframes,
+4.709.760 Audioframes und 3.257 GPU-Presents. Der naechste aktive Task ist
+`KR-5005`.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -219,8 +233,8 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 95, PlatformServices-ABI 14, Backend-Interface-ABI 19,
-  PVR-State-Contract 3, Portprojektvertrag 82, Native-Port-Profilvertrag 7
+  Runtime-ABI 96, PlatformServices-ABI 14, Backend-Interface-ABI 20,
+  PVR-State-Contract 3, Portprojektvertrag 83, Native-Port-Profilvertrag 8
   Analyzer-ABI 36
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13

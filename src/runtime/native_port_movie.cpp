@@ -9,6 +9,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,6 +37,44 @@ constexpr std::uint32_t maximum_audio_queue_budget_frames = 192'000u * 60u;
 constexpr std::uint32_t maximum_video_queue_budget_frames = 256u;
 constexpr std::uint64_t maximum_video_frame_budget_bytes = 128u * 1024u * 1024u;
 constexpr std::uint64_t maximum_video_queue_budget_bytes = 128u * 1024u * 1024u;
+constexpr std::uint32_t maximum_display_aspect_component = 65'535u;
+
+struct DisplayAspect final {
+    std::uint32_t numerator = 0u;
+    std::uint32_t denominator = 0u;
+};
+
+[[nodiscard]] DisplayAspect reduced_display_aspect(
+    const std::uint32_t width,
+    const std::uint32_t height,
+    const std::uint32_t pixel_numerator,
+    const std::uint32_t pixel_denominator) noexcept {
+    if (width == 0u || height == 0u || pixel_numerator == 0u ||
+        pixel_denominator == 0u)
+        return {};
+    std::uint64_t numerator =
+        static_cast<std::uint64_t>(width) * pixel_numerator;
+    std::uint64_t denominator =
+        static_cast<std::uint64_t>(height) * pixel_denominator;
+    const auto divisor = std::gcd(numerator, denominator);
+    numerator /= divisor;
+    denominator /= divisor;
+    while (numerator > maximum_display_aspect_component ||
+           denominator > maximum_display_aspect_component) {
+        numerator = (numerator + 1u) / 2u;
+        denominator = (denominator + 1u) / 2u;
+    }
+    return {static_cast<std::uint32_t>(numerator),
+            static_cast<std::uint32_t>(denominator)};
+}
+
+[[nodiscard]] bool valid_display_aspect(
+    const std::uint32_t numerator,
+    const std::uint32_t denominator) noexcept {
+    return numerator != 0u && denominator != 0u &&
+           numerator <= maximum_display_aspect_component &&
+           denominator <= maximum_display_aspect_component;
+}
 
 [[nodiscard]] bool path_is_within(const std::filesystem::path& path,
                                   const std::filesystem::path& root) {
@@ -449,6 +488,10 @@ class NativePortMovieSession::Impl final {
             config.maximum_video_queue_bytes < 4u ||
             config.maximum_video_queue_bytes > maximum_video_queue_budget_bytes ||
             config.maximum_video_frame_bytes > config.maximum_video_queue_bytes ||
+            !((config.video_display_aspect_numerator == 0u &&
+               config.video_display_aspect_denominator == 0u) ||
+              valid_display_aspect(config.video_display_aspect_numerator,
+                                   config.video_display_aspect_denominator)) ||
             (!config.require_audio && !config.require_video))
             return fail_and_throw(NativePortMovieFailure::InvalidConfig, "config");
         try {
@@ -613,6 +656,8 @@ class NativePortMovieSession::Impl final {
         std::uint32_t video_width = 0u;
         std::uint32_t video_height = 0u;
         std::uint32_t video_stride = 0u;
+        std::uint32_t video_display_aspect_numerator = 0u;
+        std::uint32_t video_display_aspect_denominator = 0u;
         bool video_bottom_up = false;
         std::uint64_t video_storage_bytes = 0u;
     };
@@ -626,6 +671,8 @@ class NativePortMovieSession::Impl final {
         std::uint32_t video_width = 0u;
         std::uint32_t video_height = 0u;
         std::uint32_t video_stride = 0u;
+        std::uint32_t video_display_aspect_numerator = 0u;
+        std::uint32_t video_display_aspect_denominator = 0u;
         bool video_bottom_up = false;
         std::vector<std::byte> video_pixels;
     };
@@ -892,6 +939,23 @@ class NativePortMovieSession::Impl final {
             return fail_and_throw(NativePortMovieFailure::InvalidVideoBuffer, "video-layout");
         video_stride_ = static_cast<std::uint32_t>(absolute_stride);
         video_bottom_up_ = signed_stride > 0;
+        UINT32 pixel_numerator = 1u;
+        UINT32 pixel_denominator = 1u;
+        if (FAILED(MFGetAttributeRatio(type.Get(),
+                                       MF_MT_PIXEL_ASPECT_RATIO,
+                                       &pixel_numerator,
+                                       &pixel_denominator)) ||
+            pixel_numerator == 0u || pixel_denominator == 0u) {
+            pixel_numerator = 1u;
+            pixel_denominator = 1u;
+        }
+        const auto display = reduced_display_aspect(
+            video_width_, video_height_, pixel_numerator, pixel_denominator);
+        if (!valid_display_aspect(display.numerator, display.denominator))
+            return fail_and_throw(NativePortMovieFailure::InvalidVideoBuffer,
+                                  "video-display-aspect");
+        video_display_aspect_numerator_ = display.numerator;
+        video_display_aspect_denominator_ = display.denominator;
     }
 
     void decode_until_position() {
@@ -1063,6 +1127,9 @@ class NativePortMovieSession::Impl final {
                 static_cast<std::uint64_t>(source.video_stride_bytes) * source.video_height;
             if (!has_video_ || source.video_pixels == nullptr || source.video_width == 0u ||
                 source.video_height == 0u || source.video_bottom_up > 1u ||
+                !valid_display_aspect(
+                    source.video_display_aspect_numerator,
+                    source.video_display_aspect_denominator) ||
                 static_cast<std::uint64_t>(source.video_stride_bytes) <
                     static_cast<std::uint64_t>(source.video_width) * 4u ||
                 required == 0u || required > source.video_byte_count ||
@@ -1074,6 +1141,10 @@ class NativePortMovieSession::Impl final {
             sample.video_width = source.video_width;
             sample.video_height = source.video_height;
             sample.video_stride = source.video_stride_bytes;
+            sample.video_display_aspect_numerator =
+                source.video_display_aspect_numerator;
+            sample.video_display_aspect_denominator =
+                source.video_display_aspect_denominator;
             sample.video_bottom_up = source.video_bottom_up != 0u;
             const auto* pixels = static_cast<const std::byte*>(source.video_pixels);
             sample.video_pixels.assign(pixels, pixels + static_cast<std::size_t>(required));
@@ -1089,13 +1160,23 @@ class NativePortMovieSession::Impl final {
     void present_provider_video(const ProviderSample& sample) {
         saturating_increment_counter(decoded_video_frames_);
         if (callbacks_.video == nullptr) return;
+        const auto display_numerator =
+            config_.video_display_aspect_numerator != 0u
+                ? config_.video_display_aspect_numerator
+                : sample.video_display_aspect_numerator;
+        const auto display_denominator =
+            config_.video_display_aspect_denominator != 0u
+                ? config_.video_display_aspect_denominator
+                : sample.video_display_aspect_denominator;
         const NativePortMovieVideoFrame frame{sample.timestamp,
                                               sample.duration,
                                               sample.video_width,
                                               sample.video_height,
                                               sample.video_stride,
                                               sample.video_bottom_up,
-                                              sample.video_pixels};
+                                              sample.video_pixels,
+                                              display_numerator,
+                                              display_denominator};
         callback_active_ = true;
         callbacks_.video(callbacks_.user, frame);
         callback_active_ = false;
@@ -1124,6 +1205,10 @@ class NativePortMovieSession::Impl final {
             next.video_width = video_width_;
             next.video_height = video_height_;
             next.video_stride = video_stride_;
+            next.video_display_aspect_numerator =
+                video_display_aspect_numerator_;
+            next.video_display_aspect_denominator =
+                video_display_aspect_denominator_;
             next.video_bottom_up = video_bottom_up_;
             if (next.sample) {
                 const auto required =
@@ -1201,13 +1286,23 @@ class NativePortMovieSession::Impl final {
         require_hresult(buffer->Unlock(), "video-unlock");
         saturating_increment_counter(decoded_video_frames_);
         if (callbacks_.video != nullptr) {
+            const auto display_numerator =
+                config_.video_display_aspect_numerator != 0u
+                    ? config_.video_display_aspect_numerator
+                    : pending.video_display_aspect_numerator;
+            const auto display_denominator =
+                config_.video_display_aspect_denominator != 0u
+                    ? config_.video_display_aspect_denominator
+                    : pending.video_display_aspect_denominator;
             const NativePortMovieVideoFrame frame{hundred_ns_to_ns(pending.timestamp),
                                                   hundred_ns_to_ns(duration),
                                                   pending.video_width,
                                                   pending.video_height,
                                                   pending.video_stride,
                                                   pending.video_bottom_up,
-                                                  pixels};
+                                                  pixels,
+                                                  display_numerator,
+                                                  display_denominator};
             callback_active_ = true;
             callbacks_.video(callbacks_.user, frame);
             callback_active_ = false;
@@ -1301,6 +1396,8 @@ class NativePortMovieSession::Impl final {
         video_width_ = 0u;
         video_height_ = 0u;
         video_stride_ = 0u;
+        video_display_aspect_numerator_ = 0u;
+        video_display_aspect_denominator_ = 0u;
         video_bottom_up_ = false;
         provider_audio_format_ = {};
 #endif
@@ -1425,6 +1522,8 @@ class NativePortMovieSession::Impl final {
     std::uint32_t video_width_ = 0u;
     std::uint32_t video_height_ = 0u;
     std::uint32_t video_stride_ = 0u;
+    std::uint32_t video_display_aspect_numerator_ = 0u;
+    std::uint32_t video_display_aspect_denominator_ = 0u;
     bool video_bottom_up_ = false;
     DWORD audio_stream_ = 0u;
     DWORD video_stream_ = 0u;

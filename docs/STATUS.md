@@ -47,7 +47,7 @@ Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
 nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
-Profilvertrag `7`, Portprojektvertrag `82` und der Post-Link-Audit sperren
+Profilvertrag `8`, Portprojektvertrag `83` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
 `KR-5000` ist abgeschlossen: NativePortDefinition, NativePortArtifact,
@@ -82,8 +82,14 @@ und Kamera-Viewports/Aspect-Policies sind getrennt. Die sichtbare native SFD-
 Abnahme lief `Ready` -> `Playing` -> `Completed` -> `Stopped` mit 200
 dekodierten und 200 GPU-praesentierten Videoframes, 294.016 Audioframes,
 114.688.000 GPU-Uploadbytes und `hardware_accelerated=true`, ohne PVR/Scanout/
-Gastframebuffer. Aktiv ist jetzt KR-5004;
-erst anschliessend ist KR-5005 als einziger Sonic-Produktlauf freigegeben.
+Gastframebuffer. `KR-5004` ist source- und produktseitig abgeschlossen:
+Native Plattformdienste binden exakt identitaetsgebundene read-only Content-
+Ranges, XInput fuer vier Gamepads und atomare projekt-/slot-/schema-gebundene
+Saves mit Backup-Recovery. Read-only-/Writable-Roots, sichere IDs, User-Data-
+Save-Root und Digest-Domaenen bleiben fail-closed. Der vollstaendige originale
+SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit 3.257
+dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
+3.257 GPU-Presents und `hardware=1`. Aktiv ist jetzt KR-5005.
 
 Das installierte Runtime-SDK wurde in einem frischen Prefix von einem
 externen Consumer konfiguriert, gelinkt und gestartet. Die installierbare
@@ -107,19 +113,19 @@ Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
-Funktionaler Source-Stand: aktueller KR-5003-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `95`,
+Funktionaler Source-Stand: aktueller KR-5004-Architekturreview-Checkpoint.
+Aktuell gelten Runtime-ABI `96`,
 PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`19`, PVR-State-Contract `3`, Portprojektvertrag `82` und Native-Port-
-Profilvertrag `7`. Der historische GameProject-Vertrag bleibt auf `5` mit
+`20`, PVR-State-Contract `3`, Portprojektvertrag `83` und Native-Port-
+Profilvertrag `8`. Der historische GameProject-Vertrag bleibt auf `5` mit
 Artefaktformat `4` und transportiert die unabhaengige Native-Port-Definition
 ausdruecklich nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
 `port_export.hpp` sowie `native_port_artifact.hpp` aus der Analyzer-
 Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
-Backend-Interface-ABI `19` versioniert; bestehende generierte Ports muessen
+Backend-Interface-ABI `20` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 

@@ -2,8 +2,8 @@
 
 Historischer Einfuehrungsstand: KR-4716
 
-Aktueller KR-5003-Stand: Die oeffentlichen ABI- und Portvertraege folgen dem
-aktiven Buildvertrag. KR-5001 bis KR-5003 sind source-seitig abgeschlossen;
+Aktueller KR-5004-Stand: Die oeffentlichen ABI- und Portvertraege folgen dem
+aktiven Buildvertrag. KR-5001 bis KR-5004 sind source-seitig abgeschlossen;
 KR-5004 ist der aktive native Disc-/Eingabe-/Savepfad. Historische Checkpoint- und Laufangaben
 bleiben an ihre damaligen Vertraege gebunden.
 

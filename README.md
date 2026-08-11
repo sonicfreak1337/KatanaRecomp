@@ -25,11 +25,11 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 95, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 96, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 82, Native-Port-Profilvertrag 7 sowie PVR-State-Contract 3.
+Portprojektvertrag 83, Native-Port-Profilvertrag 8 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
@@ -80,7 +80,16 @@ GPU-praesentierten Videoframes, 294.016 dekodierten Audioframes,
 114.688.000 GPU-Uploadbytes und `hardware_accelerated=true`; PVR/Scanout/
 Gastframebuffer waren nicht beteiligt. Das installierte Runtime-SDK wurde
 von einem externen Consumer gebaut, gelinkt und gestartet; der naechste aktive
-Task ist KR-5004.
+KR-5004 ist source- und produktseitig abgeschlossen: Der neue
+`NativePortPlatformServices`-Vertrag bindet exakt identitaetsgebundene
+read-only Content-Ranges, XInput fuer vier Gamepads sowie atomare, projekt-,
+Slot- und schema-gebundene Saves mit Backup-Recovery und exklusiver
+Instanzsperre. Read-only- und Writable-Roots ueberlappen nicht; Pfad-/ID-
+Validierung, User-Data-Save-Root und Digest-Domaenen bleiben fail-closed.
+Der vollstaendige native SFD-Opening-Stream lief ohne Skip bis EOS und endete
+sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
+Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
+Der naechste aktive Task ist KR-5005.
 
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
 Runtime-Performance-Checkpoint. Die
@@ -90,7 +99,7 @@ diesem historischen Checkpoint. Die damalige Erweiterung von
 `PortExportOptions` und `LatentAotDiscoveryOptions` fuehrte Backend-
 Interface-ABI `13` ein; der jetzt unabhaengige
 `PortExportOptions::native_port_definition`-Vertrag wurde inzwischen auf
-Backend-Interface-ABI `19` weiterentwickelt.
+Backend-Interface-ABI `20` weiterentwickelt.
 
 Der historische opt-in-Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zugelassen. Ab v0.49.1 ist er ausschliesslich internes
@@ -264,13 +273,13 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    95
+Runtime-ABI:                    96
 Block-ABI:                       5
 Analyzer-ABI:                   36
 PlatformServices-ABI:           14
-Backend-Interface-ABI:          19
-Portprojektvertrag:             82
-Native-Port-Profilvertrag:       7
+Backend-Interface-ABI:          20
+Portprojektvertrag:             83
+Native-Port-Profilvertrag:       8
 Native-AOT-Emissionsprofil:     27
 AOT-Partitionsschema:            7
 ```
@@ -387,8 +396,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der dokumentierte
-Der aktuelle KR-5003-Stand verwendet Runtime-ABI 95 und
-Portprojektvertrag 82. Davon getrennt verwendet `GameProject` Vertrag 5 und
+Der aktuelle KR-5004-Stand verwendet Runtime-ABI 96 und
+Portprojektvertrag 83. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

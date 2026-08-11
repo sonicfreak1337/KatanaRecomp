@@ -38,8 +38,8 @@
   validiert beide Pfade; der Bring-up-Schalter gilt nur bei unvollstaendiger
   Closure.
 
-- Runtime-ABI `95`, Analyzer-ABI `36`, Backend-Interface-ABI `19`,
-  Portprojektvertrag `82`, Native-Port-Profilvertrag `7`, Hardwareaudit-Schema
+- Runtime-ABI `96`, Analyzer-ABI `36`, Backend-Interface-ABI `20`,
+  Portprojektvertrag `83`, Native-Port-Profilvertrag `8`, Hardwareaudit-Schema
   `v5`, Hardwareaudit-Set-Schema `v2`
   und Port-
   Metadatencache-Schema `3` versionieren
@@ -47,7 +47,7 @@
   historische GameProject-Vertrag `5` samt Artefaktformat `4` bleibt
   unveraendert und enthaelt bewusst keine Native-Port-Definition; deren
   unabhaengiger privater Provider wurde mit KR-5001 angebunden.
-  Backend-Interface-ABI `19` bindet den erweiterten unabhaengigen
+  Backend-Interface-ABI `20` bindet den erweiterten unabhaengigen
   `PortExportOptions::native_port_definition`-Zeiger; er wird nicht in den
   alten Dreamcast-Spielprojektvertrag eingebaut. Der korrekte SkyEmu-MIT-
   Hinweis und die vendorte Lizenz bleiben im Repository
@@ -89,7 +89,8 @@
   `Ready` bis `Stopped`. Der 24-Worker-Inkrementalbuild der relevanten Ziele
   war in etwa `4,5 s` erfolgreich; es wurden keine neuen Tests ausgefuehrt.
   KR-5002 ist source-seitig abgeschlossen; KR-5003 ist source- und
-  produktseitig abgeschlossen. Der naechste aktive Task ist KR-5004.
+  produktseitig abgeschlossen; in diesem frueheren Eintrag war KR-5004 der
+  naechste Task.
   Ein externer Consumer konnte das installierte Runtime-SDK in einem frischen
   Prefix konfigurieren, linken und starten; das Produktarchiv enthaelt nur
   die fuenf benoetigten DLLs sowie LGPL-/Notice-Dateien und keine absoluten
@@ -108,6 +109,22 @@
   beteiligt. Ein installierter Runtime-SDK-Consumer baute und linkte; der
   inkrementelle 24-Worker-Targetbuild war in `4,9 s` erfolgreich. KR-5004 ist
   jetzt aktiv.
+
+- KR-5004 schliesst den nativen Plattformdienste-Pfad: Der neue Vertrag bindet
+  exakt SHA-256-identitaetsgebundene read-only Dateien/Ranges, XInput fuer vier
+  Gamepads mit Analog/Button/Vibration sowie atomare projekt-/slot-/schema-
+  gebundene Saves mit Backup-Recovery und exklusiver Instanzsperre. Read-only-
+  und Writable-Roots duerfen nicht ueberlappen; unsichere IDs, Save-Roots,
+  Digest-Domaenen und inkompatible Primaries fail-closed, waehrend ein guter
+  Backupbestand erhalten bleibt. Der native Linkaudit enthaelt keine
+  historischen Geraetesymbole.
+
+- Der vollstaendige originale SFD-Opening-Stream lief ohne Skip ueber den
+  nativen FFmpeg-, GPU- und Audiopfad bis EOS und endete `Completed`: `3.257`
+  dekodierte und `3.257` GPU-praesentierte Videoframes, `4.709.760`
+  Audioframes, `3.257` GPU-Presents und `hardware=1`. Der Codec-Provider-
+  Vertrag steht auf `2`; ein begrenzter PTS-Reorder und ein 64-Frame-
+  interleaved Video-Tail sichern den EOS-Pfad. KR-5005 ist jetzt aktiv.
 
 - Der KR-5002-FFmpeg-Review ist vollstaendig geschlossen: die fuenf DLLs,
   Lizenz, Notice, Buildkonfiguration und Quellbindung werden einzeln in
