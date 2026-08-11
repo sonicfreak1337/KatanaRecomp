@@ -205,7 +205,12 @@ dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
 
 Prioritaet: P0 Alpha-Gate
 
-Status: aktiv nach KR-5000 bis KR-5004. Abnahme: korrektes Opening mit Bild
+Status: aktiv nach KR-5000 bis KR-5004. Ein KR-5005-Zwischenfix transportiert
+die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
+CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
+fail-closed; die frische Konfiguration erzeugte korrekte absolute Pfade fuer
+Lizenz, Notice, Buildkonfiguration und Redistribution-Source. Abnahme:
+korrektes Opening mit Bild
 und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
 rein nativen Pfad sowie native Eingabe. Erst dann wird `v0.50.0 Alpha`
 freigegeben.

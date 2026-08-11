@@ -90,6 +90,11 @@ Save-Root und Digest-Domaenen bleiben fail-closed. Der vollstaendige originale
 SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit 3.257
 dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
 3.257 GPU-Presents und `hardware=1`. Aktiv ist jetzt KR-5005.
+Der KR-5005-Zwischenfix transportiert die verifizierte FFmpeg-Deploymentclosure
+bei Parent-Projekten ueber globale CMake-Properties und validiert Quellen sowie
+sichere Dateinamen fail-closed. Die frische Konfiguration erzeugte korrekte
+absolute Pfade fuer Lizenz, Notice, Buildkonfiguration und Redistribution-
+Source; das Produktgate bleibt offen.
 
 Das installierte Runtime-SDK wurde in einem frischen Prefix von einem
 externen Consumer konfiguriert, gelinkt und gestartet. Die installierbare

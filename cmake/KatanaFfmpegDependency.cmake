@@ -178,6 +178,22 @@ if(NOT EXISTS "${KATANA_FFMPEG_ROOT}/include/libavcodec/avcodec.h")
 endif()
 file(REAL_PATH "${KATANA_FFMPEG_ROOT}" KATANA_FFMPEG_ROOT)
 
+# The native product may add KatanaRecomp as a subdirectory and invoke the
+# deployment helper from its parent directory. CMake functions resolve normal
+# variables in the caller scope, so capture the verified redistribution
+# closure in directory-independent global properties instead of relying on
+# the subdirectory's transient variables.
+set_property(GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_ROOT
+    "${KATANA_FFMPEG_ROOT}")
+set_property(GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_NOTICE_FILE
+    "${KATANA_FFMPEG_NOTICE_FILE}")
+set_property(GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_BUILD_CONFIGURATION_FILE
+    "${KATANA_FFMPEG_BUILD_CONFIGURATION_FILE}")
+set_property(GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_REDISTRIBUTION_FILE
+    "${KATANA_FFMPEG_REDISTRIBUTION_FILE}")
+set_property(GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_REDISTRIBUTION_FILENAME
+    "${KATANA_FFMPEG_REDISTRIBUTION_FILENAME}")
+
 set(
     KATANA_FFMPEG_PINNED_FILES
     "bin/avformat-62.dll|148cfc25efafb0b63998740685e7789636309bb8a8304cbde3241bda66dbc77b"
@@ -289,6 +305,36 @@ function(katana_deploy_ffmpeg_runtime target)
     if(NOT TARGET "${target}")
         message(FATAL_ERROR "katana_deploy_ffmpeg_runtime target does not exist: ${target}")
     endif()
+    get_property(_katana_ffmpeg_root
+        GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_ROOT)
+    get_property(_katana_ffmpeg_notice_file
+        GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_NOTICE_FILE)
+    get_property(_katana_ffmpeg_build_configuration_file
+        GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_BUILD_CONFIGURATION_FILE)
+    get_property(_katana_ffmpeg_redistribution_file
+        GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_REDISTRIBUTION_FILE)
+    get_property(_katana_ffmpeg_redistribution_filename
+        GLOBAL PROPERTY KATANA_FFMPEG_DEPLOY_REDISTRIBUTION_FILENAME)
+    foreach(
+        _katana_ffmpeg_deploy_file
+        IN ITEMS
+            "${_katana_ffmpeg_root}/LICENSE.txt"
+            "${_katana_ffmpeg_notice_file}"
+            "${_katana_ffmpeg_build_configuration_file}"
+            "${_katana_ffmpeg_redistribution_file}"
+    )
+        if(_katana_ffmpeg_deploy_file STREQUAL "" OR
+           NOT EXISTS "${_katana_ffmpeg_deploy_file}" OR
+           IS_DIRECTORY "${_katana_ffmpeg_deploy_file}")
+            message(FATAL_ERROR
+                "Pinned FFmpeg deployment closure is incomplete: ${_katana_ffmpeg_deploy_file}")
+        endif()
+    endforeach()
+    if(_katana_ffmpeg_redistribution_filename STREQUAL "" OR
+       _katana_ffmpeg_redistribution_filename MATCHES "[/\\\\]")
+        message(FATAL_ERROR
+            "Pinned FFmpeg redistribution filename is invalid")
+    endif()
     add_custom_command(
         TARGET "${target}"
         POST_BUILD
@@ -296,20 +342,20 @@ function(katana_deploy_ffmpeg_runtime target)
             $<TARGET_RUNTIME_DLLS:${target}>
             $<TARGET_FILE_DIR:${target}>
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${KATANA_FFMPEG_ROOT}/LICENSE.txt"
+            "${_katana_ffmpeg_root}/LICENSE.txt"
             "$<TARGET_FILE_DIR:${target}>/FFmpeg-LGPL.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${KATANA_FFMPEG_NOTICE_FILE}"
+            "${_katana_ffmpeg_notice_file}"
             "$<TARGET_FILE_DIR:${target}>/FFmpeg-NOTICE.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${KATANA_FFMPEG_BUILD_CONFIGURATION_FILE}"
+            "${_katana_ffmpeg_build_configuration_file}"
             "$<TARGET_FILE_DIR:${target}>/FFmpeg-BUILD-CONFIGURATION.txt"
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_FILE_DIR:${target}>/FFmpeg-Corresponding-Source.zip"
             "$<TARGET_FILE_DIR:${target}>/FFmpeg-DEVELOPMENT-ONLY.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${KATANA_FFMPEG_REDISTRIBUTION_FILE}"
-            "$<TARGET_FILE_DIR:${target}>/${KATANA_FFMPEG_REDISTRIBUTION_FILENAME}"
+            "${_katana_ffmpeg_redistribution_file}"
+            "$<TARGET_FILE_DIR:${target}>/${_katana_ffmpeg_redistribution_filename}"
         COMMAND_EXPAND_LISTS
         VERBATIM
     )

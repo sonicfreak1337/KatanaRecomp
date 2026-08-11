@@ -126,6 +126,13 @@
   Vertrag steht auf `2`; ein begrenzter PTS-Reorder und ein 64-Frame-
   interleaved Video-Tail sichern den EOS-Pfad. KR-5005 ist jetzt aktiv.
 
+- KR-5005-Zwischenfix: Die FFmpeg-Deploymentclosure wird bei Verwendung des
+  Native-Ports als Parent-Projekt in globalen CMake-Properties transportiert.
+  Der Helper validiert jede absolute Quelle und jeden sicheren Dateinamen
+  fail-closed; der frische Konfigurationsnachweis erzeugte korrekte Pfade fuer
+  Lizenz, Notice, Buildkonfiguration und Redistribution-Source. Das KR-5005-
+  Produktgate bleibt offen.
+
 - Der KR-5002-FFmpeg-Review ist vollstaendig geschlossen: die fuenf DLLs,
   Lizenz, Notice, Buildkonfiguration und Quellbindung werden einzeln in
   `runtime-dependencies.json` Schema `v3` gefuehrt. Oeffentliche Pakete

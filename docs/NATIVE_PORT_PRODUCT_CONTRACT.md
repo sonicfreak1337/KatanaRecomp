@@ -219,7 +219,8 @@ Der vollstaendige originale SFD-Opening-Stream wurde ohne Skip ueber den
 nativen FFmpeg-, GPU- und Audiopfad bis EOS abgenommen: `Ready` -> `Playing` ->
 `Completed` -> `Stopped`, 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
-Der Codec-Provider-Vertrag steht auf `2`; PTS-Reorder bleibt begrenzt und der
+Der Codec-Provider-Vertrag steht auf `2`, der Plattformdienstevertrag auf `1`;
+PTS-Reorder bleibt begrenzt und der
 interleaved Video-Tail ist auf 64 Frames begrenzt.
 
 Der native Produktpfad folgt visuell standardmaessig 1:1 der Dreamcast-

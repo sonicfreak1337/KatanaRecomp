@@ -91,6 +91,13 @@ sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
 Der naechste aktive Task ist KR-5005.
 
+Der KR-5005-Zwischenfix schliesst die CMake-Deploymentgrenze fuer FFmpeg im
+Parent-Projekt: Die verifizierte Closure wird unabhaengig vom Caller-Scope
+transportiert, absolute Quellen und sichere Dateinamen werden fail-closed
+geprueft. Der frische Konfigurationsnachweis erzeugte korrekte absolute
+Pfade fuer Lizenz, Notice, Buildkonfiguration und Redistribution-Source;
+KR-5005 selbst bleibt als Produktgate offen.
+
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
 Runtime-Performance-Checkpoint. Die
 oeffentlichen AICA-/ARM7-Handoff-Layouts sind deshalb auf Runtime-ABI 90

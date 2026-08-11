@@ -84,7 +84,8 @@ optionale, togglebare Modi und duerfen den Fidelity-Modus nicht veraendern.
 Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 `katana_analyzer_sdk` und `katana_native_port_runtime` in einem inkrementellen
 24-Worker-Build in `14,2 s` bestaetigt. Dieser historische Abschnitt ist kein
-aktueller Taskstatus; nach dem abgeschlossenen KR-5003 ist jetzt KR-5004 aktiv.
+aktueller Taskstatus; KR-5003 und KR-5004 sind abgeschlossen, KR-5005 ist
+jetzt der aktive Alpha-Gate-Task.
 
 ## Historischer RuntimeOnly-Bring-up
 
